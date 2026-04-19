@@ -9,6 +9,9 @@ __pycache__/
 # qdrant_storage
 qdrant_storage
 
+#clap
+clap_music
+
 # Distribution / packaging
 .Python
 build/
