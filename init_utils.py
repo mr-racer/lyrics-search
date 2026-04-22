@@ -16,6 +16,60 @@ from tqdm.auto import tqdm
 
 MP4_TAG_MAP = {"title": "©nam", "artist": "©ART", "album": "©alb"}
 
+genre_map = {
+    # Pop
+    'pop': 'Pop', 'поп': 'Pop', 'dance-pop': 'Pop', 'indie pop': 'Pop',
+    'art pop': 'Pop', 'adult contemporary': 'Pop', 'bubblegum': 'Pop',
+    'instrumental pop': 'Pop', 'pop/indie': 'Pop', 'alternative pop': 'Pop',
+
+    # Rock
+    'rock': 'Rock', 'classic rock': 'Rock', 'hard rock': 'Rock',
+    'indie rock': 'Rock', 'alternative rock': 'Rock', 'alt. rock': 'Rock',
+    'pop rock': 'Rock', 'blues rock': 'Rock', 'grunge': 'Rock',
+    'post-grunge': 'Rock', 'post grunge': 'Rock', 'progressive rock': 'Rock',
+    'album rock': 'Rock', 'soft rock': 'Rock', 'pop-rock': 'Rock',
+    'pop/rock': 'Rock', 'blues/pop rock': 'Rock', 'dance-punk': 'Rock',
+    'acid punk': 'Rock', 'stoner rock': 'Rock', 'alternative metal': 'Rock',
+    'nu metal': 'Nu-Metal',
+
+    # Electronic
+    'electronic': 'Electronic', 'synthpop': 'Electronic', 'synth-pop': 'Electronic',
+    'electro': 'Electronic', 'electro house': 'Electronic', 'french house': 'Electronic',
+    'house': 'Electronic', 'progressive house': 'Electronic', 'dubstep': 'Electronic',
+    'brostep': 'Electronic', 'eurodance': 'Electronic', 'club': 'Electronic',
+    'downtempo': 'Electronic', 'ambient': 'Electronic', 'nu-disco': 'Electronic',
+    'disco': 'Electronic', 'trance': 'Electronic', 'dance & dj': 'Electronic',
+    'club/dance': 'Electronic',
+
+    # Hip-Hop
+    'hip hop': 'Hip-Hop', 'rap': 'Hip-Hop', 'hip-hop': 'Hip-Hop',
+    'east coast hip hop': 'Hip-Hop', 'alternative hip hop': 'Hip-Hop',
+
+    # R&B / Soul
+    'r&b': 'R&B/Soul', 'soul': 'R&B/Soul', 'contemporary r&b': 'R&B/Soul',
+    'alternative r&b': 'R&B/Soul', 'funk': 'R&B/Soul', 'boogie': 'R&B/Soul',
+    'r&b/soul': 'R&B/Soul', 'acid jazz': 'R&B/Soul',
+
+    # Alternative
+    'alternative': 'Alternative', 'new wave': 'Alternative', 'indie': 'Alternative',
+    'goth rock': 'Alternative', 'experimental': 'Alternative',
+    'alternative & indie': 'Alternative',
+
+    # Dance (самостоятельный)
+    'dance': 'Dance',
+
+    # Blues
+    'blues': 'Blues',
+
+    # Soundtrack
+    'soundtrack': 'Soundtrack',
+}
+
+NOISE = {'none', 'miscellaneous', 'abstract', 'aggressive', '00s', '80s',
+         '5+ wochen', 'adam levine', 'country & folk', 'электронная музыка',
+         'pop, miscellaneous', 'pop soul r&b'}
+
+
 # ── MusicBrainz setup ───────────────────────────────────────────────────────
 musicbrainzngs.set_useragent("MusicMetadataFetcher", "1.0", "your@email.com")
 
@@ -49,7 +103,6 @@ def _get_flac_metadata(filepath: str) -> dict:
         "year":     _validate_year(raw_year),
         "genre":    (audio.get("genre")  or [""])[0].strip() or None,
         "duration": round(duration),
-        "producer": (audio.get("producer") or [""])[0].strip() or None,
     }
 
 
@@ -69,8 +122,6 @@ def _get_alac_metadata(filepath: str) -> dict:
         "year":     _validate_year(raw_year),
         "genre":    _tag("©gen") or None,
         "duration": round(duration),
-        # M4A rarely carries producer; ----:com.apple.iTunes:PRODUCER is non-standard
-        "producer": None,
     }
 
 
@@ -102,7 +153,6 @@ def _get_mp3_metadata(filepath: str) -> dict:
         "year":     _validate_year(raw_year),
         "genre":    (audio.get("genre")  or [""])[0].strip() or None,
         "duration": duration,
-        "producer": None,  # EasyID3 doesn't expose producer; ID3 TIPL/IPLS is rare
     }
 
 
@@ -123,7 +173,7 @@ def _get_metadata(filepath: Path) -> dict | None:
 # ── MusicBrainz online enrichment ───────────────────────────────────────────
 
 def _mb_enrich(title: str, artist: str, meta: dict) -> dict:
-    """Fill missing fields (year, genre, producer, country, is_group) from MusicBrainz.
+    """Fill missing fields (year, genre, producer) from MusicBrainz.
 
     Only queries if at least one field is still absent. Adds a 1-second polite delay
     (MB rate-limit is 1 req/s for non-authenticated clients).
@@ -137,9 +187,8 @@ def _mb_enrich(title: str, artist: str, meta: dict) -> dict:
         Enriched metadata dict.
     """
     needs_track = not meta.get("year") or not meta.get("genre") or not meta.get("producer")
-    needs_artist = "country" not in meta or "is_group" not in meta
 
-    if not needs_track and not needs_artist:
+    if not needs_track:
         return meta
 
     time.sleep(1)  # respect MB rate limit
@@ -177,22 +226,6 @@ def _mb_enrich(title: str, artist: str, meta: dict) -> dict:
                                     break
         except Exception:
             pass  # MB lookup is best-effort
-
-    # ── Artist lookup (country, is_group) ────────────────────────────────
-    if needs_artist:
-        try:
-            result = musicbrainzngs.search_artists(artist=artist, limit=1)
-            artists = result.get("artist-list", [])
-            if artists:
-                a = artists[0]
-                meta["country"]  = a.get("country") or a.get("area", {}).get("name")
-                meta["is_group"] = a.get("type", "").lower() == "group"
-        except Exception:
-            pass
-
-    # Ensure keys always exist even if lookup failed
-    meta.setdefault("country", None)
-    meta.setdefault("is_group", None)
 
     return meta
 
@@ -256,6 +289,39 @@ def _fetch_lyrics_bulk(music_folder: str, output_file: str = "lyrics.json", work
     return results
 
 
+def _normalize_genre(raw: str | None):
+    if raw is None:
+        return 'Other'
+    
+    raw_lower = raw.lower().strip()
+    
+    if raw_lower in NOISE:
+        return 'Other'
+    
+    # Точное совпадение
+    if raw_lower in genre_map:
+        return genre_map[raw_lower]
+    
+    # Мультижанровые строки — берём первый
+    first = re.split(r'[,/]', raw_lower)[0].strip()
+    if first in genre_map:
+        return genre_map[first]
+    
+    # Поиск по ключевым словам
+    for keyword, genre in [
+        ('hip hop', 'Hip-Hop'), ('hip-hop', 'Hip-Hop'), ('rap', 'Hip-Hop'),
+        ('nu metal', 'Nu-Metal'), ('metal', 'Rock'),
+        ('rock', 'Rock'), ('pop', 'Pop'),
+        ('electronic', 'Electronic'), ('house', 'Electronic'),
+        ('r&b', 'R&B/Soul'), ('soul', 'R&B/Soul'), ('funk', 'R&B/Soul'),
+        ('blues', 'Blues'), ('indie', 'Alternative'),
+        ('dance', 'Dance'), ('synth', 'Electronic'),
+    ]:
+        if keyword in raw_lower:
+            return genre
+    
+    return 'Other'
+
 # ── High-level API ───────────────────────────────────────────────────────────
 
 class FileProcessor:
@@ -290,8 +356,7 @@ class FileProcessor:
 class LyricsDB:
     """Manage a Qdrant collection with hybrid dense (Jina) and sparse (BM25) lyric embeddings."""
 
-    def __init__(self, data: list, qdrant_client: QdrantClient, collection_name: str):
-        self.data = data
+    def __init__(self, qdrant_client: QdrantClient, collection_name: str):
         self.qdrant_client = qdrant_client
         self.collection_name = collection_name
         self._init_qdrant()
@@ -308,7 +373,7 @@ class LyricsDB:
         self.qdrant_client.create_collection(
             collection_name=self.collection_name,
             vectors_config={
-                "jina-small": models.VectorParams(
+                "jina-v3": models.VectorParams(
                     size=512,
                     distance=models.Distance.COSINE,
                 ),
@@ -321,12 +386,12 @@ class LyricsDB:
         )
         print(f"Collection {self.collection_name} has been successfully created")
 
-    def _upsert_in_batches(self, batch_size=100):
+    def _upsert_in_batches(self, data:list, batch_size=32):
         points = [
             models.PointStruct(
                 id=uuid.uuid4().hex,
                 vector={
-                    "jina-small": models.Document(
+                    "jina-v3": models.Document(
                         text=song_info["lyrics"],
                         model="jinaai/jina-embeddings-v2-small-en",
                     ),
@@ -341,14 +406,11 @@ class LyricsDB:
                     "artist":    song_info["artist"],
                     "album":     song_info["album"],
                     "year":      song_info.get("year"),
-                    "genre":     song_info.get("genre"),
+                    "genre":     _normalize_genre(song_info.get("genre")),
                     "duration":  song_info.get("duration"),
-                    "producer":  song_info.get("producer"),
-                    "country":   song_info.get("country"),
-                    "is_group":  song_info.get("is_group"),
                 },
             )
-            for song, song_info in self.data.items()
+            for song, song_info in data.items() if len(song_info["lyrics"].split()) < 1300
         ]
         for i in tqdm(range(0, len(points), batch_size), ):
             batch = points[i : i + batch_size]
@@ -356,14 +418,66 @@ class LyricsDB:
                 collection_name=self.collection_name,
                 points=batch,
             )
-            print(f"Upserted {min(i + batch_size, len(points))}/{len(points)}")
 
-    def fit(self):
+    def fit(self, data:list):
         self._create_collection()
-        self._upsert_in_batches()
+        self._upsert_in_batches(data)
         print("Data was fitted in DB successfully")
 
-    def search(self, query: str, limit: int = 1) -> list[models.ScoredPoint]:
+    def _build_filter(
+        self,
+        artist: str | None = None,
+        album: str | None = None,
+        title: str | None = None,
+        genre: str | list[str] | None = None,
+        year_from: int | None = None,
+        year_to: int | None = None,
+    ) -> models.Filter | None:
+        conditions = []
+
+        if artist:
+            conditions.append(models.FieldCondition(key="artist", match=models.MatchValue(value=artist)))
+        if album:
+            conditions.append(models.FieldCondition(key="album", match=models.MatchValue(value=album)))
+        if title:
+            conditions.append(models.FieldCondition(key="title", match=models.MatchValue(value=title)))
+
+        if genre:
+            conditions.append(
+                models.FieldCondition(
+                    key="genre",
+                    match=models.MatchAny(any=genre) if isinstance(genre, list) else models.MatchValue(value=genre),
+                )
+            )
+
+        if year_from is not None or year_to is not None:
+            conditions.append(
+                models.FieldCondition(key="year", range=models.Range(gte=year_from, lte=year_to))
+            )
+
+        return models.Filter(must=conditions) if conditions else None
+
+
+    def search(
+        self,
+        query: str,
+        limit: int = 1,
+        artist: str | None = None,
+        album: str | None = None,
+        title: str | None = None,
+        genre: str | list[str] | None = None,
+        year_from: int | None = None,
+        year_to: int | None = None,
+    ) -> list[models.ScoredPoint]:
+        query_filter = self._build_filter(
+            artist=artist,
+            album=album,
+            title=title,
+            genre=genre,
+            year_from=year_from,
+            year_to=year_to,
+        )
+
         results = self.qdrant_client.query_points(
             collection_name=self.collection_name,
             prefetch=[
@@ -372,16 +486,23 @@ class LyricsDB:
                         text=query,
                         model="jinaai/jina-embeddings-v2-small-en",
                     ),
-                    using="jina-small",
-                    limit=(10 * limit),
+                    using="jina-v3",
+                    limit=35,
+                    filter=query_filter,   # ← фильтр на prefetch, а не только на финале
+                ),
+                models.Prefetch(
+                    query=models.Document(
+                        text=query,
+                        model="Qdrant/bm25",
+                    ),
+                    using="bm25",
+                    limit=35,
+                    filter=query_filter,   # ← то же самое
                 ),
             ],
-            query=models.Document(
-                text=query,
-                model="Qdrant/bm25",
-            ),
-            using="bm25",
+            query=models.FusionQuery(fusion=models.Fusion.RRF),
             limit=limit,
             with_payload=True,
         )
+
         return results.points
