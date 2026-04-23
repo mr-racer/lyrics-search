@@ -1,9 +1,10 @@
 import json
 import re
 import time
+import re
 import datetime
 import syncedlyrics
-import musicbrainzngs
+import numpy as np
 from mutagen.flac import FLAC
 from mutagen.mp4 import MP4
 from mutagen.easyid3 import EasyID3
@@ -13,8 +14,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from qdrant_client import QdrantClient, models
 import uuid
 from tqdm.auto import tqdm
+from sentence_transformers import SentenceTransformer
+
+PROVIDERS = ["Musixmatch", "Lrclib", "NetEase", "Megalobiz"]
+TIME_BETWEEN_REQUESTS = 0.15
 
 MP4_TAG_MAP = {"title": "©nam", "artist": "©ART", "album": "©alb"}
+
+MAX_DURATION = 420 # filtering quite long sons
+
 
 genre_map = {
     # Pop
@@ -70,8 +78,6 @@ NOISE = {'none', 'miscellaneous', 'abstract', 'aggressive', '00s', '80s',
          'pop, miscellaneous', 'pop soul r&b'}
 
 
-# ── MusicBrainz setup ───────────────────────────────────────────────────────
-musicbrainzngs.set_useragent("MusicMetadataFetcher", "1.0", "your@email.com")
 
 _CURRENT_YEAR = datetime.datetime.now().year
 _MIN_YEAR = 1900
@@ -170,80 +176,38 @@ def _get_metadata(filepath: Path) -> dict | None:
     return None
 
 
-# ── MusicBrainz online enrichment ───────────────────────────────────────────
-
-def _mb_enrich(title: str, artist: str, meta: dict) -> dict:
-    """Fill missing fields (year, genre, producer) from MusicBrainz.
-
-    Only queries if at least one field is still absent. Adds a 1-second polite delay
-    (MB rate-limit is 1 req/s for non-authenticated clients).
-
-    Args:
-        title:  Track title.
-        artist: Artist name.
-        meta:   Existing metadata dict (modified in-place and returned).
-
-    Returns:
-        Enriched metadata dict.
-    """
-    needs_track = not meta.get("year") or not meta.get("genre") or not meta.get("producer")
-
-    if not needs_track:
-        return meta
-
-    time.sleep(1)  # respect MB rate limit
-
-    # ── Recording lookup (year, genre/tags, producer) ────────────────────
-    if needs_track:
-        try:
-            result = musicbrainzngs.search_recordings(
-                recording=title,
-                artist=artist,
-                limit=1,
-            )
-            recordings = result.get("recording-list", [])
-            if recordings:
-                rec = recordings[0]
-
-                if not meta.get("year"):
-                    meta["year"] = _validate_year(rec.get("first-release-date"))
-
-                if not meta.get("genre"):
-                    tags = rec.get("tag-list", [])
-                    if tags:
-                        # pick the tag with the highest vote count
-                        best = max(tags, key=lambda t: int(t.get("count", 0)))
-                        meta["genre"] = best.get("name")
-
-                if not meta.get("producer"):
-                    for rel in rec.get("relation-list", []):
-                        if rel.get("target-type") == "artist":
-                            for r in rel.get("relation", []):
-                                if r.get("type") == "producer":
-                                    meta["producer"] = (
-                                        r.get("artist", {}).get("name")
-                                    )
-                                    break
-        except Exception:
-            pass  # MB lookup is best-effort
-
-    return meta
-
 
 # ── Per-file pipeline ────────────────────────────────────────────────────────
 
-def _get_lyrics(title: str, artist: str) -> str | None:
+def _get_lyrics(title: str, artist: str, better_lyrics_quality: bool) -> str | None:
+    if better_lyrics_quality:
+        providers = PROVIDERS
+        time_to_sleep = 0.75
+    else:
+        providers = [x for x in PROVIDERS if x != "Musixmatch"]
+        time_to_sleep = TIME_BETWEEN_REQUESTS
+
     try:
-        return syncedlyrics.search(
+        lyrics = syncedlyrics.search(
             f"{title} {artist}",
-            providers=["Lrclib", "NetEase", "Megalobiz"],
+            providers=providers,
             plain_only=True,
         )
+        time.sleep(time_to_sleep)
+
+        lyrics = re.sub(r'\[.*?\]', '', lyrics)
+        
+        lyrics_splitted = lyrics.split(':')
+        if len(lyrics_splitted) > 2:
+            print(len(lyrics_splitted), lyrics_splitted)
+            return lyrics
+        else:
+            return lyrics_splitted[-1]
     except Exception:
         return None
 
 
-def _process_file(filepath: Path) -> dict | None:
+def _process_file(filepath: Path, better_lyrics_quality: bool) -> dict | None:
     """Load metadata, enrich online where needed, then fetch lyrics.
 
     Returns:
@@ -254,21 +218,25 @@ def _process_file(filepath: Path) -> dict | None:
         print(f"  Пропуск: {filepath.name}")
         return None
 
-    # Online enrichment — fills gaps left by local tags
-    meta = _mb_enrich(meta["title"], meta["artist"], meta)
-
-    lyrics = _get_lyrics(meta["title"], meta["artist"])
+    lyrics = _get_lyrics(meta["title"], meta["artist"], better_lyrics_quality)
     if not lyrics:
         print(f"✗ {meta['artist']} — {meta['title']}")
         return None
+
+    if meta.get('genre'):
+        meta['genre'] = _normalize_genre(meta['genre'])
 
     return {**meta, "lyrics": lyrics}
 
 
 # ── Bulk processor ───────────────────────────────────────────────────────────
 
-def _fetch_lyrics_bulk(music_folder: str, output_file: str = "lyrics.json", workers: int = 8):
+def _fetch_lyrics_bulk(music_folder: str, workers: int = 8, better_lyrics_quality: bool = False):
     """Scan folder, enrich & fetch lyrics in parallel, return results keyed by artist/title."""
+    
+    if better_lyrics_quality:
+        workers = 1
+
     audio_files = [
         p for p in Path(music_folder).rglob("*")
         if p.suffix.lower() in (".flac", ".m4a", ".mp3")
@@ -277,7 +245,7 @@ def _fetch_lyrics_bulk(music_folder: str, output_file: str = "lyrics.json", work
 
     results = {}
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {executor.submit(_process_file, f): f for f in audio_files}
+        futures = {executor.submit(_process_file, f, better_lyrics_quality): f for f in audio_files}
         for future in tqdm(as_completed(futures), total=len(audio_files)):
             meta = future.result()
             if meta:
@@ -330,8 +298,8 @@ class FileProcessor:
     def __init__(self):
         self.metadata = []
 
-    def process_folder(self, music_folder: str):
-        processed_files = _fetch_lyrics_bulk(music_folder)
+    def process_folder(self, music_folder: str, better_lyrics_quality: bool = False):
+        processed_files = _fetch_lyrics_bulk(music_folder=music_folder, better_lyrics_quality=better_lyrics_quality)
         self.metadata = processed_files
         return processed_files
 
@@ -345,12 +313,6 @@ class FileProcessor:
             except Exception as e:
                 print("Ошибка сохранения результатов! Введен неверный путь. ", e)
 
-    def info(self):
-        print(f"Инициализировано {len(self.metadata)} музыкальных файлов")
-        print(f"У ... файлов были метаданные, для ... они были получены онлайн.")
-        print(f"Для ... файлов успешно были получены тексты")
-
-
 # ── Qdrant / vector DB ───────────────────────────────────────────────────────
 
 class LyricsDB:
@@ -359,7 +321,9 @@ class LyricsDB:
     def __init__(self, qdrant_client: QdrantClient, collection_name: str):
         self.qdrant_client = qdrant_client
         self.collection_name = collection_name
+        self.model = None
         self._init_qdrant()
+        
 
     def _init_qdrant(self):
         try:
@@ -369,11 +333,95 @@ class LyricsDB:
                 "Qdrant is down. Please, disable VPN or restart Docker"
             ) from e
 
+    def _load_model(self, model: str):
+        self.model = SentenceTransformer(model)   
+
+    def _prepare_metadata(self, data: list):
+
+        data_prep = list(data.values())
+
+        # Фильтрация
+        filtered = [d for d in data_prep if d['duration'] <= MAX_DURATION]
+        durations = np.array([d['duration'] for d in filtered])
+
+        # Квартили
+        q3 = np.percentile(durations, 25)
+        q2 = np.percentile(durations, 50)
+        q1 = np.percentile(durations, 75)
+        iqr_custom = q2 - q3
+
+        lower = q3 - 1.5 * iqr_custom
+        upper = q1 + 1.5 * iqr_custom
+        max_dur = durations.max()
+
+        # Условия и метки бакетов
+        conditions = [
+            durations < lower,
+            (durations >= lower) & (durations < q3),
+            (durations >= q3) & (durations < q2),
+            (durations >= q2) & (durations <= q1),
+            (durations > q1) & (durations <= upper),
+            durations > upper,
+        ]
+        labels = [
+            f'0-{int(round(lower))}',
+            f'{int(round(lower))}-{int(round(q3))}',
+            f'{int(round(q3))}-{int(round(q2))}',
+            f'{int(round(q2))}-{int(round(q1))}',
+            f'{int(round(q1))}-{int(round(upper))}',
+            f'{int(round(upper))}-{int(max_dur)}',
+        ]
+        buckets = np.select(conditions, labels, default='')
+        buckets = list(map(lambda x: str(x), list(buckets)))
+
+        # Собираем результат
+        result = [
+            {**{k: v for k, v in d.items() if k != 'duration'}, 'duration': bucket}
+            for d, bucket in zip(filtered, buckets)
+        ]
+
+        for rec in result:
+            rec['lyrics_chunked'] = tuple(set(rec['lyrics'].split('\n\n')))
+
+        # добавление диапазонов лет
+        def get_year_range(year: int) -> str:
+            decade_start = (year // 10) * 10
+            decade_end = decade_start + 9
+            return f"{decade_start}-{decade_end}"
+
+
+        def add_year_ranges(track: dict) -> dict:
+            if track.get('year'):
+                track["year_range"] = get_year_range(track["year"])
+
+        for track in result:
+            add_year_ranges(track)
+
+        return result
+
+    def _lyrics_chunks_to_embedding(self, chunks: list[str]) -> list[float]:
+        """
+        Получить один усреднённый эмбеддинг из списка чанков.
+        Взвешивание по количеству токенов (апроксимируем длиной строки).
+        """
+        if not chunks:
+            raise ValueError("chunks list is empty")
+
+        embeddings = self.model.encode(chunks, normalize_embeddings=True)
+        weights = np.array([len(c) for c in chunks], dtype=np.float32)
+        weights /= weights.sum()
+        
+        averaged = np.average(embeddings, axis=0, weights=weights)
+        
+        averaged /= np.linalg.norm(averaged)
+        
+        return averaged.tolist()
+
     def _create_collection(self):
         self.qdrant_client.create_collection(
             collection_name=self.collection_name,
             vectors_config={
-                "jina-v3": models.VectorParams(
+                "jina-v2-small": models.VectorParams(
                     size=512,
                     distance=models.Distance.COSINE,
                 ),
@@ -386,40 +434,44 @@ class LyricsDB:
         )
         print(f"Collection {self.collection_name} has been successfully created")
 
-    def _upsert_in_batches(self, data:list, batch_size=32):
+    def _upsert_in_batches(self, data: list[dict], batch_size=32):
         points = [
-            models.PointStruct(
-                id=uuid.uuid4().hex,
-                vector={
-                    "jina-v3": models.Document(
-                        text=song_info["lyrics"],
-                        model="jinaai/jina-embeddings-v2-small-en",
-                    ),
-                    "bm25": models.Document(
-                        text=song_info["lyrics"],
-                        model="Qdrant/bm25",
-                    ),
-                },
-                payload={
-                    "lyrics":    song_info["lyrics"],
-                    "title":     song_info["title"],
-                    "artist":    song_info["artist"],
-                    "album":     song_info["album"],
-                    "year":      song_info.get("year"),
-                    "genre":     _normalize_genre(song_info.get("genre")),
-                    "duration":  song_info.get("duration"),
-                },
-            )
-            for song, song_info in data.items() if len(song_info["lyrics"].split()) < 1300
+        models.PointStruct(
+            id=uuid.uuid4().hex,
+            vector={
+                "bm25": models.Document(
+                    text=song_info["lyrics"],
+                    model="Qdrant/bm25",
+                ),
+                "jina-v2-small": self._lyrics_chunks_to_embedding(song_info["lyrics_chunked"]),
+            },
+            payload={
+                "lyrics":    song_info["lyrics"],
+                "title":     song_info["title"],
+                "artist":    song_info["artist"],
+                "album":     song_info["album"],
+                "year":      song_info.get("year"),
+                "year_range":song_info.get("year_range"),
+                "genre":     song_info.get("genre"),
+                "duration":  song_info.get("duration")
+            }
+        )
+        for song_info in data if len(song_info["lyrics"].split()) < 1300
         ]
-        for i in tqdm(range(0, len(points), batch_size), ):
-            batch = points[i : i + batch_size]
+
+        for i in tqdm(range(0, len(points), batch_size)):
+            batch = points[i:i + batch_size]
             self.qdrant_client.upsert(
                 collection_name=self.collection_name,
-                points=batch,
+                points=batch
             )
 
-    def fit(self, data:list):
+    def fit(self, data: list[dict], model: str = "jinaai/jina-embeddings-v2-small-en"):
+        if not self.model:
+            self._load_model(model)
+
+        data = self._prepare_metadata(data)
+
         self._create_collection()
         self._upsert_in_batches(data)
         print("Data was fitted in DB successfully")
@@ -430,9 +482,10 @@ class LyricsDB:
         album: str | None = None,
         title: str | None = None,
         genre: str | list[str] | None = None,
-        year_from: int | None = None,
-        year_to: int | None = None,
+        year: int | None = None,
+        year_range: str | None = None
     ) -> models.Filter | None:
+
         conditions = []
 
         if artist:
@@ -450,10 +503,11 @@ class LyricsDB:
                 )
             )
 
-        if year_from is not None or year_to is not None:
-            conditions.append(
-                models.FieldCondition(key="year", range=models.Range(gte=year_from, lte=year_to))
-            )
+        if year:
+            conditions.append(models.FieldCondition(key="year", match=models.MatchValue(value=year)))
+
+        if year_range:
+            conditions.append(models.FieldCondition(key="year_range", match=models.MatchValue(value=year_range)))
 
         return models.Filter(must=conditions) if conditions else None
 
@@ -466,16 +520,17 @@ class LyricsDB:
         album: str | None = None,
         title: str | None = None,
         genre: str | list[str] | None = None,
-        year_from: int | None = None,
-        year_to: int | None = None,
+        year: int | None = None,
+        year_range: str | None = None
     ) -> list[models.ScoredPoint]:
+
         query_filter = self._build_filter(
             artist=artist,
             album=album,
             title=title,
             genre=genre,
-            year_from=year_from,
-            year_to=year_to,
+            year=year,
+            year_range=year_range
         )
 
         results = self.qdrant_client.query_points(
@@ -486,9 +541,9 @@ class LyricsDB:
                         text=query,
                         model="jinaai/jina-embeddings-v2-small-en",
                     ),
-                    using="jina-v3",
-                    limit=35,
-                    filter=query_filter,   # ← фильтр на prefetch, а не только на финале
+                    using="jina-v2-small",
+                    limit=10,
+                    filter=query_filter,
                 ),
                 models.Prefetch(
                     query=models.Document(
@@ -496,8 +551,8 @@ class LyricsDB:
                         model="Qdrant/bm25",
                     ),
                     using="bm25",
-                    limit=35,
-                    filter=query_filter,   # ← то же самое
+                    limit=15,
+                    filter=query_filter,
                 ),
             ],
             query=models.FusionQuery(fusion=models.Fusion.RRF),
