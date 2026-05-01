@@ -1,6 +1,6 @@
 from .utils import (
     load_model, prepare_metadata, build_filter,
-    build_text_for_embedding, _encode_clap
+    build_text_for_embedding, _encode_clap, load_model_clap
 )
 from file_processor.utils import get_metadata
 
@@ -18,13 +18,17 @@ from qdrant_client import QdrantClient, models
 class LyricsDB:
     """Manage a Qdrant collection with hybrid dense and sparse (BM25) lyric embeddings."""
 
-    def __init__(self, qdrant_client: QdrantClient, collection_name: str, model_name: str):
+    def __init__(self, qdrant_client: QdrantClient, collection_name: str, model_name: str, include_clap: bool = False):
         self.qdrant_client = qdrant_client
         self.collection_name = collection_name
         self._init_qdrant()
 
         self.model_name = model_name
         self.model, self.vector_name, self.vector_dim = load_model(self.model_name)
+        if include_clap:
+            self.model_clap = load_model_clap()
+        else:
+            self.model_clap = None
 
     def _init_qdrant(self):
         try:
@@ -36,7 +40,7 @@ class LyricsDB:
 
 
 
-    def _create_collection(self, include_clap: bool = False):
+    def _create_collection(self, clap_paths: list):
         collections = self.qdrant_client.get_collections().collections
         exists = any(c.name == str(self.collection_name) for c in collections)
         if exists:
@@ -48,7 +52,7 @@ class LyricsDB:
                 distance=models.Distance.COSINE,
             ),
         }
-        if include_clap:
+        if clap_paths:
             vectors_config["clap"] = models.VectorParams(
                 size=512,
                 distance=models.Distance.COSINE,
@@ -70,7 +74,7 @@ class LyricsDB:
         self,
         data: list[dict],
         text_vecs: np.ndarray,
-        clap_map: dict | None = None,
+        clap_map: dict = {},
         batch_size: int = 32,
     ):
         for i in tqdm(range(0, len(data), batch_size)):
@@ -109,14 +113,15 @@ class LyricsDB:
     def fit(self, data: list[dict], path: str | None = None):
         prepared_data = prepare_metadata(data)
         filtered = [s for s in prepared_data if len(s["lyrics"].split()) < 1300]
-
+        
+        paths = []
         if path:
             paths = [
                 p for p in Path(path).rglob("*")
                 if p.suffix.lower() in (".flac", ".m4a", ".mp3")
             ]
 
-        self._create_collection(include_clap=paths is not None)
+        self._create_collection(clap_paths=paths)
 
         # Pass 1: encode all lyrics at once (more efficient than per-batch)
         text_vecs = self.model.encode(
@@ -132,7 +137,7 @@ class LyricsDB:
             torch.cuda.empty_cache()
 
         # Pass 2: CLAP audio embeddings (GPU now free)
-        clap_map = _encode_clap(paths) if paths is not None else {}
+        clap_map = _encode_clap(paths, self.model_clap if self.model_clap else None) if paths is not None else {}
 
         # Restore text model to GPU for search
         self.model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
@@ -145,7 +150,9 @@ class LyricsDB:
         self,
         query: str,
         limit: int = 1,
+        include_clap: bool = False,
         min_dense_score: float = 0.3,
+        min_clap_score: float = 0.01,
         artist: str | None = None,
         album: str | None = None,
         title: str | None = None,
@@ -163,9 +170,10 @@ class LyricsDB:
             year_range=year_range
         )
 
-        query_vector = self.model.encode(query).tolist()
+        if not include_clap:
+            query_vector = self.model.encode(query).tolist()
 
-        results = self.qdrant_client.query_points(
+            results = self.qdrant_client.query_points(
             collection_name=self.collection_name,
             prefetch=[
                 models.Prefetch(
@@ -185,9 +193,28 @@ class LyricsDB:
                     filter=query_filter,
                 ),
             ],
-            query=models.FusionQuery(fusion=models.Fusion.RRF),
-            limit=limit,
-            with_payload=True,
-        )
+                query=models.FusionQuery(fusion=models.Fusion.RRF),
+                limit=limit,
+                with_payload=True,
+            )
+        else:
+            query_vector = self.model.encode(query).tolist()
+            clap_vector = self.model_clap.get_text_embedding([query])[0].tolist()
+
+            results = self.qdrant_client.query_points(
+            collection_name=self.collection_name,
+            prefetch=[
+                models.Prefetch(
+                    query=clap_vector,
+                    using="clap",
+                    limit=15,
+                    score_threshold=min_clap_score,
+                    filter=query_filter,
+                )
+            ],
+                query=models.FusionQuery(fusion=models.Fusion.RRF),
+                limit=limit,
+                with_payload=True,
+            )
 
         return results.points

@@ -141,7 +141,8 @@ def get_clap_embedding_long(clap_model, y: np.ndarray, sr: int,
         chunks.append(chunk)
     
     if not chunks:
-        raise ValueError("Аудио слишком короткое")
+        print("Аудио слишком короткое")
+        return None
     
     # Эмбеддинг каждого чанка
     batch = torch.from_numpy(np.stack(chunks)).to(device)  # (n_chunks, chunk_len)
@@ -162,32 +163,33 @@ def extract_clap_features(path: str, model, duration: int = 300, device=DEVICE) 
     return unit_norm(clap_vec)
 
 
-def process_batch(paths: list[str], device=DEVICE) -> list[TrackFeatures]:
-    with ProcessPoolExecutor(max_workers=3) as ex:
-        metadatas = list(tqdm(ex.map(get_metadata, paths), total=len(paths), desc="Metadata"))
+# def process_batch(paths: list[str], device=DEVICE) -> list[TrackFeatures]:
+#     with ProcessPoolExecutor(max_workers=3) as ex:
+#         metadatas = list(tqdm(ex.map(get_metadata, paths), total=len(paths), desc="Metadata"))
 
-    # CLAP последовательно (GPU — один поток)
-    model = load_model_clap(device=device)
-    claps = [
-        extract_clap_features(p, model, 300, device=device)
-        for p in tqdm(paths, desc="CLAP embeddings")
-    ]
+#     # CLAP последовательно (GPU — один поток)
+#     model = load_model_clap(device=device)
+#     claps = [
+#         extract_clap_features(p, model, 300, device=device)
+#         for p in tqdm(paths, desc="CLAP embeddings")
+#     ]
     
-    return [
-            TrackFeatures(
-                title=meta.get('title'),
-                artist=meta.get('artist'),
-                vector_clap=c,
-            )
-            for c, meta in zip(claps, metadatas)
-            ]
+#     return [
+#             TrackFeatures(
+#                 title=meta.get('title'),
+#                 artist=meta.get('artist'),
+#                 vector_clap=c,
+#             )
+#             for c, meta in zip(claps, metadatas)
+#             ]
 
 
-def _encode_clap(paths: list[str]) -> dict[tuple, np.ndarray]:
+def _encode_clap(paths: list[str], model_clap = None) -> dict[tuple, np.ndarray]:
     with ProcessPoolExecutor(max_workers=3) as ex:
         metadatas = list(tqdm(ex.map(get_metadata, paths), total=len(paths), desc="CLAP metadata"))
 
-    model_clap = load_model_clap()
+    if not model_clap:
+        model_clap = load_model_clap()
     clap_vecs = [
         extract_clap_features(p, model_clap, 300)
         for p in tqdm(paths, desc="CLAP embeddings")
@@ -200,7 +202,7 @@ def _encode_clap(paths: list[str]) -> dict[tuple, np.ndarray]:
     return {
         (m.get("artist", "").lower(), m.get("title", "").lower()): v
         for m, v in zip(metadatas, clap_vecs)
-        if m.get("artist") and m.get("title")
+        if m.get("artist") and m.get("title") and v is not None
     }
 # QDRANT FUNCTIONS
 
