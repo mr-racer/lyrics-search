@@ -36,6 +36,7 @@ async def search_tracks(
         text_model=req.text_model,
         filters=req.filters,
         limit=req.limit,
+        collection_name=req.collection_name,
     )
 
     return SearchResponse(hits=hits, query=req.query, mode=req.mode)

@@ -110,10 +110,19 @@ class LyricsDB:
 
             self.qdrant_client.upsert(collection_name=self.collection_name, points=points)
 
-    def fit(self, data: list[dict], path: str | None = None):
+    def fit(self, data: list[dict], path: str | None = None, collection_name: str | None = None):
+        _saved = self.collection_name
+        if collection_name:
+            self.collection_name = collection_name
+        try:
+            self._fit_impl(data, path)
+        finally:
+            self.collection_name = _saved
+
+    def _fit_impl(self, data: list[dict], path: str | None = None):
         prepared_data = prepare_metadata(data)
         filtered = [s for s in prepared_data if len(s["lyrics"].split()) < 1300]
-        
+
         paths = []
         if path:
             paths = [
@@ -158,8 +167,10 @@ class LyricsDB:
         title: str | None = None,
         genre: str | list[str] | None = None,
         year: int | None = None,
-        year_range: str | None = None
+        year_range: str | None = None,
+        collection_name_override: str | None = None,
     ) -> list[models.ScoredPoint]:
+        col = collection_name_override or self.collection_name
 
         query_filter = build_filter(
             artist=artist,
@@ -174,25 +185,25 @@ class LyricsDB:
             query_vector = self.model.encode(query).tolist()
 
             results = self.qdrant_client.query_points(
-            collection_name=self.collection_name,
-            prefetch=[
-                models.Prefetch(
-                    query=query_vector,
-                    using=self.vector_name,
-                    limit=15,
-                    score_threshold=min_dense_score,
-                    filter=query_filter,
-                ),
-                models.Prefetch(
-                    query=models.Document(
-                        text=query,
-                        model="Qdrant/bm25",
+                collection_name=col,
+                prefetch=[
+                    models.Prefetch(
+                        query=query_vector,
+                        using=self.vector_name,
+                        limit=15,
+                        score_threshold=min_dense_score,
+                        filter=query_filter,
                     ),
-                    using="bm25",
-                    limit=25,
-                    filter=query_filter,
-                ),
-            ],
+                    models.Prefetch(
+                        query=models.Document(
+                            text=query,
+                            model="Qdrant/bm25",
+                        ),
+                        using="bm25",
+                        limit=25,
+                        filter=query_filter,
+                    ),
+                ],
                 query=models.FusionQuery(fusion=models.Fusion.RRF),
                 limit=limit,
                 with_payload=True,
@@ -202,16 +213,16 @@ class LyricsDB:
             clap_vector = self.model_clap.get_text_embedding([query])[0].tolist()
 
             results = self.qdrant_client.query_points(
-            collection_name=self.collection_name,
-            prefetch=[
-                models.Prefetch(
-                    query=clap_vector,
-                    using="clap",
-                    limit=15,
-                    score_threshold=min_clap_score,
-                    filter=query_filter,
-                )
-            ],
+                collection_name=col,
+                prefetch=[
+                    models.Prefetch(
+                        query=clap_vector,
+                        using="clap",
+                        limit=15,
+                        score_threshold=min_clap_score,
+                        filter=query_filter,
+                    )
+                ],
                 query=models.FusionQuery(fusion=models.Fusion.RRF),
                 limit=limit,
                 with_payload=True,

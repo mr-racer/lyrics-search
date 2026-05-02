@@ -278,6 +278,7 @@ _TYPE_TO_MODE: dict[str, str] = {
 async def _run_searches(
     llm_queries: list[dict],
     service,
+    collection_name: str | None = None,
 ) -> tuple[str, str, list[TrackHit]]:
     """Execute the LLM's search queries against the library.
 
@@ -301,7 +302,8 @@ async def _run_searches(
 
         try:
             round_hits = await service.search(
-                query=query_text, mode=mode, limit=SEARCH_LIMIT
+                query=query_text, mode=mode, limit=SEARCH_LIMIT,
+                collection_name=collection_name,
             )
             for hit in round_hits:
                 key = (hit.track.title.lower(), hit.track.artist.lower())
@@ -443,7 +445,7 @@ async def chat(req: ChatRequest, request: Request) -> dict:
 
         if action == "search":
             queries = result.get("queries") or []
-            new_pq, new_ctx, new_hits = await _run_searches(queries, service)
+            new_pq, new_ctx, new_hits = await _run_searches(queries, service, collection_name=req.collection_name)
 
             if new_pq:
                 previous_queries = (
