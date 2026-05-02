@@ -22,7 +22,7 @@ class TrackHit(BaseModel):
     track: TrackMetadata
     score: float
     matched_on: Literal["lyrics", "audio", "hybrid"] = "lyrics"
-    snippet: str | None = None  # выдержка из лирики для lyrics-поиска
+    lyrics: str | None = None  # выдержка из лирики для lyrics-поиска
 
 
 class SearchFilters(BaseModel):
