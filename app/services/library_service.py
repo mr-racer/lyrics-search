@@ -116,10 +116,27 @@ class LibraryService:
             # Process files with FileProcessor (run in thread pool to avoid blocking)
             logger.info("[LibraryService] Starting FileProcessor...")
             processor = FileProcessor()
+            loop = asyncio.get_event_loop()
+
+            # Progress callback for file processing (metadata + lyrics fetching)
+            async def on_file_progress(current: int, total: int, message: str):
+                stage_meta.current = current
+                stage_meta.total = total
+                stage_meta.message = message
+                await self._notify_progress(job, {
+                    "stage": IndexStage.METADATA.value,
+                    "current": current,
+                    "total": total,
+                    "message": message,
+                })
+
             processed_files = await asyncio.to_thread(
                 processor.process_folder,
                 music_folder=folder_path,
                 better_lyrics_quality=better_lyrics_quality,
+                progress_callback=lambda c, t, m: asyncio.run_coroutine_threadsafe(
+                    on_file_progress(c, t, m), loop
+                ),  # fire-and-forget — no .result() to avoid deadlock
             )
 
             track_count = len(processed_files)
@@ -242,6 +259,8 @@ class LibraryService:
           - year: int | None  (not a range string)
           - duration: int     (raw seconds, not "MM:SS")
         """
+        from file_processor.utils import save_cover_art
+
         tracks = []
         for key, info in metadata.items():
             file_path = info.get("file_path", "")
@@ -264,6 +283,14 @@ class LibraryService:
                 # defensive: parse "MM:SS" string if somehow that's what we got
                 duration_sec = self._parse_duration(str(raw_duration))
 
+            # Extract and save cover art
+            cover_art_path = None
+            if file_path and track_id:
+                try:
+                    cover_art_path = save_cover_art(file_path, track_id)
+                except Exception:
+                    pass  # cover art is optional, don't fail indexing
+
             track = TrackMetadata(
                 track_id=track_id,
                 title=info.get("title", ""),
@@ -274,11 +301,12 @@ class LibraryService:
                 duration_sec=duration_sec,
                 file_path=file_path,
                 lyrics=info.get("lyrics"),
+                cover_art_path=cover_art_path,
             )
 
             if track.file_path:
-                tracks.append(track) 
-                
+                tracks.append(track)
+
         return tracks
 
     @staticmethod

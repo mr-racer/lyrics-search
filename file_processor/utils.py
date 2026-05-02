@@ -3,14 +3,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path, PurePosixPath
 from tqdm.auto import tqdm
 import datetime
+import hashlib
 import time
 import re
 
 import syncedlyrics
+from mutagen import File as MutagenFile
 from mutagen.flac import FLAC
-from mutagen.mp4 import MP4
+from mutagen.mp4 import MP4, MP4Cover
 from mutagen.easyid3 import EasyID3
-from mutagen.id3 import ID3NoHeaderError
+from mutagen.id3 import ID3NoHeaderError, APIC
 
 PROVIDERS = ["Musixmatch", "Lrclib", "NetEase", "Megalobiz"]
 TIME_BETWEEN_REQUESTS_STANDARD = 0.15
@@ -84,7 +86,59 @@ def validate_year(raw: str | None) -> int | None:
             return year
     return None
 
+# Directory where extracted cover art is saved
+COVERS_DIR = Path(__file__).parent.parent / "frontend" / "covers"
+
 # FILE OPERATING FUNCTIONS
+
+def extract_cover_art(filepath: str) -> tuple[bytes, str] | None:
+    """Extract embedded cover art from an audio file.
+
+    Returns (image_bytes, mime_extension) or None if no artwork is found.
+    Supported formats: MP3 (APIC), FLAC (embedded picture), M4A (covr).
+    """
+    audio = MutagenFile(filepath)
+    if audio is None:
+        return None
+
+    # MP3 — APIC frames
+    if hasattr(audio, "tags") and audio.tags is not None:
+        for tag in audio.tags.values():
+            if isinstance(tag, APIC):
+                ext = "jpg" if tag.mime == "image/jpeg" else "png"
+                return tag.data, ext
+
+    # FLAC — embedded pictures
+    if hasattr(audio, "pictures") and audio.pictures:
+        pic = audio.pictures[0]
+        ext = "png" if "png" in pic.mime else "jpg"
+        return pic.data, ext
+
+    # M4A/MP4 — covr atom
+    if hasattr(audio, "get") and "covr" in audio:
+        covers = audio["covr"]
+        if covers:
+            raw = covers[0]
+            # MP4Cover data: first 32 bytes are a header, then the image
+            # Try to detect format from content
+            ext = "png" if raw.startswith(b'\x89PNG') else "jpg"
+            return raw, ext
+
+    return None
+
+
+def save_cover_art(filepath: str, track_id: str) -> str | None:
+    """Extract cover art and save to disk. Returns relative path or None."""
+    result = extract_cover_art(filepath)
+    if result is None:
+        return None
+
+    image_data, ext = result
+    COVERS_DIR.mkdir(parents=True, exist_ok=True)
+    dest = COVERS_DIR / f"{track_id}.{ext}"
+    dest.write_bytes(image_data)
+    return f"/covers/{track_id}.{ext}"
+
 
 def get_flac_metadata(filepath: str) -> dict:
     audio = FLAC(filepath)
@@ -271,9 +325,16 @@ def process_file(filepath: Path, better_lyrics_quality: bool) -> dict | None:
     return {**meta, "lyrics": lyrics, "file_path":str(filepath)}
 
 
-def fetch_lyrics_bulk(music_folder: str, workers: int = 8, better_lyrics_quality: bool = False):
-    """Scan folder, enrich & fetch lyrics in parallel, return results keyed by artist/title."""
-    
+def fetch_lyrics_bulk(music_folder: str, workers: int = 8, better_lyrics_quality: bool = False, progress_callback=None):
+    """Scan folder, enrich & fetch lyrics in parallel, return results keyed by artist/title.
+
+    Args:
+        music_folder: Path to scan for audio files
+        workers: Number of parallel workers (1 if better_lyrics_quality)
+        better_lyrics_quality: Use all providers including Musixmatch
+        progress_callback: Optional callback(current, total, message) called after each file
+    """
+
     if better_lyrics_quality:
         workers = 1
 
@@ -284,13 +345,25 @@ def fetch_lyrics_bulk(music_folder: str, workers: int = 8, better_lyrics_quality
     print(f"Найдено файлов: {len(audio_files)}, воркеров: {workers}")
 
     results = {}
+    processed_count = 0
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {executor.submit(process_file, f, better_lyrics_quality): f for f in audio_files}
         for future in tqdm(as_completed(futures), total=len(audio_files)):
             meta = future.result()
+            processed_count += 1
+
             if meta:
                 key = f"{meta['artist']} — {meta['title']}"
                 results.setdefault(key, meta)
+
+            # Report progress after each file
+            if progress_callback:
+                fp = futures[future]
+                if meta:
+                    status = f"[{processed_count}/{len(audio_files)}] ✓ {meta['artist']} — {meta['title']}"
+                else:
+                    status = f"[{processed_count}/{len(audio_files)}] обработка {fp.name}"
+                progress_callback(processed_count, len(audio_files), status)
 
     print(f"\nГотово: {len(results)}/{len(audio_files)} текстов найдено")
     return results

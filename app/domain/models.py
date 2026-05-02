@@ -15,6 +15,7 @@ class TrackMetadata(BaseModel):
     duration_sec: float
     file_path: str
     lyrics: str | None = None
+    cover_art_path: str | None = None  # путь к обложке /covers/{track_id}.{ext}
 
 
 class TrackHit(BaseModel):

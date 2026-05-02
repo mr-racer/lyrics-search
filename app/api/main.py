@@ -13,9 +13,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, Response
+
+# Silence overly verbose third-party loggers
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("filelock").setLevel(logging.WARNING)
 
 from ..resources.db_client import DbClient
 from ..resources.model_registry import ModelRegistry
@@ -27,6 +32,7 @@ from .sse_utils import event_stream
 
 logger = logging.getLogger(__name__)
 FRONTEND_INDEX = Path(__file__).parent.parent.parent / "frontend" / "index.html"
+COVERS_DIR = Path(__file__).parent.parent.parent / "frontend" / "covers"
 
 
 async def _preload_models_in_background(db_client: DbClient):
@@ -169,6 +175,25 @@ def create_app() -> FastAPI:
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
                 "X-Accel-Buffering": "no",  # Disable nginx buffering
+            },
+        )
+
+    # Cover art endpoint — serve extracted album covers with long cache
+    @app.get("/api/v1/covers/{cover_file}", tags=["Covers"])
+    async def serve_cover(cover_file: str):
+        """Serve an extracted album cover image."""
+        cover_path = COVERS_DIR / cover_file
+        if not cover_path.exists() or not cover_path.is_file():
+            raise HTTPException(status_code=404, detail="Cover not found")
+
+        ext = cover_path.suffix.lower()
+        content_type = "image/jpeg" if ext == ".jpg" else "image/png"
+
+        return Response(
+            cover_path.read_bytes(),
+            media_type=content_type,
+            headers={
+                "Cache-Control": "public, max-age=31536000, immutable",  # 1 year
             },
         )
 

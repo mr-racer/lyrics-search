@@ -11,8 +11,12 @@ class FileProcessor:
     def __init__(self):
         self.metadata = []
 
-    def process_folder(self, music_folder: str, better_lyrics_quality: bool = False):
-        processed_files = fetch_lyrics_bulk(music_folder=music_folder, better_lyrics_quality=better_lyrics_quality)
+    def process_folder(self, music_folder: str, better_lyrics_quality: bool = False, progress_callback=None):
+        processed_files = fetch_lyrics_bulk(
+            music_folder=music_folder,
+            better_lyrics_quality=better_lyrics_quality,
+            progress_callback=progress_callback,
+        )
         self.metadata = processed_files
         return processed_files
 
