@@ -15,7 +15,7 @@ from qdrant_client import models
 
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-CLAP_WEIGHTS = 'weights/music_audioset_epoch_15_esc_90.14.pt'
+CLAP_WEIGHTS = r"C:/Users/ivans/Desktop/python/music_text_search/lyrics-search/weights/music_audioset_epoch_15_esc_90.14.pt"
 
 # MODEL FUNCTIONS
 

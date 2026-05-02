@@ -8,3 +8,14 @@ services:
       - "6334:6334"
     volumes:
       - ./qdrant_storage:/qdrant/storage
+  # api:
+  #   build: .
+  #   container_name: lyrics_api
+  #   restart: unless-stopped
+  #   ports:
+  #     - "8000:8000"
+  #   environment:
+  #     - OPENAI_API_KEY=${OPENAI_API_KEY}
+  #     - LLM_ENDPOINT=${LLM_ENDPOINT:-}
+  #   depends_on:
+  #     - qdrant

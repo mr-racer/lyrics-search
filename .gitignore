@@ -9,6 +9,9 @@ __pycache__/
 # qdrant_storage
 qdrant_storage
 
+# QWEN
+.qwen/
+
 # model weights
 /weights
 
