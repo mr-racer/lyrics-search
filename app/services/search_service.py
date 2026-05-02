@@ -1,11 +1,15 @@
 """Search service — unified interface for text/audio/hybrid search."""
 
+import asyncio
+import logging
 import torch
 from typing import List, Optional, Literal
 
 from ..domain.models import TrackMetadata, TrackHit, SearchRequest, SearchResponse, SearchFilters
 from ..existing.qdrant_db import LyricsDB
 from ..resources.model_registry import ModelRegistry
+
+logger = logging.getLogger(__name__)
 
 
 class SearchService:
@@ -225,3 +229,63 @@ class SearchService:
             }
 
         self.lyrics_db.fit(data, path=None, collection_name=collection_name)
+
+    async def index_tracks_with_progress(
+        self,
+        tracks: List[TrackMetadata],
+        collection_name: Optional[str] = None,
+        progress_callback=None,
+    ) -> None:
+        """Index tracks into Qdrant with progress callbacks.
+
+        Args:
+            tracks: List of tracks to index
+            collection_name: Qdrant collection name
+            progress_callback: Async callback(stage, current, total, message) for progress updates
+        """
+        if not tracks:
+            logger.warning("[SearchService] index_tracks_with_progress: no tracks to index")
+            return
+
+        logger.info("[SearchService] index_tracks_with_progress: %d tracks, collection=%s",
+                    len(tracks), collection_name)
+
+        # Build dict as prepare_metadata() expects: {"Artist — Title": {...}}
+        data: dict[str, dict] = {}
+        for track in tracks:
+            key = f"{track.artist} — {track.title}"
+            data[key] = {
+                "title": track.title,
+                "artist": track.artist,
+                "album": track.album,
+                "year": track.year,
+                "genre": track.genre,
+                "duration": int(track.duration_sec) if track.duration_sec else 0,
+                "lyrics": track.lyrics or "",
+                "file_path": track.file_path,
+            }
+
+        # Report progress: lyrics encoding started
+        if progress_callback:
+            await progress_callback("lyrics", 0, len(tracks), "Кодирование текстов песен...")
+
+        # Call fit in executor (sync op, may take minutes)
+        logger.info("[SearchService] Calling lyrics_db.fit() in executor...")
+        try:
+            await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: self.lyrics_db.fit(
+                    data,
+                    path=None,
+                    collection_name=collection_name,
+                ),
+            )
+            logger.info("[SearchService] lyrics_db.fit() completed successfully")
+        except Exception as e:
+            logger.error("[SearchService] lyrics_db.fit() failed: %s", e, exc_info=True)
+            raise
+
+        # Report progress: lyrics encoding done
+        if progress_callback:
+            await progress_callback("lyrics", len(tracks), len(tracks),
+                                   f"Кодирование завершено, {len(tracks)} треков")

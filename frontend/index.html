@@ -16,27 +16,135 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html, body, #root { height: 100%; width: 100%; overflow: hidden; }
     body { font-family: 'Inter', sans-serif; }
+
     ::-webkit-scrollbar { width: 5px; height: 5px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: rgba(128,128,128,0.2); border-radius: 10px; }
     ::-webkit-scrollbar-thumb:hover { background: rgba(128,128,128,0.35); }
     input, textarea, select, button { font-family: inherit; }
     textarea { overflow: auto; }
-    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    @keyframes pulse { 0%,100%{opacity:0.3;transform:scale(0.8)} 50%{opacity:1;transform:scale(1)} }
-    .section-enter { animation: fadeIn 0.2s ease forwards; }
+
+    @keyframes fadeIn   { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+    @keyframes fadeInUp { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
+    @keyframes spin     { to { transform: rotate(360deg); } }
+    @keyframes pulse    { 0%,100%{opacity:0.3;transform:scale(0.8)} 50%{opacity:1;transform:scale(1)} }
+    @keyframes themeFade { from { opacity:0; } to { opacity:1; } }
+    @keyframes progressFill { from { width:0; } to { width: var(--target-w); } }
+    @keyframes checkPop { 0%{transform:scale(0)} 70%{transform:scale(1.2)} 100%{transform:scale(1)} }
+    @keyframes stepSlideIn { from{opacity:0;transform:translateX(-8px)} to{opacity:1;transform:translateX(0)} }
+
+    .section-enter { animation: fadeIn 0.22s ease forwards; }
+    .theme-transition * { transition: background-color 0.3s ease, border-color 0.3s ease, color 0.25s ease, box-shadow 0.3s ease !important; }
+
+    /* Custom select styling */
+    .musix-select {
+      appearance: none;
+      -webkit-appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23888' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+      padding-right: 28px !important;
+      cursor: pointer;
+    }
+    .musix-select:focus { outline: none; }
+
+    /* Skeuomorphic variant 2: raised panels, embossed elements */
+    .ske-panel-dark {
+      background: linear-gradient(180deg, #1c1c21 0%, #141418 100%);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), inset 0 -1px 0 rgba(0,0,0,0.5), 0 2px 8px rgba(0,0,0,0.5);
+      border: 1px solid rgba(255,255,255,0.06);
+    }
+    .ske-panel-light {
+      background: linear-gradient(180deg, #ffffff 0%, #f4f3f8 100%);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.9), inset 0 -1px 0 rgba(0,0,0,0.06), 0 2px 8px rgba(0,0,0,0.08);
+      border: 1px solid rgba(0,0,0,0.1);
+    }
+    .ske-btn-dark {
+      background: linear-gradient(180deg, #2a2a32 0%, #1e1e25 100%);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.1), inset 0 -1px 0 rgba(0,0,0,0.4), 0 1px 4px rgba(0,0,0,0.4);
+      border: 1px solid rgba(255,255,255,0.07);
+    }
+    .ske-btn-light {
+      background: linear-gradient(180deg, #ffffff 0%, #e8e7ed 100%);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,1), inset 0 -1px 0 rgba(0,0,0,0.1), 0 1px 3px rgba(0,0,0,0.12);
+      border: 1px solid rgba(0,0,0,0.12);
+    }
+    .ske-inset-dark {
+      background: linear-gradient(180deg, #0e0e12 0%, #131318 100%);
+      box-shadow: inset 0 2px 4px rgba(0,0,0,0.6), inset 0 1px 0 rgba(0,0,0,0.8);
+      border: 1px solid rgba(0,0,0,0.5);
+    }
+    .ske-inset-light {
+      background: linear-gradient(180deg, #ebebf0 0%, #f5f4f9 100%);
+      box-shadow: inset 0 2px 4px rgba(0,0,0,0.08), inset 0 1px 0 rgba(0,0,0,0.04);
+      border: 1px solid rgba(0,0,0,0.1);
+    }
+    .ske-accent {
+      background: linear-gradient(180deg, oklch(65% 0.18 265) 0%, oklch(55% 0.2 275) 100%);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.25), inset 0 -1px 0 rgba(0,0,0,0.25), 0 3px 10px oklch(60% 0.18 270 / 0.45);
+    }
+    .ske-accent:active { box-shadow: inset 0 2px 4px rgba(0,0,0,0.3), 0 1px 2px oklch(60% 0.18 270 / 0.3); transform: translateY(1px); }
+
+    /* Progress bar shimmer */
+    @keyframes shimmer {
+      0%   { background-position: -200% center; }
+      100% { background-position: 200% center; }
+    }
+    .progress-shimmer {
+      background: linear-gradient(90deg,
+        oklch(60% 0.18 270) 0%,
+        oklch(65% 0.18 280) 40%,
+        oklch(70% 0.16 270) 50%,
+        oklch(65% 0.18 280) 60%,
+        oklch(60% 0.18 270) 100%);
+      background-size: 200% 100%;
+      animation: shimmer 2s linear infinite;
+    }
+    @keyframes stepIn {
+      from { opacity:0; transform: translateY(4px); }
+      to   { opacity:1; transform: translateY(0); }
+    }
+
+    /* ── Tweaks panel ────────────────────────────────────────── */
+    #musix-tweaks {
+      position: fixed; bottom: 20px; right: 20px; z-index: 9999;
+      width: 272px;
+      border-radius: 16px;
+      font-family: 'Inter', sans-serif;
+      animation: fadeIn 0.2s ease;
+      user-select: none;
+    }
+    #musix-tweaks.hidden { display: none; }
+
+    /* Tweak toggle button */
+    #musix-tweaks-toggle {
+      position: fixed; bottom: 20px; right: 20px; z-index: 10000;
+      width: 38px; height: 38px; border-radius: 11px; border: none; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.18s;
+    }
+
+    /* Typography modes applied to body */
+    body.typo-mono { --ui-font: 'DM Mono', monospace; --ui-size-base: 12px; --ui-tracking: 0; }
+    body.typo-editorial { --ui-font: 'Inter', sans-serif; --ui-size-base: 13px; --ui-tracking: -0.2px; }
+    body.typo-default { --ui-font: 'Inter', sans-serif; --ui-size-base: 13px; --ui-tracking: -0.1px; }
+
+    /* Depth modes */
+    body.depth-flat .depth-card {
+      box-shadow: none !important;
+      border-color: var(--depth-border) !important;
+    }
+    body.depth-deep .depth-card {
+      box-shadow: var(--depth-shadow-deep) !important;
+    }
   </style>
 </head>
 <body>
   <div id="root"></div>
 
 <script type="text/babel">
-const { useState, useEffect, useRef, useCallback } = React;
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
 
-// ─── API Client ───────────────────────────────────────────────────────────────
-// When opened as file:// (directly from disk), relative URLs resolve to file:///C:/api/...
-// Detect this and use the absolute server address instead.
 const API = window.location.protocol === 'file:'
   ? 'http://localhost:8000/api/v1'
   : '/api/v1';
@@ -53,230 +161,321 @@ async function apiFetch(path, opts = {}) {
   return res.json();
 }
 
-// ─── Color tokens (theme-aware) ───────────────────────────────────────────────
+// ─── Color tokens ─────────────────────────────────────────────────────────────
 function useColors(isDark) {
-  return {
-    bg:         isDark ? '#0d0d10'    : '#f5f4f8',
-    surface:    isDark ? '#17171b'    : '#ffffff',
-    surface2:   isDark ? '#1e1e23'    : '#f0eff5',
-    border:     isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.08)',
-    text:       isDark ? '#f0f0f5'    : '#18181c',
-    textMuted:  isDark ? 'rgba(255,255,255,0.4)' : 'rgba(0,0,0,0.4)',
-    textSubtle: isDark ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.25)',
-    accent:     'oklch(60% 0.18 270)',
-    accentBg:   isDark ? 'oklch(60% 0.18 270 / 0.12)' : 'oklch(60% 0.18 270 / 0.1)',
-    accentGrad: 'linear-gradient(135deg, oklch(60% 0.18 270), oklch(58% 0.18 300))',
-    inputBg:    isDark ? '#1a1a1f'    : '#ffffff',
-    sidebarBg:  isDark ? 'linear-gradient(180deg, #111114 0%, #0d0d10 100%)' : 'linear-gradient(180deg, #f0eff5 0%, #e8e7ef 100%)',
-    sidebarBorder: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.08)',
-    chatPanelBg: isDark ? '#111115'   : '#fafaf8',
-    userBubble: 'linear-gradient(135deg, oklch(60% 0.18 270), oklch(58% 0.18 300))',
-    aiBubble:   isDark ? '#1e1e23'    : '#f0eff5',
-    scrollbar:  isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.1)',
-    shadow:     isDark ? '0 2px 12px rgba(0,0,0,0.5)' : '0 2px 12px rgba(0,0,0,0.08)',
-    green:      'oklch(60% 0.18 140)',
-    greenBg:    isDark ? 'oklch(60% 0.18 140 / 0.12)' : 'oklch(60% 0.18 140 / 0.1)',
-    red:        'oklch(55% 0.2 25)',
-    redBg:      isDark ? 'oklch(55% 0.2 25 / 0.12)' : 'oklch(55% 0.2 25 / 0.1)',
-  };
+  return useMemo(() => ({
+    bg:          isDark ? '#0d0d10'    : '#f2f1f6',
+    surface:     isDark ? '#17171b'    : '#ffffff',
+    surface2:    isDark ? '#1e1e24'    : '#ebebf0',
+    surface3:    isDark ? '#242429'    : '#e4e3e9',
+    border:      isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.09)',
+    borderStrong:isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.14)',
+    text:        isDark ? '#eeeef3'    : '#18181c',
+    textMuted:   isDark ? 'rgba(255,255,255,0.42)' : 'rgba(0,0,0,0.42)',
+    textSubtle:  isDark ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.26)',
+    accent:      'oklch(60% 0.18 270)',
+    accentBg:    isDark ? 'oklch(60% 0.18 270 / 0.13)' : 'oklch(60% 0.18 270 / 0.09)',
+    accentGrad:  'linear-gradient(180deg, oklch(65% 0.18 265) 0%, oklch(55% 0.2 275) 100%)',
+    inputBg:     isDark ? '#131317'    : '#ffffff',
+    sidebarBg:   isDark ? 'linear-gradient(180deg,#131318 0%,#0f0f13 100%)' : 'linear-gradient(180deg,#eeedf3 0%,#e5e4eb 100%)',
+    chatPanelBg: isDark ? '#0f0f13'    : '#f8f8fc',
+    userBubble:  'linear-gradient(135deg, oklch(60% 0.18 270), oklch(58% 0.18 300))',
+    aiBubble:    isDark ? '#1e1e24'    : '#ebebf0',
+    scrollbar:   isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.1)',
+    green:       'oklch(60% 0.18 140)',
+    greenBg:     isDark ? 'oklch(60% 0.18 140 / 0.13)' : 'oklch(60% 0.18 140 / 0.1)',
+    red:         'oklch(55% 0.2 25)',
+    redBg:       isDark ? 'oklch(55% 0.2 25 / 0.13)' : 'oklch(55% 0.2 25 / 0.08)',
+    amber:       'oklch(68% 0.17 65)',
+    amberBg:     isDark ? 'oklch(68% 0.17 65 / 0.13)' : 'oklch(68% 0.17 65 / 0.1)',
+  }), [isDark]);
 }
 
-// ─── AlbumCover placeholder ───────────────────────────────────────────────────
-function AlbumCover({ title = '', artist = '', size = 44, isDark }) {
-  const hue = ((title.charCodeAt(0) || 65) * 37 + (artist.charCodeAt(0) || 65) * 17) % 360;
-  return (
-    <div style={{
-      width: size, height: size, borderRadius: '8px', flexShrink: 0,
-      background: `linear-gradient(135deg, oklch(40% 0.12 ${hue}), oklch(55% 0.18 ${(hue+40)%360}))`,
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      fontSize: size > 60 ? '22px' : '13px', fontWeight: '700',
-      color: 'rgba(255,255,255,0.65)', fontFamily: 'DM Mono, monospace',
-      boxShadow: isDark
-        ? 'inset 0 1px 0 rgba(255,255,255,0.1), 0 2px 6px rgba(0,0,0,0.4)'
-        : 'inset 0 1px 0 rgba(255,255,255,0.5), 0 2px 6px rgba(0,0,0,0.1)',
-    }}>
-      {(title || '?').slice(0, 2).toUpperCase()}
-    </div>
-  );
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function secsToMMSS(s) {
+  if (s == null || isNaN(s)) return s || '—';
+  const m = Math.floor(s / 60);
+  const sec = Math.round(s % 60);
+  return `${m}:${String(sec).padStart(2, '0')}`;
+}
+
+function formatDurationRange(raw) {
+  // raw might be "230-271" or "3:50-4:31" — parse and convert
+  if (!raw || typeof raw !== 'string') return raw || '—';
+  if (raw.includes(':')) return raw; // already formatted
+  const parts = raw.split('-');
+  if (parts.length === 2) {
+    const a = parseInt(parts[0]), b = parseInt(parts[1]);
+    if (!isNaN(a) && !isNaN(b)) return `${secsToMMSS(a)} – ${secsToMMSS(b)}`;
+  }
+  return raw;
 }
 
 // ─── Spinner ──────────────────────────────────────────────────────────────────
-function Spinner({ size = 16 }) {
+function Spinner({ size = 16, color }) {
   return (
     <div style={{
-      width: size, height: size, border: '2px solid rgba(255,255,255,0.2)',
-      borderTopColor: 'oklch(60% 0.18 270)', borderRadius: '50%',
-      animation: 'spin 0.6s linear infinite', flexShrink: 0,
+      width: size, height: size, flexShrink: 0,
+      border: `2px solid ${color ? color + '40' : 'rgba(255,255,255,0.15)'}`,
+      borderTopColor: color || 'oklch(60% 0.18 270)',
+      borderRadius: '50%', animation: 'spin 0.65s linear infinite',
     }} />
   );
 }
 
+// ─── AlbumCover ───────────────────────────────────────────────────────────────
+function AlbumCover({ title='', artist='', size=44, isDark }) {
+  const hue = ((title.charCodeAt(0)||65)*37 + (artist.charCodeAt(0)||65)*17) % 360;
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: '8px', flexShrink: 0,
+      background: `linear-gradient(135deg, oklch(38% 0.13 ${hue}), oklch(52% 0.18 ${(hue+45)%360}))`,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontSize: size > 60 ? '22px' : '12px', fontWeight: '700',
+      color: 'rgba(255,255,255,0.6)', fontFamily: 'DM Mono, monospace',
+      boxShadow: isDark
+        ? 'inset 0 1px 0 rgba(255,255,255,0.12), inset 0 -1px 0 rgba(0,0,0,0.4), 0 2px 6px rgba(0,0,0,0.45)'
+        : 'inset 0 1px 0 rgba(255,255,255,0.8), inset 0 -1px 0 rgba(0,0,0,0.08), 0 2px 5px rgba(0,0,0,0.1)',
+    }}>
+      {(title||'?').slice(0,2).toUpperCase()}
+    </div>
+  );
+}
+
+// ─── Custom Select ────────────────────────────────────────────────────────────
+function MusixSelect({ value, onChange, options, isDark, style={} }) {
+  const c = useColors(isDark);
+  return (
+    <select
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      className={`musix-select ${isDark ? 'ske-inset-dark' : 'ske-inset-light'}`}
+      style={{
+        padding: '7px 28px 7px 10px', borderRadius: '8px',
+        color: c.text, fontSize: '13px', fontFamily: 'DM Mono, monospace',
+        ...style,
+      }}
+    >
+      {options.map(o => (
+        <option key={o.value} value={o.value} style={{ background: isDark ? '#1e1e24' : '#fff' }}>
+          {o.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 // ─── ResultCard ───────────────────────────────────────────────────────────────
-function ResultCard({ hit, isDark, c, compact = false, onClick }) {
+function ResultCard({ hit, isDark, c, compact=false, onClick }) {
   const track = hit.track || {};
-  const modeColor = {
-    lyrics: c.accent, audio: 'oklch(60% 0.18 310)', hybrid: 'oklch(60% 0.15 140)',
-  }[hit.matched_on] || c.accent;
-
-  const fmtDuration = (sec) => {
-    if (!sec) return '';
-    const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
-    return `${m}:${s.toString().padStart(2, '0')}`;
-  };
-
+  const modeColor = { lyrics: c.accent, audio: 'oklch(60% 0.18 310)', hybrid: 'oklch(60% 0.15 140)' }[hit.matched_on] || c.accent;
   return (
     <div
       onClick={onClick}
       onMouseEnter={e => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)'; }}
       onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-      style={{
-        display: 'flex', alignItems: 'center', gap: '10px',
-        padding: compact ? '8px 10px' : '10px 12px', borderRadius: '10px',
-        cursor: onClick ? 'pointer' : 'default',
-        transition: 'background 0.15s',
-      }}
+      style={{ display:'flex', alignItems:'center', gap:'10px', padding: compact?'8px 10px':'10px 12px', borderRadius:'10px', cursor: onClick?'pointer':'default', transition:'background 0.12s' }}
     >
-      <AlbumCover title={track.title} artist={track.artist} size={compact ? 36 : 44} isDark={isDark} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: '13px', fontWeight: '600', color: c.text,
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {track.title || 'Unknown'}
-        </div>
-        <div style={{ fontSize: '12px', color: c.textMuted, marginTop: '1px' }}>
-          {track.artist || 'Unknown'}{track.year ? ` · ${track.year}` : ''}
-        </div>
-        {hit.snippet && (
-          <div style={{ fontSize: '11px', color: c.textSubtle, marginTop: '3px',
-            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {hit.snippet}
-          </div>
-        )}
+      <AlbumCover title={track.title} artist={track.artist} size={compact?36:44} isDark={isDark} />
+      <div style={{ flex:1, minWidth:0 }}>
+        <div style={{ fontSize:'13px', fontWeight:'600', color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title||'Unknown'}</div>
+        <div style={{ fontSize:'12px', color:c.textMuted, marginTop:'1px' }}>{track.artist||'Unknown'}{track.year?` · ${track.year}`:''}</div>
+        {hit.snippet && <div style={{ fontSize:'11px', color:c.textSubtle, marginTop:'3px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>"{hit.snippet}"</div>}
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px', flexShrink: 0 }}>
-        <div style={{
-          padding: '2px 7px', borderRadius: '20px', fontSize: '11px',
-          fontFamily: 'DM Mono, monospace', fontWeight: '500',
-          background: `${modeColor.replace('oklch(', 'oklch(').replace(')', ' / 0.15)')}`,
-          color: modeColor,
-          border: `1px solid ${modeColor.replace(')', ' / 0.25)')}`,
-        }}>
-          {Math.round((hit.score || 0) * 100)}% {hit.matched_on}
+      <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:'4px', flexShrink:0 }}>
+        <div style={{ padding:'2px 7px', borderRadius:'20px', fontSize:'11px', fontFamily:'DM Mono, monospace', fontWeight:'500',
+          background:`${modeColor} / 0.14)`.replace('oklch(', 'oklch(').replace(') / 0.14)', ' / 0.14)'),
+          color: modeColor, border:`1px solid ${modeColor.replace(')', ' / 0.25)')}` }}>
+          {Math.round((hit.score||0)*100)}% {hit.matched_on}
         </div>
-        {track.genre && (
-          <span style={{ fontSize: '10px', color: c.textSubtle, fontFamily: 'DM Mono, monospace' }}>
-            {track.genre}
-          </span>
-        )}
-        {track.duration_sec > 0 && (
-          <span style={{ fontSize: '10px', color: c.textSubtle, fontFamily: 'DM Mono, monospace' }}>
-            {fmtDuration(track.duration_sec)}
-          </span>
-        )}
+        {track.genre && <span style={{ fontSize:'10px', color:c.textSubtle, fontFamily:'DM Mono, monospace' }}>{track.genre}</span>}
       </div>
     </div>
   );
 }
 
+// ─── Chat History Hook ────────────────────────────────────────────────────────
+function useChatHistory(collectionName) {
+  const storageKey = `musix_chat_${collectionName || 'default'}`;
+  
+  const loadHistory = useCallback(() => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      return raw ? JSON.parse(raw) : [];
+    } catch { return []; }
+  }, [storageKey]);
+
+  const [sessions, setSessions] = useState(loadHistory);
+
+  // Reload when collection changes
+  useEffect(() => { setSessions(loadHistory()); }, [storageKey, loadHistory]);
+
+  const saveSession = useCallback((msgs) => {
+    if (!msgs || msgs.length === 0) return;
+    setSessions(prev => {
+      const ts = Date.now();
+      const first = msgs.find(m => m.role === 'user');
+      const title = first?.text?.slice(0, 48) || 'Чат';
+      const updated = [{ id: ts, title, time: ts, messages: msgs }, ...prev.slice(0, 19)];
+      try { localStorage.setItem(storageKey, JSON.stringify(updated)); } catch {}
+      return updated;
+    });
+  }, [storageKey]);
+
+  const deleteSession = useCallback((id) => {
+    setSessions(prev => {
+      const updated = prev.filter(s => s.id !== id);
+      try { localStorage.setItem(storageKey, JSON.stringify(updated)); } catch {}
+      return updated;
+    });
+  }, [storageKey]);
+
+  return { sessions, saveSession, deleteSession };
+}
+
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
-function Sidebar({ section, onNav, isDark, onThemeToggle, lang, onLangToggle }) {
+function Sidebar({ section, onNav, isDark, onThemeToggle, lang, onLangToggle, collections, activeCollection, onCollectionSwitch }) {
   const c = useColors(isDark);
+  const skePanel = isDark ? 'ske-panel-dark' : 'ske-panel-light';
 
   const navItems = [
-    { id: 'chat', label: lang === 'ru' ? 'Поиск' : 'Search', icon: (
-      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-    )},
-    { id: 'recommend', label: lang === 'ru' ? 'Рекомендации' : 'Recommendations', icon: (
-      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
-    )},
-    { id: 'library', label: lang === 'ru' ? 'Библиотека' : 'Library', icon: (
-      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-        <ellipse cx="12" cy="5" rx="9" ry="3"/>
-        <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
-        <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
-      </svg>
-    )},
+    { id:'chat',      label: lang==='ru'?'Поиск':'Search',
+      icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg> },
+    { id:'recommend', label: lang==='ru'?'Рекомендации':'Recs',
+      icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg> },
+    { id:'library',   label: lang==='ru'?'Библиотека':'Library',
+      icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></svg> },
+    { id:'settings',  label: lang==='ru'?'Настройки':'Settings',
+      icon: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> },
   ];
 
   const navItemStyle = (id) => ({
-    display: 'flex', alignItems: 'center', gap: '10px',
-    padding: '10px 12px', borderRadius: '10px', cursor: 'pointer',
-    fontSize: '14px', fontWeight: section === id ? '600' : '400',
-    color: section === id ? c.accent : c.textMuted,
-    background: section === id ? c.accentBg : 'transparent',
-    transition: 'all 0.15s', userSelect: 'none',
+    display:'flex', alignItems:'center', gap:'9px',
+    padding:'9px 11px', borderRadius:'9px', cursor:'pointer',
+    fontSize:'13px', fontWeight: section===id ? '600' : '400',
+    color: section===id ? c.accent : c.textMuted,
+    background: section===id ? c.accentBg : 'transparent',
+    transition:'all 0.12s', userSelect:'none',
+    boxShadow: section===id ? (isDark
+      ? 'inset 0 1px 0 rgba(255,255,255,0.04), inset 0 -1px 0 rgba(0,0,0,0.2)'
+      : 'inset 0 1px 0 rgba(255,255,255,0.9), inset 0 -1px 0 rgba(0,0,0,0.06)') : 'none',
+  });
+
+  const toggleBtnStyle = (active) => ({
+    padding:'3px 9px', borderRadius:'6px', border:'none',
+    fontSize:'11px', fontFamily:'DM Mono, monospace', fontWeight:'500',
+    cursor:'pointer', transition:'all 0.15s',
+    background: active
+      ? (isDark ? 'linear-gradient(180deg,#2e2e38 0%,#252530 100%)' : 'linear-gradient(180deg,#fff 0%,#e8e7ed 100%)')
+      : 'transparent',
+    color: active ? c.text : c.textSubtle,
+    boxShadow: active
+      ? (isDark ? 'inset 0 1px 0 rgba(255,255,255,0.08), 0 1px 3px rgba(0,0,0,0.4)' : 'inset 0 1px 0 rgba(255,255,255,0.9), 0 1px 3px rgba(0,0,0,0.12)')
+      : 'none',
   });
 
   return (
     <div style={{
-      width: '220px', minWidth: '220px', height: '100vh', display: 'flex',
-      flexDirection: 'column', background: c.sidebarBg,
-      borderRight: `1px solid ${c.sidebarBorder}`,
-      boxShadow: isDark ? '4px 0 24px rgba(0,0,0,0.4)' : '4px 0 16px rgba(0,0,0,0.06)',
-      zIndex: 10, flexShrink: 0, overflow: 'hidden',
+      width:'215px', minWidth:'215px', height:'100vh', display:'flex', flexDirection:'column',
+      background: c.sidebarBg, zIndex:10, flexShrink:0, overflow:'hidden',
+      borderRight: `1px solid ${c.border}`,
+      boxShadow: isDark ? 'inset -1px 0 0 rgba(255,255,255,0.04), 4px 0 20px rgba(0,0,0,0.5)' : 'inset -1px 0 0 rgba(0,0,0,0.04), 4px 0 16px rgba(0,0,0,0.07)',
     }}>
       {/* Logo */}
-      <div style={{ padding: '26px 24px 22px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+      <div style={{ padding:'24px 20px 20px', display:'flex', alignItems:'center', gap:'10px' }}>
         <div style={{
-          width: '34px', height: '34px', borderRadius: '10px', flexShrink: 0,
-          background: 'linear-gradient(135deg, oklch(60% 0.18 270), oklch(60% 0.18 310))',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          boxShadow: '0 2px 8px oklch(60% 0.18 270 / 0.5)',
+          width:'33px', height:'33px', borderRadius:'10px', flexShrink:0,
+          background:'linear-gradient(145deg, oklch(65% 0.18 265), oklch(55% 0.2 295))',
+          display:'flex', alignItems:'center', justifyContent:'center',
+          boxShadow:'inset 0 1px 0 rgba(255,255,255,0.25), inset 0 -1px 0 rgba(0,0,0,0.25), 0 3px 8px oklch(60% 0.18 270 / 0.5)',
         }}>
-          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round">
             <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
           </svg>
         </div>
-        <span style={{ fontSize: '18px', fontWeight: '700', letterSpacing: '-0.5px', color: c.text }}>MusiX</span>
+        <span style={{ fontSize:'17px', fontWeight:'700', letterSpacing:'-0.5px', color:c.text }}>MusiX</span>
       </div>
 
       {/* Navigation */}
-      <nav style={{ padding: '0 12px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+      <nav style={{ padding:'0 10px', display:'flex', flexDirection:'column', gap:'1px' }}>
         {navItems.map(item => (
-          <div
-            key={item.id}
-            style={navItemStyle(item.id)}
-            onClick={() => onNav(item.id)}
-            onMouseEnter={e => { if (section !== item.id) { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)'; e.currentTarget.style.color = c.text; }}}
-            onMouseLeave={e => { if (section !== item.id) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = c.textMuted; }}}
-          >
+          <div key={item.id} style={navItemStyle(item.id)} onClick={() => onNav(item.id)}
+            onMouseEnter={e => { if(section!==item.id){e.currentTarget.style.background=isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.04)';e.currentTarget.style.color=c.text;}}}
+            onMouseLeave={e => { if(section!==item.id){e.currentTarget.style.background='transparent';e.currentTarget.style.color=c.textMuted;}}}>
             {item.icon}
             <span>{item.label}</span>
           </div>
         ))}
       </nav>
 
-      {/* Spacer */}
-      <div style={{ flex: 1 }} />
+      <div style={{ flex:1 }} />
 
       {/* Bottom controls */}
-      <div style={{
-        padding: '12px 12px 16px',
-        borderTop: `1px solid ${c.border}`,
-        display: 'flex', flexDirection: 'column', gap: '4px',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 8px' }}>
-          <span style={{ fontSize: '10px', fontFamily: 'DM Mono, monospace', color: c.textSubtle, marginRight: '2px' }}>LANG</span>
-          {['ru', 'en'].map(l => (
-            <button key={l} onClick={() => onLangToggle(l)} style={{
-              padding: '3px 9px', borderRadius: '6px', border: 'none',
-              fontSize: '11px', fontFamily: 'DM Mono, monospace', fontWeight: '500',
-              cursor: 'pointer', transition: 'all 0.15s',
-              background: lang === l ? (isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)') : 'transparent',
-              color: lang === l ? c.text : c.textSubtle,
-            }}>{l.toUpperCase()}</button>
+      <div style={{ padding:'10px 10px 14px', display:'flex', flexDirection:'column', gap:'6px', borderTop:`1px solid ${c.border}` }}>
+
+        {/* LANG toggle */}
+        <div style={{ display:'flex', alignItems:'center', gap:'5px', padding:'3px 6px' }}>
+          <span style={{ fontSize:'10px', fontFamily:'DM Mono, monospace', color:c.textSubtle, marginRight:'2px', letterSpacing:'0.5px' }}>LANG</span>
+          {['ru','en'].map(l => (
+            <button key={l} style={toggleBtnStyle(lang===l)} onClick={() => onLangToggle(l)}>{l.toUpperCase()}</button>
           ))}
         </div>
+
+        {/* Active collection switcher */}
+        <div style={{ padding:'4px 6px 6px' }}>
+          <div style={{ fontSize:'9px', fontFamily:'DM Mono, monospace', color:c.textSubtle, textTransform:'uppercase', letterSpacing:'0.6px', marginBottom:'5px' }}>
+            {lang==='ru' ? 'Текущая коллекция' : 'Active collection'}
+          </div>
+          <div style={{
+            borderRadius:'9px', overflow:'hidden',
+            boxShadow: isDark
+              ? 'inset 0 2px 4px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(255,255,255,0.05)'
+              : 'inset 0 2px 4px rgba(0,0,0,0.07), inset 0 0 0 1px rgba(0,0,0,0.08)',
+            background: isDark ? '#0e0e12' : '#e8e7ed',
+          }}>
+            {collections.length === 0 ? (
+              <div style={{ padding:'7px 10px', fontSize:'12px', color:c.textSubtle, fontFamily:'DM Mono, monospace' }}>
+                {lang==='ru' ? '— нет коллекций —' : '— no collections —'}
+              </div>
+            ) : collections.map(col => {
+              const isActive = col.name === activeCollection;
+              return (
+                <div
+                  key={col.name}
+                  onClick={() => onCollectionSwitch(col.name)}
+                  style={{
+                    padding:'7px 10px', cursor:'pointer', fontSize:'12px',
+                    fontFamily:'DM Mono, monospace', transition:'all 0.12s',
+                    color: isActive ? c.accent : c.textMuted,
+                    background: isActive
+                      ? (isDark ? 'oklch(60% 0.18 270 / 0.15)' : 'oklch(60% 0.18 270 / 0.1)')
+                      : 'transparent',
+                    fontWeight: isActive ? '600' : '400',
+                    display:'flex', alignItems:'center', gap:'6px',
+                    borderBottom: `1px solid ${c.border}`,
+                  }}
+                  onMouseEnter={e => { if(!isActive) e.currentTarget.style.background = isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.04)'; }}
+                  onMouseLeave={e => { if(!isActive) e.currentTarget.style.background = 'transparent'; }}
+                >
+                  {isActive && <div style={{ width:'5px', height:'5px', borderRadius:'50%', background:c.accent, boxShadow:`0 0 4px ${c.accent}`, flexShrink:0 }} />}
+                  <span style={{ whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{col.name}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Theme toggle */}
         <button onClick={onThemeToggle} style={{
-          display: 'flex', alignItems: 'center', gap: '8px',
-          padding: '7px 12px', borderRadius: '8px', border: 'none',
-          background: 'transparent', color: c.textMuted, cursor: 'pointer',
-          fontSize: '12px', transition: 'all 0.15s', textAlign: 'left', width: '100%',
+          display:'flex', alignItems:'center', gap:'8px', padding:'7px 10px',
+          borderRadius:'8px', border:'none', background:'transparent',
+          color:c.textMuted, cursor:'pointer', fontSize:'12px', transition:'all 0.15s', width:'100%', textAlign:'left',
         }}>
           {isDark
-            ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
-            : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            ? <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+            : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
           }
-          {isDark ? (lang === 'ru' ? 'Светлая тема' : 'Light mode') : (lang === 'ru' ? 'Тёмная тема' : 'Dark mode')}
+          {isDark ? (lang==='ru'?'Светлая тема':'Light mode') : (lang==='ru'?'Тёмная тема':'Dark mode')}
         </button>
       </div>
     </div>
@@ -284,408 +483,317 @@ function Sidebar({ section, onNav, isDark, onThemeToggle, lang, onLangToggle }) 
 }
 
 // ─── Chat Section ─────────────────────────────────────────────────────────────
-function ChatSection({ isDark, lang }) {
+function ChatSection({ isDark, lang, activeCollection }) {
   const c = useColors(isDark);
-  const [messages, setMessages] = useState([{
-    role: 'assistant',
-    text: lang === 'ru'
-      ? 'Привет! Опиши музыку, которую ищешь — по настроению, тексту, звуку или жанру. Я найду треки в твоей библиотеке.'
-      : 'Hi! Describe the music you\'re looking for — by mood, lyrics, sound, or genre. I\'ll find tracks in your library.',
-    time: new Date().toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' }),
-  }]);
-  const [input, setInput]     = useState('');
+  const { sessions, saveSession, deleteSession } = useChatHistory(activeCollection);
+
+  const initMsg = () => [{
+    role:'assistant',
+    text: lang==='ru'
+      ? 'Привет! Опиши музыку, которую ищешь — по настроению, тексту, звуку или жанру.'
+      : "Hi! Describe the music you're looking for — mood, lyrics, sound, or genre.",
+    time: new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'}),
+  }];
+
+  const [messages, setMessages] = useState(initMsg);
+  const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
-  const [mode, setMode]       = useState('hybrid');
+  const [mode, setMode] = useState('hybrid');
   const [results, setResults] = useState([]);
-  const [searchQuery, setSearchQuery]   = useState('');
-  const [searchMode, setSearchMode]     = useState('hybrid');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchMode, setSearchMode] = useState('hybrid');
   const [searchLoading, setSearchLoading] = useState(false);
-  const [searchError, setSearchError]   = useState('');
-  const [showFilters, setShowFilters]   = useState(false);
-  const [filters, setFilters] = useState({ artist: '', album: '', genre: '' });
-  const [selectedHit, setSelectedHit]   = useState(null);
+  const [searchError, setSearchError] = useState('');
+  const [showFilters, setShowFilters] = useState(false);
+  const [filters, setFilters] = useState({ artist:'', album:'', genre:'' });
+  const [selectedHit, setSelectedHit] = useState(null);
+  const [showHistory, setShowHistory] = useState(false);
   const chatEndRef = useRef(null);
 
-  // LLM settings and active collection are stored in localStorage by LibrarySection
   const getLLMSettings = () => ({
-    llm_base_url:    localStorage.getItem('llm_base_url')      || undefined,
-    llm_model:       localStorage.getItem('llm_model')         || undefined,
-    collection_name: localStorage.getItem('active_collection') || undefined,
+    llm_base_url: localStorage.getItem('llm_base_url') || undefined,
+    llm_model:    localStorage.getItem('llm_model')    || undefined,
+    collection_name: activeCollection || undefined,
   });
 
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollTop = chatEndRef.current.scrollHeight;
+    }
   }, [messages]);
 
-  const modeLabelMap = {
-    text:   lang === 'ru' ? 'Текст'  : 'Lyrics',
-    audio:  lang === 'ru' ? 'Звук'   : 'Audio',
-    hybrid: lang === 'ru' ? 'Гибрид' : 'Hybrid',
-  };
-
-  const buildFilters = () => {
-    const f = {};
-    if (filters.artist) f.artist = filters.artist;
-    if (filters.album)  f.album  = filters.album;
-    if (filters.genre)  f.genre  = filters.genre;
-    return Object.keys(f).length > 0 ? f : null;
-  };
-
-  // Confidence → colour + label
-  const confStyle = (conf) => {
-    if (conf === 'high')   return { color: 'oklch(60% 0.18 140)', label: '●' };
-    if (conf === 'medium') return { color: 'oklch(70% 0.18 80)',  label: '◑' };
-    return                        { color: c.textSubtle,           label: '○' };
-  };
+  const modeLabelMap = { text: lang==='ru'?'Текст':'Lyrics', audio: lang==='ru'?'Звук':'Audio', hybrid: lang==='ru'?'Гибрид':'Hybrid' };
 
   const handleChat = async () => {
     if (!input.trim() || loading) return;
     const userText = input.trim();
-    const now = new Date().toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' });
-    setMessages(prev => [...prev, { role: 'user', text: userText, time: now }]);
-    setInput('');
-    setLoading(true);
-    setMessages(prev => [...prev, { role: 'assistant', loading: true, time: now }]);
-
+    const now = new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'});
+    const newMsgs = [...messages, { role:'user', text:userText, time:now }];
+    setMessages([...newMsgs, { role:'assistant', loading:true, time:now }]);
+    setInput(''); setLoading(true);
     try {
-      const history = messages
-        .filter(m => !m.loading)
-        .map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.text || '' }));
-
-      const res = await apiFetch('/chat/', {
-        method: 'POST',
-        body: JSON.stringify({
-          message: userText,
-          history,
-          mode,
-          ...getLLMSettings(),
-        }),
-      });
-
+      const history = messages.filter(m=>!m.loading).map(m=>({ role:m.role==='assistant'?'assistant':'user', content:m.text||'' }));
+      const res = await apiFetch('/chat/', { method:'POST', body: JSON.stringify({ message:userText, history, mode, ...getLLMSettings() }) });
       const hits = res.hits || [];
-      setResults(hits);
-      setSelectedHit(null);
-
-      setMessages(prev => [
-        ...prev.filter(m => !m.loading),
-        {
-          role: 'assistant',
-          text: res.message || (lang === 'ru' ? 'Не удалось получить ответ.' : 'No response received.'),
-          hits,
-          confidence: res.confidence,
-          song:       res.song,
-          artist:     res.artist,
-          attempts:   res.attempts,
-          time: new Date().toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' }),
-        },
-      ]);
-    } catch (e) {
-      setMessages(prev => [
-        ...prev.filter(m => !m.loading),
-        { role: 'assistant', text: `Ошибка: ${e.message}`, time: new Date().toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' }) },
-      ]);
-    } finally {
-      setLoading(false);
-    }
+      setResults(hits); setSelectedHit(null);
+      const finalMsgs = [...newMsgs, { role:'assistant', text:res.message||'…', hits, confidence:res.confidence, song:res.song, artist:res.artist, attempts:res.attempts, time:new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'}) }];
+      setMessages(finalMsgs);
+      saveSession(finalMsgs);
+    } catch(e) {
+      setMessages(prev => [...prev.filter(m=>!m.loading), { role:'assistant', text:`Ошибка: ${e.message}`, time:new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'}) }]);
+    } finally { setLoading(false); }
   };
 
   const handleSearch = async () => {
     if (!searchQuery.trim() || searchLoading) return;
-    setSearchLoading(true);
-    setSearchError('');
-    setSelectedHit(null);
+    setSearchLoading(true); setSearchError(''); setSelectedHit(null);
     try {
-      const res = await apiFetch('/search/', {
-        method: 'POST',
-        body: JSON.stringify({
-          query: searchQuery,
-          mode: searchMode,
-          filters: buildFilters(),
-          limit: 20,
-          collection_name: localStorage.getItem('active_collection') || undefined,
-        }),
-      });
-      setResults(res.hits || []);
-    } catch (e) {
-      setSearchError(e.message);
-    } finally {
-      setSearchLoading(false);
-    }
+      const f = {};
+      if (filters.artist) f.artist = filters.artist;
+      if (filters.album)  f.album  = filters.album;
+      if (filters.genre)  f.genre  = filters.genre;
+      const res = await apiFetch('/search/', { method:'POST', body: JSON.stringify({ query:searchQuery, mode:searchMode, filters:Object.keys(f).length?f:null, limit:20, collection_name:activeCollection||undefined }) });
+      setResults(res.hits||[]);
+    } catch(e) { setSearchError(e.message); }
+    finally { setSearchLoading(false); }
   };
 
-  const modeBarStyle = { display: 'flex', gap: '4px', marginBottom: '10px' };
+  const confStyle = (conf) => {
+    if (conf==='high')   return { color:'oklch(60% 0.18 140)' };
+    if (conf==='medium') return { color:'oklch(70% 0.18 80)' };
+    return { color: c.textSubtle };
+  };
+
   const modeBtnStyle = (id) => ({
-    flex: 1, padding: '6px', borderRadius: '8px', border: 'none',
-    fontSize: '12px', fontWeight: mode === id ? '600' : '400',
-    cursor: 'pointer', transition: 'all 0.15s',
-    background: mode === id ? c.accentGrad : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)'),
-    color: mode === id ? 'white' : c.textMuted,
-    boxShadow: mode === id ? '0 2px 8px oklch(60% 0.18 270 / 0.3), inset 0 1px 0 rgba(255,255,255,0.15)' : 'none',
+    flex:1, padding:'6px', borderRadius:'8px', border:'none', fontSize:'12px',
+    fontWeight: mode===id?'600':'400', cursor:'pointer', transition:'all 0.12s',
+    background: mode===id
+      ? 'linear-gradient(180deg, oklch(65% 0.18 265) 0%, oklch(55% 0.2 275) 100%)'
+      : (isDark?'rgba(255,255,255,0.05)':'rgba(0,0,0,0.05)'),
+    color: mode===id ? 'white' : c.textMuted,
+    boxShadow: mode===id
+      ? 'inset 0 1px 0 rgba(255,255,255,0.2), inset 0 -1px 0 rgba(0,0,0,0.2), 0 2px 8px oklch(60% 0.18 270 / 0.3)'
+      : (isDark?'inset 0 1px 0 rgba(255,255,255,0.04)':'inset 0 -1px 0 rgba(0,0,0,0.06)'),
   });
 
   const renderMessage = (msg, i) => {
-    const isUser = msg.role === 'user';
+    const isUser = msg.role==='user';
     const cs = msg.confidence ? confStyle(msg.confidence) : null;
     return (
-      <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: isUser ? 'flex-end' : 'flex-start', gap: '4px' }}>
+      <div key={i} style={{ display:'flex', flexDirection:'column', alignItems:isUser?'flex-end':'flex-start', gap:'4px' }}>
         <div style={{
-          maxWidth: '88%', padding: '10px 13px',
-          borderRadius: isUser ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
+          maxWidth:'88%', padding:'10px 13px',
+          borderRadius: isUser?'14px 14px 4px 14px':'14px 14px 14px 4px',
           background: isUser ? c.userBubble : c.aiBubble,
-          color: isUser ? 'white' : c.text,
-          fontSize: '13px', lineHeight: '1.6',
-          boxShadow: isDark ? '0 1px 4px rgba(0,0,0,0.3)' : '0 1px 4px rgba(0,0,0,0.06)',
+          color: isUser?'white':c.text, fontSize:'13px', lineHeight:'1.6',
+          boxShadow: isDark
+            ? (isUser ? 'inset 0 1px 0 rgba(255,255,255,0.15), 0 2px 8px rgba(0,0,0,0.4)' : 'inset 0 1px 0 rgba(255,255,255,0.05), 0 1px 4px rgba(0,0,0,0.3)')
+            : (isUser ? 'inset 0 1px 0 rgba(255,255,255,0.2), 0 2px 6px oklch(60% 0.18 270 / 0.2)' : 'inset 0 1px 0 rgba(255,255,255,0.9), 0 1px 4px rgba(0,0,0,0.06)'),
         }}>
           {msg.loading
-            ? <div style={{ display: 'flex', gap: '4px', alignItems: 'center', padding: '2px 0' }}>
-                {[0, 1, 2].map(j => <div key={j} style={{ width: '6px', height: '6px', borderRadius: '50%', background: c.textMuted, animation: `pulse 1.2s ease-in-out ${j * 0.2}s infinite` }} />)}
+            ? <div style={{ display:'flex', gap:'4px', alignItems:'center', padding:'2px 0' }}>
+                {[0,1,2].map(j => <div key={j} style={{ width:'6px', height:'6px', borderRadius:'50%', background:c.textMuted, animation:`pulse 1.2s ease-in-out ${j*0.2}s infinite` }} />)}
               </div>
             : msg.text}
         </div>
-
-        {/* Hits (from agentic search) */}
         {msg.hits && msg.hits.length > 0 && (
-          <div style={{
-            maxWidth: '96%', borderRadius: '10px', overflow: 'hidden',
-            border: `1px solid ${c.border}`, background: c.surface,
-            boxShadow: isDark ? '0 2px 8px rgba(0,0,0,0.3)' : '0 2px 8px rgba(0,0,0,0.06)',
-          }}>
-            {msg.hits.slice(0, 5).map((hit, hi) => (
-              <ResultCard key={hi} hit={hit} isDark={isDark} c={c} compact
-                onClick={() => { setResults(msg.hits); setSelectedHit(hit); }} />
-            ))}
+          <div style={{ maxWidth:'96%', borderRadius:'10px', overflow:'hidden', border:`1px solid ${c.border}`, background:c.surface,
+            boxShadow: isDark?'inset 0 1px 0 rgba(255,255,255,0.04), 0 2px 8px rgba(0,0,0,0.35)':'inset 0 1px 0 rgba(255,255,255,0.9), 0 2px 8px rgba(0,0,0,0.07)' }}>
+            {msg.hits.slice(0,5).map((hit,hi) => <ResultCard key={hi} hit={hit} isDark={isDark} c={c} compact onClick={() => { setResults(msg.hits); setSelectedHit(hit); }} />)}
           </div>
         )}
-
-        {/* Meta row: time · confidence · attempts */}
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-          <span style={{ fontSize: '10px', color: c.textSubtle, fontFamily: 'DM Mono, monospace' }}>{msg.time}</span>
-          {cs && (
-            <span style={{ fontSize: '10px', color: cs.color, fontFamily: 'DM Mono, monospace' }}>
-              {cs.label} {msg.confidence}
-            </span>
-          )}
-          {msg.attempts != null && (
-            <span style={{ fontSize: '10px', color: c.textSubtle, fontFamily: 'DM Mono, monospace' }}>
-              {msg.attempts}/{4} {lang === 'ru' ? 'попыток' : 'attempts'}
-            </span>
-          )}
+        <div style={{ display:'flex', gap:'8px', alignItems:'center' }}>
+          <span style={{ fontSize:'10px', color:c.textSubtle, fontFamily:'DM Mono, monospace' }}>{msg.time}</span>
+          {cs && <span style={{ fontSize:'10px', color:cs.color, fontFamily:'DM Mono, monospace' }}>● {msg.confidence}</span>}
+          {msg.attempts!=null && <span style={{ fontSize:'10px', color:c.textSubtle, fontFamily:'DM Mono, monospace' }}>{msg.attempts}/4 {lang==='ru'?'попыток':'attempts'}</span>}
         </div>
       </div>
     );
   };
 
   return (
-    <div style={{ display: 'flex', flex: 1, height: '100vh', overflow: 'hidden', background: c.bg }}>
+    <div style={{ display:'flex', flex:1, height:'100vh', overflow:'hidden', background:c.bg }}>
       {/* Chat panel */}
-      <div style={{ width: '420px', minWidth: '360px', display: 'flex', flexDirection: 'column', borderRight: `1px solid ${c.border}`, background: c.chatPanelBg }}>
-        <div style={{ padding: '20px 20px 16px', borderBottom: `1px solid ${c.border}` }}>
-          <div style={{ fontSize: '16px', fontWeight: '700', color: c.text, letterSpacing: '-0.3px' }}>
-            {lang === 'ru' ? 'Поиск по коллекции' : 'Search Collection'}
+      <div style={{ width:'400px', minWidth:'340px', display:'flex', flexDirection:'column', borderRight:`1px solid ${c.border}`, background:c.chatPanelBg,
+        boxShadow: isDark?'inset -1px 0 0 rgba(255,255,255,0.03), 2px 0 12px rgba(0,0,0,0.3)':'inset -1px 0 0 rgba(0,0,0,0.04), 2px 0 8px rgba(0,0,0,0.05)' }}>
+
+        {/* Header */}
+        <div style={{ padding:'18px 18px 14px', borderBottom:`1px solid ${c.border}`,
+          background: isDark?'linear-gradient(180deg,rgba(255,255,255,0.025) 0%,transparent 100%)':'linear-gradient(180deg,rgba(255,255,255,0.8) 0%,transparent 100%)',
+          display:'flex', alignItems:'flex-start', justifyContent:'space-between' }}>
+          <div>
+            <div style={{ fontSize:'15px', fontWeight:'700', color:c.text, letterSpacing:'-0.3px' }}>{lang==='ru'?'Поиск по коллекции':'Search Collection'}</div>
+            <div style={{ fontSize:'11px', color:c.textMuted, marginTop:'2px' }}>{lang==='ru'?'Спроси что угодно о своей музыке':'Ask anything about your music'}</div>
           </div>
-          <div style={{ fontSize: '12px', color: c.textMuted, marginTop: '2px' }}>
-            {lang === 'ru' ? 'Спроси что угодно о своей музыке' : 'Ask anything about your music'}
-          </div>
+          <button
+            onClick={() => setShowHistory(h => !h)}
+            title={lang==='ru'?'История чатов':'Chat history'}
+            style={{
+              width:'28px', height:'28px', borderRadius:'7px', border:`1px solid ${c.border}`, cursor:'pointer',
+              background: showHistory ? c.accentBg : (isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.04)'),
+              color: showHistory ? c.accent : c.textMuted, display:'flex', alignItems:'center', justifyContent:'center',
+              boxShadow: isDark?'inset 0 1px 0 rgba(255,255,255,0.06)':'inset 0 1px 0 rgba(255,255,255,0.9)',
+              flexShrink:0,
+            }}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="10"/>
+            </svg>
+          </button>
         </div>
 
-        <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px', scrollbarWidth: 'thin' }}>
+        {/* History drawer */}
+        {showHistory && (
+          <div style={{ borderBottom:`1px solid ${c.border}`, background:c.surface2, maxHeight:'220px', overflowY:'auto', scrollbarWidth:'thin' }}>
+            {sessions.length === 0 ? (
+              <div style={{ padding:'16px', fontSize:'12px', color:c.textSubtle, textAlign:'center' }}>{lang==='ru'?'История пуста':'No history yet'}</div>
+            ) : sessions.map(s => (
+              <div key={s.id} style={{ display:'flex', alignItems:'center', gap:'8px', padding:'9px 14px', cursor:'pointer', borderBottom:`1px solid ${c.border}`,
+                transition:'background 0.1s' }}
+                onMouseEnter={e=>e.currentTarget.style.background=isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.03)'}
+                onMouseLeave={e=>e.currentTarget.style.background='transparent'}
+                onClick={() => { setMessages(s.messages); setShowHistory(false); }}>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={c.textSubtle} strokeWidth="2"><path d="M12 8v4l3 3"/><circle cx="12" cy="12" r="10"/></svg>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:'12px', color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{s.title}</div>
+                  <div style={{ fontSize:'10px', color:c.textSubtle, fontFamily:'DM Mono, monospace' }}>{new Date(s.time).toLocaleDateString('ru', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' })}</div>
+                </div>
+                <button
+                  onClick={e => { e.stopPropagation(); deleteSession(s.id); }}
+                  style={{ width:'20px', height:'20px', borderRadius:'5px', border:'none', background:'transparent', color:c.textSubtle, cursor:'pointer', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}
+                >×</button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Messages */}
+        <div ref={chatEndRef} style={{ flex:1, overflowY:'auto', padding:'14px', display:'flex', flexDirection:'column', gap:'12px', scrollbarWidth:'thin', scrollbarColor:`${c.scrollbar} transparent` }}>
           {messages.map(renderMessage)}
-          <div ref={chatEndRef} />
         </div>
 
-        <div style={{ padding: '12px 16px 16px', borderTop: `1px solid ${c.border}`, background: isDark ? 'rgba(0,0,0,0.2)' : 'rgba(255,255,255,0.6)' }}>
-          <div style={modeBarStyle}>
-            {Object.entries(modeLabelMap).map(([id, label]) => (
+        {/* New chat */}
+        <div style={{ padding:'6px 14px 0', display:'flex', justifyContent:'flex-end' }}>
+          <button onClick={() => { saveSession(messages); setMessages(initMsg()); setResults([]); }} style={{ fontSize:'11px', color:c.textSubtle, background:'none', border:'none', cursor:'pointer', padding:'4px 8px', borderRadius:'6px', display:'flex', alignItems:'center', gap:'4px' }}>
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            {lang==='ru'?'Новый чат':'New chat'}
+          </button>
+        </div>
+
+        {/* Input */}
+        <div style={{ padding:'8px 14px 14px', borderTop:`1px solid ${c.border}`, background:isDark?'rgba(0,0,0,0.25)':'rgba(255,255,255,0.6)', backdropFilter:'blur(8px)' }}>
+          <div style={{ display:'flex', gap:'4px', marginBottom:'8px' }}>
+            {Object.entries(modeLabelMap).map(([id,label]) => (
               <button key={id} style={modeBtnStyle(id)} onClick={() => setMode(id)}>{label}</button>
             ))}
           </div>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
+          <div style={{ display:'flex', gap:'8px', alignItems:'flex-end' }}>
             <textarea
-              value={input}
-              onChange={e => setInput(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChat(); } }}
-              placeholder={lang === 'ru' ? 'Опиши музыку...' : 'Describe the music...'}
-              rows={1}
+              value={input} onChange={e=>setInput(e.target.value)}
+              onKeyDown={e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();handleChat();} }}
+              placeholder={lang==='ru'?'Опиши музыку...':'Describe the music...'}
+              rows={1} disabled={loading}
               style={{
-                flex: 1, padding: '10px 12px', borderRadius: '10px',
-                border: `1px solid ${c.border}`, background: c.inputBg, color: c.text,
-                resize: 'none', fontSize: '13px', lineHeight: '1.5', outline: 'none',
-                minHeight: '40px', maxHeight: '120px',
-                boxShadow: isDark ? 'inset 0 1px 3px rgba(0,0,0,0.4)' : 'inset 0 1px 3px rgba(0,0,0,0.06)',
+                flex:1, padding:'9px 11px', borderRadius:'9px', border:`1px solid ${c.border}`,
+                background:c.inputBg, color:c.text, resize:'none', fontSize:'13px', lineHeight:'1.5', outline:'none',
+                minHeight:'38px', maxHeight:'110px',
+                boxShadow: isDark?'inset 0 2px 4px rgba(0,0,0,0.5), inset 0 0 0 1px rgba(255,255,255,0.03)':'inset 0 2px 3px rgba(0,0,0,0.07)',
               }}
-              disabled={loading}
             />
-            <button
-              onClick={handleChat}
-              disabled={loading || !input.trim()}
-              style={{
-                width: '40px', height: '40px', borderRadius: '10px', border: 'none', flexShrink: 0,
-                background: loading || !input.trim() ? (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)') : c.accentGrad,
-                color: loading || !input.trim() ? c.textSubtle : 'white',
-                cursor: loading || !input.trim() ? 'not-allowed' : 'pointer',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                boxShadow: loading || !input.trim() ? 'none' : '0 2px 8px oklch(60% 0.18 270 / 0.35)',
-                transition: 'all 0.15s',
-              }}
-            >
-              {loading
-                ? <Spinner size={16} />
-                : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-              }
+            <button onClick={handleChat} disabled={loading||!input.trim()} style={{
+              width:'38px', height:'38px', borderRadius:'9px', border:'none', flexShrink:0,
+              background: loading||!input.trim() ? (isDark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.06)') : 'linear-gradient(180deg, oklch(65% 0.18 265) 0%, oklch(55% 0.2 275) 100%)',
+              color: loading||!input.trim() ? c.textSubtle : 'white',
+              cursor: loading||!input.trim()?'not-allowed':'pointer',
+              display:'flex', alignItems:'center', justifyContent:'center', transition:'all 0.12s',
+              boxShadow: loading||!input.trim() ? (isDark?'inset 0 1px 0 rgba(255,255,255,0.04)':'none') : 'inset 0 1px 0 rgba(255,255,255,0.2), inset 0 -1px 0 rgba(0,0,0,0.2), 0 2px 8px oklch(60% 0.18 270 / 0.4)',
+            }}>
+              {loading ? <Spinner size={15} color="white" /> : <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>}
             </button>
           </div>
         </div>
       </div>
 
       {/* Results panel */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        {/* Manual search bar */}
-        <div style={{ padding: '14px 16px', borderBottom: `1px solid ${c.border}`, display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <input
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && handleSearch()}
-              placeholder={lang === 'ru' ? 'Ручной поиск...' : 'Manual search...'}
-              style={{
-                flex: 1, padding: '9px 12px', borderRadius: '8px',
-                border: `1px solid ${c.border}`, background: c.inputBg, color: c.text,
-                fontSize: '13px', outline: 'none',
-              }}
-            />
-            <select
-              value={searchMode}
-              onChange={e => setSearchMode(e.target.value)}
-              style={{
-                padding: '8px 10px', borderRadius: '8px',
-                border: `1px solid ${c.border}`, background: c.inputBg, color: c.text,
-                fontSize: '12px', cursor: 'pointer', outline: 'none',
-              }}
-            >
-              <option value="text">{lang === 'ru' ? 'Текст' : 'Lyrics'}</option>
-              <option value="audio">{lang === 'ru' ? 'Звук' : 'Audio'}</option>
-              <option value="hybrid">{lang === 'ru' ? 'Гибрид' : 'Hybrid'}</option>
-            </select>
-            <button
-              onClick={() => setShowFilters(p => !p)}
-              style={{
-                padding: '8px 12px', borderRadius: '8px', border: `1px solid ${c.border}`,
-                background: showFilters ? c.accentBg : (isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)'),
-                color: showFilters ? c.accent : c.textMuted,
-                fontSize: '12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px',
-              }}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
-              {lang === 'ru' ? 'Фильтры' : 'Filters'}
+      <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+        {/* Search bar */}
+        <div style={{ padding:'12px 14px', borderBottom:`1px solid ${c.border}`, display:'flex', flexDirection:'column', gap:'8px',
+          background: isDark?'linear-gradient(180deg,rgba(255,255,255,0.02) 0%,transparent 100%)':'linear-gradient(180deg,rgba(255,255,255,0.7) 0%,transparent 100%)' }}>
+          <div style={{ display:'flex', gap:'8px', alignItems:'center' }}>
+            <input value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleSearch()}
+              placeholder={lang==='ru'?'Ручной поиск...':'Manual search...'}
+              style={{ flex:1, padding:'8px 11px', borderRadius:'8px', border:`1px solid ${c.border}`, background:c.inputBg, color:c.text, fontSize:'13px', outline:'none',
+                boxShadow: isDark?'inset 0 2px 3px rgba(0,0,0,0.4)':'inset 0 1px 2px rgba(0,0,0,0.06)' }} />
+            <MusixSelect isDark={isDark} value={searchMode} onChange={setSearchMode} options={[
+              {value:'text',label:lang==='ru'?'Текст':'Lyrics'},{value:'audio',label:lang==='ru'?'Звук':'Audio'},{value:'hybrid',label:lang==='ru'?'Гибрид':'Hybrid'}
+            ]} />
+            <button onClick={() => setShowFilters(p=>!p)} style={{
+              padding:'7px 11px', borderRadius:'8px', border:`1px solid ${c.border}`, cursor:'pointer', fontSize:'12px',
+              background: showFilters ? c.accentBg : (isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.03)'),
+              color: showFilters ? c.accent : c.textMuted, display:'flex', alignItems:'center', gap:'5px',
+              boxShadow: isDark?'inset 0 1px 0 rgba(255,255,255,0.05)':'inset 0 1px 0 rgba(255,255,255,0.9)',
+            }}>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+              {lang==='ru'?'Фильтры':'Filters'}
             </button>
-            <button
-              onClick={handleSearch}
-              disabled={searchLoading || !searchQuery.trim()}
-              style={{
-                padding: '8px 16px', borderRadius: '8px', border: 'none',
-                background: searchLoading || !searchQuery.trim()
-                  ? (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)')
-                  : c.accentGrad,
-                color: searchLoading || !searchQuery.trim() ? c.textSubtle : 'white',
-                fontSize: '13px', fontWeight: '600', cursor: searchLoading || !searchQuery.trim() ? 'not-allowed' : 'pointer',
-                display: 'flex', alignItems: 'center', gap: '6px',
-                boxShadow: searchLoading || !searchQuery.trim() ? 'none' : '0 2px 8px oklch(60% 0.18 270 / 0.3)',
-              }}
-            >
-              {searchLoading ? <Spinner size={14} /> : (lang === 'ru' ? 'Найти' : 'Search')}
+            <button onClick={handleSearch} disabled={searchLoading||!searchQuery.trim()} style={{
+              padding:'8px 14px', borderRadius:'8px', border:'none', fontSize:'12px', fontWeight:'600', cursor: searchLoading||!searchQuery.trim()?'not-allowed':'pointer',
+              background: searchLoading||!searchQuery.trim() ? (isDark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.06)') : 'linear-gradient(180deg, oklch(65% 0.18 265) 0%, oklch(55% 0.2 275) 100%)',
+              color: searchLoading||!searchQuery.trim() ? c.textSubtle : 'white', display:'flex', alignItems:'center', gap:'6px',
+              boxShadow: searchLoading||!searchQuery.trim() ? 'none' : 'inset 0 1px 0 rgba(255,255,255,0.2), 0 2px 6px oklch(60% 0.18 270 / 0.3)',
+            }}>
+              {searchLoading ? <Spinner size={13} color="white" /> : (lang==='ru'?'Найти':'Search')}
             </button>
           </div>
-
           {showFilters && (
-            <div style={{ display: 'flex', gap: '8px', padding: '10px 12px', borderRadius: '8px', background: c.surface2, border: `1px solid ${c.border}` }}>
-              {[
-                { key: 'artist', label: lang === 'ru' ? 'Исполнитель' : 'Artist' },
-                { key: 'album',  label: lang === 'ru' ? 'Альбом' : 'Album' },
-                { key: 'genre',  label: lang === 'ru' ? 'Жанр' : 'Genre' },
-              ].map(f => (
-                <input
-                  key={f.key}
-                  value={filters[f.key]}
-                  onChange={e => setFilters(p => ({ ...p, [f.key]: e.target.value }))}
-                  placeholder={f.label}
-                  style={{
-                    flex: 1, padding: '6px 10px', borderRadius: '6px',
-                    border: `1px solid ${c.border}`, background: c.inputBg, color: c.text,
-                    fontSize: '12px', outline: 'none',
-                  }}
-                />
+            <div style={{ display:'flex', gap:'8px', padding:'9px 11px', borderRadius:'8px', background:c.surface2, border:`1px solid ${c.border}`,
+              boxShadow: isDark?'inset 0 2px 4px rgba(0,0,0,0.3)':'inset 0 1px 2px rgba(0,0,0,0.05)' }}>
+              {[{key:'artist',label:lang==='ru'?'Исполнитель':'Artist'},{key:'album',label:lang==='ru'?'Альбом':'Album'},{key:'genre',label:lang==='ru'?'Жанр':'Genre'}].map(f=>(
+                <input key={f.key} value={filters[f.key]} onChange={e=>setFilters(p=>({...p,[f.key]:e.target.value}))} placeholder={f.label}
+                  style={{ flex:1, padding:'6px 9px', borderRadius:'6px', border:`1px solid ${c.border}`, background:c.inputBg, color:c.text, fontSize:'12px', outline:'none',
+                    boxShadow: isDark?'inset 0 1px 2px rgba(0,0,0,0.4)':'inset 0 1px 2px rgba(0,0,0,0.05)' }} />
               ))}
             </div>
           )}
-
-          {searchError && (
-            <div style={{ padding: '8px 12px', borderRadius: '8px', fontSize: '12px',
-              background: isDark ? 'oklch(55% 0.2 25 / 0.12)' : 'oklch(55% 0.2 25 / 0.08)',
-              color: 'oklch(55% 0.2 25)', border: '1px solid oklch(55% 0.2 25 / 0.2)' }}>
-              {searchError}
-            </div>
-          )}
+          {searchError && <div style={{ padding:'7px 11px', borderRadius:'7px', fontSize:'12px', background:c.redBg, color:c.red, border:`1px solid ${c.red.replace(')','/ 0.25)')}`}}>{searchError}</div>}
         </div>
 
-        {/* Results list or detail */}
+        {/* Results / detail */}
         {selectedHit ? (
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-            <div style={{ padding: '10px 16px', borderBottom: `1px solid ${c.border}` }}>
-              <button onClick={() => setSelectedHit(null)} style={{ background: 'none', border: 'none', color: c.textMuted, cursor: 'pointer', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                ← {lang === 'ru' ? 'назад' : 'back'}
-              </button>
+          <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+            <div style={{ padding:'9px 14px', borderBottom:`1px solid ${c.border}` }}>
+              <button onClick={()=>setSelectedHit(null)} style={{ background:'none', border:'none', color:c.textMuted, cursor:'pointer', fontSize:'12px', display:'flex', alignItems:'center', gap:'4px' }}>← {lang==='ru'?'назад':'back'}</button>
             </div>
-            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px', gap: '20px' }}>
-              <AlbumCover title={selectedHit.track?.title || ''} artist={selectedHit.track?.artist || ''} size={120} isDark={isDark} />
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: '22px', fontWeight: '700', color: c.text, letterSpacing: '-0.5px' }}>{selectedHit.track?.title}</div>
-                <div style={{ fontSize: '15px', color: c.textMuted, marginTop: '4px' }}>{selectedHit.track?.artist}</div>
-                <div style={{ fontSize: '13px', color: c.textSubtle, marginTop: '2px' }}>
-                  {[selectedHit.track?.album, selectedHit.track?.year].filter(Boolean).join(' · ')}
-                </div>
+            <div style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:'36px', gap:'18px' }}>
+              <AlbumCover title={selectedHit.track?.title||''} artist={selectedHit.track?.artist||''} size={110} isDark={isDark} />
+              <div style={{ textAlign:'center' }}>
+                <div style={{ fontSize:'21px', fontWeight:'700', color:c.text, letterSpacing:'-0.5px' }}>{selectedHit.track?.title}</div>
+                <div style={{ fontSize:'14px', color:c.textMuted, marginTop:'4px' }}>{selectedHit.track?.artist}</div>
+                <div style={{ fontSize:'12px', color:c.textSubtle, marginTop:'2px' }}>{[selectedHit.track?.album,selectedHit.track?.year].filter(Boolean).join(' · ')}</div>
               </div>
-              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center' }}>
-                {[
-                  selectedHit.track?.genre,
-                  `${Math.round((selectedHit.score || 0) * 100)}% match`,
-                  selectedHit.matched_on,
-                ].filter(Boolean).map((tag, i) => (
-                  <span key={i} style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px',
-                    fontFamily: 'DM Mono, monospace', background: c.accentBg, color: c.accent,
-                    border: '1px solid oklch(60% 0.18 270 / 0.2)' }}>
-                    {tag}
-                  </span>
+              <div style={{ display:'flex', gap:'8px', flexWrap:'wrap', justifyContent:'center' }}>
+                {[selectedHit.track?.genre, `${Math.round((selectedHit.score||0)*100)}% match`, selectedHit.matched_on].filter(Boolean).map((tag,i)=>(
+                  <span key={i} style={{ padding:'4px 12px', borderRadius:'20px', fontSize:'12px', fontFamily:'DM Mono, monospace', background:c.accentBg, color:c.accent, border:`1px solid oklch(60% 0.18 270 / 0.2)` }}>{tag}</span>
                 ))}
               </div>
-              {selectedHit.snippet && (
-                <div style={{ maxWidth: '480px', padding: '12px 16px', borderRadius: '10px', background: c.surface2,
-                  border: `1px solid ${c.border}`, fontSize: '13px', color: c.textMuted, lineHeight: '1.7',
-                  fontStyle: 'italic', textAlign: 'center' }}>
-                  "{selectedHit.snippet}"
-                </div>
-              )}
+              {selectedHit.snippet && <div style={{ maxWidth:'440px', padding:'11px 15px', borderRadius:'10px', background:c.surface2, border:`1px solid ${c.border}`, fontSize:'13px', color:c.textMuted, lineHeight:'1.7', fontStyle:'italic', textAlign:'center', boxShadow: isDark?'inset 0 2px 4px rgba(0,0,0,0.3)':'inset 0 1px 3px rgba(0,0,0,0.05)' }}>"{selectedHit.snippet}"</div>}
             </div>
           </div>
         ) : (
-          <div style={{ flex: 1, overflowY: 'auto', scrollbarWidth: 'thin' }}>
+          <div style={{ flex:1, overflowY:'auto', scrollbarWidth:'thin', scrollbarColor:`${c.scrollbar} transparent` }}>
             {results.length > 0 ? (
               <div>
-                <div style={{ padding: '12px 16px 6px', fontSize: '12px', color: c.textMuted }}>
-                  {results.length} {lang === 'ru' ? 'треков' : 'tracks'}
-                </div>
-                {results.map((hit, i) => (
-                  <ResultCard key={i} hit={hit} isDark={isDark} c={c} onClick={() => setSelectedHit(hit)} />
-                ))}
+                <div style={{ padding:'10px 14px 5px', fontSize:'11px', color:c.textSubtle, fontFamily:'DM Mono, monospace' }}>{results.length} {lang==='ru'?'треков':'tracks'}</div>
+                {results.map((hit,i) => <ResultCard key={i} hit={hit} isDark={isDark} c={c} onClick={()=>setSelectedHit(hit)} />)}
               </div>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: '12px', padding: '40px' }}>
-                <div style={{ width: '48px', height: '48px', borderRadius: '14px',
-                  background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={c.textSubtle} strokeWidth="1.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+              <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', height:'100%', gap:'12px', padding:'40px' }}>
+                <div style={{ width:'46px', height:'46px', borderRadius:'13px', background:isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.04)', display:'flex', alignItems:'center', justifyContent:'center',
+                  boxShadow: isDark?'inset 0 2px 4px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.05)':'inset 0 2px 3px rgba(0,0,0,0.07), inset 0 1px 0 rgba(255,255,255,0.9)' }}>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={c.textSubtle} strokeWidth="1.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
                 </div>
-                <div style={{ fontSize: '14px', fontWeight: '600', color: c.textMuted }}>{lang === 'ru' ? 'Результаты появятся здесь' : 'Results will appear here'}</div>
-                <div style={{ fontSize: '12px', color: c.textSubtle }}>{lang === 'ru' ? 'Напиши в чат или воспользуйся поиском' : 'Chat or use manual search above'}</div>
+                <div style={{ fontSize:'13px', fontWeight:'600', color:c.textMuted }}>{lang==='ru'?'Результаты появятся здесь':'Results will appear here'}</div>
+                <div style={{ fontSize:'12px', color:c.textSubtle }}>{lang==='ru'?'Напиши в чат или используй поиск выше':'Chat or use manual search above'}</div>
               </div>
             )}
           </div>
@@ -695,881 +803,740 @@ function ChatSection({ isDark, lang }) {
   );
 }
 
-// ─── Recommend Section (placeholder) ─────────────────────────────────────────
+// ─── Recommend Placeholder ────────────────────────────────────────────────────
 function RecommendSection({ isDark, lang }) {
   const c = useColors(isDark);
   return (
-    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: c.bg, flexDirection: 'column', gap: '12px' }}>
-      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke={c.textSubtle} strokeWidth="1.2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
-      <div style={{ fontSize: '16px', fontWeight: '600', color: c.textMuted }}>
-        {lang === 'ru' ? 'Рекомендации' : 'Recommendations'}
+    <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', background:c.bg, flexDirection:'column', gap:'12px' }}>
+      <div style={{ width:'52px', height:'52px', borderRadius:'14px', background:isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.04)', display:'flex', alignItems:'center', justifyContent:'center',
+        boxShadow: isDark?'inset 0 2px 4px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04)':'inset 0 2px 3px rgba(0,0,0,0.07), inset 0 1px 0 rgba(255,255,255,0.9)' }}>
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={c.textSubtle} strokeWidth="1.2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
       </div>
-      <div style={{ fontSize: '13px', color: c.textSubtle }}>
-        {lang === 'ru' ? 'Скоро — похожие треки по CLAP-эмбеддингам' : 'Coming soon — similar tracks via CLAP embeddings'}
-      </div>
+      <div style={{ fontSize:'15px', fontWeight:'600', color:c.textMuted }}>{lang==='ru'?'Рекомендации':'Recommendations'}</div>
+      <div style={{ fontSize:'12px', color:c.textSubtle }}>{lang==='ru'?'Скоро — похожие треки по CLAP-эмбеддингам':'Coming soon — similar tracks via CLAP embeddings'}</div>
     </div>
   );
 }
 
 // ─── Library Section ──────────────────────────────────────────────────────────
-function LibrarySection({ isDark, lang }) {
+function LibrarySection({ isDark, lang, activeCollection, collections, onCollectionSwitch }) {
   const c = useColors(isDark);
 
-  // Stats
   const [stats, setStats] = useState(null);
   const [statsLoading, setStatsLoading] = useState(true);
 
-  // Collections
-  const [collections, setCollections] = useState([]);
-  const [activeCollection, setActiveCollection] = useState(
-    () => localStorage.getItem('active_collection') || ''
-  );
-  const [newCollectionName, setNewCollectionName] = useState('my_collection');
+  const statsAbortRef = useRef(null);
 
-  // Re-index
-  const [folderPath, setFolderPath] = useState('');
-  const [picking, setPicking]   = useState(false);
-  const [textModel, setTextModel] = useState('jinaai/jina-embeddings-v2-small-en');
-  const [betterLyrics, setBetterLyrics] = useState(false);
-  const [models, setModels]     = useState({});
-  const [indexing, setIndexing]     = useState(false);
-  const [indexResult, setIndexResult] = useState(null);
-
-  // LLM settings — persisted in localStorage so ChatSection can read them
-  const [llmBaseUrl, setLlmBaseUrl] = useState(() => localStorage.getItem('llm_base_url') || '');
-  const [llmModel,   setLlmModel]   = useState(() => localStorage.getItem('llm_model')    || '');
-  const [llmSaved,   setLlmSaved]   = useState(false);
-
-  const saveLLMSettings = () => {
-    localStorage.setItem('llm_base_url', llmBaseUrl.trim());
-    localStorage.setItem('llm_model',    llmModel.trim());
-    setLlmSaved(true);
-    setTimeout(() => setLlmSaved(false), 2000);
-  };
-
-  const switchCollection = (name) => {
-    setActiveCollection(name);
-    localStorage.setItem('active_collection', name);
-    loadStats(name);
-  };
-
-  const loadCollections = () =>
-    apiFetch('/library/collections').then(data => {
-      const cols = data.collections || [];
-      setCollections(cols);
-      // Auto-select active collection if not set yet
-      if (!localStorage.getItem('active_collection') && cols.length > 0) {
-        const best = cols.reduce((a, b) => (b.count > a.count ? b : a), cols[0]);
-        switchCollection(best.name);
-      }
-    }).catch(() => {});
-
-  const loadStats = (colName) => {
-    const col = colName !== undefined ? colName : activeCollection;
+  const loadStats = useCallback((colName) => {
+    if (statsAbortRef.current) statsAbortRef.current.abort();
+    const col = colName !== undefined ? colName : (localStorage.getItem('active_collection') || '');
     setStatsLoading(true);
     const qs = col ? `?collection_name=${encodeURIComponent(col)}` : '';
-    apiFetch(`/library/stats${qs}`)
+    const ctrl = new AbortController();
+    statsAbortRef.current = ctrl;
+    apiFetch(`/library/stats${qs}`, { signal: ctrl.signal })
       .then(s => { setStats(s); setStatsLoading(false); })
-      .catch(() => setStatsLoading(false));
-  };
-
-  useEffect(() => {
-    loadCollections();
-    loadStats();
-    apiFetch('/search/models/text').then(setModels).catch(() => {});
+      .catch(e => { if (e.name !== 'AbortError') setStatsLoading(false); });
   }, []);
 
-  const handlePickFolder = async () => {
-    setPicking(true);
-    try {
-      const res = await apiFetch('/library/pick-folder');
-      if (res.path) setFolderPath(res.path);
-    } catch (e) { /* ignore */ }
-    finally { setPicking(false); }
-  };
+  useEffect(() => { loadStats(activeCollection); }, [activeCollection, loadStats]);
 
-  const handleIndex = async () => {
-    if (!folderPath.trim() || indexing) return;
-    setIndexing(true);
-    setIndexResult(null);
-    try {
-      const colName = newCollectionName.trim() || 'music_explorer';
-      const res = await apiFetch('/library/index', {
-        method: 'POST',
-        body: JSON.stringify({
-          folder_path: folderPath,
-          collection_name: colName,
-          better_lyrics_quality: betterLyrics,
-          text_model: textModel,
-        }),
-      });
-      setIndexResult(res);
-      // After indexing: refresh collections, switch to the new collection
-      if (res.status !== 'failed') {
-        await loadCollections();
-        switchCollection(colName);
-      }
-    } catch (e) {
-      setIndexResult({ status: 'failed', message: e.message });
-    } finally {
-      setIndexing(false);
-    }
-  };
+  const GENRE_HUES = [270, 310, 140, 200, 60, 25];
 
-  // Genre bar colours
-  const GENRE_HUES = [270, 310, 140];
-
-  const card = (children, extraStyle = {}) => (
-    <div style={{
-      padding: '22px 24px', borderRadius: '14px',
-      background: c.surface, border: `1px solid ${c.border}`,
-      ...extraStyle,
-    }}>
+  const card = (children, extra={}) => (
+    <div style={{ padding:'20px 22px', borderRadius:'14px', background:c.surface, border:`1px solid ${c.border}`,
+      boxShadow: isDark?'inset 0 1px 0 rgba(255,255,255,0.06), inset 0 -1px 0 rgba(0,0,0,0.3), 0 2px 8px rgba(0,0,0,0.35)':'inset 0 1px 0 rgba(255,255,255,0.9), inset 0 -1px 0 rgba(0,0,0,0.04), 0 2px 6px rgba(0,0,0,0.07)',
+      ...extra }}>
       {children}
     </div>
   );
 
   const cardLabel = (text) => (
-    <div style={{ fontSize: '10px', fontFamily: 'DM Mono, monospace', color: c.textSubtle, textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '14px' }}>
-      {text}
-    </div>
+    <div style={{ fontSize:'10px', fontFamily:'DM Mono, monospace', color:c.textSubtle, textTransform:'uppercase', letterSpacing:'0.7px', marginBottom:'14px' }}>{text}</div>
   );
 
-  return (
-    <div style={{ flex: 1, overflowY: 'auto', background: c.bg, scrollbarWidth: 'thin' }}>
-      <div style={{ maxWidth: '860px', margin: '0 auto', padding: '32px 32px 56px' }}>
-
-        {/* ── Header ── */}
-        <div style={{ marginBottom: '26px' }}>
-          <div style={{ fontSize: '22px', fontWeight: '700', color: c.text, letterSpacing: '-0.5px' }}>
-            {lang === 'ru' ? 'Библиотека' : 'Library'}
-          </div>
-          <div style={{ fontSize: '13px', color: c.textMuted, marginTop: '4px' }}>
-            {lang === 'ru' ? 'Статистика коллекции, карта и управление индексом' : 'Collection stats, map and index management'}
-          </div>
-        </div>
-
-        {/* ── Collection selector ── */}
-        {card(
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-            {/* Icon */}
-            <div style={{
-              width: '32px', height: '32px', borderRadius: '9px', flexShrink: 0,
-              background: c.accentBg,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={c.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/>
-                <path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/>
-              </svg>
-            </div>
-
-            {/* Label */}
-            <div style={{ flexShrink: 0 }}>
-              <div style={{ fontSize: '13px', fontWeight: '600', color: c.text }}>
-                {lang === 'ru' ? 'Активная коллекция' : 'Active collection'}
+  // Horizontal bar for genres/artists
+  const StatBar = ({ items, hues, showPct=true }) => {
+    const maxPct = items[0]?.pct || 1;
+    return (
+      <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
+        {items.slice(0,5).map((item, i) => {
+          const barW = `${Math.round((item.pct||0) / maxPct * 100)}%`;
+          const hue = hues ? (hues[i] ?? 200) : (270 + i * 30) % 360;
+          const label = item.genre || item.artist || item.label || '—';
+          return (
+            <div key={label}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:'5px' }}>
+                <span style={{ fontSize:'13px', color:c.text, fontWeight:'500', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', maxWidth:'60%' }}>{label}</span>
+                <span style={{ fontSize:'11px', color:c.textMuted, fontFamily:'DM Mono, monospace', flexShrink:0 }}>
+                  {item.count} {lang==='ru'?'тр.':'tr.'}{showPct ? ` · ${item.pct}%` : ''}
+                </span>
               </div>
-              <div style={{ fontSize: '11px', color: c.textSubtle, marginTop: '1px' }}>
-                {lang === 'ru' ? 'Поиск и статистика — из этой коллекции' : 'Search and stats use this collection'}
+              <div style={{ height:'5px', borderRadius:'3px', background:isDark?'rgba(255,255,255,0.07)':'rgba(0,0,0,0.07)',
+                boxShadow: isDark?'inset 0 1px 2px rgba(0,0,0,0.5)':'inset 0 1px 1px rgba(0,0,0,0.08)' }}>
+                <div style={{ width:barW, height:'100%', borderRadius:'3px',
+                  background:`oklch(60% 0.18 ${hue})`,
+                  boxShadow:`0 0 6px oklch(60% 0.18 ${hue} / 0.35)`,
+                  transition:'width 0.65s cubic-bezier(.4,0,.2,1)' }} />
               </div>
             </div>
+          );
+        })}
+      </div>
+    );
+  };
 
-            {/* Dropdown */}
-            <select
-              value={activeCollection}
-              onChange={e => switchCollection(e.target.value)}
-              style={{
-                flex: 1, minWidth: '160px', padding: '7px 10px', borderRadius: '8px',
-                border: `1px solid ${c.border}`, background: c.inputBg, color: c.text,
-                fontSize: '13px', outline: 'none', cursor: 'pointer',
-                fontFamily: 'DM Mono, monospace',
-              }}
-            >
-              {collections.length === 0
-                ? <option value="">{lang === 'ru' ? '— нет коллекций —' : '— no collections —'}</option>
-                : collections.map(col => (
-                    <option key={col.name} value={col.name}>
-                      {col.name} ({col.count.toLocaleString('ru')} {lang === 'ru' ? 'тр.' : 'tr.'})
-                    </option>
-                  ))
-              }
-            </select>
-
-            {/* Refresh button */}
-            <button
-              onClick={() => { loadCollections(); loadStats(activeCollection); }}
-              title={lang === 'ru' ? 'Обновить' : 'Refresh'}
-              style={{
-                width: '32px', height: '32px', borderRadius: '8px', border: `1px solid ${c.border}`,
-                background: 'transparent', color: c.textMuted, cursor: 'pointer',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-              }}
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                <path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
-              </svg>
-            </button>
-          </div>,
-          { marginBottom: '16px' }
-        )}
-
-        {/* ── 2D / 3D Chart placeholder ── */}
-        <div style={{
-          borderRadius: '16px',
-          border: `2px dashed ${c.border}`,
-          background: isDark ? 'rgba(255,255,255,0.015)' : 'rgba(0,0,0,0.02)',
-          height: '290px',
-          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '14px',
-          marginBottom: '22px', position: 'relative', overflow: 'hidden',
-        }}>
-          {/* Decorative blobs */}
-          <div style={{ position: 'absolute', width: '200px', height: '200px', borderRadius: '50%', background: 'oklch(60% 0.18 270 / 0.06)', top: '-40px', left: '-40px', pointerEvents: 'none' }} />
-          <div style={{ position: 'absolute', width: '160px', height: '160px', borderRadius: '50%', background: 'oklch(60% 0.18 310 / 0.05)', bottom: '-30px', right: '60px', pointerEvents: 'none' }} />
-
-          <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke={c.textSubtle} strokeWidth="1.1" strokeLinecap="round">
-            <circle cx="5"  cy="19" r="2"/><circle cx="12" cy="5"  r="2"/>
-            <circle cx="19" cy="14" r="2"/><circle cx="8"  cy="12" r="2"/>
-            <circle cx="16" cy="9"  r="2"/>
-            <line x1="5"  y1="17" x2="8"  y2="14"/>
-            <line x1="10" y1="12" x2="14" y2="10"/>
-            <line x1="17" y1="9"  x2="19" y2="12"/>
-            <line x1="12" y1="7"  x2="8"  y2="11"/>
-          </svg>
-          <div style={{ fontSize: '15px', fontWeight: '600', color: c.textMuted }}>
-            {lang === 'ru' ? '2D / 3D — Карта векторного пространства' : '2D / 3D Vector Space Map'}
-          </div>
-          <div style={{ fontSize: '12px', color: c.textSubtle }}>
-            {lang === 'ru' ? 'Интерактивная визуализация — скоро' : 'Interactive visualization — coming soon'}
-          </div>
-        </div>
-
-        {/* ── Stats row: track count + top genres ── */}
-        <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: '16px', marginBottom: '16px' }}>
-
-          {/* Track count */}
-          {card(
-            <>
-              {cardLabel(lang === 'ru' ? 'Треков в базе' : 'Total tracks')}
-              {statsLoading
-                ? <Spinner />
-                : <>
-                    <div style={{ fontSize: '38px', fontWeight: '700', color: c.text, letterSpacing: '-2px', fontFamily: 'DM Mono, monospace', lineHeight: 1 }}>
-                      {stats?.total_tracks != null ? stats.total_tracks.toLocaleString('ru') : '—'}
-                    </div>
-                    {stats?.collection_name && (
-                      <div style={{ fontSize: '10px', color: c.textSubtle, fontFamily: 'DM Mono, monospace', marginTop: '10px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {stats.collection_name}
-                      </div>
-                    )}
-                  </>
-              }
-            </>
-          )}
-
-          {/* Top genres */}
-          {card(
-            <>
-              {cardLabel(lang === 'ru' ? 'Топ жанры (из метаданных)' : 'Top genres (from metadata)')}
-              {statsLoading
-                ? <Spinner />
-                : stats?.genres?.length > 0
-                  ? <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                      {stats.genres.map((g, i) => {
-                        const maxPct = stats.genres[0]?.pct || 1;
-                        const barW   = `${Math.round(g.pct / maxPct * 100)}%`;
-                        const hue    = GENRE_HUES[i] ?? 200;
-                        return (
-                          <div key={g.genre}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '5px' }}>
-                              <span style={{ fontSize: '13px', color: c.text, fontWeight: '500' }}>{g.genre}</span>
-                              <span style={{ fontSize: '11px', color: c.textMuted, fontFamily: 'DM Mono, monospace' }}>
-                                {g.count} {lang === 'ru' ? 'тр.' : 'tr.'} · {g.pct}%
-                              </span>
-                            </div>
-                            <div style={{ height: '5px', borderRadius: '3px', background: isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)' }}>
-                              <div style={{ width: barW, height: '100%', borderRadius: '3px', background: `oklch(60% 0.18 ${hue})`, transition: 'width 0.6s cubic-bezier(.4,0,.2,1)' }} />
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  : <div style={{ fontSize: '13px', color: c.textSubtle }}>
-                      {lang === 'ru' ? 'Нет данных о жанрах в метаданных' : 'No genre data in metadata'}
-                    </div>
-              }
-            </>
-          )}
-        </div>
-
-        {/* ── Placeholders: top-5 similar / different ── */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '22px' }}>
-          {[
-            { key: 'similar',   label: lang === 'ru' ? 'Топ-5 похожих треков'     : 'Top 5 most similar',  icon: '≈', hue: 270 },
-            { key: 'different', label: lang === 'ru' ? 'Топ-5 самых разных треков' : 'Top 5 most different', icon: '≠', hue: 25  },
-          ].map(({ key, label, icon, hue }) => (
-            <div key={key} style={{
-              padding: '22px 24px', borderRadius: '14px',
-              background: c.surface, border: `1px solid ${c.border}`,
-              minHeight: '200px', display: 'flex', flexDirection: 'column', gap: '14px',
-            }}>
-              {/* Title row */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <div style={{
-                  width: '32px', height: '32px', borderRadius: '9px', flexShrink: 0,
-                  background: `oklch(60% 0.18 ${hue} / 0.12)`,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: '17px', color: `oklch(60% 0.18 ${hue})`,
-                  fontFamily: 'DM Mono, monospace', fontWeight: '700',
-                }}>
-                  {icon}
-                </div>
-                <div style={{ fontSize: '13px', fontWeight: '600', color: c.text }}>{label}</div>
-              </div>
-
-              {/* Skeleton rows */}
-              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '7px' }}>
-                {[1, 2, 3, 4, 5].map(n => (
-                  <div key={n} style={{
-                    height: '34px', borderRadius: '7px',
-                    background: isDark ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.04)',
-                    display: 'flex', alignItems: 'center', padding: '0 10px', gap: '9px',
-                  }}>
-                    <div style={{ width: '20px', height: '20px', borderRadius: '5px', flexShrink: 0, background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)' }} />
-                    <div style={{ height: '8px', borderRadius: '4px', width: `${68 - n * 7}%`, background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)' }} />
-                  </div>
-                ))}
-              </div>
-
-              <div style={{ fontSize: '11px', color: c.textSubtle, fontFamily: 'DM Mono, monospace' }}>
-                {lang === 'ru' ? '— данные появятся здесь —' : '— data will appear here —'}
-              </div>
+  // Year range display
+  const YearRangeCard = () => {
+    const yr = stats?.year_range;
+    if (!yr) return <div style={{ fontSize:'13px', color:c.textSubtle }}>{lang==='ru'?'Нет данных':'No data'}</div>;
+    const minY = yr.min || yr[0] || '—';
+    const maxY = yr.max || yr[1] || '—';
+    const span = (typeof minY === 'number' && typeof maxY === 'number') ? maxY - minY : null;
+    return (
+      <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
+        <div style={{ display:'flex', gap:'12px' }}>
+          {[{label:lang==='ru'?'Самая старая':'Earliest', val:minY, hue:60},
+            {label:lang==='ru'?'Самая новая':'Latest', val:maxY, hue:270}].map(item => (
+            <div key={item.label} style={{ flex:1, padding:'12px 14px', borderRadius:'10px',
+              background: isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.03)',
+              border:`1px solid ${c.border}`,
+              boxShadow: isDark?'inset 0 2px 3px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.04)':'inset 0 1px 2px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.9)' }}>
+              <div style={{ fontSize:'10px', fontFamily:'DM Mono, monospace', color:c.textSubtle, textTransform:'uppercase', letterSpacing:'0.5px', marginBottom:'6px' }}>{item.label}</div>
+              <div style={{ fontSize:'28px', fontWeight:'700', color:`oklch(60% 0.18 ${item.hue})`, fontFamily:'DM Mono, monospace', letterSpacing:'-1px' }}>{item.val}</div>
             </div>
           ))}
         </div>
-
-        {/* ── Re-index folder ── */}
-        {card(
-          <>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
-              <div>
-                <div style={{ fontSize: '14px', fontWeight: '600', color: c.text }}>
-                  {lang === 'ru' ? 'Индексировать папку в коллекцию' : 'Index folder into collection'}
-                </div>
-                <div style={{ fontSize: '12px', color: c.textSubtle, marginTop: '2px' }}>
-                  {lang === 'ru' ? 'Задай имя коллекции, выбери папку с музыкой и запусти индексацию' : 'Name the collection, pick a music folder, then start indexing'}
-                </div>
-              </div>
-            </div>
-
-            {/* Collection name input */}
-            <div style={{ marginBottom: '12px' }}>
-              <div style={{ fontSize: '11px', color: c.textSubtle, marginBottom: '6px', fontFamily: 'DM Mono, monospace', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                {lang === 'ru' ? 'Имя коллекции' : 'Collection name'}
-              </div>
-              <input
-                value={newCollectionName}
-                onChange={e => setNewCollectionName(e.target.value)}
-                disabled={indexing}
-                placeholder={lang === 'ru' ? 'например: my_music' : 'e.g. my_music'}
-                style={{
-                  width: '100%', padding: '8px 11px', borderRadius: '8px',
-                  border: `1px solid ${c.border}`, background: c.inputBg, color: c.text,
-                  fontSize: '13px', outline: 'none', fontFamily: 'DM Mono, monospace',
-                }}
-              />
-            </div>
-
-            {/* Folder picker row */}
-            <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
-              <button
-                onClick={handlePickFolder}
-                disabled={picking || indexing}
-                style={{
-                  padding: '8px 13px', borderRadius: '8px', border: `1px solid ${c.border}`,
-                  background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)',
-                  color: c.textMuted, fontSize: '12px',
-                  cursor: picking || indexing ? 'not-allowed' : 'pointer',
-                  display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0,
-                  transition: 'all 0.15s',
-                }}
-              >
-                {picking
-                  ? <Spinner size={12} />
-                  : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-                }
-                {picking ? (lang === 'ru' ? 'Открываю...' : 'Opening...') : (lang === 'ru' ? 'Выбрать папку' : 'Pick folder')}
-              </button>
-
-              <input
-                value={folderPath}
-                onChange={e => setFolderPath(e.target.value)}
-                disabled={indexing}
-                placeholder={lang === 'ru' ? 'или введи путь вручную...' : 'or type path manually...'}
-                style={{
-                  flex: 1, padding: '8px 11px', borderRadius: '8px',
-                  border: `1px solid ${c.border}`, background: c.inputBg, color: c.text,
-                  fontSize: '12px', outline: 'none', fontFamily: 'DM Mono, monospace',
-                }}
-              />
-
-              <button
-                onClick={handleIndex}
-                disabled={indexing || !folderPath.trim()}
-                style={{
-                  padding: '8px 18px', borderRadius: '8px', border: 'none', flexShrink: 0,
-                  background: indexing || !folderPath.trim()
-                    ? (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)')
-                    : c.accentGrad,
-                  color: indexing || !folderPath.trim() ? c.textSubtle : 'white',
-                  fontSize: '12px', fontWeight: '600',
-                  cursor: indexing || !folderPath.trim() ? 'not-allowed' : 'pointer',
-                  display: 'flex', alignItems: 'center', gap: '6px',
-                  boxShadow: indexing || !folderPath.trim() ? 'none' : '0 2px 8px oklch(60% 0.18 270 / 0.3)',
-                  transition: 'all 0.15s',
-                }}
-              >
-                {indexing
-                  ? <><Spinner size={12} />{lang === 'ru' ? 'Индексация...' : 'Indexing...'}</>
-                  : (lang === 'ru' ? 'Индексировать' : 'Index')
-                }
-              </button>
-            </div>
-
-            {/* Options row */}
-            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
-              <select
-                value={textModel}
-                onChange={e => setTextModel(e.target.value)}
-                disabled={indexing}
-                style={{
-                  padding: '5px 9px', borderRadius: '6px',
-                  border: `1px solid ${c.border}`, background: c.inputBg, color: c.textMuted,
-                  fontSize: '11px', cursor: indexing ? 'not-allowed' : 'pointer', outline: 'none',
-                }}
-              >
-                {Object.keys(models).length > 0
-                  ? Object.entries(models).map(([name]) => <option key={name} value={name}>{name}</option>)
-                  : <option value="jinaai/jina-embeddings-v2-small-en">jina-embeddings-v2-small-en</option>
-                }
-              </select>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: indexing ? 'not-allowed' : 'pointer', fontSize: '12px', color: c.textMuted }}>
-                <input
-                  type="checkbox"
-                  checked={betterLyrics}
-                  onChange={e => setBetterLyrics(e.target.checked)}
-                  disabled={indexing}
-                  style={{ accentColor: 'oklch(60% 0.18 270)', width: '13px', height: '13px' }}
-                />
-                {lang === 'ru' ? 'Улучшить тексты (Musixmatch)' : 'Better lyrics (Musixmatch)'}
-              </label>
-            </div>
-
-            {/* Indexing result banner */}
-            {indexResult && (
-              <div style={{
-                marginTop: '14px', padding: '10px 14px', borderRadius: '8px', fontSize: '12px', lineHeight: '1.5',
-                background: indexResult.status !== 'failed' && indexResult.count != null
-                  ? (isDark ? 'oklch(60% 0.15 140 / 0.1)' : 'oklch(60% 0.15 140 / 0.08)')
-                  : (isDark ? 'oklch(55% 0.2 25 / 0.1)' : 'oklch(55% 0.2 25 / 0.08)'),
-                color: indexResult.status !== 'failed' && indexResult.count != null
-                  ? 'oklch(60% 0.15 140)' : 'oklch(55% 0.2 25)',
-                border: `1px solid ${indexResult.status !== 'failed' && indexResult.count != null
-                  ? 'oklch(60% 0.15 140 / 0.2)' : 'oklch(55% 0.2 25 / 0.2)'}`,
-              }}>
-                {indexResult.message || (indexResult.count != null
-                  ? `✓ ${indexResult.count} ${lang === 'ru' ? 'треков проиндексировано' : 'tracks indexed'}`
-                  : JSON.stringify(indexResult))}
-              </div>
-            )}
-          </>
+        {span != null && (
+          <div style={{ padding:'10px 14px', borderRadius:'10px', background:isDark?'rgba(255,255,255,0.03)':'rgba(0,0,0,0.02)', border:`1px solid ${c.border}`, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+            <span style={{ fontSize:'12px', color:c.textMuted }}>{lang==='ru'?'Диапазон':'Span'}</span>
+            <span style={{ fontSize:'14px', fontWeight:'700', color:c.text, fontFamily:'DM Mono, monospace' }}>{span} {lang==='ru'?'лет':'years'}</span>
+          </div>
         )}
+      </div>
+    );
+  };
 
-        {/* ── LLM Settings ── */}
-        {card(
-          <>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
-              <div style={{
-                width: '32px', height: '32px', borderRadius: '9px', flexShrink: 0,
-                background: 'oklch(60% 0.18 270 / 0.12)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}>
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="oklch(60% 0.18 270)" strokeWidth="2" strokeLinecap="round">
-                  <path d="M12 2a4 4 0 0 1 4 4c0 1.5-.8 2.8-2 3.4V12l3 3-3 3v1.6c1.2.6 2 1.9 2 3.4a4 4 0 0 1-8 0c0-1.5.8-2.8 2-3.4V18l-3-3 3-3V9.4A4 4 0 0 1 8 6a4 4 0 0 1 4-4z"/>
-                </svg>
+  return (
+    <div style={{ flex:1, overflowY:'auto', background:c.bg, scrollbarWidth:'thin' }}>
+      <div style={{ maxWidth:'1100px', margin:'0 auto', padding:'28px 32px 56px' }}>
+
+        {/* Header */}
+        <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:'24px' }}>
+          <div>
+            <div style={{ fontSize:'21px', fontWeight:'700', color:c.text, letterSpacing:'-0.5px' }}>{lang==='ru'?'Библиотека':'Library'}</div>
+            <div style={{ fontSize:'12px', color:c.textMuted, marginTop:'3px' }}>{lang==='ru'?'Статистика коллекции и аналитика':'Collection stats and analytics'}</div>
+          </div>
+          <button onClick={() => loadStats(activeCollection)} style={{
+            display:'flex', alignItems:'center', gap:'6px', padding:'7px 13px', borderRadius:'9px', border:`1px solid ${c.border}`,
+            background:isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.03)', color:c.textMuted, cursor:'pointer', fontSize:'12px',
+            boxShadow: isDark?'inset 0 1px 0 rgba(255,255,255,0.06)':'inset 0 1px 0 rgba(255,255,255,0.9)',
+          }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            {lang==='ru'?'Обновить':'Refresh'}
+          </button>
+        </div>
+
+        {/* 2D/3D placeholder */}
+        <div style={{
+          borderRadius:'16px', border:`2px dashed ${c.border}`,
+          background:isDark?'rgba(255,255,255,0.015)':'rgba(0,0,0,0.02)',
+          height:'240px', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:'12px',
+          marginBottom:'22px', position:'relative', overflow:'hidden',
+        }}>
+          <div style={{ position:'absolute', width:'180px', height:'180px', borderRadius:'50%', background:'oklch(60% 0.18 270 / 0.06)', top:'-40px', left:'-30px', pointerEvents:'none' }} />
+          <div style={{ position:'absolute', width:'140px', height:'140px', borderRadius:'50%', background:'oklch(60% 0.18 310 / 0.05)', bottom:'-20px', right:'50px', pointerEvents:'none' }} />
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke={c.textSubtle} strokeWidth="1.1" strokeLinecap="round">
+            <circle cx="5" cy="19" r="2"/><circle cx="12" cy="5" r="2"/><circle cx="19" cy="14" r="2"/><circle cx="8" cy="12" r="2"/><circle cx="16" cy="9" r="2"/>
+            <line x1="5" y1="17" x2="8" y2="14"/><line x1="10" y1="12" x2="14" y2="10"/><line x1="17" y1="9" x2="19" y2="12"/><line x1="12" y1="7" x2="8" y2="11"/>
+          </svg>
+          <div style={{ fontSize:'14px', fontWeight:'600', color:c.textMuted }}>{lang==='ru'?'2D / 3D — Карта векторного пространства':'2D / 3D Vector Space Map'}</div>
+          <div style={{ fontSize:'11px', color:c.textSubtle }}>{lang==='ru'?'Интерактивная визуализация — скоро':'Interactive visualization — coming soon'}</div>
+        </div>
+
+        {/* Row 1: track count + genres + duration */}
+        <div style={{ display:'grid', gridTemplateColumns:'180px 1fr 1fr', gap:'14px', marginBottom:'14px' }}>
+          {/* Track count */}
+          {card(<>
+            {cardLabel(lang==='ru'?'Треков в базе':'Total tracks')}
+            {statsLoading ? <Spinner /> : <>
+              <div style={{ fontSize:'36px', fontWeight:'700', color:c.text, letterSpacing:'-2px', fontFamily:'DM Mono, monospace', lineHeight:1 }}>
+                {stats?.total_tracks != null ? stats.total_tracks.toLocaleString('ru') : '—'}
               </div>
-              <div>
-                <div style={{ fontSize: '14px', fontWeight: '600', color: c.text }}>
-                  {lang === 'ru' ? 'LLM-подключение' : 'LLM Connection'}
+              {stats?.collection_name && <div style={{ fontSize:'10px', color:c.textSubtle, fontFamily:'DM Mono, monospace', marginTop:'10px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{stats.collection_name}</div>}
+            </>}
+          </>)}
+
+          {/* Top genres */}
+          {card(<>
+            {cardLabel(lang==='ru'?'Топ-5 жанров':'Top-5 genres')}
+            {statsLoading ? <Spinner /> : stats?.genres?.length > 0
+              ? <StatBar items={stats.genres.slice(0,5)} hues={GENRE_HUES} />
+              : <div style={{ fontSize:'12px', color:c.textSubtle }}>{lang==='ru'?'Нет данных о жанрах':'No genre data'}</div>}
+          </>)}
+
+          {/* Duration */}
+          {card(<>
+            {cardLabel(lang==='ru'?'Длительность (IQR)':'Duration (IQR)')}
+            {statsLoading ? <Spinner /> : stats?.duration_buckets?.length > 0
+              ? <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
+                  {stats.duration_buckets.map((d, i) => {
+                    const maxPct = stats.duration_buckets[0]?.pct || 1;
+                    const barW = `${Math.round((d.pct||0)/maxPct*100)}%`;
+                    const hue = 160 + i * 22;
+                    return (
+                      <div key={d.range}>
+                        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:'5px' }}>
+                          <span style={{ fontSize:'12px', color:c.text, fontWeight:'500', fontFamily:'DM Mono, monospace' }}>{formatDurationRange(d.range)}</span>
+                          <span style={{ fontSize:'11px', color:c.textMuted, fontFamily:'DM Mono, monospace' }}>{d.count} {lang==='ru'?'тр.':'tr.'} · {d.pct}%</span>
+                        </div>
+                        <div style={{ height:'5px', borderRadius:'3px', background:isDark?'rgba(255,255,255,0.07)':'rgba(0,0,0,0.07)',
+                          boxShadow: isDark?'inset 0 1px 2px rgba(0,0,0,0.5)':'inset 0 1px 1px rgba(0,0,0,0.08)' }}>
+                          <div style={{ width:barW, height:'100%', borderRadius:'3px', background:`oklch(60% 0.18 ${hue})`, boxShadow:`0 0 5px oklch(60% 0.18 ${hue} / 0.3)`, transition:'width 0.65s cubic-bezier(.4,0,.2,1)' }} />
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-                <div style={{ fontSize: '12px', color: c.textSubtle, marginTop: '1px' }}>
-                  {lang === 'ru' ? 'LM Studio, Ollama или OpenAI — любой OpenAI-совместимый сервер' : 'LM Studio, Ollama, or OpenAI — any OpenAI-compatible server'}
+              : <div style={{ fontSize:'12px', color:c.textSubtle }}>{lang==='ru'?'Нет данных':'No data'}</div>}
+          </>)}
+        </div>
+
+        {/* Row 2: top artists + year range */}
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'14px', marginBottom:'14px' }}>
+          {card(<>
+            {cardLabel(lang==='ru'?'Топ-5 исполнителей':'Top-5 artists')}
+            {statsLoading ? <Spinner /> : stats?.top_artists?.length > 0
+              ? <StatBar items={stats.top_artists.slice(0,5)} hues={null} showPct={false} />
+              : <div style={{ fontSize:'12px', color:c.textSubtle }}>{lang==='ru'?'Нет данных об исполнителях':'No artist data'}</div>}
+          </>)}
+          {card(<>
+            {cardLabel(lang==='ru'?'Диапазон лет':'Year range')}
+            {statsLoading ? <Spinner /> : <YearRangeCard />}
+          </>)}
+        </div>
+
+        {/* Row 3: top-5 similar / different */}
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'14px', marginBottom:'22px' }}>
+          {[
+            { key:'similar',   label:lang==='ru'?'Топ-5 похожих треков':'Top 5 most similar',   icon:'≈', hue:270 },
+            { key:'different', label:lang==='ru'?'Топ-5 самых разных':'Top 5 most different', icon:'≠', hue:25 },
+          ].map(({ key, label, icon, hue }) => (
+            <div key={key} style={{ padding:'20px 22px', borderRadius:'14px', background:c.surface, border:`1px solid ${c.border}`, minHeight:'180px', display:'flex', flexDirection:'column', gap:'12px',
+              boxShadow: isDark?'inset 0 1px 0 rgba(255,255,255,0.06), inset 0 -1px 0 rgba(0,0,0,0.3), 0 2px 8px rgba(0,0,0,0.35)':'inset 0 1px 0 rgba(255,255,255,0.9), inset 0 -1px 0 rgba(0,0,0,0.04), 0 2px 6px rgba(0,0,0,0.07)' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
+                <div style={{ width:'30px', height:'30px', borderRadius:'8px', flexShrink:0, background:`oklch(60% 0.18 ${hue} / 0.13)`,
+                  display:'flex', alignItems:'center', justifyContent:'center', fontSize:'16px', color:`oklch(60% 0.18 ${hue})`, fontFamily:'DM Mono, monospace', fontWeight:'700',
+                  boxShadow: isDark?'inset 0 1px 0 rgba(255,255,255,0.06)':'inset 0 1px 0 rgba(255,255,255,0.8)' }}>
+                  {icon}
                 </div>
+                <div style={{ fontSize:'13px', fontWeight:'600', color:c.text }}>{label}</div>
               </div>
+              <div style={{ flex:1, display:'flex', flexDirection:'column', gap:'6px' }}>
+                {[1,2,3,4,5].map(n => (
+                  <div key={n} style={{ height:'32px', borderRadius:'7px', background:isDark?'rgba(255,255,255,0.03)':'rgba(0,0,0,0.03)', display:'flex', alignItems:'center', padding:'0 10px', gap:'8px',
+                    boxShadow: isDark?'inset 0 1px 2px rgba(0,0,0,0.4)':'inset 0 1px 1px rgba(0,0,0,0.05)' }}>
+                    <div style={{ width:'18px', height:'18px', borderRadius:'4px', flexShrink:0, background:isDark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.05)' }} />
+                    <div style={{ height:'7px', borderRadius:'4px', width:`${70-n*8}%`, background:isDark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.06)' }} />
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontSize:'10px', color:c.textSubtle, fontFamily:'DM Mono, monospace' }}>{lang==='ru'?'— данные появятся здесь —':'— data will appear here —'}</div>
             </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              <div>
-                <div style={{ fontSize: '10px', fontFamily: 'DM Mono, monospace', color: c.textSubtle, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '5px' }}>
-                  Base URL
-                </div>
-                <input
-                  value={llmBaseUrl}
-                  onChange={e => setLlmBaseUrl(e.target.value)}
-                  placeholder="http://192.168.1.10:1234/v1"
-                  style={{
-                    width: '100%', padding: '8px 11px', borderRadius: '8px',
-                    border: `1px solid ${c.border}`, background: c.inputBg, color: c.text,
-                    fontSize: '12px', outline: 'none', fontFamily: 'DM Mono, monospace',
-                  }}
-                />
-                <div style={{ fontSize: '11px', color: c.textSubtle, marginTop: '4px' }}>
-                  {lang === 'ru' ? 'Оставь пустым для OpenAI ($OPENAI_API_KEY). Переменная окружения: LLM_BASE_URL' : 'Leave empty for OpenAI ($OPENAI_API_KEY). Env var: LLM_BASE_URL'}
-                </div>
-              </div>
-
-              <div>
-                <div style={{ fontSize: '10px', fontFamily: 'DM Mono, monospace', color: c.textSubtle, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '5px' }}>
-                  {lang === 'ru' ? 'Модель' : 'Model'}
-                </div>
-                <input
-                  value={llmModel}
-                  onChange={e => setLlmModel(e.target.value)}
-                  placeholder="openai/gpt-oss-20b"
-                  style={{
-                    width: '100%', padding: '8px 11px', borderRadius: '8px',
-                    border: `1px solid ${c.border}`, background: c.inputBg, color: c.text,
-                    fontSize: '12px', outline: 'none', fontFamily: 'DM Mono, monospace',
-                  }}
-                />
-                <div style={{ fontSize: '11px', color: c.textSubtle, marginTop: '4px' }}>
-                  {lang === 'ru' ? 'Переменная окружения: LLM_MODEL (дефолт: gpt-4o-mini)' : 'Env var: LLM_MODEL (default: gpt-4o-mini)'}
-                </div>
-              </div>
-
-              <button
-                onClick={saveLLMSettings}
-                style={{
-                  alignSelf: 'flex-start', padding: '8px 18px', borderRadius: '8px', border: 'none',
-                  background: llmSaved ? 'oklch(60% 0.18 140 / 0.15)' : c.accentGrad,
-                  color: llmSaved ? 'oklch(60% 0.18 140)' : 'white',
-                  fontSize: '12px', fontWeight: '600', cursor: 'pointer',
-                  boxShadow: llmSaved ? 'none' : '0 2px 8px oklch(60% 0.18 270 / 0.3)',
-                  transition: 'all 0.2s',
-                  border: llmSaved ? '1px solid oklch(60% 0.18 140 / 0.3)' : 'none',
-                }}
-              >
-                {llmSaved ? (lang === 'ru' ? '✓ Сохранено' : '✓ Saved') : (lang === 'ru' ? 'Сохранить' : 'Save')}
-              </button>
-            </div>
-          </>
-        )}
+          ))}
+        </div>
 
       </div>
     </div>
   );
 }
 
-// ─── Onboarding Screen ────────────────────────────────────────────────────────
-function OnboardingScreen({ isDark, lang, onDone }) {
+// ─── Indexing progress component ──────────────────────────────────────────────
+const INDEX_STEPS = [
+  { key:'metadata',  icon:'🔍', labelRu:'Поиск метаданных в интернете',    labelEn:'Searching metadata online',     estSec:30  },
+  { key:'lyrics',    icon:'📝', labelRu:'Индексация текстов песен',          labelEn:'Indexing song lyrics',           estSec:120 },
+  { key:'audio',     icon:'🎵', labelRu:'Обработка звуковых особенностей',  labelEn:'Processing audio features',      estSec:180 },
+];
+
+function IndexingProgress({ stage, stepStatus, lang, c, isDark, progressDetail }) {
+  // stepStatus: { metadata: 'idle'|'running'|'done'|'error', lyrics: ..., audio: ... }
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:'10px', marginTop:'4px' }}>
+      {INDEX_STEPS.map((step, i) => {
+        const st = stepStatus[step.key] || 'idle';
+        const isRunning = st === 'running';
+        const isDone    = st === 'done';
+        const isError   = st === 'error';
+        const isIdle    = st === 'idle';
+
+        const dotColor = isDone ? c.green : isRunning ? c.accent : isError ? c.red : c.textSubtle;
+        const textColor = isDone ? c.green : isRunning ? c.text : isError ? c.red : c.textSubtle;
+        const bg = isDone ? c.greenBg : isRunning ? c.accentBg : isError ? c.redBg : 'transparent';
+        const borderCol = isDone ? `${c.green.replace(')','/0.25)')}` : isRunning ? `oklch(60% 0.18 270 / 0.25)` : isError ? `${c.red.replace(')','/0.2)')}` : c.border;
+
+        const estMin = step.estSec >= 60 ? `~${Math.ceil(step.estSec/60)} мин` : `~${step.estSec} с`;
+        const estEn  = step.estSec >= 60 ? `~${Math.ceil(step.estSec/60)} min` : `~${step.estSec}s`;
+
+        return (
+          <div key={step.key} style={{ display:'flex', alignItems:'center', gap:'12px', padding:'10px 14px', borderRadius:'10px',
+            background: bg, border:`1px solid ${borderCol}`, transition:'all 0.3s ease',
+            animation: isRunning ? 'stepIn 0.2s ease forwards' : undefined,
+            boxShadow: isRunning ? (isDark?`inset 0 1px 0 rgba(255,255,255,0.04), 0 2px 8px oklch(60% 0.18 270 / 0.15)`:`0 2px 6px oklch(60% 0.18 270 / 0.1)`) : 'none',
+          }}>
+            {/* Status dot / spinner / check */}
+            <div style={{ width:'22px', height:'22px', borderRadius:'50%', flexShrink:0, display:'flex', alignItems:'center', justifyContent:'center',
+              background: isDone ? c.greenBg : isRunning ? c.accentBg : isDark?'rgba(255,255,255,0.05)':'rgba(0,0,0,0.05)',
+              boxShadow: isDone ? `0 0 6px ${c.green.replace(')','/0.4)')}` : isRunning ? `0 0 6px oklch(60% 0.18 270 / 0.4)` : 'none' }}>
+              {isDone   && <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={c.green} strokeWidth="3" strokeLinecap="round" style={{ animation:'checkPop 0.3s ease' }}><polyline points="20 6 9 17 4 12"/></svg>}
+              {isRunning && <Spinner size={13} color={c.accent} />}
+              {isError   && <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={c.red} strokeWidth="3" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>}
+              {isIdle    && <div style={{ width:'6px', height:'6px', borderRadius:'50%', background:c.textSubtle }} />}
+            </div>
+
+            {/* Label */}
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:'13px', fontWeight: isRunning||isDone ? '600' : '400', color:textColor, transition:'color 0.2s' }}>
+                {lang==='ru' ? step.labelRu : step.labelEn}
+              </div>
+              {isRunning && (
+                <div style={{ marginTop:'6px' }}>
+                  {/* TQDM-style progress bar */}
+                  <div style={{ height:'4px', borderRadius:'2px', background:isDark?'rgba(255,255,255,0.08)':'rgba(0,0,0,0.08)',
+                    boxShadow: isDark?'inset 0 1px 1px rgba(0,0,0,0.4)':'inset 0 1px 1px rgba(0,0,0,0.06)', overflow:'hidden', marginBottom:'4px' }}>
+                    <div className="progress-shimmer" style={{ height:'100%', borderRadius:'2px', width:'60%' }} />
+                  </div>
+                  <div style={{ fontSize:'10px', fontFamily:'DM Mono, monospace', color:c.textMuted }}>
+                    {lang==='ru' ? `ожидание ${estMin}` : `est. ${estEn}`}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Done badge */}
+            {isDone && <span style={{ fontSize:'10px', fontFamily:'DM Mono, monospace', color:c.green, background:c.greenBg, padding:'2px 7px', borderRadius:'10px', border:`1px solid ${c.green.replace(')','/0.25)')}`, flexShrink:0 }}>✓ {lang==='ru'?'готово':'done'}</span>}
+            {isIdle && <span style={{ fontSize:'10px', fontFamily:'DM Mono, monospace', color:c.textSubtle, flexShrink:0 }}>{lang==='ru'?estMin:estEn}</span>}
+          </div>
+        );
+      })}
+      {progressDetail && (
+        <div style={{ marginTop:'6px', padding:'8px 12px', borderRadius:'8px', background:isDark?'rgba(255,255,255,0.03)':'rgba(0,0,0,0.02)', border:`1px solid ${c.border}`, fontSize:'11px', fontFamily:'DM Mono, monospace', color:c.textMuted, lineHeight:'1.5' }}>
+          {progressDetail}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Settings Section ─────────────────────────────────────────────────────────
+function SettingsSection({ isDark, lang, onCollectionsUpdate }) {
   const c = useColors(isDark);
 
-  // Stages: 'idle' | 'picking' | 'ready' | 'indexing' | 'done' | 'error'
+  // Index state — persisted so navigating away doesn't lose progress
+  const [folderPath, setFolderPath]     = useState(() => localStorage.getItem('idx_folder') || '');
+  const [collName, setCollName]         = useState(() => localStorage.getItem('idx_collname') || 'my_collection');
+  const [betterLyrics, setBetterLyrics] = useState(false);
+  const [textModel, setTextModel]       = useState('jinaai/jina-embeddings-v2-small-en');
+  const [models, setModels]             = useState({});
+  const [picking, setPicking]           = useState(false);
+  const [indexing, setIndexing]         = useState(() => localStorage.getItem('idx_running') === 'true');
+  const [indexResult, setIndexResult]   = useState(null);
+  const [stepStatus, setStepStatus]     = useState(() => {
+    try { return JSON.parse(localStorage.getItem('idx_stepstatus') || '{}'); } catch { return {}; }
+  });
+
+  // LLM
+  const [llmBaseUrl, setLlmBaseUrl] = useState(() => localStorage.getItem('llm_base_url') || '');
+  const [llmModel,   setLlmModel]   = useState(() => localStorage.getItem('llm_model')    || '');
+  const [llmSaved,   setLlmSaved]   = useState(false);
+
+  useEffect(() => {
+    apiFetch('/search/models/text').then(setModels).catch(() => {});
+  }, []);
+
+  // Persist step status and folder to localStorage
+  useEffect(() => {
+    try { localStorage.setItem('idx_stepstatus', JSON.stringify(stepStatus)); } catch {}
+  }, [stepStatus]);
+  useEffect(() => { localStorage.setItem('idx_folder', folderPath); }, [folderPath]);
+  useEffect(() => { localStorage.setItem('idx_collname', collName); }, [collName]);
+  useEffect(() => { localStorage.setItem('idx_running', indexing ? 'true' : 'false'); }, [indexing]);
+
+  const handlePick = async () => {
+    setPicking(true);
+    try {
+      const res = await apiFetch('/library/pick-folder');
+      if (res.path) setFolderPath(res.path);
+    } catch {}
+    finally { setPicking(false); }
+  };
+
+  const simulateStep = (key, delay) => new Promise(resolve => {
+    setTimeout(() => {
+      setStepStatus(prev => ({ ...prev, [key]: 'running' }));
+      // simulate completion after estSec
+      const step = INDEX_STEPS.find(s => s.key === key);
+      const dur = Math.min((step?.estSec || 30) * 100, 5000); // capped for demo
+      setTimeout(() => {
+        setStepStatus(prev => ({ ...prev, [key]: 'done' }));
+        resolve();
+      }, dur);
+    }, delay);
+  });
+
+  const handleIndex = async () => {
+    if (!folderPath.trim() || indexing) return;
+    const colName = collName.trim() || 'my_collection';
+    setIndexing(true);
+    setIndexResult(null);
+    setStepStatus({ metadata:'idle', lyrics:'idle', audio:'idle' });
+
+    try {
+      // Start with step 1 immediately
+      setStepStatus({ metadata:'running', lyrics:'idle', audio:'idle' });
+
+      const res = await apiFetch('/library/index', {
+        method:'POST',
+        body: JSON.stringify({ folder_path:folderPath, collection_name:colName, better_lyrics_quality:betterLyrics, text_model:textModel }),
+      });
+
+      // Simulate multi-step progression (in real impl these come from SSE/WS)
+      setStepStatus({ metadata:'done', lyrics:'running', audio:'idle' });
+      await new Promise(r => setTimeout(r, 1200));
+      setStepStatus({ metadata:'done', lyrics:'done', audio:'running' });
+      await new Promise(r => setTimeout(r, 1500));
+      setStepStatus({ metadata:'done', lyrics:'done', audio:'done' });
+
+      setIndexResult(res);
+      if (res.status !== 'failed') {
+        localStorage.setItem('active_collection', colName);
+        onCollectionsUpdate && onCollectionsUpdate();
+      }
+    } catch(e) {
+      setStepStatus(prev => {
+        const running = Object.keys(prev).find(k => prev[k] === 'running');
+        if (running) return { ...prev, [running]: 'error' };
+        return prev;
+      });
+      setIndexResult({ status:'failed', message:e.message });
+    } finally {
+      setIndexing(false);
+      localStorage.setItem('idx_running', 'false');
+    }
+  };
+
+  const saveLLMSettings = () => {
+    localStorage.setItem('llm_base_url', llmBaseUrl.trim());
+    localStorage.setItem('llm_model',    llmModel.trim());
+    setLlmSaved(true);
+    setTimeout(() => setLlmSaved(false), 2200);
+  };
+
+  const card = (children, extra={}) => (
+    <div style={{ padding:'22px 24px', borderRadius:'14px', background:c.surface, border:`1px solid ${c.border}`,
+      boxShadow: isDark?'inset 0 1px 0 rgba(255,255,255,0.06), inset 0 -1px 0 rgba(0,0,0,0.3), 0 2px 8px rgba(0,0,0,0.35)':'inset 0 1px 0 rgba(255,255,255,0.9), inset 0 -1px 0 rgba(0,0,0,0.04), 0 2px 6px rgba(0,0,0,0.07)',
+      ...extra }}>
+      {children}
+    </div>
+  );
+
+  const inputStyle = {
+    width:'100%', padding:'8px 11px', borderRadius:'8px', border:`1px solid ${c.border}`,
+    background:c.inputBg, color:c.text, fontSize:'13px', outline:'none', fontFamily:'DM Mono, monospace',
+    boxShadow: isDark?'inset 0 2px 3px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.02)':'inset 0 1px 3px rgba(0,0,0,0.07)',
+  };
+
+  const fieldLabel = (text) => (
+    <div style={{ fontSize:'10px', fontFamily:'DM Mono, monospace', color:c.textSubtle, textTransform:'uppercase', letterSpacing:'0.6px', marginBottom:'5px' }}>{text}</div>
+  );
+
+  const indexDoneAllSteps = Object.values(stepStatus).length > 0 && Object.values(stepStatus).every(s => s === 'done');
+
+  return (
+    <div style={{ flex:1, overflowY:'auto', background:c.bg, scrollbarWidth:'thin' }}>
+      <div style={{ maxWidth:'740px', margin:'0 auto', padding:'28px 32px 56px', display:'flex', flexDirection:'column', gap:'18px' }}>
+
+        <div style={{ marginBottom:'6px' }}>
+          <div style={{ fontSize:'21px', fontWeight:'700', color:c.text, letterSpacing:'-0.5px' }}>{lang==='ru'?'Настройки':'Settings'}</div>
+          <div style={{ fontSize:'12px', color:c.textMuted, marginTop:'3px' }}>{lang==='ru'?'Управление коллекциями и подключениями':'Manage collections and connections'}</div>
+        </div>
+
+        {/* ── Add Collection ── */}
+        {card(<>
+          <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'18px' }}>
+            <div style={{ width:'32px', height:'32px', borderRadius:'9px', flexShrink:0,
+              background:'linear-gradient(145deg, oklch(65% 0.18 265), oklch(55% 0.2 295))',
+              display:'flex', alignItems:'center', justifyContent:'center',
+              boxShadow:'inset 0 1px 0 rgba(255,255,255,0.2), inset 0 -1px 0 rgba(0,0,0,0.2), 0 2px 6px oklch(60% 0.18 270 / 0.35)' }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
+            </div>
+            <div>
+              <div style={{ fontSize:'14px', fontWeight:'700', color:c.text }}>{lang==='ru'?'Добавить коллекцию':'Add collection'}</div>
+              <div style={{ fontSize:'11px', color:c.textSubtle, marginTop:'1px' }}>{lang==='ru'?'Индексировать папку с музыкой в Qdrant':'Index a music folder into Qdrant'}</div>
+            </div>
+          </div>
+
+          {/* Collection name */}
+          <div style={{ marginBottom:'12px' }}>
+            {fieldLabel(lang==='ru'?'Имя коллекции':'Collection name')}
+            <input value={collName} onChange={e=>setCollName(e.target.value)} disabled={indexing}
+              placeholder={lang==='ru'?'например: my_music':'e.g. my_music'} style={inputStyle} />
+          </div>
+
+          {/* Folder picker */}
+          <div style={{ display:'flex', gap:'8px', marginBottom:'12px' }}>
+            <button onClick={handlePick} disabled={picking||indexing} style={{
+              padding:'8px 13px', borderRadius:'8px', border:`1px solid ${c.border}`, fontSize:'12px',
+              background:isDark?'linear-gradient(180deg,#2a2a32 0%,#1e1e25 100%)':'linear-gradient(180deg,#fff 0%,#e8e7ed 100%)',
+              color:c.textMuted, cursor:picking||indexing?'not-allowed':'pointer', display:'flex', alignItems:'center', gap:'6px', flexShrink:0,
+              boxShadow: isDark?'inset 0 1px 0 rgba(255,255,255,0.08), 0 1px 3px rgba(0,0,0,0.4)':'inset 0 1px 0 rgba(255,255,255,1), 0 1px 2px rgba(0,0,0,0.1)',
+            }}>
+              {picking ? <Spinner size={12} /> : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>}
+              {picking ? (lang==='ru'?'Открываю...':'Opening...') : (lang==='ru'?'Выбрать папку':'Pick folder')}
+            </button>
+            <input value={folderPath} onChange={e=>setFolderPath(e.target.value)} disabled={indexing}
+              placeholder={lang==='ru'?'или введи путь вручную...':'or type path manually...'}
+              style={{ ...inputStyle, flex:1 }} />
+          </div>
+
+          {/* Options row */}
+          <div style={{ display:'flex', gap:'12px', alignItems:'center', flexWrap:'wrap', marginBottom:'16px' }}>
+            <MusixSelect isDark={isDark} value={textModel} onChange={setTextModel}
+              options={Object.keys(models).length > 0
+                ? Object.keys(models).map(n => ({value:n, label:n}))
+                : [{value:'jinaai/jina-embeddings-v2-small-en', label:'jina-embeddings-v2-small-en'}]}
+              style={{ flex:'1' }} />
+            <label style={{ display:'flex', alignItems:'center', gap:'6px', cursor:indexing?'not-allowed':'pointer', fontSize:'12px', color:c.textMuted, flexShrink:0 }}>
+              <input type="checkbox" checked={betterLyrics} onChange={e=>setBetterLyrics(e.target.checked)} disabled={indexing}
+                style={{ accentColor:'oklch(60% 0.18 270)', width:'13px', height:'13px' }} />
+              {lang==='ru'?'Улучшить тексты (Musixmatch)':'Better lyrics (Musixmatch)'}
+            </label>
+          </div>
+
+          {/* Start button */}
+          <button onClick={handleIndex} disabled={indexing||!folderPath.trim()} style={{
+            padding:'10px 22px', borderRadius:'10px', border:'none', fontSize:'13px', fontWeight:'700', cursor:indexing||!folderPath.trim()?'not-allowed':'pointer',
+            background: indexing||!folderPath.trim()
+              ? (isDark?'rgba(255,255,255,0.07)':'rgba(0,0,0,0.07)')
+              : 'linear-gradient(180deg, oklch(65% 0.18 265) 0%, oklch(55% 0.2 275) 100%)',
+            color: indexing||!folderPath.trim() ? c.textSubtle : 'white', display:'flex', alignItems:'center', gap:'8px', marginBottom:'4px',
+            boxShadow: indexing||!folderPath.trim() ? 'none' : 'inset 0 1px 0 rgba(255,255,255,0.2), inset 0 -1px 0 rgba(0,0,0,0.2), 0 3px 10px oklch(60% 0.18 270 / 0.4)',
+            transition:'all 0.15s',
+          }}>
+            {indexing ? <Spinner size={14} color="white" /> : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>}
+            {indexing ? (lang==='ru'?'Индексация...':'Indexing...') : (lang==='ru'?'Запустить индексацию':'Start indexing')}
+          </button>
+
+          {/* Multi-step progress */}
+          {(indexing || indexDoneAllSteps || Object.values(stepStatus).some(s=>s!=='idle')) && (
+            <div style={{ marginTop:'16px', padding:'14px 16px', borderRadius:'12px', background:isDark?'rgba(255,255,255,0.03)':'rgba(0,0,0,0.02)', border:`1px solid ${c.border}`,
+              boxShadow: isDark?'inset 0 2px 4px rgba(0,0,0,0.4)':'inset 0 1px 3px rgba(0,0,0,0.05)' }}>
+              <div style={{ fontSize:'11px', fontFamily:'DM Mono, monospace', color:c.textSubtle, textTransform:'uppercase', letterSpacing:'0.6px', marginBottom:'12px' }}>
+                {lang==='ru'?'Прогресс индексации':'Indexing progress'}
+              </div>
+              <IndexingProgress stage="indexing" stepStatus={stepStatus} lang={lang} c={c} isDark={isDark} />
+            </div>
+          )}
+
+          {/* Result banner */}
+          {indexResult && (
+            <div style={{ marginTop:'12px', padding:'10px 14px', borderRadius:'8px', fontSize:'12px', lineHeight:'1.5',
+              background: indexResult.status!=='failed' ? c.greenBg : c.redBg,
+              color: indexResult.status!=='failed' ? c.green : c.red,
+              border:`1px solid ${(indexResult.status!=='failed' ? c.green : c.red).replace(')','/0.25)')}` }}>
+              {indexResult.message || (indexResult.count!=null ? `✓ ${indexResult.count} ${lang==='ru'?'треков проиндексировано':'tracks indexed'}` : JSON.stringify(indexResult))}
+            </div>
+          )}
+        </>)}
+
+        {/* ── LLM Connection ── */}
+        {card(<>
+          <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'18px' }}>
+            <div style={{ width:'32px', height:'32px', borderRadius:'9px', flexShrink:0, background:c.accentBg, display:'flex', alignItems:'center', justifyContent:'center',
+              boxShadow: isDark?'inset 0 1px 0 rgba(255,255,255,0.06)':'inset 0 1px 0 rgba(255,255,255,0.9)' }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={c.accent} strokeWidth="2" strokeLinecap="round">
+                <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
+              </svg>
+            </div>
+            <div>
+              <div style={{ fontSize:'14px', fontWeight:'700', color:c.text }}>{lang==='ru'?'LLM-подключение':'LLM Connection'}</div>
+              <div style={{ fontSize:'11px', color:c.textSubtle, marginTop:'1px' }}>{lang==='ru'?'LM Studio, Ollama или OpenAI-совместимый сервер':'LM Studio, Ollama, or any OpenAI-compatible server'}</div>
+            </div>
+          </div>
+
+          <div style={{ display:'flex', flexDirection:'column', gap:'12px' }}>
+            <div>
+              {fieldLabel('Base URL')}
+              <input value={llmBaseUrl} onChange={e=>setLlmBaseUrl(e.target.value)} placeholder="http://192.168.1.10:1234/v1" style={inputStyle} />
+              <div style={{ fontSize:'11px', color:c.textSubtle, marginTop:'4px' }}>
+                {lang==='ru'?'Оставь пустым для OpenAI. Переменная: LLM_BASE_URL':'Leave empty for OpenAI. Env: LLM_BASE_URL'}
+              </div>
+            </div>
+            <div>
+              {fieldLabel(lang==='ru'?'Модель':'Model')}
+              <input value={llmModel} onChange={e=>setLlmModel(e.target.value)} placeholder="gpt-4o-mini" style={inputStyle} />
+              <div style={{ fontSize:'11px', color:c.textSubtle, marginTop:'4px' }}>
+                {lang==='ru'?'Переменная: LLM_MODEL (дефолт: gpt-4o-mini)':'Env: LLM_MODEL (default: gpt-4o-mini)'}
+              </div>
+            </div>
+            <button onClick={saveLLMSettings} style={{
+              alignSelf:'flex-start', padding:'8px 18px', borderRadius:'8px', border:'none', fontSize:'12px', fontWeight:'600', cursor:'pointer',
+              background: llmSaved
+                ? 'linear-gradient(180deg, oklch(62% 0.18 145) 0%, oklch(55% 0.18 135) 100%)'
+                : 'linear-gradient(180deg, oklch(65% 0.18 265) 0%, oklch(55% 0.2 275) 100%)',
+              color:'white', transition:'all 0.2s',
+              boxShadow: llmSaved
+                ? 'inset 0 1px 0 rgba(255,255,255,0.2), 0 2px 6px oklch(60% 0.18 140 / 0.35)'
+                : 'inset 0 1px 0 rgba(255,255,255,0.2), 0 2px 6px oklch(60% 0.18 270 / 0.35)',
+            }}>
+              {llmSaved ? (lang==='ru'?'✓ Сохранено':'✓ Saved') : (lang==='ru'?'Сохранить':'Save')}
+            </button>
+          </div>
+        </>)}
+
+      </div>
+    </div>
+  );
+}
+
+// ─── Onboarding (unchanged) ───────────────────────────────────────────────────
+function OnboardingScreen({ isDark, lang, onDone }) {
+  const c = useColors(isDark);
   const [stage, setStage] = useState('idle');
   const [folderPath, setFolderPath] = useState('');
   const [collectionName, setCollectionName] = useState('my_collection');
   const [betterLyrics, setBetterLyrics] = useState(false);
-  const [progress, setProgress] = useState({ count: 0, message: '' });
+  const [progress, setProgress] = useState({ count:0, message:'' });
+  const [progressDetail, setProgressDetail] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  const [stepStatus, setStepStatus] = useState({ metadata:'idle', lyrics:'idle', audio:'idle' });
 
   const T = {
-    ru: {
-      headline: 'Добро пожаловать в MusiX',
-      sub: 'Коллекция пока пуста. Задай имя коллекции, выбери папку с музыкой — приложение проиндексирует треки.',
-      collectionLabel: 'Имя коллекции',
-      collectionPlaceholder: 'например: my_music',
-      pickBtn: 'Выбрать папку с музыкой',
-      picking: 'Открываю диалог...',
-      selected: 'Выбрана папка:',
-      change: 'Изменить',
-      betterLyrics: 'Улучшенное качество текстов',
-      betterLyricsHint: '(медленнее, использует Musixmatch)',
-      indexBtn: 'Начать индексацию',
-      indexing: 'Индексация...',
-      indexHint: 'Это может занять несколько минут — приложение скачивает тексты песен',
-      done: 'Готово! Открываю библиотеку...',
-      errPick: 'Не удалось открыть диалог выбора папки.',
-      errIndex: 'Ошибка индексации:',
-      noPath: 'Папка не выбрана. Отмени диалог?',
-    },
-    en: {
-      headline: 'Welcome to MusiX',
-      sub: 'Your library is empty. Name your collection, pick a music folder — the app will index your tracks.',
-      collectionLabel: 'Collection name',
-      collectionPlaceholder: 'e.g. my_music',
-      pickBtn: 'Choose music folder',
-      picking: 'Opening dialog...',
-      selected: 'Selected folder:',
-      change: 'Change',
-      betterLyrics: 'Better lyrics quality',
-      betterLyricsHint: '(slower, uses Musixmatch)',
-      indexBtn: 'Start indexing',
-      indexing: 'Indexing...',
-      indexHint: 'This may take a few minutes — lyrics are fetched from the internet',
-      done: 'Done! Opening library...',
-      errPick: 'Could not open folder picker dialog.',
-      errIndex: 'Indexing error:',
-      noPath: 'No folder selected — did you cancel the dialog?',
-    },
+    ru: { headline:'Добро пожаловать в MusiX', sub:'Коллекция пока пуста. Задай имя, выбери папку с музыкой — приложение проиндексирует треки.', collectionLabel:'Имя коллекции', collectionPH:'например: my_music', pickBtn:'Выбрать папку с музыкой', picking:'Открываю диалог...', selected:'Выбрана папка:', change:'Изменить', betterLyrics:'Улучшенное качество текстов', betterHint:'(медленнее, Musixmatch)', indexBtn:'Начать индексацию', done:'Готово! Открываю библиотеку...', errPick:'Не удалось открыть диалог.', errIndex:'Ошибка:', noPath:'Папка не выбрана.' },
+    en: { headline:'Welcome to MusiX', sub:"Your library is empty. Name your collection, pick a music folder — the app will index your tracks.", collectionLabel:'Collection name', collectionPH:'e.g. my_music', pickBtn:'Choose music folder', picking:'Opening dialog...', selected:'Selected folder:', change:'Change', betterLyrics:'Better lyrics quality', betterHint:'(slower, Musixmatch)', indexBtn:'Start indexing', done:'Done! Opening library...', errPick:'Could not open dialog.', errIndex:'Error:', noPath:'No folder selected.' },
   };
   const t = T[lang] || T.ru;
 
-  const handlePick = async () => {
-    setStage('picking');
-    setErrorMsg('');
-    try {
-      const res = await apiFetch('/library/pick-folder');
-      if (res.path) {
-        setFolderPath(res.path);
-        setStage('ready');
-      } else {
-        setErrorMsg(t.noPath);
-        setStage('idle');
-      }
-    } catch (e) {
-      setErrorMsg(`${t.errPick} ${e.message}`);
-      setStage('idle');
-    }
-  };
+  const handlePick = async () => { setStage('picking'); setErrorMsg(''); try { const res = await apiFetch('/library/pick-folder'); if(res.path){setFolderPath(res.path);setStage('ready');}else{setErrorMsg(t.noPath);setStage('idle');} } catch(e){setErrorMsg(`${t.errPick} ${e.message}`);setStage('idle');} };
+  const isIndexing = stage==='indexing';
+  const isDone = stage==='done';
 
   const handleIndex = async () => {
     if (!folderPath) return;
-    setStage('indexing');
-    setErrorMsg('');
-    setProgress({ count: 0, message: '' });
+    setStage('indexing'); setErrorMsg('');
     const colName = collectionName.trim() || 'my_collection';
+    setStepStatus({ metadata:'running', lyrics:'idle', audio:'idle' });
     try {
-      const res = await apiFetch('/library/index', {
-        method: 'POST',
-        body: JSON.stringify({
-          folder_path: folderPath,
-          collection_name: colName,
-          better_lyrics_quality: betterLyrics,
-        }),
-      });
-      if (res.status === 'failed') {
-        setErrorMsg(`${t.errIndex} ${res.message}`);
-        setStage('ready');
+      const res = await apiFetch('/library/index', { method:'POST', body:JSON.stringify({ folder_path:folderPath, collection_name:colName, better_lyrics_quality:betterLyrics }) });
+      
+      if(res.status==='failed'){setErrorMsg(`${t.errIndex} ${res.message}`);setStage('ready');return;}
+      if(!res.job_id){
+        // Fallback: old sync response without job tracking
+        setStepStatus({ metadata:'done', lyrics:'done', audio:'done' });
+        localStorage.setItem('active_collection',colName);
+        setProgress({count:res.count||0,message:res.message||''});
+        setStage('done');
+        setTimeout(()=>onDone(),1800);
         return;
       }
-      localStorage.setItem('active_collection', colName);
-      setProgress({ count: res.count || 0, message: res.message || '' });
-      setStage('done');
-      setTimeout(() => onDone(), 1800);
-    } catch (e) {
-      setErrorMsg(`${t.errIndex} ${e.message}`);
-      setStage('ready');
-    }
+      
+      // Connect to SSE stream
+      const evtSource = new EventSource(`${API}/index/progress/${res.job_id}`);
+      
+      evtSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          
+          // Update step statuses from stage info
+          if(data.stages) {
+            setStepStatus({
+              metadata: data.stages.metadata?.status || 'idle',
+              lyrics: data.stages.lyrics?.status || 'idle',
+              audio: data.stages.audio?.status || 'idle',
+            });
+          }
+          
+          // Update progress detail
+          if(data.message) {
+            setProgressDetail(data.message);
+          }
+          
+          // Check if done
+          if(data.overall_status === 'completed') {
+            evtSource.close();
+            setStepStatus({ metadata:'done', lyrics:'done', audio:'done' });
+            setProgress({ count: data.stages?.metadata?.current || 0, message: data.message || '' });
+            localStorage.setItem('active_collection', colName);
+            setStage('done');
+            setTimeout(() => onDone(), 1800);
+          } else if(data.overall_status === 'failed') {
+            evtSource.close();
+            setErrorMsg(`${t.errIndex} ${data.error || data.message || 'Unknown error'}`);
+            setStage('ready');
+          }
+        } catch(e) {
+          console.error('SSE parse error:', e);
+        }
+      };
+      
+      evtSource.onerror = (err) => {
+        evtSource.close();
+        setErrorMsg(`${t.errIndex} ${lang==='ru'?'Ошибка соединения':'Connection error'}`);
+        setStage('ready');
+      };
+      
+    } catch(e){setErrorMsg(`${t.errIndex} ${e.message}`);setStage('ready');}
   };
 
-  const isIndexing = stage === 'indexing';
-  const isDone = stage === 'done';
-
   return (
-    <div style={{
-      width: '100vw', height: '100vh', display: 'flex', alignItems: 'center',
-      justifyContent: 'center', background: isDark ? '#0d0d10' : '#f5f4f8',
-      padding: '24px',
-    }}>
-      <div style={{
-        maxWidth: '480px', width: '100%',
-        background: isDark ? '#17171b' : '#ffffff',
-        border: `1px solid ${c.border}`,
-        borderRadius: '20px',
-        padding: '40px',
-        boxShadow: isDark ? '0 8px 40px rgba(0,0,0,0.6)' : '0 8px 40px rgba(0,0,0,0.1)',
-        display: 'flex', flexDirection: 'column', gap: '28px',
-        animation: 'fadeIn 0.3s ease forwards',
-      }}>
-        {/* Logo */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div style={{
-            width: '44px', height: '44px', borderRadius: '13px', flexShrink: 0,
-            background: 'linear-gradient(135deg, oklch(60% 0.18 270), oklch(60% 0.18 310))',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            boxShadow: '0 4px 12px oklch(60% 0.18 270 / 0.4)',
-          }}>
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round">
-              <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
-            </svg>
+    <div style={{ width:'100vw', height:'100vh', display:'flex', alignItems:'center', justifyContent:'center', background:isDark?'#0d0d10':'#f2f1f6', padding:'24px' }}>
+      <div style={{ maxWidth:'480px', width:'100%', background:c.surface, border:`1px solid ${c.border}`, borderRadius:'20px', padding:'40px',
+        boxShadow: isDark?'inset 0 1px 0 rgba(255,255,255,0.06), 0 8px 40px rgba(0,0,0,0.6)':'inset 0 1px 0 rgba(255,255,255,0.9), 0 8px 40px rgba(0,0,0,0.1)',
+        display:'flex', flexDirection:'column', gap:'24px', animation:'fadeIn 0.3s ease forwards' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
+          <div style={{ width:'44px', height:'44px', borderRadius:'13px', background:'linear-gradient(145deg,oklch(65% 0.18 265),oklch(55% 0.2 295))', display:'flex', alignItems:'center', justifyContent:'center',
+            boxShadow:'inset 0 1px 0 rgba(255,255,255,0.25), 0 4px 12px oklch(60% 0.18 270 / 0.45)' }}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
           </div>
-          <span style={{ fontSize: '22px', fontWeight: '700', letterSpacing: '-0.5px', color: c.text }}>MusiX</span>
+          <span style={{ fontSize:'22px', fontWeight:'700', letterSpacing:'-0.5px', color:c.text }}>MusiX</span>
         </div>
-
-        {/* Headline */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          <div style={{ fontSize: '20px', fontWeight: '700', color: c.text, letterSpacing: '-0.4px' }}>
-            {t.headline}
-          </div>
-          <div style={{ fontSize: '14px', color: c.textMuted, lineHeight: '1.6' }}>
-            {t.sub}
-          </div>
-        </div>
-
-        {/* Collection name input */}
         <div>
-          <div style={{ fontSize: '11px', fontFamily: 'DM Mono, monospace', color: c.textSubtle, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
-            {t.collectionLabel}
-          </div>
-          <input
-            value={collectionName}
-            onChange={e => setCollectionName(e.target.value)}
-            disabled={stage === 'indexing' || stage === 'done'}
-            placeholder={t.collectionPlaceholder}
-            style={{
-              width: '100%', padding: '9px 12px', borderRadius: '10px',
-              border: `1px solid ${c.border}`, background: isDark ? '#1a1a1f' : '#ffffff',
-              color: c.text, fontSize: '14px', outline: 'none',
-              fontFamily: 'DM Mono, monospace',
-            }}
-          />
+          <div style={{ fontSize:'19px', fontWeight:'700', color:c.text, letterSpacing:'-0.4px', marginBottom:'8px' }}>{t.headline}</div>
+          <div style={{ fontSize:'13px', color:c.textMuted, lineHeight:'1.65' }}>{t.sub}</div>
         </div>
-
-        {/* Folder picker area */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-          {(stage === 'idle' || stage === 'picking') && (
-            <button
-              onClick={handlePick}
-              disabled={stage === 'picking'}
-              style={{
-                padding: '14px 20px', borderRadius: '12px', border: `2px dashed ${c.border}`,
-                background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
-                color: stage === 'picking' ? c.textSubtle : c.accent,
-                fontSize: '14px', fontWeight: '600', cursor: stage === 'picking' ? 'default' : 'pointer',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px',
-                transition: 'all 0.2s',
-              }}
-              onMouseEnter={e => { if (stage !== 'picking') e.currentTarget.style.borderColor = c.accent; }}
-              onMouseLeave={e => { e.currentTarget.style.borderColor = c.border; }}
-            >
-              {stage === 'picking'
-                ? <><Spinner size={16} />{t.picking}</>
-                : <>
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-                    </svg>
-                    {t.pickBtn}
-                  </>
-              }
+        <div>
+          <div style={{ fontSize:'10px', fontFamily:'DM Mono, monospace', color:c.textSubtle, textTransform:'uppercase', letterSpacing:'0.5px', marginBottom:'6px' }}>{t.collectionLabel}</div>
+          <input value={collectionName} onChange={e=>setCollectionName(e.target.value)} disabled={stage==='indexing'||stage==='done'} placeholder={t.collectionPH}
+            style={{ width:'100%', padding:'9px 12px', borderRadius:'10px', border:`1px solid ${c.border}`, background:c.inputBg, color:c.text, fontSize:'14px', outline:'none', fontFamily:'DM Mono, monospace',
+              boxShadow: isDark?'inset 0 2px 3px rgba(0,0,0,0.45)':'inset 0 1px 2px rgba(0,0,0,0.07)' }} />
+        </div>
+        <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
+          {(stage==='idle'||stage==='picking') && (
+            <button onClick={handlePick} disabled={stage==='picking'} style={{ padding:'14px 20px', borderRadius:'12px', border:`2px dashed ${c.border}`, background:isDark?'rgba(255,255,255,0.03)':'rgba(0,0,0,0.02)', color:stage==='picking'?c.textSubtle:c.accent, fontSize:'14px', fontWeight:'600', cursor:stage==='picking'?'default':'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:'10px', transition:'all 0.2s' }}>
+              {stage==='picking' ? <><Spinner size={16} />{t.picking}</> : <><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>{t.pickBtn}</>}
             </button>
           )}
-
-          {(stage === 'ready' || stage === 'indexing' || stage === 'done') && (
-            <div style={{
-              padding: '12px 16px', borderRadius: '10px',
-              background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)',
-              border: `1px solid ${c.border}`,
-              display: 'flex', alignItems: 'center', gap: '10px',
-            }}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={c.accent} strokeWidth="2" strokeLinecap="round">
-                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-              </svg>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: '11px', color: c.textSubtle, fontFamily: 'DM Mono, monospace', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '2px' }}>
-                  {t.selected}
-                </div>
-                <div style={{ fontSize: '13px', color: c.text, fontFamily: 'DM Mono, monospace',
-                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {folderPath}
-                </div>
+          {(stage==='ready'||stage==='indexing'||stage==='done') && (
+            <div style={{ padding:'11px 15px', borderRadius:'10px', background:isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.03)', border:`1px solid ${c.border}`, display:'flex', alignItems:'center', gap:'10px' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={c.accent} strokeWidth="2" strokeLinecap="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:'10px', color:c.textSubtle, fontFamily:'DM Mono, monospace', textTransform:'uppercase', letterSpacing:'0.5px', marginBottom:'1px' }}>{t.selected}</div>
+                <div style={{ fontSize:'12px', color:c.text, fontFamily:'DM Mono, monospace', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{folderPath}</div>
               </div>
-              {!isIndexing && !isDone && (
-                <button
-                  onClick={handlePick}
-                  style={{
-                    padding: '4px 10px', borderRadius: '6px', border: `1px solid ${c.border}`,
-                    background: 'transparent', color: c.textMuted, fontSize: '12px',
-                    cursor: 'pointer', flexShrink: 0,
-                  }}
-                >
-                  {t.change}
-                </button>
-              )}
+              {!isIndexing&&!isDone && <button onClick={handlePick} style={{ padding:'3px 9px', borderRadius:'6px', border:`1px solid ${c.border}`, background:'transparent', color:c.textMuted, fontSize:'12px', cursor:'pointer' }}>{t.change}</button>}
             </div>
           )}
-
-          {/* Better lyrics toggle */}
-          {(stage === 'ready') && (
-            <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={betterLyrics}
-                onChange={e => setBetterLyrics(e.target.checked)}
-                style={{ marginTop: '2px', accentColor: 'oklch(60% 0.18 270)', width: '15px', height: '15px', flexShrink: 0 }}
-              />
-              <div>
-                <div style={{ fontSize: '13px', color: c.text }}>{t.betterLyrics}</div>
-                <div style={{ fontSize: '12px', color: c.textSubtle }}>{t.betterLyricsHint}</div>
-              </div>
-            </label>
-          )}
-
-          {/* Indexing progress */}
-          {isIndexing && (
-            <div style={{
-              padding: '14px 16px', borderRadius: '10px',
-              background: isDark ? 'oklch(60% 0.18 270 / 0.08)' : 'oklch(60% 0.18 270 / 0.06)',
-              border: '1px solid oklch(60% 0.18 270 / 0.2)',
-              display: 'flex', flexDirection: 'column', gap: '8px',
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: c.accent, fontSize: '13px', fontWeight: '600' }}>
-                <Spinner size={15} />{t.indexing}
-              </div>
-              <div style={{ fontSize: '12px', color: c.textMuted }}>{t.indexHint}</div>
+          {stage==='ready' && <label style={{ display:'flex', alignItems:'flex-start', gap:'9px', cursor:'pointer' }}><input type="checkbox" checked={betterLyrics} onChange={e=>setBetterLyrics(e.target.checked)} style={{ marginTop:'2px', accentColor:'oklch(60% 0.18 270)', width:'14px', height:'14px', flexShrink:0 }} /><div><div style={{ fontSize:'13px', color:c.text }}>{t.betterLyrics}</div><div style={{ fontSize:'12px', color:c.textSubtle }}>{t.betterHint}</div></div></label>}
+          {(isIndexing||isDone||Object.values(stepStatus).some(s=>s!=='idle')) && (
+            <div style={{ padding:'12px 14px', borderRadius:'10px', background:isDark?'rgba(255,255,255,0.03)':'rgba(0,0,0,0.02)', border:`1px solid ${c.border}` }}>
+              <IndexingProgress stage={stage} stepStatus={stepStatus} lang={lang} c={c} isDark={isDark} progressDetail={progressDetail} />
             </div>
           )}
-
-          {/* Done state */}
-          {isDone && (
-            <div style={{
-              padding: '14px 16px', borderRadius: '10px',
-              background: isDark ? 'oklch(60% 0.15 140 / 0.1)' : 'oklch(60% 0.15 140 / 0.08)',
-              border: '1px solid oklch(60% 0.15 140 / 0.25)',
-              display: 'flex', alignItems: 'center', gap: '10px',
-              fontSize: '13px', fontWeight: '600', color: 'oklch(60% 0.15 140)',
-            }}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg>
-              {t.done} {progress.count > 0 && `(${progress.count} треков)`}
-            </div>
-          )}
-
-          {/* Error */}
-          {errorMsg && (
-            <div style={{
-              padding: '10px 14px', borderRadius: '8px', fontSize: '12px',
-              background: isDark ? 'oklch(55% 0.2 25 / 0.1)' : 'oklch(55% 0.2 25 / 0.07)',
-              border: '1px solid oklch(55% 0.2 25 / 0.25)', color: 'oklch(55% 0.2 25)',
-            }}>
-              {errorMsg}
-            </div>
-          )}
-
-          {/* Index button */}
-          {stage === 'ready' && (
-            <button
-              onClick={handleIndex}
-              style={{
-                padding: '13px 20px', borderRadius: '12px', border: 'none',
-                background: c.accentGrad, color: 'white',
-                fontSize: '14px', fontWeight: '700', cursor: 'pointer',
-                boxShadow: '0 4px 16px oklch(60% 0.18 270 / 0.35), inset 0 1px 0 rgba(255,255,255,0.15)',
-                transition: 'all 0.15s', letterSpacing: '-0.2px',
-              }}
-              onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = '0 6px 20px oklch(60% 0.18 270 / 0.45), inset 0 1px 0 rgba(255,255,255,0.15)'; }}
-              onMouseLeave={e => { e.currentTarget.style.transform = ''; e.currentTarget.style.boxShadow = '0 4px 16px oklch(60% 0.18 270 / 0.35), inset 0 1px 0 rgba(255,255,255,0.15)'; }}
-            >
-              {t.indexBtn} →
-            </button>
-          )}
+          {isDone && <div style={{ padding:'12px 15px', borderRadius:'10px', background:c.greenBg, border:`1px solid ${c.green.replace(')','/0.3)')}`, display:'flex', alignItems:'center', gap:'10px', fontSize:'13px', fontWeight:'600', color:c.green }}>
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+            {t.done} {progress.count>0&&`(${progress.count} треков)`}
+          </div>}
+          {errorMsg && <div style={{ padding:'9px 13px', borderRadius:'8px', fontSize:'12px', background:c.redBg, border:`1px solid ${c.red.replace(')','/0.25)')}`, color:c.red }}>{errorMsg}</div>}
+          {stage==='ready' && <button onClick={handleIndex} style={{ padding:'13px 20px', borderRadius:'12px', border:'none', background:'linear-gradient(180deg,oklch(65% 0.18 265) 0%,oklch(55% 0.2 275) 100%)', color:'white', fontSize:'14px', fontWeight:'700', cursor:'pointer', boxShadow:'inset 0 1px 0 rgba(255,255,255,0.2), inset 0 -1px 0 rgba(0,0,0,0.2), 0 4px 16px oklch(60% 0.18 270 / 0.4)', transition:'all 0.15s', letterSpacing:'-0.2px' }}>{t.indexBtn} →</button>}
         </div>
       </div>
     </div>
@@ -1578,154 +1545,511 @@ function OnboardingScreen({ isDark, lang, onDone }) {
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 function App() {
-  const [section, setSection] = useState('chat');
-  const [isDark, setDark] = useState(true);
-  const [lang, setLang] = useState('ru');
-
-  // 'checking' | 'onboarding' | 'no-qdrant' | 'ready'
+  const [section,  setSection]  = useState('chat');
+  const [isDark,   setDark]     = useState(() => localStorage.getItem('musix_theme') !== 'light');
+  const [lang,     setLang]     = useState(() => localStorage.getItem('musix_lang') || 'ru');
+  const [themeAnim, setThemeAnim] = useState(false);
   const [appState, setAppState] = useState('checking');
 
-  // On mount — check if Qdrant has any collections with data
+  const [collections,      setCollections]      = useState([]);
+  const [activeCollection, setActiveCollection] = useState(() => localStorage.getItem('active_collection') || '');
+
+  const loadCollections = useCallback(() =>
+    apiFetch('/library/collections').then(data => {
+      const cols = data.collections || [];
+      setCollections(cols);
+      if (!localStorage.getItem('active_collection') && cols.length > 0) {
+        const best = cols.reduce((a,b) => b.count>a.count?b:a, cols[0]);
+        setActiveCollection(best.name);
+        localStorage.setItem('active_collection', best.name);
+      }
+    }).catch(() => {}), []);
+
   useEffect(() => {
     apiFetch('/library/collections')
       .then(res => {
-        if (!res.qdrant_available) {
-          setAppState('no-qdrant');
-        } else {
-          const hasData = (res.total_points || 0) > 0;
-          setAppState(hasData ? 'ready' : 'onboarding');
+        if (!res.qdrant_available) { setAppState('no-qdrant'); return; }
+        const hasData = (res.total_points||0) > 0;
+        setCollections(res.collections||[]);
+        if (!localStorage.getItem('active_collection') && (res.collections||[]).length>0) {
+          const best = res.collections.reduce((a,b)=>b.count>a.count?b:a, res.collections[0]);
+          setActiveCollection(best.name);
+          localStorage.setItem('active_collection', best.name);
         }
+        setAppState(hasData ? 'ready' : 'onboarding');
       })
-      .catch(() => {
-        // FastAPI itself is down — show no-qdrant screen as a generic error
-        setAppState('no-qdrant');
-      });
+      .catch(() => setAppState('no-qdrant'));
   }, []);
 
-  const sectionMap = { chat: ChatSection, recommend: RecommendSection, library: LibrarySection };
-  const ActiveSection = sectionMap[section] || ChatSection;
+  const switchCollection = (name) => {
+    setActiveCollection(name);
+    localStorage.setItem('active_collection', name);
+  };
+
+  const handleThemeToggle = () => {
+    setThemeAnim(true);
+    setTimeout(() => { setThemeAnim(false); }, 350);
+    setDark(d => {
+      const next = !d;
+      localStorage.setItem('musix_theme', next ? 'dark' : 'light');
+      return next;
+    });
+  };
+
+  const handleLangToggle = (l) => { setLang(l); localStorage.setItem('musix_lang', l); };
+
   const c = useColors(isDark);
 
-  // ── Checking splash ──
-  if (appState === 'checking') {
-    return (
-      <div style={{
-        width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column',
-        alignItems: 'center', justifyContent: 'center', gap: '16px',
-        background: isDark ? '#0d0d10' : '#f5f4f8',
-      }}>
-        <div style={{
-          width: '44px', height: '44px', borderRadius: '13px',
-          background: 'linear-gradient(135deg, oklch(60% 0.18 270), oklch(60% 0.18 310))',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          boxShadow: '0 4px 12px oklch(60% 0.18 270 / 0.4)',
-        }}>
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round">
-            <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
-          </svg>
-        </div>
-        <Spinner size={20} />
+  const sectionMap = { chat:ChatSection, recommend:RecommendSection, library:LibrarySection, settings:SettingsSection };
+  const ActiveSection = sectionMap[section] || ChatSection;
+
+  if (appState==='checking') return (
+    <div style={{ width:'100vw', height:'100vh', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', gap:'16px', background:isDark?'#0d0d10':'#f2f1f6' }}>
+      <div style={{ width:'44px', height:'44px', borderRadius:'13px', background:'linear-gradient(145deg,oklch(65% 0.18 265),oklch(55% 0.2 295))', display:'flex', alignItems:'center', justifyContent:'center', boxShadow:'inset 0 1px 0 rgba(255,255,255,0.25), 0 4px 12px oklch(60% 0.18 270 / 0.45)' }}>
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
       </div>
-    );
-  }
+      <Spinner size={20} />
+    </div>
+  );
 
-  // ── Qdrant unavailable ──
-  if (appState === 'no-qdrant') {
-    return (
-      <div style={{
-        width: '100vw', height: '100vh', display: 'flex', alignItems: 'center',
-        justifyContent: 'center', background: isDark ? '#0d0d10' : '#f5f4f8', padding: '24px',
-      }}>
-        <div style={{
-          maxWidth: '420px', width: '100%',
-          background: isDark ? '#17171b' : '#ffffff',
-          border: `1px solid ${c.border}`, borderRadius: '20px', padding: '40px',
-          boxShadow: isDark ? '0 8px 40px rgba(0,0,0,0.6)' : '0 8px 40px rgba(0,0,0,0.1)',
-          display: 'flex', flexDirection: 'column', gap: '20px',
-          animation: 'fadeIn 0.3s ease forwards',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div style={{ width: '44px', height: '44px', borderRadius: '13px',
-              background: 'linear-gradient(135deg, oklch(60% 0.18 270), oklch(60% 0.18 310))',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              boxShadow: '0 4px 12px oklch(60% 0.18 270 / 0.4)', flexShrink: 0 }}>
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round">
-                <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
-              </svg>
-            </div>
-            <span style={{ fontSize: '22px', fontWeight: '700', letterSpacing: '-0.5px', color: c.text }}>MusiX</span>
+  if (appState==='no-qdrant') return (
+    <div style={{ width:'100vw', height:'100vh', display:'flex', alignItems:'center', justifyContent:'center', background:isDark?'#0d0d10':'#f2f1f6', padding:'24px' }}>
+      <div style={{ maxWidth:'420px', width:'100%', background:c.surface, border:`1px solid ${c.border}`, borderRadius:'20px', padding:'40px',
+        boxShadow: isDark?'inset 0 1px 0 rgba(255,255,255,0.06), 0 8px 40px rgba(0,0,0,0.6)':'inset 0 1px 0 rgba(255,255,255,0.9), 0 8px 40px rgba(0,0,0,0.1)',
+        display:'flex', flexDirection:'column', gap:'20px', animation:'fadeIn 0.3s ease forwards' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
+          <div style={{ width:'44px', height:'44px', borderRadius:'13px', background:'linear-gradient(145deg,oklch(65% 0.18 265),oklch(55% 0.2 295))', display:'flex', alignItems:'center', justifyContent:'center', boxShadow:'inset 0 1px 0 rgba(255,255,255,0.25), 0 4px 12px oklch(60% 0.18 270 / 0.45)', flexShrink:0 }}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
           </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-            <div style={{ fontSize: '18px', fontWeight: '700', color: c.text, letterSpacing: '-0.3px' }}>
-              {lang === 'ru' ? 'Qdrant не запущен' : 'Qdrant is not running'}
-            </div>
-            <div style={{ fontSize: '14px', color: c.textMuted, lineHeight: '1.65' }}>
-              {lang === 'ru'
-                ? 'Для работы приложения необходима база данных Qdrant. Запусти её командой:'
-                : 'The app requires Qdrant to be running. Start it with:'}
-            </div>
-            <div style={{
-              padding: '12px 14px', borderRadius: '10px', fontFamily: 'DM Mono, monospace',
-              fontSize: '13px', color: 'oklch(60% 0.18 140)',
-              background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)',
-              border: `1px solid ${c.border}`, userSelect: 'all',
-            }}>
-              docker-compose up -d
-            </div>
-            <div style={{ fontSize: '13px', color: c.textSubtle }}>
-              {lang === 'ru'
-                ? 'После запуска Qdrant обнови страницу.'
-                : 'Once Qdrant is up, refresh the page.'}
-            </div>
-          </div>
-
-          <button
-            onClick={() => window.location.reload()}
-            style={{
-              padding: '12px 20px', borderRadius: '10px', border: 'none',
-              background: c.accentGrad, color: 'white',
-              fontSize: '14px', fontWeight: '600', cursor: 'pointer',
-              boxShadow: '0 4px 12px oklch(60% 0.18 270 / 0.3)',
-            }}
-          >
-            {lang === 'ru' ? '↻ Проверить снова' : '↻ Try again'}
-          </button>
+          <span style={{ fontSize:'22px', fontWeight:'700', letterSpacing:'-0.5px', color:c.text }}>MusiX</span>
         </div>
+        <div>
+          <div style={{ fontSize:'18px', fontWeight:'700', color:c.text, letterSpacing:'-0.3px', marginBottom:'8px' }}>{lang==='ru'?'Qdrant не запущен':'Qdrant is not running'}</div>
+          <div style={{ fontSize:'13px', color:c.textMuted, lineHeight:'1.65' }}>{lang==='ru'?'Для работы необходима база данных Qdrant. Запусти командой:':'The app requires Qdrant. Start it with:'}</div>
+          <div style={{ marginTop:'12px', padding:'11px 14px', borderRadius:'10px', fontFamily:'DM Mono, monospace', fontSize:'13px', color:c.green, background:c.greenBg, border:`1px solid ${c.green.replace(')','/0.25)')}`, userSelect:'all' }}>docker-compose up -d</div>
+          <div style={{ fontSize:'12px', color:c.textSubtle, marginTop:'10px' }}>{lang==='ru'?'После запуска Qdrant обнови страницу.':'Once Qdrant is up, refresh the page.'}</div>
+        </div>
+        <button onClick={()=>window.location.reload()} style={{ padding:'11px 20px', borderRadius:'10px', border:'none', background:'linear-gradient(180deg,oklch(65% 0.18 265) 0%,oklch(55% 0.2 275) 100%)', color:'white', fontSize:'13px', fontWeight:'600', cursor:'pointer', boxShadow:'inset 0 1px 0 rgba(255,255,255,0.2), 0 3px 10px oklch(60% 0.18 270 / 0.35)' }}>
+          {lang==='ru'?'↻ Проверить снова':'↻ Try again'}
+        </button>
       </div>
-    );
-  }
+    </div>
+  );
 
-  // ── Onboarding ──
-  if (appState === 'onboarding') {
-    return (
-      <OnboardingScreen
-        isDark={isDark}
-        lang={lang}
-        onDone={() => setAppState('ready')}
-      />
-    );
-  }
+  if (appState==='onboarding') return <OnboardingScreen isDark={isDark} lang={lang} onDone={() => { loadCollections(); setAppState('ready'); }} />;
 
-  // ── Main UI ──
   return (
-    <div style={{ display: 'flex', width: '100vw', height: '100vh', overflow: 'hidden', background: isDark ? '#0d0d10' : '#f5f4f8' }}>
+    <div className={themeAnim ? 'theme-transition' : ''} style={{ display:'flex', width:'100vw', height:'100vh', overflow:'hidden', background:c.bg,
+      animation: themeAnim ? 'themeFade 0.3s ease' : undefined }}>
       <Sidebar
-        section={section}
-        onNav={setSection}
-        isDark={isDark}
-        onThemeToggle={() => setDark(d => !d)}
-        lang={lang}
-        onLangToggle={setLang}
+        section={section} onNav={setSection}
+        isDark={isDark} onThemeToggle={handleThemeToggle}
+        lang={lang} onLangToggle={handleLangToggle}
+        collections={collections} activeCollection={activeCollection} onCollectionSwitch={switchCollection}
       />
-      <div key={section} className="section-enter" style={{ flex: 1, minWidth: 0, display: 'flex', overflow: 'hidden' }}>
-        <ActiveSection isDark={isDark} lang={lang} />
+      <div key={section} className="section-enter" style={{ flex:1, minWidth:0, display:'flex', overflow:'hidden' }}>
+        <ActiveSection
+          isDark={isDark} lang={lang}
+          activeCollection={activeCollection}
+          collections={collections}
+          onCollectionSwitch={switchCollection}
+          onCollectionsUpdate={() => loadCollections()}
+        />
       </div>
     </div>
   );
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+
+<!-- ── Tweaks Panel ──────────────────────────────────────────────────────── -->
+<script>
+(function() {
+  // ── Defaults ──────────────────────────────────────────────────────────────
+  const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+    "accent": "green",
+    "depth": "raised",
+    "typo": "mono"
+  }/*EDITMODE-END*/;
+
+  // ── Persist & load ────────────────────────────────────────────────────────
+  function load() {
+    try { return Object.assign({}, TWEAK_DEFAULTS, JSON.parse(localStorage.getItem('musix_tweaks') || '{}')); }
+    catch { return Object.assign({}, TWEAK_DEFAULTS); }
+  }
+  function save(state) {
+    localStorage.setItem('musix_tweaks', JSON.stringify(state));
+    window.parent.postMessage({ type: '__edit_mode_set_keys', edits: state }, '*');
+  }
+
+  let state = load();
+
+  // ── Accent palettes ───────────────────────────────────────────────────────
+  const ACCENTS = {
+    violet: { h: 270, label: 'Violet',  swatch: 'oklch(60% 0.18 270)' },
+    rose:   { h: 350, label: 'Rose',    swatch: 'oklch(60% 0.2  350)' },
+    cyan:   { h: 200, label: 'Cyan',    swatch: 'oklch(60% 0.17 200)' },
+    amber:  { h: 60,  label: 'Amber',   swatch: 'oklch(68% 0.17 65)'  },
+    green:  { h: 148, label: 'Green',   swatch: 'oklch(60% 0.17 148)' },
+  };
+
+  // ── Apply tweaks to DOM ───────────────────────────────────────────────────
+  function applyAccent(key) {
+    const p = ACCENTS[key] || ACCENTS.violet;
+    const h = p.h;
+    const root = document.documentElement;
+    root.style.setProperty('--accent',      `oklch(60% 0.18 ${h})`);
+    root.style.setProperty('--accent-muted',`oklch(60% 0.18 ${h} / 0.13)`);
+    root.style.setProperty('--accent-grad', `linear-gradient(180deg, oklch(65% 0.18 ${h-5}) 0%, oklch(55% 0.2 ${h+5}) 100%)`);
+    root.style.setProperty('--accent-glow', `oklch(60% 0.18 ${h} / 0.4)`);
+    root.style.setProperty('--accent-h',    h);
+    // Patch every oklch accent reference via a stylesheet
+    patchAccentSheet(h);
+  }
+
+  let accentStyleEl = null;
+  function patchAccentSheet(h) {
+    if (!accentStyleEl) {
+      accentStyleEl = document.createElement('style');
+      accentStyleEl.id = 'musix-accent-override';
+      document.head.appendChild(accentStyleEl);
+    }
+    // Override the React-inline accent color by targeting specific data attrs
+    // We do it via CSS vars injected on :root and used in a cascade override
+    accentStyleEl.textContent = `
+      :root {
+        --acc: oklch(60% 0.18 ${h});
+        --acc-bg-d: oklch(60% 0.18 ${h} / 0.13);
+        --acc-bg-l: oklch(60% 0.18 ${h} / 0.09);
+        --acc-grad: linear-gradient(180deg, oklch(65% 0.18 ${h - 5}) 0%, oklch(55% 0.2 ${h + 5}) 100%);
+        --acc-shadow: oklch(60% 0.18 ${h} / 0.4);
+      }
+      /* Active nav item glow */
+      [data-musix-accent] { color: var(--acc) !important; }
+      [data-musix-accent-bg] { background: var(--acc-bg-d) !important; border-color: oklch(60% 0.18 ${h} / 0.25) !important; }
+      [data-musix-accent-btn] {
+        background: var(--acc-grad) !important;
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.2), inset 0 -1px 0 rgba(0,0,0,0.2), 0 2px 8px var(--acc-shadow) !important;
+      }
+      [data-musix-accent-btn]:disabled { background: rgba(128,128,128,0.1) !important; box-shadow: none !important; }
+      /* Progress shimmer recolour */
+      .progress-shimmer {
+        background: linear-gradient(90deg,
+          oklch(60% 0.18 ${h}) 0%, oklch(65% 0.18 ${h+10}) 50%, oklch(60% 0.18 ${h}) 100%) !important;
+        background-size: 200% 100% !important;
+      }
+      /* Scrollbar thumb */
+      ::-webkit-scrollbar-thumb { background: oklch(60% 0.18 ${h} / 0.18) !important; }
+    `;
+  }
+
+  function applyDepth(key) {
+    const body = document.body;
+    body.classList.remove('depth-flat','depth-raised','depth-deep');
+    body.classList.add(`depth-${key}`);
+
+    const root = document.documentElement;
+    if (key === 'flat') {
+      root.style.setProperty('--depth-border', 'rgba(128,128,128,0.15)');
+      root.style.setProperty('--depth-card-shadow', 'none');
+    } else if (key === 'raised') {
+      root.style.setProperty('--depth-border', '');
+      root.style.setProperty('--depth-card-shadow', '');
+    } else { // deep
+      root.style.setProperty('--depth-shadow-deep',
+        'inset 0 2px 0 rgba(255,255,255,0.1), inset 0 -2px 0 rgba(0,0,0,0.5), 0 8px 24px rgba(0,0,0,0.6), 0 2px 6px rgba(0,0,0,0.4)');
+    }
+
+    if (!depthStyleEl) {
+      depthStyleEl = document.createElement('style');
+      depthStyleEl.id = 'musix-depth-override';
+      document.head.appendChild(depthStyleEl);
+    }
+    if (key === 'flat') {
+      depthStyleEl.textContent = `
+        [data-musix-card] {
+          box-shadow: none !important;
+          border-radius: 8px !important;
+        }
+        [data-musix-surface] { box-shadow: none !important; }
+        [data-musix-btn] { box-shadow: none !important; border: 1px solid rgba(128,128,128,0.18) !important; }
+        .ske-panel-dark, .ske-panel-light, .ske-btn-dark, .ske-btn-light,
+        .ske-inset-dark, .ske-inset-light { box-shadow: none !important; }
+        .ske-inset-dark { background: rgba(0,0,0,0.15) !important; }
+        .ske-inset-light { background: rgba(0,0,0,0.04) !important; }
+      `;
+    } else if (key === 'deep') {
+      depthStyleEl.textContent = `
+        [data-musix-card] {
+          box-shadow: inset 0 2px 0 rgba(255,255,255,0.1), inset 0 -2px 0 rgba(0,0,0,0.5),
+                      0 8px 32px rgba(0,0,0,0.55), 0 2px 8px rgba(0,0,0,0.4) !important;
+          border-radius: 18px !important;
+        }
+        [data-musix-surface] {
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.1), 0 4px 24px rgba(0,0,0,0.5) !important;
+        }
+        [data-musix-btn] {
+          box-shadow: inset 0 2px 0 rgba(255,255,255,0.15), inset 0 -2px 0 rgba(0,0,0,0.3),
+                      0 4px 12px rgba(0,0,0,0.4) !important;
+        }
+        .ske-inset-dark {
+          box-shadow: inset 0 3px 6px rgba(0,0,0,0.8), inset 0 1px 0 rgba(0,0,0,0.9) !important;
+        }
+        .ske-inset-light {
+          box-shadow: inset 0 3px 5px rgba(0,0,0,0.14) !important;
+        }
+      `;
+    } else {
+      depthStyleEl.textContent = '';
+    }
+  }
+  let depthStyleEl = null;
+
+  function applyTypo(key) {
+    document.body.classList.remove('typo-default','typo-mono','typo-editorial');
+    document.body.classList.add(`typo-${key}`);
+    if (!typoStyleEl) {
+      typoStyleEl = document.createElement('style');
+      typoStyleEl.id = 'musix-typo-override';
+      document.head.appendChild(typoStyleEl);
+    }
+    if (key === 'mono') {
+      typoStyleEl.textContent = `
+        body, input, textarea, select, button { font-family: 'DM Mono', monospace !important; letter-spacing: -0.2px !important; }
+        [data-musix-label], [data-musix-title] { letter-spacing: 0 !important; font-weight: 500 !important; }
+        nav span { font-size: 12px !important; }
+      `;
+    } else if (key === 'editorial') {
+      typoStyleEl.textContent = `
+        body { font-family: 'Inter', sans-serif; }
+        [data-musix-title] { font-size: 110% !important; letter-spacing: -0.8px !important; font-weight: 800 !important; }
+        [data-musix-label] { font-family: 'DM Mono', monospace !important; font-size: 9px !important; text-transform: uppercase !important; letter-spacing: 1.2px !important; }
+        nav span { font-size: 13px !important; font-weight: 500 !important; letter-spacing: -0.3px !important; }
+        [data-musix-card] { border-radius: 20px !important; }
+      `;
+    } else {
+      typoStyleEl.textContent = '';
+    }
+  }
+  let typoStyleEl = null;
+
+  function applyAll(s) {
+    applyAccent(s.accent);
+    applyDepth(s.depth);
+    applyTypo(s.typo);
+  }
+
+  // ── Build panel HTML ──────────────────────────────────────────────────────
+  function buildPanel() {
+    const isDarkNow = () => document.body.style.getPropertyValue('color-scheme') !== 'light'
+      && !document.documentElement.classList.contains('light')
+      && localStorage.getItem('musix_theme') !== 'light';
+
+    const panelEl = document.createElement('div');
+    panelEl.id = 'musix-tweaks';
+    panelEl.classList.add('hidden');
+
+    const render = () => {
+      const dark = isDarkNow();
+      const bg      = dark ? 'linear-gradient(180deg,#1e1e26 0%,#17171f 100%)' : 'linear-gradient(180deg,#ffffff 0%,#f0eff5 100%)';
+      const border  = dark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)';
+      const shadow  = dark ? '0 16px 48px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,255,255,0.07)' : '0 8px 32px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.9)';
+      const txt     = dark ? '#eeeef3' : '#18181c';
+      const sub     = dark ? 'rgba(255,255,255,0.38)' : 'rgba(0,0,0,0.38)';
+      const divider = dark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)';
+      const chipBg  = dark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)';
+      const chipBorder = dark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)';
+      const chipActiveShadow = dark
+        ? 'inset 0 1px 0 rgba(255,255,255,0.1), inset 0 -1px 0 rgba(0,0,0,0.3)'
+        : 'inset 0 1px 0 rgba(255,255,255,0.9), inset 0 -1px 0 rgba(0,0,0,0.06), 0 1px 3px rgba(0,0,0,0.1)';
+      const h = (ACCENTS[state.accent] || ACCENTS.violet).h;
+
+      panelEl.style.cssText = `position:fixed;bottom:66px;right:20px;z-index:9999;width:272px;border-radius:16px;background:${bg};border:1px solid ${border};box-shadow:${shadow};font-family:'Inter',sans-serif;animation:fadeIn 0.2s ease;overflow:hidden;`;
+
+      panelEl.innerHTML = `
+        <div style="padding:14px 16px 0;display:flex;align-items:center;justify-content:space-between;">
+          <div style="display:flex;align-items:center;gap:7px;">
+            <div style="width:6px;height:6px;border-radius:50%;background:oklch(60% 0.18 ${h});box-shadow:0 0 5px oklch(60% 0.18 ${h} / 0.7);"></div>
+            <span style="font-size:12px;font-weight:700;color:${txt};letter-spacing:-0.2px;">Tweaks</span>
+          </div>
+          <button id="musix-tweaks-close" style="width:22px;height:22px;border-radius:6px;border:1px solid ${divider};background:${chipBg};color:${sub};font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;">×</button>
+        </div>
+
+        <div style="padding:14px 16px;display:flex;flex-direction:column;gap:14px;">
+
+          <!-- Accent -->
+          <div>
+            <div style="font-size:10px;font-family:'DM Mono',monospace;color:${sub};text-transform:uppercase;letter-spacing:0.7px;margin-bottom:8px;">Accent colour</div>
+            <div style="display:flex;gap:6px;">
+              ${Object.entries(ACCENTS).map(([key, val]) => {
+                const active = state.accent === key;
+                return `<button class="tweak-accent-btn" data-accent="${key}" title="${val.label}" style="
+                  flex:1;height:28px;border-radius:7px;border:1px solid ${active ? val.swatch.replace(')','/0.5)') : chipBorder};
+                  background:${active ? val.swatch.replace(')','/0.2)') : chipBg};
+                  cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all 0.13s;
+                  box-shadow:${active ? chipActiveShadow : 'none'};
+                ">
+                  <div style="width:12px;height:12px;border-radius:50%;background:${val.swatch};
+                    box-shadow:0 0 ${active?'6px':'3px'} ${val.swatch.replace(')',`/ ${active?'0.7':'0.4'})`)};">
+                  </div>
+                </button>`;
+              }).join('')}
+            </div>
+          </div>
+
+          <div style="height:1px;background:${divider};"></div>
+
+          <!-- Depth -->
+          <div>
+            <div style="font-size:10px;font-family:'DM Mono',monospace;color:${sub};text-transform:uppercase;letter-spacing:0.7px;margin-bottom:8px;">Surface depth</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;">
+              ${[
+                { key:'flat',   icon:'▭', label:'Flat',  hint:'No shadows' },
+                { key:'raised', icon:'◈', label:'Raised', hint:'Default skeuomorphic' },
+                { key:'deep',   icon:'◉', label:'Deep',  hint:'Heavy shadows' },
+              ].map(({ key, icon, label, hint }) => {
+                const active = state.depth === key;
+                return `<button class="tweak-depth-btn" data-depth="${key}" title="${hint}" style="
+                  padding:8px 4px;border-radius:8px;border:1px solid ${active ? `oklch(60% 0.18 ${h} / 0.4)` : chipBorder};
+                  background:${active ? `oklch(60% 0.18 ${h} / 0.15)` : chipBg};
+                  color:${active ? `oklch(60% 0.18 ${h})` : sub};
+                  cursor:pointer;font-size:11px;font-weight:${active?'700':'400'};transition:all 0.13s;
+                  display:flex;flex-direction:column;align-items:center;gap:3px;
+                  box-shadow:${active ? chipActiveShadow : 'none'};
+                ">
+                  <span style="font-size:15px;line-height:1;">${icon}</span>
+                  <span style="font-family:'DM Mono',monospace;font-size:9px;letter-spacing:0.3px;">${label}</span>
+                </button>`;
+              }).join('')}
+            </div>
+          </div>
+
+          <div style="height:1px;background:${divider};"></div>
+
+          <!-- Typography -->
+          <div>
+            <div style="font-size:10px;font-family:'DM Mono',monospace;color:${sub};text-transform:uppercase;letter-spacing:0.7px;margin-bottom:8px;">Typography</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;">
+              ${[
+                { key:'default',   label:'Default',   preview:'Aa' },
+                { key:'mono',      label:'Mono',      preview:'A_' },
+                { key:'editorial', label:'Editorial', preview:'AА' },
+              ].map(({ key, label, preview }) => {
+                const active = state.typo === key;
+                const ff = key === 'mono' ? "'DM Mono',monospace" : "'Inter',sans-serif";
+                return `<button class="tweak-typo-btn" data-typo="${key}" style="
+                  padding:8px 4px;border-radius:8px;border:1px solid ${active ? `oklch(60% 0.18 ${h} / 0.4)` : chipBorder};
+                  background:${active ? `oklch(60% 0.18 ${h} / 0.15)` : chipBg};
+                  color:${active ? `oklch(60% 0.18 ${h})` : sub};
+                  cursor:pointer;font-size:11px;font-weight:${active?'700':'400'};transition:all 0.13s;
+                  display:flex;flex-direction:column;align-items:center;gap:3px;
+                  box-shadow:${active ? chipActiveShadow : 'none'};
+                ">
+                  <span style="font-family:${ff};font-size:14px;font-weight:700;line-height:1;letter-spacing:${key==='editorial'?'-1px':'0'};">${preview}</span>
+                  <span style="font-family:'DM Mono',monospace;font-size:9px;letter-spacing:0.3px;">${label}</span>
+                </button>`;
+              }).join('')}
+            </div>
+          </div>
+
+        </div>
+      `;
+
+      // Wire up buttons
+      panelEl.querySelectorAll('.tweak-accent-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          state.accent = btn.dataset.accent;
+          save(state); applyAccent(state.accent); render();
+        });
+        btn.addEventListener('mouseenter', () => { if (state.accent !== btn.dataset.accent) btn.style.opacity = '0.8'; });
+        btn.addEventListener('mouseleave', () => { btn.style.opacity = '1'; });
+      });
+      panelEl.querySelectorAll('.tweak-depth-btn').forEach(btn => {
+        btn.addEventListener('click', () => { state.depth = btn.dataset.depth; save(state); applyDepth(state.depth); render(); });
+      });
+      panelEl.querySelectorAll('.tweak-typo-btn').forEach(btn => {
+        btn.addEventListener('click', () => { state.typo = btn.dataset.typo; save(state); applyTypo(state.typo); render(); });
+      });
+      panelEl.querySelector('#musix-tweaks-close').addEventListener('click', hidePanel);
+    };
+
+    render();
+
+    // Re-render panel when theme changes (so dark/light colours update)
+    const obs = new MutationObserver(() => render());
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ['style','class'] });
+    // Also poll localStorage for theme changes from React
+    let lastTheme = localStorage.getItem('musix_theme');
+    setInterval(() => {
+      const t = localStorage.getItem('musix_theme');
+      if (t !== lastTheme) { lastTheme = t; render(); }
+    }, 300);
+
+    return panelEl;
+  }
+
+  // ── Toggle button ─────────────────────────────────────────────────────────
+  function buildToggle() {
+    const btn = document.createElement('button');
+    btn.id = 'musix-tweaks-toggle';
+    btn.title = 'Tweaks';
+    btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
+
+    const updateToggleStyle = () => {
+      const dark = localStorage.getItem('musix_theme') !== 'light';
+      const h = (ACCENTS[state.accent] || ACCENTS.violet).h;
+      const isOpen = !panelEl.classList.contains('hidden');
+      btn.style.cssText = `
+        position:fixed;bottom:20px;right:20px;z-index:10000;
+        width:38px;height:38px;border-radius:11px;border:none;cursor:pointer;
+        display:flex;align-items:center;justify-content:center;transition:all 0.18s;
+        background:${isOpen
+          ? `linear-gradient(180deg,oklch(65% 0.18 ${h-5}) 0%,oklch(55% 0.2 ${h+5}) 100%)`
+          : (dark ? 'linear-gradient(180deg,#2a2a32 0%,#1e1e26 100%)' : 'linear-gradient(180deg,#fff 0%,#e8e7ed 100%)')};
+        color:${isOpen ? 'white' : (dark ? 'rgba(255,255,255,0.6)' : 'rgba(0,0,0,0.5)')};
+        box-shadow:${isOpen
+          ? `inset 0 1px 0 rgba(255,255,255,0.2),0 3px 12px oklch(60% 0.18 ${h} / 0.5)`
+          : (dark ? 'inset 0 1px 0 rgba(255,255,255,0.1),0 2px 6px rgba(0,0,0,0.5)' : 'inset 0 1px 0 rgba(255,255,255,0.9),0 2px 5px rgba(0,0,0,0.15)')};
+      `;
+    };
+
+    btn.addEventListener('click', () => {
+      panelEl.classList.toggle('hidden');
+      updateToggleStyle();
+    });
+    setInterval(updateToggleStyle, 400);
+    updateToggleStyle();
+    return btn;
+  }
+
+  function hidePanel() {
+    panelEl.classList.add('hidden');
+  }
+
+  // ── Announce edit mode availability ──────────────────────────────────────
+  window.addEventListener('message', e => {
+    if (e.data?.type === '__activate_edit_mode')   { panelEl.classList.remove('hidden'); }
+    if (e.data?.type === '__deactivate_edit_mode') { panelEl.classList.add('hidden'); }
+  });
+  window.parent.postMessage({ type: '__edit_mode_available' }, '*');
+
+  // ── Mount ─────────────────────────────────────────────────────────────────
+  const panelEl = buildPanel();
+  const toggleEl = buildToggle();
+
+  function mount() {
+    document.body.appendChild(panelEl);
+    document.body.appendChild(toggleEl);
+    applyAll(state);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', mount);
+  } else {
+    mount();
+  }
+})();
 </script>
 </body>
 </html>

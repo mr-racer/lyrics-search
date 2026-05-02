@@ -72,32 +72,37 @@ async def get_stats(
     """
     db_client = request.app.state.db_client
     if db_client is None:
-        return {"total_tracks": 0, "collection_name": None, "genres": [], "qdrant_available": False}
+        return {"total_tracks": 0, "collection_name": None, "genres": [], "duration_buckets": [], "qdrant_available": False}
 
     try:
         qdrant = db_client.qdrant
         cols = qdrant.get_collections().collections
     except Exception:
-        return {"total_tracks": 0, "collection_name": None, "genres": [], "qdrant_available": False}
+        return {"total_tracks": 0, "collection_name": None, "genres": [], "duration_buckets": [], "qdrant_available": False}
 
     if not cols:
-        return {"total_tracks": 0, "collection_name": None, "genres": [], "qdrant_available": True}
+        return {"total_tracks": 0, "collection_name": None, "genres": [], "duration_buckets": [], "qdrant_available": True}
 
-    # Use the requested collection or fall back to the one with the most points
+    # Use the requested collection; fall back to the default collection name
+    # (same default as DbClient / LyricsDB) so that stats and search always
+    # target the same collection when the frontend does not specify one.
+    DEFAULT_COLLECTION = "music_explorer"
+    existing = {c.name for c in cols}
+
     target_col: str | None = None
     target_count: int = 0
 
-    if collection_name:
-        # Verify the requested collection exists
-        existing = {c.name for c in cols}
-        if collection_name in existing:
-            try:
-                info = qdrant.get_collection(collection_name)
-                target_col = collection_name
-                target_count = info.points_count or 0
-            except Exception:
-                pass
-    else:
+    pick = collection_name if collection_name else DEFAULT_COLLECTION
+    if pick in existing:
+        try:
+            info = qdrant.get_collection(pick)
+            target_col = pick
+            target_count = info.points_count or 0
+        except Exception:
+            pass
+
+    # If the default doesn't exist, fall back to any collection with points
+    if not target_col:
         for col in cols:
             try:
                 info = qdrant.get_collection(col.name)
@@ -109,10 +114,11 @@ async def get_stats(
                 pass
 
     if not target_col:
-        return {"total_tracks": 0, "collection_name": collection_name, "genres": [], "qdrant_available": True}
+        return {"total_tracks": 0, "collection_name": collection_name, "genres": [], "duration_buckets": [], "qdrant_available": True}
 
-    # Sample up to 1 000 points; collect genre tags from payload
+    # Sample up to 1 000 points; collect genre + duration buckets from payload
     genre_counter: Counter = Counter()
+    duration_counter: Counter = Counter()
     offset = None
     sampled = 0
     SAMPLE_LIMIT = 1000
@@ -123,19 +129,23 @@ async def get_stats(
                 collection_name=target_col,
                 offset=offset,
                 limit=min(100, SAMPLE_LIMIT - sampled),
-                with_payload=["genre"],
+                with_payload=["genre", "duration"],
                 with_vectors=False,
             )
             for point in results:
-                genre = (point.payload or {}).get("genre")
+                pl = point.payload or {}
+                genre = pl.get("genre")
                 if genre and str(genre).strip():
                     genre_counter[str(genre).strip()] += 1
+                dur = pl.get("duration")
+                if dur and str(dur).strip():
+                    duration_counter[str(dur).strip()] += 1
             sampled += len(results)
             if next_offset is None or not results:
                 break
             offset = next_offset
     except Exception:
-        pass  # genre data unavailable — still return total count
+        pass  # data unavailable — still return total count
 
     total_sampled = sum(genre_counter.values()) or 1
     top_genres = [
@@ -143,10 +153,17 @@ async def get_stats(
         for g, c in genre_counter.most_common(3)
     ]
 
+    total_dur = sum(duration_counter.values()) or 1
+    top_durations = [
+        {"range": r, "count": c, "pct": round(c / total_dur * 100)}
+        for r, c in duration_counter.most_common(6)
+    ]
+
     return {
         "total_tracks": target_count,
         "collection_name": target_col,
         "genres": top_genres,
+        "duration_buckets": top_durations,
         "qdrant_available": True,
     }
 

@@ -2,12 +2,17 @@
 
 import asyncio
 import hashlib
+import logging
+import time
 from pathlib import Path
 from typing import List, Optional
 
 from ..domain.models import TrackMetadata, IndexProgress
 from ..resources.model_registry import ModelRegistry
 from ..existing.folder_processor import FileProcessor
+from .job_tracker import JobTracker, IndexStage, IndexStatus
+
+logger = logging.getLogger(__name__)
 
 
 class LibraryService:
@@ -19,8 +24,8 @@ class LibraryService:
             search_service: SearchService instance for indexing tracks into Qdrant.
         """
         self.search_service = search_service
-        self._indexing_in_progress = False
-        self._indexed_count = 0
+        self._job_tracker = JobTracker()
+        self._current_job_id = None
 
     async def index_folder(
         self,
@@ -30,20 +35,86 @@ class LibraryService:
         text_model: Optional[str] = None,
     ) -> dict:
         """
-        Index all audio files in folder.
-        Returns dict with status, count, and message.
+        Index all audio files in folder with progress tracking.
+        Returns dict with job_id for tracking progress via SSE.
         """
-        if self._indexing_in_progress:
-            return {"status": "failed", "message": "Indexing already in progress"}
+        logger.info("[LibraryService] index_folder called: folder=%s, collection=%s, text_model=%s",
+                    folder_path, collection_name, text_model)
 
-        self._indexing_in_progress = True
+        # Check if indexing is already in progress
+        if self._current_job_id:
+            current_job = self._job_tracker.get_job(self._current_job_id)
+            if current_job and current_job.overall_status == IndexStatus.RUNNING:
+                logger.warning("[LibraryService] Indexing already in progress, rejecting new request")
+                return {
+                    "status": "failed",
+                    "message": "Indexing already in progress",
+                    "job_id": self._current_job_id,
+                }
+
+        # Create new job
+        job = self._job_tracker.create_job(folder_path, collection_name)
+        self._current_job_id = job.job_id
+        job.overall_status = IndexStatus.RUNNING
+        logger.info("[LibraryService] Job created: %s", job.job_id)
+
+        # Start indexing in background task to allow SSE progress updates
+        task = asyncio.create_task(self._run_indexing_job(job, better_lyrics_quality, text_model))
+        logger.info("[LibraryService] Background task created: %s", task)
+
+        return {
+            "status": "started",
+            "job_id": job.job_id,
+            "message": "Indexing started",
+        }
+
+    async def _run_indexing_job(self, job, better_lyrics_quality: bool, text_model: Optional[str] = None):
+        """Execute the indexing process with progress updates."""
+        folder_path = job.folder_path
+        collection_name = job.collection_name
+        logger.info("[LibraryService] _run_indexing_job START: job=%s, folder=%s, collection=%s",
+                    job.job_id, folder_path, collection_name)
 
         try:
-            # Load text model if specified
+            # Stage 1: Metadata fetching
+            logger.info("[LibraryService] Stage 1: Metadata fetching")
+            await self._notify_progress(job, {
+                "stage": IndexStage.METADATA.value,
+                "stage_status": IndexStatus.RUNNING.value,
+                "message": "Сканирование папки...",
+                "current": 0,
+            })
+
+            stage_meta = job.stages[IndexStage.METADATA]
+            stage_meta.status = IndexStatus.RUNNING
+            stage_meta.started_at = time.time()
+            stage_meta.message = "Сканирование папки и чтение метаданных..."
+
+            # Use already-loaded text model (don't reload during indexing)
+            # The model should be loaded at startup via ModelRegistry
             if text_model:
+                logger.info("[LibraryService] Getting text model: %s (cached if already loaded)", text_model)
                 ModelRegistry.load_text_model(text_model)
+            else:
+                logger.info("[LibraryService] No text_model specified, using default")
+
+            # Process files - scan first to get total count
+            logger.info("[LibraryService] Scanning folder for audio files: %s", folder_path)
+            audio_files = [
+                p for p in Path(folder_path).rglob("*")
+                if p.suffix.lower() in (".flac", ".m4a", ".mp3")
+            ]
+            stage_meta.total = len(audio_files)
+            logger.info("[LibraryService] Found %d audio files", len(audio_files))
+
+            await self._notify_progress(job, {
+                "stage": IndexStage.METADATA.value,
+                "total": len(audio_files),
+                "message": f"Найдено {len(audio_files)} файлов",
+            })
 
             # Process files with FileProcessor (run in thread pool to avoid blocking)
+            logger.info("[LibraryService] Starting FileProcessor...")
             processor = FileProcessor()
             processed_files = await asyncio.to_thread(
                 processor.process_folder,
@@ -52,35 +123,115 @@ class LibraryService:
             )
 
             track_count = len(processed_files)
-            self._indexed_count = track_count
+            logger.info("[LibraryService] FileProcessor done, processed %d tracks", track_count)
+            stage_meta.status = IndexStatus.COMPLETED
+            stage_meta.current = track_count
+            stage_meta.completed_at = time.time()
+            stage_meta.message = f"Обработано {track_count} треков"
+
+            await self._notify_progress(job, {
+                "stage": IndexStage.METADATA.value,
+                "stage_status": IndexStatus.COMPLETED.value,
+                "current": track_count,
+                "message": stage_meta.message,
+            })
 
             # Convert to TrackMetadata list
+            logger.info("[LibraryService] Converting to TrackMetadata...")
             tracks = self._metadata_to_tracks(processed_files)
+            logger.info("[LibraryService] Converted %d tracks to TrackMetadata", len(tracks))
 
-            # Index into Qdrant via SearchService
+            # Stage 2: Lyrics indexing
+            logger.info("[LibraryService] Stage 2: Lyrics indexing")
+            await self._notify_progress(job, {
+                "stage": IndexStage.LYRICS.value,
+                "stage_status": IndexStatus.RUNNING.value,
+                "message": "Кодирование текстов песен...",
+                "current": 0,
+            })
+
+            stage_lyrics = job.stages[IndexStage.LYRICS]
+            stage_lyrics.status = IndexStatus.RUNNING
+            stage_lyrics.started_at = time.time()
+            stage_lyrics.total = len(tracks)
+            stage_lyrics.message = "Индексация текстов в векторную БД..."
+
+            # Stage 3: Index into Qdrant via SearchService (includes both lyrics and audio)
             if self.search_service and tracks:
-                await self.search_service.index_tracks(tracks, collection_name=collection_name)
+                logger.info("[LibraryService] Starting SearchService.index_tracks_with_progress...")
+                # Index with progress callbacks
+                await self.search_service.index_tracks_with_progress(
+                    tracks,
+                    collection_name=collection_name,
+                    progress_callback=self._on_index_progress,
+                )
+                logger.info("[LibraryService] SearchService.index_tracks_with_progress done")
+            else:
+                logger.warning("[LibraryService] Skipping indexing: search_service=%s, tracks=%d",
+                              self.search_service is not None, len(tracks))
 
-            return {
-                "status": "completed",
-                "count": track_count,
-                "message": f"Indexed {track_count} tracks",
-            }
+            # Mark job as completed
+            job.overall_status = IndexStatus.COMPLETED
+            logger.info("[LibraryService] Job %s COMPLETED", job.job_id)
+            await self._notify_progress(job, {
+                "overall_status": IndexStatus.COMPLETED.value,
+                "message": f"Индексация завершена! {track_count} треков",
+            })
+
         except Exception as e:
-            return {
-                "status": "failed",
-                "count": 0,
-                "message": str(e),
-            }
+            logger.error("[LibraryService] Job %s FAILED: %s", job.job_id, e, exc_info=True)
+            job.overall_status = IndexStatus.FAILED
+            job.error_message = str(e)
+            await self._notify_progress(job, {
+                "overall_status": IndexStatus.FAILED.value,
+                "error": str(e),
+            })
         finally:
-            self._indexing_in_progress = False
+            self._current_job_id = None
+            logger.info("[LibraryService] _run_indexing_job FINALLY, cleared current_job_id")
+
+    async def _notify_progress(self, job, data: dict):
+        """Send progress update to all subscribers."""
+        await job.notify_subscribers(data)
+
+    async def _on_index_progress(self, stage: str, current: int, total: int, message: str):
+        """Callback from SearchService for indexing progress."""
+        if self._current_job_id:
+            job = self._job_tracker.get_job(self._current_job_id)
+            if job:
+                # Update the appropriate stage
+                if stage == "lyrics":
+                    job.stages[IndexStage.LYRICS].current = current
+                    job.stages[IndexStage.LYRICS].total = total
+                    job.stages[IndexStage.LYRICS].message = message
+                elif stage == "audio":
+                    job.stages[IndexStage.AUDIO].current = current
+                    job.stages[IndexStage.AUDIO].total = total
+                    job.stages[IndexStage.AUDIO].message = message
+                
+                await self._notify_progress(job, {
+                    "stage": stage,
+                    "current": current,
+                    "total": total,
+                    "message": message,
+                })
 
     async def get_status(self) -> dict:
         """Return current indexing status."""
-        return {
-            "indexing_in_progress": self._indexing_in_progress,
-            "indexed_count": self._indexed_count,
-        }
+        if not self._current_job_id:
+            return {
+                "indexing_in_progress": False,
+                "current_job_id": None,
+            }
+        
+        job = self._job_tracker.get_job(self._current_job_id)
+        if not job:
+            return {
+                "indexing_in_progress": False,
+                "current_job_id": None,
+            }
+        
+        return self._job_tracker.get_progress_summary(job)
 
     # ── Helpers ──
 
@@ -93,9 +244,7 @@ class LibraryService:
         """
         tracks = []
         for key, info in metadata.items():
-            # FileProcessor doesn't add file_path to the result dict;
-            # the key is "Artist — Title", so we fall back to it.
-            file_path = info.get("file_path", key)
+            file_path = info.get("file_path", "")
             track_id = self._compute_track_id(file_path)
 
             # year is already int|None from file_processor
@@ -126,13 +275,20 @@ class LibraryService:
                 file_path=file_path,
                 lyrics=info.get("lyrics"),
             )
-            tracks.append(track)
+
+            if track.file_path:
+                tracks.append(track) 
+                
         return tracks
 
     @staticmethod
     def _compute_track_id(file_path: str) -> str:
         """Stable ID from file path (SHA256, first 16 chars)."""
-        return hashlib.sha256(file_path.encode()).hexdigest()[:16]
+        if file_path:
+            return hashlib.sha256(file_path.encode()).hexdigest()[:16]
+        else:
+            print('Error while resolving file path')
+            return None
 
     @staticmethod
     def _parse_duration(duration_str: str) -> float:

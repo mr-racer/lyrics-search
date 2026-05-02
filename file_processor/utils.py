@@ -1,6 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from tqdm.auto import tqdm
 import datetime
 import time
@@ -268,7 +268,7 @@ def process_file(filepath: Path, better_lyrics_quality: bool) -> dict | None:
     if meta.get('genre'):
         meta['genre'] = normalize_genre(meta['genre'])
 
-    return {**meta, "lyrics": lyrics}
+    return {**meta, "lyrics": lyrics, "file_path":str(filepath)}
 
 
 def fetch_lyrics_bulk(music_folder: str, workers: int = 8, better_lyrics_quality: bool = False):

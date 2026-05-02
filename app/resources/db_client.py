@@ -1,25 +1,32 @@
 """DbClient — context manager for Qdrant + LyricsDB."""
 
+import logging
+
 from qdrant_client import QdrantClient
 from ..existing.qdrant_db import LyricsDB
 from .model_registry import ModelRegistry
+
+logger = logging.getLogger(__name__)
 
 
 class DbClient:
     """
     Context manager providing:
     - qdrant: QdrantClient instance
-    - lyrics_db: LyricsDB instance (using models from ModelRegistry)
+    - lyrics_db: LyricsDB instance (models loaded lazily)
+
+    Model loading is deferred to first use (search/fit) or to a background
+    preload task started by the FastAPI lifespan.
     """
 
-    def __init__(self, 
+    def __init__(self,
                  qdrant_url: str = "http://localhost:6333",
                  collection_name: str = "music_explorer",
                  model_name: str = "jinaai/jina-embeddings-v2-small-en"):
         self.qdrant_url = qdrant_url
         self.collection_name = collection_name
         self.model_name = model_name
-        
+
         self._qdrant_client: QdrantClient | None = None
         self._lyrics_db: LyricsDB | None = None
 
@@ -27,21 +34,20 @@ class DbClient:
         return self._connect()
 
     def _connect(self) -> "DbClient":
-        # Create Qdrant client
+        # Create Qdrant client (fast — just TCP connect)
         self._qdrant_client = QdrantClient(url=self.qdrant_url)
 
-        # Load text model via ModelRegistry
-        model, vector_name, dim = ModelRegistry.load_text_model(self.model_name)
-        
-        # Create LyricsDB with the loaded model
-        # Note: need to adapt LyricsDB to accept pre-loaded model
+        # Create LyricsDB with lazy model loading (default)
+        # Models are NOT loaded here — they load on first search/fit access
         self._lyrics_db = LyricsDB(
             qdrant_client=self._qdrant_client,
             collection_name=self.collection_name,
-            model_name=self.model_name,  # will be refactored later
-            include_clap=False
+            model_name=self.model_name,
+            include_clap=True,
+            lazy=True,  # defer model loading
         )
-        
+        logger.info("[DbClient] Connected to Qdrant, models will load lazily")
+
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):

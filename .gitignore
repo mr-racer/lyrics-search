@@ -11,9 +11,13 @@ qdrant_storage
 
 # QWEN
 .qwen/
+QWEN.md
 
 # model weights
 /weights
+
+# notebooks
+/notebooks
 
 # Distribution / packaging
 .Python

@@ -1,27 +1,79 @@
 """
 Main FastAPI application.
 
-- Lifespan: setup DbClient + Services on startup (including CLAP)
+- Lifespan: setup DbClient + Services on startup (models load in background)
 - Include search, library and chat routers
 - CORS middleware
 - Static files (frontend)
 """
 
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncGenerator
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from ..resources.db_client import DbClient
 from ..resources.model_registry import ModelRegistry
 from ..services.search_service import SearchService
 from ..services.library_service import LibraryService
+from ..services.job_tracker import JobTracker
 from .routes import search_router, library_router, chat_router
+from .sse_utils import event_stream
 
+logger = logging.getLogger(__name__)
 FRONTEND_INDEX = Path(__file__).parent.parent.parent / "frontend" / "index.html"
+
+
+async def _preload_models_in_background(db_client: DbClient):
+    """Background task: find the largest collection and preload its text model + CLAP.
+
+    This runs after the server is ready, so the user can start browsing immediately.
+    Models are loaded into ModelRegistry cache; LyricsDB picks them up lazily.
+    """
+    try:
+        await asyncio.sleep(1)  # give the event loop a moment
+
+        # ── Step 1: Find the largest collection ──
+        largest_col = None
+        largest_count = 0
+        try:
+            cols = db_client.qdrant.get_collections().collections
+            for col in cols:
+                try:
+                    info = db_client.qdrant.get_collection(col.name)
+                    count = info.points_count or 0
+                    if count > largest_count:
+                        largest_count = count
+                        largest_col = col.name
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.warning("[preload] Could not query collections: %s", e)
+
+        logger.info("[preload] Largest collection: %s (%d points)",
+                    largest_col, largest_count)
+
+        # ── Step 2: Load default text model ──
+        try:
+            ModelRegistry.load_text_model("jinaai/jina-embeddings-v2-small-en")
+            logger.info("[preload] Text model (jina) loaded")
+        except Exception as e:
+            logger.warning("[preload] Text model load failed: %s", e)
+
+        # ── Step 3: Load CLAP ──
+        try:
+            ModelRegistry.load_clap()
+            logger.info("[preload] CLAP model loaded")
+        except Exception as e:
+            logger.warning("[preload] CLAP load failed: %s", e)
+
+    except Exception as e:
+        logger.error("[preload] Unexpected error during model preload: %s", e, exc_info=True)
 
 
 @asynccontextmanager
@@ -31,6 +83,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     Gracefully handles Qdrant being unavailable at startup — the app still
     starts so the frontend can show the onboarding screen and instruct the
     user to start Qdrant.
+
+    Models are loaded lazily (on first use) AND preloaded in the background
+    so the server starts fast but models are ready by the time the user
+    searches or indexes.
     """
     db: DbClient | None = None
 
@@ -41,23 +97,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         app.state.db_client = db
         app.state.search_service = SearchService(db.lyrics_db)
         app.state.library_service = LibraryService(search_service=app.state.search_service)
+        app.state.job_tracker = JobTracker()
 
-        # CLAP is optional — warn if unavailable, don't crash
-        try:
-            ModelRegistry.load_clap()
-            print("✓ CLAP model loaded")
-        except Exception as e:
-            print(f"⚠  CLAP model not loaded (audio search unavailable): {e}")
+        logger.info("[OK] Qdrant connected, services ready — models will preload in background")
 
-        print("✓ Qdrant connected, services ready")
+        # Start background model preload (non-blocking)
+        asyncio.create_task(_preload_models_in_background(db))
 
     except Exception as e:
         # Qdrant is down or model failed to load — start anyway with limited mode
-        print(f"⚠  Startup warning: {e}")
-        print("   App is running in limited mode (Qdrant unavailable).")
+        logger.warning("[WARN] Startup warning: %s", e)
+        logger.warning("   App is running in limited mode (Qdrant unavailable).")
         app.state.db_client = None
         app.state.search_service = None
         app.state.library_service = None
+        app.state.job_tracker = JobTracker()
 
     yield  # ← app serves requests here
 
@@ -102,6 +156,21 @@ def create_app() -> FastAPI:
             "status": "healthy",
             "qdrant": app.state.db_client is not None,
         }
+
+    # SSE endpoint for indexing progress
+    @app.get("/api/v1/index/progress/{job_id}", tags=["Index"])
+    async def get_index_progress(job_id: str):
+        """Stream indexing progress via SSE."""
+        job_tracker = app.state.job_tracker
+        return StreamingResponse(
+            event_stream(job_id, job_tracker),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",  # Disable nginx buffering
+            },
+        )
 
     # Routers — MUST be registered BEFORE the SPA catch-all so Starlette
     # matches /api/v1/... routes first (routes are evaluated in order).
