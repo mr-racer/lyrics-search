@@ -18,10 +18,15 @@ from openai import AsyncOpenAI
 # session on every request).
 _clients: dict[str, AsyncOpenAI] = {}
 
+def _normalize_base_url(url: str) -> str:
+    url = url.rstrip("/")
+    if not url.endswith("/v1"):
+        url += "/v1"
+    return url
 
 def _get_client(base_url: str | None = None, api_key: str | None = None) -> AsyncOpenAI:
     """Return (and cache) an AsyncOpenAI client for the given base_url."""
-    resolved_url = (base_url or os.getenv("LLM_BASE_URL", "")).strip() or None
+    resolved_url = _normalize_base_url((base_url or os.getenv("LLM_BASE_URL", "")).strip()) or None
     resolved_key = (api_key or os.getenv("OPENAI_API_KEY", "lm-studio")).strip()
 
     cache_key = resolved_url or "__default__"
@@ -42,7 +47,6 @@ async def ask_llm(
     base_url: str | None = None,
     api_key: str | None = None,
     temperature: float = 0.3,
-    max_tokens: int = 1024,
     extra_body: dict | None = None,
     parse_json: bool = False,
 ) -> str | dict:
@@ -52,18 +56,17 @@ async def ask_llm(
     ----------
     user_message  : Content of the user turn.
     system_prompt : Optional system / developer prompt prepended to messages.
-    model         : Model name. Falls back to $LLM_MODEL, then 'gpt-4o-mini'.
-    base_url      : API base URL (e.g. http://192.168.1.10:1234/v1).
+    model         : Model name. Falls back to $LLM_MODEL, then 'openai/gpt-oss-20b'.
+    base_url      : API base URL (e.g. http://localhost:8000/v1).
                     Falls back to $LLM_BASE_URL.
     api_key       : API key. Falls back to $OPENAI_API_KEY ('lm-studio' default).
     temperature   : Sampling temperature.
-    max_tokens    : Maximum completion tokens.
     extra_body    : Extra fields forwarded in the request body.
                     Example: {"enable_thinking": False} for LM Studio.
     parse_json    : If True, strip markdown fences and return parsed dict.
                     Raises json.JSONDecodeError if the response is not valid JSON.
     """
-    resolved_model = (model or os.getenv("LLM_MODEL", "gpt-4o-mini")).strip()
+    resolved_model = (model or os.getenv("LLM_MODEL", "openai/gpt-oss-20b")).strip()
     client = _get_client(base_url, api_key)
 
     messages: list[dict] = []
@@ -75,10 +78,11 @@ async def ask_llm(
         "model":       resolved_model,
         "messages":    messages,
         "temperature": temperature,
-        "max_tokens":  max_tokens,
     }
     if extra_body:
         call_kwargs["extra_body"] = extra_body
+
+    print(call_kwargs)
 
     response = await client.chat.completions.create(**call_kwargs)
     content: str = (response.choices[0].message.content or "").strip()

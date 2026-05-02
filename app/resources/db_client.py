@@ -15,7 +15,7 @@ class DbClient:
     def __init__(self, 
                  qdrant_url: str = "http://localhost:6333",
                  collection_name: str = "music_explorer",
-                 model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
+                 model_name: str = "jinaai/jina-embeddings-v2-small-en"):
         self.qdrant_url = qdrant_url
         self.collection_name = collection_name
         self.model_name = model_name

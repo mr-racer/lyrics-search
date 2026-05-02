@@ -720,7 +720,7 @@ function LibrarySection({ isDark, lang }) {
   // Re-index
   const [folderPath, setFolderPath] = useState('');
   const [picking, setPicking]   = useState(false);
-  const [textModel, setTextModel] = useState('all-MiniLM-L6-v2');
+  const [textModel, setTextModel] = useState('jinaai/jina-embeddings-v2-small-en');
   const [betterLyrics, setBetterLyrics] = useState(false);
   const [models, setModels]     = useState({});
   const [indexing, setIndexing]     = useState(false);
@@ -1029,7 +1029,7 @@ function LibrarySection({ isDark, lang }) {
               >
                 {Object.keys(models).length > 0
                   ? Object.entries(models).map(([name]) => <option key={name} value={name}>{name}</option>)
-                  : <option value="all-MiniLM-L6-v2">all-MiniLM-L6-v2</option>
+                  : <option value="jinaai/jina-embeddings-v2-small-en">jina-embeddings-v2-small-en</option>
                 }
               </select>
               <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: indexing ? 'not-allowed' : 'pointer', fontSize: '12px', color: c.textMuted }}>
