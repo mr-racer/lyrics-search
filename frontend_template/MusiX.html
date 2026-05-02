@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MusiX — Music Intelligence</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { height: 100%; width: 100%; overflow: hidden; }
+    body { font-family: 'Inter', sans-serif; }
+
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(128,128,128,0.2); border-radius: 10px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(128,128,128,0.35); }
+
+    input, textarea, select, button { font-family: inherit; }
+    textarea { overflow: auto; }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .section-enter { animation: fadeIn 0.2s ease forwards; }
+  </style>
+
+  <template id="__bundler_thumbnail" data-bg-color="#0d0d10">
+    <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+      <rect width="1200" height="800" fill="#0d0d10"/>
+      <rect x="0" y="0" width="220" height="800" fill="#111115"/>
+      <rect x="30" y="36" width="44" height="44" rx="12" fill="url(#lg)"/>
+      <defs>
+        <linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="oklch(60% 0.18 270)"/>
+          <stop offset="100%" stop-color="oklch(58% 0.18 310)"/>
+        </linearGradient>
+      </defs>
+      <text x="88" y="66" font-family="sans-serif" font-size="22" font-weight="700" fill="#f0f0f5">MusiX</text>
+      <rect x="14" y="120" width="192" height="36" rx="10" fill="rgba(255,255,255,0.08)"/>
+      <rect x="14" y="166" width="192" height="36" rx="10" fill="rgba(255,255,255,0.04)"/>
+      <rect x="14" y="212" width="192" height="36" rx="10" fill="rgba(255,255,255,0.04)"/>
+      <rect x="240" y="0" width="580" height="800" fill="#111115"/>
+      <rect x="240" y="0" width="580" height="60" fill="rgba(255,255,255,0.02)"/>
+      <!-- scatter dots -->
+      <circle cx="380" cy="250" r="4" fill="oklch(60% 0.18 270)" opacity="0.8"/>
+      <circle cx="420" cy="300" r="3" fill="oklch(60% 0.18 270)" opacity="0.7"/>
+      <circle cx="500" cy="220" r="4" fill="oklch(60% 0.18 200)" opacity="0.8"/>
+      <circle cx="560" cy="280" r="3" fill="oklch(60% 0.18 200)" opacity="0.7"/>
+      <circle cx="620" cy="350" r="5" fill="oklch(62% 0.16 140)" opacity="0.8"/>
+      <circle cx="700" cy="200" r="3" fill="oklch(60% 0.14 60)" opacity="0.7"/>
+      <circle cx="740" cy="310" r="4" fill="oklch(60% 0.18 310)" opacity="0.8"/>
+      <rect x="820" y="0" width="380" height="800" fill="#17171b"/>
+    </svg>
+  </template>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" src="components/Sidebar.jsx"></script>
+  <script type="text/babel" src="components/ChatSection.jsx"></script>
+  <script type="text/babel" src="components/RecommendSection.jsx"></script>
+  <script type="text/babel" src="components/StatsSection.jsx"></script>
+  <script type="text/babel" src="tweaks-panel.jsx"></script>
+
+  <script type="text/babel">
+    const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+      "theme": "dark",
+      "lang": "ru",
+      "accentHue": 270,
+      "density": "medium"
+    }/*EDITMODE-END*/;
+
+    const App = () => {
+      const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
+
+      const [section, setSection] = React.useState('chat');
+      const theme = tweaks.theme || 'dark';
+      const lang  = tweaks.lang  || 'ru';
+      const isDark = theme === 'dark';
+
+      const sectionMap = {
+        chat: ChatSection,
+        recommend: RecommendSection,
+        stats: StatsSection,
+      };
+      const ActiveSection = sectionMap[section] || ChatSection;
+
+      const appStyle = {
+        display: 'flex',
+        width: '100vw',
+        height: '100vh',
+        overflow: 'hidden',
+        background: isDark ? '#0d0d10' : '#f5f4f8',
+      };
+
+      return (
+        <div style={appStyle}>
+          <Sidebar
+            activeSection={section}
+            onNavigate={setSection}
+            theme={theme}
+            onThemeToggle={() => setTweak('theme', isDark ? 'light' : 'dark')}
+            lang={lang}
+            onLangToggle={(l) => setTweak('lang', l)}
+          />
+          <div key={section} className="section-enter" style={{ flex: 1, minWidth: 0, display: 'flex', overflow: 'hidden' }}>
+            <ActiveSection theme={theme} lang={lang} />
+          </div>
+
+          <TweaksPanel>
+            <TweakSection title="Тема">
+              <TweakRadio
+                label="Тема интерфейса"
+                value={theme}
+                options={[{value:'dark', label:'Тёмная'},{value:'light', label:'Светлая'}]}
+                onChange={v => setTweak('theme', v)}
+              />
+            </TweakSection>
+            <TweakSection title="Язык">
+              <TweakRadio
+                label="Язык"
+                value={lang}
+                options={[{value:'ru', label:'RU'},{value:'en', label:'EN'}]}
+                onChange={v => setTweak('lang', v)}
+              />
+            </TweakSection>
+            <TweakSection title="Отображение">
+              <TweakRadio
+                label="Плотность"
+                value={tweaks.density}
+                options={[{value:'compact', label:'Compact'},{value:'medium', label:'Medium'},{value:'spacious', label:'Spacious'}]}
+                onChange={v => setTweak('density', v)}
+              />
+            </TweakSection>
+          </TweaksPanel>
+        </div>
+      );
+    };
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>

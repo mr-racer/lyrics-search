@@ -14,4 +14,8 @@ transformers
 openai
 pydantic-ai
 laion-clap
-torchvision 
+torchvision
+fastapi
+uvicorn[standard]
+httpx
+pytest-asyncio

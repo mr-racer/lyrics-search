@@ -1,0 +1,1584 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MusiX — Music Intelligence</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { height: 100%; width: 100%; overflow: hidden; }
+    body { font-family: 'Inter', sans-serif; }
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(128,128,128,0.2); border-radius: 10px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(128,128,128,0.35); }
+    input, textarea, select, button { font-family: inherit; }
+    textarea { overflow: auto; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes pulse { 0%,100%{opacity:0.3;transform:scale(0.8)} 50%{opacity:1;transform:scale(1)} }
+    .section-enter { animation: fadeIn 0.2s ease forwards; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+// ─── API Client ───────────────────────────────────────────────────────────────
+// When opened as file:// (directly from disk), relative URLs resolve to file:///C:/api/...
+// Detect this and use the absolute server address instead.
+const API = window.location.protocol === 'file:'
+  ? 'http://localhost:8000/api/v1'
+  : '/api/v1';
+
+async function apiFetch(path, opts = {}) {
+  const res = await fetch(API + path, {
+    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+    ...opts,
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`);
+  }
+  return res.json();
+}
+
+// ─── Color tokens (theme-aware) ───────────────────────────────────────────────
+function useColors(isDark) {
+  return {
+    bg:         isDark ? '#0d0d10'    : '#f5f4f8',
+    surface:    isDark ? '#17171b'    : '#ffffff',
+    surface2:   isDark ? '#1e1e23'    : '#f0eff5',
+    border:     isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.08)',
+    text:       isDark ? '#f0f0f5'    : '#18181c',
+    textMuted:  isDark ? 'rgba(255,255,255,0.4)' : 'rgba(0,0,0,0.4)',
+    textSubtle: isDark ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.25)',
+    accent:     'oklch(60% 0.18 270)',
+    accentBg:   isDark ? 'oklch(60% 0.18 270 / 0.12)' : 'oklch(60% 0.18 270 / 0.1)',
+    accentGrad: 'linear-gradient(135deg, oklch(60% 0.18 270), oklch(58% 0.18 300))',
+    inputBg:    isDark ? '#1a1a1f'    : '#ffffff',
+    sidebarBg:  isDark ? 'linear-gradient(180deg, #111114 0%, #0d0d10 100%)' : 'linear-gradient(180deg, #f0eff5 0%, #e8e7ef 100%)',
+    sidebarBorder: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.08)',
+    chatPanelBg: isDark ? '#111115'   : '#fafaf8',
+    userBubble: 'linear-gradient(135deg, oklch(60% 0.18 270), oklch(58% 0.18 300))',
+    aiBubble:   isDark ? '#1e1e23'    : '#f0eff5',
+    scrollbar:  isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.1)',
+    shadow:     isDark ? '0 2px 12px rgba(0,0,0,0.5)' : '0 2px 12px rgba(0,0,0,0.08)',
+    green:      'oklch(60% 0.18 140)',
+    greenBg:    isDark ? 'oklch(60% 0.18 140 / 0.12)' : 'oklch(60% 0.18 140 / 0.1)',
+    red:        'oklch(55% 0.2 25)',
+    redBg:      isDark ? 'oklch(55% 0.2 25 / 0.12)' : 'oklch(55% 0.2 25 / 0.1)',
+  };
+}
+
+// ─── AlbumCover placeholder ───────────────────────────────────────────────────
+function AlbumCover({ title = '', artist = '', size = 44, isDark }) {
+  const hue = ((title.charCodeAt(0) || 65) * 37 + (artist.charCodeAt(0) || 65) * 17) % 360;
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: '8px', flexShrink: 0,
+      background: `linear-gradient(135deg, oklch(40% 0.12 ${hue}), oklch(55% 0.18 ${(hue+40)%360}))`,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontSize: size > 60 ? '22px' : '13px', fontWeight: '700',
+      color: 'rgba(255,255,255,0.65)', fontFamily: 'DM Mono, monospace',
+      boxShadow: isDark
+        ? 'inset 0 1px 0 rgba(255,255,255,0.1), 0 2px 6px rgba(0,0,0,0.4)'
+        : 'inset 0 1px 0 rgba(255,255,255,0.5), 0 2px 6px rgba(0,0,0,0.1)',
+    }}>
+      {(title || '?').slice(0, 2).toUpperCase()}
+    </div>
+  );
+}
+
+// ─── Spinner ──────────────────────────────────────────────────────────────────
+function Spinner({ size = 16 }) {
+  return (
+    <div style={{
+      width: size, height: size, border: '2px solid rgba(255,255,255,0.2)',
+      borderTopColor: 'oklch(60% 0.18 270)', borderRadius: '50%',
+      animation: 'spin 0.6s linear infinite', flexShrink: 0,
+    }} />
+  );
+}
+
+// ─── ResultCard ───────────────────────────────────────────────────────────────
+function ResultCard({ hit, isDark, c, compact = false, onClick }) {
+  const track = hit.track || {};
+  const modeColor = {
+    lyrics: c.accent, audio: 'oklch(60% 0.18 310)', hybrid: 'oklch(60% 0.15 140)',
+  }[hit.matched_on] || c.accent;
+
+  const fmtDuration = (sec) => {
+    if (!sec) return '';
+    const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  };
+
+  return (
+    <div
+      onClick={onClick}
+      onMouseEnter={e => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)'; }}
+      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+      style={{
+        display: 'flex', alignItems: 'center', gap: '10px',
+        padding: compact ? '8px 10px' : '10px 12px', borderRadius: '10px',
+        cursor: onClick ? 'pointer' : 'default',
+        transition: 'background 0.15s',
+      }}
+    >
+      <AlbumCover title={track.title} artist={track.artist} size={compact ? 36 : 44} isDark={isDark} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: '13px', fontWeight: '600', color: c.text,
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {track.title || 'Unknown'}
+        </div>
+        <div style={{ fontSize: '12px', color: c.textMuted, marginTop: '1px' }}>
+          {track.artist || 'Unknown'}{track.year ? ` · ${track.year}` : ''}
+        </div>
+        {hit.snippet && (
+          <div style={{ fontSize: '11px', color: c.textSubtle, marginTop: '3px',
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {hit.snippet}
+          </div>
+        )}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px', flexShrink: 0 }}>
+        <div style={{
+          padding: '2px 7px', borderRadius: '20px', fontSize: '11px',
+          fontFamily: 'DM Mono, monospace', fontWeight: '500',
+          background: `${modeColor.replace('oklch(', 'oklch(').replace(')', ' / 0.15)')}`,
+          color: modeColor,
+          border: `1px solid ${modeColor.replace(')', ' / 0.25)')}`,
+        }}>
+          {Math.round((hit.score || 0) * 100)}% {hit.matched_on}
+        </div>
+        {track.genre && (
+          <span style={{ fontSize: '10px', color: c.textSubtle, fontFamily: 'DM Mono, monospace' }}>
+            {track.genre}
+          </span>
+        )}
+        {track.duration_sec > 0 && (
+          <span style={{ fontSize: '10px', color: c.textSubtle, fontFamily: 'DM Mono, monospace' }}>
+            {fmtDuration(track.duration_sec)}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Sidebar ──────────────────────────────────────────────────────────────────
+function Sidebar({ section, onNav, isDark, onThemeToggle, lang, onLangToggle }) {
+  const c = useColors(isDark);
+
+  const navItems = [
+    { id: 'chat', label: lang === 'ru' ? 'Поиск' : 'Search', icon: (
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+    )},
+    { id: 'recommend', label: lang === 'ru' ? 'Рекомендации' : 'Recommendations', icon: (
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+    )},
+    { id: 'library', label: lang === 'ru' ? 'Библиотека' : 'Library', icon: (
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+        <ellipse cx="12" cy="5" rx="9" ry="3"/>
+        <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/>
+        <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/>
+      </svg>
+    )},
+  ];
+
+  const navItemStyle = (id) => ({
+    display: 'flex', alignItems: 'center', gap: '10px',
+    padding: '10px 12px', borderRadius: '10px', cursor: 'pointer',
+    fontSize: '14px', fontWeight: section === id ? '600' : '400',
+    color: section === id ? c.accent : c.textMuted,
+    background: section === id ? c.accentBg : 'transparent',
+    transition: 'all 0.15s', userSelect: 'none',
+  });
+
+  return (
+    <div style={{
+      width: '220px', minWidth: '220px', height: '100vh', display: 'flex',
+      flexDirection: 'column', background: c.sidebarBg,
+      borderRight: `1px solid ${c.sidebarBorder}`,
+      boxShadow: isDark ? '4px 0 24px rgba(0,0,0,0.4)' : '4px 0 16px rgba(0,0,0,0.06)',
+      zIndex: 10, flexShrink: 0, overflow: 'hidden',
+    }}>
+      {/* Logo */}
+      <div style={{ padding: '26px 24px 22px', display: 'flex', alignItems: 'center', gap: '10px' }}>
+        <div style={{
+          width: '34px', height: '34px', borderRadius: '10px', flexShrink: 0,
+          background: 'linear-gradient(135deg, oklch(60% 0.18 270), oklch(60% 0.18 310))',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          boxShadow: '0 2px 8px oklch(60% 0.18 270 / 0.5)',
+        }}>
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round">
+            <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+          </svg>
+        </div>
+        <span style={{ fontSize: '18px', fontWeight: '700', letterSpacing: '-0.5px', color: c.text }}>MusiX</span>
+      </div>
+
+      {/* Navigation */}
+      <nav style={{ padding: '0 12px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+        {navItems.map(item => (
+          <div
+            key={item.id}
+            style={navItemStyle(item.id)}
+            onClick={() => onNav(item.id)}
+            onMouseEnter={e => { if (section !== item.id) { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)'; e.currentTarget.style.color = c.text; }}}
+            onMouseLeave={e => { if (section !== item.id) { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = c.textMuted; }}}
+          >
+            {item.icon}
+            <span>{item.label}</span>
+          </div>
+        ))}
+      </nav>
+
+      {/* Spacer */}
+      <div style={{ flex: 1 }} />
+
+      {/* Bottom controls */}
+      <div style={{
+        padding: '12px 12px 16px',
+        borderTop: `1px solid ${c.border}`,
+        display: 'flex', flexDirection: 'column', gap: '4px',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 8px' }}>
+          <span style={{ fontSize: '10px', fontFamily: 'DM Mono, monospace', color: c.textSubtle, marginRight: '2px' }}>LANG</span>
+          {['ru', 'en'].map(l => (
+            <button key={l} onClick={() => onLangToggle(l)} style={{
+              padding: '3px 9px', borderRadius: '6px', border: 'none',
+              fontSize: '11px', fontFamily: 'DM Mono, monospace', fontWeight: '500',
+              cursor: 'pointer', transition: 'all 0.15s',
+              background: lang === l ? (isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)') : 'transparent',
+              color: lang === l ? c.text : c.textSubtle,
+            }}>{l.toUpperCase()}</button>
+          ))}
+        </div>
+        <button onClick={onThemeToggle} style={{
+          display: 'flex', alignItems: 'center', gap: '8px',
+          padding: '7px 12px', borderRadius: '8px', border: 'none',
+          background: 'transparent', color: c.textMuted, cursor: 'pointer',
+          fontSize: '12px', transition: 'all 0.15s', textAlign: 'left', width: '100%',
+        }}>
+          {isDark
+            ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+            : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          }
+          {isDark ? (lang === 'ru' ? 'Светлая тема' : 'Light mode') : (lang === 'ru' ? 'Тёмная тема' : 'Dark mode')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Chat Section ─────────────────────────────────────────────────────────────
+function ChatSection({ isDark, lang }) {
+  const c = useColors(isDark);
+  const [messages, setMessages] = useState([{
+    role: 'assistant',
+    text: lang === 'ru'
+      ? 'Привет! Опиши музыку, которую ищешь — по настроению, тексту, звуку или жанру. Я найду треки в твоей библиотеке.'
+      : 'Hi! Describe the music you\'re looking for — by mood, lyrics, sound, or genre. I\'ll find tracks in your library.',
+    time: new Date().toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' }),
+  }]);
+  const [input, setInput]     = useState('');
+  const [loading, setLoading] = useState(false);
+  const [mode, setMode]       = useState('hybrid');
+  const [results, setResults] = useState([]);
+  const [searchQuery, setSearchQuery]   = useState('');
+  const [searchMode, setSearchMode]     = useState('hybrid');
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError]   = useState('');
+  const [showFilters, setShowFilters]   = useState(false);
+  const [filters, setFilters] = useState({ artist: '', album: '', genre: '' });
+  const [selectedHit, setSelectedHit]   = useState(null);
+  const chatEndRef = useRef(null);
+
+  // LLM settings are stored in localStorage by LibrarySection
+  const getLLMSettings = () => ({
+    llm_base_url: localStorage.getItem('llm_base_url') || undefined,
+    llm_model:    localStorage.getItem('llm_model')    || undefined,
+  });
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  const modeLabelMap = {
+    text:   lang === 'ru' ? 'Текст'  : 'Lyrics',
+    audio:  lang === 'ru' ? 'Звук'   : 'Audio',
+    hybrid: lang === 'ru' ? 'Гибрид' : 'Hybrid',
+  };
+
+  const buildFilters = () => {
+    const f = {};
+    if (filters.artist) f.artist = filters.artist;
+    if (filters.album)  f.album  = filters.album;
+    if (filters.genre)  f.genre  = filters.genre;
+    return Object.keys(f).length > 0 ? f : null;
+  };
+
+  // Confidence → colour + label
+  const confStyle = (conf) => {
+    if (conf === 'high')   return { color: 'oklch(60% 0.18 140)', label: '●' };
+    if (conf === 'medium') return { color: 'oklch(70% 0.18 80)',  label: '◑' };
+    return                        { color: c.textSubtle,           label: '○' };
+  };
+
+  const handleChat = async () => {
+    if (!input.trim() || loading) return;
+    const userText = input.trim();
+    const now = new Date().toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' });
+    setMessages(prev => [...prev, { role: 'user', text: userText, time: now }]);
+    setInput('');
+    setLoading(true);
+    setMessages(prev => [...prev, { role: 'assistant', loading: true, time: now }]);
+
+    try {
+      const history = messages
+        .filter(m => !m.loading)
+        .map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.text || '' }));
+
+      const res = await apiFetch('/chat/', {
+        method: 'POST',
+        body: JSON.stringify({
+          message: userText,
+          history,
+          mode,
+          ...getLLMSettings(),
+        }),
+      });
+
+      const hits = res.hits || [];
+      setResults(hits);
+      setSelectedHit(null);
+
+      setMessages(prev => [
+        ...prev.filter(m => !m.loading),
+        {
+          role: 'assistant',
+          text: res.message || (lang === 'ru' ? 'Не удалось получить ответ.' : 'No response received.'),
+          hits,
+          confidence: res.confidence,
+          song:       res.song,
+          artist:     res.artist,
+          attempts:   res.attempts,
+          time: new Date().toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' }),
+        },
+      ]);
+    } catch (e) {
+      setMessages(prev => [
+        ...prev.filter(m => !m.loading),
+        { role: 'assistant', text: `Ошибка: ${e.message}`, time: new Date().toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' }) },
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSearch = async () => {
+    if (!searchQuery.trim() || searchLoading) return;
+    setSearchLoading(true);
+    setSearchError('');
+    setSelectedHit(null);
+    try {
+      const res = await apiFetch('/search/', {
+        method: 'POST',
+        body: JSON.stringify({
+          query: searchQuery,
+          mode: searchMode,
+          filters: buildFilters(),
+          limit: 20,
+        }),
+      });
+      setResults(res.hits || []);
+    } catch (e) {
+      setSearchError(e.message);
+    } finally {
+      setSearchLoading(false);
+    }
+  };
+
+  const modeBarStyle = { display: 'flex', gap: '4px', marginBottom: '10px' };
+  const modeBtnStyle = (id) => ({
+    flex: 1, padding: '6px', borderRadius: '8px', border: 'none',
+    fontSize: '12px', fontWeight: mode === id ? '600' : '400',
+    cursor: 'pointer', transition: 'all 0.15s',
+    background: mode === id ? c.accentGrad : (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)'),
+    color: mode === id ? 'white' : c.textMuted,
+    boxShadow: mode === id ? '0 2px 8px oklch(60% 0.18 270 / 0.3), inset 0 1px 0 rgba(255,255,255,0.15)' : 'none',
+  });
+
+  const renderMessage = (msg, i) => {
+    const isUser = msg.role === 'user';
+    const cs = msg.confidence ? confStyle(msg.confidence) : null;
+    return (
+      <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: isUser ? 'flex-end' : 'flex-start', gap: '4px' }}>
+        <div style={{
+          maxWidth: '88%', padding: '10px 13px',
+          borderRadius: isUser ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
+          background: isUser ? c.userBubble : c.aiBubble,
+          color: isUser ? 'white' : c.text,
+          fontSize: '13px', lineHeight: '1.6',
+          boxShadow: isDark ? '0 1px 4px rgba(0,0,0,0.3)' : '0 1px 4px rgba(0,0,0,0.06)',
+        }}>
+          {msg.loading
+            ? <div style={{ display: 'flex', gap: '4px', alignItems: 'center', padding: '2px 0' }}>
+                {[0, 1, 2].map(j => <div key={j} style={{ width: '6px', height: '6px', borderRadius: '50%', background: c.textMuted, animation: `pulse 1.2s ease-in-out ${j * 0.2}s infinite` }} />)}
+              </div>
+            : msg.text}
+        </div>
+
+        {/* Hits (from agentic search) */}
+        {msg.hits && msg.hits.length > 0 && (
+          <div style={{
+            maxWidth: '96%', borderRadius: '10px', overflow: 'hidden',
+            border: `1px solid ${c.border}`, background: c.surface,
+            boxShadow: isDark ? '0 2px 8px rgba(0,0,0,0.3)' : '0 2px 8px rgba(0,0,0,0.06)',
+          }}>
+            {msg.hits.slice(0, 5).map((hit, hi) => (
+              <ResultCard key={hi} hit={hit} isDark={isDark} c={c} compact
+                onClick={() => { setResults(msg.hits); setSelectedHit(hit); }} />
+            ))}
+          </div>
+        )}
+
+        {/* Meta row: time · confidence · attempts */}
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <span style={{ fontSize: '10px', color: c.textSubtle, fontFamily: 'DM Mono, monospace' }}>{msg.time}</span>
+          {cs && (
+            <span style={{ fontSize: '10px', color: cs.color, fontFamily: 'DM Mono, monospace' }}>
+              {cs.label} {msg.confidence}
+            </span>
+          )}
+          {msg.attempts != null && (
+            <span style={{ fontSize: '10px', color: c.textSubtle, fontFamily: 'DM Mono, monospace' }}>
+              {msg.attempts}/{4} {lang === 'ru' ? 'попыток' : 'attempts'}
+            </span>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ display: 'flex', flex: 1, height: '100vh', overflow: 'hidden', background: c.bg }}>
+      {/* Chat panel */}
+      <div style={{ width: '420px', minWidth: '360px', display: 'flex', flexDirection: 'column', borderRight: `1px solid ${c.border}`, background: c.chatPanelBg }}>
+        <div style={{ padding: '20px 20px 16px', borderBottom: `1px solid ${c.border}` }}>
+          <div style={{ fontSize: '16px', fontWeight: '700', color: c.text, letterSpacing: '-0.3px' }}>
+            {lang === 'ru' ? 'Поиск по коллекции' : 'Search Collection'}
+          </div>
+          <div style={{ fontSize: '12px', color: c.textMuted, marginTop: '2px' }}>
+            {lang === 'ru' ? 'Спроси что угодно о своей музыке' : 'Ask anything about your music'}
+          </div>
+        </div>
+
+        <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px', scrollbarWidth: 'thin' }}>
+          {messages.map(renderMessage)}
+          <div ref={chatEndRef} />
+        </div>
+
+        <div style={{ padding: '12px 16px 16px', borderTop: `1px solid ${c.border}`, background: isDark ? 'rgba(0,0,0,0.2)' : 'rgba(255,255,255,0.6)' }}>
+          <div style={modeBarStyle}>
+            {Object.entries(modeLabelMap).map(([id, label]) => (
+              <button key={id} style={modeBtnStyle(id)} onClick={() => setMode(id)}>{label}</button>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
+            <textarea
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChat(); } }}
+              placeholder={lang === 'ru' ? 'Опиши музыку...' : 'Describe the music...'}
+              rows={1}
+              style={{
+                flex: 1, padding: '10px 12px', borderRadius: '10px',
+                border: `1px solid ${c.border}`, background: c.inputBg, color: c.text,
+                resize: 'none', fontSize: '13px', lineHeight: '1.5', outline: 'none',
+                minHeight: '40px', maxHeight: '120px',
+                boxShadow: isDark ? 'inset 0 1px 3px rgba(0,0,0,0.4)' : 'inset 0 1px 3px rgba(0,0,0,0.06)',
+              }}
+              disabled={loading}
+            />
+            <button
+              onClick={handleChat}
+              disabled={loading || !input.trim()}
+              style={{
+                width: '40px', height: '40px', borderRadius: '10px', border: 'none', flexShrink: 0,
+                background: loading || !input.trim() ? (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)') : c.accentGrad,
+                color: loading || !input.trim() ? c.textSubtle : 'white',
+                cursor: loading || !input.trim() ? 'not-allowed' : 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                boxShadow: loading || !input.trim() ? 'none' : '0 2px 8px oklch(60% 0.18 270 / 0.35)',
+                transition: 'all 0.15s',
+              }}
+            >
+              {loading
+                ? <Spinner size={16} />
+                : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+              }
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Results panel */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        {/* Manual search bar */}
+        <div style={{ padding: '14px 16px', borderBottom: `1px solid ${c.border}`, display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <input
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleSearch()}
+              placeholder={lang === 'ru' ? 'Ручной поиск...' : 'Manual search...'}
+              style={{
+                flex: 1, padding: '9px 12px', borderRadius: '8px',
+                border: `1px solid ${c.border}`, background: c.inputBg, color: c.text,
+                fontSize: '13px', outline: 'none',
+              }}
+            />
+            <select
+              value={searchMode}
+              onChange={e => setSearchMode(e.target.value)}
+              style={{
+                padding: '8px 10px', borderRadius: '8px',
+                border: `1px solid ${c.border}`, background: c.inputBg, color: c.text,
+                fontSize: '12px', cursor: 'pointer', outline: 'none',
+              }}
+            >
+              <option value="text">{lang === 'ru' ? 'Текст' : 'Lyrics'}</option>
+              <option value="audio">{lang === 'ru' ? 'Звук' : 'Audio'}</option>
+              <option value="hybrid">{lang === 'ru' ? 'Гибрид' : 'Hybrid'}</option>
+            </select>
+            <button
+              onClick={() => setShowFilters(p => !p)}
+              style={{
+                padding: '8px 12px', borderRadius: '8px', border: `1px solid ${c.border}`,
+                background: showFilters ? c.accentBg : (isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)'),
+                color: showFilters ? c.accent : c.textMuted,
+                fontSize: '12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px',
+              }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+              {lang === 'ru' ? 'Фильтры' : 'Filters'}
+            </button>
+            <button
+              onClick={handleSearch}
+              disabled={searchLoading || !searchQuery.trim()}
+              style={{
+                padding: '8px 16px', borderRadius: '8px', border: 'none',
+                background: searchLoading || !searchQuery.trim()
+                  ? (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)')
+                  : c.accentGrad,
+                color: searchLoading || !searchQuery.trim() ? c.textSubtle : 'white',
+                fontSize: '13px', fontWeight: '600', cursor: searchLoading || !searchQuery.trim() ? 'not-allowed' : 'pointer',
+                display: 'flex', alignItems: 'center', gap: '6px',
+                boxShadow: searchLoading || !searchQuery.trim() ? 'none' : '0 2px 8px oklch(60% 0.18 270 / 0.3)',
+              }}
+            >
+              {searchLoading ? <Spinner size={14} /> : (lang === 'ru' ? 'Найти' : 'Search')}
+            </button>
+          </div>
+
+          {showFilters && (
+            <div style={{ display: 'flex', gap: '8px', padding: '10px 12px', borderRadius: '8px', background: c.surface2, border: `1px solid ${c.border}` }}>
+              {[
+                { key: 'artist', label: lang === 'ru' ? 'Исполнитель' : 'Artist' },
+                { key: 'album',  label: lang === 'ru' ? 'Альбом' : 'Album' },
+                { key: 'genre',  label: lang === 'ru' ? 'Жанр' : 'Genre' },
+              ].map(f => (
+                <input
+                  key={f.key}
+                  value={filters[f.key]}
+                  onChange={e => setFilters(p => ({ ...p, [f.key]: e.target.value }))}
+                  placeholder={f.label}
+                  style={{
+                    flex: 1, padding: '6px 10px', borderRadius: '6px',
+                    border: `1px solid ${c.border}`, background: c.inputBg, color: c.text,
+                    fontSize: '12px', outline: 'none',
+                  }}
+                />
+              ))}
+            </div>
+          )}
+
+          {searchError && (
+            <div style={{ padding: '8px 12px', borderRadius: '8px', fontSize: '12px',
+              background: isDark ? 'oklch(55% 0.2 25 / 0.12)' : 'oklch(55% 0.2 25 / 0.08)',
+              color: 'oklch(55% 0.2 25)', border: '1px solid oklch(55% 0.2 25 / 0.2)' }}>
+              {searchError}
+            </div>
+          )}
+        </div>
+
+        {/* Results list or detail */}
+        {selectedHit ? (
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <div style={{ padding: '10px 16px', borderBottom: `1px solid ${c.border}` }}>
+              <button onClick={() => setSelectedHit(null)} style={{ background: 'none', border: 'none', color: c.textMuted, cursor: 'pointer', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                ← {lang === 'ru' ? 'назад' : 'back'}
+              </button>
+            </div>
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '40px', gap: '20px' }}>
+              <AlbumCover title={selectedHit.track?.title || ''} artist={selectedHit.track?.artist || ''} size={120} isDark={isDark} />
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '22px', fontWeight: '700', color: c.text, letterSpacing: '-0.5px' }}>{selectedHit.track?.title}</div>
+                <div style={{ fontSize: '15px', color: c.textMuted, marginTop: '4px' }}>{selectedHit.track?.artist}</div>
+                <div style={{ fontSize: '13px', color: c.textSubtle, marginTop: '2px' }}>
+                  {[selectedHit.track?.album, selectedHit.track?.year].filter(Boolean).join(' · ')}
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                {[
+                  selectedHit.track?.genre,
+                  `${Math.round((selectedHit.score || 0) * 100)}% match`,
+                  selectedHit.matched_on,
+                ].filter(Boolean).map((tag, i) => (
+                  <span key={i} style={{ padding: '4px 12px', borderRadius: '20px', fontSize: '12px',
+                    fontFamily: 'DM Mono, monospace', background: c.accentBg, color: c.accent,
+                    border: '1px solid oklch(60% 0.18 270 / 0.2)' }}>
+                    {tag}
+                  </span>
+                ))}
+              </div>
+              {selectedHit.snippet && (
+                <div style={{ maxWidth: '480px', padding: '12px 16px', borderRadius: '10px', background: c.surface2,
+                  border: `1px solid ${c.border}`, fontSize: '13px', color: c.textMuted, lineHeight: '1.7',
+                  fontStyle: 'italic', textAlign: 'center' }}>
+                  "{selectedHit.snippet}"
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div style={{ flex: 1, overflowY: 'auto', scrollbarWidth: 'thin' }}>
+            {results.length > 0 ? (
+              <div>
+                <div style={{ padding: '12px 16px 6px', fontSize: '12px', color: c.textMuted }}>
+                  {results.length} {lang === 'ru' ? 'треков' : 'tracks'}
+                </div>
+                {results.map((hit, i) => (
+                  <ResultCard key={i} hit={hit} isDark={isDark} c={c} onClick={() => setSelectedHit(hit)} />
+                ))}
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: '12px', padding: '40px' }}>
+                <div style={{ width: '48px', height: '48px', borderRadius: '14px',
+                  background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={c.textSubtle} strokeWidth="1.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                </div>
+                <div style={{ fontSize: '14px', fontWeight: '600', color: c.textMuted }}>{lang === 'ru' ? 'Результаты появятся здесь' : 'Results will appear here'}</div>
+                <div style={{ fontSize: '12px', color: c.textSubtle }}>{lang === 'ru' ? 'Напиши в чат или воспользуйся поиском' : 'Chat or use manual search above'}</div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Recommend Section (placeholder) ─────────────────────────────────────────
+function RecommendSection({ isDark, lang }) {
+  const c = useColors(isDark);
+  return (
+    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', background: c.bg, flexDirection: 'column', gap: '12px' }}>
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke={c.textSubtle} strokeWidth="1.2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+      <div style={{ fontSize: '16px', fontWeight: '600', color: c.textMuted }}>
+        {lang === 'ru' ? 'Рекомендации' : 'Recommendations'}
+      </div>
+      <div style={{ fontSize: '13px', color: c.textSubtle }}>
+        {lang === 'ru' ? 'Скоро — похожие треки по CLAP-эмбеддингам' : 'Coming soon — similar tracks via CLAP embeddings'}
+      </div>
+    </div>
+  );
+}
+
+// ─── Library Section ──────────────────────────────────────────────────────────
+function LibrarySection({ isDark, lang }) {
+  const c = useColors(isDark);
+
+  // Stats
+  const [stats, setStats] = useState(null);
+  const [statsLoading, setStatsLoading] = useState(true);
+
+  // Re-index
+  const [folderPath, setFolderPath] = useState('');
+  const [picking, setPicking]   = useState(false);
+  const [textModel, setTextModel] = useState('all-MiniLM-L6-v2');
+  const [betterLyrics, setBetterLyrics] = useState(false);
+  const [models, setModels]     = useState({});
+  const [indexing, setIndexing]     = useState(false);
+  const [indexResult, setIndexResult] = useState(null);
+
+  // LLM settings — persisted in localStorage so ChatSection can read them
+  const [llmBaseUrl, setLlmBaseUrl] = useState(() => localStorage.getItem('llm_base_url') || '');
+  const [llmModel,   setLlmModel]   = useState(() => localStorage.getItem('llm_model')    || '');
+  const [llmSaved,   setLlmSaved]   = useState(false);
+
+  const saveLLMSettings = () => {
+    localStorage.setItem('llm_base_url', llmBaseUrl.trim());
+    localStorage.setItem('llm_model',    llmModel.trim());
+    setLlmSaved(true);
+    setTimeout(() => setLlmSaved(false), 2000);
+  };
+
+  const loadStats = () => {
+    setStatsLoading(true);
+    apiFetch('/library/stats')
+      .then(s => { setStats(s); setStatsLoading(false); })
+      .catch(() => setStatsLoading(false));
+  };
+
+  useEffect(() => {
+    loadStats();
+    apiFetch('/search/models/text').then(setModels).catch(() => {});
+  }, []);
+
+  const handlePickFolder = async () => {
+    setPicking(true);
+    try {
+      const res = await apiFetch('/library/pick-folder');
+      if (res.path) setFolderPath(res.path);
+    } catch (e) { /* ignore */ }
+    finally { setPicking(false); }
+  };
+
+  const handleIndex = async () => {
+    if (!folderPath.trim() || indexing) return;
+    setIndexing(true);
+    setIndexResult(null);
+    try {
+      const res = await apiFetch('/library/index', {
+        method: 'POST',
+        body: JSON.stringify({ folder_path: folderPath, better_lyrics_quality: betterLyrics, text_model: textModel }),
+      });
+      setIndexResult(res);
+      // Refresh stats after successful indexing
+      if (res.status !== 'failed') loadStats();
+    } catch (e) {
+      setIndexResult({ status: 'failed', message: e.message });
+    } finally {
+      setIndexing(false);
+    }
+  };
+
+  // Genre bar colours
+  const GENRE_HUES = [270, 310, 140];
+
+  const card = (children, extraStyle = {}) => (
+    <div style={{
+      padding: '22px 24px', borderRadius: '14px',
+      background: c.surface, border: `1px solid ${c.border}`,
+      ...extraStyle,
+    }}>
+      {children}
+    </div>
+  );
+
+  const cardLabel = (text) => (
+    <div style={{ fontSize: '10px', fontFamily: 'DM Mono, monospace', color: c.textSubtle, textTransform: 'uppercase', letterSpacing: '0.6px', marginBottom: '14px' }}>
+      {text}
+    </div>
+  );
+
+  return (
+    <div style={{ flex: 1, overflowY: 'auto', background: c.bg, scrollbarWidth: 'thin' }}>
+      <div style={{ maxWidth: '860px', margin: '0 auto', padding: '32px 32px 56px' }}>
+
+        {/* ── Header ── */}
+        <div style={{ marginBottom: '26px' }}>
+          <div style={{ fontSize: '22px', fontWeight: '700', color: c.text, letterSpacing: '-0.5px' }}>
+            {lang === 'ru' ? 'Библиотека' : 'Library'}
+          </div>
+          <div style={{ fontSize: '13px', color: c.textMuted, marginTop: '4px' }}>
+            {lang === 'ru' ? 'Статистика коллекции, карта и управление индексом' : 'Collection stats, map and index management'}
+          </div>
+        </div>
+
+        {/* ── 2D / 3D Chart placeholder ── */}
+        <div style={{
+          borderRadius: '16px',
+          border: `2px dashed ${c.border}`,
+          background: isDark ? 'rgba(255,255,255,0.015)' : 'rgba(0,0,0,0.02)',
+          height: '290px',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '14px',
+          marginBottom: '22px', position: 'relative', overflow: 'hidden',
+        }}>
+          {/* Decorative blobs */}
+          <div style={{ position: 'absolute', width: '200px', height: '200px', borderRadius: '50%', background: 'oklch(60% 0.18 270 / 0.06)', top: '-40px', left: '-40px', pointerEvents: 'none' }} />
+          <div style={{ position: 'absolute', width: '160px', height: '160px', borderRadius: '50%', background: 'oklch(60% 0.18 310 / 0.05)', bottom: '-30px', right: '60px', pointerEvents: 'none' }} />
+
+          <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke={c.textSubtle} strokeWidth="1.1" strokeLinecap="round">
+            <circle cx="5"  cy="19" r="2"/><circle cx="12" cy="5"  r="2"/>
+            <circle cx="19" cy="14" r="2"/><circle cx="8"  cy="12" r="2"/>
+            <circle cx="16" cy="9"  r="2"/>
+            <line x1="5"  y1="17" x2="8"  y2="14"/>
+            <line x1="10" y1="12" x2="14" y2="10"/>
+            <line x1="17" y1="9"  x2="19" y2="12"/>
+            <line x1="12" y1="7"  x2="8"  y2="11"/>
+          </svg>
+          <div style={{ fontSize: '15px', fontWeight: '600', color: c.textMuted }}>
+            {lang === 'ru' ? '2D / 3D — Карта векторного пространства' : '2D / 3D Vector Space Map'}
+          </div>
+          <div style={{ fontSize: '12px', color: c.textSubtle }}>
+            {lang === 'ru' ? 'Интерактивная визуализация — скоро' : 'Interactive visualization — coming soon'}
+          </div>
+        </div>
+
+        {/* ── Stats row: track count + top genres ── */}
+        <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: '16px', marginBottom: '16px' }}>
+
+          {/* Track count */}
+          {card(
+            <>
+              {cardLabel(lang === 'ru' ? 'Треков в базе' : 'Total tracks')}
+              {statsLoading
+                ? <Spinner />
+                : <>
+                    <div style={{ fontSize: '38px', fontWeight: '700', color: c.text, letterSpacing: '-2px', fontFamily: 'DM Mono, monospace', lineHeight: 1 }}>
+                      {stats?.total_tracks != null ? stats.total_tracks.toLocaleString('ru') : '—'}
+                    </div>
+                    {stats?.collection_name && (
+                      <div style={{ fontSize: '10px', color: c.textSubtle, fontFamily: 'DM Mono, monospace', marginTop: '10px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {stats.collection_name}
+                      </div>
+                    )}
+                  </>
+              }
+            </>
+          )}
+
+          {/* Top genres */}
+          {card(
+            <>
+              {cardLabel(lang === 'ru' ? 'Топ жанры (из метаданных)' : 'Top genres (from metadata)')}
+              {statsLoading
+                ? <Spinner />
+                : stats?.genres?.length > 0
+                  ? <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      {stats.genres.map((g, i) => {
+                        const maxPct = stats.genres[0]?.pct || 1;
+                        const barW   = `${Math.round(g.pct / maxPct * 100)}%`;
+                        const hue    = GENRE_HUES[i] ?? 200;
+                        return (
+                          <div key={g.genre}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: '5px' }}>
+                              <span style={{ fontSize: '13px', color: c.text, fontWeight: '500' }}>{g.genre}</span>
+                              <span style={{ fontSize: '11px', color: c.textMuted, fontFamily: 'DM Mono, monospace' }}>
+                                {g.count} {lang === 'ru' ? 'тр.' : 'tr.'} · {g.pct}%
+                              </span>
+                            </div>
+                            <div style={{ height: '5px', borderRadius: '3px', background: isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)' }}>
+                              <div style={{ width: barW, height: '100%', borderRadius: '3px', background: `oklch(60% 0.18 ${hue})`, transition: 'width 0.6s cubic-bezier(.4,0,.2,1)' }} />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  : <div style={{ fontSize: '13px', color: c.textSubtle }}>
+                      {lang === 'ru' ? 'Нет данных о жанрах в метаданных' : 'No genre data in metadata'}
+                    </div>
+              }
+            </>
+          )}
+        </div>
+
+        {/* ── Placeholders: top-5 similar / different ── */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '22px' }}>
+          {[
+            { key: 'similar',   label: lang === 'ru' ? 'Топ-5 похожих треков'     : 'Top 5 most similar',  icon: '≈', hue: 270 },
+            { key: 'different', label: lang === 'ru' ? 'Топ-5 самых разных треков' : 'Top 5 most different', icon: '≠', hue: 25  },
+          ].map(({ key, label, icon, hue }) => (
+            <div key={key} style={{
+              padding: '22px 24px', borderRadius: '14px',
+              background: c.surface, border: `1px solid ${c.border}`,
+              minHeight: '200px', display: 'flex', flexDirection: 'column', gap: '14px',
+            }}>
+              {/* Title row */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div style={{
+                  width: '32px', height: '32px', borderRadius: '9px', flexShrink: 0,
+                  background: `oklch(60% 0.18 ${hue} / 0.12)`,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: '17px', color: `oklch(60% 0.18 ${hue})`,
+                  fontFamily: 'DM Mono, monospace', fontWeight: '700',
+                }}>
+                  {icon}
+                </div>
+                <div style={{ fontSize: '13px', fontWeight: '600', color: c.text }}>{label}</div>
+              </div>
+
+              {/* Skeleton rows */}
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '7px' }}>
+                {[1, 2, 3, 4, 5].map(n => (
+                  <div key={n} style={{
+                    height: '34px', borderRadius: '7px',
+                    background: isDark ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.04)',
+                    display: 'flex', alignItems: 'center', padding: '0 10px', gap: '9px',
+                  }}>
+                    <div style={{ width: '20px', height: '20px', borderRadius: '5px', flexShrink: 0, background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)' }} />
+                    <div style={{ height: '8px', borderRadius: '4px', width: `${68 - n * 7}%`, background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)' }} />
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ fontSize: '11px', color: c.textSubtle, fontFamily: 'DM Mono, monospace' }}>
+                {lang === 'ru' ? '— данные появятся здесь —' : '— data will appear here —'}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* ── Re-index folder ── */}
+        {card(
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
+              <div>
+                <div style={{ fontSize: '14px', fontWeight: '600', color: c.text }}>
+                  {lang === 'ru' ? 'Переиндексировать папку' : 'Re-index folder'}
+                </div>
+                <div style={{ fontSize: '12px', color: c.textSubtle, marginTop: '2px' }}>
+                  {lang === 'ru' ? 'Новая папка заменит (или дополнит) текущую коллекцию' : 'A new folder will update the current collection'}
+                </div>
+              </div>
+            </div>
+
+            {/* Folder picker row */}
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+              <button
+                onClick={handlePickFolder}
+                disabled={picking || indexing}
+                style={{
+                  padding: '8px 13px', borderRadius: '8px', border: `1px solid ${c.border}`,
+                  background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)',
+                  color: c.textMuted, fontSize: '12px',
+                  cursor: picking || indexing ? 'not-allowed' : 'pointer',
+                  display: 'flex', alignItems: 'center', gap: '6px', flexShrink: 0,
+                  transition: 'all 0.15s',
+                }}
+              >
+                {picking
+                  ? <Spinner size={12} />
+                  : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                }
+                {picking ? (lang === 'ru' ? 'Открываю...' : 'Opening...') : (lang === 'ru' ? 'Выбрать папку' : 'Pick folder')}
+              </button>
+
+              <input
+                value={folderPath}
+                onChange={e => setFolderPath(e.target.value)}
+                disabled={indexing}
+                placeholder={lang === 'ru' ? 'или введи путь вручную...' : 'or type path manually...'}
+                style={{
+                  flex: 1, padding: '8px 11px', borderRadius: '8px',
+                  border: `1px solid ${c.border}`, background: c.inputBg, color: c.text,
+                  fontSize: '12px', outline: 'none', fontFamily: 'DM Mono, monospace',
+                }}
+              />
+
+              <button
+                onClick={handleIndex}
+                disabled={indexing || !folderPath.trim()}
+                style={{
+                  padding: '8px 18px', borderRadius: '8px', border: 'none', flexShrink: 0,
+                  background: indexing || !folderPath.trim()
+                    ? (isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)')
+                    : c.accentGrad,
+                  color: indexing || !folderPath.trim() ? c.textSubtle : 'white',
+                  fontSize: '12px', fontWeight: '600',
+                  cursor: indexing || !folderPath.trim() ? 'not-allowed' : 'pointer',
+                  display: 'flex', alignItems: 'center', gap: '6px',
+                  boxShadow: indexing || !folderPath.trim() ? 'none' : '0 2px 8px oklch(60% 0.18 270 / 0.3)',
+                  transition: 'all 0.15s',
+                }}
+              >
+                {indexing
+                  ? <><Spinner size={12} />{lang === 'ru' ? 'Индексация...' : 'Indexing...'}</>
+                  : (lang === 'ru' ? 'Индексировать' : 'Index')
+                }
+              </button>
+            </div>
+
+            {/* Options row */}
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+              <select
+                value={textModel}
+                onChange={e => setTextModel(e.target.value)}
+                disabled={indexing}
+                style={{
+                  padding: '5px 9px', borderRadius: '6px',
+                  border: `1px solid ${c.border}`, background: c.inputBg, color: c.textMuted,
+                  fontSize: '11px', cursor: indexing ? 'not-allowed' : 'pointer', outline: 'none',
+                }}
+              >
+                {Object.keys(models).length > 0
+                  ? Object.entries(models).map(([name]) => <option key={name} value={name}>{name}</option>)
+                  : <option value="all-MiniLM-L6-v2">all-MiniLM-L6-v2</option>
+                }
+              </select>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: indexing ? 'not-allowed' : 'pointer', fontSize: '12px', color: c.textMuted }}>
+                <input
+                  type="checkbox"
+                  checked={betterLyrics}
+                  onChange={e => setBetterLyrics(e.target.checked)}
+                  disabled={indexing}
+                  style={{ accentColor: 'oklch(60% 0.18 270)', width: '13px', height: '13px' }}
+                />
+                {lang === 'ru' ? 'Улучшить тексты (Musixmatch)' : 'Better lyrics (Musixmatch)'}
+              </label>
+            </div>
+
+            {/* Indexing result banner */}
+            {indexResult && (
+              <div style={{
+                marginTop: '14px', padding: '10px 14px', borderRadius: '8px', fontSize: '12px', lineHeight: '1.5',
+                background: indexResult.status !== 'failed' && indexResult.count != null
+                  ? (isDark ? 'oklch(60% 0.15 140 / 0.1)' : 'oklch(60% 0.15 140 / 0.08)')
+                  : (isDark ? 'oklch(55% 0.2 25 / 0.1)' : 'oklch(55% 0.2 25 / 0.08)'),
+                color: indexResult.status !== 'failed' && indexResult.count != null
+                  ? 'oklch(60% 0.15 140)' : 'oklch(55% 0.2 25)',
+                border: `1px solid ${indexResult.status !== 'failed' && indexResult.count != null
+                  ? 'oklch(60% 0.15 140 / 0.2)' : 'oklch(55% 0.2 25 / 0.2)'}`,
+              }}>
+                {indexResult.message || (indexResult.count != null
+                  ? `✓ ${indexResult.count} ${lang === 'ru' ? 'треков проиндексировано' : 'tracks indexed'}`
+                  : JSON.stringify(indexResult))}
+              </div>
+            )}
+          </>
+        )}
+
+        {/* ── LLM Settings ── */}
+        {card(
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
+              <div style={{
+                width: '32px', height: '32px', borderRadius: '9px', flexShrink: 0,
+                background: 'oklch(60% 0.18 270 / 0.12)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="oklch(60% 0.18 270)" strokeWidth="2" strokeLinecap="round">
+                  <path d="M12 2a4 4 0 0 1 4 4c0 1.5-.8 2.8-2 3.4V12l3 3-3 3v1.6c1.2.6 2 1.9 2 3.4a4 4 0 0 1-8 0c0-1.5.8-2.8 2-3.4V18l-3-3 3-3V9.4A4 4 0 0 1 8 6a4 4 0 0 1 4-4z"/>
+                </svg>
+              </div>
+              <div>
+                <div style={{ fontSize: '14px', fontWeight: '600', color: c.text }}>
+                  {lang === 'ru' ? 'LLM-подключение' : 'LLM Connection'}
+                </div>
+                <div style={{ fontSize: '12px', color: c.textSubtle, marginTop: '1px' }}>
+                  {lang === 'ru' ? 'LM Studio, Ollama или OpenAI — любой OpenAI-совместимый сервер' : 'LM Studio, Ollama, or OpenAI — any OpenAI-compatible server'}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <div>
+                <div style={{ fontSize: '10px', fontFamily: 'DM Mono, monospace', color: c.textSubtle, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '5px' }}>
+                  Base URL
+                </div>
+                <input
+                  value={llmBaseUrl}
+                  onChange={e => setLlmBaseUrl(e.target.value)}
+                  placeholder="http://192.168.1.10:1234/v1"
+                  style={{
+                    width: '100%', padding: '8px 11px', borderRadius: '8px',
+                    border: `1px solid ${c.border}`, background: c.inputBg, color: c.text,
+                    fontSize: '12px', outline: 'none', fontFamily: 'DM Mono, monospace',
+                  }}
+                />
+                <div style={{ fontSize: '11px', color: c.textSubtle, marginTop: '4px' }}>
+                  {lang === 'ru' ? 'Оставь пустым для OpenAI ($OPENAI_API_KEY). Переменная окружения: LLM_BASE_URL' : 'Leave empty for OpenAI ($OPENAI_API_KEY). Env var: LLM_BASE_URL'}
+                </div>
+              </div>
+
+              <div>
+                <div style={{ fontSize: '10px', fontFamily: 'DM Mono, monospace', color: c.textSubtle, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '5px' }}>
+                  {lang === 'ru' ? 'Модель' : 'Model'}
+                </div>
+                <input
+                  value={llmModel}
+                  onChange={e => setLlmModel(e.target.value)}
+                  placeholder="openai/gpt-oss-20b"
+                  style={{
+                    width: '100%', padding: '8px 11px', borderRadius: '8px',
+                    border: `1px solid ${c.border}`, background: c.inputBg, color: c.text,
+                    fontSize: '12px', outline: 'none', fontFamily: 'DM Mono, monospace',
+                  }}
+                />
+                <div style={{ fontSize: '11px', color: c.textSubtle, marginTop: '4px' }}>
+                  {lang === 'ru' ? 'Переменная окружения: LLM_MODEL (дефолт: gpt-4o-mini)' : 'Env var: LLM_MODEL (default: gpt-4o-mini)'}
+                </div>
+              </div>
+
+              <button
+                onClick={saveLLMSettings}
+                style={{
+                  alignSelf: 'flex-start', padding: '8px 18px', borderRadius: '8px', border: 'none',
+                  background: llmSaved ? 'oklch(60% 0.18 140 / 0.15)' : c.accentGrad,
+                  color: llmSaved ? 'oklch(60% 0.18 140)' : 'white',
+                  fontSize: '12px', fontWeight: '600', cursor: 'pointer',
+                  boxShadow: llmSaved ? 'none' : '0 2px 8px oklch(60% 0.18 270 / 0.3)',
+                  transition: 'all 0.2s',
+                  border: llmSaved ? '1px solid oklch(60% 0.18 140 / 0.3)' : 'none',
+                }}
+              >
+                {llmSaved ? (lang === 'ru' ? '✓ Сохранено' : '✓ Saved') : (lang === 'ru' ? 'Сохранить' : 'Save')}
+              </button>
+            </div>
+          </>
+        )}
+
+      </div>
+    </div>
+  );
+}
+
+// ─── Onboarding Screen ────────────────────────────────────────────────────────
+function OnboardingScreen({ isDark, lang, onDone }) {
+  const c = useColors(isDark);
+
+  // Stages: 'idle' | 'picking' | 'ready' | 'indexing' | 'done' | 'error'
+  const [stage, setStage] = useState('idle');
+  const [folderPath, setFolderPath] = useState('');
+  const [betterLyrics, setBetterLyrics] = useState(false);
+  const [progress, setProgress] = useState({ count: 0, message: '' });
+  const [errorMsg, setErrorMsg] = useState('');
+
+  const T = {
+    ru: {
+      headline: 'Добро пожаловать в MusiX',
+      sub: 'Коллекция пока пуста. Выбери папку с музыкой — приложение проиндексирует треки и ты сможешь искать по лирике и звуку.',
+      pickBtn: 'Выбрать папку с музыкой',
+      picking: 'Открываю диалог...',
+      selected: 'Выбрана папка:',
+      change: 'Изменить',
+      betterLyrics: 'Улучшенное качество текстов',
+      betterLyricsHint: '(медленнее, использует Musixmatch)',
+      indexBtn: 'Начать индексацию',
+      indexing: 'Индексация...',
+      indexHint: 'Это может занять несколько минут — приложение скачивает тексты песен',
+      done: 'Готово! Открываю библиотеку...',
+      errPick: 'Не удалось открыть диалог выбора папки.',
+      errIndex: 'Ошибка индексации:',
+      noPath: 'Папка не выбрана. Отмени диалог?',
+    },
+    en: {
+      headline: 'Welcome to MusiX',
+      sub: 'Your library is empty. Pick a music folder — the app will index your tracks so you can search by lyrics and sound.',
+      pickBtn: 'Choose music folder',
+      picking: 'Opening dialog...',
+      selected: 'Selected folder:',
+      change: 'Change',
+      betterLyrics: 'Better lyrics quality',
+      betterLyricsHint: '(slower, uses Musixmatch)',
+      indexBtn: 'Start indexing',
+      indexing: 'Indexing...',
+      indexHint: 'This may take a few minutes — lyrics are fetched from the internet',
+      done: 'Done! Opening library...',
+      errPick: 'Could not open folder picker dialog.',
+      errIndex: 'Indexing error:',
+      noPath: 'No folder selected — did you cancel the dialog?',
+    },
+  };
+  const t = T[lang] || T.ru;
+
+  const handlePick = async () => {
+    setStage('picking');
+    setErrorMsg('');
+    try {
+      const res = await apiFetch('/library/pick-folder');
+      if (res.path) {
+        setFolderPath(res.path);
+        setStage('ready');
+      } else {
+        setErrorMsg(t.noPath);
+        setStage('idle');
+      }
+    } catch (e) {
+      setErrorMsg(`${t.errPick} ${e.message}`);
+      setStage('idle');
+    }
+  };
+
+  const handleIndex = async () => {
+    if (!folderPath) return;
+    setStage('indexing');
+    setErrorMsg('');
+    setProgress({ count: 0, message: '' });
+    try {
+      const res = await apiFetch('/library/index', {
+        method: 'POST',
+        body: JSON.stringify({
+          folder_path: folderPath,
+          better_lyrics_quality: betterLyrics,
+        }),
+      });
+      if (res.status === 'failed') {
+        setErrorMsg(`${t.errIndex} ${res.message}`);
+        setStage('ready');
+        return;
+      }
+      setProgress({ count: res.count || 0, message: res.message || '' });
+      setStage('done');
+      setTimeout(() => onDone(), 1800);
+    } catch (e) {
+      setErrorMsg(`${t.errIndex} ${e.message}`);
+      setStage('ready');
+    }
+  };
+
+  const isIndexing = stage === 'indexing';
+  const isDone = stage === 'done';
+
+  return (
+    <div style={{
+      width: '100vw', height: '100vh', display: 'flex', alignItems: 'center',
+      justifyContent: 'center', background: isDark ? '#0d0d10' : '#f5f4f8',
+      padding: '24px',
+    }}>
+      <div style={{
+        maxWidth: '480px', width: '100%',
+        background: isDark ? '#17171b' : '#ffffff',
+        border: `1px solid ${c.border}`,
+        borderRadius: '20px',
+        padding: '40px',
+        boxShadow: isDark ? '0 8px 40px rgba(0,0,0,0.6)' : '0 8px 40px rgba(0,0,0,0.1)',
+        display: 'flex', flexDirection: 'column', gap: '28px',
+        animation: 'fadeIn 0.3s ease forwards',
+      }}>
+        {/* Logo */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          <div style={{
+            width: '44px', height: '44px', borderRadius: '13px', flexShrink: 0,
+            background: 'linear-gradient(135deg, oklch(60% 0.18 270), oklch(60% 0.18 310))',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            boxShadow: '0 4px 12px oklch(60% 0.18 270 / 0.4)',
+          }}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round">
+              <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+            </svg>
+          </div>
+          <span style={{ fontSize: '22px', fontWeight: '700', letterSpacing: '-0.5px', color: c.text }}>MusiX</span>
+        </div>
+
+        {/* Headline */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div style={{ fontSize: '20px', fontWeight: '700', color: c.text, letterSpacing: '-0.4px' }}>
+            {t.headline}
+          </div>
+          <div style={{ fontSize: '14px', color: c.textMuted, lineHeight: '1.6' }}>
+            {t.sub}
+          </div>
+        </div>
+
+        {/* Folder picker area */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {(stage === 'idle' || stage === 'picking') && (
+            <button
+              onClick={handlePick}
+              disabled={stage === 'picking'}
+              style={{
+                padding: '14px 20px', borderRadius: '12px', border: `2px dashed ${c.border}`,
+                background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+                color: stage === 'picking' ? c.textSubtle : c.accent,
+                fontSize: '14px', fontWeight: '600', cursor: stage === 'picking' ? 'default' : 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px',
+                transition: 'all 0.2s',
+              }}
+              onMouseEnter={e => { if (stage !== 'picking') e.currentTarget.style.borderColor = c.accent; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = c.border; }}
+            >
+              {stage === 'picking'
+                ? <><Spinner size={16} />{t.picking}</>
+                : <>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+                    </svg>
+                    {t.pickBtn}
+                  </>
+              }
+            </button>
+          )}
+
+          {(stage === 'ready' || stage === 'indexing' || stage === 'done') && (
+            <div style={{
+              padding: '12px 16px', borderRadius: '10px',
+              background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)',
+              border: `1px solid ${c.border}`,
+              display: 'flex', alignItems: 'center', gap: '10px',
+            }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={c.accent} strokeWidth="2" strokeLinecap="round">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+              </svg>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: '11px', color: c.textSubtle, fontFamily: 'DM Mono, monospace', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '2px' }}>
+                  {t.selected}
+                </div>
+                <div style={{ fontSize: '13px', color: c.text, fontFamily: 'DM Mono, monospace',
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {folderPath}
+                </div>
+              </div>
+              {!isIndexing && !isDone && (
+                <button
+                  onClick={handlePick}
+                  style={{
+                    padding: '4px 10px', borderRadius: '6px', border: `1px solid ${c.border}`,
+                    background: 'transparent', color: c.textMuted, fontSize: '12px',
+                    cursor: 'pointer', flexShrink: 0,
+                  }}
+                >
+                  {t.change}
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Better lyrics toggle */}
+          {(stage === 'ready') && (
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={betterLyrics}
+                onChange={e => setBetterLyrics(e.target.checked)}
+                style={{ marginTop: '2px', accentColor: 'oklch(60% 0.18 270)', width: '15px', height: '15px', flexShrink: 0 }}
+              />
+              <div>
+                <div style={{ fontSize: '13px', color: c.text }}>{t.betterLyrics}</div>
+                <div style={{ fontSize: '12px', color: c.textSubtle }}>{t.betterLyricsHint}</div>
+              </div>
+            </label>
+          )}
+
+          {/* Indexing progress */}
+          {isIndexing && (
+            <div style={{
+              padding: '14px 16px', borderRadius: '10px',
+              background: isDark ? 'oklch(60% 0.18 270 / 0.08)' : 'oklch(60% 0.18 270 / 0.06)',
+              border: '1px solid oklch(60% 0.18 270 / 0.2)',
+              display: 'flex', flexDirection: 'column', gap: '8px',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', color: c.accent, fontSize: '13px', fontWeight: '600' }}>
+                <Spinner size={15} />{t.indexing}
+              </div>
+              <div style={{ fontSize: '12px', color: c.textMuted }}>{t.indexHint}</div>
+            </div>
+          )}
+
+          {/* Done state */}
+          {isDone && (
+            <div style={{
+              padding: '14px 16px', borderRadius: '10px',
+              background: isDark ? 'oklch(60% 0.15 140 / 0.1)' : 'oklch(60% 0.15 140 / 0.08)',
+              border: '1px solid oklch(60% 0.15 140 / 0.25)',
+              display: 'flex', alignItems: 'center', gap: '10px',
+              fontSize: '13px', fontWeight: '600', color: 'oklch(60% 0.15 140)',
+            }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+              {t.done} {progress.count > 0 && `(${progress.count} треков)`}
+            </div>
+          )}
+
+          {/* Error */}
+          {errorMsg && (
+            <div style={{
+              padding: '10px 14px', borderRadius: '8px', fontSize: '12px',
+              background: isDark ? 'oklch(55% 0.2 25 / 0.1)' : 'oklch(55% 0.2 25 / 0.07)',
+              border: '1px solid oklch(55% 0.2 25 / 0.25)', color: 'oklch(55% 0.2 25)',
+            }}>
+              {errorMsg}
+            </div>
+          )}
+
+          {/* Index button */}
+          {stage === 'ready' && (
+            <button
+              onClick={handleIndex}
+              style={{
+                padding: '13px 20px', borderRadius: '12px', border: 'none',
+                background: c.accentGrad, color: 'white',
+                fontSize: '14px', fontWeight: '700', cursor: 'pointer',
+                boxShadow: '0 4px 16px oklch(60% 0.18 270 / 0.35), inset 0 1px 0 rgba(255,255,255,0.15)',
+                transition: 'all 0.15s', letterSpacing: '-0.2px',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = '0 6px 20px oklch(60% 0.18 270 / 0.45), inset 0 1px 0 rgba(255,255,255,0.15)'; }}
+              onMouseLeave={e => { e.currentTarget.style.transform = ''; e.currentTarget.style.boxShadow = '0 4px 16px oklch(60% 0.18 270 / 0.35), inset 0 1px 0 rgba(255,255,255,0.15)'; }}
+            >
+              {t.indexBtn} →
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── App ──────────────────────────────────────────────────────────────────────
+function App() {
+  const [section, setSection] = useState('chat');
+  const [isDark, setDark] = useState(true);
+  const [lang, setLang] = useState('ru');
+
+  // 'checking' | 'onboarding' | 'no-qdrant' | 'ready'
+  const [appState, setAppState] = useState('checking');
+
+  // On mount — check if Qdrant has any collections with data
+  useEffect(() => {
+    apiFetch('/library/collections')
+      .then(res => {
+        if (!res.qdrant_available) {
+          setAppState('no-qdrant');
+        } else {
+          const hasData = (res.total_points || 0) > 0;
+          setAppState(hasData ? 'ready' : 'onboarding');
+        }
+      })
+      .catch(() => {
+        // FastAPI itself is down — show no-qdrant screen as a generic error
+        setAppState('no-qdrant');
+      });
+  }, []);
+
+  const sectionMap = { chat: ChatSection, recommend: RecommendSection, library: LibrarySection };
+  const ActiveSection = sectionMap[section] || ChatSection;
+  const c = useColors(isDark);
+
+  // ── Checking splash ──
+  if (appState === 'checking') {
+    return (
+      <div style={{
+        width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center', gap: '16px',
+        background: isDark ? '#0d0d10' : '#f5f4f8',
+      }}>
+        <div style={{
+          width: '44px', height: '44px', borderRadius: '13px',
+          background: 'linear-gradient(135deg, oklch(60% 0.18 270), oklch(60% 0.18 310))',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          boxShadow: '0 4px 12px oklch(60% 0.18 270 / 0.4)',
+        }}>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round">
+            <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+          </svg>
+        </div>
+        <Spinner size={20} />
+      </div>
+    );
+  }
+
+  // ── Qdrant unavailable ──
+  if (appState === 'no-qdrant') {
+    return (
+      <div style={{
+        width: '100vw', height: '100vh', display: 'flex', alignItems: 'center',
+        justifyContent: 'center', background: isDark ? '#0d0d10' : '#f5f4f8', padding: '24px',
+      }}>
+        <div style={{
+          maxWidth: '420px', width: '100%',
+          background: isDark ? '#17171b' : '#ffffff',
+          border: `1px solid ${c.border}`, borderRadius: '20px', padding: '40px',
+          boxShadow: isDark ? '0 8px 40px rgba(0,0,0,0.6)' : '0 8px 40px rgba(0,0,0,0.1)',
+          display: 'flex', flexDirection: 'column', gap: '20px',
+          animation: 'fadeIn 0.3s ease forwards',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <div style={{ width: '44px', height: '44px', borderRadius: '13px',
+              background: 'linear-gradient(135deg, oklch(60% 0.18 270), oklch(60% 0.18 310))',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              boxShadow: '0 4px 12px oklch(60% 0.18 270 / 0.4)', flexShrink: 0 }}>
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round">
+                <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+              </svg>
+            </div>
+            <span style={{ fontSize: '22px', fontWeight: '700', letterSpacing: '-0.5px', color: c.text }}>MusiX</span>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div style={{ fontSize: '18px', fontWeight: '700', color: c.text, letterSpacing: '-0.3px' }}>
+              {lang === 'ru' ? 'Qdrant не запущен' : 'Qdrant is not running'}
+            </div>
+            <div style={{ fontSize: '14px', color: c.textMuted, lineHeight: '1.65' }}>
+              {lang === 'ru'
+                ? 'Для работы приложения необходима база данных Qdrant. Запусти её командой:'
+                : 'The app requires Qdrant to be running. Start it with:'}
+            </div>
+            <div style={{
+              padding: '12px 14px', borderRadius: '10px', fontFamily: 'DM Mono, monospace',
+              fontSize: '13px', color: 'oklch(60% 0.18 140)',
+              background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)',
+              border: `1px solid ${c.border}`, userSelect: 'all',
+            }}>
+              docker-compose up -d
+            </div>
+            <div style={{ fontSize: '13px', color: c.textSubtle }}>
+              {lang === 'ru'
+                ? 'После запуска Qdrant обнови страницу.'
+                : 'Once Qdrant is up, refresh the page.'}
+            </div>
+          </div>
+
+          <button
+            onClick={() => window.location.reload()}
+            style={{
+              padding: '12px 20px', borderRadius: '10px', border: 'none',
+              background: c.accentGrad, color: 'white',
+              fontSize: '14px', fontWeight: '600', cursor: 'pointer',
+              boxShadow: '0 4px 12px oklch(60% 0.18 270 / 0.3)',
+            }}
+          >
+            {lang === 'ru' ? '↻ Проверить снова' : '↻ Try again'}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Onboarding ──
+  if (appState === 'onboarding') {
+    return (
+      <OnboardingScreen
+        isDark={isDark}
+        lang={lang}
+        onDone={() => setAppState('ready')}
+      />
+    );
+  }
+
+  // ── Main UI ──
+  return (
+    <div style={{ display: 'flex', width: '100vw', height: '100vh', overflow: 'hidden', background: isDark ? '#0d0d10' : '#f5f4f8' }}>
+      <Sidebar
+        section={section}
+        onNav={setSection}
+        isDark={isDark}
+        onThemeToggle={() => setDark(d => !d)}
+        lang={lang}
+        onLangToggle={setLang}
+      />
+      <div key={section} className="section-enter" style={{ flex: 1, minWidth: 0, display: 'flex', overflow: 'hidden' }}>
+        <ActiveSection isDark={isDark} lang={lang} />
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
