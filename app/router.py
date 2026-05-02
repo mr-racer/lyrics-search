@@ -24,3 +24,60 @@ async def similar_endpoint(song_id: str):
 async def generate_lyrics(req: LyricsRequest):
     lyrics = await ask_llm(req.prompt)
     return LyricsResponse(lyrics=lyrics)
+
+    
+# @router.post("/completions", response_model=ChatResponse)
+# async def chat_completion(request: ChatRequest):
+#     """
+#     Handles incoming requests using the standard OpenAI/Chat Completions API format.
+#     Processes the messages list and uses the underlying LLM client.
+#     """
+
+#     # --- 1. Parse Messages for ask_llm ---
+    
+#     system_prompt = None
+#     user_message = ""
+    
+#     # Process the message list to find system/user content
+#     messages: list[ChatMessage] = request.messages
+#     if messages:
+#         for i, msg in enumerate(messages):
+#             role = msg.role.lower()
+#             content = msg.content
+
+#             if role == "system":
+#                 # We only take the first system message as the prompt
+#                 system_prompt = content
+#             elif role == "user" and i > 0: # Assume user's query is not the very first message
+#                 # The primary user message should be passed to the LLM core function
+#                 user_message = content
+
+#     if not user_message:
+#         raise HTTPException(status_code=400, detail="Missing required 'user' message in chat history.")
+
+
+#     # --- 2. Call the Core LLM Logic ---
+#     try:
+#         llm_response_content = await ask_llm(
+#             user_message=user_message,
+#             system_prompt=system_prompt, # Pass system prompt if available
+#             model=request.model,          # Use model provided by client
+#             temperature=request.temperature,
+#             extra_body={"enable_thinking": request.enable_thinking}, # Passes extra fields like enable_thinking
+#         )
+
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=f"LLM Communication Error: {e}")
+
+
+#     # --- 3. Format the Output Response ---
+#     # The client expects a specific structure (like OpenAI's response).
+#     return ChatCompletionResponse(
+#         id=f"chat-completion-{hash(''.join([m.content for m in messages]))}", # Generate a unique ID
+#         object="chat.completion",
+#         choices=[
+#             {
+#                 "message": {"role": "assistant", "content": llm_response_content}
+#             }
+#         ]
+#     )

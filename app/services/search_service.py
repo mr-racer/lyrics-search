@@ -165,12 +165,12 @@ class SearchService:
             except (ValueError, TypeError):
                 duration_sec = 0.0
 
-            # Lyrics snippet for LLM context (first ~400 chars; not sent to frontend)
+            # Lyrics for LLM context (first ~400 chars; not sent to frontend)
             raw_lyrics: str = payload.get("lyrics") or ""
             snippet: str | None = None
             if raw_lyrics.strip():
-                flat = raw_lyrics.replace("\n", " ").strip()
-                snippet = flat[:400] + ("…" if len(flat) > 400 else "")
+                lyrics = raw_lyrics.replace("\n", " ").strip()
+                # snippet = lyrics[:400] + ("…" if len(lyrics) > 400 else "")
 
             track = TrackMetadata(
                 track_id=str(point.id),
@@ -187,7 +187,7 @@ class SearchService:
                 track=track,
                 score=float(point.score),
                 matched_on=matched_on,
-                snippet=snippet,
+                lyrics=lyrics,
             ))
         return hits
 

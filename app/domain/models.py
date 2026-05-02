@@ -79,7 +79,7 @@ class ChatRequest(BaseModel):
     history: List[ChatMessage] = []
     mode: Literal["text", "audio", "hybrid"] = "hybrid"
     # LLM connection — overrides env vars LLM_BASE_URL / LLM_MODEL if set
-    llm_base_url: Optional[str] = Field(None, description="e.g. http://192.168.1.10:1234/v1")
+    llm_base_url: Optional[str] = Field(None, description="e.g. http://localhost:8000/v1")
     llm_model: Optional[str] = Field(None, description="e.g. openai/gpt-oss-20b")
 
 

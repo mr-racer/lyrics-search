@@ -33,9 +33,8 @@ CLAP_WEIGHTS_PATH = Path(__file__).parent.parent / "weights" / "music_audioset_e
 
 # Available text embedding models
 TEXT_MODELS = {
-    "all-MiniLM-L6-v2": {"dim": 384, "desc": "Fast, good quality (default)"},
-    "paraphrase-MiniLM-L6-v2": {"dim": 384, "desc": "Good for paraphrasing"},
-    "all-mpnet-base-v2": {"dim": 768, "desc": "Higher quality, slower"},
+    "jinaai/jina-embeddings-v2-small-en": {"dim": 512, "desc": "Lightweight model with CPU optimisatiobn"},
+    "Qwen/Qwen3-Embedding-0.6B": {"dim": 1024, "desc": "Higher quality, slower"},
 }
 
 
@@ -65,14 +64,14 @@ class ModelRegistry:
         return cls._text_models[model_name]
 
     @classmethod
-    def get_text_model(cls, model_name: str = "all-MiniLM-L6-v2") -> Any:
-        """Get a loaded text model by name (default: all-MiniLM-L6-v2)."""
+    def get_text_model(cls, model_name: str = "jinaai/jina-embeddings-v2-small-en") -> Any:
+        """Get a loaded text model by name (default: jinaai/jina-embeddings-v2-small-en)."""
         if model_name not in cls._text_models:
             raise RuntimeError(f"Text model '{model_name}' not loaded. Call load_text_model first.")
         return cls._text_models[model_name][0]
 
     @classmethod
-    def get_text_model_config(cls, model_name: str = "all-MiniLM-L6-v2") -> tuple[str, int]:
+    def get_text_model_config(cls, model_name: str = "jinaai/jina-embeddings-v2-small-en") -> tuple[str, int]:
         """Get vector_name and dim for a loaded text model."""
         if model_name not in cls._text_models:
             raise RuntimeError(f"Text model '{model_name}' not loaded.")

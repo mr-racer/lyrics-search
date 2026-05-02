@@ -28,6 +28,7 @@ from fastapi import APIRouter, Request
 
 from app.domain.models import ChatRequest, TrackHit
 from app.services.llm_client import ask_llm
+import traceback
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
@@ -35,7 +36,7 @@ router = APIRouter(prefix="/chat", tags=["Chat"])
 
 # TODO: provide your classification system prompt here.
 # The call is skipped entirely when this string is empty.
-CLASSIFICATION_SYSTEM_PROMPT: str = ""
+CLASSIFICATION_SYSTEM_PROMPT: str = "You need to classify the user query into one of the following types: text, sound, hybrid"
 
 DEVELOPER_PROMPT: str = """
 You are a music search assistant. You find songs from descriptions, moods,
@@ -323,7 +324,7 @@ async def _run_searches(
         lines = [header]
         if t.genre:
             lines.append(f"  Genre: {t.genre}")
-        lyric_text = hit.snippet or ""
+        lyric_text = hit.lyrics or ""
         if lyric_text:
             lines.append(f"  Lyrics: {lyric_text}")
         ctx_parts.append("\n".join(lines))
@@ -395,12 +396,12 @@ async def chat(req: ChatRequest, request: Request) -> dict:
             classification = await ask_llm(
                 req.message,
                 system_prompt=CLASSIFICATION_SYSTEM_PROMPT,
-                parse_json=True,
-                max_tokens=256,
+                parse_json=False,
                 **llm_kw,
             )
         except Exception as exc:
             print(f"[chat] classification error (non-fatal): {exc}")
+            print(traceback.format_exc())
 
     # ── Calls 2…N: agentic search loop ───────────────────────────────────────
     previous_queries = ""
@@ -425,7 +426,6 @@ async def chat(req: ChatRequest, request: Request) -> dict:
                 req.message,
                 system_prompt=filled,
                 parse_json=True,
-                max_tokens=1024,
                 **llm_kw,
             )
         except Exception as exc:
