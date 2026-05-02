@@ -2,7 +2,8 @@
 
 import asyncio
 from collections import Counter
-from fastapi import APIRouter, HTTPException, Request
+from typing import Optional
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.domain.models import IndexRequest, IndexProgress
 from app.services.library_service import LibraryService
@@ -52,11 +53,14 @@ async def get_collections(request: Request) -> dict:
 # ── Library statistics ────────────────────────────────────────────────────────
 
 @router.get("/stats")
-async def get_stats(request: Request) -> dict:
+async def get_stats(
+    request: Request,
+    collection_name: Optional[str] = Query(None, description="Collection to get stats for"),
+) -> dict:
     """Library statistics: total tracks, top genres (from Qdrant payload).
 
-    Scrolls up to 1 000 points to sample genre distribution — fast enough
-    for a sidebar/tab load while still covering most small-to-mid libraries.
+    If collection_name is provided, stats are for that specific collection.
+    Otherwise, picks the collection with the most points.
 
     Returns:
         {
@@ -79,21 +83,33 @@ async def get_stats(request: Request) -> dict:
     if not cols:
         return {"total_tracks": 0, "collection_name": None, "genres": [], "qdrant_available": True}
 
-    # Pick the collection with the most points
-    best_col: str | None = None
-    best_count: int = 0
-    for col in cols:
-        try:
-            info = qdrant.get_collection(col.name)
-            cnt = info.points_count or 0
-            if cnt > best_count:
-                best_count = cnt
-                best_col = col.name
-        except Exception:
-            pass
+    # Use the requested collection or fall back to the one with the most points
+    target_col: str | None = None
+    target_count: int = 0
 
-    if not best_col:
-        return {"total_tracks": 0, "collection_name": None, "genres": [], "qdrant_available": True}
+    if collection_name:
+        # Verify the requested collection exists
+        existing = {c.name for c in cols}
+        if collection_name in existing:
+            try:
+                info = qdrant.get_collection(collection_name)
+                target_col = collection_name
+                target_count = info.points_count or 0
+            except Exception:
+                pass
+    else:
+        for col in cols:
+            try:
+                info = qdrant.get_collection(col.name)
+                cnt = info.points_count or 0
+                if cnt > target_count:
+                    target_count = cnt
+                    target_col = col.name
+            except Exception:
+                pass
+
+    if not target_col:
+        return {"total_tracks": 0, "collection_name": collection_name, "genres": [], "qdrant_available": True}
 
     # Sample up to 1 000 points; collect genre tags from payload
     genre_counter: Counter = Counter()
@@ -104,7 +120,7 @@ async def get_stats(request: Request) -> dict:
     try:
         while sampled < SAMPLE_LIMIT:
             results, next_offset = qdrant.scroll(
-                collection_name=best_col,
+                collection_name=target_col,
                 offset=offset,
                 limit=min(100, SAMPLE_LIMIT - sampled),
                 with_payload=["genre"],
@@ -128,8 +144,8 @@ async def get_stats(request: Request) -> dict:
     ]
 
     return {
-        "total_tracks": best_count,
-        "collection_name": best_col,
+        "total_tracks": target_count,
+        "collection_name": target_col,
         "genres": top_genres,
         "qdrant_available": True,
     }
@@ -175,6 +191,7 @@ async def index_folder(req: IndexRequest, request: Request) -> dict:
         raise HTTPException(status_code=503, detail="Library service unavailable — is Qdrant running?")
     result = await service.index_folder(
         folder_path=req.folder_path,
+        collection_name=req.collection_name,
         better_lyrics_quality=req.better_lyrics_quality,
         text_model=req.text_model,
     )

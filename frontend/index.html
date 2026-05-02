@@ -306,10 +306,11 @@ function ChatSection({ isDark, lang }) {
   const [selectedHit, setSelectedHit]   = useState(null);
   const chatEndRef = useRef(null);
 
-  // LLM settings are stored in localStorage by LibrarySection
+  // LLM settings and active collection are stored in localStorage by LibrarySection
   const getLLMSettings = () => ({
-    llm_base_url: localStorage.getItem('llm_base_url') || undefined,
-    llm_model:    localStorage.getItem('llm_model')    || undefined,
+    llm_base_url:    localStorage.getItem('llm_base_url')      || undefined,
+    llm_model:       localStorage.getItem('llm_model')         || undefined,
+    collection_name: localStorage.getItem('active_collection') || undefined,
   });
 
   useEffect(() => {
@@ -401,6 +402,7 @@ function ChatSection({ isDark, lang }) {
           mode: searchMode,
           filters: buildFilters(),
           limit: 20,
+          collection_name: localStorage.getItem('active_collection') || undefined,
         }),
       });
       setResults(res.hits || []);
@@ -717,6 +719,13 @@ function LibrarySection({ isDark, lang }) {
   const [stats, setStats] = useState(null);
   const [statsLoading, setStatsLoading] = useState(true);
 
+  // Collections
+  const [collections, setCollections] = useState([]);
+  const [activeCollection, setActiveCollection] = useState(
+    () => localStorage.getItem('active_collection') || ''
+  );
+  const [newCollectionName, setNewCollectionName] = useState('my_collection');
+
   // Re-index
   const [folderPath, setFolderPath] = useState('');
   const [picking, setPicking]   = useState(false);
@@ -738,14 +747,34 @@ function LibrarySection({ isDark, lang }) {
     setTimeout(() => setLlmSaved(false), 2000);
   };
 
-  const loadStats = () => {
+  const switchCollection = (name) => {
+    setActiveCollection(name);
+    localStorage.setItem('active_collection', name);
+    loadStats(name);
+  };
+
+  const loadCollections = () =>
+    apiFetch('/library/collections').then(data => {
+      const cols = data.collections || [];
+      setCollections(cols);
+      // Auto-select active collection if not set yet
+      if (!localStorage.getItem('active_collection') && cols.length > 0) {
+        const best = cols.reduce((a, b) => (b.count > a.count ? b : a), cols[0]);
+        switchCollection(best.name);
+      }
+    }).catch(() => {});
+
+  const loadStats = (colName) => {
+    const col = colName !== undefined ? colName : activeCollection;
     setStatsLoading(true);
-    apiFetch('/library/stats')
+    const qs = col ? `?collection_name=${encodeURIComponent(col)}` : '';
+    apiFetch(`/library/stats${qs}`)
       .then(s => { setStats(s); setStatsLoading(false); })
       .catch(() => setStatsLoading(false));
   };
 
   useEffect(() => {
+    loadCollections();
     loadStats();
     apiFetch('/search/models/text').then(setModels).catch(() => {});
   }, []);
@@ -764,13 +793,22 @@ function LibrarySection({ isDark, lang }) {
     setIndexing(true);
     setIndexResult(null);
     try {
+      const colName = newCollectionName.trim() || 'music_explorer';
       const res = await apiFetch('/library/index', {
         method: 'POST',
-        body: JSON.stringify({ folder_path: folderPath, better_lyrics_quality: betterLyrics, text_model: textModel }),
+        body: JSON.stringify({
+          folder_path: folderPath,
+          collection_name: colName,
+          better_lyrics_quality: betterLyrics,
+          text_model: textModel,
+        }),
       });
       setIndexResult(res);
-      // Refresh stats after successful indexing
-      if (res.status !== 'failed') loadStats();
+      // After indexing: refresh collections, switch to the new collection
+      if (res.status !== 'failed') {
+        await loadCollections();
+        switchCollection(colName);
+      }
     } catch (e) {
       setIndexResult({ status: 'failed', message: e.message });
     } finally {
@@ -810,6 +848,70 @@ function LibrarySection({ isDark, lang }) {
             {lang === 'ru' ? 'Статистика коллекции, карта и управление индексом' : 'Collection stats, map and index management'}
           </div>
         </div>
+
+        {/* ── Collection selector ── */}
+        {card(
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+            {/* Icon */}
+            <div style={{
+              width: '32px', height: '32px', borderRadius: '9px', flexShrink: 0,
+              background: c.accentBg,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={c.accent} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/>
+                <path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/>
+              </svg>
+            </div>
+
+            {/* Label */}
+            <div style={{ flexShrink: 0 }}>
+              <div style={{ fontSize: '13px', fontWeight: '600', color: c.text }}>
+                {lang === 'ru' ? 'Активная коллекция' : 'Active collection'}
+              </div>
+              <div style={{ fontSize: '11px', color: c.textSubtle, marginTop: '1px' }}>
+                {lang === 'ru' ? 'Поиск и статистика — из этой коллекции' : 'Search and stats use this collection'}
+              </div>
+            </div>
+
+            {/* Dropdown */}
+            <select
+              value={activeCollection}
+              onChange={e => switchCollection(e.target.value)}
+              style={{
+                flex: 1, minWidth: '160px', padding: '7px 10px', borderRadius: '8px',
+                border: `1px solid ${c.border}`, background: c.inputBg, color: c.text,
+                fontSize: '13px', outline: 'none', cursor: 'pointer',
+                fontFamily: 'DM Mono, monospace',
+              }}
+            >
+              {collections.length === 0
+                ? <option value="">{lang === 'ru' ? '— нет коллекций —' : '— no collections —'}</option>
+                : collections.map(col => (
+                    <option key={col.name} value={col.name}>
+                      {col.name} ({col.count.toLocaleString('ru')} {lang === 'ru' ? 'тр.' : 'tr.'})
+                    </option>
+                  ))
+              }
+            </select>
+
+            {/* Refresh button */}
+            <button
+              onClick={() => { loadCollections(); loadStats(activeCollection); }}
+              title={lang === 'ru' ? 'Обновить' : 'Refresh'}
+              style={{
+                width: '32px', height: '32px', borderRadius: '8px', border: `1px solid ${c.border}`,
+                background: 'transparent', color: c.textMuted, cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+              }}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+              </svg>
+            </button>
+          </div>,
+          { marginBottom: '16px' }
+        )}
 
         {/* ── 2D / 3D Chart placeholder ── */}
         <div style={{
@@ -951,12 +1053,30 @@ function LibrarySection({ isDark, lang }) {
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '16px' }}>
               <div>
                 <div style={{ fontSize: '14px', fontWeight: '600', color: c.text }}>
-                  {lang === 'ru' ? 'Переиндексировать папку' : 'Re-index folder'}
+                  {lang === 'ru' ? 'Индексировать папку в коллекцию' : 'Index folder into collection'}
                 </div>
                 <div style={{ fontSize: '12px', color: c.textSubtle, marginTop: '2px' }}>
-                  {lang === 'ru' ? 'Новая папка заменит (или дополнит) текущую коллекцию' : 'A new folder will update the current collection'}
+                  {lang === 'ru' ? 'Задай имя коллекции, выбери папку с музыкой и запусти индексацию' : 'Name the collection, pick a music folder, then start indexing'}
                 </div>
               </div>
+            </div>
+
+            {/* Collection name input */}
+            <div style={{ marginBottom: '12px' }}>
+              <div style={{ fontSize: '11px', color: c.textSubtle, marginBottom: '6px', fontFamily: 'DM Mono, monospace', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                {lang === 'ru' ? 'Имя коллекции' : 'Collection name'}
+              </div>
+              <input
+                value={newCollectionName}
+                onChange={e => setNewCollectionName(e.target.value)}
+                disabled={indexing}
+                placeholder={lang === 'ru' ? 'например: my_music' : 'e.g. my_music'}
+                style={{
+                  width: '100%', padding: '8px 11px', borderRadius: '8px',
+                  border: `1px solid ${c.border}`, background: c.inputBg, color: c.text,
+                  fontSize: '13px', outline: 'none', fontFamily: 'DM Mono, monospace',
+                }}
+              />
             </div>
 
             {/* Folder picker row */}
@@ -1156,6 +1276,7 @@ function OnboardingScreen({ isDark, lang, onDone }) {
   // Stages: 'idle' | 'picking' | 'ready' | 'indexing' | 'done' | 'error'
   const [stage, setStage] = useState('idle');
   const [folderPath, setFolderPath] = useState('');
+  const [collectionName, setCollectionName] = useState('my_collection');
   const [betterLyrics, setBetterLyrics] = useState(false);
   const [progress, setProgress] = useState({ count: 0, message: '' });
   const [errorMsg, setErrorMsg] = useState('');
@@ -1163,7 +1284,9 @@ function OnboardingScreen({ isDark, lang, onDone }) {
   const T = {
     ru: {
       headline: 'Добро пожаловать в MusiX',
-      sub: 'Коллекция пока пуста. Выбери папку с музыкой — приложение проиндексирует треки и ты сможешь искать по лирике и звуку.',
+      sub: 'Коллекция пока пуста. Задай имя коллекции, выбери папку с музыкой — приложение проиндексирует треки.',
+      collectionLabel: 'Имя коллекции',
+      collectionPlaceholder: 'например: my_music',
       pickBtn: 'Выбрать папку с музыкой',
       picking: 'Открываю диалог...',
       selected: 'Выбрана папка:',
@@ -1180,7 +1303,9 @@ function OnboardingScreen({ isDark, lang, onDone }) {
     },
     en: {
       headline: 'Welcome to MusiX',
-      sub: 'Your library is empty. Pick a music folder — the app will index your tracks so you can search by lyrics and sound.',
+      sub: 'Your library is empty. Name your collection, pick a music folder — the app will index your tracks.',
+      collectionLabel: 'Collection name',
+      collectionPlaceholder: 'e.g. my_music',
       pickBtn: 'Choose music folder',
       picking: 'Opening dialog...',
       selected: 'Selected folder:',
@@ -1221,11 +1346,13 @@ function OnboardingScreen({ isDark, lang, onDone }) {
     setStage('indexing');
     setErrorMsg('');
     setProgress({ count: 0, message: '' });
+    const colName = collectionName.trim() || 'my_collection';
     try {
       const res = await apiFetch('/library/index', {
         method: 'POST',
         body: JSON.stringify({
           folder_path: folderPath,
+          collection_name: colName,
           better_lyrics_quality: betterLyrics,
         }),
       });
@@ -1234,6 +1361,7 @@ function OnboardingScreen({ isDark, lang, onDone }) {
         setStage('ready');
         return;
       }
+      localStorage.setItem('active_collection', colName);
       setProgress({ count: res.count || 0, message: res.message || '' });
       setStage('done');
       setTimeout(() => onDone(), 1800);
@@ -1285,6 +1413,25 @@ function OnboardingScreen({ isDark, lang, onDone }) {
           <div style={{ fontSize: '14px', color: c.textMuted, lineHeight: '1.6' }}>
             {t.sub}
           </div>
+        </div>
+
+        {/* Collection name input */}
+        <div>
+          <div style={{ fontSize: '11px', fontFamily: 'DM Mono, monospace', color: c.textSubtle, textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: '6px' }}>
+            {t.collectionLabel}
+          </div>
+          <input
+            value={collectionName}
+            onChange={e => setCollectionName(e.target.value)}
+            disabled={stage === 'indexing' || stage === 'done'}
+            placeholder={t.collectionPlaceholder}
+            style={{
+              width: '100%', padding: '9px 12px', borderRadius: '10px',
+              border: `1px solid ${c.border}`, background: isDark ? '#1a1a1f' : '#ffffff',
+              color: c.text, fontSize: '14px', outline: 'none',
+              fontFamily: 'DM Mono, monospace',
+            }}
+          />
         </div>
 
         {/* Folder picker area */}

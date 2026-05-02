@@ -43,6 +43,7 @@ class SearchRequest(BaseModel):
     text_model: Optional[str] = Field(None, description="Text embedding model to use")
     filters: SearchFilters | None = None
     limit: int = 10
+    collection_name: Optional[str] = Field(None, description="Qdrant collection to search in")
 
 
 class SearchResponse(BaseModel):
@@ -55,6 +56,7 @@ class SearchResponse(BaseModel):
 class IndexRequest(BaseModel):
     """Запрос на индексацию папки с музыкой."""
     folder_path: str
+    collection_name: str = "music_explorer"
     better_lyrics_quality: bool = False
     text_model: Optional[str] = None
 
@@ -81,6 +83,7 @@ class ChatRequest(BaseModel):
     # LLM connection — overrides env vars LLM_BASE_URL / LLM_MODEL if set
     llm_base_url: Optional[str] = Field(None, description="e.g. http://localhost:8000/v1")
     llm_model: Optional[str] = Field(None, description="e.g. openai/gpt-oss-20b")
+    collection_name: Optional[str] = Field(None, description="Qdrant collection to search in")
 
 
 class ChatResponse(BaseModel):

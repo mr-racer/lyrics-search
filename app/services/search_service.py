@@ -26,14 +26,15 @@ class SearchService:
         text_model: Optional[str] = None,
         filters: Optional[SearchFilters] = None,
         limit: int = 10,
+        collection_name: Optional[str] = None,
     ) -> List[TrackHit]:
         """Unified search dispatching to mode-specific handlers."""
         if mode == "audio":
-            return await self._search_audio(query, filters, limit)
+            return await self._search_audio(query, filters, limit, collection_name)
         elif mode == "hybrid":
-            return await self._search_hybrid(query, filters, limit)
+            return await self._search_hybrid(query, filters, limit, collection_name)
         else:  # text
-            return await self._search_text(query, filters, limit)
+            return await self._search_text(query, filters, limit, collection_name)
 
     # ── Text search (dense + BM25) ──
 
@@ -42,6 +43,7 @@ class SearchService:
         query: str,
         filters: Optional[SearchFilters],
         limit: int,
+        collection_name: Optional[str] = None,
     ) -> List[TrackHit]:
         """Text-based search using dense + BM25 fusion."""
         qdrant_filter = self._build_qdrant_filter(filters)
@@ -52,6 +54,7 @@ class SearchService:
             limit=limit * 2,
             min_dense_score=0.3,
             include_clap=False,
+            collection_name_override=collection_name,
             **filter_kwargs,
         )
 
@@ -64,6 +67,7 @@ class SearchService:
         query: str,
         filters: Optional[SearchFilters],
         limit: int,
+        collection_name: Optional[str] = None,
     ) -> List[TrackHit]:
         """Audio-based search using CLAP text embedding."""
         clap_model = ModelRegistry.get_clap()
@@ -76,6 +80,7 @@ class SearchService:
             limit=limit * 2,
             include_clap=True,
             min_clap_score=0.01,
+            collection_name_override=collection_name,
             **filter_kwargs,
         )
 
@@ -89,6 +94,7 @@ class SearchService:
         query: str,
         filters: Optional[SearchFilters],
         limit: int,
+        collection_name: Optional[str] = None,
     ) -> List[TrackHit]:
         """Hybrid search combining text and audio embeddings."""
         filter_kwargs = self._extract_filter_kwargs(filters)
@@ -99,6 +105,7 @@ class SearchService:
             include_clap=True,
             min_dense_score=0.3,
             min_clap_score=0.01,
+            collection_name_override=collection_name,
             **filter_kwargs,
         )
 
@@ -191,7 +198,7 @@ class SearchService:
             ))
         return hits
 
-    async def index_tracks(self, tracks: List[TrackMetadata]) -> None:
+    async def index_tracks(self, tracks: List[TrackMetadata], collection_name: Optional[str] = None) -> None:
         """Index tracks into Qdrant.
 
         Note: LyricsDB.fit() calls prepare_metadata() which expects a dict keyed by
@@ -217,4 +224,4 @@ class SearchService:
                 "file_path": track.file_path,
             }
 
-        self.lyrics_db.fit(data, path=None)
+        self.lyrics_db.fit(data, path=None, collection_name=collection_name)

@@ -25,6 +25,7 @@ class LibraryService:
     async def index_folder(
         self,
         folder_path: str,
+        collection_name: str = "music_explorer",
         better_lyrics_quality: bool = False,
         text_model: Optional[str] = None,
     ) -> dict:
@@ -58,7 +59,7 @@ class LibraryService:
 
             # Index into Qdrant via SearchService
             if self.search_service and tracks:
-                await self.search_service.index_tracks(tracks)
+                await self.search_service.index_tracks(tracks, collection_name=collection_name)
 
             return {
                 "status": "completed",
