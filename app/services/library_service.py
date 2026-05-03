@@ -9,8 +9,10 @@ from typing import List, Optional
 
 from ..domain.models import TrackMetadata, IndexProgress
 from ..resources.model_registry import ModelRegistry
+from ..resources.db_client import DbClient
 from ..existing.folder_processor import FileProcessor
 from .job_tracker import JobTracker, IndexStage, IndexStatus
+from .similarity_service import analyze_collection
 
 logger = logging.getLogger(__name__)
 
@@ -18,12 +20,14 @@ logger = logging.getLogger(__name__)
 class LibraryService:
     """Index music files, extract metadata + lyrics, and upsert to Qdrant."""
 
-    def __init__(self, search_service=None):
+    def __init__(self, search_service=None, db_client: Optional[DbClient] = None):
         """
         Args:
             search_service: SearchService instance for indexing tracks into Qdrant.
+            db_client: DbClient instance for Qdrant access (needed for similarity analysis).
         """
         self.search_service = search_service
+        self.db_client = db_client
         self._job_tracker = JobTracker()
         self._current_job_id = None
 
@@ -187,6 +191,53 @@ class LibraryService:
                 logger.warning("[LibraryService] Skipping indexing: search_service=%s, tracks=%d",
                               self.search_service is not None, len(tracks))
 
+            # Mark lyrics/audio stages as completed
+            job.stages[IndexStage.LYRICS].status = IndexStatus.COMPLETED
+            job.stages[IndexStage.LYRICS].completed_at = time.time()
+            job.stages[IndexStage.AUDIO].status = IndexStatus.COMPLETED
+            job.stages[IndexStage.AUDIO].completed_at = time.time()
+
+            # Stage 4: Similarity analysis
+            logger.info("[LibraryService] Stage 4: Similarity analysis")
+            await self._notify_progress(job, {
+                "stage": IndexStage.ANALYSIS.value,
+                "stage_status": IndexStatus.RUNNING.value,
+                "message": "Анализ схожих и разных треков...",
+                "current": 0,
+            })
+
+            stage_analysis = job.stages[IndexStage.ANALYSIS]
+            stage_analysis.status = IndexStatus.RUNNING
+            stage_analysis.started_at = time.time()
+            stage_analysis.total = 1
+            stage_analysis.message = "Анализ схожих и разных треков..."
+
+            try:
+                if self.db_client and tracks:
+                    await analyze_collection(
+                        qdrant_client=self.db_client.qdrant,
+                        collection_name=collection_name,
+                        progress_callback=self._on_analysis_progress,
+                    )
+                    stage_analysis.status = IndexStatus.COMPLETED
+                    stage_analysis.current = 1
+                    stage_analysis.completed_at = time.time()
+                    stage_analysis.message = "Анализ завершён"
+
+                    await self._notify_progress(job, {
+                        "stage": IndexStage.ANALYSIS.value,
+                        "stage_status": IndexStatus.COMPLETED.value,
+                        "current": 1,
+                        "message": "Анализ завершён",
+                    })
+                else:
+                    logger.warning("[LibraryService] Skipping analysis: db_client=%s", self.db_client is not None)
+                    stage_analysis.status = IndexStatus.COMPLETED
+            except Exception as e:
+                logger.error("[LibraryService] Analysis failed: %s", e, exc_info=True)
+                # Don't fail the whole job — analysis is optional
+                stage_analysis.status = IndexStatus.COMPLETED
+
             # Mark job as completed
             job.overall_status = IndexStatus.COMPLETED
             logger.info("[LibraryService] Job %s COMPLETED", job.job_id)
@@ -225,9 +276,25 @@ class LibraryService:
                     job.stages[IndexStage.AUDIO].current = current
                     job.stages[IndexStage.AUDIO].total = total
                     job.stages[IndexStage.AUDIO].message = message
-                
+
                 await self._notify_progress(job, {
                     "stage": stage,
+                    "current": current,
+                    "total": total,
+                    "message": message,
+                })
+
+    async def _on_analysis_progress(self, stage: IndexStage, current: int, total: int, message: str):
+        """Callback from SimilarityService for analysis progress."""
+        if self._current_job_id:
+            job = self._job_tracker.get_job(self._current_job_id)
+            if job:
+                job.stages[IndexStage.ANALYSIS].current = current
+                job.stages[IndexStage.ANALYSIS].total = total
+                job.stages[IndexStage.ANALYSIS].message = message
+
+                await self._notify_progress(job, {
+                    "stage": IndexStage.ANALYSIS.value,
                     "current": current,
                     "total": total,
                     "message": message,

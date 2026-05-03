@@ -2,11 +2,13 @@
 
 import asyncio
 from collections import Counter
+from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.domain.models import IndexRequest, IndexProgress
 from app.services.library_service import LibraryService
+from app.services.similarity_service import load_top_pairs
 
 router = APIRouter(prefix="/library", tags=["Library"])
 
@@ -168,6 +170,108 @@ async def get_stats(
     }
 
 
+# ── Top similar/dissimilar pairs ──────────────────────────────────────────────
+
+@router.get("/top-pairs")
+async def get_top_pairs(
+    request: Request,
+    collection_name: Optional[str] = Query(None, description="Collection to get top pairs for"),
+) -> dict:
+    """Get cached top-similar and top-dissimilar track pairs.
+
+    Returns cached data if available, otherwise empty lists.
+
+    Returns:
+        {
+          "similar": [...],
+          "dissimilar": [...],
+          "collection_name": str | None,
+          "computed_at": float | None,
+        }
+    """
+    db_client = request.app.state.db_client
+    if db_client is None:
+        return {
+            "similar": [],
+            "dissimilar": [],
+            "collection_name": None,
+            "computed_at": None,
+            "qdrant_available": False,
+        }
+
+    try:
+        qdrant = db_client.qdrant
+        cols = qdrant.get_collections().collections
+    except Exception:
+        return {
+            "similar": [],
+            "dissimilar": [],
+            "collection_name": None,
+            "computed_at": None,
+            "qdrant_available": False,
+        }
+
+    if not cols:
+        return {
+            "similar": [],
+            "dissimilar": [],
+            "collection_name": None,
+            "computed_at": None,
+            "qdrant_available": True,
+        }
+
+    # Resolve target collection (same logic as /stats)
+    DEFAULT_COLLECTION = "music_explorer"
+    existing = {c.name for c in cols}
+
+    target_col: str | None = None
+    pick = collection_name if collection_name else DEFAULT_COLLECTION
+    if pick in existing:
+        target_col = pick
+
+    if not target_col:
+        # Fall back to collection with most points
+        target_count = 0
+        for col in cols:
+            try:
+                info = qdrant.get_collection(col.name)
+                cnt = info.points_count or 0
+                if cnt > target_count:
+                    target_count = cnt
+                    target_col = col.name
+            except Exception:
+                pass
+
+    if not target_col:
+        return {
+            "similar": [],
+            "dissimilar": [],
+            "collection_name": None,
+            "computed_at": None,
+            "qdrant_available": True,
+        }
+
+    # Load cached pairs
+    cached = load_top_pairs(target_col)
+    if cached:
+        return {
+            "similar": cached.get("similar", []),
+            "dissimilar": cached.get("dissimilar", []),
+            "collection_name": cached.get("collection_name"),
+            "computed_at": cached.get("computed_at"),
+            "qdrant_available": True,
+        }
+
+    # No cache yet
+    return {
+        "similar": [],
+        "dissimilar": [],
+        "collection_name": target_col,
+        "computed_at": None,
+        "qdrant_available": True,
+    }
+
+
 # ── Native folder picker (server-side, returns real FS path) ─────────────────
 
 @router.get("/pick-folder")
@@ -230,3 +334,29 @@ async def get_status(request: Request) -> dict:
 async def get_progress(job_id: str) -> IndexProgress:
     """Get indexing progress (not yet implemented)."""
     raise HTTPException(status_code=501, detail="Job tracking not yet implemented")
+
+
+# ── Delete collection ─────────────────────────────────────────────────────────
+
+@router.delete("/collection/{collection_name}")
+async def delete_collection(collection_name: str, request: Request):
+    """Delete a Qdrant collection by name and clean up related cache files."""
+    db_client = request.app.state.db_client
+    if db_client is None:
+        raise HTTPException(status_code=503, detail="Qdrant unavailable")
+
+    try:
+        qdrant = db_client.qdrant
+        qdrant.delete_collection(collection_name)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete collection: {e}")
+
+    # Clean up cached top-pairs if exists
+    try:
+        cache_file = Path(__file__).parent.parent.parent / "cache" / "top_pairs" / f"{collection_name}.json"
+        if cache_file.exists():
+            cache_file.unlink()
+    except Exception:
+        pass
+
+    return {"deleted": True, "collection_name": collection_name}

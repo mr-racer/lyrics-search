@@ -102,7 +102,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         app.state.db_client = db
         app.state.search_service = SearchService(db.lyrics_db)
-        app.state.library_service = LibraryService(search_service=app.state.search_service)
+        app.state.library_service = LibraryService(
+            search_service=app.state.search_service,
+            db_client=db,
+        )
         app.state.job_tracker = JobTracker()
 
         logger.info("[OK] Qdrant connected, services ready — models will preload in background")

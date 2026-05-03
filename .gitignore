@@ -17,10 +17,17 @@ QWEN.md
 /weights
 
 # covers
-/frontend/cover
+/frontend/covers
 
 # notebooks
 /notebooks
+# node
+/node_modules
+package.json
+package-lock.json
+
+# cache
+/cache
 
 # Distribution / packaging
 .Python

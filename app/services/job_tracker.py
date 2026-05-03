@@ -13,6 +13,7 @@ class IndexStage(str, Enum):
     METADATA = "metadata"          # Поиск метаданных песен в интернете
     LYRICS = "lyrics"             # Индексация текстов песен
     AUDIO = "audio"               # Обработка звуковых особенностей песен
+    ANALYSIS = "analysis"         # Анализ схожих/разных треков
 
 
 class IndexStatus(str, Enum):
@@ -134,9 +135,10 @@ class JobTracker:
         """Get a summary of job progress for API responses."""
         overall_percent = 0
         stage_weights = {
-            IndexStage.METADATA: 0.4,   # 40% of total time
-            IndexStage.LYRICS: 0.35,    # 35% of total time
-            IndexStage.AUDIO: 0.25,     # 25% of total time
+            IndexStage.METADATA: 0.40,   # 40% of total time
+            IndexStage.LYRICS: 0.30,     # 30% of total time
+            IndexStage.AUDIO: 0.20,      # 20% of total time
+            IndexStage.ANALYSIS: 0.10,   # 10% of total time
         }
         
         for stage, weight in stage_weights.items():

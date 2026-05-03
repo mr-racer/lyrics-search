@@ -364,7 +364,7 @@ function useChatHistory(collectionName) {
 }
 
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
-function Sidebar({ section, onNav, isDark, onThemeToggle, lang, onLangToggle, collections, activeCollection, onCollectionSwitch }) {
+function Sidebar({ section, onNav, isDark, onThemeToggle, lang, onLangToggle, collections, activeCollection, onCollectionSwitch, onCollectionDelete }) {
   const c = useColors(isDark);
   const skePanel = isDark ? 'ske-panel-dark' : 'ske-panel-light';
 
@@ -472,9 +472,8 @@ function Sidebar({ section, onNav, isDark, onThemeToggle, lang, onLangToggle, co
               return (
                 <div
                   key={col.name}
-                  onClick={() => onCollectionSwitch(col.name)}
                   style={{
-                    padding:'7px 10px', cursor:'pointer', fontSize:'12px',
+                    padding:'7px 10px', fontSize:'12px',
                     fontFamily:'DM Mono, monospace', transition:'all 0.12s',
                     color: isActive ? c.accent : c.textMuted,
                     background: isActive
@@ -483,12 +482,39 @@ function Sidebar({ section, onNav, isDark, onThemeToggle, lang, onLangToggle, co
                     fontWeight: isActive ? '600' : '400',
                     display:'flex', alignItems:'center', gap:'6px',
                     borderBottom: `1px solid ${c.border}`,
+                    position:'relative',
                   }}
                   onMouseEnter={e => { if(!isActive) e.currentTarget.style.background = isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.04)'; }}
                   onMouseLeave={e => { if(!isActive) e.currentTarget.style.background = 'transparent'; }}
                 >
                   {isActive && <div style={{ width:'5px', height:'5px', borderRadius:'50%', background:c.accent, boxShadow:`0 0 4px ${c.accent}`, flexShrink:0 }} />}
-                  <span style={{ whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{col.name}</span>
+                  <span
+                    style={{ flex:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', cursor:'pointer' }}
+                    onClick={() => onCollectionSwitch(col.name)}
+                  >
+                    {col.name}
+                  </span>
+                  <span
+                    onClick={(e) => { e.stopPropagation(); onCollectionDelete && onCollectionDelete(col.name); }}
+                    style={{
+                      width:'18px', height:'18px', borderRadius:'4px', flexShrink:0,
+                      display:'flex', alignItems:'center', justifyContent:'center',
+                      cursor:'pointer', fontSize:'14px', lineHeight:'1',
+                      color: isDark ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.2)',
+                      background:'transparent', transition:'all 0.12s',
+                    }}
+                    onMouseEnter={e => {
+                      e.currentTarget.style.color = '#ef4444';
+                      e.currentTarget.style.background = 'rgba(239,68,68,0.12)';
+                    }}
+                    onMouseLeave={e => {
+                      e.currentTarget.style.color = isDark ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.2)';
+                      e.currentTarget.style.background = 'transparent';
+                    }}
+                    title={lang==='ru' ? `Удалить "${col.name}"` : `Delete "${col.name}"`}
+                  >
+                    ×
+                  </span>
                 </div>
               );
             })}
@@ -854,8 +880,11 @@ function LibrarySection({ isDark, lang, activeCollection, collections, onCollect
 
   const [stats, setStats] = useState(null);
   const [statsLoading, setStatsLoading] = useState(true);
+  const [topPairs, setTopPairs] = useState(null);
+  const [topPairsLoading, setTopPairsLoading] = useState(true);
 
   const statsAbortRef = useRef(null);
+  const topPairsAbortRef = useRef(null);
 
   const loadStats = useCallback((colName) => {
     if (statsAbortRef.current) statsAbortRef.current.abort();
@@ -869,7 +898,22 @@ function LibrarySection({ isDark, lang, activeCollection, collections, onCollect
       .catch(e => { if (e.name !== 'AbortError') setStatsLoading(false); });
   }, []);
 
-  useEffect(() => { loadStats(activeCollection); }, [activeCollection, loadStats]);
+  const loadTopPairs = useCallback((colName) => {
+    if (topPairsAbortRef.current) topPairsAbortRef.current.abort();
+    const col = colName !== undefined ? colName : (localStorage.getItem('active_collection') || '');
+    setTopPairsLoading(true);
+    const qs = col ? `?collection_name=${encodeURIComponent(col)}` : '';
+    const ctrl = new AbortController();
+    topPairsAbortRef.current = ctrl;
+    apiFetch(`/library/top-pairs${qs}`, { signal: ctrl.signal })
+      .then(s => { setTopPairs(s); setTopPairsLoading(false); })
+      .catch(e => { if (e.name !== 'AbortError') setTopPairsLoading(false); });
+  }, []);
+
+  useEffect(() => {
+    loadStats(activeCollection);
+    loadTopPairs(activeCollection);
+  }, [activeCollection, loadStats, loadTopPairs]);
 
   const GENRE_HUES = [270, 310, 140, 200, 60, 25];
 
@@ -1051,29 +1095,105 @@ function LibrarySection({ isDark, lang, activeCollection, collections, onCollect
           {[
             { key:'similar',   label:lang==='ru'?'Топ-5 похожих треков':'Top 5 most similar',   icon:'≈', hue:270 },
             { key:'different', label:lang==='ru'?'Топ-5 самых разных':'Top 5 most different', icon:'≠', hue:25 },
-          ].map(({ key, label, icon, hue }) => (
-            <div key={key} style={{ padding:'20px 22px', borderRadius:'14px', background:c.surface, border:`1px solid ${c.border}`, minHeight:'180px', display:'flex', flexDirection:'column', gap:'12px',
-              boxShadow: isDark?'inset 0 1px 0 rgba(255,255,255,0.06), inset 0 -1px 0 rgba(0,0,0,0.3), 0 2px 8px rgba(0,0,0,0.35)':'inset 0 1px 0 rgba(255,255,255,0.9), inset 0 -1px 0 rgba(0,0,0,0.04), 0 2px 6px rgba(0,0,0,0.07)' }}>
-              <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
-                <div style={{ width:'30px', height:'30px', borderRadius:'8px', flexShrink:0, background:`oklch(60% 0.18 ${hue} / 0.13)`,
-                  display:'flex', alignItems:'center', justifyContent:'center', fontSize:'16px', color:`oklch(60% 0.18 ${hue})`, fontFamily:'DM Mono, monospace', fontWeight:'700',
-                  boxShadow: isDark?'inset 0 1px 0 rgba(255,255,255,0.06)':'inset 0 1px 0 rgba(255,255,255,0.8)' }}>
-                  {icon}
-                </div>
-                <div style={{ fontSize:'13px', fontWeight:'600', color:c.text }}>{label}</div>
-              </div>
-              <div style={{ flex:1, display:'flex', flexDirection:'column', gap:'6px' }}>
-                {[1,2,3,4,5].map(n => (
-                  <div key={n} style={{ height:'32px', borderRadius:'7px', background:isDark?'rgba(255,255,255,0.03)':'rgba(0,0,0,0.03)', display:'flex', alignItems:'center', padding:'0 10px', gap:'8px',
-                    boxShadow: isDark?'inset 0 1px 2px rgba(0,0,0,0.4)':'inset 0 1px 1px rgba(0,0,0,0.05)' }}>
-                    <div style={{ width:'18px', height:'18px', borderRadius:'4px', flexShrink:0, background:isDark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.05)' }} />
-                    <div style={{ height:'7px', borderRadius:'4px', width:`${70-n*8}%`, background:isDark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.06)' }} />
+          ].map(({ key, label, icon, hue }) => {
+            const pairs = topPairs?.[key] || [];
+            const isLoading = topPairsLoading || pairs.length === 0;
+
+            // Pick top 5 pairs with highest scores
+            const top5 = pairs.length > 0
+              ? pairs.map(p => ({
+                  main: p,
+                  best: p[`top_${key === 'similar' ? 'similar' : 'dissimilar'}`][0]
+                })).slice(0, 5)
+              : [];
+
+            return (
+              <div key={key} style={{ padding:'20px 22px', borderRadius:'14px', background:c.surface, border:`1px solid ${c.border}`, minHeight:'180px', display:'flex', flexDirection:'column', gap:'12px',
+                boxShadow: isDark?'inset 0 1px 0 rgba(255,255,255,0.06), inset 0 -1px 0 rgba(0,0,0,0.3), 0 2px 8px rgba(0,0,0,0.35)':'inset 0 1px 0 rgba(255,255,255,0.9), inset 0 -1px 0 rgba(0,0,0,0.04), 0 2px 6px rgba(0,0,0,0.07)' }}>
+                <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
+                  <div style={{ width:'30px', height:'30px', borderRadius:'8px', flexShrink:0, background:`oklch(60% 0.18 ${hue} / 0.13)`,
+                    display:'flex', alignItems:'center', justifyContent:'center', fontSize:'16px', color:`oklch(60% 0.18 ${hue})`, fontFamily:'DM Mono, monospace', fontWeight:'700',
+                    boxShadow: isDark?'inset 0 1px 0 rgba(255,255,255,0.06)':'inset 0 1px 0 rgba(255,255,255,0.8)' }}>
+                    {icon}
                   </div>
-                ))}
+                  <div style={{ fontSize:'13px', fontWeight:'600', color:c.text }}>{label}</div>
+                </div>
+                <div style={{ flex:1, display:'flex', flexDirection:'column', gap:'8px' }}>
+                  {isLoading ? (
+                    // Skeleton loading state
+                    [1,2,3,4,5].map(n => (
+                      <div key={n} style={{ height:'48px', borderRadius:'8px', background:isDark?'rgba(255,255,255,0.03)':'rgba(0,0,0,0.03)', display:'flex', alignItems:'center', padding:'0 10px', gap:'8px',
+                        boxShadow: isDark?'inset 0 1px 2px rgba(0,0,0,0.4)':'inset 0 1px 1px rgba(0,0,0,0.05)' }}>
+                        <div style={{ width:'32px', height:'32px', borderRadius:'6px', flexShrink:0, background:isDark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.05)' }} />
+                        <div style={{ flex:1, display:'flex', flexDirection:'column', gap:'4px' }}>
+                          <div style={{ height:'7px', borderRadius:'4px', width:'60%', background:isDark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.06)' }} />
+                          <div style={{ height:'5px', borderRadius:'4px', width:'40%', background:isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.04)' }} />
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    // Real data with covers
+                    top5.map((pair, idx) => {
+                      const mainName = pair.main.song;
+                      const bestName = pair.best?.name || '';
+                      const bestScore = pair.best?.score || 0;
+                      const [mainArtist, mainTitle] = mainName.split(' - ').length === 2 ? mainName.split(' - ') : ['Unknown', mainName];
+                      const [bestArtist, bestTitle] = bestName.split(' - ').length === 2 ? bestName.split(' - ') : ['Unknown', bestName];
+
+                      return (
+                        <div key={idx} style={{
+                          display:'flex', alignItems:'center', gap:'8px', padding:'6px 8px', borderRadius:'8px',
+                          background: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)',
+                          border: `1px solid ${c.border}`,
+                          boxShadow: isDark ? 'inset 0 1px 2px rgba(0,0,0,0.3)' : 'inset 0 1px 1px rgba(0,0,0,0.04)',
+                        }}>
+                          {/* Main track cover */}
+                          <AlbumCover
+                            title={mainTitle}
+                            artist={mainArtist}
+                            size={32}
+                            isDark={isDark}
+                            coverPath={pair.main.cover_art_path}
+                          />
+                          {/* Best match cover */}
+                          <AlbumCover
+                            title={bestTitle}
+                            artist={bestArtist}
+                            size={32}
+                            isDark={isDark}
+                            coverPath={pair.best?.cover_art_path}
+                          />
+                          {/* Track info */}
+                          <div style={{ flex:1, display:'flex', flexDirection:'column', gap:'2px', minWidth: 0 }}>
+                            <div style={{ fontSize:'11px', color:c.text, fontWeight:'500', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                              {mainTitle}
+                            </div>
+                            <div style={{ fontSize:'9px', color:c.textMuted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                              {mainArtist}
+                            </div>
+                          </div>
+                          {/* Score badge */}
+                          <div style={{
+                            fontSize:'10px', fontFamily:'DM Mono, monospace', fontWeight:'700',
+                            color: `oklch(60% 0.18 ${hue})`,
+                            background: `oklch(60% 0.18 ${hue} / 0.12)`,
+                            padding:'3px 6px', borderRadius:'5px', flexShrink:0,
+                          }}>
+                            {bestScore}%
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+                {!isLoading && pairs.length === 0 && (
+                  <div style={{ fontSize:'10px', color:c.textSubtle, fontFamily:'DM Mono, monospace', textAlign:'center', padding:'10px 0' }}>
+                    {lang==='ru'?'Данные ещё не рассчитаны':'Data not computed yet'}
+                  </div>
+                )}
               </div>
-              <div style={{ fontSize:'10px', color:c.textSubtle, fontFamily:'DM Mono, monospace' }}>{lang==='ru'?'— данные появятся здесь —':'— data will appear here —'}</div>
-            </div>
-          ))}
+            );
+          })}
         </div>
 
       </div>
@@ -1086,6 +1206,7 @@ const INDEX_STEPS = [
   { key:'metadata',  icon:'🔍', labelRu:'Поиск метаданных в интернете',    labelEn:'Searching metadata online',     estSec:30  },
   { key:'lyrics',    icon:'📝', labelRu:'Индексация текстов песен',          labelEn:'Indexing song lyrics',           estSec:120 },
   { key:'audio',     icon:'🎵', labelRu:'Обработка звуковых особенностей',  labelEn:'Processing audio features',      estSec:180 },
+  { key:'analysis',  icon:'📊', labelRu:'Анализ схожих и разных треков',    labelEn:'Analyzing track similarities',   estSec:60  },
 ];
 
 function IndexingProgress({ stage, stepStatus, lang, c, isDark, progressDetail }) {
@@ -1573,6 +1694,50 @@ function OnboardingScreen({ isDark, lang, onDone }) {
   );
 }
 
+// ─── Confirm Delete Modal ────────────────────────────────────────────────────
+function ConfirmDeleteModal({ isDark, lang, collectionName, onConfirm, onCancel }) {
+  const c = useColors(isDark);
+  return (
+    <div style={{
+      position:'fixed', inset:0, zIndex:9999, display:'flex', alignItems:'center', justifyContent:'center',
+      background:'rgba(0,0,0,0.6)', backdropFilter:'blur(4px)', animation:'fadeIn 0.15s ease',
+    }} onClick={onCancel}>
+      <div style={{
+        width:'380px', maxWidth:'90vw', background:c.surface, borderRadius:'16px',
+        border:`1px solid ${c.border}`, padding:'28px',
+        boxShadow: isDark ? '0 8px 40px rgba(0,0,0,0.6)' : '0 8px 40px rgba(0,0,0,0.15)',
+        animation:'slideUp 0.2s ease',
+      }} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize:'17px', fontWeight:'700', color:c.text, marginBottom:'8px', letterSpacing:'-0.2px' }}>
+          {lang==='ru' ? 'Удалить коллекцию?' : 'Delete collection?'}
+        </div>
+        <div style={{ fontSize:'14px', color:c.textMuted, lineHeight:'1.6', marginBottom:'24px' }}>
+          {lang==='ru'
+            ? `Коллекция «${collectionName}» будет удалена вместе со всеми проиндексированными треками. Это действие нельзя отменить.`
+            : `Collection "${collectionName}" will be deleted along with all indexed tracks. This cannot be undone.`}
+        </div>
+        <div style={{ display:'flex', gap:'10px', justifyContent:'flex-end' }}>
+          <button onClick={onCancel} style={{
+            padding:'10px 18px', borderRadius:'10px', border:`1px solid ${c.border}`,
+            background:'transparent', color:c.textMuted, fontSize:'13px', fontWeight:'600',
+            cursor:'pointer',
+          }}>
+            {lang==='ru' ? 'Отмена' : 'Cancel'}
+          </button>
+          <button onClick={onConfirm} style={{
+            padding:'10px 18px', borderRadius:'10px', border:'none',
+            background:'linear-gradient(180deg, #ef4444, #dc2626)',
+            color:'white', fontSize:'13px', fontWeight:'700', cursor:'pointer',
+            boxShadow:'inset 0 1px 0 rgba(255,255,255,0.15), 0 2px 8px rgba(239,68,68,0.3)',
+          }}>
+            {lang==='ru' ? 'Удалить' : 'Delete'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── App ──────────────────────────────────────────────────────────────────────
 function App() {
   const [section,  setSection]  = useState('chat');
@@ -1583,6 +1748,7 @@ function App() {
 
   const [collections,      setCollections]      = useState([]);
   const [activeCollection, setActiveCollection] = useState(() => localStorage.getItem('active_collection') || '');
+  const [deleteConfirm,    setDeleteConfirm]    = useState(null); // collection name or null
 
   const loadCollections = useCallback(() =>
     apiFetch('/library/collections').then(data => {
@@ -1614,6 +1780,32 @@ function App() {
   const switchCollection = (name) => {
     setActiveCollection(name);
     localStorage.setItem('active_collection', name);
+  };
+
+  const handleDeleteCollection = async (name) => {
+    try {
+      await apiFetch(`/library/collection/${encodeURIComponent(name)}`, {
+        method: 'DELETE',
+      });
+      // Reload collections
+      const res = await apiFetch('/library/collections');
+      const cols = res.collections || [];
+      setCollections(cols);
+      // If we deleted the active collection, switch to another one
+      if (name === activeCollection) {
+        if (cols.length > 0) {
+          const best = cols.reduce((a,b) => b.count>a.count?b:a, cols[0]);
+          setActiveCollection(best.name);
+          localStorage.setItem('active_collection', best.name);
+        } else {
+          setActiveCollection('');
+          localStorage.removeItem('active_collection');
+        }
+      }
+    } catch (err) {
+      console.error('Failed to delete collection:', err);
+    }
+    setDeleteConfirm(null);
   };
 
   const handleThemeToggle = () => {
@@ -1675,7 +1867,9 @@ function App() {
         section={section} onNav={setSection}
         isDark={isDark} onThemeToggle={handleThemeToggle}
         lang={lang} onLangToggle={handleLangToggle}
-        collections={collections} activeCollection={activeCollection} onCollectionSwitch={switchCollection}
+        collections={collections} activeCollection={activeCollection}
+        onCollectionSwitch={switchCollection}
+        onCollectionDelete={(name) => setDeleteConfirm(name)}
       />
       <div key={section} className="section-enter" style={{ flex:1, minWidth:0, display:'flex', overflow:'hidden' }}>
         <ActiveSection
@@ -1686,6 +1880,14 @@ function App() {
           onCollectionsUpdate={() => loadCollections()}
         />
       </div>
+      {deleteConfirm && (
+        <ConfirmDeleteModal
+          isDark={isDark} lang={lang}
+          collectionName={deleteConfirm}
+          onConfirm={handleDeleteCollection}
+          onCancel={() => setDeleteConfirm(null)}
+        />
+      )}
     </div>
   );
 }
