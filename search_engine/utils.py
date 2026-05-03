@@ -184,26 +184,57 @@ def extract_clap_features(path: str, model, duration: int = 300, device=DEVICE) 
 #             ]
 
 
-def _encode_clap(paths: list[str], model_clap = None) -> dict[tuple, np.ndarray]:
-    with ProcessPoolExecutor(max_workers=3) as ex:
-        metadatas = list(tqdm(ex.map(get_metadata, paths), total=len(paths), desc="CLAP metadata"))
+def _encode_clap(tracks: list[dict], model_clap=None) -> dict[tuple, np.ndarray]:
+    """Encode audio files with CLAP.
+
+    Args:
+        tracks: list[dict] — уже готовые метаданные (из filtered).
+                Каждый dict должен содержать 'file_path', 'artist', 'title'.
+        model_clap: загруженная CLAP-модель (или None — загрузится сама).
+
+    Returns:
+        {(artist_lower, title_lower): np.ndarray} — маппинг ключей в CLAP-векторы.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+
+    # Строим lookup: file_path → (artist_lower, title_lower) из готовых метаданных
+    path_to_key = {}
+    for t in tracks:
+        fp = t.get("file_path")
+        artist = (t.get("artist") or "").strip().lower()
+        title = (t.get("title") or "").strip().lower()
+        if fp and artist and title:
+            path_to_key[fp] = (artist, title)
+
+    if not path_to_key:
+        log.warning("[CLAP] No tracks with valid file_path + artist + title — skipping")
+        return {}
 
     if not model_clap:
         model_clap = load_model_clap()
-    clap_vecs = [
-        extract_clap_features(p, model_clap, 300)
-        for p in tqdm(paths, desc="CLAP embeddings")
-    ]
+
+    # Кодируем каждый файл отдельно (GPU — один поток), с защитой от ошибок
+    clap_map: dict[tuple, np.ndarray] = {}
+    total = len(path_to_key)
+    for idx, (fp, key) in enumerate(path_to_key.items(), 1):
+        try:
+            vec = extract_clap_features(fp, model_clap, 300)
+            if vec is not None:
+                clap_map[key] = vec
+        except Exception as e:
+            log.warning("[CLAP] Failed to encode %s (%s — %s): %s", fp, *key, e)
+
+        if idx % 50 == 0 or idx == total:
+            log.info("[CLAP] Encoded %d / %d", idx, total)
+
     del model_clap
     gc.collect()
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    return {
-        (m.get("artist", "").lower(), m.get("title", "").lower()): v
-        for m, v in zip(metadatas, clap_vecs)
-        if m.get("artist") and m.get("title") and v is not None
-    }
+    log.info("[CLAP] Mapped %d / %d tracks", len(clap_map), total)
+    return clap_map
 # QDRANT FUNCTIONS
 
 def build_text_for_embedding(track: dict) -> str:

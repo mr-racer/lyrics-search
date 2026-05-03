@@ -192,6 +192,7 @@ class SearchService:
                 genre=payload.get("genre"),
                 duration_sec=duration_sec,
                 file_path=payload.get("file_path", ""),
+                cover_art_path=payload.get("cover_art_path"),
                 lyrics=None,  # not sent to frontend — use snippet for LLM
             )
             hits.append(TrackHit(
@@ -226,6 +227,7 @@ class SearchService:
                 "duration": int(track.duration_sec) if track.duration_sec else 0,
                 "lyrics": track.lyrics or "",
                 "file_path": track.file_path,
+                "cover_art_path": track.cover_art_path,
             }
 
         self.lyrics_db.fit(data, path=None, collection_name=collection_name)
@@ -263,6 +265,7 @@ class SearchService:
                 "duration": int(track.duration_sec) if track.duration_sec else 0,
                 "lyrics": track.lyrics or "",
                 "file_path": track.file_path,
+                "cover_art_path": track.cover_art_path,
             }
 
         # Report progress: lyrics encoding started

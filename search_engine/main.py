@@ -221,6 +221,7 @@ class LyricsDB:
         clap_map: dict = {},
         batch_size: int = 32,
     ):
+        matched = 0
         for i in tqdm(range(0, len(data), batch_size)):
             batch = data[i : i + batch_size]
             vecs  = text_vecs[i : i + batch_size]
@@ -232,10 +233,12 @@ class LyricsDB:
                     self.vector_name: vec,
                 }
                 if clap_map:
-                    key = (song_info.get("artist", "").lower(), song_info.get("title", "").lower())
+                    key = (song_info.get("artist", "").strip().lower(),
+                           song_info.get("title", "").strip().lower())
                     clap_vec = clap_map.get(key)
                     if clap_vec is not None:
                         vector["clap"] = clap_vec
+                        matched += 1
 
                 points.append(models.PointStruct(
                     id=uuid.uuid4().hex,
@@ -249,11 +252,15 @@ class LyricsDB:
                         "year_range": song_info.get("year_range"),
                         "genre":      song_info.get("genre"),
                         "duration":   song_info.get("duration"),
-                        "file_path":  song_info.get("file_path")
+                        "file_path":  song_info.get("file_path"),
+                        "cover_art_path": song_info.get("cover_art_path"),
                     },
                 ))
 
             self.qdrant_client.upsert(collection_name=self.collection_name, points=points)
+
+        if clap_map:
+            logger.info("[LyricsDB] CLAP vectors attached to %d / %d points", matched, len(data))
 
     def fit(self, data: list[dict], path: str | None = None, collection_name: str | None = None):
         _saved = self.collection_name
@@ -268,11 +275,17 @@ class LyricsDB:
         prepared_data = prepare_metadata(data)
         filtered = [s for s in prepared_data if len(s["lyrics"].split()) < 1300]
 
-        paths = []
+        # CLAP paths: из path-аргумента ИЛИ из file_path в метаданных
         if path:
             paths = [
                 p for p in Path(path).rglob("*")
                 if p.suffix.lower() in (".flac", ".m4a", ".mp3")
+            ]
+        else:
+            paths = [
+                s.get("file_path")
+                for s in filtered
+                if s.get("file_path") and Path(s["file_path"]).suffix.lower() in (".flac", ".m4a", ".mp3")
             ]
 
         self._create_collection(clap_paths=paths)
@@ -287,15 +300,14 @@ class LyricsDB:
 
         # Vacate GPU before loading CLAP
         self.model.to("cpu")
+        gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-        # Pass 2: CLAP audio embeddings (GPU now free)
-        clap_map = _encode_clap(paths, self.model_clap if self.model_clap else None) if paths is not None else {}
+        # Pass 2: CLAP audio embeddings (GPU now free) — передаём готовые метаданные
+        clap_map = _encode_clap(filtered, self.model_clap if self.model_clap else None) if paths else {}
 
-        # Restore text model to GPU for search
-        self.model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
-
+        # Upsert (сетевой запрос — модель на CPU не мешает)
         self._upsert_in_batches(filtered, text_vecs, clap_map or None)
         print("Тексты песен были успешно проиндексированы в DB")
 

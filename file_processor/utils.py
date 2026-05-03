@@ -128,16 +128,26 @@ def extract_cover_art(filepath: str) -> tuple[bytes, str] | None:
 
 
 def save_cover_art(filepath: str, track_id: str) -> str | None:
-    """Extract cover art and save to disk. Returns relative path or None."""
+    """Extract cover art and save to disk (content-addressed, deduplicated by SHA256).
+
+    Returns relative URL path like '/covers/a3f2c1...jpg' or None.
+    If an identical cover already exists on disk, returns the existing path — no duplicate write.
+    """
     result = extract_cover_art(filepath)
     if result is None:
         return None
 
     image_data, ext = result
     COVERS_DIR.mkdir(parents=True, exist_ok=True)
-    dest = COVERS_DIR / f"{track_id}.{ext}"
-    dest.write_bytes(image_data)
-    return f"/covers/{track_id}.{ext}"
+
+    # Content-addressed filename: first 16 hex chars of SHA256
+    content_hash = hashlib.sha256(image_data).hexdigest()[:16]
+    dest = COVERS_DIR / f"{content_hash}.{ext}"
+
+    if not dest.exists():
+        dest.write_bytes(image_data)
+
+    return f"/covers/{content_hash}.{ext}"
 
 
 def get_flac_metadata(filepath: str) -> dict:
