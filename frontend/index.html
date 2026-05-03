@@ -1108,7 +1108,7 @@ function LibrarySection({ isDark, lang, activeCollection, collections, onCollect
               : [];
 
             return (
-              <div key={key} style={{ padding:'20px 22px', borderRadius:'14px', background:c.surface, border:`1px solid ${c.border}`, minHeight:'180px', display:'flex', flexDirection:'column', gap:'12px',
+              <div key={key} style={{ padding:'20px 22px', borderRadius:'14px', background:c.surface, border:`1px solid ${c.border}`, minHeight:'700px', display:'flex', flexDirection:'column', gap:'12px',
                 boxShadow: isDark?'inset 0 1px 0 rgba(255,255,255,0.06), inset 0 -1px 0 rgba(0,0,0,0.3), 0 2px 8px rgba(0,0,0,0.35)':'inset 0 1px 0 rgba(255,255,255,0.9), inset 0 -1px 0 rgba(0,0,0,0.04), 0 2px 6px rgba(0,0,0,0.07)' }}>
                 <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
                   <div style={{ width:'30px', height:'30px', borderRadius:'8px', flexShrink:0, background:`oklch(60% 0.18 ${hue} / 0.13)`,
@@ -1120,19 +1120,39 @@ function LibrarySection({ isDark, lang, activeCollection, collections, onCollect
                 </div>
                 <div style={{ flex:1, display:'flex', flexDirection:'column', gap:'8px' }}>
                   {isLoading ? (
-                    // Skeleton loading state
+                    // Skeleton loading state — matches new vertical card layout
                     [1,2,3,4,5].map(n => (
-                      <div key={n} style={{ height:'48px', borderRadius:'8px', background:isDark?'rgba(255,255,255,0.03)':'rgba(0,0,0,0.03)', display:'flex', alignItems:'center', padding:'0 10px', gap:'8px',
-                        boxShadow: isDark?'inset 0 1px 2px rgba(0,0,0,0.4)':'inset 0 1px 1px rgba(0,0,0,0.05)' }}>
-                        <div style={{ width:'32px', height:'32px', borderRadius:'6px', flexShrink:0, background:isDark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.05)' }} />
-                        <div style={{ flex:1, display:'flex', flexDirection:'column', gap:'4px' }}>
-                          <div style={{ height:'7px', borderRadius:'4px', width:'60%', background:isDark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.06)' }} />
-                          <div style={{ height:'5px', borderRadius:'4px', width:'40%', background:isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.04)' }} />
+                      <div key={n} style={{
+                        height:'130px', borderRadius:'12px', overflow:'hidden',
+                        background: isDark?'rgba(255,255,255,0.025)':'rgba(0,0,0,0.02)',
+                        border:`1px solid ${c.border}`,
+                        boxShadow: isDark?'inset 0 1px 2px rgba(0,0,0,0.35)':'inset 0 1px 1px rgba(0,0,0,0.04)',
+                        display:'flex', flexDirection:'column',
+                      }}>
+                        {/* Top track skeleton */}
+                        <div style={{ display:'flex', alignItems:'center', gap:'10px', padding:'10px 12px 6px' }}>
+                          <div style={{ width:'40px', height:'40px', borderRadius:'8px', flexShrink:0, background:isDark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.05)' }} />
+                          <div style={{ flex:1, display:'flex', flexDirection:'column', gap:'4px' }}>
+                            <div style={{ height:'8px', borderRadius:'4px', width:'60%', background:isDark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.06)' }} />
+                            <div style={{ height:'6px', borderRadius:'4px', width:'40%', background:isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.04)' }} />
+                          </div>
+                        </div>
+                        {/* Score bar skeleton */}
+                        <div style={{ margin:'4px 12px 0', padding:'8px 0', borderTop:`1px solid ${c.border}`, borderBottom:`1px solid ${c.border}`, display:'flex', justifyContent:'center' }}>
+                          <div style={{ height:'14px', borderRadius:'4px', width:'80px', background:isDark?'rgba(255,255,255,0.05)':'rgba(0,0,0,0.05)' }} />
+                        </div>
+                        {/* Bottom track skeleton */}
+                        <div style={{ display:'flex', alignItems:'center', gap:'10px', padding:'6px 12px 10px' }}>
+                          <div style={{ width:'40px', height:'40px', borderRadius:'8px', flexShrink:0, background:isDark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.05)' }} />
+                          <div style={{ flex:1, display:'flex', flexDirection:'column', gap:'4px' }}>
+                            <div style={{ height:'8px', borderRadius:'4px', width:'55%', background:isDark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.06)' }} />
+                            <div style={{ height:'6px', borderRadius:'4px', width:'35%', background:isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.04)' }} />
+                          </div>
                         </div>
                       </div>
                     ))
                   ) : (
-                    // Real data with covers
+                    // Real data — vertical card per pair
                     top5.map((pair, idx) => {
                       const mainName = pair.main.song;
                       const bestName = pair.best?.name || '';
@@ -1140,46 +1160,74 @@ function LibrarySection({ isDark, lang, activeCollection, collections, onCollect
                       const [mainArtist, mainTitle] = mainName.split(' - ').length === 2 ? mainName.split(' - ') : ['Unknown', mainName];
                       const [bestArtist, bestTitle] = bestName.split(' - ').length === 2 ? bestName.split(' - ') : ['Unknown', bestName];
 
+                      // Score gradient: 0% → red, 100% → green
+                      const scorePct = Math.max(0, Math.min(100, bestScore));
+                      const scoreHue = (scorePct / 100) * 130; // 0→red(0), 100→green(130)
+
                       return (
                         <div key={idx} style={{
-                          display:'flex', alignItems:'center', gap:'8px', padding:'6px 8px', borderRadius:'8px',
-                          background: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)',
+                          borderRadius:'12px', overflow:'hidden',
+                          background: isDark ? 'rgba(255,255,255,0.025)' : 'rgba(0,0,0,0.02)',
                           border: `1px solid ${c.border}`,
-                          boxShadow: isDark ? 'inset 0 1px 2px rgba(0,0,0,0.3)' : 'inset 0 1px 1px rgba(0,0,0,0.04)',
+                          boxShadow: isDark ? 'inset 0 1px 2px rgba(0,0,0,0.35), 0 2px 6px rgba(0,0,0,0.25)' : 'inset 0 1px 1px rgba(0,0,0,0.04), 0 2px 6px rgba(0,0,0,0.06)',
+                          display:'flex', flexDirection:'column', gap:'0',
                         }}>
-                          {/* Main track cover */}
-                          <AlbumCover
-                            title={mainTitle}
-                            artist={mainArtist}
-                            size={32}
-                            isDark={isDark}
-                            coverPath={pair.main.cover_art_path}
-                          />
-                          {/* Best match cover */}
-                          <AlbumCover
-                            title={bestTitle}
-                            artist={bestArtist}
-                            size={32}
-                            isDark={isDark}
-                            coverPath={pair.best?.cover_art_path}
-                          />
-                          {/* Track info */}
-                          <div style={{ flex:1, display:'flex', flexDirection:'column', gap:'2px', minWidth: 0 }}>
-                            <div style={{ fontSize:'11px', color:c.text, fontWeight:'500', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-                              {mainTitle}
-                            </div>
-                            <div style={{ fontSize:'9px', color:c.textMuted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-                              {mainArtist}
+                          {/* ── Top track ── */}
+                          <div style={{ display:'flex', alignItems:'center', gap:'10px', padding:'10px 12px 6px' }}>
+                            <AlbumCover
+                              title={mainTitle}
+                              artist={mainArtist}
+                              size={40}
+                              isDark={isDark}
+                              coverPath={pair.main.cover_art_path}
+                            />
+                            <div style={{ flex:1, minWidth:0, display:'flex', flexDirection:'column', gap:'2px' }}>
+                              <div style={{ fontSize:'13px', fontWeight:'600', color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                                {mainTitle}
+                              </div>
+                              <div style={{ fontSize:'11px', color:c.textMuted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                                {mainArtist}
+                              </div>
                             </div>
                           </div>
-                          {/* Score badge */}
+
+                          {/* ── Score bar ── */}
                           <div style={{
-                            fontSize:'10px', fontFamily:'DM Mono, monospace', fontWeight:'700',
-                            color: `oklch(60% 0.18 ${hue})`,
-                            background: `oklch(60% 0.18 ${hue} / 0.12)`,
-                            padding:'3px 6px', borderRadius:'5px', flexShrink:0,
+                            margin:'4px 12px 0', padding:'8px 0',
+                            borderTop: `1px solid ${c.border}`,
+                            borderBottom: `1px solid ${c.border}`,
+                            display:'flex', alignItems:'center', justifyContent:'center', gap:'8px',
                           }}>
-                            {bestScore}%
+                            <span style={{ fontSize:'11px', color:c.textMuted, fontFamily:'DM Mono, monospace' }}>
+                              {lang==='ru'?'похожесть':'similarity'}
+                            </span>
+                            <span style={{
+                              fontSize:'18px', fontWeight:'700', fontFamily:'DM Mono, monospace',
+                              background: `linear-gradient(90deg, oklch(65% 0.22 ${scoreHue}), oklch(70% 0.25 ${scoreHue}) )`,
+                              WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
+                              backgroundClip: 'text',
+                            }}>
+                              {bestScore.toFixed(1)}%
+                            </span>
+                          </div>
+
+                          {/* ── Bottom track ── */}
+                          <div style={{ display:'flex', alignItems:'center', gap:'10px', padding:'6px 12px 10px' }}>
+                            <AlbumCover
+                              title={bestTitle}
+                              artist={bestArtist}
+                              size={40}
+                              isDark={isDark}
+                              coverPath={pair.best?.cover_art_path}
+                            />
+                            <div style={{ flex:1, minWidth:0, display:'flex', flexDirection:'column', gap:'2px' }}>
+                              <div style={{ fontSize:'13px', fontWeight:'600', color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                                {bestTitle}
+                              </div>
+                              <div style={{ fontSize:'11px', color:c.textMuted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                                {bestArtist}
+                              </div>
+                            </div>
                           </div>
                         </div>
                       );
@@ -1724,7 +1772,7 @@ function ConfirmDeleteModal({ isDark, lang, collectionName, onConfirm, onCancel 
           }}>
             {lang==='ru' ? 'Отмена' : 'Cancel'}
           </button>
-          <button onClick={onConfirm} style={{
+          <button onClick={() => onConfirm(collectionName)} style={{
             padding:'10px 18px', borderRadius:'10px', border:'none',
             background:'linear-gradient(180deg, #ef4444, #dc2626)',
             color:'white', fontSize:'13px', fontWeight:'700', cursor:'pointer',
@@ -1802,10 +1850,11 @@ function App() {
           localStorage.removeItem('active_collection');
         }
       }
+      setDeleteConfirm(null);
     } catch (err) {
       console.error('Failed to delete collection:', err);
+      alert(lang==='ru' ? `Ошибка удаления: ${err.message}` : `Delete failed: ${err.message}`);
     }
-    setDeleteConfirm(null);
   };
 
   const handleThemeToggle = () => {
