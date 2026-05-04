@@ -225,10 +225,11 @@ function Spinner({ size = 16, color }) {
 }
 
 // ─── AlbumCover ───────────────────────────────────────────────────────────────
-function AlbumCover({ title='', artist='', size=44, isDark, coverPath }) {
+function AlbumCover({ title='', artist='', size=44, isDark, coverPath, radius }) {
   const hue = ((title.charCodeAt(0)||65)*37 + (artist.charCodeAt(0)||65)*17) % 360;
+  const br = radius ?? (size > 100 ? 16 : size > 60 ? 10 : 8);
   const boxStyle = {
-    width: size, height: size, borderRadius: '8px', flexShrink: 0, overflow: 'hidden',
+    width: size, height: size, borderRadius: `${br}px`, flexShrink: 0, overflow: 'hidden',
     boxShadow: isDark
       ? 'inset 0 1px 0 rgba(255,255,255,0.12), inset 0 -1px 0 rgba(0,0,0,0.4), 0 2px 6px rgba(0,0,0,0.45)'
       : 'inset 0 1px 0 rgba(255,255,255,0.8), inset 0 -1px 0 rgba(0,0,0,0.08), 0 2px 5px rgba(0,0,0,0.1)',
@@ -311,7 +312,7 @@ function ResultCard({ hit, isDark, c, compact=false, onClick }) {
       <div style={{ flex:1, minWidth:0 }}>
         <div style={{ fontSize:'13px', fontWeight:'600', color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title||'Unknown'}</div>
         <div style={{ fontSize:'12px', color:c.textMuted, marginTop:'1px' }}>{track.artist||'Unknown'}{track.year?` · ${track.year}`:''}</div>
-        {hit.snippet && <div style={{ fontSize:'11px', color:c.textSubtle, marginTop:'3px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>"{hit.snippet}"</div>}
+        {hit.lyrics && <div style={{ fontSize:'11px', color:c.textSubtle, marginTop:'3px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>"{hit.lyrics.slice(0,120)}"</div>}
       </div>
       <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:'4px', flexShrink:0 }}>
         <div style={{ padding:'2px 7px', borderRadius:'20px', fontSize:'11px', fontFamily:'DM Mono, monospace', fontWeight:'500',
@@ -818,22 +819,51 @@ function ChatSection({ isDark, lang, activeCollection }) {
         {/* Results / detail */}
         {selectedHit ? (
           <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
-            <div style={{ padding:'9px 14px', borderBottom:`1px solid ${c.border}` }}>
+            <div style={{ padding:'9px 14px', borderBottom:`1px solid ${c.border}`, flexShrink:0 }}>
               <button onClick={()=>setSelectedHit(null)} style={{ background:'none', border:'none', color:c.textMuted, cursor:'pointer', fontSize:'12px', display:'flex', alignItems:'center', gap:'4px' }}>← {lang==='ru'?'назад':'back'}</button>
             </div>
-            <div style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:'36px', gap:'18px' }}>
-              <AlbumCover title={selectedHit.track?.title||''} artist={selectedHit.track?.artist||''} size={110} isDark={isDark} coverPath={selectedHit.track?.cover_art_path} />
-              <div style={{ textAlign:'center' }}>
+            <div style={{ flex:1, overflowY:'auto', padding:'28px 20px 48px', scrollbarWidth:'thin', scrollbarColor:`${c.scrollbar} transparent` }}>
+
+              {/* Album cover — 2× bigger */}
+              <div style={{ display:'flex', justifyContent:'center', marginBottom:'20px' }}>
+                <AlbumCover title={selectedHit.track?.title||''} artist={selectedHit.track?.artist||''} size={220} isDark={isDark} coverPath={selectedHit.track?.cover_art_path} />
+              </div>
+
+              {/* Title / artist / meta */}
+              <div style={{ textAlign:'center', marginBottom:'14px' }}>
                 <div style={{ fontSize:'21px', fontWeight:'700', color:c.text, letterSpacing:'-0.5px' }}>{selectedHit.track?.title}</div>
                 <div style={{ fontSize:'14px', color:c.textMuted, marginTop:'4px' }}>{selectedHit.track?.artist}</div>
                 <div style={{ fontSize:'12px', color:c.textSubtle, marginTop:'2px' }}>{[selectedHit.track?.album,selectedHit.track?.year].filter(Boolean).join(' · ')}</div>
               </div>
-              <div style={{ display:'flex', gap:'8px', flexWrap:'wrap', justifyContent:'center' }}>
+
+              {/* Tags */}
+              <div style={{ display:'flex', gap:'8px', flexWrap:'wrap', justifyContent:'center', marginBottom:'16px' }}>
                 {[selectedHit.track?.genre, `${Math.round((selectedHit.score||0)*100)}% match`, selectedHit.matched_on].filter(Boolean).map((tag,i)=>(
                   <span key={i} style={{ padding:'4px 12px', borderRadius:'20px', fontSize:'12px', fontFamily:'DM Mono, monospace', background:c.accentBg, color:c.accent, border:`1px solid oklch(60% 0.18 270 / 0.2)` }}>{tag}</span>
                 ))}
               </div>
-              {selectedHit.snippet && <div style={{ maxWidth:'440px', padding:'11px 15px', borderRadius:'10px', background:c.surface2, border:`1px solid ${c.border}`, fontSize:'13px', color:c.textMuted, lineHeight:'1.7', fontStyle:'italic', textAlign:'center', boxShadow: isDark?'inset 0 2px 4px rgba(0,0,0,0.3)':'inset 0 1px 3px rgba(0,0,0,0.05)' }}>"{selectedHit.snippet}"</div>}
+
+              {/* Snippet */}
+              {selectedHit.lyrics && (
+                <div style={{ marginBottom:'20px', padding:'11px 15px', borderRadius:'10px', background:c.surface2, border:`1px solid ${c.border}`, fontSize:'13px', color:c.textMuted, lineHeight:'1.7', fontStyle:'italic', textAlign:'center', boxShadow: isDark?'inset 0 2px 4px rgba(0,0,0,0.3)':'inset 0 1px 3px rgba(0,0,0,0.05)' }}>"{selectedHit.lyrics.slice(0,200)}"</div>
+              )}
+
+              {/* Lyrics */}
+              {selectedHit.track?.lyrics && (
+                <div style={{ borderRadius:'12px', border:`1px solid ${c.border}`,
+                  background: isDark?'rgba(255,255,255,0.025)':'rgba(0,0,0,0.02)',
+                  boxShadow: isDark?'inset 0 2px 6px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.04)':'inset 0 1px 4px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.9)' }}>
+                  <div style={{ padding:'12px 16px 10px', borderBottom:`1px solid ${c.border}`,
+                    fontSize:'10px', fontFamily:'DM Mono, monospace', color:c.textMuted, fontWeight:'600',
+                    textTransform:'uppercase', letterSpacing:'0.8px' }}>
+                    {lang==='ru'?'Текст песни':'Lyrics'}
+                  </div>
+                  <div style={{ padding:'16px', fontSize:'13px', color:c.textMuted, lineHeight:'1.9',
+                    whiteSpace:'pre-wrap', fontFamily:'Inter, sans-serif', wordBreak:'break-word' }}>
+                    {selectedHit.track.lyrics}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         ) : (

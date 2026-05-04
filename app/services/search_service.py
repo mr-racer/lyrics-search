@@ -193,7 +193,7 @@ class SearchService:
                 duration_sec=duration_sec,
                 file_path=payload.get("file_path", ""),
                 cover_art_path=payload.get("cover_art_path"),
-                lyrics=None,  # not sent to frontend — use snippet for LLM
+                lyrics=raw_lyrics or None,
             )
             hits.append(TrackHit(
                 track=track,
