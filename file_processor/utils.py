@@ -356,24 +356,54 @@ def fetch_lyrics_bulk(music_folder: str, workers: int = 8, better_lyrics_quality
 
     results = {}
     processed_count = 0
+    found_count = 0
+    not_found_count = 0
+
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {executor.submit(process_file, f, better_lyrics_quality): f for f in audio_files}
+        start_time = time.time()
+
         for future in tqdm(as_completed(futures), total=len(audio_files)):
             meta = future.result()
             processed_count += 1
 
             if meta:
+                found_count += 1
                 key = f"{meta['artist']} — {meta['title']}"
                 results.setdefault(key, meta)
+            else:
+                not_found_count += 1
 
-            # Report progress after each file
             if progress_callback:
                 fp = futures[future]
+
+                elapsed = time.time() - start_time
+                rate_per_min = None
+                eta_seconds = None
+                if elapsed > 1 and processed_count > 1:
+                    rate_per_sec = processed_count / elapsed
+                    rate_per_min = round(rate_per_sec * 60, 1)
+                    remaining = len(audio_files) - processed_count
+                    eta_seconds = max(0, int(remaining / rate_per_sec)) if rate_per_sec > 0 else None
+
                 if meta:
-                    status = f"[{processed_count}/{len(audio_files)}] ✓ {meta['artist']} — {meta['title']}"
+                    last_track = f"{meta['artist']} — {meta['title']}"
+                    status = f"[{processed_count}/{len(audio_files)}] ✓ {last_track}"
+                    last_success = True
                 else:
-                    status = f"[{processed_count}/{len(audio_files)}] обработка {fp.name}"
-                progress_callback(processed_count, len(audio_files), status)
+                    last_track = fp.stem
+                    status = f"[{processed_count}/{len(audio_files)}] ✗ {fp.name}"
+                    last_success = False
+
+                details = {
+                    "found":        found_count,
+                    "not_found":    not_found_count,
+                    "rate_per_min": rate_per_min,
+                    "eta_seconds":  eta_seconds,
+                    "last_track":   last_track,
+                    "last_success": last_success,
+                }
+                progress_callback(processed_count, len(audio_files), status, details)
 
     print(f"\nГотово: {len(results)}/{len(audio_files)} текстов найдено")
     return results

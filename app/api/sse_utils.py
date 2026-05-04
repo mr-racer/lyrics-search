@@ -30,24 +30,18 @@ async def event_stream(job_id: str, job_tracker) -> AsyncGenerator[str, None]:
         # Wait for updates until job completes
         while True:
             try:
-                # Wait for update with timeout
-                update = await asyncio.wait_for(queue.get(), timeout=30.0)
-                
-                # Send update
-                summary = {
-                    **job_tracker.get_progress_summary(job),
-                    **update
-                }
-                yield f"data: {json.dumps(summary)}\n\n"
-                
-                # Stop if job is completed or failed
-                if job.overall_status.value in ("completed", "failed"):
+                # Each payload already contains a stage snapshot taken at enqueue
+                # time — do NOT call get_progress_summary() here or we'll override
+                # past states with the live (already-advanced) state.
+                payload = await asyncio.wait_for(queue.get(), timeout=30.0)
+                yield f"data: {json.dumps(payload)}\n\n"
+
+                if payload.get("overall_status") in ("completed", "failed"):
                     break
-                    
+
             except asyncio.TimeoutError:
-                # Send heartbeat to keep connection alive
+                # Heartbeat + current live state (nothing in queue, safe to use live)
                 yield f": heartbeat\n\n"
-                # Also send current status periodically
                 yield f"data: {json.dumps(job_tracker.get_progress_summary(job))}\n\n"
                 
     finally:

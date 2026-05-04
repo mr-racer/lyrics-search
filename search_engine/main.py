@@ -317,7 +317,7 @@ class LyricsDB:
         query: str,
         limit: int = 1,
         include_clap: bool = False,
-        min_dense_score: float = 0.3,
+        min_dense_score: float = 0.4,
         min_clap_score: float = 0.01,
         artist: str | None = None,
         album: str | None = None,

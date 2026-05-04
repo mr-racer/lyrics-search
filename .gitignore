@@ -13,6 +13,9 @@ qdrant_storage
 .qwen/
 QWEN.md
 
+# Claude
+CLAUDE.MD
+
 # model weights
 /weights
 

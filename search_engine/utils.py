@@ -163,27 +163,6 @@ def extract_clap_features(path: str, model, duration: int = 300, device=DEVICE) 
     return unit_norm(clap_vec)
 
 
-# def process_batch(paths: list[str], device=DEVICE) -> list[TrackFeatures]:
-#     with ProcessPoolExecutor(max_workers=3) as ex:
-#         metadatas = list(tqdm(ex.map(get_metadata, paths), total=len(paths), desc="Metadata"))
-
-#     # CLAP последовательно (GPU — один поток)
-#     model = load_model_clap(device=device)
-#     claps = [
-#         extract_clap_features(p, model, 300, device=device)
-#         for p in tqdm(paths, desc="CLAP embeddings")
-#     ]
-    
-#     return [
-#             TrackFeatures(
-#                 title=meta.get('title'),
-#                 artist=meta.get('artist'),
-#                 vector_clap=c,
-#             )
-#             for c, meta in zip(claps, metadatas)
-#             ]
-
-
 def _encode_clap(tracks: list[dict], model_clap=None) -> dict[tuple, np.ndarray]:
     """Encode audio files with CLAP.
 

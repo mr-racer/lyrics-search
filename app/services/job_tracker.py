@@ -70,11 +70,29 @@ class IndexJob:
             pass
     
     async def notify_subscribers(self, data: dict):
-        """Send progress update to all subscribers."""
+        """Send progress update to all subscribers.
+
+        We snapshot the current stage states HERE (at enqueue time) so that
+        the SSE consumer sees the historical state for each event, not whatever
+        the live state happens to be when it finally drains the queue.
+        """
         self.updated_at = time.time()
-        for queue in self._subscribers[:]:  # Copy to avoid modification during iteration
+        snapshot = {
+            "overall_status": self.overall_status.value,
+            "stages": {
+                stage.value: {
+                    "status": sp.status.value,
+                    "current": sp.current,
+                    "total": sp.total,
+                    "message": sp.message,
+                }
+                for stage, sp in self.stages.items()
+            },
+        }
+        payload = {**snapshot, **data}
+        for queue in self._subscribers[:]:
             try:
-                await asyncio.wait_for(queue.put(data), timeout=0.1)
+                await asyncio.wait_for(queue.put(payload), timeout=0.1)
             except (asyncio.TimeoutError, asyncio.QueueFull):
                 pass
     

@@ -73,17 +73,27 @@ async def get_stats(
         }
     """
     db_client = request.app.state.db_client
+    empty_payload = {
+        "total_tracks": 0,
+        "collection_name": None,
+        "genres": [],
+        "duration_buckets": [],
+        "top_artists": [],
+        "year_range": None,
+        "decades": [],
+    }
+
     if db_client is None:
-        return {"total_tracks": 0, "collection_name": None, "genres": [], "duration_buckets": [], "qdrant_available": False}
+        return {**empty_payload, "qdrant_available": False}
 
     try:
         qdrant = db_client.qdrant
         cols = qdrant.get_collections().collections
     except Exception:
-        return {"total_tracks": 0, "collection_name": None, "genres": [], "duration_buckets": [], "qdrant_available": False}
+        return {**empty_payload, "qdrant_available": False}
 
     if not cols:
-        return {"total_tracks": 0, "collection_name": None, "genres": [], "duration_buckets": [], "qdrant_available": True}
+        return {**empty_payload, "qdrant_available": True}
 
     # Use the requested collection; fall back to the default collection name
     # (same default as DbClient / LyricsDB) so that stats and search always
@@ -116,22 +126,22 @@ async def get_stats(
                 pass
 
     if not target_col:
-        return {"total_tracks": 0, "collection_name": collection_name, "genres": [], "duration_buckets": [], "qdrant_available": True}
+        return {**empty_payload, "collection_name": collection_name, "qdrant_available": True}
 
-    # Sample up to 1 000 points; collect genre + duration buckets from payload
+    # Scroll through ALL points (payload only, no vectors — fast even on large collections)
     genre_counter: Counter = Counter()
     duration_counter: Counter = Counter()
+    artist_counter: Counter = Counter()
+    year_counter: Counter = Counter()
     offset = None
-    sampled = 0
-    SAMPLE_LIMIT = 1000
 
     try:
-        while sampled < SAMPLE_LIMIT:
+        while True:
             results, next_offset = qdrant.scroll(
                 collection_name=target_col,
                 offset=offset,
-                limit=min(100, SAMPLE_LIMIT - sampled),
-                with_payload=["genre", "duration"],
+                limit=250,
+                with_payload=["genre", "duration", "artist", "year"],
                 with_vectors=False,
             )
             for point in results:
@@ -142,7 +152,16 @@ async def get_stats(
                 dur = pl.get("duration")
                 if dur and str(dur).strip():
                     duration_counter[str(dur).strip()] += 1
-            sampled += len(results)
+                artist = pl.get("artist")
+                if artist and str(artist).strip():
+                    artist_counter[str(artist).strip()] += 1
+                year = pl.get("year")
+                try:
+                    yi = int(year) if year is not None else None
+                except (TypeError, ValueError):
+                    yi = None
+                if yi and 1900 <= yi <= 2100:
+                    year_counter[yi] += 1
             if next_offset is None or not results:
                 break
             offset = next_offset
@@ -161,11 +180,34 @@ async def get_stats(
         for r, c in duration_counter.most_common(6)
     ]
 
+    total_artists = sum(artist_counter.values()) or 1
+    top_artists = [
+        {"artist": a, "count": c, "pct": round(c / total_artists * 100)}
+        for a, c in artist_counter.most_common(5)
+    ]
+
+    year_range = None
+    decades: list[dict] = []
+    if year_counter:
+        years_seen = list(year_counter.elements())
+        year_range = {"min": min(years_seen), "max": max(years_seen)}
+        decade_counter: Counter = Counter()
+        for y, c in year_counter.items():
+            decade_counter[(y // 10) * 10] += c
+        total_years = sum(decade_counter.values()) or 1
+        decades = [
+            {"decade": d, "count": c, "pct": round(c / total_years * 100)}
+            for d, c in sorted(decade_counter.items())
+        ]
+
     return {
         "total_tracks": target_count,
         "collection_name": target_col,
         "genres": top_genres,
         "duration_buckets": top_durations,
+        "top_artists": top_artists,
+        "year_range": year_range,
+        "decades": decades,
         "qdrant_available": True,
     }
 

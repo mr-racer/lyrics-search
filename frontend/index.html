@@ -32,6 +32,7 @@
     @keyframes progressFill { from { width:0; } to { width: var(--target-w); } }
     @keyframes checkPop { 0%{transform:scale(0)} 70%{transform:scale(1.2)} 100%{transform:scale(1)} }
     @keyframes stepSlideIn { from{opacity:0;transform:translateX(-8px)} to{opacity:1;transform:translateX(0)} }
+    @keyframes slideUp     { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
 
     .section-enter { animation: fadeIn 0.22s ease forwards; }
     .theme-transition * { transition: background-color 0.3s ease, border-color 0.3s ease, color 0.25s ease, box-shadow 0.3s ease !important; }
@@ -926,16 +927,16 @@ function LibrarySection({ isDark, lang, activeCollection, collections, onCollect
   );
 
   const cardLabel = (text) => (
-    <div style={{ fontSize:'10px', fontFamily:'DM Mono, monospace', color:c.textSubtle, textTransform:'uppercase', letterSpacing:'0.7px', marginBottom:'14px' }}>{text}</div>
+    <div style={{ fontSize:'12px', fontFamily:'DM Mono, monospace', color:c.textMuted, fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.6px', marginBottom:'14px' }}>{text}</div>
   );
 
   // Horizontal bar for genres/artists
   const StatBar = ({ items, hues, showPct=true }) => {
-    const maxPct = items[0]?.pct || 1;
+    const maxCount = items[0]?.count || 1;
     return (
       <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
         {items.slice(0,5).map((item, i) => {
-          const barW = `${Math.round((item.pct||0) / maxPct * 100)}%`;
+          const barW = `${Math.round((item.count||0) / maxCount * 100)}%`;
           const hue = hues ? (hues[i] ?? 200) : (270 + i * 30) % 360;
           const label = item.genre || item.artist || item.label || '—';
           return (
@@ -960,15 +961,30 @@ function LibrarySection({ isDark, lang, activeCollection, collections, onCollect
     );
   };
 
-  // Year range display
+  // Year range / epochs display
   const YearRangeCard = () => {
     const yr = stats?.year_range;
-    if (!yr) return <div style={{ fontSize:'13px', color:c.textSubtle }}>{lang==='ru'?'Нет данных':'No data'}</div>;
-    const minY = yr.min || yr[0] || '—';
-    const maxY = yr.max || yr[1] || '—';
+    const decades = stats?.decades || [];
+    if (!yr && decades.length === 0) return <div style={{ fontSize:'13px', color:c.textSubtle }}>{lang==='ru'?'Нет данных':'No data'}</div>;
+    const minY = yr?.min ?? yr?.[0] ?? '—';
+    const maxY = yr?.max ?? yr?.[1] ?? '—';
     const span = (typeof minY === 'number' && typeof maxY === 'number') ? maxY - minY : null;
+
+    // Dominant decade
+    const peak = decades.reduce((p, d) => (d.count > (p?.count || 0) ? d : p), null);
+    const maxCount = decades.reduce((m, d) => Math.max(m, d.count || 0), 0) || 1;
+
+    // Hue ramp across decades: warm (old) → cool (new)
+    const decadeHue = (d) => {
+      if (decades.length <= 1) return 270;
+      const i = decades.findIndex(x => x.decade === d.decade);
+      const t = i / (decades.length - 1);
+      return Math.round(40 + t * 240); // 40° (amber) → 280° (violet)
+    };
+
     return (
-      <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
+      <div style={{ display:'flex', flexDirection:'column', gap:'12px' }}>
+        {/* Min / Max flip-style cards */}
         <div style={{ display:'flex', gap:'12px' }}>
           {[{label:lang==='ru'?'Самая старая':'Earliest', val:minY, hue:60},
             {label:lang==='ru'?'Самая новая':'Latest', val:maxY, hue:270}].map(item => (
@@ -976,17 +992,66 @@ function LibrarySection({ isDark, lang, activeCollection, collections, onCollect
               background: isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.03)',
               border:`1px solid ${c.border}`,
               boxShadow: isDark?'inset 0 2px 3px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.04)':'inset 0 1px 2px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.9)' }}>
-              <div style={{ fontSize:'10px', fontFamily:'DM Mono, monospace', color:c.textSubtle, textTransform:'uppercase', letterSpacing:'0.5px', marginBottom:'6px' }}>{item.label}</div>
+              <div style={{ fontSize:'12px', fontFamily:'DM Mono, monospace', color:c.textMuted, fontWeight:'500', textTransform:'uppercase', letterSpacing:'0.4px', marginBottom:'6px' }}>{item.label}</div>
               <div style={{ fontSize:'28px', fontWeight:'700', color:`oklch(60% 0.18 ${item.hue})`, fontFamily:'DM Mono, monospace', letterSpacing:'-1px' }}>{item.val}</div>
             </div>
           ))}
         </div>
-        {span != null && (
-          <div style={{ padding:'10px 14px', borderRadius:'10px', background:isDark?'rgba(255,255,255,0.03)':'rgba(0,0,0,0.02)', border:`1px solid ${c.border}`, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
-            <span style={{ fontSize:'12px', color:c.textMuted }}>{lang==='ru'?'Диапазон':'Span'}</span>
-            <span style={{ fontSize:'14px', fontWeight:'700', color:c.text, fontFamily:'DM Mono, monospace' }}>{span} {lang==='ru'?'лет':'years'}</span>
+
+        {/* Decade histogram */}
+        {decades.length > 0 && (
+          <div style={{ padding:'12px 14px 10px', borderRadius:'10px',
+            background: isDark?'rgba(255,255,255,0.03)':'rgba(0,0,0,0.02)',
+            border:`1px solid ${c.border}`,
+            boxShadow: isDark?'inset 0 1px 2px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.04)':'inset 0 1px 2px rgba(0,0,0,0.05), inset 0 1px 0 rgba(255,255,255,0.85)' }}>
+            <div style={{ fontSize:'12px', fontFamily:'DM Mono, monospace', color:c.textMuted, fontWeight:'600', textTransform:'uppercase', letterSpacing:'0.5px', marginBottom:'10px' }}>
+              {lang==='ru'?'По десятилетиям':'By decade'}
+            </div>
+            <div style={{ display:'flex', alignItems:'flex-end', gap:'6px' }}>
+              {decades.map(d => {
+                const BAR_MAX_PX = 60;
+                const barPx = Math.max(4, Math.round((d.count / maxCount) * BAR_MAX_PX));
+                const hue = decadeHue(d);
+                const isPeak = peak && d.decade === peak.decade;
+                return (
+                  <div key={d.decade} title={`${d.decade}s — ${d.count} ${lang==='ru'?'тр.':'tr.'} · ${d.pct}%`}
+                       style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:'3px', minWidth:0 }}>
+                    <div style={{ fontSize:'11px', color:c.textMuted, fontFamily:'DM Mono, monospace', fontWeight: isPeak ? '700' : '400', opacity: isPeak ? 1 : 0.75 }}>{d.count}</div>
+                    <div style={{
+                      width:'100%', height:`${barPx}px`, borderRadius:'4px 4px 2px 2px',
+                      background:`linear-gradient(180deg, oklch(68% 0.18 ${hue}) 0%, oklch(52% 0.2 ${hue}) 100%)`,
+                      boxShadow: isPeak
+                        ? `0 0 10px oklch(60% 0.18 ${hue} / 0.55), inset 0 1px 0 rgba(255,255,255,0.25)`
+                        : `inset 0 1px 0 rgba(255,255,255,0.15)`,
+                      transition:'height 0.65s cubic-bezier(.4,0,.2,1)',
+                    }} />
+                    <div style={{ fontSize:'11px', color: isPeak ? c.textMuted : c.textSubtle, fontFamily:'DM Mono, monospace', fontWeight: isPeak ? '600' : '400', whiteSpace:'nowrap' }}>{`'${String(d.decade).slice(2)}`}</div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
+
+        {/* Span + dominant decade */}
+        <div style={{ display:'flex', gap:'10px' }}>
+          {span != null && (
+            <div style={{ flex:1, padding:'10px 14px', borderRadius:'10px',
+              background:isDark?'rgba(255,255,255,0.03)':'rgba(0,0,0,0.02)', border:`1px solid ${c.border}`,
+              display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+              <span style={{ fontSize:'12px', color:c.textMuted }}>{lang==='ru'?'Диапазон':'Span'}</span>
+              <span style={{ fontSize:'14px', fontWeight:'700', color:c.text, fontFamily:'DM Mono, monospace' }}>{span} {lang==='ru'?'лет':'years'}</span>
+            </div>
+          )}
+          {peak && (
+            <div style={{ flex:1, padding:'10px 14px', borderRadius:'10px',
+              background:isDark?'rgba(255,255,255,0.03)':'rgba(0,0,0,0.02)', border:`1px solid ${c.border}`,
+              display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+              <span style={{ fontSize:'12px', color:c.textMuted }}>{lang==='ru'?'Пик':'Peak'}</span>
+              <span style={{ fontSize:'14px', fontWeight:'700', color:`oklch(60% 0.18 ${decadeHue(peak)})`, fontFamily:'DM Mono, monospace' }}>{peak.decade}s · {peak.pct}%</span>
+            </div>
+          )}
+        </div>
       </div>
     );
   };
@@ -1085,7 +1150,7 @@ function LibrarySection({ isDark, lang, activeCollection, collections, onCollect
               : <div style={{ fontSize:'12px', color:c.textSubtle }}>{lang==='ru'?'Нет данных об исполнителях':'No artist data'}</div>}
           </>)}
           {card(<>
-            {cardLabel(lang==='ru'?'Диапазон лет':'Year range')}
+            {cardLabel(lang==='ru'?'Эпохи':'Epochs')}
             {statsLoading ? <Spinner /> : <YearRangeCard />}
           </>)}
         </div>
@@ -1249,80 +1314,258 @@ function LibrarySection({ isDark, lang, activeCollection, collections, onCollect
   );
 }
 
-// ─── Indexing progress component ──────────────────────────────────────────────
+// ─── Indexing steps definition ────────────────────────────────────────────────
 const INDEX_STEPS = [
-  { key:'metadata',  icon:'🔍', labelRu:'Поиск метаданных в интернете',    labelEn:'Searching metadata online',     estSec:30  },
-  { key:'lyrics',    icon:'📝', labelRu:'Индексация текстов песен',          labelEn:'Indexing song lyrics',           estSec:120 },
-  { key:'audio',     icon:'🎵', labelRu:'Обработка звуковых особенностей',  labelEn:'Processing audio features',      estSec:180 },
-  { key:'analysis',  icon:'📊', labelRu:'Анализ схожих и разных треков',    labelEn:'Analyzing track similarities',   estSec:60  },
+  { key:'metadata',  icon:'🔍', labelRu:'Поиск текстов онлайн',        labelEn:'Fetching lyrics online'       },
+  { key:'lyrics',    icon:'📝', labelRu:'Индексация текстов',          labelEn:'Indexing lyrics'              },
+  { key:'audio',     icon:'🎵', labelRu:'Обработка аудио',             labelEn:'Processing audio'             },
+  { key:'analysis',  icon:'📊', labelRu:'Анализ схожести треков',      labelEn:'Analyzing track similarity'   },
 ];
 
-function IndexingProgress({ stage, stepStatus, lang, c, isDark, progressDetail }) {
-  // stepStatus: { metadata: 'idle'|'running'|'done'|'error', lyrics: ..., audio: ... }
+function fmtEta(secs, lang) {
+  if (!secs || secs < 5) return '';
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  if (m > 0) return lang==='ru' ? `~${m}м ${s}с` : `~${m}m ${s}s`;
+  return lang==='ru' ? `~${s}с` : `~${s}s`;
+}
+
+// ─── Indexing stage row (shared by modal and inline progress) ─────────────────
+function IndexingStageRow({ step, status, lang, c, progress, isDark }) {
+  const isRunning = status === 'running';
+  const isDone    = status === 'done';
+  const isError   = status === 'error';
+  const isIdle    = status === 'idle';
+
+  const textColor = isDone ? c.green : isRunning ? c.text : isError ? c.red : c.textSubtle;
+  const bg = isDone ? c.greenBg : isRunning ? c.accentBg : isError ? c.redBg : 'transparent';
+  const borderCol = isDone ? `${c.green.replace(')','/0.25)')}`
+    : isRunning ? `oklch(60% 0.18 270 / 0.25)`
+    : isError   ? `${c.red.replace(')','/0.2)')}`
+    : c.border;
+
+  const showLyricsProgress = isRunning && step.key === 'metadata' && progress;
+  const pct = (progress?.total > 0) ? Math.min(100, Math.round((progress.current / progress.total) * 100)) : 0;
+
   return (
-    <div style={{ display:'flex', flexDirection:'column', gap:'10px', marginTop:'4px' }}>
-      {INDEX_STEPS.map((step, i) => {
-        const st = stepStatus[step.key] || 'idle';
-        const isRunning = st === 'running';
-        const isDone    = st === 'done';
-        const isError   = st === 'error';
-        const isIdle    = st === 'idle';
+    <div style={{ padding:'10px 14px', borderRadius:'10px',
+      background: bg, border:`1px solid ${borderCol}`, transition:'all 0.3s ease' }}>
+      {/* Header row */}
+      <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
+        {/* Status indicator */}
+        <div style={{ width:'22px', height:'22px', borderRadius:'50%', flexShrink:0, display:'flex', alignItems:'center', justifyContent:'center',
+          background: isDone ? c.greenBg : isRunning ? c.accentBg : 'transparent',
+          boxShadow: isDone ? `0 0 6px ${c.green.replace(')','/0.4)')}` : isRunning ? `0 0 6px oklch(60% 0.18 270 / 0.4)` : 'none' }}>
+          {isDone    && <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={c.green} strokeWidth="3" strokeLinecap="round" style={{ animation:'checkPop 0.3s ease' }}><polyline points="20 6 9 17 4 12"/></svg>}
+          {isRunning && <Spinner size={13} color={c.accent} />}
+          {isError   && <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={c.red} strokeWidth="3" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>}
+          {isIdle    && <div style={{ width:'6px', height:'6px', borderRadius:'50%', background:c.textSubtle }} />}
+        </div>
 
-        const dotColor = isDone ? c.green : isRunning ? c.accent : isError ? c.red : c.textSubtle;
-        const textColor = isDone ? c.green : isRunning ? c.text : isError ? c.red : c.textSubtle;
-        const bg = isDone ? c.greenBg : isRunning ? c.accentBg : isError ? c.redBg : 'transparent';
-        const borderCol = isDone ? `${c.green.replace(')','/0.25)')}` : isRunning ? `oklch(60% 0.18 270 / 0.25)` : isError ? `${c.red.replace(')','/0.2)')}` : c.border;
+        {/* Label */}
+        <div style={{ flex:1 }}>
+          <div style={{ fontSize:'13px', fontWeight: isRunning||isDone ? '600' : '400', color:textColor, transition:'color 0.2s' }}>
+            {lang==='ru' ? step.labelRu : step.labelEn}
+          </div>
+        </div>
 
-        const estMin = step.estSec >= 60 ? `~${Math.ceil(step.estSec/60)} мин` : `~${step.estSec} с`;
-        const estEn  = step.estSec >= 60 ? `~${Math.ceil(step.estSec/60)} min` : `~${step.estSec}s`;
+        {/* Counter or badge */}
+        {isRunning && progress?.total > 0 && (
+          <span style={{ fontSize:'11px', fontFamily:'DM Mono, monospace', color:c.accent, flexShrink:0 }}>
+            {progress.current}/{progress.total}
+          </span>
+        )}
+        {isDone && <span style={{ fontSize:'10px', fontFamily:'DM Mono, monospace', color:c.green, background:c.greenBg, padding:'2px 7px', borderRadius:'10px', border:`1px solid ${c.green.replace(')','/0.25)')}`, flexShrink:0 }}>✓ {lang==='ru'?'готово':'done'}</span>}
+      </div>
 
-        return (
-          <div key={step.key} style={{ display:'flex', alignItems:'center', gap:'12px', padding:'10px 14px', borderRadius:'10px',
-            background: bg, border:`1px solid ${borderCol}`, transition:'all 0.3s ease',
-            animation: isRunning ? 'stepIn 0.2s ease forwards' : undefined,
-            boxShadow: isRunning ? (isDark?`inset 0 1px 0 rgba(255,255,255,0.04), 0 2px 8px oklch(60% 0.18 270 / 0.15)`:`0 2px 6px oklch(60% 0.18 270 / 0.1)`) : 'none',
-          }}>
-            {/* Status dot / spinner / check */}
-            <div style={{ width:'22px', height:'22px', borderRadius:'50%', flexShrink:0, display:'flex', alignItems:'center', justifyContent:'center',
-              background: isDone ? c.greenBg : isRunning ? c.accentBg : isDark?'rgba(255,255,255,0.05)':'rgba(0,0,0,0.05)',
-              boxShadow: isDone ? `0 0 6px ${c.green.replace(')','/0.4)')}` : isRunning ? `0 0 6px oklch(60% 0.18 270 / 0.4)` : 'none' }}>
-              {isDone   && <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={c.green} strokeWidth="3" strokeLinecap="round" style={{ animation:'checkPop 0.3s ease' }}><polyline points="20 6 9 17 4 12"/></svg>}
-              {isRunning && <Spinner size={13} color={c.accent} />}
-              {isError   && <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke={c.red} strokeWidth="3" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>}
-              {isIdle    && <div style={{ width:'6px', height:'6px', borderRadius:'50%', background:c.textSubtle }} />}
-            </div>
+      {/* ── Rich lyrics-fetch progress (metadata stage only) ── */}
+      {showLyricsProgress && (
+        <div style={{ marginTop:'10px', paddingLeft:'34px', display:'flex', flexDirection:'column', gap:'8px' }}>
 
-            {/* Label */}
-            <div style={{ flex:1 }}>
-              <div style={{ fontSize:'13px', fontWeight: isRunning||isDone ? '600' : '400', color:textColor, transition:'color 0.2s' }}>
-                {lang==='ru' ? step.labelRu : step.labelEn}
+          {/* Progress bar */}
+          {progress.total > 0 && (
+            <div>
+              <div style={{ height:'5px', borderRadius:'3px',
+                background: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
+                boxShadow: isDark ? 'inset 0 1px 2px rgba(0,0,0,0.5)' : 'inset 0 1px 1px rgba(0,0,0,0.08)' }}>
+                <div style={{
+                  width:`${pct}%`, height:'100%', borderRadius:'3px',
+                  background:'linear-gradient(90deg, oklch(65% 0.18 265) 0%, oklch(60% 0.2 275) 100%)',
+                  boxShadow:'0 0 6px oklch(60% 0.18 270 / 0.4)',
+                  transition:'width 0.4s cubic-bezier(.4,0,.2,1)',
+                }} />
               </div>
-              {isRunning && (
-                <div style={{ marginTop:'6px' }}>
-                  {/* TQDM-style progress bar */}
-                  <div style={{ height:'4px', borderRadius:'2px', background:isDark?'rgba(255,255,255,0.08)':'rgba(0,0,0,0.08)',
-                    boxShadow: isDark?'inset 0 1px 1px rgba(0,0,0,0.4)':'inset 0 1px 1px rgba(0,0,0,0.06)', overflow:'hidden', marginBottom:'4px' }}>
-                    <div className="progress-shimmer" style={{ height:'100%', borderRadius:'2px', width:'60%' }} />
-                  </div>
-                  <div style={{ fontSize:'10px', fontFamily:'DM Mono, monospace', color:c.textMuted }}>
-                    {lang==='ru' ? `ожидание ${estMin}` : `est. ${estEn}`}
-                  </div>
-                </div>
+            </div>
+          )}
+
+          {/* Rate + ETA */}
+          <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+            <div style={{ display:'flex', gap:'12px', alignItems:'center' }}>
+              {progress.found > 0 && (
+                <span style={{ fontSize:'11px', color:c.green, fontFamily:'DM Mono, monospace' }}>
+                  ✓ {progress.found}
+                </span>
+              )}
+              {progress.notFound > 0 && (
+                <span style={{ fontSize:'11px', color:c.red, fontFamily:'DM Mono, monospace' }}>
+                  ✗ {progress.notFound}
+                </span>
               )}
             </div>
-
-            {/* Done badge */}
-            {isDone && <span style={{ fontSize:'10px', fontFamily:'DM Mono, monospace', color:c.green, background:c.greenBg, padding:'2px 7px', borderRadius:'10px', border:`1px solid ${c.green.replace(')','/0.25)')}`, flexShrink:0 }}>✓ {lang==='ru'?'готово':'done'}</span>}
-            {isIdle && <span style={{ fontSize:'10px', fontFamily:'DM Mono, monospace', color:c.textSubtle, flexShrink:0 }}>{lang==='ru'?estMin:estEn}</span>}
+            <div style={{ display:'flex', gap:'10px', alignItems:'center' }}>
+              {progress.rate && (
+                <span style={{ fontSize:'11px', color:c.textMuted, fontFamily:'DM Mono, monospace' }}>
+                  {progress.rate} {lang==='ru'?'тр/мин':'tr/min'}
+                </span>
+              )}
+              {progress.eta > 0 && (
+                <span style={{ fontSize:'11px', color:c.textSubtle, fontFamily:'DM Mono, monospace' }}>
+                  {fmtEta(progress.eta, lang)}
+                </span>
+              )}
+            </div>
           </div>
-        );
-      })}
-      {progressDetail && (
-        <div style={{ marginTop:'6px', padding:'8px 12px', borderRadius:'8px', background:isDark?'rgba(255,255,255,0.03)':'rgba(0,0,0,0.02)', border:`1px solid ${c.border}`, fontSize:'11px', fontFamily:'DM Mono, monospace', color:c.textMuted, lineHeight:'1.5' }}>
-          {progressDetail}
+
+          {/* Last processed track */}
+          {progress.lastTrack && (
+            <div style={{ display:'flex', alignItems:'center', gap:'6px', minWidth:0 }}>
+              <span style={{ fontSize:'11px', flexShrink:0,
+                color: progress.lastSuccess ? c.green : c.textSubtle }}>
+                {progress.lastSuccess ? '✓' : '✗'}
+              </span>
+              <span style={{ fontSize:'11px', color:c.textSubtle, fontFamily:'DM Mono, monospace',
+                overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                {progress.lastTrack}
+              </span>
+            </div>
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+// ─── Inline IndexingProgress (simplified — for settings panel) ────────────────
+function IndexingProgress({ stepStatus, lang, c, isDark, lyricsProgress }) {
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:'8px', marginTop:'4px' }}>
+      {INDEX_STEPS.map(step => (
+        <IndexingStageRow
+          key={step.key} step={step}
+          status={stepStatus[step.key] || 'idle'}
+          lang={lang} c={c} isDark={isDark}
+          progress={step.key === 'metadata' ? lyricsProgress : null}
+        />
+      ))}
+    </div>
+  );
+}
+
+// ─── Blocking Indexing Modal ──────────────────────────────────────────────────
+function IndexingModal({ isDark, lang, collectionName, stepStatus, trackCount, errorMessage, onClose, lyricsProgress }) {
+  const c = useColors(isDark);
+  const isCompleted = Object.values(stepStatus).length === INDEX_STEPS.length && Object.values(stepStatus).every(s => s === 'done');
+  const hasError = !!errorMessage;
+  const isRunning = !isCompleted && !hasError;
+
+  return ReactDOM.createPortal(
+    <div style={{
+      position:'fixed', inset:0, zIndex:10000, display:'flex', alignItems:'center', justifyContent:'center',
+      background:'rgba(0,0,0,0.7)', backdropFilter:'blur(6px)', animation:'fadeIn 0.2s ease',
+    }}>
+      <div style={{
+        width:'460px', maxWidth:'92vw', background:c.surface, borderRadius:'20px',
+        border:`1px solid ${c.border}`, padding:'36px 32px 28px',
+        boxShadow: isDark ? '0 12px 60px rgba(0,0,0,0.7), inset 0 1px 0 rgba(255,255,255,0.06)' : '0 12px 60px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.9)',
+        animation:'slideUp 0.25s ease',
+        display:'flex', flexDirection:'column', gap:'20px',
+      }}>
+        {/* Header */}
+        <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
+          <div style={{ width:'40px', height:'40px', borderRadius:'12px', flexShrink:0,
+            background:'linear-gradient(145deg, oklch(65% 0.18 265), oklch(55% 0.2 295))',
+            display:'flex', alignItems:'center', justifyContent:'center',
+            boxShadow:'inset 0 1px 0 rgba(255,255,255,0.25), 0 4px 12px oklch(60% 0.18 270 / 0.45)' }}>
+            {isCompleted ? (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" style={{ animation:'checkPop 0.3s ease' }}><polyline points="20 6 9 17 4 12"/></svg>
+            ) : hasError ? (
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            ) : (
+              <Spinner size={20} color="white" />
+            )}
+          </div>
+          <div>
+            <div style={{ fontSize:'17px', fontWeight:'700', color:c.text, letterSpacing:'-0.3px' }}>
+              {isCompleted
+                ? (lang==='ru' ? 'Индексация завершена' : 'Indexing complete')
+                : hasError
+                  ? (lang==='ru' ? 'Ошибка индексации' : 'Indexing failed')
+                  : (lang==='ru' ? 'Индексация коллекции' : 'Indexing collection')}
+            </div>
+            {collectionName && (
+              <div style={{ fontSize:'12px', color:c.textMuted, fontFamily:'DM Mono, monospace', marginTop:'2px' }}>
+                {collectionName}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Stages */}
+        {!isCompleted && !hasError && (
+          <div style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
+            {INDEX_STEPS.map(step => (
+              <IndexingStageRow
+                key={step.key} step={step}
+                status={stepStatus[step.key] || 'idle'}
+                lang={lang} c={c} isDark={isDark}
+                progress={step.key === 'metadata' ? lyricsProgress : null}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Success message */}
+        {isCompleted && (
+          <div style={{ padding:'14px 16px', borderRadius:'12px', background:c.greenBg,
+            border:`1px solid ${c.green.replace(')','/0.25)')}`, display:'flex', alignItems:'center', gap:'10px',
+            animation:'fadeIn 0.3s ease' }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke={c.green} strokeWidth="2.5" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg>
+            <div>
+              <div style={{ fontSize:'14px', fontWeight:'600', color:c.green }}>
+                {lang==='ru' ? 'Коллекция успешно проиндексирована' : 'Collection indexed successfully'}
+              </div>
+              {trackCount != null && trackCount > 0 && (
+                <div style={{ fontSize:'12px', color:c.green, opacity:0.8, marginTop:'2px' }}>
+                  {lang==='ru' ? `${trackCount} треков добавлено` : `${trackCount} tracks added`}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Error message */}
+        {hasError && (
+          <div style={{ padding:'14px 16px', borderRadius:'12px', background:c.redBg,
+            border:`1px solid ${c.red.replace(')','/0.25)')}`, animation:'fadeIn 0.3s ease' }}>
+            <div style={{ fontSize:'13px', color:c.red, lineHeight:'1.5' }}>{errorMessage}</div>
+          </div>
+        )}
+
+        {/* Close button */}
+        {(isCompleted || hasError) && (
+          <button onClick={onClose} style={{
+            padding:'11px 24px', borderRadius:'10px', border:'none',
+            background:'linear-gradient(180deg, oklch(65% 0.18 265) 0%, oklch(55% 0.2 275) 100%)',
+            color:'white', fontSize:'13px', fontWeight:'700', cursor:'pointer', alignSelf:'center',
+            boxShadow:'inset 0 1px 0 rgba(255,255,255,0.2), inset 0 -1px 0 rgba(0,0,0,0.2), 0 3px 10px oklch(60% 0.18 270 / 0.4)',
+            animation:'fadeIn 0.3s ease',
+          }}>
+            {lang==='ru' ? 'Закрыть' : 'Close'}
+          </button>
+        )}
+      </div>
+    </div>,
+    document.body
   );
 }
 
@@ -1337,11 +1580,15 @@ function SettingsSection({ isDark, lang, onCollectionsUpdate }) {
   const [textModel, setTextModel]       = useState('jinaai/jina-embeddings-v2-small-en');
   const [models, setModels]             = useState({});
   const [picking, setPicking]           = useState(false);
-  const [indexing, setIndexing]         = useState(() => localStorage.getItem('idx_running') === 'true');
+  const [indexing, setIndexing]         = useState(false);
+  const [stepStatus, setStepStatus]     = useState({});
   const [indexResult, setIndexResult]   = useState(null);
-  const [stepStatus, setStepStatus]     = useState(() => {
-    try { return JSON.parse(localStorage.getItem('idx_stepstatus') || '{}'); } catch { return {}; }
-  });
+
+  // Modal state
+  const [showModal, setShowModal]       = useState(false);
+  const [modalTrackCount, setModalTrackCount] = useState(null);
+  const [modalError, setModalError]     = useState(null);
+  const [lyricsProgress, setLyricsProgress] = useState(null);
 
   // LLM
   const [llmBaseUrl, setLlmBaseUrl] = useState(() => localStorage.getItem('llm_base_url') || '');
@@ -1352,14 +1599,6 @@ function SettingsSection({ isDark, lang, onCollectionsUpdate }) {
     apiFetch('/search/models/text').then(setModels).catch(() => {});
   }, []);
 
-  // Persist step status and folder to localStorage
-  useEffect(() => {
-    try { localStorage.setItem('idx_stepstatus', JSON.stringify(stepStatus)); } catch {}
-  }, [stepStatus]);
-  useEffect(() => { localStorage.setItem('idx_folder', folderPath); }, [folderPath]);
-  useEffect(() => { localStorage.setItem('idx_collname', collName); }, [collName]);
-  useEffect(() => { localStorage.setItem('idx_running', indexing ? 'true' : 'false'); }, [indexing]);
-
   const handlePick = async () => {
     setPicking(true);
     try {
@@ -1369,58 +1608,111 @@ function SettingsSection({ isDark, lang, onCollectionsUpdate }) {
     finally { setPicking(false); }
   };
 
-  const simulateStep = (key, delay) => new Promise(resolve => {
-    setTimeout(() => {
-      setStepStatus(prev => ({ ...prev, [key]: 'running' }));
-      // simulate completion after estSec
-      const step = INDEX_STEPS.find(s => s.key === key);
-      const dur = Math.min((step?.estSec || 30) * 100, 5000); // capped for demo
-      setTimeout(() => {
-        setStepStatus(prev => ({ ...prev, [key]: 'done' }));
-        resolve();
-      }, dur);
-    }, delay);
-  });
-
   const handleIndex = async () => {
     if (!folderPath.trim() || indexing) return;
     const colName = collName.trim() || 'my_collection';
     setIndexing(true);
     setIndexResult(null);
-    setStepStatus({ metadata:'idle', lyrics:'idle', audio:'idle' });
+    setModalError(null);
+    setModalTrackCount(null);
+    setLyricsProgress(null);
+    setShowModal(true);
+    setStepStatus({ metadata:'running', lyrics:'idle', audio:'idle', analysis:'idle' });
+    localStorage.setItem('idx_running', 'true');
 
     try {
-      // Start with step 1 immediately
-      setStepStatus({ metadata:'running', lyrics:'idle', audio:'idle' });
-
       const res = await apiFetch('/library/index', {
         method:'POST',
         body: JSON.stringify({ folder_path:folderPath, collection_name:colName, better_lyrics_quality:betterLyrics, text_model:textModel }),
       });
 
-      // Simulate multi-step progression (in real impl these come from SSE/WS)
-      setStepStatus({ metadata:'done', lyrics:'running', audio:'idle' });
-      await new Promise(r => setTimeout(r, 1200));
-      setStepStatus({ metadata:'done', lyrics:'done', audio:'running' });
-      await new Promise(r => setTimeout(r, 1500));
-      setStepStatus({ metadata:'done', lyrics:'done', audio:'done' });
-
-      setIndexResult(res);
-      if (res.status !== 'failed') {
-        localStorage.setItem('active_collection', colName);
-        onCollectionsUpdate && onCollectionsUpdate();
+      if (res.status === 'failed') {
+        setModalError(res.message || (lang==='ru' ? 'Индексация не удалась' : 'Indexing failed'));
+        setIndexing(false);
+        localStorage.setItem('idx_running', 'false');
+        return;
       }
+
+      if (!res.job_id) {
+        // Sync response — no job tracking
+        setStepStatus({ metadata:'done', lyrics:'done', audio:'done', analysis:'done' });
+        setModalTrackCount(res.count || 0);
+        localStorage.setItem('active_collection', colName);
+        localStorage.setItem('idx_running', 'false');
+        onCollectionsUpdate && onCollectionsUpdate();
+        return;
+      }
+
+      // Connect to SSE stream
+      const evtSource = new EventSource(`${API}/index/progress/${res.job_id}`);
+
+      evtSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+
+          if (data.stages) {
+            setStepStatus({
+              metadata: data.stages.metadata?.status || 'idle',
+              lyrics:   data.stages.lyrics?.status   || 'idle',
+              audio:    data.stages.audio?.status    || 'idle',
+              analysis: data.stages.analysis?.status || 'idle',
+            });
+          }
+
+          // Lyrics-fetch progress (metadata stage)
+          if (data.stage === 'metadata' && data.lyrics_found !== undefined) {
+            setLyricsProgress({
+              current:     data.stages?.metadata?.current ?? data.current ?? 0,
+              total:       data.stages?.metadata?.total   ?? data.total   ?? 0,
+              found:       data.lyrics_found       ?? 0,
+              notFound:    data.lyrics_not_found   ?? 0,
+              rate:        data.lyrics_rate        ?? null,
+              eta:         data.lyrics_eta         ?? null,
+              lastTrack:   data.lyrics_last_track  ?? null,
+              lastSuccess: data.lyrics_last_success ?? null,
+            });
+          }
+
+          if (data.overall_status === 'completed') {
+            evtSource.close();
+            setStepStatus({ metadata:'done', lyrics:'done', audio:'done', analysis:'done' });
+            setModalTrackCount(data.stages?.metadata?.current || 0);
+            setIndexing(false);
+            localStorage.setItem('active_collection', colName);
+            localStorage.setItem('idx_running', 'false');
+            onCollectionsUpdate && onCollectionsUpdate();
+          } else if (data.overall_status === 'failed') {
+            evtSource.close();
+            setModalError(data.error || data.message || (lang==='ru' ? 'Ошибка индексации' : 'Indexing failed'));
+            setIndexing(false);
+            localStorage.setItem('idx_running', 'false');
+          }
+        } catch(e) {
+          console.error('SSE parse error:', e);
+        }
+      };
+
+      evtSource.onerror = (err) => {
+        evtSource.close();
+        if (indexing) {
+          setModalError(lang==='ru' ? 'Ошибка соединения с сервером' : 'Connection lost');
+          setIndexing(false);
+          localStorage.setItem('idx_running', 'false');
+        }
+      };
+
     } catch(e) {
-      setStepStatus(prev => {
-        const running = Object.keys(prev).find(k => prev[k] === 'running');
-        if (running) return { ...prev, [running]: 'error' };
-        return prev;
-      });
-      setIndexResult({ status:'failed', message:e.message });
-    } finally {
+      setModalError(e.message);
       setIndexing(false);
       localStorage.setItem('idx_running', 'false');
     }
+  };
+
+  const handleCloseModal = () => {
+    setShowModal(false);
+    setStepStatus({});
+    setModalError(null);
+    setModalTrackCount(null);
   };
 
   const saveLLMSettings = () => {
@@ -1525,27 +1817,31 @@ function SettingsSection({ isDark, lang, onCollectionsUpdate }) {
             {indexing ? (lang==='ru'?'Индексация...':'Indexing...') : (lang==='ru'?'Запустить индексацию':'Start indexing')}
           </button>
 
-          {/* Multi-step progress */}
-          {(indexing || indexDoneAllSteps || Object.values(stepStatus).some(s=>s!=='idle')) && (
+          {/* Multi-step inline progress (visible when modal is closed but status persists) */}
+          {Object.values(stepStatus).some(s=>s!=='idle') && !showModal && (
             <div style={{ marginTop:'16px', padding:'14px 16px', borderRadius:'12px', background:isDark?'rgba(255,255,255,0.03)':'rgba(0,0,0,0.02)', border:`1px solid ${c.border}`,
               boxShadow: isDark?'inset 0 2px 4px rgba(0,0,0,0.4)':'inset 0 1px 3px rgba(0,0,0,0.05)' }}>
               <div style={{ fontSize:'11px', fontFamily:'DM Mono, monospace', color:c.textSubtle, textTransform:'uppercase', letterSpacing:'0.6px', marginBottom:'12px' }}>
                 {lang==='ru'?'Прогресс индексации':'Indexing progress'}
               </div>
-              <IndexingProgress stage="indexing" stepStatus={stepStatus} lang={lang} c={c} isDark={isDark} />
-            </div>
-          )}
-
-          {/* Result banner */}
-          {indexResult && (
-            <div style={{ marginTop:'12px', padding:'10px 14px', borderRadius:'8px', fontSize:'12px', lineHeight:'1.5',
-              background: indexResult.status!=='failed' ? c.greenBg : c.redBg,
-              color: indexResult.status!=='failed' ? c.green : c.red,
-              border:`1px solid ${(indexResult.status!=='failed' ? c.green : c.red).replace(')','/0.25)')}` }}>
-              {indexResult.message || (indexResult.count!=null ? `✓ ${indexResult.count} ${lang==='ru'?'треков проиндексировано':'tracks indexed'}` : JSON.stringify(indexResult))}
+              <IndexingProgress stepStatus={stepStatus} lang={lang} c={c} isDark={isDark} lyricsProgress={lyricsProgress} />
             </div>
           )}
         </>)}
+
+        {/* ─── Indexing Modal ─── */}
+        {showModal && (
+          <IndexingModal
+            isDark={isDark}
+            lang={lang}
+            collectionName={collName}
+            stepStatus={stepStatus}
+            trackCount={modalTrackCount}
+            errorMessage={modalError}
+            onClose={handleCloseModal}
+            lyricsProgress={lyricsProgress}
+          />
+        )}
 
         {/* ── LLM Connection ── */}
         {card(<>
@@ -1605,9 +1901,14 @@ function OnboardingScreen({ isDark, lang, onDone }) {
   const [collectionName, setCollectionName] = useState('my_collection');
   const [betterLyrics, setBetterLyrics] = useState(false);
   const [progress, setProgress] = useState({ count:0, message:'' });
-  const [progressDetail, setProgressDetail] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
-  const [stepStatus, setStepStatus] = useState({ metadata:'idle', lyrics:'idle', audio:'idle' });
+  const [stepStatus, setStepStatus] = useState({ metadata:'idle', lyrics:'idle', audio:'idle', analysis:'idle' });
+  const [lyricsProgress, setLyricsProgress] = useState(null);
+
+  // Modal state
+  const [showModal, setShowModal] = useState(false);
+  const [modalTrackCount, setModalTrackCount] = useState(null);
+  const [modalError, setModalError] = useState(null);
 
   const T = {
     ru: { headline:'Добро пожаловать в MusiX', sub:'Коллекция пока пуста. Задай имя, выбери папку с музыкой — приложение проиндексирует треки.', collectionLabel:'Имя коллекции', collectionPH:'например: my_music', pickBtn:'Выбрать папку с музыкой', picking:'Открываю диалог...', selected:'Выбрана папка:', change:'Изменить', betterLyrics:'Улучшенное качество текстов', betterHint:'(медленнее, Musixmatch)', indexBtn:'Начать индексацию', done:'Готово! Открываю библиотеку...', errPick:'Не удалось открыть диалог.', errIndex:'Ошибка:', noPath:'Папка не выбрана.' },
@@ -1622,68 +1923,82 @@ function OnboardingScreen({ isDark, lang, onDone }) {
   const handleIndex = async () => {
     if (!folderPath) return;
     setStage('indexing'); setErrorMsg('');
+    setShowModal(true); setModalError(null); setModalTrackCount(null); setLyricsProgress(null);
     const colName = collectionName.trim() || 'my_collection';
-    setStepStatus({ metadata:'running', lyrics:'idle', audio:'idle' });
+    setStepStatus({ metadata:'running', lyrics:'idle', audio:'idle', analysis:'idle' });
     try {
       const res = await apiFetch('/library/index', { method:'POST', body:JSON.stringify({ folder_path:folderPath, collection_name:colName, better_lyrics_quality:betterLyrics }) });
-      
-      if(res.status==='failed'){setErrorMsg(`${t.errIndex} ${res.message}`);setStage('ready');return;}
+
+      if(res.status==='failed'){
+        setModalError(res.message || (lang==='ru' ? 'Индексация не удалась' : 'Indexing failed'));
+        setStage('ready'); return;
+      }
       if(!res.job_id){
-        // Fallback: old sync response without job tracking
-        setStepStatus({ metadata:'done', lyrics:'done', audio:'done' });
+        setStepStatus({ metadata:'done', lyrics:'done', audio:'done', analysis:'done' });
+        setModalTrackCount(res.count||0);
         localStorage.setItem('active_collection',colName);
         setProgress({count:res.count||0,message:res.message||''});
         setStage('done');
         setTimeout(()=>onDone(),1800);
         return;
       }
-      
+
       // Connect to SSE stream
       const evtSource = new EventSource(`${API}/index/progress/${res.job_id}`);
-      
+
       evtSource.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          
-          // Update step statuses from stage info
           if(data.stages) {
             setStepStatus({
               metadata: data.stages.metadata?.status || 'idle',
-              lyrics: data.stages.lyrics?.status || 'idle',
-              audio: data.stages.audio?.status || 'idle',
+              lyrics:   data.stages.lyrics?.status   || 'idle',
+              audio:    data.stages.audio?.status    || 'idle',
+              analysis: data.stages.analysis?.status || 'idle',
             });
           }
-          
-          // Update progress detail
-          if(data.message) {
-            setProgressDetail(data.message);
+          if(data.stage === 'metadata' && data.lyrics_found !== undefined) {
+            setLyricsProgress({
+              current:     data.stages?.metadata?.current ?? data.current ?? 0,
+              total:       data.stages?.metadata?.total   ?? data.total   ?? 0,
+              found:       data.lyrics_found       ?? 0,
+              notFound:    data.lyrics_not_found   ?? 0,
+              rate:        data.lyrics_rate        ?? null,
+              eta:         data.lyrics_eta         ?? null,
+              lastTrack:   data.lyrics_last_track  ?? null,
+              lastSuccess: data.lyrics_last_success ?? null,
+            });
           }
-          
-          // Check if done
           if(data.overall_status === 'completed') {
             evtSource.close();
-            setStepStatus({ metadata:'done', lyrics:'done', audio:'done' });
+            setStepStatus({ metadata:'done', lyrics:'done', audio:'done', analysis:'done' });
+            setModalTrackCount(data.stages?.metadata?.current || 0);
             setProgress({ count: data.stages?.metadata?.current || 0, message: data.message || '' });
             localStorage.setItem('active_collection', colName);
             setStage('done');
             setTimeout(() => onDone(), 1800);
           } else if(data.overall_status === 'failed') {
             evtSource.close();
-            setErrorMsg(`${t.errIndex} ${data.error || data.message || 'Unknown error'}`);
+            setModalError(data.error || data.message || (lang==='ru' ? 'Ошибка индексации' : 'Indexing failed'));
             setStage('ready');
           }
-        } catch(e) {
-          console.error('SSE parse error:', e);
-        }
+        } catch(e) { console.error('SSE parse error:', e); }
       };
-      
+
       evtSource.onerror = (err) => {
         evtSource.close();
-        setErrorMsg(`${t.errIndex} ${lang==='ru'?'Ошибка соединения':'Connection error'}`);
+        setModalError(lang==='ru' ? 'Ошибка соединения с сервером' : 'Connection lost');
         setStage('ready');
       };
-      
-    } catch(e){setErrorMsg(`${t.errIndex} ${e.message}`);setStage('ready');}
+
+    } catch(e){setModalError(e.message);setStage('ready');}
+  };
+
+  const handleCloseModal = () => {
+    setShowModal(false);
+    setModalError(null);
+    setModalTrackCount(null);
+    if (stage === 'done') onDone();
   };
 
   return (
@@ -1727,7 +2042,7 @@ function OnboardingScreen({ isDark, lang, onDone }) {
           {stage==='ready' && <label style={{ display:'flex', alignItems:'flex-start', gap:'9px', cursor:'pointer' }}><input type="checkbox" checked={betterLyrics} onChange={e=>setBetterLyrics(e.target.checked)} style={{ marginTop:'2px', accentColor:'oklch(60% 0.18 270)', width:'14px', height:'14px', flexShrink:0 }} /><div><div style={{ fontSize:'13px', color:c.text }}>{t.betterLyrics}</div><div style={{ fontSize:'12px', color:c.textSubtle }}>{t.betterHint}</div></div></label>}
           {(isIndexing||isDone||Object.values(stepStatus).some(s=>s!=='idle')) && (
             <div style={{ padding:'12px 14px', borderRadius:'10px', background:isDark?'rgba(255,255,255,0.03)':'rgba(0,0,0,0.02)', border:`1px solid ${c.border}` }}>
-              <IndexingProgress stage={stage} stepStatus={stepStatus} lang={lang} c={c} isDark={isDark} progressDetail={progressDetail} />
+              <IndexingProgress stepStatus={stepStatus} lang={lang} c={c} isDark={isDark} lyricsProgress={lyricsProgress} />
             </div>
           )}
           {isDone && <div style={{ padding:'12px 15px', borderRadius:'10px', background:c.greenBg, border:`1px solid ${c.green.replace(')','/0.3)')}`, display:'flex', alignItems:'center', gap:'10px', fontSize:'13px', fontWeight:'600', color:c.green }}>
@@ -1738,6 +2053,20 @@ function OnboardingScreen({ isDark, lang, onDone }) {
           {stage==='ready' && <button onClick={handleIndex} style={{ padding:'13px 20px', borderRadius:'12px', border:'none', background:'linear-gradient(180deg,oklch(65% 0.18 265) 0%,oklch(55% 0.2 275) 100%)', color:'white', fontSize:'14px', fontWeight:'700', cursor:'pointer', boxShadow:'inset 0 1px 0 rgba(255,255,255,0.2), inset 0 -1px 0 rgba(0,0,0,0.2), 0 4px 16px oklch(60% 0.18 270 / 0.4)', transition:'all 0.15s', letterSpacing:'-0.2px' }}>{t.indexBtn} →</button>}
         </div>
       </div>
+
+      {/* Indexing Modal */}
+      {showModal && (
+        <IndexingModal
+          isDark={isDark}
+          lang={lang}
+          collectionName={collectionName}
+          stepStatus={stepStatus}
+          trackCount={modalTrackCount}
+          errorMessage={modalError}
+          onClose={handleCloseModal}
+          lyricsProgress={lyricsProgress}
+        />
+      )}
     </div>
   );
 }

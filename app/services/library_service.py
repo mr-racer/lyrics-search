@@ -123,23 +123,34 @@ class LibraryService:
             loop = asyncio.get_event_loop()
 
             # Progress callback for file processing (metadata + lyrics fetching)
-            async def on_file_progress(current: int, total: int, message: str):
+            async def on_file_progress(current: int, total: int, message: str, details: dict = None):
                 stage_meta.current = current
                 stage_meta.total = total
                 stage_meta.message = message
+                extra: dict = {}
+                if details:
+                    extra = {
+                        "lyrics_found":        details.get("found", 0),
+                        "lyrics_not_found":    details.get("not_found", 0),
+                        "lyrics_rate":         details.get("rate_per_min"),
+                        "lyrics_eta":          details.get("eta_seconds"),
+                        "lyrics_last_track":   details.get("last_track"),
+                        "lyrics_last_success": details.get("last_success"),
+                    }
                 await self._notify_progress(job, {
                     "stage": IndexStage.METADATA.value,
                     "current": current,
                     "total": total,
                     "message": message,
+                    **extra,
                 })
 
             processed_files = await asyncio.to_thread(
                 processor.process_folder,
                 music_folder=folder_path,
                 better_lyrics_quality=better_lyrics_quality,
-                progress_callback=lambda c, t, m: asyncio.run_coroutine_threadsafe(
-                    on_file_progress(c, t, m), loop
+                progress_callback=lambda c, t, m, d=None: asyncio.run_coroutine_threadsafe(
+                    on_file_progress(c, t, m, d), loop
                 ),  # fire-and-forget — no .result() to avoid deadlock
             )
 
