@@ -34,9 +34,23 @@ router = APIRouter(prefix="/chat", tags=["Chat"])
 
 # ─── Prompts ──────────────────────────────────────────────────────────────────
 
-# TODO: provide your classification system prompt here.
+# Classification prompt — asks LLM to determine the search type for the user's query.
 # The call is skipped entirely when this string is empty.
-CLASSIFICATION_SYSTEM_PROMPT: str = ""
+CLASSIFICATION_SYSTEM_PROMPT: str = """
+You are a query classifier for a music search system. Analyze the user's query and classify it into ONE of three types:
+
+1. **"text"** — User asks about concrete details that should literally appear in lyrics (specific words, phrases, themes, storylines).
+2. **"sound"** — User describes feelings, vibe, vocals, production, atmosphere, mood — not specific words.
+3. **"hybrid"** — Mix of both, or unclear which dominates.
+
+Return ONLY a JSON object with this shape:
+{
+  "type": "text" | "sound" | "hybrid",
+  "reasoning": "one short sentence explaining why"
+}
+
+No prose before or after the JSON.
+""".strip()
 
 # DEVELOPER_PROMPT: str = """
 # You are a music search assistant. You find songs from descriptions, moods,
@@ -301,11 +315,11 @@ SEARCH_LIMIT  = 6   # hits per individual query
 MAX_CTX_HITS  = 12  # max tracks in LLM context window
 
 # Map LLM query type → service search mode
-# _TYPE_TO_MODE: dict[str, str] = {
-#     "text":   "text",
-#     "sound":  "audio",
-#     "hybrid": "hybrid",
-# }
+_TYPE_TO_MODE: dict[str, str] = {
+    "text":   "text",
+    "sound":  "audio",
+    "hybrid": "hybrid",
+}
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -314,6 +328,7 @@ async def _run_searches(
     llm_queries: list[dict],
     service,
     collection_name: str | None = None,
+    forced_mode: str | None = None,  # когда auto_mode=False, используется этот mode для всех запросов
 ) -> tuple[str, str, list[TrackHit]]:
     """Execute the LLM's search queries against the library.
 
@@ -333,7 +348,7 @@ async def _run_searches(
             continue
 
         # mode = _TYPE_TO_MODE.get(q.get("type", "hybrid"), "hybrid")
-        mode = "text"
+        mode = forced_mode if forced_mode else _TYPE_TO_MODE.get(q.get("type", "hybrid"), "hybrid")
         query_strs.append(query_text)
 
         try:
@@ -426,14 +441,14 @@ async def chat(req: ChatRequest, request: Request) -> dict:
         "temperature": 0.3,
     }
 
-    # ── Call 1: classification (skipped when prompt is empty) ─────────────────
+    # ── Call 1: classification (skipped when prompt is empty OR auto_mode=False) ──
     classification: dict = {}
-    if CLASSIFICATION_SYSTEM_PROMPT.strip():
+    if req.auto_mode and CLASSIFICATION_SYSTEM_PROMPT.strip():
         try:
             classification = await ask_llm(
                 req.message,
                 system_prompt=CLASSIFICATION_SYSTEM_PROMPT,
-                parse_json=False,
+                parse_json=True,
                 **llm_kw,
             )
         except Exception as exc:
@@ -480,7 +495,8 @@ async def chat(req: ChatRequest, request: Request) -> dict:
 
         if action == "search":
             queries = result.get("queries") or []
-            new_pq, new_ctx, new_hits = await _run_searches(queries, service, collection_name=req.collection_name)
+            forced_mode = req.mode if not req.auto_mode else None
+            new_pq, new_ctx, new_hits = await _run_searches(queries, service, collection_name=req.collection_name, forced_mode=forced_mode)
 
             if new_pq:
                 previous_queries = (

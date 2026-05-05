@@ -2,8 +2,7 @@
 
 import asyncio
 import logging
-import torch
-from typing import List, Optional, Literal
+from typing import List, Optional, Literal, Dict
 
 from ..domain.models import TrackMetadata, TrackHit, SearchRequest, SearchResponse, SearchFilters
 from ..existing.qdrant_db import LyricsDB
@@ -16,8 +15,8 @@ class SearchService:
     """
     Unified search supporting:
     - text: dense + BM25 fusion via LyricsDB
-    - audio: CLAP text embedding search
-    - hybrid: dense + BM25 + CLAP RRF fusion
+    - audio: CLAP text embedding → search only by 'clap' vector
+    - hybrid: parallel dense+BM25 + CLAP, merged with 0.5/0.5 score weighting
     """
 
     def __init__(self, lyrics_db: LyricsDB):
@@ -50,7 +49,6 @@ class SearchService:
         collection_name: Optional[str] = None,
     ) -> List[TrackHit]:
         """Text-based search using dense + BM25 fusion."""
-        qdrant_filter = self._build_qdrant_filter(filters)
         filter_kwargs = self._extract_filter_kwargs(filters)
 
         results = self.lyrics_db.search(
@@ -64,7 +62,7 @@ class SearchService:
 
         return self._points_to_hits(results[:limit], matched_on="lyrics")
 
-    # ── Audio search (CLAP) ──
+    # ── Audio search (CLAP only) ──
 
     async def _search_audio(
         self,
@@ -73,25 +71,28 @@ class SearchService:
         limit: int,
         collection_name: Optional[str] = None,
     ) -> List[TrackHit]:
-        """Audio-based search using CLAP text embedding."""
+        """Audio-based search: encode query with CLAP, search Qdrant by 'clap' vector only."""
         clap_model = ModelRegistry.get_clap()
         clap_vector = clap_model.get_text_embedding([query])[0].tolist()
 
-        filter_kwargs = self._extract_filter_kwargs(filters)
+        col = collection_name or self.lyrics_db.collection_name
+        qdrant_filter = self._build_qdrant_filter(filters)
 
-        results = self.lyrics_db.search(
-            query=query,
-            limit=limit * 2,
-            include_clap=True,
-            min_clap_score=0.01,
-            collection_name_override=collection_name,
-            **filter_kwargs,
+        results = await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: self.lyrics_db.qdrant_client.query_points(
+                collection_name=col,
+                query=clap_vector,
+                using="clap",
+                limit=limit * 2,
+                filter=qdrant_filter,
+                with_payload=True,
+            ),
         )
 
-        hits = self._points_to_hits(results[:limit], matched_on="audio")
-        return hits
+        return self._points_to_hits(results.points[:limit], matched_on="audio")
 
-    # ── Hybrid search (dense + BM25 + CLAP) ──
+    # ── Hybrid search (dense+BM25 0.5 + CLAP 0.5) ──
 
     async def _search_hybrid(
         self,
@@ -100,21 +101,95 @@ class SearchService:
         limit: int,
         collection_name: Optional[str] = None,
     ) -> List[TrackHit]:
-        """Hybrid search combining text and audio embeddings."""
-        filter_kwargs = self._extract_filter_kwargs(filters)
-
-        results = self.lyrics_db.search(
-            query=query,
-            limit=limit * 2,
-            include_clap=True,
-            min_dense_score=0.3,
-            min_clap_score=0.01,
-            collection_name_override=collection_name,
-            **filter_kwargs,
+        """Hybrid search: parallel text (dense+BM25) + CLAP, merge with 0.5/0.5 weighting.
+        
+        If audio search fails, gracefully degrades to text-only results.
+        """
+        text_task = asyncio.create_task(
+            self._search_text(query, filters, limit * 2, collection_name)
+        )
+        audio_task = asyncio.create_task(
+            self._search_audio(query, filters, limit * 2, collection_name)
+        )
+        text_result, audio_result = await asyncio.gather(
+            text_task, audio_task, return_exceptions=True
         )
 
-        hits = self._points_to_hits(results[:limit], matched_on="hybrid")
-        return hits
+        # Handle exceptions gracefully
+        if isinstance(audio_result, Exception):
+            logger.warning("Audio search failed in hybrid mode, using text-only fallback: %s",
+                           audio_result)
+            audio_hits: List[TrackHit] = []
+        else:
+            audio_hits = audio_result
+
+        if isinstance(text_result, Exception):
+            logger.error("Text search failed in hybrid mode: %s", text_result)
+            raise
+
+        text_hits = text_result
+
+        # Merge by track_id with weighted scores
+        merged = self._merge_hits(text_hits, audio_hits, text_weight=0.5, clap_weight=0.5)
+        return merged[:limit]
+
+    @staticmethod
+    def _merge_hits(
+        text_hits: List[TrackHit],
+        clap_hits: List[TrackHit],
+        text_weight: float = 0.5,
+        clap_weight: float = 0.5,
+    ) -> List[TrackHit]:
+        """Merge two hit lists by track_id, applying weighted score fusion.
+        
+        Tracks appearing in both lists get combined score:
+            final_score = normalized_text_score * text_weight + normalized_clap_score * clap_weight
+        
+        Scores are min-max normalized within each list before fusion to ensure
+        fair weighting across different vector spaces.
+        """
+        def normalize(hits: List[TrackHit]) -> List[TrackHit]:
+            """Normalize scores to [0, 1] range within a hit list."""
+            if not hits:
+                return hits
+            scores = [h.score for h in hits]
+            min_s, max_s = min(scores), max(scores)
+            range_s = max_s - min_s if max_s > min_s else 1.0
+            return [
+                TrackHit(track=h.track, score=(h.score - min_s) / range_s,
+                         matched_on=h.matched_on, lyrics=h.lyrics)
+                for h in hits
+            ]
+
+        text_hits = normalize(text_hits)
+        clap_hits = normalize(clap_hits)
+
+        score_map: Dict[str, dict] = {}
+
+        for hit in text_hits:
+            tid = hit.track.track_id
+            score_map[tid] = {"score": hit.score * text_weight, "lead": hit}
+
+        for hit in clap_hits:
+            tid = hit.track.track_id
+            if tid in score_map:
+                score_map[tid]["score"] += hit.score * clap_weight
+            else:
+                score_map[tid] = {"score": hit.score * clap_weight, "lead": hit}
+
+        # Build final list, sorted by merged score descending
+        merged: List[TrackHit] = []
+        for entry in score_map.values():
+            lead = entry["lead"]
+            merged.append(TrackHit(
+                track=lead.track,
+                score=entry["score"],
+                matched_on="hybrid",
+                lyrics=lead.lyrics,
+            ))
+
+        merged.sort(key=lambda h: h.score, reverse=True)
+        return merged
 
     # ── Legacy alias (backward compat) ──
 
@@ -178,10 +253,9 @@ class SearchService:
 
             # Lyrics for LLM context (first ~400 chars; not sent to frontend)
             raw_lyrics: str = payload.get("lyrics") or ""
-            snippet: str | None = None
+            lyrics: str | None = None
             if raw_lyrics.strip():
                 lyrics = raw_lyrics.replace("\n", " ").strip()
-                # snippet = lyrics[:400] + ("…" if len(lyrics) > 400 else "")
 
             track = TrackMetadata(
                 track_id=str(point.id),
@@ -275,7 +349,7 @@ class SearchService:
         # Call fit in executor (sync op, may take minutes)
         logger.info("[SearchService] Calling lyrics_db.fit() in executor...")
         try:
-            await asyncio.get_event_loop().run_in_executor(
+            await asyncio.get_running_loop().run_in_executor(
                 None,
                 lambda: self.lyrics_db.fit(
                     data,

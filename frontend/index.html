@@ -557,6 +557,7 @@ function ChatSection({ isDark, lang, activeCollection }) {
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState('hybrid');
+  const [autoMode, setAutoMode] = useState(true);
   const [results, setResults] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchMode, setSearchMode] = useState('hybrid');
@@ -591,7 +592,7 @@ function ChatSection({ isDark, lang, activeCollection }) {
     setInput(''); setLoading(true);
     try {
       const history = messages.filter(m=>!m.loading).map(m=>({ role:m.role==='assistant'?'assistant':'user', content:m.text||'' }));
-      const res = await apiFetch('/chat/', { method:'POST', body: JSON.stringify({ message:userText, history, mode, ...getLLMSettings() }) });
+      const res = await apiFetch('/chat/', { method:'POST', body: JSON.stringify({ message:userText, history, mode, auto_mode: autoMode, ...getLLMSettings() }) });
       const hits = res.hits || [];
       setResults(hits); setSelectedHit(null);
       const finalMsgs = [...newMsgs, { role:'assistant', text:res.message||'…', hits, confidence:res.confidence, song:res.song, artist:res.artist, attempts:res.attempts, time:new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'}) }];
@@ -624,12 +625,13 @@ function ChatSection({ isDark, lang, activeCollection }) {
 
   const modeBtnStyle = (id) => ({
     flex:1, padding:'6px', borderRadius:'8px', border:'none', fontSize:'12px',
-    fontWeight: mode===id?'600':'400', cursor:'pointer', transition:'all 0.12s',
-    background: mode===id
+    fontWeight: (!autoMode && mode===id)?'600':'400', cursor: autoMode ? 'not-allowed' : 'pointer', transition:'all 0.12s',
+    opacity: autoMode ? 0.5 : 1,
+    background: (!autoMode && mode===id)
       ? 'linear-gradient(180deg, oklch(65% 0.18 265) 0%, oklch(55% 0.2 275) 100%)'
       : (isDark?'rgba(255,255,255,0.05)':'rgba(0,0,0,0.05)'),
-    color: mode===id ? 'white' : c.textMuted,
-    boxShadow: mode===id
+    color: (!autoMode && mode===id) ? 'white' : c.textMuted,
+    boxShadow: (!autoMode && mode===id)
       ? 'inset 0 1px 0 rgba(255,255,255,0.2), inset 0 -1px 0 rgba(0,0,0,0.2), 0 2px 8px oklch(60% 0.18 270 / 0.3)'
       : (isDark?'inset 0 1px 0 rgba(255,255,255,0.04)':'inset 0 -1px 0 rgba(0,0,0,0.06)'),
   });
@@ -740,9 +742,27 @@ function ChatSection({ isDark, lang, activeCollection }) {
 
         {/* Input */}
         <div style={{ padding:'8px 14px 14px', borderTop:`1px solid ${c.border}`, background:isDark?'rgba(0,0,0,0.25)':'rgba(255,255,255,0.6)', backdropFilter:'blur(8px)' }}>
-          <div style={{ display:'flex', gap:'4px', marginBottom:'8px' }}>
+          {/* Auto toggle + mode buttons */}
+          <div style={{ display:'flex', gap:'4px', marginBottom:'8px', alignItems:'center' }}>
+            {/* Auto toggle — визуально отделен */}
+            <button onClick={() => { setAutoMode(!autoMode); if(!autoMode) setMode('hybrid'); }} style={{
+              flex:1, padding:'6px', borderRadius:'8px', border:'none', fontSize:'12px',
+              fontWeight: autoMode?'600':'400', cursor:'pointer', transition:'all 0.12s',
+              background: autoMode
+                ? 'linear-gradient(180deg, oklch(65% 0.15 145) 0%, oklch(55% 0.18 155) 100%)'
+                : (isDark?'rgba(255,255,255,0.05)':'rgba(0,0,0,0.05)'),
+              color: autoMode ? 'white' : c.textMuted,
+              boxShadow: autoMode
+                ? 'inset 0 1px 0 rgba(255,255,255,0.2), inset 0 -1px 0 rgba(0,0,0,0.2), 0 2px 8px oklch(60% 0.15 145 / 0.3)'
+                : (isDark?'inset 0 1px 0 rgba(255,255,255,0.04)':'inset 0 -1px 0 rgba(0,0,0,0.06)'),
+            }}>{lang==='ru'?'Авто':'Auto'}</button>
+            
+            {/* Separator */}
+            <div style={{ width:'1px', height:'24px', background:c.border, margin:'0 4px' }}></div>
+            
+            {/* Mode buttons — disabled when autoMode is on */}
             {Object.entries(modeLabelMap).map(([id,label]) => (
-              <button key={id} style={modeBtnStyle(id)} onClick={() => setMode(id)}>{label}</button>
+              <button key={id} style={modeBtnStyle(id)} onClick={() => setMode(id)} disabled={autoMode}>{label}</button>
             ))}
           </div>
           <div style={{ display:'flex', gap:'8px', alignItems:'flex-end' }}>

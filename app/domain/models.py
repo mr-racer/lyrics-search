@@ -81,6 +81,7 @@ class ChatRequest(BaseModel):
     message: str
     history: List[ChatMessage] = []
     mode: Literal["text", "audio", "hybrid"] = "hybrid"
+    auto_mode: bool = True  # если True — LLM классифицирует запрос, если False — используется mode напрямую
     # LLM connection — overrides env vars LLM_BASE_URL / LLM_MODEL if set
     llm_base_url: Optional[str] = Field(None, description="e.g. http://localhost:8000/v1")
     llm_model: Optional[str] = Field(None, description="e.g. openai/gpt-oss-20b")
