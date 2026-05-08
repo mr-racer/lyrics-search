@@ -7,6 +7,8 @@ from typing import List, Optional, Literal, Dict
 from ..domain.models import TrackMetadata, TrackHit, SearchRequest, SearchResponse, SearchFilters
 from ..existing.qdrant_db import LyricsDB
 from ..resources.model_registry import ModelRegistry
+from .artist_facts_service import load_all_facts_for_collection
+from .song_facts_service import load_all_song_facts_for_collection, get_song_facts_key
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +62,7 @@ class SearchService:
             **filter_kwargs,
         )
 
-        return self._points_to_hits(results[:limit], matched_on="lyrics")
+        return self._points_to_hits(results[:limit], matched_on="lyrics", collection_name=collection_name)
 
     # ── Audio search (CLAP only) ──
 
@@ -117,7 +119,7 @@ class SearchService:
 
         logger.info("[SearchService] Qdrant returned %d points", len(results.points) if results else 0)
         
-        hits = self._points_to_hits(results.points[:limit], matched_on="audio")
+        hits = self._points_to_hits(results.points[:limit], matched_on="audio", collection_name=collection_name)
         # filtered_hits = [h for h in hits if h.score >= 0.1]
         filtered_hits = hits
         
@@ -195,7 +197,8 @@ class SearchService:
             range_s = max_s - min_s if max_s > min_s else 1.0
             return [
                 TrackHit(track=h.track, score=(h.score - min_s) / range_s,
-                         matched_on=h.matched_on, lyrics=h.lyrics)
+                         matched_on=h.matched_on, lyrics=h.lyrics,
+                         artist_facts=h.artist_facts, song_facts=h.song_facts)
                 for h in hits
             ]
 
@@ -224,6 +227,8 @@ class SearchService:
                 score=entry["score"],
                 matched_on="hybrid",
                 lyrics=lead.lyrics,
+                artist_facts=lead.artist_facts,
+                song_facts=lead.song_facts,
             ))
 
         merged.sort(key=lambda h: h.score, reverse=True)
@@ -290,8 +295,19 @@ class SearchService:
 
         return models.Filter(must=conditions) if conditions else None
 
-    def _points_to_hits(self, points, matched_on: str = "lyrics") -> List[TrackHit]:
+    def _points_to_hits(
+        self,
+        points,
+        matched_on: str = "lyrics",
+        collection_name: Optional[str] = None,
+    ) -> List[TrackHit]:
         """Convert Qdrant ScoredPoint list to TrackHit list."""
+        facts_cache: Dict[str, str] = {}
+        song_facts_cache: Dict[str, str] = {}
+        if collection_name:
+            facts_cache = load_all_facts_for_collection(collection_name)
+            song_facts_cache = load_all_song_facts_for_collection(collection_name)
+
         hits = []
         for point in points:
             payload = point.payload or {}
@@ -318,10 +334,19 @@ class SearchService:
             if raw_lyrics.strip():
                 lyrics = raw_lyrics.replace("\n", " ").strip()
 
+            # Facts from cache
+            artist = payload.get("artist", "Unknown")
+            artist_slug = "-".join(artist.lower().split())
+            artist_facts = facts_cache.get(artist_slug)
+
+            song_title = payload.get("title", "Unknown")
+            song_key = get_song_facts_key(artist, song_title)
+            song_facts = song_facts_cache.get(song_key)
+
             track = TrackMetadata(
                 track_id=str(point.id),
                 title=payload.get("title", "Unknown"),
-                artist=payload.get("artist", "Unknown"),
+                artist=artist,
                 album=payload.get("album"),
                 year=year,
                 genre=payload.get("genre"),
@@ -335,6 +360,8 @@ class SearchService:
                 score=float(point.score),
                 matched_on=matched_on,
                 lyrics=lyrics,
+                artist_facts=artist_facts,
+                song_facts=song_facts,
             ))
         return hits
 
@@ -419,23 +446,27 @@ class SearchService:
         if progress_callback:
             await progress_callback("lyrics", 0, len(tracks), "Кодирование текстов песен...")
 
-        # Call fit in executor (sync op, may take minutes)
-        logger.info("[SearchService] Calling lyrics_db.fit() in executor...")
+        # Bridge async callback into sync context inside run_in_executor
+        loop = asyncio.get_event_loop()
+        def _sync_cb(stage, current, total, message):
+            if progress_callback:
+                asyncio.run_coroutine_threadsafe(
+                    progress_callback(stage, current, total, message), loop
+                )
+
+        # Call fit_with_progress in executor (sync op, may take minutes)
+        logger.info("[SearchService] Calling lyrics_db.fit_with_progress() in executor...")
         try:
             await asyncio.get_running_loop().run_in_executor(
                 None,
-                lambda: self.lyrics_db.fit(
+                lambda: self.lyrics_db.fit_with_progress(
                     data,
                     path=None,
                     collection_name=collection_name,
+                    progress_callback=_sync_cb if progress_callback else None,
                 ),
             )
-            logger.info("[SearchService] lyrics_db.fit() completed successfully")
+            logger.info("[SearchService] lyrics_db.fit_with_progress() completed successfully")
         except Exception as e:
-            logger.error("[SearchService] lyrics_db.fit() failed: %s", e, exc_info=True)
+            logger.error("[SearchService] lyrics_db.fit_with_progress() failed: %s", e, exc_info=True)
             raise
-
-        # Report progress: lyrics encoding done
-        if progress_callback:
-            await progress_callback("lyrics", len(tracks), len(tracks),
-                                   f"Кодирование завершено, {len(tracks)} треков")

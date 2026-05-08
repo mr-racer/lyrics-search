@@ -24,6 +24,8 @@ class TrackHit(BaseModel):
     score: float
     matched_on: Literal["lyrics", "audio", "hybrid"] = "lyrics"
     lyrics: str | None = None  # выдержка из лирики для lyrics-поиска
+    artist_facts: str | None = None  # interesting facts about the artist
+    song_facts: str | None = None  # interesting facts about the song
 
 
 class SearchFilters(BaseModel):

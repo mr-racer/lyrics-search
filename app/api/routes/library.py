@@ -76,6 +76,8 @@ async def get_stats(
     empty_payload = {
         "total_tracks": 0,
         "collection_name": None,
+        "unique_genres": 0,
+        "unique_artists": 0,
         "genres": [],
         "duration_buckets": [],
         "top_artists": [],
@@ -169,9 +171,10 @@ async def get_stats(
         pass  # data unavailable — still return total count
 
     total_sampled = sum(genre_counter.values()) or 1
+    unique_genre_count = len(genre_counter)
     top_genres = [
         {"genre": g, "count": c, "pct": round(c / total_sampled * 100)}
-        for g, c in genre_counter.most_common(3)
+        for g, c in genre_counter.most_common(5)
     ]
 
     total_dur = sum(duration_counter.values()) or 1
@@ -181,6 +184,7 @@ async def get_stats(
     ]
 
     total_artists = sum(artist_counter.values()) or 1
+    unique_artist_count = len(artist_counter)
     top_artists = [
         {"artist": a, "count": c, "pct": round(c / total_artists * 100)}
         for a, c in artist_counter.most_common(5)
@@ -203,6 +207,8 @@ async def get_stats(
     return {
         "total_tracks": target_count,
         "collection_name": target_col,
+        "unique_genres": unique_genre_count,
+        "unique_artists": unique_artist_count,
         "genres": top_genres,
         "duration_buckets": top_durations,
         "top_artists": top_artists,

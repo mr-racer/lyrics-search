@@ -11,8 +11,10 @@ from ..domain.models import TrackMetadata, IndexProgress
 from ..resources.model_registry import ModelRegistry
 from ..resources.db_client import DbClient
 from ..existing.folder_processor import FileProcessor
+from .artist_facts_service import fetch_facts_for_artists
 from .job_tracker import JobTracker, IndexStage, IndexStatus
 from .similarity_service import analyze_collection
+from .song_facts_service import fetch_facts_for_songs
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +156,30 @@ class LibraryService:
                 ),  # fire-and-forget — no .result() to avoid deadlock
             )
 
+            # Extract unique artists and start fetching facts in background
+            unique_artists = sorted({
+                info.get("artist", "").strip()
+                for info in processed_files.values()
+                if info.get("artist", "").strip()
+            })
+            facts_task = asyncio.create_task(
+                fetch_facts_for_artists(unique_artists, collection_name),
+                name="artist-facts",
+            )
+            logger.info("[LibraryService] Launched facts fetch for %d artists", len(unique_artists))
+
+            # Extract unique songs and start fetching song facts in background
+            unique_songs = sorted({
+                (info.get("artist", "").strip(), info.get("title", "").strip())
+                for info in processed_files.values()
+                if info.get("artist", "").strip() and info.get("title", "").strip()
+            })
+            song_facts_task = asyncio.create_task(
+                fetch_facts_for_songs(unique_songs, collection_name),
+                name="song-facts",
+            )
+            logger.info("[LibraryService] Launched song facts fetch for %d songs", len(unique_songs))
+
             track_count = len(processed_files)
             logger.info("[LibraryService] FileProcessor done, processed %d tracks", track_count)
             stage_meta.status = IndexStatus.COMPLETED
@@ -175,12 +201,6 @@ class LibraryService:
 
             # Stage 2: Lyrics indexing
             logger.info("[LibraryService] Stage 2: Lyrics indexing")
-            await self._notify_progress(job, {
-                "stage": IndexStage.LYRICS.value,
-                "stage_status": IndexStatus.RUNNING.value,
-                "message": "Кодирование текстов песен...",
-                "current": 0,
-            })
 
             stage_lyrics = job.stages[IndexStage.LYRICS]
             stage_lyrics.status = IndexStatus.RUNNING
@@ -196,6 +216,15 @@ class LibraryService:
             stage_audio.started_at = time.time()
             stage_audio.total = len(tracks)
             stage_audio.message = "CLAP-кодирование аудио..."
+
+            # Notify AFTER updating stage states so the snapshot captures RUNNING
+            await self._notify_progress(job, {
+                "stage": IndexStage.LYRICS.value,
+                "stage_status": IndexStatus.RUNNING.value,
+                "message": stage_lyrics.message,
+                "current": 0,
+                "total": len(tracks),
+            })
             await self._notify_progress(job, {
                 "stage": IndexStage.AUDIO.value,
                 "stage_status": IndexStatus.RUNNING.value,
@@ -224,6 +253,21 @@ class LibraryService:
             job.stages[IndexStage.LYRICS].completed_at = time.time()
             job.stages[IndexStage.AUDIO].status = IndexStatus.COMPLETED
             job.stages[IndexStage.AUDIO].completed_at = time.time()
+
+            # Await facts (runs parallel to encoding, cached to disk)
+            try:
+                await asyncio.wait_for(facts_task, timeout=60)
+                logger.info("[LibraryService] Artist facts fetched")
+            except (asyncio.TimeoutError, Exception) as e:
+                logger.warning("[LibraryService] Artist facts fetch timed out or failed: %s", e)
+                facts_task.cancel()
+
+            try:
+                await asyncio.wait_for(song_facts_task, timeout=120)
+                logger.info("[LibraryService] Song facts fetched")
+            except (asyncio.TimeoutError, Exception) as e:
+                logger.warning("[LibraryService] Song facts fetch timed out or failed: %s", e)
+                song_facts_task.cancel()
 
             # Stage 4: Similarity analysis
             logger.info("[LibraryService] Stage 4: Similarity analysis")
@@ -296,20 +340,20 @@ class LibraryService:
             job = self._job_tracker.get_job(self._current_job_id)
             if job:
                 # Update the appropriate stage
-                if stage == "lyrics":
-                    job.stages[IndexStage.LYRICS].current = current
-                    job.stages[IndexStage.LYRICS].total = total
-                    job.stages[IndexStage.LYRICS].message = message
-                elif stage == "audio":
-                    job.stages[IndexStage.AUDIO].current = current
-                    job.stages[IndexStage.AUDIO].total = total
-                    job.stages[IndexStage.AUDIO].message = message
+                index_stage = IndexStage.LYRICS if stage == "lyrics" else IndexStage.AUDIO if stage == "audio" else None
+                if index_stage:
+                    sp = job.stages[index_stage]
+                    sp.current = current
+                    sp.total = total
+                    sp.message = message
 
+                eta = job.calculate_eta_seconds(index_stage) if index_stage else None
                 await self._notify_progress(job, {
                     "stage": stage,
                     "current": current,
                     "total": total,
                     "message": message,
+                    "eta_seconds": eta,
                 })
 
     async def _on_analysis_progress(self, stage: IndexStage, current: int, total: int, message: str):

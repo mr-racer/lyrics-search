@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from .utils import (
     load_model, prepare_metadata, build_filter,
     build_text_for_embedding, _encode_clap, load_model_clap
@@ -271,7 +273,22 @@ class LyricsDB:
         finally:
             self.collection_name = _saved
 
-    def _fit_impl(self, data: list[dict], path: str | None = None):
+    def fit_with_progress(self, data: list[dict], path: str | None = None, collection_name: str | None = None,
+                           progress_callback: callable | None = None):
+        """Variant of fit() that reports progress at each encoding stage.
+
+        Args:
+            progress_callback: sync callable(stage, current, total, message) invoked from a worker thread.
+        """
+        _saved = self.collection_name
+        if collection_name:
+            self.collection_name = collection_name
+        try:
+            self._fit_impl(data, path, progress_callback=progress_callback)
+        finally:
+            self.collection_name = _saved
+
+    def _fit_impl(self, data: list[dict], path: str | None = None, progress_callback: callable | None = None):
         prepared_data = prepare_metadata(data)
         filtered = [s for s in prepared_data if len(s["lyrics"].split()) < 1500]
 
@@ -289,14 +306,19 @@ class LyricsDB:
             ]
 
         self._create_collection(clap_paths=paths)
+        total = len(filtered)
 
         # Pass 1: encode all lyrics at once (more efficient than per-batch)
+        if progress_callback:
+            progress_callback("lyrics", 0, total, "Encoding lyrics...")
         text_vecs = self.model.encode(
             [s["lyrics"] for s in filtered],
             batch_size=32,
             show_progress_bar=True,
             convert_to_numpy=True,
         )
+        if progress_callback:
+            progress_callback("lyrics", total, total, "Lyrics encoding done")
 
         # Vacate GPU before loading CLAP — remember original device to restore after
         text_device = next(self.model.parameters()).device
@@ -307,7 +329,14 @@ class LyricsDB:
 
         try:
             # Pass 2: CLAP audio embeddings (GPU now free)
-            clap_map = _encode_clap(filtered, self.model_clap if self.model_clap else None) if paths else {}
+            if paths:
+                if progress_callback:
+                    progress_callback("audio", 0, total, "Encoding audio (CLAP)...")
+                clap_map = _encode_clap(filtered, self.model_clap if self.model_clap else None)
+                if progress_callback:
+                    progress_callback("audio", total, total, "CLAP encoding done")
+            else:
+                clap_map = {}
         finally:
             # Restore text model to original device so subsequent searches stay on GPU
             if text_device.type == "cuda" and torch.cuda.is_available():
