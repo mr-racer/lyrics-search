@@ -29,7 +29,7 @@ except ImportError:
     CLAP_AVAILABLE = False
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-CLAP_WEIGHTS_PATH = Path(__file__).parent.parent / "weights" / "music_audioset_epoch_15_esc_90.14.pt"
+CLAP_WEIGHTS_PATH = Path(__file__).parent.parent.parent / "weights" / "music_audioset_epoch_15_esc_90.14.pt"
 
 # Available text embedding models
 TEXT_MODELS = {
@@ -98,12 +98,18 @@ class ModelRegistry:
         if not CLAP_AVAILABLE:
             raise RuntimeError("CLAP not available: pip install laion-clap")
 
+        if not CLAP_WEIGHTS_PATH.exists():
+            raise FileNotFoundError(
+                f"CLAP weights not found at {CLAP_WEIGHTS_PATH}. "
+                "Without the checkpoint the audio/projection layers stay randomly "
+                "initialized and embeddings are meaningless."
+            )
+
         cls._clap_model = laion_clap.CLAP_Module(
             enable_fusion=False,
             amodel='HTSAT-base'
         )
-        if CLAP_WEIGHTS_PATH.exists():
-            cls._clap_model.load_ckpt(str(CLAP_WEIGHTS_PATH))
+        cls._clap_model.load_ckpt(str(CLAP_WEIGHTS_PATH))
         cls._clap_model.eval()
         cls._clap_model = cls._clap_model.to(DEVICE)
 

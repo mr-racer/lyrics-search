@@ -52,6 +52,26 @@ Return ONLY a JSON object with this shape:
 No prose before or after the JSON.
 """.strip()
 
+# Sound-query rephrasing prompt — used when classification == "sound".
+# The LLM rephrases the user's mood/vibe description into concrete keywords
+# optimized for CLAP cross-modal text→audio embeddings.
+# TODO: REPLACE WITH FINAL PROMPT — this is a placeholder.
+SOUND_QUERY_REPHRASING_SYSTEM_PROMPT: str = """
+PLACEHOLDER_SOUND_REPHRASING_PROMPT — TODO: replace with actual prompt.
+
+You are a query optimizer for cross-modal audio search (CLAP model).
+The user describes a song by feeling, vibe, atmosphere, or production style.
+Your job is to rephrase their description into 1-3 concise keyword phrases
+that will match well against CLAP text embeddings of audio.
+
+Return ONLY a JSON object:
+{
+  "rephrased_queries": ["phrase 1", "phrase 2"]
+}
+
+No prose before or after the JSON.
+""".strip()
+
 # DEVELOPER_PROMPT: str = """
 # You are a music search assistant. You find songs from descriptions, moods,
 # vague memories, or remembered lyric fragments. You have access to a lyrics
@@ -455,7 +475,81 @@ async def chat(req: ChatRequest, request: Request) -> dict:
             print(f"[chat] classification error (non-fatal): {exc}")
             print(traceback.format_exc())
 
-    # ── Calls 2…N: agentic search loop ───────────────────────────────────────
+    # Determine effective search mode
+    detected_type = classification.get("type", "hybrid") if req.auto_mode else None
+    effective_mode = req.mode if not req.auto_mode else (detected_type or "hybrid")
+
+    # ── Sound fast path: rephrase → CLAP search → answer ─────────────────────
+    # When the query is classified as "sound" (or forced to "audio"), skip the
+    # agentic loop. Instead: ask LLM to rephrase the user's mood/vibe into
+    # CLAP-friendly keywords, run those through audio search, then format answer.
+    if effective_mode == "sound" or (not req.auto_mode and req.mode == "audio"):
+        sound_rephrased_queries: list[str] = []
+
+        if SOUND_QUERY_REPHRASING_SYSTEM_PROMPT.strip():
+            try:
+                rephrase_result = await ask_llm(
+                    req.message,
+                    system_prompt=SOUND_QUERY_REPHRASING_SYSTEM_PROMPT,
+                    parse_json=True,
+                    **llm_kw,
+                )
+                sound_rephrased_queries = rephrase_result.get("rephrased_queries", [])
+            except Exception as exc:
+                print(f"[chat] sound-rephrasing error (non-fatal): {exc}")
+
+        # Fallback: if rephrasing produced nothing, use the original query
+        if not sound_rephrased_queries:
+            sound_rephrased_queries = [req.message]
+
+        # Run each rephrased query through CLAP audio search
+        all_hits: list[TrackHit] = []
+        for rq in sound_rephrased_queries:
+            try:
+                round_hits = await service.search(
+                    query=rq, mode="audio", limit=SEARCH_LIMIT,
+                    collection_name=req.collection_name,
+                )
+                all_hits = _merge_hits(all_hits, round_hits)
+            except Exception as exc:
+                print(f"[chat] audio search error for '{rq}': {exc}")
+
+        attempts_done = 1
+        all_hits.sort(key=lambda h: h.score, reverse=True)
+
+        # Build a conversational answer from the results
+        if all_hits:
+            top = all_hits[0]
+            final_result = {
+                "action":     "answer",
+                "confidence": "medium",
+                "song":       top.track.title,
+                "artist":     top.track.artist,
+                "message":    (
+                    f"По звучанию ближе всего — «{top.track.title}» "
+                    f"({top.track.artist}{' [' + top.track.album + ']' if top.track.album else ''})."
+                ),
+            }
+        else:
+            final_result = {
+                "action":     "answer",
+                "confidence": "low",
+                "song":       None,
+                "artist":     None,
+                "message":    "Не удалось найти треков по описанию звука. Попробуй уточнить настроение, инструменты, или стиль вокала.",
+            }
+
+        return {
+            "message":        final_result.get("message", ""),
+            "song":           final_result.get("song"),
+            "artist":         final_result.get("artist"),
+            "confidence":     final_result.get("confidence", "low"),
+            "hits":           [h.model_dump() for h in all_hits[:10]],
+            "attempts":       attempts_done,
+            "classification": classification,
+        }
+
+    # ── Calls 2…N: agentic search loop (text / hybrid) ──────────────────────
     previous_queries = ""
     context          = ""
     all_hits: list[TrackHit] = []

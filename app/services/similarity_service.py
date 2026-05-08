@@ -73,8 +73,8 @@ def get_top_pairs(
         sim_idx = sorted_idx[:k]
         sim_scores = (1.0 - dist_matrix[i, sim_idx] / 2.0) * 100.0
 
-        # Dissimilar: largest distances (skip inf on diagonal)
-        diss_idx = sorted_idx[-(k + 1):-1]
+        # Dissimilar: largest distances (skip inf on diagonal), most-different first
+        diss_idx = sorted_idx[-(k + 1):-1][::-1]
         diss_scores = (1.0 - dist_matrix[i, diss_idx] / 2.0) * 100.0
 
         similar.append(

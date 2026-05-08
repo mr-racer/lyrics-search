@@ -188,6 +188,22 @@ class LibraryService:
             stage_lyrics.total = len(tracks)
             stage_lyrics.message = "Индексация текстов в векторную БД..."
 
+            # CLAP encoding runs inside fit() alongside text encoding without its own
+            # progress callback — mark AUDIO as RUNNING here so the UI doesn't show
+            # it as idle while the GPU is busy on it.
+            stage_audio = job.stages[IndexStage.AUDIO]
+            stage_audio.status = IndexStatus.RUNNING
+            stage_audio.started_at = time.time()
+            stage_audio.total = len(tracks)
+            stage_audio.message = "CLAP-кодирование аудио..."
+            await self._notify_progress(job, {
+                "stage": IndexStage.AUDIO.value,
+                "stage_status": IndexStatus.RUNNING.value,
+                "message": stage_audio.message,
+                "current": 0,
+                "total": len(tracks),
+            })
+
             # Stage 3: Index into Qdrant via SearchService (includes both lyrics and audio)
             if self.search_service and tracks:
                 logger.info("[LibraryService] Starting SearchService.index_tracks_with_progress...")
@@ -196,6 +212,7 @@ class LibraryService:
                     tracks,
                     collection_name=collection_name,
                     progress_callback=self._on_index_progress,
+                    text_model=text_model,
                 )
                 logger.info("[LibraryService] SearchService.index_tracks_with_progress done")
             else:

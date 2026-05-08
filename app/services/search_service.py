@@ -72,25 +72,63 @@ class SearchService:
         collection_name: Optional[str] = None,
     ) -> List[TrackHit]:
         """Audio-based search: encode query with CLAP, search Qdrant by 'clap' vector only."""
-        clap_model = ModelRegistry.get_clap()
-        clap_vector = clap_model.get_text_embedding([query])[0].tolist()
+        logger.info("[SearchService] _search_audio: query='%s', limit=%d, collection=%s",
+                    query, limit, collection_name)
+        
+        clap_model = ModelRegistry._clap_model
+        if clap_model is None:
+            logger.info("[SearchService] CLAP not yet loaded — loading now (lazy)")
+            try:
+                clap_model = await asyncio.get_running_loop().run_in_executor(
+                    None, ModelRegistry.load_clap
+                )
+            except Exception as e:
+                logger.error("[SearchService] CLAP model failed to load: %s", e)
+                raise RuntimeError(f"Audio search unavailable: CLAP model could not be loaded — {e}") from e
+        
+        try:
+            clap_vector = clap_model.get_text_embedding([query])[0].tolist()
+            logger.debug("[SearchService] CLAP text embedding generated, dim=%d", len(clap_vector))
+        except Exception as e:
+            logger.error("[SearchService] Failed to generate CLAP embedding: %s", e)
+            return []
 
         col = collection_name or self.lyrics_db.collection_name
-        qdrant_filter = self._build_qdrant_filter(filters)
+        qdrant_filter = self._build_qdrant_filter_models(filters)
+        
+        logger.info("[SearchService] Querying Qdrant collection='%s', using='clap', limit=%d",
+                    col, limit * 2)
 
-        results = await asyncio.get_running_loop().run_in_executor(
-            None,
-            lambda: self.lyrics_db.qdrant_client.query_points(
-                collection_name=col,
-                query=clap_vector,
-                using="clap",
-                limit=limit * 2,
-                filter=qdrant_filter,
-                with_payload=True,
-            ),
-        )
+        try:
+            results = await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: self.lyrics_db.qdrant_client.query_points(
+                    collection_name=col,
+                    query=clap_vector,
+                    using="clap",
+                    limit=limit * 2,
+                    query_filter=qdrant_filter,
+                    with_payload=True,
+                ),
+            )
+        except Exception as e:
+            logger.error("[SearchService] Qdrant query failed: %s", e, exc_info=True)
+            raise
 
-        return self._points_to_hits(results.points[:limit], matched_on="audio")
+        logger.info("[SearchService] Qdrant returned %d points", len(results.points) if results else 0)
+        
+        hits = self._points_to_hits(results.points[:limit], matched_on="audio")
+        # filtered_hits = [h for h in hits if h.score >= 0.1]
+        filtered_hits = hits
+        
+        logger.info("[SearchService] After score filter (>=0.1): %d hits", len(filtered_hits))
+        if filtered_hits:
+            logger.debug("[SearchService] Top hit: '%s' by '%s' (score=%.3f)",
+                        filtered_hits[0].track.title,
+                        filtered_hits[0].track.artist,
+                        filtered_hits[0].score)
+        
+        return filtered_hits
 
     # ── Hybrid search (dense+BM25 0.5 + CLAP 0.5) ──
 
@@ -229,6 +267,29 @@ class SearchService:
 
         return {"must": conditions} if conditions else None
 
+    def _build_qdrant_filter_models(self, filters: Optional[SearchFilters]):
+        """Build proper qdrant_client.models.Filter object for query_points()."""
+        from qdrant_client import models
+        
+        if not filters or all(v is None for v in [filters.artist, filters.album, filters.genre]):
+            return None
+
+        conditions = []
+        if filters.artist:
+            conditions.append(models.FieldCondition(
+                key="artist", match=models.MatchValue(value=filters.artist)
+            ))
+        if filters.album:
+            conditions.append(models.FieldCondition(
+                key="album", match=models.MatchValue(value=filters.album)
+            ))
+        if filters.genre:
+            conditions.append(models.FieldCondition(
+                key="genre", match=models.MatchValue(value=filters.genre)
+            ))
+
+        return models.Filter(must=conditions) if conditions else None
+
     def _points_to_hits(self, points, matched_on: str = "lyrics") -> List[TrackHit]:
         """Convert Qdrant ScoredPoint list to TrackHit list."""
         hits = []
@@ -311,6 +372,7 @@ class SearchService:
         tracks: List[TrackMetadata],
         collection_name: Optional[str] = None,
         progress_callback=None,
+        text_model: Optional[str] = None,
     ) -> None:
         """Index tracks into Qdrant with progress callbacks.
 
@@ -318,13 +380,24 @@ class SearchService:
             tracks: List of tracks to index
             collection_name: Qdrant collection name
             progress_callback: Async callback(stage, current, total, message) for progress updates
+            text_model: Override text embedding model for this indexing run.
+                        Must already be loaded via ModelRegistry.load_text_model().
         """
         if not tracks:
             logger.warning("[SearchService] index_tracks_with_progress: no tracks to index")
             return
 
-        logger.info("[SearchService] index_tracks_with_progress: %d tracks, collection=%s",
-                    len(tracks), collection_name)
+        logger.info("[SearchService] index_tracks_with_progress: %d tracks, collection=%s, text_model=%s",
+                    len(tracks), collection_name, text_model)
+
+        if text_model and text_model != self.lyrics_db.model_name:
+            logger.info("[SearchService] Switching LyricsDB text model: %s -> %s",
+                        self.lyrics_db.model_name, text_model)
+            model, vector_name, vector_dim = ModelRegistry.load_text_model(text_model)
+            self.lyrics_db.model_name = text_model
+            self.lyrics_db._model = model
+            self.lyrics_db._vector_name = vector_name
+            self.lyrics_db._vector_dim = vector_dim
 
         # Build dict as prepare_metadata() expects: {"Artist — Title": {...}}
         data: dict[str, dict] = {}

@@ -273,7 +273,7 @@ class LyricsDB:
 
     def _fit_impl(self, data: list[dict], path: str | None = None):
         prepared_data = prepare_metadata(data)
-        filtered = [s for s in prepared_data if len(s["lyrics"].split()) < 1300]
+        filtered = [s for s in prepared_data if len(s["lyrics"].split()) < 1500]
 
         # CLAP paths: из path-аргумента ИЛИ из file_path в метаданных
         if path:
@@ -298,14 +298,20 @@ class LyricsDB:
             convert_to_numpy=True,
         )
 
-        # Vacate GPU before loading CLAP
-        self.model.to("cpu")
-        gc.collect()
-        if torch.cuda.is_available():
+        # Vacate GPU before loading CLAP — remember original device to restore after
+        text_device = next(self.model.parameters()).device
+        if torch.cuda.is_available() and text_device.type == "cuda":
+            self.model.to("cpu")
+            gc.collect()
             torch.cuda.empty_cache()
 
-        # Pass 2: CLAP audio embeddings (GPU now free) — передаём готовые метаданные
-        clap_map = _encode_clap(filtered, self.model_clap if self.model_clap else None) if paths else {}
+        try:
+            # Pass 2: CLAP audio embeddings (GPU now free)
+            clap_map = _encode_clap(filtered, self.model_clap if self.model_clap else None) if paths else {}
+        finally:
+            # Restore text model to original device so subsequent searches stay on GPU
+            if text_device.type == "cuda" and torch.cuda.is_available():
+                self.model.to(text_device)
 
         # Upsert (сетевой запрос — модель на CPU не мешает)
         self._upsert_in_batches(filtered, text_vecs, clap_map or None)
@@ -366,7 +372,6 @@ class LyricsDB:
                 with_payload=True,
             )
         else:
-            query_vector = self.model.encode(query).tolist()
             clap_vector = self.model_clap.get_text_embedding([query])[0].tolist()
 
             results = self.qdrant_client.query_points(
@@ -380,7 +385,7 @@ class LyricsDB:
                         filter=query_filter,
                     )
                 ],
-                query=models.FusionQuery(fusion=models.Fusion.RRF),
+                # query=models.FusionQuery(fusion=models.Fusion.RRF),
                 limit=limit,
                 with_payload=True,
             )

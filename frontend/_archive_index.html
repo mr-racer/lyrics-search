@@ -106,6 +106,16 @@
       to   { opacity:1; transform: translateY(0); }
     }
 
+    /* Top pairs comparator */
+    @keyframes pair-row-in {
+      from { opacity: 0; transform: translateX(-6px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+    @keyframes meter-grow {
+      from { transform: scaleX(0); }
+      to   { transform: scaleX(1); }
+    }
+
     /* ── Tweaks panel ────────────────────────────────────────── */
     #musix-tweaks {
       position: fixed; bottom: 20px; right: 20px; z-index: 9999;
@@ -559,6 +569,7 @@ function ChatSection({ isDark, lang, activeCollection }) {
   const [mode, setMode] = useState('hybrid');
   const [autoMode, setAutoMode] = useState(true);
   const [results, setResults] = useState([]);
+  const [searchExecuted, setSearchExecuted] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [searchMode, setSearchMode] = useState('hybrid');
   const [searchLoading, setSearchLoading] = useState(false);
@@ -613,6 +624,7 @@ function ChatSection({ isDark, lang, activeCollection }) {
       if (filters.genre)  f.genre  = filters.genre;
       const res = await apiFetch('/search/', { method:'POST', body: JSON.stringify({ query:searchQuery, mode:searchMode, filters:Object.keys(f).length?f:null, limit:20, collection_name:activeCollection||undefined }) });
       setResults(res.hits||[]);
+      setSearchExecuted(true);
     } catch(e) { setSearchError(e.message); }
     finally { setSearchLoading(false); }
   };
@@ -899,8 +911,33 @@ function ChatSection({ isDark, lang, activeCollection }) {
                   boxShadow: isDark?'inset 0 2px 4px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.05)':'inset 0 2px 3px rgba(0,0,0,0.07), inset 0 1px 0 rgba(255,255,255,0.9)' }}>
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={c.textSubtle} strokeWidth="1.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
                 </div>
-                <div style={{ fontSize:'13px', fontWeight:'600', color:c.textMuted }}>{lang==='ru'?'Результаты появятся здесь':'Results will appear here'}</div>
-                <div style={{ fontSize:'12px', color:c.textSubtle }}>{lang==='ru'?'Напиши в чат или используй поиск выше':'Chat or use manual search above'}</div>
+                {searchExecuted ? (
+                  <>
+                    <div style={{ fontSize:'13px', fontWeight:'600', color:c.textMuted }}>
+                      {searchMode === 'audio' && lang==='ru' 
+                        ? 'Аудио-соответствий не найдено'
+                        : searchMode === 'audio'
+                        ? 'No audio matches found'
+                        : lang==='ru'
+                        ? 'По вашему запросу ничего не найдено'
+                        : 'No results found for your query'}
+                    </div>
+                    <div style={{ fontSize:'12px', color:c.textSubtle }}>
+                      {searchMode === 'audio' && lang==='ru'
+                        ? 'Попробуйте изменить запрос или переключитесь на режим "Текст"'
+                        : searchMode === 'audio'
+                        ? 'Try rephrasing or switch to "Text" mode'
+                        : lang==='ru'
+                        ? 'Попробуйте изменить формулировку запроса'
+                        : 'Try adjusting your search terms'}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontSize:'13px', fontWeight:'600', color:c.textMuted }}>{lang==='ru'?'Результаты появятся здесь':'Results will appear here'}</div>
+                    <div style={{ fontSize:'12px', color:c.textSubtle }}>{lang==='ru'?'Напиши в чат или используй поиск выше':'Chat or use manual search above'}</div>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -933,6 +970,7 @@ function LibrarySection({ isDark, lang, activeCollection, collections, onCollect
   const [statsLoading, setStatsLoading] = useState(true);
   const [topPairs, setTopPairs] = useState(null);
   const [topPairsLoading, setTopPairsLoading] = useState(true);
+  const [activePairsTab, setActivePairsTab] = useState('similar');
 
   const statsAbortRef = useRef(null);
   const topPairsAbortRef = useRef(null);
@@ -1205,143 +1243,275 @@ function LibrarySection({ isDark, lang, activeCollection, collections, onCollect
           </>)}
         </div>
 
-        {/* Row 3: top-5 similar / different */}
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'14px', marginBottom:'22px' }}>
-          {[
-            { key:'similar',   label:lang==='ru'?'Топ-5 похожих треков':'Top 5 most similar',   icon:'≈', hue:270 },
-            { key:'different', label:lang==='ru'?'Топ-5 самых разных':'Top 5 most different', icon:'≠', hue:25 },
-          ].map(({ key, label, icon, hue }) => {
+        {/* Row 3: pairs comparator (compact, tabbed) */}
+        <div style={{ marginBottom:'22px' }}>
+          {(() => {
+            const TABS = [
+              { key:'similar',   label:lang==='ru'?'Похожие':'Similar',   icon:'≈', hue:270, scoreLabel:lang==='ru'?'сходство':'similarity' },
+              { key:'dissimilar', label:lang==='ru'?'Разные':'Different',  icon:'≠', hue:25,  scoreLabel:lang==='ru'?'различие':'difference' },
+            ];
+            const active = TABS.find(t => t.key === activePairsTab) || TABS[0];
+            const { key, hue } = active;
             const pairs = topPairs?.[key] || [];
-            const isLoading = topPairsLoading || pairs.length === 0;
+            const isLoading = topPairsLoading;
 
-            // Pick top 5 pairs with highest scores
-            const top5 = pairs.length > 0
-              ? pairs.map(p => ({
-                  main: p,
-                  best: p[`top_${key === 'similar' ? 'similar' : 'dissimilar'}`][0]
-                })).slice(0, 5)
+            const sortedPairs = pairs.length > 0
+              ? pairs
+                  .map(p => ({
+                    main: p,
+                    best: p[`top_${key === 'similar' ? 'similar' : 'dissimilar'}`]?.[0]
+                  }))
+                  .filter(x => x.best)
+                  .sort((a, b) => key === 'similar'
+                    ? b.best.score - a.best.score
+                    : a.best.score - b.best.score)
               : [];
 
+            const seenPairs = new Set();
+            const top5 = [];
+            for (const item of sortedPairs) {
+              const a = item.main.track_id || item.main.song;
+              const b = item.best.track_id || item.best.name;
+              const pairKey = a < b ? `${a}|${b}` : `${b}|${a}`;
+              if (seenPairs.has(pairKey)) continue;
+              seenPairs.add(pairKey);
+              top5.push(item);
+              if (top5.length === 5) break;
+            }
+
+            const accent = `oklch(70% 0.18 ${hue})`;
+            const accentDim = `oklch(60% 0.14 ${hue})`;
+            const accentSoft = `oklch(60% 0.18 ${hue} / 0.13)`;
+
             return (
-              <div key={key} style={{ padding:'20px 22px', borderRadius:'14px', background:c.surface, border:`1px solid ${c.border}`, minHeight:'700px', display:'flex', flexDirection:'column', gap:'12px',
-                boxShadow: isDark?'inset 0 1px 0 rgba(255,255,255,0.06), inset 0 -1px 0 rgba(0,0,0,0.3), 0 2px 8px rgba(0,0,0,0.35)':'inset 0 1px 0 rgba(255,255,255,0.9), inset 0 -1px 0 rgba(0,0,0,0.04), 0 2px 6px rgba(0,0,0,0.07)' }}>
-                <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
-                  <div style={{ width:'30px', height:'30px', borderRadius:'8px', flexShrink:0, background:`oklch(60% 0.18 ${hue} / 0.13)`,
-                    display:'flex', alignItems:'center', justifyContent:'center', fontSize:'16px', color:`oklch(60% 0.18 ${hue})`, fontFamily:'DM Mono, monospace', fontWeight:'700',
-                    boxShadow: isDark?'inset 0 1px 0 rgba(255,255,255,0.06)':'inset 0 1px 0 rgba(255,255,255,0.8)' }}>
-                    {icon}
+              <div style={{
+                padding:'16px 20px 14px',
+                borderRadius:'14px',
+                background:c.surface,
+                border:`1px solid ${c.border}`,
+                boxShadow: isDark
+                  ? 'inset 0 1px 0 rgba(255,255,255,0.06), inset 0 -1px 0 rgba(0,0,0,0.3), 0 2px 8px rgba(0,0,0,0.35)'
+                  : 'inset 0 1px 0 rgba(255,255,255,0.9), inset 0 -1px 0 rgba(0,0,0,0.04), 0 2px 6px rgba(0,0,0,0.07)',
+                position:'relative',
+                overflow:'hidden',
+              }}>
+                {/* Subtle accent glow that shifts with active tab */}
+                <div style={{
+                  position:'absolute', top:0, right:0, width:'180px', height:'120px',
+                  background:`radial-gradient(ellipse at top right, ${accentSoft}, transparent 70%)`,
+                  pointerEvents:'none',
+                  transition:'background 0.4s ease',
+                }} />
+
+                {/* Header: label · segmented switch */}
+                <div style={{ position:'relative', display:'flex', alignItems:'center', justifyContent:'space-between', gap:'12px', marginBottom:'12px' }}>
+                  <div style={{ display:'flex', alignItems:'baseline', gap:'10px', minWidth:0 }}>
+                    <span style={{
+                      fontSize:'11px', fontFamily:'DM Mono, monospace',
+                      color:c.textMuted, fontWeight:'600',
+                      textTransform:'uppercase', letterSpacing:'0.6px',
+                    }}>
+                      {lang==='ru'?'Пары · CLAP':'Pairs · CLAP'}
+                    </span>
+                    <span style={{
+                      fontSize:'10px', fontFamily:'DM Mono, monospace',
+                      color:c.textSubtle, letterSpacing:'0.4px',
+                    }}>
+                      {top5.length > 0 ? `Top ${top5.length}` : ''}
+                    </span>
                   </div>
-                  <div style={{ fontSize:'13px', fontWeight:'600', color:c.text }}>{label}</div>
+
+                  <div role="tablist" style={{
+                    display:'inline-flex', padding:'3px', borderRadius:'10px',
+                    background: isDark ? 'rgba(0,0,0,0.4)' : 'rgba(0,0,0,0.05)',
+                    boxShadow: isDark ? 'inset 0 1px 2px rgba(0,0,0,0.55)' : 'inset 0 1px 2px rgba(0,0,0,0.08)',
+                  }}>
+                    {TABS.map(t => {
+                      const on = t.key === activePairsTab;
+                      const tHue = t.hue;
+                      return (
+                        <button key={t.key}
+                          role="tab"
+                          aria-selected={on}
+                          onClick={() => setActivePairsTab(t.key)}
+                          style={{
+                            border:'none', cursor:'pointer',
+                            padding:'5px 12px 5px 10px', borderRadius:'7px',
+                            fontSize:'12px', fontWeight:'600', fontFamily:'inherit',
+                            color: on ? `oklch(72% 0.18 ${tHue})` : c.textMuted,
+                            background: on ? (isDark ? 'rgba(255,255,255,0.06)' : '#fff') : 'transparent',
+                            boxShadow: on
+                              ? (isDark ? 'inset 0 1px 0 rgba(255,255,255,0.08), 0 1px 2px rgba(0,0,0,0.35)' : '0 1px 2px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.9)')
+                              : 'none',
+                            transition:'color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease',
+                            display:'flex', alignItems:'center', gap:'6px',
+                          }}>
+                          <span style={{
+                            fontFamily:'DM Mono, monospace', fontSize:'13px',
+                            color: on ? `oklch(72% 0.18 ${tHue})` : c.textSubtle,
+                            transition:'color 0.18s ease',
+                          }}>
+                            {t.icon}
+                          </span>
+                          {t.label}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-                <div style={{ flex:1, display:'flex', flexDirection:'column', gap:'8px' }}>
+
+                {/* Rows */}
+                <div style={{ position:'relative', display:'flex', flexDirection:'column' }}>
                   {isLoading ? (
-                    // Skeleton loading state — matches new vertical card layout
                     [1,2,3,4,5].map(n => (
-                      <div key={n} style={{
-                        height:'130px', borderRadius:'12px', overflow:'hidden',
-                        background: isDark?'rgba(255,255,255,0.025)':'rgba(0,0,0,0.02)',
-                        border:`1px solid ${c.border}`,
-                        boxShadow: isDark?'inset 0 1px 2px rgba(0,0,0,0.35)':'inset 0 1px 1px rgba(0,0,0,0.04)',
-                        display:'flex', flexDirection:'column',
+                      <div key={`sk-${n}`} style={{
+                        display:'grid', gridTemplateColumns:'24px 64px 1fr 92px',
+                        alignItems:'center', gap:'14px',
+                        padding:'12px 0',
+                        borderTop: n > 1 ? `1px solid ${c.border}` : 'none',
                       }}>
-                        {/* Top track skeleton */}
-                        <div style={{ display:'flex', alignItems:'center', gap:'10px', padding:'10px 12px 6px' }}>
-                          <div style={{ width:'40px', height:'40px', borderRadius:'8px', flexShrink:0, background:isDark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.05)' }} />
-                          <div style={{ flex:1, display:'flex', flexDirection:'column', gap:'4px' }}>
-                            <div style={{ height:'8px', borderRadius:'4px', width:'60%', background:isDark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.06)' }} />
-                            <div style={{ height:'6px', borderRadius:'4px', width:'40%', background:isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.04)' }} />
-                          </div>
+                        <div style={{ width:'14px', height:'10px', borderRadius:'3px', background:isDark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.06)' }} />
+                        <div style={{ display:'flex', gap:'-8px' }}>
+                          <div style={{ width:'34px', height:'34px', borderRadius:'8px', background:isDark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.05)' }} />
+                          <div style={{ width:'34px', height:'34px', borderRadius:'8px', background:isDark?'rgba(255,255,255,0.05)':'rgba(0,0,0,0.04)', marginLeft:'-10px' }} />
                         </div>
-                        {/* Score bar skeleton */}
-                        <div style={{ margin:'4px 12px 0', padding:'8px 0', borderTop:`1px solid ${c.border}`, borderBottom:`1px solid ${c.border}`, display:'flex', justifyContent:'center' }}>
-                          <div style={{ height:'14px', borderRadius:'4px', width:'80px', background:isDark?'rgba(255,255,255,0.05)':'rgba(0,0,0,0.05)' }} />
+                        <div style={{ display:'flex', flexDirection:'column', gap:'5px' }}>
+                          <div style={{ height:'9px', borderRadius:'4px', width:'70%', background:isDark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.06)' }} />
+                          <div style={{ height:'8px', borderRadius:'4px', width:'45%', background:isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.04)' }} />
                         </div>
-                        {/* Bottom track skeleton */}
-                        <div style={{ display:'flex', alignItems:'center', gap:'10px', padding:'6px 12px 10px' }}>
-                          <div style={{ width:'40px', height:'40px', borderRadius:'8px', flexShrink:0, background:isDark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.05)' }} />
-                          <div style={{ flex:1, display:'flex', flexDirection:'column', gap:'4px' }}>
-                            <div style={{ height:'8px', borderRadius:'4px', width:'55%', background:isDark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.06)' }} />
-                            <div style={{ height:'6px', borderRadius:'4px', width:'35%', background:isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.04)' }} />
-                          </div>
+                        <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:'4px' }}>
+                          <div style={{ width:'48px', height:'14px', borderRadius:'4px', background:isDark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.06)' }} />
+                          <div style={{ width:'72px', height:'3px', borderRadius:'2px', background:isDark?'rgba(255,255,255,0.05)':'rgba(0,0,0,0.05)' }} />
                         </div>
                       </div>
                     ))
+                  ) : top5.length === 0 ? (
+                    <div style={{ fontSize:'12px', color:c.textSubtle, fontFamily:'DM Mono, monospace', textAlign:'center', padding:'40px 0' }}>
+                      {lang==='ru'?'Данные ещё не рассчитаны':'Data not computed yet'}
+                    </div>
                   ) : (
-                    // Real data — vertical card per pair
                     top5.map((pair, idx) => {
                       const mainName = pair.main.song;
                       const bestName = pair.best?.name || '';
-                      const bestScore = pair.best?.score || 0;
+                      const rawScore = pair.best?.score || 0;
                       const [mainArtist, mainTitle] = mainName.split(' - ').length === 2 ? mainName.split(' - ') : ['Unknown', mainName];
                       const [bestArtist, bestTitle] = bestName.split(' - ').length === 2 ? bestName.split(' - ') : ['Unknown', bestName];
 
-                      // Score gradient: 0% → red, 100% → green
-                      const scorePct = Math.max(0, Math.min(100, bestScore));
-                      const scoreHue = (scorePct / 100) * 130; // 0→red(0), 100→green(130)
+                      // similar shows similarity %, different shows distance % (100 - similarity)
+                      const displayScore = key === 'similar' ? rawScore : Math.max(0, 100 - rawScore);
+                      const meterPct = Math.max(3, Math.min(100, displayScore));
 
                       return (
-                        <div key={idx} style={{
-                          borderRadius:'12px', overflow:'hidden',
-                          background: isDark ? 'rgba(255,255,255,0.025)' : 'rgba(0,0,0,0.02)',
-                          border: `1px solid ${c.border}`,
-                          boxShadow: isDark ? 'inset 0 1px 2px rgba(0,0,0,0.35), 0 2px 6px rgba(0,0,0,0.25)' : 'inset 0 1px 1px rgba(0,0,0,0.04), 0 2px 6px rgba(0,0,0,0.06)',
-                          display:'flex', flexDirection:'column', gap:'0',
-                        }}>
-                          {/* ── Top track ── */}
-                          <div style={{ display:'flex', alignItems:'center', gap:'10px', padding:'10px 12px 6px' }}>
-                            <AlbumCover
-                              title={mainTitle}
-                              artist={mainArtist}
-                              size={40}
-                              isDark={isDark}
-                              coverPath={pair.main.cover_art_path}
-                            />
-                            <div style={{ flex:1, minWidth:0, display:'flex', flexDirection:'column', gap:'2px' }}>
-                              <div style={{ fontSize:'13px', fontWeight:'600', color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-                                {mainTitle}
-                              </div>
-                              <div style={{ fontSize:'11px', color:c.textMuted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-                                {mainArtist}
-                              </div>
+                        <div key={`${key}-${idx}`}
+                          style={{
+                            display:'grid',
+                            gridTemplateColumns:'24px 64px 1fr 92px',
+                            alignItems:'center', gap:'14px',
+                            padding:'12px 0 13px',
+                            borderTop: idx > 0 ? `1px solid ${c.border}` : 'none',
+                            animation: `pair-row-in 0.4s ${idx * 60}ms cubic-bezier(.4,0,.2,1) backwards`,
+                          }}>
+                          {/* Rank */}
+                          <div style={{
+                            fontSize:'10px', fontFamily:'DM Mono, monospace',
+                            color:c.textSubtle, letterSpacing:'0.6px',
+                            fontWeight:'600',
+                          }}>
+                            {String(idx + 1).padStart(2, '0')}
+                          </div>
+
+                          {/* Stacked covers — slight overlap, gentle tilt */}
+                          <div style={{ position:'relative', width:'64px', height:'34px' }}>
+                            <div style={{
+                              position:'absolute', left:0, top:0,
+                              transform:'rotate(-4deg)',
+                              transformOrigin:'center',
+                              filter: isDark ? 'drop-shadow(0 2px 5px rgba(0,0,0,0.55))' : 'drop-shadow(0 1px 3px rgba(0,0,0,0.18))',
+                            }}>
+                              <AlbumCover
+                                title={mainTitle}
+                                artist={mainArtist}
+                                size={34}
+                                isDark={isDark}
+                                coverPath={pair.main.cover_art_path}
+                              />
+                            </div>
+                            <div style={{
+                              position:'absolute', left:'24px', top:0,
+                              transform:'rotate(4deg)',
+                              transformOrigin:'center',
+                              filter: isDark ? 'drop-shadow(0 2px 5px rgba(0,0,0,0.55))' : 'drop-shadow(0 1px 3px rgba(0,0,0,0.18))',
+                            }}>
+                              <AlbumCover
+                                title={bestTitle}
+                                artist={bestArtist}
+                                size={34}
+                                isDark={isDark}
+                                coverPath={pair.best?.cover_art_path}
+                              />
                             </div>
                           </div>
 
-                          {/* ── Score bar ── */}
-                          <div style={{
-                            margin:'4px 12px 0', padding:'8px 0',
-                            borderTop: `1px solid ${c.border}`,
-                            borderBottom: `1px solid ${c.border}`,
-                            display:'flex', alignItems:'center', justifyContent:'center', gap:'8px',
-                          }}>
-                            <span style={{ fontSize:'11px', color:c.textMuted, fontFamily:'DM Mono, monospace' }}>
-                              {lang==='ru'?'похожесть':'similarity'}
-                            </span>
-                            <span style={{
-                              fontSize:'18px', fontWeight:'700', fontFamily:'DM Mono, monospace',
-                              background: `linear-gradient(90deg, oklch(65% 0.22 ${scoreHue}), oklch(70% 0.25 ${scoreHue}) )`,
-                              WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
-                              backgroundClip: 'text',
+                          {/* Names — stacked tightly, with link glyph */}
+                          <div style={{ minWidth:0, display:'flex', flexDirection:'column', gap:'2px' }}>
+                            <div style={{ fontSize:'12.5px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', color:c.text }}>
+                              <span style={{ fontWeight:'600' }}>{mainTitle}</span>
+                              <span style={{ color:c.textSubtle, margin:'0 6px' }}>·</span>
+                              <span style={{ color:c.textMuted }}>{mainArtist}</span>
+                            </div>
+                            <div style={{
+                              fontSize:'11.5px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+                              color:c.textMuted,
+                              display:'flex', alignItems:'center', gap:'6px',
                             }}>
-                              {bestScore.toFixed(1)}%
-                            </span>
+                              <span style={{
+                                color:accent, fontFamily:'DM Mono, monospace',
+                                fontSize:'10px', flexShrink:0, opacity:0.85,
+                                transform:'translateY(-1px)',
+                              }}>
+                                ↳
+                              </span>
+                              <span style={{ overflow:'hidden', textOverflow:'ellipsis' }}>
+                                <span style={{ fontWeight:'600', color:c.text }}>{bestTitle}</span>
+                                <span style={{ color:c.textSubtle, margin:'0 6px' }}>·</span>
+                                <span>{bestArtist}</span>
+                              </span>
+                            </div>
                           </div>
 
-                          {/* ── Bottom track ── */}
-                          <div style={{ display:'flex', alignItems:'center', gap:'10px', padding:'6px 12px 10px' }}>
-                            <AlbumCover
-                              title={bestTitle}
-                              artist={bestArtist}
-                              size={40}
-                              isDark={isDark}
-                              coverPath={pair.best?.cover_art_path}
-                            />
-                            <div style={{ flex:1, minWidth:0, display:'flex', flexDirection:'column', gap:'2px' }}>
-                              <div style={{ fontSize:'13px', fontWeight:'600', color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-                                {bestTitle}
-                              </div>
-                              <div style={{ fontSize:'11px', color:c.textMuted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-                                {bestArtist}
-                              </div>
+                          {/* Score block — tabular figure + thin meter */}
+                          <div style={{
+                            display:'flex', flexDirection:'column',
+                            alignItems:'flex-end', gap:'5px',
+                          }}>
+                            <div style={{ display:'flex', alignItems:'baseline', gap:'2px' }}>
+                              <span style={{
+                                fontSize:'19px', fontWeight:'700',
+                                fontFamily:'DM Mono, monospace',
+                                fontVariantNumeric:'tabular-nums',
+                                color: accent,
+                                letterSpacing:'-0.5px',
+                                lineHeight:1,
+                              }}>
+                                {displayScore.toFixed(1)}
+                              </span>
+                              <span style={{
+                                fontSize:'10px', color:c.textMuted,
+                                fontFamily:'DM Mono, monospace',
+                              }}>%</span>
+                            </div>
+                            <div style={{
+                              width:'80px', height:'3px', borderRadius:'2px',
+                              background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)',
+                              overflow:'hidden', position:'relative',
+                            }}>
+                              <div style={{
+                                width:`${meterPct}%`, height:'100%', borderRadius:'2px',
+                                transformOrigin:'left center',
+                                background:`linear-gradient(90deg, ${accentDim}, ${accent})`,
+                                boxShadow:`0 0 6px oklch(70% 0.2 ${hue} / 0.45)`,
+                                animation:`meter-grow 0.7s ${idx * 60 + 180}ms cubic-bezier(.4,0,.2,1) backwards`,
+                              }} />
                             </div>
                           </div>
                         </div>
@@ -1349,14 +1519,22 @@ function LibrarySection({ isDark, lang, activeCollection, collections, onCollect
                     })
                   )}
                 </div>
-                {!isLoading && pairs.length === 0 && (
-                  <div style={{ fontSize:'10px', color:c.textSubtle, fontFamily:'DM Mono, monospace', textAlign:'center', padding:'10px 0' }}>
-                    {lang==='ru'?'Данные ещё не рассчитаны':'Data not computed yet'}
-                  </div>
-                )}
+
+                {/* Footnote */}
+                <div style={{
+                  marginTop:'10px',
+                  fontSize:'9.5px', color:c.textSubtle,
+                  fontFamily:'DM Mono, monospace',
+                  letterSpacing:'0.6px',
+                  display:'flex', justifyContent:'space-between',
+                  textTransform:'uppercase',
+                }}>
+                  <span>{active.scoreLabel} · cosine</span>
+                  <span>CLAP · audio embeddings</span>
+                </div>
               </div>
             );
-          })}
+          })()}
         </div>
 
       </div>

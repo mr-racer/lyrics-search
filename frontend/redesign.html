@@ -1,0 +1,2908 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MusiX — Studio Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=JetBrains+Mono:wght@400;500;600&family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { height: 100%; width: 100%; overflow: hidden; }
+    body {
+      font-family: 'Geist', 'Inter', system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+    .serif { font-family: 'Instrument Serif', 'Times New Roman', serif; font-weight: 400; letter-spacing: -0.01em; }
+    .mono  { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(128,128,128,0.22); border-radius: 10px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(128,128,128,0.4); }
+    input, textarea, select, button { font-family: inherit; }
+    textarea { overflow: auto; }
+    button { background: none; border: none; color: inherit; cursor: pointer; }
+    a { color: inherit; text-decoration: none; }
+
+    /* ── Animations ───────────────────────────────────────────── */
+    @keyframes fadeIn       { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+    @keyframes fadeInUp     { from { opacity:0; transform:translateY(20px); } to { opacity:1; transform:translateY(0); } }
+    @keyframes spin         { to { transform: rotate(360deg); } }
+    @keyframes pulse        { 0%,100%{opacity:0.3;transform:scale(0.8)} 50%{opacity:1;transform:scale(1)} }
+    @keyframes shimmer      { 0% { background-position: -200% center; } 100% { background-position: 200% center; } }
+    @keyframes marquee      { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+    @keyframes needleSweep  { 0%{transform:rotate(-58deg)} 50%{transform:rotate(58deg)} 100%{transform:rotate(-58deg)} }
+    @keyframes vinylSpin    { to { transform: rotate(360deg); } }
+    @keyframes glowPulse    { 0%,100%{box-shadow:0 0 0 rgba(212,165,90,0)} 50%{box-shadow:0 0 18px rgba(212,165,90,0.5)} }
+    @keyframes doorRise     { from { opacity:0; transform: translateY(40px) scale(0.97); } to { opacity:1; transform: translateY(0) scale(1); } }
+    @keyframes meterTick    { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+    @keyframes flicker      { 0%,98%,100%{opacity:1} 99%{opacity:0.85} }
+    @keyframes typeIn       { from { width: 0; } to { width: 100%; } }
+    @keyframes blinkCaret   { 50% { opacity: 0; } }
+    @keyframes themeFade    { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes slideUp      { from { opacity:0; transform: translateY(20px); } to { opacity:1; transform: translateY(0); } }
+    @keyframes slideRight   { from { opacity:0; transform: translateX(-12px); } to { opacity:1; transform: translateX(0); } }
+    @keyframes scaleIn      { from { opacity:0; transform: scale(0.92); } to { opacity:1; transform: scale(1); } }
+    @keyframes bgDrift      { 0%{background-position:0% 0%} 50%{background-position:100% 100%} 100%{background-position:0% 0%} }
+
+    .stagger > * { opacity: 0; animation: fadeInUp 0.6s cubic-bezier(.22,.9,.3,1) forwards; }
+    .stagger > *:nth-child(1) { animation-delay: 0.05s; }
+    .stagger > *:nth-child(2) { animation-delay: 0.16s; }
+    .stagger > *:nth-child(3) { animation-delay: 0.27s; }
+    .stagger > *:nth-child(4) { animation-delay: 0.38s; }
+    .stagger > *:nth-child(5) { animation-delay: 0.49s; }
+
+    .theme-fade { animation: themeFade 0.4s ease; }
+    .theme-transition * { transition: background-color 0.35s ease, border-color 0.35s ease, color 0.3s ease, box-shadow 0.35s ease !important; }
+
+    /* ── Skeuomorphic surface library ─────────────────────────── */
+    .ske-panel-d {
+      background: linear-gradient(180deg, #1d1d23 0%, #131318 100%);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.09),
+        inset 0 -1px 0 rgba(0,0,0,0.55),
+        inset 0 0 0 1px rgba(255,255,255,0.04),
+        0 4px 14px rgba(0,0,0,0.45),
+        0 1px 3px rgba(0,0,0,0.35);
+    }
+    .ske-panel-l {
+      background: linear-gradient(180deg, #ffffff 0%, #ecebf2 100%);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,1),
+        inset 0 -1px 0 rgba(0,0,0,0.07),
+        inset 0 0 0 1px rgba(0,0,0,0.05),
+        0 4px 14px rgba(40,30,60,0.10),
+        0 1px 3px rgba(40,30,60,0.06);
+    }
+    .ske-btn-d {
+      background: linear-gradient(180deg, #2c2c34 0%, #1c1c23 100%);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.13),
+        inset 0 -1px 0 rgba(0,0,0,0.5),
+        0 2px 5px rgba(0,0,0,0.5),
+        0 0 0 1px rgba(255,255,255,0.05);
+    }
+    .ske-btn-l {
+      background: linear-gradient(180deg, #ffffff 0%, #e1e0ea 100%);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,1),
+        inset 0 -1px 0 rgba(0,0,0,0.12),
+        0 2px 4px rgba(40,30,60,0.13),
+        0 0 0 1px rgba(0,0,0,0.08);
+    }
+    .ske-btn-d:active, .ske-btn-l:active {
+      box-shadow: inset 0 2px 5px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(0,0,0,0.2);
+      transform: translateY(1px);
+    }
+    .ske-inset-d {
+      background: linear-gradient(180deg, #0a0a0d 0%, #14141a 100%);
+      box-shadow:
+        inset 0 2px 5px rgba(0,0,0,0.7),
+        inset 0 1px 0 rgba(0,0,0,0.6),
+        inset 0 0 0 1px rgba(0,0,0,0.5),
+        0 1px 0 rgba(255,255,255,0.04);
+    }
+    .ske-inset-l {
+      background: linear-gradient(180deg, #e7e6ee 0%, #f3f2f7 100%);
+      box-shadow:
+        inset 0 2px 4px rgba(40,30,60,0.13),
+        inset 0 1px 0 rgba(40,30,60,0.06),
+        inset 0 0 0 1px rgba(40,30,60,0.07),
+        0 1px 0 rgba(255,255,255,0.9);
+    }
+    .ske-display-d {
+      background:
+        radial-gradient(ellipse at top, rgba(212,165,90,0.04), transparent 70%),
+        linear-gradient(180deg, #07070a 0%, #0e0e12 100%);
+      box-shadow:
+        inset 0 2px 8px rgba(0,0,0,0.85),
+        inset 0 1px 0 rgba(0,0,0,0.9),
+        inset 0 0 0 1px rgba(0,0,0,0.6),
+        inset 0 0 60px rgba(0,0,0,0.5),
+        0 1px 0 rgba(255,255,255,0.05);
+    }
+    .ske-display-l {
+      background:
+        radial-gradient(ellipse at top, rgba(212,165,90,0.06), transparent 70%),
+        linear-gradient(180deg, #f4f2e9 0%, #e8e5d8 100%);
+      box-shadow:
+        inset 0 2px 5px rgba(70,55,30,0.18),
+        inset 0 1px 0 rgba(70,55,30,0.1),
+        inset 0 0 0 1px rgba(70,55,30,0.13),
+        0 1px 0 rgba(255,255,255,0.85);
+    }
+    .ske-accent {
+      background: linear-gradient(180deg, oklch(67% 0.18 270) 0%, oklch(54% 0.22 280) 100%);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.32),
+        inset 0 -1px 0 rgba(0,0,0,0.3),
+        0 4px 14px oklch(60% 0.18 270 / 0.5),
+        0 0 0 1px oklch(50% 0.2 275 / 0.5);
+      color: white;
+    }
+    .ske-accent:active {
+      box-shadow: inset 0 2px 5px rgba(0,0,0,0.35), 0 1px 3px oklch(60% 0.18 270 / 0.3);
+      transform: translateY(1px);
+    }
+    .ske-amber {
+      background: linear-gradient(180deg, oklch(72% 0.13 75) 0%, oklch(58% 0.15 60) 100%);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.4),
+        inset 0 -1px 0 rgba(0,0,0,0.25),
+        0 3px 12px oklch(65% 0.15 70 / 0.45);
+      color: #2a1f0a;
+    }
+
+    /* Brushed metal panel for top decks */
+    .brushed-d {
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.03) 0%, rgba(0,0,0,0.15) 100%),
+        repeating-linear-gradient(90deg, rgba(255,255,255,0.012) 0px, rgba(255,255,255,0.012) 1px, transparent 1px, transparent 3px),
+        linear-gradient(180deg, #25252d 0%, #161620 100%);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.1),
+        inset 0 -1px 0 rgba(0,0,0,0.5),
+        0 2px 12px rgba(0,0,0,0.4);
+    }
+    .brushed-l {
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.5) 0%, rgba(0,0,0,0.04) 100%),
+        repeating-linear-gradient(90deg, rgba(0,0,0,0.012) 0px, rgba(0,0,0,0.012) 1px, transparent 1px, transparent 3px),
+        linear-gradient(180deg, #fafaff 0%, #e7e6ee 100%);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,1),
+        inset 0 -1px 0 rgba(40,30,60,0.08),
+        0 2px 10px rgba(40,30,60,0.08);
+    }
+
+    /* ── Custom select chevron ────────────────────────────────── */
+    .mx-select {
+      appearance: none;
+      -webkit-appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23999' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 12px center;
+      padding-right: 32px !important;
+      cursor: pointer;
+    }
+    .mx-select:focus { outline: none; }
+
+    /* Underlay grain texture */
+    .grain::after {
+      content:'';
+      position:absolute; inset:0;
+      pointer-events:none;
+      opacity: 0.025;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      mix-blend-mode: overlay;
+    }
+
+    .marquee-wrap { overflow: hidden; mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); }
+    .marquee-track { display: flex; gap: 56px; width: max-content; animation: marquee 60s linear infinite; }
+    .marquee-track:hover { animation-play-state: paused; }
+
+    .door {
+      transition: transform 0.35s cubic-bezier(.22,.9,.3,1), box-shadow 0.35s ease;
+    }
+    .door:hover { transform: translateY(-6px); }
+    .door:hover .door-arrow { transform: translate(4px, -4px); }
+    .door-arrow { transition: transform 0.32s cubic-bezier(.22,.9,.3,1); }
+
+    .needle {
+      transform-origin: 50% 100%;
+      transition: transform 0.5s cubic-bezier(.22,.9,.3,1);
+    }
+
+    .knob {
+      transition: transform 0.4s cubic-bezier(.22,.9,.3,1);
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, Fragment } = React;
+
+const API = window.location.protocol === 'file:'
+  ? 'http://localhost:8000/api/v1'
+  : '/api/v1';
+
+async function apiFetch(path, opts = {}) {
+  const res = await fetch(API + path, {
+    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
+    ...opts,
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`);
+  }
+  return res.json();
+}
+
+// ─── Color tokens ─────────────────────────────────────────────────────────────
+function useColors(isDark) {
+  return useMemo(() => ({
+    bg:           isDark ? '#0d0d10'    : '#f2f1f6',
+    bgDeep:       isDark ? '#08080b'    : '#e8e7ed',
+    surface:      isDark ? '#17171b'    : '#ffffff',
+    surface2:     isDark ? '#1e1e24'    : '#ebebf0',
+    surface3:     isDark ? '#26262d'    : '#e4e3e9',
+    border:       isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.09)',
+    borderStrong: isDark ? 'rgba(255,255,255,0.13)' : 'rgba(0,0,0,0.16)',
+    text:         isDark ? '#eeeef3'    : '#161620',
+    textMuted:    isDark ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.5)',
+    textSubtle:   isDark ? 'rgba(255,255,255,0.28)' : 'rgba(0,0,0,0.32)',
+    accent:       'oklch(60% 0.18 270)',
+    accentBg:     isDark ? 'oklch(60% 0.18 270 / 0.15)' : 'oklch(60% 0.18 270 / 0.10)',
+    accentLight:  'oklch(70% 0.16 270)',
+    amber:        isDark ? 'oklch(72% 0.13 75)' : 'oklch(58% 0.15 60)',
+    amberGlow:    'rgba(212,165,90,0.35)',
+    inputBg:      isDark ? '#10101a'    : '#ffffff',
+    sidebarBg:    isDark ? 'linear-gradient(180deg,#131318 0%,#0c0c10 100%)' : 'linear-gradient(180deg,#f0eff5 0%,#e7e6ec 100%)',
+    chatPanelBg:  isDark ? '#0f0f13'    : '#f8f8fc',
+    userBubble:   'linear-gradient(135deg, oklch(60% 0.18 270), oklch(58% 0.18 305))',
+    aiBubble:     isDark ? '#1e1e26'    : '#ebebf2',
+    green:        'oklch(63% 0.17 142)',
+    greenBg:      isDark ? 'oklch(63% 0.17 142 / 0.13)' : 'oklch(63% 0.17 142 / 0.10)',
+    red:          'oklch(58% 0.21 25)',
+    redBg:        isDark ? 'oklch(58% 0.21 25 / 0.14)' : 'oklch(58% 0.21 25 / 0.09)',
+  }), [isDark]);
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+const ske = (kind, isDark) => `ske-${kind}-${isDark ? 'd' : 'l'}`;
+const brushed = (isDark) => `brushed-${isDark ? 'd' : 'l'}`;
+
+function secsToMMSS(s) {
+  if (s == null || isNaN(s)) return s || '—';
+  const m = Math.floor(s / 60);
+  const sec = Math.round(s % 60);
+  return `${m}:${String(sec).padStart(2, '0')}`;
+}
+function formatDurationRange(raw) {
+  if (!raw || typeof raw !== 'string') return raw || '—';
+  if (raw.includes(':')) return raw;
+  const parts = raw.split('-');
+  if (parts.length === 2) {
+    const a = parseInt(parts[0]), b = parseInt(parts[1]);
+    if (!isNaN(a) && !isNaN(b)) return `${secsToMMSS(a)} – ${secsToMMSS(b)}`;
+  }
+  return raw;
+}
+
+// ─── Curated music trivia (general) ───────────────────────────────────────────
+const TRIVIA = {
+  ru: [
+    { k: 'Знал ли ты', v: 'самой длинной официальной песне — 13 часов 23 минуты («The Rise and Fall of Bossanova»).' },
+    { k: 'Факт', v: 'средний слушатель за жизнь успевает услышать ~1.3 миллиона песен.' },
+    { k: 'Любопытно', v: '«Bohemian Rhapsody» записывали 180 раз, чтобы свести все вокальные слои.' },
+    { k: 'Знал ли ты', v: 'песни в миноре в среднем длятся на 8 секунд дольше, чем мажорные.' },
+    { k: 'Факт', v: 'мозг распознаёт знакомую мелодию за 100–300 мс — быстрее, чем лицо.' },
+    { k: 'Любопытно', v: '90% всех чарт-хитов мира написано в одной из четырёх тональностей.' },
+    { k: 'Знал ли ты', v: 'самый частый темп поп-музыки — ровно 120 BPM, ритм быстрого шага.' },
+    { k: 'Факт', v: 'низкий бас в наушниках буквально замедляет восприятие времени.' },
+    { k: 'Любопытно', v: 'у Майлза Дэвиса при записи «Kind of Blue» не было ни одного дубля.' },
+    { k: 'Знал ли ты', v: 'песни длиннее 7 минут попадают в чарты в 3 раза реже коротких.' },
+  ],
+  en: [
+    { k: 'Did you know', v: "the longest official song runs 13h 23m — 'The Rise and Fall of Bossanova'." },
+    { k: 'Fact', v: 'an average listener will hear ~1.3 million songs in a lifetime.' },
+    { k: 'Curious', v: "Bohemian Rhapsody was recorded 180 times to layer all the vocal harmonies." },
+    { k: 'Did you know', v: 'minor-key songs are on average 8 seconds longer than major-key ones.' },
+    { k: 'Fact', v: 'the brain recognizes a familiar tune in 100–300 ms — faster than a face.' },
+    { k: 'Curious', v: '90% of global chart hits are written in one of just four keys.' },
+    { k: 'Did you know', v: 'the most common pop-music tempo is exactly 120 BPM — the rhythm of brisk walking.' },
+    { k: 'Fact', v: 'deep bass in headphones literally slows your perception of time.' },
+    { k: 'Curious', v: "Miles Davis recorded Kind of Blue in single takes — no edits." },
+    { k: 'Did you know', v: 'songs longer than 7 minutes hit the charts 3× less often than short ones.' },
+  ],
+};
+
+// ─── Build dynamic facts from /library/stats ──────────────────────────────────
+function buildLibraryFacts(stats, lang) {
+  if (!stats || !stats.total_tracks) return [];
+  const out = [];
+  const t = lang === 'ru';
+  if (stats.total_tracks) {
+    out.push({ k: t ? 'В коллекции' : 'In your library', v: `${stats.total_tracks.toLocaleString(t?'ru':'en')} ${t?'треков':'tracks'}.` });
+  }
+  if (stats.top_artists?.length) {
+    const a = stats.top_artists[0];
+    out.push({ k: t ? 'Главный артист' : 'Top artist', v: `${a.artist || a.label} — ${a.count} ${t?'треков':'tracks'}.` });
+  }
+  if (stats.genres?.length) {
+    const g = stats.genres[0];
+    out.push({ k: t ? 'Жанр-доминанта' : 'Dominant genre', v: `${g.genre || g.label} (${g.pct}%).` });
+  }
+  if (stats.year_range) {
+    const yr = stats.year_range;
+    const min = yr.min ?? yr[0], max = yr.max ?? yr[1];
+    if (min && max) out.push({ k: t ? 'Хронология' : 'Era', v: `${min} → ${max}, ${max-min} ${t?'лет музыки':'years of music'}.` });
+  }
+  if (stats.decades?.length) {
+    const peak = stats.decades.reduce((p,d)=>d.count>(p?.count||0)?d:p, null);
+    if (peak) out.push({ k: t ? 'Любимое десятилетие' : 'Favorite decade', v: `${peak.decade}-${t?'е':'s'} (${peak.count} ${t?'треков':'tracks'}).` });
+  }
+  if (stats.duration_buckets?.length) {
+    const top = stats.duration_buckets[0];
+    out.push({ k: t ? 'Типичная длина' : 'Typical length', v: `${formatDurationRange(top.range)} (${top.pct}%).` });
+  }
+  return out;
+}
+
+// ─── Spinner ──────────────────────────────────────────────────────────────────
+function Spinner({ size = 16, color }) {
+  return (
+    <div style={{
+      width: size, height: size, flexShrink: 0,
+      border: `2px solid ${color ? color + '30' : 'rgba(255,255,255,0.12)'}`,
+      borderTopColor: color || 'oklch(60% 0.18 270)',
+      borderRadius: '50%', animation: 'spin 0.7s linear infinite',
+    }} />
+  );
+}
+
+// ─── AlbumCover ───────────────────────────────────────────────────────────────
+function AlbumCover({ title='', artist='', size=44, isDark, coverPath, radius }) {
+  const hue = ((title.charCodeAt(0)||65)*37 + (artist.charCodeAt(0)||65)*17) % 360;
+  const br = radius ?? (size > 100 ? 14 : size > 60 ? 10 : 8);
+  const boxStyle = {
+    width: size, height: size, borderRadius: `${br}px`, flexShrink: 0, overflow: 'hidden',
+    boxShadow: isDark
+      ? 'inset 0 1px 0 rgba(255,255,255,0.14), inset 0 -1px 0 rgba(0,0,0,0.45), inset 0 0 0 1px rgba(0,0,0,0.5), 0 3px 8px rgba(0,0,0,0.55)'
+      : 'inset 0 1px 0 rgba(255,255,255,0.85), inset 0 -1px 0 rgba(0,0,0,0.1), inset 0 0 0 1px rgba(0,0,0,0.08), 0 3px 7px rgba(40,30,60,0.13)',
+  };
+
+  if (coverPath) {
+    const imgSrc = coverPath.startsWith('http') ? coverPath : `${API}${coverPath}`;
+    return (
+      <div style={boxStyle}>
+        <img
+          src={imgSrc} alt=""
+          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+          onError={e => {
+            e.currentTarget.style.display = 'none';
+            const parent = e.currentTarget.parentElement;
+            const span = document.createElement('span');
+            span.style.cssText = `display:flex;align-items:center;justify-content:center;width:100%;height:100%;
+              background:linear-gradient(135deg, oklch(38% 0.13 ${hue}), oklch(52% 0.18 ${(hue+45)%360}));
+              font-size:${size > 60 ? '22px' : '12px'};font-weight:700;color:rgba(255,255,255,0.65);
+              font-family:'JetBrains Mono', monospace;letter-spacing:0.5px;`;
+            span.textContent = (title||'?').slice(0,2).toUpperCase();
+            parent.appendChild(span);
+          }}
+        />
+      </div>
+    );
+  }
+  return (
+    <div style={{
+      ...boxStyle,
+      background: `linear-gradient(135deg, oklch(38% 0.13 ${hue}), oklch(52% 0.18 ${(hue+45)%360}))`,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontSize: size > 60 ? '22px' : '12px', fontWeight: '700',
+      color: 'rgba(255,255,255,0.65)', fontFamily: "'JetBrains Mono', monospace",
+      letterSpacing: '0.5px',
+    }}>
+      {(title||'?').slice(0,2).toUpperCase()}
+    </div>
+  );
+}
+
+// ─── Custom Select ────────────────────────────────────────────────────────────
+function MusixSelect({ value, onChange, options, isDark, style={} }) {
+  const c = useColors(isDark);
+  return (
+    <select
+      value={value}
+      onChange={e => onChange(e.target.value)}
+      className={`mx-select ${ske('inset', isDark)}`}
+      style={{
+        padding: '8px 32px 8px 12px', borderRadius: '9px',
+        color: c.text, fontSize: '12px', fontFamily: "'JetBrains Mono', monospace",
+        border: 'none',
+        ...style,
+      }}
+    >
+      {options.map(o => (
+        <option key={o.value} value={o.value} style={{ background: isDark ? '#1e1e24' : '#fff', color: c.text }}>
+          {o.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+// ─── Knob (skeuomorphic toggle) ───────────────────────────────────────────────
+function Knob({ angle = -45, size = 44, isDark, label, onClick, glow }) {
+  const c = useColors(isDark);
+  return (
+    <button
+      onClick={onClick}
+      title={label}
+      style={{
+        width: size, height: size, borderRadius: '50%', flexShrink: 0,
+        position: 'relative', cursor: 'pointer', padding: 0,
+        background: isDark
+          ? 'radial-gradient(circle at 30% 25%, #38383f 0%, #1a1a20 65%, #0c0c10 100%)'
+          : 'radial-gradient(circle at 30% 25%, #ffffff 0%, #d8d7df 65%, #b8b7c1 100%)',
+        boxShadow: isDark
+          ? 'inset 0 1px 0 rgba(255,255,255,0.18), inset 0 -1px 0 rgba(0,0,0,0.5), 0 2px 6px rgba(0,0,0,0.55), 0 0 0 1px rgba(0,0,0,0.6)'
+          : 'inset 0 1px 0 rgba(255,255,255,1), inset 0 -1px 0 rgba(0,0,0,0.13), 0 2px 5px rgba(40,30,60,0.18), 0 0 0 1px rgba(0,0,0,0.1)',
+      }}
+    >
+      <div className="knob" style={{
+        position:'absolute', inset:'0', borderRadius:'50%',
+        transform:`rotate(${angle}deg)`,
+      }}>
+        <div style={{
+          position:'absolute', top:'12%', left:'50%', transform:'translateX(-50%)',
+          width:'2.5px', height:'30%', borderRadius:'2px',
+          background: glow ? c.amber : (isDark ? '#9a99a4' : '#6e6c7a'),
+          boxShadow: glow ? `0 0 8px ${c.amberGlow}` : 'none',
+        }} />
+      </div>
+    </button>
+  );
+}
+
+// ─── ResultCard ───────────────────────────────────────────────────────────────
+function ResultCard({ hit, isDark, c, compact=false, onClick }) {
+  const track = hit.track || {};
+  const modeColor = { lyrics: c.accent, audio: 'oklch(60% 0.18 310)', hybrid: c.amber }[hit.matched_on] || c.accent;
+  return (
+    <div
+      onClick={onClick}
+      onMouseEnter={e => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)'; }}
+      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+      style={{ display:'flex', alignItems:'center', gap:'12px', padding: compact?'9px 12px':'12px 14px',
+        borderRadius:'12px', cursor: onClick?'pointer':'default', transition:'background 0.15s' }}
+    >
+      <AlbumCover title={track.title} artist={track.artist} size={compact?40:50} isDark={isDark} coverPath={track.cover_art_path} />
+      <div style={{ flex:1, minWidth:0 }}>
+        <div style={{ fontSize:'14px', fontWeight:'600', color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', letterSpacing:'-0.01em' }}>{track.title||'—'}</div>
+        <div style={{ fontSize:'12px', color:c.textMuted, marginTop:'2px' }}>{track.artist||'—'}{track.year?` · ${track.year}`:''}</div>
+        {hit.lyrics && <div style={{ fontSize:'11px', color:c.textSubtle, marginTop:'4px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', fontStyle:'italic' }} className="serif">"{hit.lyrics.slice(0,140)}"</div>}
+      </div>
+      <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:'4px', flexShrink:0 }}>
+        <div className="mono" style={{ padding:'3px 9px', borderRadius:'20px', fontSize:'10px', fontWeight:'500',
+          background: modeColor.replace(')', ' / 0.14)'),
+          color: modeColor, border: `1px solid ${modeColor.replace(')', ' / 0.3)')}` }}>
+          {Math.round((hit.score||0)*100)}% · {hit.matched_on}
+        </div>
+        {track.genre && <span className="mono" style={{ fontSize:'10px', color:c.textSubtle }}>{track.genre}</span>}
+      </div>
+    </div>
+  );
+}
+
+// ─── Chat history ─────────────────────────────────────────────────────────────
+function useChatHistory(collectionName) {
+  const storageKey = `musix_chat_${collectionName || 'default'}`;
+  const load = useCallback(() => {
+    try { const raw = localStorage.getItem(storageKey); return raw ? JSON.parse(raw) : []; }
+    catch { return []; }
+  }, [storageKey]);
+  const [sessions, setSessions] = useState(load);
+  useEffect(() => { setSessions(load()); }, [storageKey, load]);
+  const saveSession = useCallback((msgs) => {
+    if (!msgs || msgs.length === 0) return;
+    setSessions(prev => {
+      const ts = Date.now();
+      const first = msgs.find(m => m.role === 'user');
+      const title = first?.text?.slice(0, 48) || 'Чат';
+      const updated = [{ id: ts, title, time: ts, messages: msgs }, ...prev.slice(0, 19)];
+      try { localStorage.setItem(storageKey, JSON.stringify(updated)); } catch {}
+      return updated;
+    });
+  }, [storageKey]);
+  const deleteSession = useCallback((id) => {
+    setSessions(prev => {
+      const updated = prev.filter(s => s.id !== id);
+      try { localStorage.setItem(storageKey, JSON.stringify(updated)); } catch {}
+      return updated;
+    });
+  }, [storageKey]);
+  return { sessions, saveSession, deleteSession };
+}
+
+// ─── Brand mark ───────────────────────────────────────────────────────────────
+function BrandMark({ size=34, isDark }) {
+  return (
+    <div style={{
+      width:size, height:size, borderRadius:`${size*0.32}px`, flexShrink:0, position:'relative',
+      background:'linear-gradient(145deg, oklch(67% 0.18 265), oklch(54% 0.22 285))',
+      display:'flex', alignItems:'center', justifyContent:'center',
+      boxShadow: isDark
+        ? 'inset 0 1px 0 rgba(255,255,255,0.3), inset 0 -1px 0 rgba(0,0,0,0.3), 0 4px 12px oklch(60% 0.18 270 / 0.55), 0 0 0 1px rgba(0,0,0,0.4)'
+        : 'inset 0 1px 0 rgba(255,255,255,0.45), inset 0 -1px 0 rgba(0,0,0,0.2), 0 3px 10px oklch(60% 0.18 270 / 0.45), 0 0 0 1px rgba(0,0,0,0.05)',
+    }}>
+      <svg width={size*0.5} height={size*0.5} viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+      </svg>
+    </div>
+  );
+}
+
+// ─── Top right corner: settings + theme + lang (used on landing) ──────────────
+function TopRightControls({ isDark, lang, onLang, onTheme, onSettings, floating=false }) {
+  const c = useColors(isDark);
+  const wrap = floating ? {
+    position:'absolute', top:'24px', right:'28px', zIndex:5,
+  } : {};
+  return (
+    <div style={{ display:'flex', alignItems:'center', gap:'8px', ...wrap }}>
+      {/* Lang switch — segmented physical control */}
+      <div className={ske('inset', isDark)} style={{ display:'flex', padding:'3px', borderRadius:'10px', gap:'2px' }}>
+        {['ru','en'].map(l => {
+          const active = lang === l;
+          return (
+            <button key={l} onClick={() => onLang(l)} className={active ? ske('btn', isDark) : ''}
+              style={{
+                padding:'5px 11px', borderRadius:'7px', fontFamily:"'JetBrains Mono', monospace",
+                fontSize:'11px', fontWeight:'600', letterSpacing:'0.4px',
+                color: active ? c.text : c.textSubtle,
+                transition:'color 0.2s',
+              }}>{l.toUpperCase()}</button>
+          );
+        })}
+      </div>
+      {/* Theme knob */}
+      <Knob size={36} isDark={isDark} angle={isDark ? -55 : 55} glow={!isDark}
+        label={isDark ? 'Light theme' : 'Dark theme'} onClick={onTheme} />
+      {/* Settings — round button */}
+      <button onClick={onSettings} className={ske('btn', isDark)} title={lang==='ru'?'Настройки':'Settings'}
+        style={{
+          width:'36px', height:'36px', borderRadius:'50%',
+          display:'flex', alignItems:'center', justifyContent:'center',
+          color: c.textMuted, transition:'transform 0.5s ease',
+        }}
+        onMouseEnter={e => { e.currentTarget.firstChild.style.transform = 'rotate(60deg)'; }}
+        onMouseLeave={e => { e.currentTarget.firstChild.style.transform = 'rotate(0)'; }}
+      >
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ transition:'transform 0.5s cubic-bezier(.22,.9,.3,1)' }}>
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </button>
+    </div>
+  );
+}
+
+// ─── Sidebar (shown inside sections, not on landing) ──────────────────────────
+function Sidebar({ section, onNav, onHome, isDark, lang, collections, activeCollection, onCollectionSwitch, onCollectionDelete, onSettings }) {
+  const c = useColors(isDark);
+
+  const navItems = [
+    { id:'search', label: lang==='ru'?'Поиск':'Search',
+      icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg> },
+    { id:'recommend', label: lang==='ru'?'Рекомендации':'Recommend',
+      icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33"/><circle cx="12" cy="12" r="9"/></svg> },
+    { id:'library', label: lang==='ru'?'Библиотека':'Library',
+      icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></svg> },
+  ];
+
+  return (
+    <div style={{
+      width:'232px', minWidth:'232px', height:'100vh', display:'flex', flexDirection:'column',
+      background: c.sidebarBg, zIndex:10, flexShrink:0, overflow:'hidden',
+      borderRight: `1px solid ${c.border}`,
+      boxShadow: isDark
+        ? 'inset -1px 0 0 rgba(255,255,255,0.04), 8px 0 24px rgba(0,0,0,0.5)'
+        : 'inset -1px 0 0 rgba(0,0,0,0.04), 8px 0 18px rgba(40,30,60,0.07)',
+    }}>
+      {/* Logo — clickable home */}
+      <button onClick={onHome} style={{
+        padding:'24px 22px 20px', display:'flex', alignItems:'center', gap:'12px',
+        textAlign:'left', cursor:'pointer',
+      }}>
+        <BrandMark size={34} isDark={isDark} />
+        <div>
+          <div className="serif" style={{ fontSize:'24px', fontWeight:'400', letterSpacing:'-0.02em', color:c.text, lineHeight:'1' }}>
+            Musi<i style={{ color: 'oklch(60% 0.18 270)' }}>X</i>
+          </div>
+          <div className="mono" style={{ fontSize:'9px', color:c.textSubtle, marginTop:'4px', letterSpacing:'0.18em' }}>STUDIO · LOCAL</div>
+        </div>
+      </button>
+
+      {/* Section badge */}
+      <div style={{ padding:'4px 22px 14px' }}>
+        <div className="mono" style={{ fontSize:'9px', color:c.textSubtle, letterSpacing:'0.18em', marginBottom:'8px' }}>
+          {lang==='ru'?'РАЗДЕЛЫ':'SECTIONS'}
+        </div>
+        <nav style={{ display:'flex', flexDirection:'column', gap:'2px' }}>
+          {navItems.map(item => {
+            const active = section === item.id;
+            return (
+              <button key={item.id} onClick={() => onNav(item.id)}
+                style={{
+                  display:'flex', alignItems:'center', gap:'11px',
+                  padding:'10px 12px', borderRadius:'10px',
+                  fontSize:'13px', fontWeight: active?'600':'500',
+                  color: active ? c.text : c.textMuted,
+                  background: active
+                    ? (isDark ? 'linear-gradient(180deg,#252530 0%,#1b1b22 100%)' : 'linear-gradient(180deg,#ffffff 0%,#ebeaf2 100%)')
+                    : 'transparent',
+                  boxShadow: active
+                    ? (isDark
+                      ? 'inset 0 1px 0 rgba(255,255,255,0.07), inset 0 -1px 0 rgba(0,0,0,0.4), 0 1px 3px rgba(0,0,0,0.4)'
+                      : 'inset 0 1px 0 rgba(255,255,255,1), inset 0 -1px 0 rgba(0,0,0,0.07), 0 1px 3px rgba(40,30,60,0.1)')
+                    : 'none',
+                  textAlign:'left', transition:'all 0.18s',
+                }}
+                onMouseEnter={e => { if(!active){e.currentTarget.style.background=isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.04)';e.currentTarget.style.color=c.text;}}}
+                onMouseLeave={e => { if(!active){e.currentTarget.style.background='transparent';e.currentTarget.style.color=c.textMuted;}}}>
+                <span style={{ display:'flex', color: active ? 'oklch(60% 0.18 270)' : 'currentColor' }}>{item.icon}</span>
+                {item.label}
+              </button>
+            );
+          })}
+        </nav>
+      </div>
+
+      <div style={{ flex:1 }} />
+
+      {/* Collections — recessed display */}
+      <div style={{ padding:'0 14px 14px' }}>
+        <div className="mono" style={{ fontSize:'9px', color:c.textSubtle, letterSpacing:'0.18em', marginBottom:'8px', padding:'0 8px' }}>
+          {lang==='ru'?'КОЛЛЕКЦИЯ':'COLLECTION'}
+        </div>
+        <div className={ske('display', isDark)} style={{ borderRadius:'11px', overflow:'hidden' }}>
+          {collections.length === 0 ? (
+            <div className="mono" style={{ padding:'10px 12px', fontSize:'11px', color:c.textSubtle }}>
+              — {lang==='ru'?'нет коллекций':'no collections'} —
+            </div>
+          ) : collections.map(col => {
+            const isActive = col.name === activeCollection;
+            return (
+              <div key={col.name}
+                style={{
+                  padding:'9px 11px', fontSize:'12px', fontFamily:"'JetBrains Mono', monospace",
+                  color: isActive ? c.amber : c.textMuted,
+                  background: isActive ? 'rgba(212,165,90,0.08)' : 'transparent',
+                  display:'flex', alignItems:'center', gap:'8px',
+                  borderBottom: `1px solid ${isDark ? 'rgba(0,0,0,0.5)' : 'rgba(40,30,60,0.08)'}`,
+                  transition:'all 0.15s',
+                }}
+                onMouseEnter={e => { if(!isActive) e.currentTarget.style.background = isDark?'rgba(255,255,255,0.03)':'rgba(40,30,60,0.04)'; }}
+                onMouseLeave={e => { if(!isActive) e.currentTarget.style.background = 'transparent'; }}
+              >
+                <div style={{ width:'6px', height:'6px', borderRadius:'50%',
+                  background: isActive ? c.amber : 'rgba(128,128,128,0.3)',
+                  boxShadow: isActive ? `0 0 6px ${c.amberGlow}, 0 0 12px ${c.amberGlow}` : 'none',
+                  animation: isActive ? 'flicker 4s infinite' : 'none',
+                  flexShrink:0,
+                }} />
+                <span style={{ flex:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', cursor:'pointer' }}
+                  onClick={() => onCollectionSwitch(col.name)}>
+                  {col.name}
+                </span>
+                <button onClick={(e) => { e.stopPropagation(); onCollectionDelete && onCollectionDelete(col.name); }}
+                  style={{ width:'18px', height:'18px', borderRadius:'4px', fontSize:'14px',
+                    color: isDark ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.25)', flexShrink:0,
+                  }}
+                  onMouseEnter={e => { e.currentTarget.style.color='oklch(58% 0.21 25)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.color = isDark ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.25)'; }}
+                  title={lang==='ru'?'Удалить':'Delete'}>×</button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Bottom — settings shortcut */}
+      <div style={{ padding:'0 14px 18px' }}>
+        <button onClick={onSettings} className={ske('btn', isDark)} style={{
+          width:'100%', padding:'10px 14px', borderRadius:'10px',
+          display:'flex', alignItems:'center', gap:'10px',
+          fontSize:'12px', color: c.textMuted, fontWeight:'500',
+        }}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33"/></svg>
+          {lang==='ru'?'Настройки':'Settings'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── LANDING SCREEN ───────────────────────────────────────────────────────────
+function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, activeCollection, hasLibrary, stats }) {
+  const c = useColors(isDark);
+  const [factIdx, setFactIdx] = useState(0);
+  const [now, setNow] = useState(new Date());
+
+  const trivia = TRIVIA[lang] || TRIVIA.en;
+  const libFacts = useMemo(() => buildLibraryFacts(stats, lang), [stats, lang]);
+  // Interleave library facts with trivia (alternating), if libFacts present
+  const facts = useMemo(() => {
+    if (!libFacts.length) return trivia;
+    const out = [];
+    const max = Math.max(libFacts.length, trivia.length);
+    for (let i = 0; i < max; i++) {
+      if (libFacts[i % libFacts.length]) out.push({ ...libFacts[i % libFacts.length], live: true });
+      if (trivia[i % trivia.length]) out.push(trivia[i % trivia.length]);
+    }
+    return out;
+  }, [libFacts, trivia]);
+
+  useEffect(() => {
+    const t = setInterval(() => setFactIdx(i => (i + 1) % facts.length), 5500);
+    return () => clearInterval(t);
+  }, [facts.length]);
+
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const fact = facts[factIdx] || facts[0] || { k:'', v:'' };
+
+  // Doors
+  const doors = [
+    {
+      id: 'search',
+      key: lang==='ru'?'01':'01',
+      caption: lang==='ru'?'НАЙТИ':'FIND',
+      title: lang==='ru'?'Поиск':'Search',
+      titleAccent: lang==='ru'?'по смыслу':'by meaning',
+      hint: lang==='ru'?'По тексту, звуку или вместе.':'By lyrics, sound, or both.',
+      hue: 270,
+      meta: lang==='ru'?'TEXT · AUDIO · HYBRID':'TEXT · AUDIO · HYBRID',
+      icon: (
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+          <circle cx="11" cy="11" r="7"/><path d="m21 21-5.5-5.5"/>
+        </svg>
+      ),
+    },
+    {
+      id: 'recommend',
+      key: '02',
+      caption: lang==='ru'?'ОТКРЫТЬ':'DISCOVER',
+      title: lang==='ru'?'Рекомендации':'Recommend',
+      titleAccent: lang==='ru'?'и плейлисты':'& playlists',
+      hint: lang==='ru'?'Похожие треки, миксы по настроению.':'Similar tracks, mood-based mixes.',
+      hue: 30,
+      meta: lang==='ru'?'CLAP · MOOD · DAILY':'CLAP · MOOD · DAILY',
+      icon: (
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+          <circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="1" fill="currentColor"/>
+        </svg>
+      ),
+    },
+    {
+      id: 'library',
+      key: '03',
+      caption: lang==='ru'?'УЗНАТЬ':'STUDY',
+      title: lang==='ru'?'Библиотека':'Library',
+      titleAccent: lang==='ru'?'в цифрах':'in numbers',
+      hint: lang==='ru'?'Статистика, эпохи, пары треков.':'Stats, eras, track pairs.',
+      hue: 145,
+      meta: lang==='ru'?'STATS · ERAS · PAIRS':'STATS · ERAS · PAIRS',
+      icon: (
+        <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+          <path d="M3 21V8M9 21V3M15 21v-9M21 21V14"/>
+        </svg>
+      ),
+    },
+  ];
+
+  const timeStr = now.toLocaleTimeString(lang==='ru'?'ru':'en-GB', { hour:'2-digit', minute:'2-digit' });
+
+  return (
+    <div className="grain" style={{
+      width:'100vw', height:'100vh', overflow:'hidden auto', position:'relative',
+      background: isDark
+        ? 'radial-gradient(ellipse at top, #15151b 0%, #0a0a0e 60%, #07070a 100%)'
+        : 'radial-gradient(ellipse at top, #fafaff 0%, #ececf3 60%, #e3e2e8 100%)',
+      color: c.text,
+      animation: 'themeFade 0.45s ease',
+    }}>
+      {/* Subtle bg pattern: concentric vinyl-like rings */}
+      <div style={{
+        position:'absolute', top:'-25%', right:'-15%', width:'820px', height:'820px',
+        borderRadius:'50%', pointerEvents:'none', opacity:0.4,
+        background: `radial-gradient(circle,
+          transparent 0%, transparent 32%,
+          ${isDark?'rgba(255,255,255,0.012)':'rgba(0,0,0,0.022)'} 32.5%,
+          ${isDark?'rgba(255,255,255,0.012)':'rgba(0,0,0,0.022)'} 33%,
+          transparent 33.5%, transparent 38%,
+          ${isDark?'rgba(255,255,255,0.012)':'rgba(0,0,0,0.022)'} 38.5%,
+          ${isDark?'rgba(255,255,255,0.012)':'rgba(0,0,0,0.022)'} 39%,
+          transparent 39.5%, transparent 47%,
+          ${isDark?'rgba(255,255,255,0.012)':'rgba(0,0,0,0.022)'} 47.5%,
+          ${isDark?'rgba(255,255,255,0.012)':'rgba(0,0,0,0.022)'} 48%,
+          transparent 48.5%)`,
+      }} />
+
+      {/* Header bar */}
+      <div style={{
+        position:'relative', display:'flex', alignItems:'center', justifyContent:'space-between',
+        padding:'24px 32px',
+      }}>
+        <div style={{ display:'flex', alignItems:'center', gap:'14px' }}>
+          <BrandMark size={42} isDark={isDark} />
+          <div>
+            <div className="serif" style={{ fontSize:'34px', lineHeight:'0.95', letterSpacing:'-0.02em' }}>
+              Musi<i style={{ color: 'oklch(62% 0.2 275)' }}>X</i>
+            </div>
+            <div className="mono" style={{ fontSize:'9px', color:c.textSubtle, letterSpacing:'0.22em', marginTop:'4px' }}>
+              STUDIO CONSOLE · v2
+            </div>
+          </div>
+        </div>
+        <TopRightControls isDark={isDark} lang={lang} onLang={onLang} onTheme={onTheme} onSettings={onSettings} />
+      </div>
+
+      {/* Hero */}
+      <div style={{ position:'relative', maxWidth:'1280px', margin:'0 auto', padding:'34px 40px 0' }}>
+
+        {/* Display strip — clock + collection + status */}
+        <div className={`${ske('display', isDark)} mono`} style={{
+          padding:'14px 22px', borderRadius:'14px',
+          display:'flex', alignItems:'center', justifyContent:'space-between', gap:'24px',
+          marginBottom:'42px', animation:'fadeIn 0.5s ease',
+          color: c.amber,
+        }}>
+          <div style={{ display:'flex', alignItems:'center', gap:'18px' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
+              <div style={{ width:'8px', height:'8px', borderRadius:'50%', background:c.amber, boxShadow:`0 0 10px ${c.amberGlow}, 0 0 20px ${c.amberGlow}`, animation:'flicker 3s infinite' }} />
+              <span style={{ fontSize:'11px', letterSpacing:'0.2em' }}>ONLINE</span>
+            </div>
+            <span style={{ opacity:0.4 }}>·</span>
+            <span style={{ fontSize:'13px', letterSpacing:'0.1em' }}>{timeStr}</span>
+            <span style={{ opacity:0.4 }}>·</span>
+            <span style={{ fontSize:'11px', letterSpacing:'0.16em', opacity:0.85 }}>
+              {activeCollection
+                ? (lang==='ru'?'КОЛЛЕКЦИЯ ':'COLL ') + activeCollection
+                : (lang==='ru'?'КОЛЛЕКЦИЯ НЕ ВЫБРАНА':'NO COLLECTION')}
+            </span>
+          </div>
+          <div style={{ fontSize:'10px', letterSpacing:'0.2em', opacity:0.6 }}>
+            {hasLibrary
+              ? (stats?.total_tracks ? `${stats.total_tracks.toLocaleString(lang==='ru'?'ru':'en')} ${lang==='ru'?'TRACKS':'TRACKS'}` : '')
+              : (lang==='ru'?'СНАЧАЛА ИНДЕКСИРУЙ ПАПКУ':'INDEX A FOLDER FIRST')}
+          </div>
+        </div>
+
+        {/* Headline */}
+        <div style={{ marginBottom:'48px', maxWidth:'780px', animation:'fadeInUp 0.7s cubic-bezier(.22,.9,.3,1)' }}>
+          <div className="mono" style={{ fontSize:'10px', color:c.textSubtle, letterSpacing:'0.32em', marginBottom:'18px' }}>
+            — {lang==='ru'?'ПЛАНШЕТ ОПЕРАТОРА':'OPERATOR DECK'}
+          </div>
+          <h1 className="serif" style={{
+            fontSize:'clamp(54px, 7vw, 96px)', lineHeight:'1.02', letterSpacing:'-0.025em',
+            color: c.text, fontWeight:'400',
+          }}>
+            {lang==='ru' ? <>Слушай <i style={{ color:'oklch(62% 0.2 275)' }}>смысл</i>,<br/>не названия.</> : <>Listen to the <i style={{ color:'oklch(62% 0.2 275)' }}>meaning</i>,<br/>not the titles.</>}
+          </h1>
+          <p style={{ marginTop:'20px', fontSize:'15px', color:c.textMuted, lineHeight:'1.6', maxWidth:'560px' }}>
+            {lang==='ru'
+              ? 'Локальный поисковик музыки по тексту и звуку. Никакой облачной слежки — только твоя коллекция и быстрая семантика.'
+              : "A local music search engine across lyrics and audio. No cloud tracking — just your library and fast semantic recall."}
+          </p>
+        </div>
+
+        {/* Doors */}
+        <div className="stagger" style={{
+          display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:'18px', marginBottom:'56px',
+        }}>
+          {doors.map((d, i) => {
+            const accent = `oklch(62% 0.18 ${d.hue})`;
+            const accentGlow = `oklch(62% 0.18 ${d.hue} / 0.4)`;
+            return (
+              <button key={d.id} className={`door ${ske('panel', isDark)}`}
+                onClick={() => onNav(d.id)}
+                style={{
+                  position:'relative', overflow:'hidden',
+                  padding:'28px 26px 26px',
+                  borderRadius:'20px', textAlign:'left',
+                  display:'flex', flexDirection:'column', gap:'18px',
+                  minHeight:'320px',
+                  cursor:'pointer',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.boxShadow = (isDark
+                  ? `inset 0 1px 0 rgba(255,255,255,0.12), inset 0 -1px 0 rgba(0,0,0,0.55), inset 0 0 0 1px rgba(255,255,255,0.05), 0 14px 36px rgba(0,0,0,0.6), 0 0 60px ${accentGlow}`
+                  : `inset 0 1px 0 rgba(255,255,255,1), inset 0 -1px 0 rgba(0,0,0,0.07), inset 0 0 0 1px rgba(0,0,0,0.05), 0 14px 36px rgba(40,30,60,0.18), 0 0 50px ${accentGlow}`); }}
+                onMouseLeave={e => { e.currentTarget.style.boxShadow = ''; }}
+              >
+                {/* Top row: number + caption + arrow */}
+                <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between' }}>
+                  <div>
+                    <div className="mono" style={{ fontSize:'10px', color:c.textSubtle, letterSpacing:'0.22em' }}>{d.key}</div>
+                    <div className="mono" style={{ fontSize:'10px', color: accent, letterSpacing:'0.28em', marginTop:'4px' }}>{d.caption}</div>
+                  </div>
+                  <div className="door-arrow" style={{
+                    width:'36px', height:'36px', borderRadius:'50%',
+                    display:'flex', alignItems:'center', justifyContent:'center',
+                    background: `${accent.replace(')', ' / 0.13)')}`,
+                    color: accent,
+                    boxShadow: isDark ? `inset 0 1px 0 rgba(255,255,255,0.06)` : `inset 0 1px 0 rgba(255,255,255,0.85)`,
+                  }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M7 17 17 7M9 7h8v8"/></svg>
+                  </div>
+                </div>
+
+                {/* Big icon — embedded in a recessed panel */}
+                <div className={ske('inset', isDark)} style={{
+                  height:'100px', borderRadius:'14px',
+                  display:'flex', alignItems:'center', justifyContent:'center',
+                  color: accent,
+                  position:'relative', overflow:'hidden',
+                }}>
+                  <div style={{
+                    position:'absolute', inset:0,
+                    background: `radial-gradient(circle at 50% 50%, ${accent.replace(')', ' / 0.15)')}, transparent 70%)`,
+                  }} />
+                  <div style={{ position:'relative', filter:`drop-shadow(0 0 12px ${accentGlow})` }}>
+                    {d.icon}
+                  </div>
+                </div>
+
+                {/* Title */}
+                <div style={{ flex:1 }}>
+                  <div className="serif" style={{ fontSize:'34px', lineHeight:'1.02', letterSpacing:'-0.02em', color:c.text }}>
+                    {d.title}<br/>
+                    <i style={{ color: accent, fontSize:'30px' }}>{d.titleAccent}</i>
+                  </div>
+                  <div style={{ fontSize:'13px', color:c.textMuted, marginTop:'10px', lineHeight:'1.5' }}>
+                    {d.hint}
+                  </div>
+                </div>
+
+                {/* Footer meta */}
+                <div className="mono" style={{
+                  fontSize:'9px', color:c.textSubtle, letterSpacing:'0.22em',
+                  borderTop:`1px solid ${c.border}`, paddingTop:'12px',
+                }}>
+                  {d.meta}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Fun-fact ticker */}
+        <div className={`${ske('display', isDark)} mono`} style={{
+          padding:'18px 24px', borderRadius:'14px', marginBottom:'28px',
+          color: c.amber, position:'relative', overflow:'hidden',
+          animation:'fadeIn 0.8s ease',
+        }}>
+          <div style={{ display:'flex', alignItems:'center', gap:'18px' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:'8px', flexShrink:0 }}>
+              <span style={{ width:'7px', height:'7px', borderRadius:'50%', background:c.amber, boxShadow:`0 0 6px ${c.amberGlow}` }} />
+              <span style={{ fontSize:'10px', letterSpacing:'0.24em' }}>{lang==='ru'?'ЛЕНТА':'TICKER'}</span>
+            </div>
+            <span style={{ opacity:0.3 }}>|</span>
+            <div key={factIdx} style={{
+              flex:1, minWidth:0, display:'flex', alignItems:'baseline', gap:'14px',
+              animation:'slideRight 0.5s cubic-bezier(.22,.9,.3,1)',
+            }}>
+              <span style={{ fontSize:'10px', letterSpacing:'0.18em', color: fact.live ? 'oklch(70% 0.16 145)' : c.amber, opacity:0.85, flexShrink:0 }}>
+                {fact.live ? `${lang==='ru'?'LIVE':'LIVE'} · ` : ''}{(fact.k||'').toUpperCase()}
+              </span>
+              <span style={{ fontSize:'13px', color:c.text, lineHeight:'1.45', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }} className="serif">
+                {fact.v}
+              </span>
+            </div>
+            <div style={{ display:'flex', gap:'4px', flexShrink:0 }}>
+              {facts.slice(0,8).map((_,i) => (
+                <span key={i} style={{
+                  width:'5px', height:'5px', borderRadius:'50%',
+                  background: i === (factIdx % 8) ? c.amber : 'rgba(128,128,128,0.25)',
+                  boxShadow: i === (factIdx % 8) ? `0 0 5px ${c.amberGlow}` : 'none',
+                  transition:'all 0.3s',
+                }} />
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Footer marquee — secondary scrolling line of all facts */}
+        <div className="marquee-wrap" style={{ marginBottom:'32px', padding:'14px 0',
+          borderTop:`1px solid ${c.border}`, borderBottom:`1px solid ${c.border}` }}>
+          <div className="marquee-track">
+            {[...facts, ...facts].map((f, i) => (
+              <div key={i} className="mono" style={{ display:'flex', alignItems:'center', gap:'10px', fontSize:'11px', color:c.textMuted, flexShrink:0 }}>
+                <span style={{ color: c.amber, letterSpacing:'0.2em' }}>◇</span>
+                <span style={{ color: c.textSubtle, letterSpacing:'0.14em' }}>{(f.k||'').toUpperCase()}</span>
+                <span className="serif" style={{ fontFamily:"'Instrument Serif', serif", fontSize:'14px', color: c.text, fontStyle:'italic' }}>{f.v}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Bottom — credit line */}
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'20px 0 36px',
+          fontSize:'11px', color:c.textSubtle, fontFamily:"'JetBrains Mono', monospace", letterSpacing:'0.15em' }}>
+          <span>{lang==='ru'?'ВСЁ ЛОКАЛЬНО · QDRANT · CLAP · BM25':'ALL LOCAL · QDRANT · CLAP · BM25'}</span>
+          <span>{lang==='ru'?'НИЧЕГО НЕ УХОДИТ В СЕТЬ':'NOTHING LEAVES YOUR MACHINE'}</span>
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
+// ─── Section Header (used inside all sub-sections) ────────────────────────────
+function SectionHeader({ isDark, lang, kicker, title, accent, right, children }) {
+  const c = useColors(isDark);
+  return (
+    <div style={{ padding:'28px 36px 22px', borderBottom:`1px solid ${c.border}`,
+      background: isDark ? 'linear-gradient(180deg, rgba(255,255,255,0.018) 0%, transparent 100%)' : 'linear-gradient(180deg, rgba(255,255,255,0.6) 0%, transparent 100%)' }}>
+      <div style={{ display:'flex', alignItems:'flex-end', justifyContent:'space-between', gap:'24px', flexWrap:'wrap' }}>
+        <div>
+          <div className="mono" style={{ fontSize:'10px', letterSpacing:'0.28em', color:c.textSubtle, marginBottom:'10px' }}>{kicker}</div>
+          <h2 className="serif" style={{ fontSize:'46px', lineHeight:'0.98', letterSpacing:'-0.02em', color:c.text, fontWeight:'400' }}>
+            {title}{accent && <i style={{ color: 'oklch(62% 0.2 275)' }}> {accent}</i>}
+          </h2>
+        </div>
+        {right}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// ─── Segmented control ────────────────────────────────────────────────────────
+function Segmented({ value, onChange, options, isDark, size='md' }) {
+  const c = useColors(isDark);
+  const padY = size === 'sm' ? '5px' : '7px';
+  return (
+    <div className={ske('inset', isDark)} style={{ display:'inline-flex', padding:'3px', borderRadius:'10px', gap:'2px' }}>
+      {options.map(o => {
+        const active = value === o.value;
+        return (
+          <button key={o.value} onClick={() => onChange(o.value)}
+            className={active ? ske('btn', isDark) : ''}
+            style={{
+              padding:`${padY} 14px`, borderRadius:'8px',
+              fontSize: size === 'sm' ? '11px' : '12px', fontWeight:'600',
+              fontFamily:"'JetBrains Mono', monospace", letterSpacing:'0.06em',
+              color: active ? c.text : c.textSubtle,
+              transition:'all 0.18s', whiteSpace:'nowrap',
+            }}>
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── SEARCH SECTION ───────────────────────────────────────────────────────────
+function SearchSection({ isDark, lang, activeCollection }) {
+  const c = useColors(isDark);
+  const { sessions, saveSession, deleteSession } = useChatHistory(activeCollection);
+
+  const initMsg = () => [{
+    role:'assistant',
+    text: lang==='ru'
+      ? 'Опиши музыку, которую ищешь — настроение, текст, звук или жанр. Попробуй: «грустный синти-поп под ночь».'
+      : "Describe the music — mood, lyrics, sound, or genre. Try: \"melancholic synth-pop for late nights\".",
+    time: new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'}),
+  }];
+
+  const [messages, setMessages] = useState(initMsg);
+  const [input, setInput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [mode, setMode] = useState('hybrid');
+  const [autoMode, setAutoMode] = useState(true);
+  const [results, setResults] = useState([]);
+  const [searchExecuted, setSearchExecuted] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchMode, setSearchMode] = useState('hybrid');
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState('');
+  const [showFilters, setShowFilters] = useState(false);
+  const [filters, setFilters] = useState({ artist:'', album:'', genre:'' });
+  const [selectedHit, setSelectedHit] = useState(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const [chatOpen, setChatOpen] = useState(true);
+  const chatEndRef = useRef(null);
+
+  const getLLMSettings = () => ({
+    llm_base_url: localStorage.getItem('llm_base_url') || undefined,
+    llm_model:    localStorage.getItem('llm_model')    || undefined,
+    collection_name: activeCollection || undefined,
+  });
+
+  useEffect(() => {
+    if (chatEndRef.current) chatEndRef.current.scrollTop = chatEndRef.current.scrollHeight;
+  }, [messages]);
+
+  const handleChat = async () => {
+    if (!input.trim() || loading) return;
+    const userText = input.trim();
+    const now = new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'});
+    const newMsgs = [...messages, { role:'user', text:userText, time:now }];
+    setMessages([...newMsgs, { role:'assistant', loading:true, time:now }]);
+    setInput(''); setLoading(true);
+    try {
+      const history = messages.filter(m=>!m.loading).map(m=>({ role:m.role==='assistant'?'assistant':'user', content:m.text||'' }));
+      const res = await apiFetch('/chat/', { method:'POST', body: JSON.stringify({ message:userText, history, mode, auto_mode: autoMode, ...getLLMSettings() }) });
+      const hits = res.hits || [];
+      setResults(hits); setSelectedHit(null);
+      const finalMsgs = [...newMsgs, { role:'assistant', text:res.message||'…', hits, confidence:res.confidence, song:res.song, artist:res.artist, attempts:res.attempts, time:new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'}) }];
+      setMessages(finalMsgs);
+      saveSession(finalMsgs);
+    } catch(e) {
+      setMessages(prev => [...prev.filter(m=>!m.loading), { role:'assistant', text:`${lang==='ru'?'Ошибка':'Error'}: ${e.message}`, time:new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'}) }]);
+    } finally { setLoading(false); }
+  };
+
+  const handleSearch = async () => {
+    if (!searchQuery.trim() || searchLoading) return;
+    setSearchLoading(true); setSearchError(''); setSelectedHit(null);
+    try {
+      const f = {};
+      ['artist','album','genre'].forEach(k => { if (filters[k]) f[k] = filters[k]; });
+      const res = await apiFetch('/search/', { method:'POST', body: JSON.stringify({ query:searchQuery, mode:searchMode, filters:Object.keys(f).length?f:null, limit:20, collection_name:activeCollection||undefined }) });
+      setResults(res.hits||[]);
+      setSearchExecuted(true);
+    } catch(e) { setSearchError(e.message); }
+    finally { setSearchLoading(false); }
+  };
+
+  const renderMessage = (msg, i) => {
+    const isUser = msg.role==='user';
+    const conf = msg.confidence;
+    const confColor = conf==='high' ? c.green : conf==='medium' ? c.amber : c.textSubtle;
+    return (
+      <div key={i} style={{ display:'flex', flexDirection:'column', alignItems:isUser?'flex-end':'flex-start', gap:'5px', animation:'fadeIn 0.3s ease' }}>
+        <div style={{
+          maxWidth:'92%', padding:'11px 15px',
+          borderRadius: isUser?'16px 16px 5px 16px':'16px 16px 16px 5px',
+          background: isUser ? c.userBubble : c.aiBubble,
+          color: isUser?'white':c.text, fontSize:'13px', lineHeight:'1.6',
+          boxShadow: isDark
+            ? (isUser ? 'inset 0 1px 0 rgba(255,255,255,0.18), 0 3px 10px rgba(0,0,0,0.45)' : 'inset 0 1px 0 rgba(255,255,255,0.05), 0 1px 4px rgba(0,0,0,0.3)')
+            : (isUser ? 'inset 0 1px 0 rgba(255,255,255,0.22), 0 3px 10px oklch(60% 0.18 270 / 0.25)' : 'inset 0 1px 0 rgba(255,255,255,0.95), 0 1px 4px rgba(40,30,60,0.08)'),
+        }}>
+          {msg.loading
+            ? <div style={{ display:'flex', gap:'5px', padding:'2px 0' }}>
+                {[0,1,2].map(j => <div key={j} style={{ width:'6px', height:'6px', borderRadius:'50%', background:c.textMuted, animation:`pulse 1.2s ease-in-out ${j*0.2}s infinite` }} />)}
+              </div>
+            : msg.text}
+        </div>
+        {msg.hits && msg.hits.length > 0 && (
+          <div style={{ maxWidth:'96%', borderRadius:'12px', overflow:'hidden',
+            background: c.surface,
+            boxShadow: isDark?'inset 0 1px 0 rgba(255,255,255,0.04), inset 0 0 0 1px rgba(0,0,0,0.4), 0 3px 10px rgba(0,0,0,0.3)':'inset 0 1px 0 rgba(255,255,255,0.95), inset 0 0 0 1px rgba(0,0,0,0.07), 0 3px 10px rgba(40,30,60,0.08)' }}>
+            {msg.hits.slice(0,5).map((hit,hi) => <ResultCard key={hi} hit={hit} isDark={isDark} c={c} compact onClick={() => { setResults(msg.hits); setSelectedHit(hit); }} />)}
+          </div>
+        )}
+        <div className="mono" style={{ display:'flex', gap:'10px', alignItems:'center', fontSize:'9px', letterSpacing:'0.12em' }}>
+          <span style={{ color:c.textSubtle }}>{msg.time}</span>
+          {conf && <span style={{ color: confColor }}>● {conf.toUpperCase()}</span>}
+          {msg.attempts!=null && <span style={{ color:c.textSubtle }}>{msg.attempts}/4</span>}
+        </div>
+      </div>
+    );
+  };
+
+  const isEmpty = !selectedHit && results.length === 0;
+
+  return (
+    <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:c.bg }}>
+      <SectionHeader
+        isDark={isDark} lang={lang}
+        kicker={lang==='ru'?'РАЗДЕЛ 01 · ПОИСК':'SECTION 01 · SEARCH'}
+        title={lang==='ru'?'Поиск':'Search'}
+        accent={lang==='ru'?'по смыслу':'by meaning'}
+        right={
+          <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
+            <Segmented isDark={isDark} value={chatOpen?'chat':'manual'}
+              onChange={v => setChatOpen(v==='chat')}
+              options={[
+                { value:'chat', label: lang==='ru'?'AI чат':'AI chat' },
+                { value:'manual', label: lang==='ru'?'Ручной':'Manual' },
+              ]} />
+          </div>
+        }
+      />
+
+      <div style={{ flex:1, display:'flex', overflow:'hidden' }}>
+        {/* LEFT: Chat / Manual input */}
+        {chatOpen ? (
+          <div style={{ width:'440px', minWidth:'380px', display:'flex', flexDirection:'column',
+            borderRight:`1px solid ${c.border}`, background:c.chatPanelBg }}>
+
+            <div style={{ padding:'14px 18px', borderBottom:`1px solid ${c.border}`, display:'flex', gap:'8px', alignItems:'center' }}>
+              <Segmented isDark={isDark} value={autoMode?'auto':mode}
+                onChange={v => { if (v==='auto') { setAutoMode(true); setMode('hybrid'); } else { setAutoMode(false); setMode(v); } }}
+                options={[
+                  { value:'auto',   label:'AUTO' },
+                  { value:'text',   label:lang==='ru'?'ТЕКСТ':'TEXT' },
+                  { value:'audio',  label:lang==='ru'?'ЗВУК':'AUDIO' },
+                  { value:'hybrid', label:'HYB' },
+                ]}
+                size="sm" />
+              <div style={{ flex:1 }} />
+              <button onClick={() => setShowHistory(h=>!h)}
+                className={!showHistory ? ske('btn', isDark) : ''}
+                style={{ width:'32px', height:'32px', borderRadius:'9px', display:'flex', alignItems:'center', justifyContent:'center',
+                  color: showHistory ? 'oklch(62% 0.2 275)' : c.textMuted,
+                  background: showHistory ? c.accentBg : undefined,
+                }}
+                title={lang==='ru'?'История':'History'}>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+              </button>
+            </div>
+
+            {showHistory && (
+              <div style={{ borderBottom:`1px solid ${c.border}`, background:c.surface2, maxHeight:'220px', overflowY:'auto' }}>
+                {sessions.length === 0
+                  ? <div className="serif" style={{ padding:'20px', fontSize:'14px', color:c.textSubtle, textAlign:'center', fontStyle:'italic' }}>{lang==='ru'?'История пуста':'No history yet'}</div>
+                  : sessions.map(s => (
+                    <div key={s.id} style={{ display:'flex', alignItems:'center', gap:'10px', padding:'10px 16px', cursor:'pointer', borderBottom:`1px solid ${c.border}`, transition:'background 0.12s' }}
+                      onMouseEnter={e=>e.currentTarget.style.background=isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.03)'}
+                      onMouseLeave={e=>e.currentTarget.style.background='transparent'}
+                      onClick={() => { setMessages(s.messages); setShowHistory(false); }}>
+                      <span style={{ width:'4px', height:'4px', borderRadius:'50%', background:c.accent }} />
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={{ fontSize:'12px', color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{s.title}</div>
+                        <div className="mono" style={{ fontSize:'9px', color:c.textSubtle, marginTop:'2px', letterSpacing:'0.1em' }}>
+                          {new Date(s.time).toLocaleDateString('ru', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' })}
+                        </div>
+                      </div>
+                      <button onClick={e => { e.stopPropagation(); deleteSession(s.id); }}
+                        style={{ width:'22px', height:'22px', borderRadius:'5px', color:c.textSubtle }}>×</button>
+                    </div>
+                ))}
+              </div>
+            )}
+
+            <div ref={chatEndRef} style={{ flex:1, overflowY:'auto', padding:'18px', display:'flex', flexDirection:'column', gap:'14px' }}>
+              {messages.map(renderMessage)}
+            </div>
+
+            <div style={{ padding:'4px 18px 0', display:'flex', justifyContent:'flex-end' }}>
+              <button onClick={() => { saveSession(messages); setMessages(initMsg()); setResults([]); }}
+                className="mono"
+                style={{ fontSize:'10px', color:c.textSubtle, padding:'4px 10px', borderRadius:'6px', letterSpacing:'0.12em' }}>
+                + {lang==='ru'?'НОВЫЙ ЧАТ':'NEW CHAT'}
+              </button>
+            </div>
+
+            <div style={{ padding:'12px 18px 18px', borderTop:`1px solid ${c.border}`,
+              background: isDark?'rgba(0,0,0,0.3)':'rgba(255,255,255,0.55)', backdropFilter:'blur(10px)' }}>
+              <div className={ske('inset', isDark)} style={{ display:'flex', gap:'8px', alignItems:'flex-end', padding:'6px', borderRadius:'14px' }}>
+                <textarea
+                  value={input} onChange={e=>setInput(e.target.value)}
+                  onKeyDown={e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();handleChat();} }}
+                  placeholder={lang==='ru'?'Опиши музыку…':'Describe the music…'}
+                  rows={1} disabled={loading}
+                  style={{
+                    flex:1, padding:'9px 12px', borderRadius:'10px', border:'none',
+                    background:'transparent', color:c.text, resize:'none', fontSize:'13px',
+                    lineHeight:'1.5', outline:'none', minHeight:'38px', maxHeight:'110px',
+                  }} />
+                <button onClick={handleChat} disabled={loading||!input.trim()}
+                  className={loading||!input.trim() ? '' : 'ske-accent'}
+                  style={{
+                    width:'40px', height:'40px', borderRadius:'10px', flexShrink:0,
+                    background: loading||!input.trim() ? (isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.05)') : undefined,
+                    color: loading||!input.trim() ? c.textSubtle : 'white',
+                    cursor: loading||!input.trim()?'not-allowed':'pointer',
+                    display:'flex', alignItems:'center', justifyContent:'center',
+                  }}>
+                  {loading ? <Spinner size={15} color="white" /> : <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4z"/></svg>}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div style={{ width:'440px', minWidth:'380px', display:'flex', flexDirection:'column',
+            borderRight:`1px solid ${c.border}`, background:c.chatPanelBg, padding:'24px 22px', gap:'18px' }}>
+            <div className="mono" style={{ fontSize:'10px', color:c.textSubtle, letterSpacing:'0.22em' }}>
+              {lang==='ru'?'ЗАПРОС':'QUERY'}
+            </div>
+            <div className={ske('inset', isDark)} style={{ borderRadius:'14px', padding:'10px 14px',
+              display:'flex', alignItems:'center', gap:'10px' }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c.textSubtle} strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-5.5-5.5"/></svg>
+              <input value={searchQuery} onChange={e=>setSearchQuery(e.target.value)} onKeyDown={e=>e.key==='Enter'&&handleSearch()}
+                placeholder={lang==='ru'?'строка поиска…':'search query…'}
+                style={{ flex:1, padding:'8px 0', border:'none', background:'transparent', color:c.text, fontSize:'14px', outline:'none' }} />
+            </div>
+            <div>
+              <div className="mono" style={{ fontSize:'10px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'10px' }}>
+                {lang==='ru'?'РЕЖИМ':'MODE'}
+              </div>
+              <Segmented isDark={isDark} value={searchMode} onChange={setSearchMode}
+                options={[
+                  { value:'text',   label:lang==='ru'?'ТЕКСТ':'TEXT' },
+                  { value:'audio',  label:lang==='ru'?'ЗВУК':'AUDIO' },
+                  { value:'hybrid', label:lang==='ru'?'ГИБРИД':'HYBRID' },
+                ]} />
+            </div>
+            <div>
+              <button onClick={() => setShowFilters(s=>!s)} className="mono"
+                style={{ fontSize:'10px', color:c.textSubtle, letterSpacing:'0.22em' }}>
+                {showFilters ? '−' : '+'} {lang==='ru'?'ФИЛЬТРЫ':'FILTERS'}
+              </button>
+              {showFilters && (
+                <div style={{ marginTop:'10px', display:'flex', flexDirection:'column', gap:'8px', animation:'fadeIn 0.2s' }}>
+                  {[{k:'artist', l:lang==='ru'?'Артист':'Artist'},{k:'album', l:lang==='ru'?'Альбом':'Album'},{k:'genre', l:lang==='ru'?'Жанр':'Genre'}].map(f => (
+                    <input key={f.k} value={filters[f.k]}
+                      onChange={e=>setFilters(p=>({...p,[f.k]:e.target.value}))}
+                      placeholder={f.l}
+                      className={ske('inset', isDark)}
+                      style={{ width:'100%', padding:'8px 12px', borderRadius:'9px', border:'none', color:c.text, fontSize:'12px', outline:'none', fontFamily:"'JetBrains Mono', monospace" }} />
+                  ))}
+                </div>
+              )}
+            </div>
+            <button onClick={handleSearch} disabled={searchLoading || !searchQuery.trim()}
+              className="ske-accent"
+              style={{
+                padding:'12px 20px', borderRadius:'12px',
+                fontSize:'13px', fontWeight:'600', letterSpacing:'0.05em',
+                opacity: searchLoading||!searchQuery.trim() ? 0.5 : 1,
+                cursor: searchLoading||!searchQuery.trim() ? 'not-allowed' : 'pointer',
+                display:'flex', alignItems:'center', justifyContent:'center', gap:'8px',
+              }}>
+              {searchLoading ? <Spinner size={14} color="white" /> : (lang==='ru'?'НАЙТИ':'SEARCH')}
+            </button>
+            {searchError && (
+              <div style={{ padding:'10px 14px', borderRadius:'10px', fontSize:'12px',
+                background: c.redBg, color: c.red, border:`1px solid ${c.red.replace(')',' / 0.3)')}` }}>
+                {searchError}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* RIGHT: results */}
+        <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+          {selectedHit ? (
+            <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+              <div style={{ padding:'14px 24px', borderBottom:`1px solid ${c.border}` }}>
+                <button onClick={() => setSelectedHit(null)} className="mono"
+                  style={{ fontSize:'11px', color:c.textMuted, letterSpacing:'0.12em' }}>
+                  ← {lang==='ru'?'НАЗАД':'BACK'}
+                </button>
+              </div>
+              <div style={{ flex:1, overflowY:'auto', padding:'40px 32px 64px', maxWidth:'780px', margin:'0 auto', width:'100%' }}>
+                <div style={{ display:'flex', justifyContent:'center', marginBottom:'28px', animation:'scaleIn 0.4s ease' }}>
+                  <AlbumCover title={selectedHit.track?.title||''} artist={selectedHit.track?.artist||''} size={240} isDark={isDark} coverPath={selectedHit.track?.cover_art_path} radius={20} />
+                </div>
+                <div style={{ textAlign:'center', marginBottom:'18px' }}>
+                  <h3 className="serif" style={{ fontSize:'42px', lineHeight:'1', letterSpacing:'-0.02em', color:c.text, fontWeight:'400' }}>
+                    {selectedHit.track?.title}
+                  </h3>
+                  <div className="serif" style={{ fontSize:'20px', color:c.textMuted, marginTop:'10px', fontStyle:'italic' }}>
+                    {selectedHit.track?.artist}
+                  </div>
+                  <div className="mono" style={{ fontSize:'10px', color:c.textSubtle, marginTop:'10px', letterSpacing:'0.18em' }}>
+                    {[selectedHit.track?.album, selectedHit.track?.year].filter(Boolean).join(' · ').toUpperCase()}
+                  </div>
+                </div>
+                <div style={{ display:'flex', gap:'8px', flexWrap:'wrap', justifyContent:'center', marginBottom:'24px' }}>
+                  {[selectedHit.track?.genre, `${Math.round((selectedHit.score||0)*100)}% match`, selectedHit.matched_on].filter(Boolean).map((tag,i)=>(
+                    <span key={i} className="mono" style={{
+                      padding:'5px 14px', borderRadius:'20px', fontSize:'10px', letterSpacing:'0.15em',
+                      background:c.accentBg, color:c.accent, border:`1px solid ${c.accent.replace(')', ' / 0.25)')}`,
+                    }}>{String(tag).toUpperCase()}</span>
+                  ))}
+                </div>
+                {selectedHit.lyrics && (
+                  <div className={ske('inset', isDark)} style={{
+                    padding:'18px 22px', borderRadius:'14px', marginBottom:'24px',
+                    fontSize:'15px', color:c.textMuted, lineHeight:'1.7', textAlign:'center',
+                  }}>
+                    <span className="serif" style={{ fontStyle:'italic', fontSize:'18px' }}>"{selectedHit.lyrics.slice(0,250)}"</span>
+                  </div>
+                )}
+                {selectedHit.track?.lyrics && (
+                  <div className={ske('panel', isDark)} style={{ borderRadius:'16px' }}>
+                    <div className="mono" style={{ padding:'14px 20px', borderBottom:`1px solid ${c.border}`,
+                      fontSize:'10px', color:c.textSubtle, letterSpacing:'0.22em' }}>
+                      {lang==='ru'?'ТЕКСТ ПЕСНИ':'LYRICS'}
+                    </div>
+                    <div style={{ padding:'20px 22px', fontSize:'14px', color:c.textMuted, lineHeight:'1.85',
+                      whiteSpace:'pre-wrap', wordBreak:'break-word' }}>
+                      {selectedHit.track.lyrics}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : isEmpty ? (
+            <div style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
+              padding:'40px', gap:'18px', textAlign:'center' }}>
+              <div className={ske('display', isDark)} style={{
+                width:'120px', height:'120px', borderRadius:'24px',
+                display:'flex', alignItems:'center', justifyContent:'center',
+                color: c.amber,
+              }}>
+                <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="11" cy="11" r="7"/><path d="m21 21-5.5-5.5"/></svg>
+              </div>
+              <div className="serif" style={{ fontSize:'28px', letterSpacing:'-0.01em', color:c.text }}>
+                {searchExecuted
+                  ? <i style={{ color: c.textMuted }}>{lang==='ru'?'Ничего не нашлось':'Nothing matched'}</i>
+                  : <>{lang==='ru'?'Готов слушать.':'Ready to listen.'}</>}
+              </div>
+              <div style={{ fontSize:'13px', color:c.textSubtle, maxWidth:'380px' }}>
+                {searchExecuted
+                  ? (lang==='ru'?'Попробуй другие слова или режим.':'Try different words or another mode.')
+                  : (lang==='ru'?'Опиши, что хочешь услышать — слева чат, справа результаты.':'Describe what you want — chat on the left, results here.')}
+              </div>
+            </div>
+          ) : (
+            <div style={{ flex:1, overflowY:'auto', padding:'8px 0' }}>
+              <div className="mono" style={{ padding:'14px 24px 8px', fontSize:'10px', color:c.textSubtle, letterSpacing:'0.22em' }}>
+                {results.length} {lang==='ru'?'НАЙДЕНО':'FOUND'}
+              </div>
+              <div style={{ padding:'0 12px' }}>
+                {results.map((hit,i) => <ResultCard key={i} hit={hit} isDark={isDark} c={c} onClick={()=>setSelectedHit(hit)} />)}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── RECOMMEND SECTION ────────────────────────────────────────────────────────
+function RecommendSection({ isDark, lang, activeCollection }) {
+  const c = useColors(isDark);
+
+  // Vibe (mood) input — runs hybrid search
+  const [vibeText, setVibeText] = useState('');
+  const [vibeLoading, setVibeLoading] = useState(false);
+  const [vibeResults, setVibeResults] = useState([]);
+
+  // Track-similarity — picks a track from search results, then queries similar
+  const [trackQuery, setTrackQuery] = useState('');
+  const [trackOptions, setTrackOptions] = useState([]);
+  const [trackPicker, setTrackPicker] = useState(false);
+  const [pickedTrack, setPickedTrack] = useState(null);
+  const [similarLoading, setSimilarLoading] = useState(false);
+  const [similar, setSimilar] = useState([]);
+
+  // Quick mixes — derived from /library/stats and /library/top-pairs
+  const [stats, setStats] = useState(null);
+  const [topPairs, setTopPairs] = useState(null);
+  const [topPairsLoading, setTopPairsLoading] = useState(true);
+
+  useEffect(() => {
+    const col = activeCollection ? `?collection_name=${encodeURIComponent(activeCollection)}` : '';
+    apiFetch(`/library/stats${col}`).then(setStats).catch(()=>{});
+    setTopPairsLoading(true);
+    apiFetch(`/library/top-pairs${col}`).then(d => { setTopPairs(d); setTopPairsLoading(false); }).catch(()=>setTopPairsLoading(false));
+  }, [activeCollection]);
+
+  const runVibe = async () => {
+    if (!vibeText.trim() || vibeLoading) return;
+    setVibeLoading(true);
+    try {
+      const res = await apiFetch('/search/', { method:'POST', body: JSON.stringify({
+        query: vibeText, mode:'hybrid', limit: 12, collection_name: activeCollection || undefined
+      })});
+      setVibeResults(res.hits || []);
+    } catch(e) { setVibeResults([]); }
+    finally { setVibeLoading(false); }
+  };
+
+  const lookupTracks = async (q) => {
+    if (!q.trim()) { setTrackOptions([]); setTrackPicker(false); return; }
+    try {
+      const res = await apiFetch('/search/', { method:'POST', body: JSON.stringify({
+        query: q, mode:'text', limit: 6, collection_name: activeCollection || undefined
+      })});
+      setTrackOptions(res.hits || []);
+      setTrackPicker(true);
+    } catch(e) { setTrackOptions([]); }
+  };
+
+  const findSimilar = async (hit) => {
+    setPickedTrack(hit); setTrackPicker(false); setSimilarLoading(true); setSimilar([]);
+    const seedTitle = hit.track?.title || '';
+    const seedArtist = hit.track?.artist || '';
+    try {
+      // Use audio mode with title+artist as a CLAP-friendly query
+      const q = `${seedArtist} ${seedTitle}`.trim();
+      const res = await apiFetch('/search/', { method:'POST', body: JSON.stringify({
+        query: q, mode:'audio', limit: 12, collection_name: activeCollection || undefined
+      })});
+      const filtered = (res.hits || []).filter(h => !(h.track?.title === seedTitle && h.track?.artist === seedArtist));
+      setSimilar(filtered.slice(0, 10));
+    } catch(e) {}
+    finally { setSimilarLoading(false); }
+  };
+
+  // Quick mix presets — each runs a hybrid search with a curated query
+  const moodPresets = lang==='ru' ? [
+    { id:'late', label:'Под поздний вечер', q:'тихо, меланхолично, поздно ночью, размеренно', hue:265, icon:'🌙' },
+    { id:'walk', label:'Для прогулки', q:'бодро, позитивно, ритмично, движение', hue:140, icon:'⊜' },
+    { id:'focus', label:'Для фокуса', q:'инструментальное, минимализм, фон, концентрация', hue:200, icon:'◇' },
+    { id:'rain', label:'Дождь и кофе', q:'грустно, дождливо, уютно, акустика', hue:220, icon:'☁' },
+    { id:'energy', label:'Заряд энергии', q:'мощно, драйв, рок, быстро, агрессивно', hue:25, icon:'⚡' },
+    { id:'love', label:'Романтика', q:'нежно, лирично, любовь, тепло', hue:340, icon:'❤' },
+  ] : [
+    { id:'late', label:'Late night', q:'quiet, melancholic, slow, late night', hue:265, icon:'🌙' },
+    { id:'walk', label:'For a walk', q:'upbeat, positive, rhythmic, motion', hue:140, icon:'⊜' },
+    { id:'focus', label:'Focus', q:'instrumental, minimal, ambient, concentration', hue:200, icon:'◇' },
+    { id:'rain', label:'Rain & coffee', q:'sad, rainy, cozy, acoustic', hue:220, icon:'☁' },
+    { id:'energy', label:'Energy boost', q:'powerful, driving, rock, fast, aggressive', hue:25, icon:'⚡' },
+    { id:'love', label:'Romance', q:'gentle, lyrical, love, warm', hue:340, icon:'❤' },
+  ];
+  const [activePreset, setActivePreset] = useState(null);
+  const runPreset = async (p) => {
+    setActivePreset(p.id); setVibeLoading(true); setVibeText(p.q);
+    try {
+      const res = await apiFetch('/search/', { method:'POST', body: JSON.stringify({
+        query: p.q, mode:'hybrid', limit: 12, collection_name: activeCollection || undefined,
+      })});
+      setVibeResults(res.hits || []);
+    } catch(e) { setVibeResults([]); }
+    finally { setVibeLoading(false); }
+  };
+
+  const card = (children, extra={}) => (
+    <div className={ske('panel', isDark)} style={{ padding:'24px 26px', borderRadius:'18px', ...extra }}>
+      {children}
+    </div>
+  );
+  const blockTitle = (kicker, title, accent) => (
+    <div style={{ marginBottom:'20px' }}>
+      <div className="mono" style={{ fontSize:'10px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'6px' }}>{kicker}</div>
+      <div className="serif" style={{ fontSize:'30px', lineHeight:'1', letterSpacing:'-0.02em', color:c.text }}>
+        {title}{accent && <i style={{ color: 'oklch(62% 0.2 275)' }}> {accent}</i>}
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:c.bg }}>
+      <SectionHeader
+        isDark={isDark} lang={lang}
+        kicker={lang==='ru'?'РАЗДЕЛ 02 · РЕКОМЕНДАЦИИ':'SECTION 02 · RECOMMEND'}
+        title={lang==='ru'?'Что включить':"What to play"}
+        accent={lang==='ru'?'сегодня':'tonight'}
+      />
+
+      <div style={{ flex:1, overflowY:'auto', padding:'30px 36px 60px' }}>
+        <div style={{ maxWidth:'1180px', margin:'0 auto', display:'flex', flexDirection:'column', gap:'28px' }}>
+
+          {/* ── 1. QUICK MIXES — preset buttons ── */}
+          {card(<>
+            {blockTitle(
+              lang==='ru'?'01 · БЫСТРЫЕ МИКСЫ':'01 · QUICK MIXES',
+              lang==='ru'?'Подбери':'Pick',
+              lang==='ru'?'настроение':'a mood',
+            )}
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(180px, 1fr))', gap:'12px' }}>
+              {moodPresets.map(p => {
+                const active = activePreset === p.id;
+                const accent = `oklch(62% 0.18 ${p.hue})`;
+                return (
+                  <button key={p.id} onClick={() => runPreset(p)}
+                    className={active ? '' : ske('btn', isDark)}
+                    style={{
+                      padding:'18px 18px', borderRadius:'14px',
+                      display:'flex', flexDirection:'column', alignItems:'flex-start', gap:'10px',
+                      cursor:'pointer', textAlign:'left', position:'relative', overflow:'hidden',
+                      background: active
+                        ? `linear-gradient(180deg, ${accent.replace(')', ' / 0.18)')} 0%, ${accent.replace(')', ' / 0.07)')} 100%)`
+                        : undefined,
+                      boxShadow: active
+                        ? `inset 0 0 0 1.5px ${accent.replace(')', ' / 0.5)')}, 0 0 30px ${accent.replace(')', ' / 0.3)')}`
+                        : undefined,
+                      transition:'all 0.25s',
+                    }}>
+                    <div style={{
+                      width:'40px', height:'40px', borderRadius:'10px',
+                      display:'flex', alignItems:'center', justifyContent:'center',
+                      fontSize:'18px',
+                      background: `${accent.replace(')', ' / 0.16)')}`,
+                      color: accent,
+                      boxShadow: isDark ? 'inset 0 1px 0 rgba(255,255,255,0.08)' : 'inset 0 1px 0 rgba(255,255,255,0.85)',
+                    }}>{p.icon}</div>
+                    <div className="serif" style={{ fontSize:'20px', lineHeight:'1.05', letterSpacing:'-0.01em', color:c.text }}>
+                      {p.label}
+                    </div>
+                    <div className="mono" style={{ fontSize:'9px', color:c.textSubtle, letterSpacing:'0.16em' }}>
+                      {active ? (vibeLoading ? (lang==='ru'?'ПОДБОР…':'MIXING…') : (lang==='ru'?'АКТИВНО':'ACTIVE')) : (lang==='ru'?'НАЖАТЬ':'TAP')}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </>)}
+
+          {/* ── 2. VIBE INPUT ── */}
+          {card(<>
+            {blockTitle(
+              lang==='ru'?'02 · ВЫРАЗИ СЛОВАМИ':'02 · DESCRIBE A VIBE',
+              lang==='ru'?'Опиши':'Describe',
+              lang==='ru'?'настроение':'the feeling',
+            )}
+            <div className={ske('inset', isDark)} style={{ padding:'10px 14px', borderRadius:'14px', display:'flex', gap:'12px', alignItems:'center', marginBottom:'14px' }}>
+              <span className="serif" style={{ fontSize:'22px', color: c.amber, fontStyle:'italic' }}>"</span>
+              <input value={vibeText} onChange={e=>setVibeText(e.target.value)}
+                onKeyDown={e=>e.key==='Enter'&&runVibe()}
+                placeholder={lang==='ru'?'тёплое лето, лёгкая ностальгия, гитара…':'warm summer, slight nostalgia, guitar…'}
+                style={{ flex:1, padding:'10px 0', border:'none', background:'transparent', color:c.text, fontSize:'15px', outline:'none', fontFamily:"'Instrument Serif', serif", fontStyle:'italic' }} />
+              <button onClick={runVibe} disabled={vibeLoading || !vibeText.trim()} className="ske-accent"
+                style={{ padding:'8px 18px', borderRadius:'10px', fontSize:'12px', fontWeight:'600',
+                  opacity: vibeLoading||!vibeText.trim() ? 0.5 : 1,
+                  cursor: vibeLoading||!vibeText.trim() ? 'not-allowed' : 'pointer',
+                  letterSpacing:'0.06em',
+                }}>
+                {vibeLoading ? <Spinner size={13} color="white" /> : (lang==='ru'?'СОБРАТЬ':'BUILD')}
+              </button>
+            </div>
+            {vibeResults.length > 0 && (
+              <div style={{ display:'flex', flexDirection:'column', gap:'2px', animation:'fadeIn 0.4s ease' }}>
+                <div className="mono" style={{ fontSize:'9px', color:c.textSubtle, letterSpacing:'0.22em', padding:'4px 0 8px' }}>
+                  {vibeResults.length} {lang==='ru'?'ТРЕКОВ В МИКСЕ':'TRACKS IN THE MIX'}
+                </div>
+                {vibeResults.map((h, i) => <ResultCard key={i} hit={h} isDark={isDark} c={c} compact />)}
+              </div>
+            )}
+          </>)}
+
+          {/* ── 3. TRACK PICKER → SIMILAR ── */}
+          {card(<>
+            {blockTitle(
+              lang==='ru'?'03 · ПОХОЖЕЕ ПО ТРЕКУ':'03 · SIMILAR TO A TRACK',
+              lang==='ru'?'Выбери':'Pick',
+              lang==='ru'?'трек':'a track',
+            )}
+            <div className={ske('inset', isDark)} style={{ padding:'10px 14px', borderRadius:'14px', display:'flex', gap:'10px', alignItems:'center', position:'relative' }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c.textSubtle} strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-5.5-5.5"/></svg>
+              <input value={trackQuery} onChange={e=>{ setTrackQuery(e.target.value); lookupTracks(e.target.value); }}
+                placeholder={lang==='ru'?'название или артист…':'title or artist…'}
+                style={{ flex:1, padding:'8px 0', border:'none', background:'transparent', color:c.text, fontSize:'14px', outline:'none' }} />
+              {pickedTrack && (
+                <button onClick={() => { setPickedTrack(null); setSimilar([]); setTrackQuery(''); }} className="mono"
+                  style={{ fontSize:'10px', color:c.textSubtle, letterSpacing:'0.12em' }}>×&nbsp;{lang==='ru'?'СБРОС':'RESET'}</button>
+              )}
+              {trackPicker && trackOptions.length > 0 && (
+                <div className={ske('panel', isDark)} style={{
+                  position:'absolute', top:'calc(100% + 6px)', left:0, right:0, zIndex:5, borderRadius:'12px', overflow:'hidden',
+                  maxHeight:'300px', overflowY:'auto', animation:'fadeIn 0.18s ease',
+                }}>
+                  {trackOptions.map((h,i) => (
+                    <div key={i} onClick={() => findSimilar(h)} style={{ cursor:'pointer' }}>
+                      <ResultCard hit={h} isDark={isDark} c={c} compact />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {pickedTrack && (
+              <div style={{ marginTop:'18px', display:'grid', gridTemplateColumns:'auto 1fr', gap:'18px', alignItems:'center', animation:'fadeIn 0.3s ease' }}>
+                <AlbumCover title={pickedTrack.track?.title} artist={pickedTrack.track?.artist} size={70} isDark={isDark} coverPath={pickedTrack.track?.cover_art_path} />
+                <div>
+                  <div className="mono" style={{ fontSize:'9px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'4px' }}>
+                    {lang==='ru'?'СЕМЯ':'SEED'}
+                  </div>
+                  <div className="serif" style={{ fontSize:'24px', letterSpacing:'-0.01em', color:c.text, lineHeight:'1.1' }}>
+                    {pickedTrack.track?.title}
+                  </div>
+                  <div className="serif" style={{ fontSize:'15px', color:c.textMuted, fontStyle:'italic', marginTop:'2px' }}>
+                    {pickedTrack.track?.artist}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {pickedTrack && (
+              <div style={{ marginTop:'20px' }}>
+                <div className="mono" style={{ fontSize:'10px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'12px' }}>
+                  {similarLoading
+                    ? (lang==='ru'?'ПОДБОР ПОХОЖИХ…':'FINDING SIMILAR…')
+                    : (lang==='ru'?`ТОП-${similar.length} ПОХОЖИХ`:`TOP ${similar.length} SIMILAR`)}
+                </div>
+                {similarLoading ? (
+                  <div style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
+                    {[1,2,3,4,5].map(i => (
+                      <div key={i} style={{ height:'62px', borderRadius:'12px',
+                        background: isDark?'rgba(255,255,255,0.03)':'rgba(0,0,0,0.025)',
+                        boxShadow: isDark?'inset 0 1px 2px rgba(0,0,0,0.4)':'inset 0 1px 2px rgba(40,30,60,0.06)',
+                        animation:`pulse 1.4s ${i*0.1}s ease-in-out infinite` }} />
+                    ))}
+                  </div>
+                ) : similar.length > 0 ? (
+                  <div style={{ display:'flex', flexDirection:'column', gap:'2px' }}>
+                    {similar.map((h,i) => <ResultCard key={i} hit={h} isDark={isDark} c={c} compact />)}
+                  </div>
+                ) : (
+                  <div className="serif" style={{ fontSize:'14px', color:c.textSubtle, fontStyle:'italic', textAlign:'center', padding:'24px' }}>
+                    {lang==='ru'?'Ничего похожего не нашлось':'No similar tracks found'}
+                  </div>
+                )}
+              </div>
+            )}
+          </>)}
+
+          {/* ── 4. TOP PAIRS — quick view of similar/dissimilar ── */}
+          {topPairs && (topPairs.similar?.length || topPairs.dissimilar?.length) ? (
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'18px' }}>
+              {[
+                { key:'similar', label:lang==='ru'?'≈ Самые похожие пары':'≈ Most similar pairs', hue:270 },
+                { key:'dissimilar', label:lang==='ru'?'≠ Самые разные пары':'≠ Most different pairs', hue:25 },
+              ].map(({ key, label, hue }) => {
+                const pairs = topPairs?.[key] || [];
+                const top = pairs
+                  .map(p => ({ main:p, best: p[`top_${key}`]?.[0] }))
+                  .filter(x => x.best)
+                  .sort((a,b) => key==='similar' ? b.best.score - a.best.score : a.best.score - b.best.score)
+                  .slice(0, 4);
+                const accent = `oklch(62% 0.18 ${hue})`;
+                return (
+                  <div key={key} className={ske('panel', isDark)} style={{ padding:'22px', borderRadius:'18px' }}>
+                    <div className="mono" style={{ fontSize:'10px', letterSpacing:'0.22em', color:accent, marginBottom:'14px' }}>
+                      {label}
+                    </div>
+                    <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
+                      {top.map((pair, i) => (
+                        <div key={i} className={ske('inset', isDark)} style={{ padding:'10px 12px', borderRadius:'12px', display:'flex', alignItems:'center', gap:'10px' }}>
+                          <AlbumCover title={pair.main.song?.split(' - ')[1]||''} artist={pair.main.song?.split(' - ')[0]||''} size={32} isDark={isDark} coverPath={pair.main.cover_art_path} />
+                          <span className="mono" style={{ fontSize:'9px', color:accent, letterSpacing:'0.1em' }}>{Math.round(pair.best.score)}%</span>
+                          <AlbumCover title={pair.best.name?.split(' - ')[1]||''} artist={pair.best.name?.split(' - ')[0]||''} size={32} isDark={isDark} coverPath={pair.best.cover_art_path} />
+                          <div style={{ flex:1, minWidth:0, fontSize:'11px', color:c.textMuted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }} className="serif">
+                            <i>{pair.main.song} ↔ {pair.best.name}</i>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
+
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── VU Meter (semicircle gauge) ──────────────────────────────────────────────
+function VUMeter({ value, max=100, label, sub, isDark, hue=265, size=180 }) {
+  const c = useColors(isDark);
+  const pct = Math.max(0, Math.min(1, (value || 0) / (max || 1)));
+  const angle = -90 + pct * 180; // -90deg → +90deg
+  const accent = `oklch(62% 0.18 ${hue})`;
+  return (
+    <div style={{ width:size, position:'relative', display:'flex', flexDirection:'column', alignItems:'center', gap:'10px' }}>
+      <div className={ske('display', isDark)} style={{
+        width: size, height: size * 0.65, borderRadius:`${size*0.6}px ${size*0.6}px 12px 12px`,
+        position:'relative', overflow:'hidden',
+        display:'flex', alignItems:'flex-end', justifyContent:'center',
+        padding:'0 0 8px',
+      }}>
+        {/* tick marks */}
+        <svg width={size-16} height={size*0.55} viewBox={`-50 -50 100 55`} style={{ position:'absolute', bottom:'8px', left:'8px' }}>
+          {[...Array(11)].map((_,i) => {
+            const a = -90 + (i / 10) * 180;
+            const r1 = 38, r2 = i % 5 === 0 ? 44 : 41;
+            const x1 = r1 * Math.cos(a * Math.PI / 180);
+            const y1 = r1 * Math.sin(a * Math.PI / 180);
+            const x2 = r2 * Math.cos(a * Math.PI / 180);
+            const y2 = r2 * Math.sin(a * Math.PI / 180);
+            return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2}
+              stroke={i >= 7 ? c.amber : (i >= 9 ? 'oklch(58% 0.21 25)' : (isDark?'rgba(255,255,255,0.18)':'rgba(0,0,0,0.18)'))}
+              strokeWidth={i % 5 === 0 ? 1.4 : 0.8} />;
+          })}
+          {/* arc gradient */}
+          <path d={`M -42 0 A 42 42 0 0 1 42 0`} fill="none"
+            stroke={`${accent.replace(')', ' / 0.18)')}`} strokeWidth="1.5" />
+        </svg>
+        {/* needle */}
+        <div className="needle" style={{
+          position:'absolute', left:'50%', bottom:'8px',
+          width:'2px', height: size*0.42, marginLeft:'-1px',
+          background: `linear-gradient(180deg, ${accent}, ${accent.replace(')', ' / 0.6)')})`,
+          borderRadius:'2px',
+          transform:`rotate(${angle}deg)`,
+          transformOrigin: '50% 100%',
+          boxShadow: `0 0 8px ${accent.replace(')', ' / 0.6)')}`,
+        }} />
+        {/* needle pivot */}
+        <div style={{
+          position:'absolute', left:'50%', bottom:'4px', width:'12px', height:'12px',
+          marginLeft:'-6px', borderRadius:'50%',
+          background: 'radial-gradient(circle at 30% 30%, #555, #1a1a1a)',
+          boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.2), 0 1px 3px rgba(0,0,0,0.6)',
+        }} />
+        {/* numeric readout */}
+        <div className="mono" style={{
+          position:'absolute', top:'18px', left:0, right:0, textAlign:'center',
+          fontSize:'24px', color: c.amber, letterSpacing:'0.05em',
+          textShadow: `0 0 12px ${c.amberGlow}`,
+        }}>
+          {value != null ? value.toLocaleString('ru') : '—'}
+        </div>
+      </div>
+      <div style={{ textAlign:'center' }}>
+        <div className="mono" style={{ fontSize:'9px', letterSpacing:'0.22em', color:c.textSubtle }}>{label}</div>
+        {sub && <div className="serif" style={{ fontSize:'14px', color:c.textMuted, fontStyle:'italic', marginTop:'2px' }}>{sub}</div>}
+      </div>
+    </div>
+  );
+}
+
+// ─── LIBRARY SECTION ──────────────────────────────────────────────────────────
+function LibrarySection({ isDark, lang, activeCollection }) {
+  const c = useColors(isDark);
+  const [stats, setStats] = useState(null);
+  const [topPairs, setTopPairs] = useState(null);
+  const [statsLoading, setStatsLoading] = useState(true);
+  const [topPairsLoading, setTopPairsLoading] = useState(true);
+  const [activePairsTab, setActivePairsTab] = useState('similar');
+
+  useEffect(() => {
+    const col = activeCollection ? `?collection_name=${encodeURIComponent(activeCollection)}` : '';
+    setStatsLoading(true);
+    apiFetch(`/library/stats${col}`).then(s => { setStats(s); setStatsLoading(false); }).catch(()=>setStatsLoading(false));
+    setTopPairsLoading(true);
+    apiFetch(`/library/top-pairs${col}`).then(d => { setTopPairs(d); setTopPairsLoading(false); }).catch(()=>setTopPairsLoading(false));
+  }, [activeCollection]);
+
+  const card = (children, extra={}) => (
+    <div className={ske('panel', isDark)} style={{ padding:'24px 26px', borderRadius:'18px', ...extra }}>
+      {children}
+    </div>
+  );
+
+  const blockTitle = (kicker, title, accent) => (
+    <div style={{ marginBottom:'18px' }}>
+      <div className="mono" style={{ fontSize:'10px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'6px' }}>{kicker}</div>
+      <div className="serif" style={{ fontSize:'26px', lineHeight:'1', letterSpacing:'-0.02em', color:c.text }}>
+        {title}{accent && <i style={{ color: 'oklch(62% 0.2 275)' }}> {accent}</i>}
+      </div>
+    </div>
+  );
+
+  // StatBar
+  const StatBar = ({ items, hues, showPct=true }) => {
+    if (!items || items.length === 0) return <div className="serif" style={{ fontSize:'14px', color:c.textSubtle, fontStyle:'italic' }}>{lang==='ru'?'Нет данных':'No data'}</div>;
+    const maxCount = items[0]?.count || 1;
+    return (
+      <div style={{ display:'flex', flexDirection:'column', gap:'12px' }}>
+        {items.slice(0,5).map((item, i) => {
+          const barW = `${Math.round((item.count||0) / maxCount * 100)}%`;
+          const hue = hues ? (hues[i] ?? 200) : (270 + i * 30) % 360;
+          const label = item.genre || item.artist || item.label || '—';
+          return (
+            <div key={label}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:'5px' }}>
+                <span className="serif" style={{ fontSize:'15px', color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', maxWidth:'70%', letterSpacing:'-0.01em' }}>{label}</span>
+                <span className="mono" style={{ fontSize:'10px', color:c.textMuted, flexShrink:0, letterSpacing:'0.08em' }}>
+                  {item.count}{showPct && item.pct ? ` · ${item.pct}%` : ''}
+                </span>
+              </div>
+              <div className={ske('inset', isDark)} style={{ height:'7px', borderRadius:'4px', overflow:'hidden' }}>
+                <div style={{
+                  width:barW, height:'100%', borderRadius:'4px',
+                  background:`linear-gradient(90deg, oklch(60% 0.18 ${hue}), oklch(70% 0.16 ${(hue+25)%360}))`,
+                  boxShadow:`0 0 8px oklch(60% 0.18 ${hue} / 0.4)`,
+                  transform:'scaleX(0)', transformOrigin:'left',
+                  animation:`meterTick 0.9s cubic-bezier(.22,.9,.3,1) ${i*0.08}s forwards`,
+                }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  // Year range
+  const YearRangeCard = () => {
+    const yr = stats?.year_range;
+    const decades = stats?.decades || [];
+    if (!yr && decades.length === 0) return <div className="serif" style={{ fontSize:'14px', color:c.textSubtle, fontStyle:'italic' }}>{lang==='ru'?'Нет данных':'No data'}</div>;
+    const minY = yr?.min ?? yr?.[0] ?? '—';
+    const maxY = yr?.max ?? yr?.[1] ?? '—';
+    const peak = decades.reduce((p,d) => d.count>(p?.count||0)?d:p, null);
+    const maxCount = decades.reduce((m,d) => Math.max(m, d.count||0), 0) || 1;
+    return (
+      <div style={{ display:'flex', flexDirection:'column', gap:'14px' }}>
+        <div style={{ display:'flex', gap:'12px' }}>
+          {[
+            {label:lang==='ru'?'Самая старая':'Earliest', val:minY, hue:60},
+            {label:lang==='ru'?'Самая новая':'Latest', val:maxY, hue:270},
+          ].map(item => (
+            <div key={item.label} className={ske('display', isDark)} style={{ flex:1, padding:'14px 16px', borderRadius:'12px', textAlign:'center' }}>
+              <div className="mono" style={{ fontSize:'9px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'4px' }}>{item.label.toUpperCase()}</div>
+              <div className="mono" style={{ fontSize:'28px', color:c.amber, letterSpacing:'0.05em', textShadow:`0 0 10px ${c.amberGlow}` }}>{item.val}</div>
+            </div>
+          ))}
+        </div>
+        {decades.length > 0 && (
+          <div>
+            <div className="mono" style={{ fontSize:'9px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'10px' }}>
+              {lang==='ru'?'ПО ДЕСЯТИЛЕТИЯМ':'BY DECADE'}
+            </div>
+            <div style={{ display:'flex', alignItems:'flex-end', gap:'4px', height:'70px' }}>
+              {decades.map((d,i) => {
+                const h = `${(d.count / maxCount) * 100}%`;
+                const hue = 40 + (i / Math.max(1, decades.length-1)) * 240;
+                const isPeak = peak && d.decade === peak.decade;
+                return (
+                  <div key={d.decade} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:'4px' }}>
+                    <div className={ske('inset', isDark)} style={{
+                      width:'100%', height:'52px', borderRadius:'6px', display:'flex', alignItems:'flex-end', overflow:'hidden',
+                    }}>
+                      <div style={{
+                        width:'100%', height: h, minHeight:'2px',
+                        background: `linear-gradient(180deg, oklch(72% 0.16 ${hue}), oklch(56% 0.18 ${hue}))`,
+                        boxShadow: isPeak ? `0 0 8px oklch(60% 0.18 ${hue} / 0.5)` : 'none',
+                        borderRadius:'4px',
+                        animation: `meterTick 0.7s cubic-bezier(.22,.9,.3,1) ${i*0.05}s both`,
+                      }} />
+                    </div>
+                    <div className="mono" style={{ fontSize:'9px', color: isPeak ? c.amber : c.textSubtle, letterSpacing:'0.06em' }}>{d.decade}</div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:c.bg }}>
+      <SectionHeader
+        isDark={isDark} lang={lang}
+        kicker={lang==='ru'?'РАЗДЕЛ 03 · БИБЛИОТЕКА':'SECTION 03 · LIBRARY'}
+        title={lang==='ru'?'Твоя коллекция':'Your library'}
+        accent={lang==='ru'?'в цифрах':'in numbers'}
+      />
+
+      <div style={{ flex:1, overflowY:'auto', padding:'30px 36px 60px' }}>
+        <div style={{ maxWidth:'1180px', margin:'0 auto', display:'flex', flexDirection:'column', gap:'22px' }}>
+
+          {/* Hero readout */}
+          <div className={`${brushed(isDark)}`} style={{ padding:'28px 32px', borderRadius:'20px', position:'relative', overflow:'hidden' }}>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr auto', gap:'20px', alignItems:'center' }}>
+              <div>
+                <div className="mono" style={{ fontSize:'10px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'10px' }}>
+                  {activeCollection || (lang==='ru'?'НЕТ КОЛЛЕКЦИИ':'NO COLLECTION')}
+                </div>
+                <div className="serif" style={{ fontSize:'72px', lineHeight:'0.9', letterSpacing:'-0.03em', color:c.text }}>
+                  {statsLoading ? '…' : (stats?.total_tracks?.toLocaleString(lang==='ru'?'ru':'en') ?? '—')}
+                </div>
+                <div className="serif" style={{ fontSize:'18px', color:c.textMuted, marginTop:'6px', fontStyle:'italic' }}>
+                  {lang==='ru'?'треков индексировано':'tracks indexed'}
+                </div>
+              </div>
+              {/* Mini gauges */}
+              <div style={{ display:'flex', gap:'14px' }}>
+                <VUMeter value={stats?.top_artists?.length || 0} max={Math.max(50, stats?.top_artists?.length || 0)}
+                  label={lang==='ru'?'АРТИСТЫ':'ARTISTS'} isDark={isDark} hue={265} size={140} />
+                <VUMeter value={stats?.genres?.length || 0} max={Math.max(20, stats?.genres?.length || 0)}
+                  label={lang==='ru'?'ЖАНРЫ':'GENRES'} isDark={isDark} hue={30} size={140} />
+              </div>
+            </div>
+          </div>
+
+          {/* Genres + Durations */}
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'18px' }}>
+            {card(<>
+              {blockTitle(lang==='ru'?'ЖАНРЫ':'GENRES', lang==='ru'?'Топ-5':'Top 5')}
+              {statsLoading ? <Spinner /> : <StatBar items={stats?.genres} hues={[270, 310, 145, 200, 60, 25]} />}
+            </>)}
+            {card(<>
+              {blockTitle(lang==='ru'?'ДЛИТЕЛЬНОСТЬ':'DURATION', lang==='ru'?'Распределение':'Histogram')}
+              {statsLoading ? <Spinner /> : (stats?.duration_buckets?.length > 0 ? (
+                <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
+                  {stats.duration_buckets.map((d,i) => {
+                    const maxPct = stats.duration_buckets[0]?.pct || 1;
+                    const w = `${Math.round((d.pct||0) / maxPct * 100)}%`;
+                    const hue = 160 + i*22;
+                    return (
+                      <div key={d.range}>
+                        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:'5px' }}>
+                          <span className="mono" style={{ fontSize:'11px', color:c.text, letterSpacing:'0.06em' }}>{formatDurationRange(d.range)}</span>
+                          <span className="mono" style={{ fontSize:'10px', color:c.textMuted }}>{d.count} · {d.pct}%</span>
+                        </div>
+                        <div className={ske('inset', isDark)} style={{ height:'6px', borderRadius:'4px', overflow:'hidden' }}>
+                          <div style={{ width:w, height:'100%', background:`linear-gradient(90deg, oklch(60% 0.18 ${hue}), oklch(70% 0.16 ${(hue+30)%360}))`,
+                            boxShadow:`0 0 6px oklch(60% 0.18 ${hue} / 0.4)`,
+                            transform:'scaleX(0)', transformOrigin:'left',
+                            animation:`meterTick 0.8s cubic-bezier(.22,.9,.3,1) ${i*0.07}s forwards` }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : <div className="serif" style={{ fontSize:'14px', color:c.textSubtle, fontStyle:'italic' }}>{lang==='ru'?'Нет данных':'No data'}</div>)}
+            </>)}
+          </div>
+
+          {/* Artists + YearRange */}
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'18px' }}>
+            {card(<>
+              {blockTitle(lang==='ru'?'АРТИСТЫ':'ARTISTS', lang==='ru'?'Топ-5':'Top 5')}
+              {statsLoading ? <Spinner /> : <StatBar items={stats?.top_artists} hues={null} showPct={false} />}
+            </>)}
+            {card(<>
+              {blockTitle(lang==='ru'?'ЭПОХИ':'EPOCHS', lang==='ru'?'Хронология':'Timeline')}
+              {statsLoading ? <Spinner /> : <YearRangeCard />}
+            </>)}
+          </div>
+
+          {/* Top pairs — tabbed */}
+          <div className={ske('panel', isDark)} style={{ padding:'24px 26px', borderRadius:'18px' }}>
+            <div style={{ display:'flex', alignItems:'flex-end', justifyContent:'space-between', marginBottom:'18px', gap:'12px', flexWrap:'wrap' }}>
+              <div>
+                <div className="mono" style={{ fontSize:'10px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'6px' }}>
+                  {lang==='ru'?'CLAP-ПАРЫ':'CLAP PAIRS'}
+                </div>
+                <div className="serif" style={{ fontSize:'26px', lineHeight:'1', letterSpacing:'-0.02em', color:c.text }}>
+                  {lang==='ru'?'Звуковое':'Sonic'}<i style={{ color:'oklch(62% 0.2 275)' }}> {lang==='ru'?'родство':'kinship'}</i>
+                </div>
+              </div>
+              <Segmented isDark={isDark} value={activePairsTab} onChange={setActivePairsTab}
+                options={[
+                  { value:'similar', label:lang==='ru'?'ПОХОЖИЕ ≈':'SIMILAR ≈' },
+                  { value:'dissimilar', label:lang==='ru'?'РАЗНЫЕ ≠':'DIFFERENT ≠' },
+                ]} />
+            </div>
+
+            {(() => {
+              if (topPairsLoading) {
+                return <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
+                  {[1,2,3,4,5].map(i => (
+                    <div key={i} style={{ height:'70px', borderRadius:'14px',
+                      background: isDark?'rgba(255,255,255,0.03)':'rgba(0,0,0,0.025)',
+                      animation:`pulse 1.4s ${i*0.1}s ease-in-out infinite` }} />
+                  ))}
+                </div>;
+              }
+              const pairs = topPairs?.[activePairsTab] || [];
+              const top = pairs
+                .map(p => ({ main:p, best: p[`top_${activePairsTab}`]?.[0] }))
+                .filter(x => x.best)
+                .sort((a,b) => activePairsTab === 'similar' ? b.best.score - a.best.score : a.best.score - b.best.score);
+              const seen = new Set();
+              const top5 = [];
+              for (const item of top) {
+                const a = item.main.track_id || item.main.song;
+                const b = item.best.track_id || item.best.name;
+                const k = a < b ? `${a}|${b}` : `${b}|${a}`;
+                if (seen.has(k)) continue;
+                seen.add(k); top5.push(item);
+                if (top5.length === 5) break;
+              }
+
+              if (top5.length === 0) {
+                return <div className="serif" style={{ fontSize:'15px', color:c.textSubtle, fontStyle:'italic', textAlign:'center', padding:'40px' }}>
+                  {lang==='ru'?'Данные ещё не рассчитаны':'Data not computed yet'}
+                </div>;
+              }
+
+              return (
+                <div style={{ display:'flex', flexDirection:'column' }}>
+                  {top5.map((pair, idx) => {
+                    const score = pair.best.score || 0;
+                    const display = activePairsTab === 'similar' ? score : Math.max(0, 100 - score);
+                    const meterPct = Math.max(3, Math.min(100, display));
+                    const hue = activePairsTab === 'similar' ? 270 : 25;
+                    const accent = `oklch(62% 0.18 ${hue})`;
+                    const [aA, aT] = (pair.main.song || '').split(' - ').length===2 ? pair.main.song.split(' - ') : ['—', pair.main.song];
+                    const [bA, bT] = (pair.best.name || '').split(' - ').length===2 ? pair.best.name.split(' - ') : ['—', pair.best.name];
+                    return (
+                      <div key={idx} style={{
+                        display:'grid', gridTemplateColumns:'24px 60px 1fr 100px',
+                        alignItems:'center', gap:'14px',
+                        padding:'14px 0',
+                        borderTop: idx > 0 ? `1px solid ${c.border}` : 'none',
+                        animation:`fadeIn 0.4s ease ${idx*0.05}s both`,
+                      }}>
+                        <span className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.06em' }}>{String(idx+1).padStart(2,'0')}</span>
+                        <div style={{ display:'flex', position:'relative' }}>
+                          <AlbumCover title={aT} artist={aA} size={36} isDark={isDark} coverPath={pair.main.cover_art_path} />
+                          <div style={{ marginLeft:'-12px' }}>
+                            <AlbumCover title={bT} artist={bA} size={36} isDark={isDark} coverPath={pair.best.cover_art_path} />
+                          </div>
+                        </div>
+                        <div style={{ minWidth:0 }}>
+                          <div style={{ fontSize:'13px', color:c.text, fontWeight:'500', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                            {aT} <span style={{ color: accent }}>↔</span> {bT}
+                          </div>
+                          <div className="serif" style={{ fontSize:'12px', color:c.textMuted, fontStyle:'italic', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', marginTop:'2px' }}>
+                            {aA} · {bA}
+                          </div>
+                        </div>
+                        <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:'5px' }}>
+                          <span className="mono" style={{ fontSize:'14px', color: accent, letterSpacing:'0.04em' }}>{display.toFixed(1)}%</span>
+                          <div className={ske('inset', isDark)} style={{ width:'80px', height:'4px', borderRadius:'3px', overflow:'hidden' }}>
+                            <div style={{ width:`${meterPct}%`, height:'100%',
+                              background:`linear-gradient(90deg, ${accent}, ${accent.replace(')', ' / 0.5)')})`,
+                              boxShadow:`0 0 6px ${accent.replace(')', ' / 0.4)')}`,
+                              transform:'scaleX(0)', transformOrigin:'left',
+                              animation:`meterTick 0.8s cubic-bezier(.22,.9,.3,1) ${idx*0.07}s forwards` }} />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+          </div>
+
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Indexing progress (compact) ─────────────────────────────────────────────
+function IndexingProgress({ stepStatus, lang, c, isDark, lyricsProgress }) {
+  const STEPS = [
+    { key:'metadata', icon:'⌕', labelRu:'Поиск текстов',          labelEn:'Fetching lyrics' },
+    { key:'lyrics',   icon:'✎', labelRu:'Индексация текстов',     labelEn:'Indexing lyrics' },
+    { key:'audio',    icon:'♪', labelRu:'Обработка аудио',        labelEn:'Processing audio' },
+    { key:'analysis', icon:'∿', labelRu:'Анализ схожести',         labelEn:'Similarity analysis' },
+  ];
+  return (
+    <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
+      {STEPS.map(s => {
+        const status = stepStatus[s.key] || 'idle';
+        const active = status === 'running';
+        const done = status === 'done';
+        const fail = status === 'failed';
+        const accent = done ? c.green : fail ? c.red : active ? c.amber : c.textSubtle;
+        return (
+          <div key={s.key} style={{ display:'flex', alignItems:'center', gap:'10px' }}>
+            <div style={{
+              width:'28px', height:'28px', borderRadius:'8px',
+              display:'flex', alignItems:'center', justifyContent:'center',
+              fontSize:'14px', color: accent, fontFamily:"'JetBrains Mono', monospace",
+              background: done ? c.greenBg : fail ? c.redBg : active ? `oklch(72% 0.13 75 / 0.13)` : (isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.04)'),
+              boxShadow: isDark ? 'inset 0 1px 0 rgba(255,255,255,0.05)' : 'inset 0 1px 0 rgba(255,255,255,0.85)',
+              animation: active ? 'flicker 1.5s infinite' : 'none',
+            }}>
+              {done ? '✓' : fail ? '×' : active ? <Spinner size={11} color={accent} /> : s.icon}
+            </div>
+            <div style={{ flex:1 }}>
+              <div style={{ fontSize:'12px', color: c.text, fontWeight: active?'600':'500' }}>
+                {lang==='ru' ? s.labelRu : s.labelEn}
+              </div>
+              {s.key === 'metadata' && lyricsProgress && active && (
+                <div className="mono" style={{ fontSize:'9px', color:c.textMuted, marginTop:'2px', letterSpacing:'0.08em' }}>
+                  {lyricsProgress.current}/{lyricsProgress.total} · {lyricsProgress.found || 0} found
+                  {lyricsProgress.eta != null && ` · ETA ${Math.round(lyricsProgress.eta)}s`}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Indexing Modal ──────────────────────────────────────────────────────────
+function IndexingModal({ isDark, lang, collectionName, stepStatus, trackCount, errorMessage, onClose, lyricsProgress }) {
+  const c = useColors(isDark);
+  const allDone = Object.values(stepStatus).length > 0 && Object.values(stepStatus).every(s => s === 'done');
+  return (
+    <div style={{
+      position:'fixed', inset:0, zIndex:100,
+      display:'flex', alignItems:'center', justifyContent:'center',
+      background: isDark ? 'rgba(0,0,0,0.75)' : 'rgba(40,30,60,0.4)',
+      backdropFilter:'blur(8px)',
+      animation:'fadeIn 0.2s ease',
+    }} onClick={(allDone || errorMessage) ? onClose : undefined}>
+      <div className={ske('panel', isDark)} onClick={e => e.stopPropagation()}
+        style={{
+          width:'460px', maxWidth:'90vw', borderRadius:'20px', padding:'32px 30px',
+          animation:'scaleIn 0.3s cubic-bezier(.22,.9,.3,1)',
+        }}>
+        <div className="mono" style={{ fontSize:'10px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'10px' }}>
+          {lang==='ru'?'ИНДЕКСАЦИЯ':'INDEXING'} · {collectionName}
+        </div>
+        <div className="serif" style={{ fontSize:'30px', lineHeight:'1', letterSpacing:'-0.02em', color:c.text, marginBottom:'24px' }}>
+          {errorMessage
+            ? <i style={{ color: c.red }}>{lang==='ru'?'Ошибка':'Failed'}</i>
+            : allDone
+              ? <>{lang==='ru'?'Готово':'Done'} <i style={{ color: c.green }}>✓</i></>
+              : <>{lang==='ru'?'Идёт':'Working'} <i style={{ color: c.amber }}>…</i></>}
+        </div>
+        {errorMessage ? (
+          <div style={{ padding:'12px 14px', borderRadius:'10px',
+            background: c.redBg, color: c.red, fontSize:'12px', marginBottom:'18px' }}>
+            {errorMessage}
+          </div>
+        ) : (
+          <IndexingProgress stepStatus={stepStatus} lang={lang} c={c} isDark={isDark} lyricsProgress={lyricsProgress} />
+        )}
+        {trackCount != null && (
+          <div className="mono" style={{ marginTop:'18px', fontSize:'11px', color: c.textMuted, letterSpacing:'0.1em' }}>
+            {trackCount} {lang==='ru'?'треков обработано':'tracks processed'}
+          </div>
+        )}
+        {(allDone || errorMessage) && (
+          <button onClick={onClose} className="ske-accent" style={{
+            marginTop:'22px', padding:'10px 20px', borderRadius:'10px',
+            fontSize:'12px', fontWeight:'600', letterSpacing:'0.06em',
+          }}>
+            {lang==='ru'?'ЗАКРЫТЬ':'CLOSE'}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Settings overlay (slides in from right) ─────────────────────────────────
+function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeCollection }) {
+  const c = useColors(isDark);
+  const [models, setModels] = useState({});
+  const [textModel, setTextModel] = useState(() => localStorage.getItem('text_model') || 'jinaai/jina-embeddings-v2-small-en');
+  const [collName, setCollName] = useState('');
+  const [folderPath, setFolderPath] = useState('');
+  const [picking, setPicking] = useState(false);
+  const [betterLyrics, setBetterLyrics] = useState(false);
+  const [indexing, setIndexing] = useState(false);
+  const [stepStatus, setStepStatus] = useState({});
+  const [showModal, setShowModal] = useState(false);
+  const [modalTrackCount, setModalTrackCount] = useState(null);
+  const [modalError, setModalError] = useState(null);
+  const [lyricsProgress, setLyricsProgress] = useState(null);
+
+  const [llmBaseUrl, setLlmBaseUrl] = useState(() => localStorage.getItem('llm_base_url') || '');
+  const [llmModel, setLlmModel] = useState(() => localStorage.getItem('llm_model') || '');
+  const [llmSaved, setLlmSaved] = useState(false);
+
+  useEffect(() => {
+    apiFetch('/search/models/text').then(setModels).catch(() => {});
+  }, []);
+
+  useEffect(() => { localStorage.setItem('text_model', textModel); }, [textModel]);
+
+  const handlePick = async () => {
+    setPicking(true);
+    try { const res = await apiFetch('/library/pick-folder'); if (res.path) setFolderPath(res.path); }
+    catch {} finally { setPicking(false); }
+  };
+
+  const handleIndex = async () => {
+    if (!folderPath.trim() || indexing) return;
+    const colName = collName.trim() || 'my_collection';
+    setIndexing(true); setModalError(null); setModalTrackCount(null); setLyricsProgress(null); setShowModal(true);
+    setStepStatus({ metadata:'running', lyrics:'idle', audio:'idle', analysis:'idle' });
+    try {
+      const res = await apiFetch('/library/index', { method:'POST',
+        body: JSON.stringify({ folder_path:folderPath, collection_name:colName, better_lyrics_quality:betterLyrics, text_model:textModel }) });
+      if (res.status === 'failed') { setModalError(res.message); setIndexing(false); return; }
+      if (!res.job_id) {
+        setStepStatus({ metadata:'done', lyrics:'done', audio:'done', analysis:'done' });
+        setModalTrackCount(res.count || 0);
+        localStorage.setItem('active_collection', colName);
+        onCollectionsUpdate && onCollectionsUpdate();
+        return;
+      }
+      const evt = new EventSource(`${API}/index/progress/${res.job_id}`);
+      evt.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.stages) {
+            setStepStatus({
+              metadata: data.stages.metadata?.status || 'idle',
+              lyrics:   data.stages.lyrics?.status   || 'idle',
+              audio:    data.stages.audio?.status    || 'idle',
+              analysis: data.stages.analysis?.status || 'idle',
+            });
+          }
+          if (data.stage === 'metadata' && data.lyrics_found !== undefined) {
+            setLyricsProgress({
+              current: data.stages?.metadata?.current ?? data.current ?? 0,
+              total:   data.stages?.metadata?.total   ?? data.total   ?? 0,
+              found:   data.lyrics_found ?? 0,
+              eta:     data.lyrics_eta ?? null,
+            });
+          }
+          if (data.overall_status === 'completed') {
+            evt.close();
+            setStepStatus({ metadata:'done', lyrics:'done', audio:'done', analysis:'done' });
+            setModalTrackCount(data.stages?.metadata?.current || 0);
+            setIndexing(false);
+            localStorage.setItem('active_collection', colName);
+            onCollectionsUpdate && onCollectionsUpdate();
+          } else if (data.overall_status === 'failed') {
+            evt.close();
+            setModalError(data.error || data.message);
+            setIndexing(false);
+          }
+        } catch {}
+      };
+      evt.onerror = () => { evt.close(); if (indexing) { setModalError(lang==='ru'?'Соединение потеряно':'Connection lost'); setIndexing(false); } };
+    } catch (e) { setModalError(e.message); setIndexing(false); }
+  };
+
+  const saveLLM = () => {
+    localStorage.setItem('llm_base_url', llmBaseUrl.trim());
+    localStorage.setItem('llm_model',    llmModel.trim());
+    setLlmSaved(true); setTimeout(() => setLlmSaved(false), 2000);
+  };
+
+  const fieldLabel = (text) => (
+    <div className="mono" style={{ fontSize:'9px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'7px' }}>{text}</div>
+  );
+  const inputClass = ske('inset', isDark);
+  const inputStyle = {
+    width:'100%', padding:'10px 13px', borderRadius:'10px', border:'none',
+    color: c.text, fontSize:'13px', outline:'none', fontFamily:"'JetBrains Mono', monospace",
+  };
+  const card = (children) => (
+    <div className={ske('panel', isDark)} style={{ padding:'22px 24px', borderRadius:'16px' }}>{children}</div>
+  );
+
+  return (
+    <>
+      <div onClick={onClose} style={{
+        position:'fixed', inset:0, zIndex:90,
+        background: isDark ? 'rgba(0,0,0,0.5)' : 'rgba(40,30,60,0.25)',
+        backdropFilter:'blur(4px)',
+        animation:'fadeIn 0.2s ease',
+      }} />
+      <div className={`${ske('panel', isDark)} grain`} style={{
+        position:'fixed', top:0, right:0, bottom:0, zIndex:91,
+        width:'min(540px, 92vw)', display:'flex', flexDirection:'column',
+        borderRadius:'0', overflow:'hidden',
+        animation:'slideRight 0.32s cubic-bezier(.22,.9,.3,1)',
+      }}>
+        <div style={{ padding:'24px 28px 18px', borderBottom:`1px solid ${c.border}`, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+          <div>
+            <div className="mono" style={{ fontSize:'10px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'6px' }}>
+              {lang==='ru'?'НАСТРОЙКИ':'SETTINGS'}
+            </div>
+            <div className="serif" style={{ fontSize:'32px', lineHeight:'1', letterSpacing:'-0.02em', color:c.text }}>
+              {lang==='ru'?'Студия':'Studio'} <i style={{ color:'oklch(62% 0.2 275)' }}>{lang==='ru'?'настроек':'tools'}</i>
+            </div>
+          </div>
+          <button onClick={onClose} className={ske('btn', isDark)} style={{
+            width:'36px', height:'36px', borderRadius:'10px',
+            display:'flex', alignItems:'center', justifyContent:'center', color: c.textMuted,
+          }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+
+        <div style={{ flex:1, overflowY:'auto', padding:'22px 28px 32px', display:'flex', flexDirection:'column', gap:'16px' }}>
+
+          {/* Add collection */}
+          {card(<>
+            <div style={{ display:'flex', alignItems:'center', gap:'12px', marginBottom:'18px' }}>
+              <div className="ske-accent" style={{
+                width:'34px', height:'34px', borderRadius:'10px',
+                display:'flex', alignItems:'center', justifyContent:'center',
+              }}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
+              </div>
+              <div>
+                <div className="serif" style={{ fontSize:'20px', color:c.text, letterSpacing:'-0.01em' }}>
+                  {lang==='ru'?'Новая коллекция':'New collection'}
+                </div>
+                <div className="mono" style={{ fontSize:'10px', color:c.textSubtle, letterSpacing:'0.12em', marginTop:'2px' }}>
+                  {lang==='ru'?'ИНДЕКСИРОВАТЬ ПАПКУ → QDRANT':'INDEX A FOLDER → QDRANT'}
+                </div>
+              </div>
+            </div>
+
+            {fieldLabel(lang==='ru'?'ИМЯ КОЛЛЕКЦИИ':'COLLECTION NAME')}
+            <input value={collName} onChange={e=>setCollName(e.target.value)} disabled={indexing}
+              placeholder={lang==='ru'?'например: my_music':'e.g. my_music'} className={inputClass} style={{ ...inputStyle, marginBottom:'12px' }} />
+
+            {fieldLabel(lang==='ru'?'ПУТЬ К ПАПКЕ':'FOLDER PATH')}
+            <div style={{ display:'flex', gap:'8px', marginBottom:'12px' }}>
+              <button onClick={handlePick} disabled={picking||indexing} className={ske('btn', isDark)} style={{
+                padding:'10px 14px', borderRadius:'10px', fontSize:'12px',
+                color: c.textMuted, display:'flex', alignItems:'center', gap:'6px', flexShrink:0,
+                cursor: picking||indexing?'not-allowed':'pointer',
+              }}>
+                {picking ? <Spinner size={12} /> : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>}
+                {lang==='ru'?'Выбрать':'Pick'}
+              </button>
+              <input value={folderPath} onChange={e=>setFolderPath(e.target.value)} disabled={indexing}
+                placeholder={lang==='ru'?'/path/to/music':'/path/to/music'} className={inputClass} style={{ ...inputStyle, flex:1 }} />
+            </div>
+
+            {fieldLabel(lang==='ru'?'МОДЕЛЬ ТЕКСТА':'TEXT MODEL')}
+            <MusixSelect isDark={isDark} value={textModel} onChange={setTextModel}
+              options={Object.keys(models).length > 0
+                ? Object.keys(models).map(n => ({value:n, label:n}))
+                : [{value:'jinaai/jina-embeddings-v2-small-en', label:'jina-embeddings-v2-small-en'}]}
+              style={{ width:'100%', marginBottom:'14px' }} />
+
+            <label style={{ display:'flex', alignItems:'center', gap:'8px', cursor:'pointer', fontSize:'12px', color:c.textMuted, marginBottom:'18px' }}>
+              <input type="checkbox" checked={betterLyrics} onChange={e=>setBetterLyrics(e.target.checked)}
+                style={{ accentColor:'oklch(60% 0.18 270)', width:'14px', height:'14px' }} />
+              {lang==='ru'?'Лучшее качество текстов (медленнее)':'Better lyrics quality (slower)'}
+            </label>
+
+            <button onClick={handleIndex} disabled={indexing||!folderPath.trim()}
+              className="ske-accent" style={{
+                width:'100%', padding:'12px 20px', borderRadius:'12px',
+                fontSize:'13px', fontWeight:'600', letterSpacing:'0.06em',
+                opacity: indexing||!folderPath.trim() ? 0.5 : 1,
+                cursor: indexing||!folderPath.trim() ? 'not-allowed' : 'pointer',
+                display:'flex', alignItems:'center', justifyContent:'center', gap:'8px',
+              }}>
+              {indexing ? <><Spinner size={14} color="white" /> {lang==='ru'?'ИДЁТ ИНДЕКСАЦИЯ…':'INDEXING…'}</> : (lang==='ru'?'▶ ЗАПУСТИТЬ ИНДЕКСАЦИЮ':'▶ START INDEXING')}
+            </button>
+          </>)}
+
+          {/* LLM */}
+          {card(<>
+            <div style={{ display:'flex', alignItems:'center', gap:'12px', marginBottom:'18px' }}>
+              <div className={ske('inset', isDark)} style={{
+                width:'34px', height:'34px', borderRadius:'10px',
+                display:'flex', alignItems:'center', justifyContent:'center', color: c.amber,
+              }}>
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+              </div>
+              <div>
+                <div className="serif" style={{ fontSize:'20px', color:c.text, letterSpacing:'-0.01em' }}>
+                  {lang==='ru'?'LLM подключение':'LLM connection'}
+                </div>
+                <div className="mono" style={{ fontSize:'10px', color:c.textSubtle, letterSpacing:'0.12em', marginTop:'2px' }}>
+                  {lang==='ru'?'LM STUDIO · OLLAMA · OPENAI':'LM STUDIO · OLLAMA · OPENAI'}
+                </div>
+              </div>
+            </div>
+            {fieldLabel('BASE URL')}
+            <input value={llmBaseUrl} onChange={e=>setLlmBaseUrl(e.target.value)}
+              placeholder="http://localhost:1234/v1" className={inputClass} style={{ ...inputStyle, marginBottom:'14px' }} />
+            {fieldLabel(lang==='ru'?'МОДЕЛЬ':'MODEL')}
+            <input value={llmModel} onChange={e=>setLlmModel(e.target.value)}
+              placeholder="gpt-4o-mini" className={inputClass} style={{ ...inputStyle, marginBottom:'18px' }} />
+            <button onClick={saveLLM} className={llmSaved ? '' : 'ske-accent'} style={{
+              padding:'10px 20px', borderRadius:'10px',
+              fontSize:'12px', fontWeight:'600', letterSpacing:'0.06em',
+              background: llmSaved ? 'linear-gradient(180deg, oklch(63% 0.17 142), oklch(53% 0.18 138))' : undefined,
+              color: 'white',
+              boxShadow: llmSaved ? 'inset 0 1px 0 rgba(255,255,255,0.25), 0 3px 10px oklch(63% 0.17 142 / 0.4)' : undefined,
+            }}>
+              {llmSaved ? (lang==='ru'?'✓ СОХРАНЕНО':'✓ SAVED') : (lang==='ru'?'СОХРАНИТЬ':'SAVE')}
+            </button>
+          </>)}
+
+          {/* About */}
+          <div style={{ padding:'18px 22px', textAlign:'center' }}>
+            <div className="serif" style={{ fontSize:'18px', color:c.textMuted, fontStyle:'italic', lineHeight:'1.4' }}>
+              {lang==='ru'?'«Слушай смысл, не названия.»':'"Listen to the meaning, not the titles."'}
+            </div>
+            <div className="mono" style={{ fontSize:'9px', color:c.textSubtle, letterSpacing:'0.22em', marginTop:'10px' }}>
+              MUSIX · STUDIO CONSOLE · v2
+            </div>
+          </div>
+        </div>
+
+        {showModal && (
+          <IndexingModal isDark={isDark} lang={lang} collectionName={collName||'my_collection'}
+            stepStatus={stepStatus} trackCount={modalTrackCount} errorMessage={modalError}
+            onClose={() => { setShowModal(false); setStepStatus({}); setModalError(null); setModalTrackCount(null); }}
+            lyricsProgress={lyricsProgress} />
+        )}
+      </div>
+    </>
+  );
+}
+
+// ─── Onboarding (compact, themed) ─────────────────────────────────────────────
+function OnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
+  const c = useColors(isDark);
+  const [folderPath, setFolderPath] = useState('');
+  const [collName, setCollName] = useState('my_collection');
+  const [betterLyrics, setBetterLyrics] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const [error, setError] = useState('');
+  const [indexing, setIndexing] = useState(false);
+  const [stepStatus, setStepStatus] = useState({});
+  const [showModal, setShowModal] = useState(false);
+  const [modalTrackCount, setModalTrackCount] = useState(null);
+  const [modalError, setModalError] = useState(null);
+  const [lyricsProgress, setLyricsProgress] = useState(null);
+
+  const handlePick = async () => {
+    setPicking(true); setError('');
+    try { const res = await apiFetch('/library/pick-folder'); if (res.path) setFolderPath(res.path); else setError(lang==='ru'?'Папка не выбрана':'No folder picked'); }
+    catch (e) { setError(e.message); } finally { setPicking(false); }
+  };
+
+  const handleIndex = async () => {
+    if (!folderPath || indexing) return;
+    setIndexing(true); setShowModal(true); setModalError(null); setModalTrackCount(null); setLyricsProgress(null);
+    setStepStatus({ metadata:'running', lyrics:'idle', audio:'idle', analysis:'idle' });
+    const c = collName.trim() || 'my_collection';
+    try {
+      const res = await apiFetch('/library/index', { method:'POST',
+        body: JSON.stringify({ folder_path:folderPath, collection_name:c, better_lyrics_quality:betterLyrics }) });
+      if (res.status === 'failed') { setModalError(res.message); setIndexing(false); return; }
+      if (!res.job_id) {
+        setStepStatus({ metadata:'done', lyrics:'done', audio:'done', analysis:'done' });
+        setModalTrackCount(res.count || 0);
+        localStorage.setItem('active_collection', c);
+        setTimeout(onDone, 800); return;
+      }
+      const evt = new EventSource(`${API}/index/progress/${res.job_id}`);
+      evt.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.stages) setStepStatus({
+            metadata: data.stages.metadata?.status || 'idle',
+            lyrics:   data.stages.lyrics?.status   || 'idle',
+            audio:    data.stages.audio?.status    || 'idle',
+            analysis: data.stages.analysis?.status || 'idle',
+          });
+          if (data.stage === 'metadata' && data.lyrics_found !== undefined) {
+            setLyricsProgress({
+              current: data.stages?.metadata?.current ?? 0,
+              total:   data.stages?.metadata?.total   ?? 0,
+              found:   data.lyrics_found ?? 0,
+              eta:     data.lyrics_eta ?? null,
+            });
+          }
+          if (data.overall_status === 'completed') {
+            evt.close();
+            setStepStatus({ metadata:'done', lyrics:'done', audio:'done', analysis:'done' });
+            setModalTrackCount(data.stages?.metadata?.current || 0);
+            localStorage.setItem('active_collection', c);
+            setTimeout(onDone, 800);
+          } else if (data.overall_status === 'failed') {
+            evt.close(); setModalError(data.error || data.message); setIndexing(false);
+          }
+        } catch {}
+      };
+      evt.onerror = () => { evt.close(); if (indexing) { setModalError(lang==='ru'?'Соединение потеряно':'Connection lost'); setIndexing(false); } };
+    } catch (e) { setModalError(e.message); setIndexing(false); }
+  };
+
+  return (
+    <div className="grain" style={{
+      width:'100vw', height:'100vh', overflow:'auto', position:'relative',
+      background: isDark
+        ? 'radial-gradient(ellipse at top, #15151b 0%, #0a0a0e 60%, #07070a 100%)'
+        : 'radial-gradient(ellipse at top, #fafaff 0%, #ececf3 60%, #e3e2e8 100%)',
+      color: c.text,
+    }}>
+      <div style={{ display:'flex', justifyContent:'space-between', padding:'24px 32px' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
+          <BrandMark size={36} isDark={isDark} />
+          <span className="serif" style={{ fontSize:'28px', letterSpacing:'-0.02em' }}>Musi<i style={{ color:'oklch(62% 0.2 275)' }}>X</i></span>
+        </div>
+        <TopRightControls isDark={isDark} lang={lang} onLang={onLang} onTheme={onTheme} onSettings={() => {}} />
+      </div>
+
+      <div style={{ maxWidth:'620px', margin:'40px auto 0', padding:'0 32px' }}>
+        <div className="mono" style={{ fontSize:'10px', color:c.textSubtle, letterSpacing:'0.32em', marginBottom:'14px' }}>
+          — {lang==='ru'?'ПЕРВЫЙ ЗАПУСК':'FIRST RUN'}
+        </div>
+        <h1 className="serif" style={{ fontSize:'56px', lineHeight:'1.02', letterSpacing:'-0.025em', marginBottom:'18px' }}>
+          {lang==='ru' ? <>Добро <i style={{ color:'oklch(62% 0.2 275)' }}>пожаловать</i>.</> : <>Welcome <i style={{ color:'oklch(62% 0.2 275)' }}>aboard</i>.</>}
+        </h1>
+        <p style={{ fontSize:'15px', color:c.textMuted, lineHeight:'1.6', marginBottom:'34px' }}>
+          {lang==='ru'
+            ? 'MusiX индексирует музыкальную папку локально и позволяет искать треки по смыслу — текстам и звуку. Ничего не уходит в облако.'
+            : 'MusiX indexes a music folder locally so you can search tracks by meaning — lyrics and sound. Nothing leaves your machine.'}
+        </p>
+
+        <div className={ske('panel', isDark)} style={{ padding:'26px 28px', borderRadius:'18px' }}>
+          <div className="mono" style={{ fontSize:'10px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'8px' }}>
+            {lang==='ru'?'ИМЯ КОЛЛЕКЦИИ':'COLLECTION NAME'}
+          </div>
+          <input value={collName} onChange={e=>setCollName(e.target.value)} disabled={indexing}
+            className={ske('inset', isDark)} style={{ width:'100%', padding:'10px 13px', borderRadius:'10px', border:'none',
+              color:c.text, fontSize:'13px', outline:'none', fontFamily:"'JetBrains Mono', monospace", marginBottom:'18px' }} />
+
+          <div className="mono" style={{ fontSize:'10px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'8px' }}>
+            {lang==='ru'?'ПАПКА С МУЗЫКОЙ':'MUSIC FOLDER'}
+          </div>
+          <div style={{ display:'flex', gap:'8px', marginBottom:'14px' }}>
+            <button onClick={handlePick} disabled={picking||indexing}
+              className={ske('btn', isDark)} style={{ padding:'11px 16px', borderRadius:'10px', fontSize:'12px',
+                color:c.textMuted, display:'flex', alignItems:'center', gap:'6px', flexShrink:0,
+                cursor: picking||indexing?'not-allowed':'pointer' }}>
+              {picking ? <Spinner size={12} /> : '📁'}
+              {picking ? '…' : (lang==='ru'?'Выбрать':'Pick')}
+            </button>
+            <input value={folderPath} onChange={e=>setFolderPath(e.target.value)} disabled={indexing}
+              placeholder="/path/to/music"
+              className={ske('inset', isDark)} style={{ flex:1, padding:'11px 13px', borderRadius:'10px', border:'none',
+                color:c.text, fontSize:'13px', outline:'none', fontFamily:"'JetBrains Mono', monospace" }} />
+          </div>
+
+          <label style={{ display:'flex', alignItems:'center', gap:'8px', cursor:'pointer', fontSize:'12px', color:c.textMuted, marginBottom:'18px' }}>
+            <input type="checkbox" checked={betterLyrics} onChange={e=>setBetterLyrics(e.target.checked)}
+              style={{ accentColor:'oklch(60% 0.18 270)', width:'14px', height:'14px' }} />
+            {lang==='ru'?'Лучшее качество текстов (Musixmatch — медленнее)':'Better lyrics (Musixmatch — slower)'}
+          </label>
+
+          <button onClick={handleIndex} disabled={indexing||!folderPath.trim()}
+            className="ske-accent" style={{
+              width:'100%', padding:'13px 20px', borderRadius:'12px',
+              fontSize:'13px', fontWeight:'600', letterSpacing:'0.08em',
+              opacity: indexing||!folderPath.trim() ? 0.5 : 1,
+              cursor: indexing||!folderPath.trim() ? 'not-allowed' : 'pointer',
+              display:'flex', alignItems:'center', justifyContent:'center', gap:'8px',
+            }}>
+            {indexing ? <><Spinner size={14} color="white" /> {lang==='ru'?'ИДЁТ ИНДЕКСАЦИЯ':'INDEXING'}</> : (lang==='ru'?'▶ НАЧАТЬ ИНДЕКСАЦИЮ':'▶ START INDEXING')}
+          </button>
+
+          {error && <div style={{ marginTop:'14px', padding:'10px 14px', borderRadius:'10px', background:c.redBg, color:c.red, fontSize:'12px' }}>{error}</div>}
+        </div>
+      </div>
+
+      {showModal && (
+        <IndexingModal isDark={isDark} lang={lang} collectionName={collName}
+          stepStatus={stepStatus} trackCount={modalTrackCount} errorMessage={modalError}
+          onClose={() => { setShowModal(false); setStepStatus({}); setModalError(null); }}
+          lyricsProgress={lyricsProgress} />
+      )}
+    </div>
+  );
+}
+
+// ─── No-Qdrant screen ─────────────────────────────────────────────────────────
+function NoQdrantScreen({ isDark, lang }) {
+  const c = useColors(isDark);
+  return (
+    <div className="grain" style={{
+      width:'100vw', height:'100vh', display:'flex', alignItems:'center', justifyContent:'center',
+      background: isDark ? 'radial-gradient(ellipse at top, #15151b 0%, #07070a 100%)' : 'radial-gradient(ellipse at top, #fafaff 0%, #e3e2e8 100%)',
+      color: c.text, padding:'24px',
+    }}>
+      <div className={ske('panel', isDark)} style={{ maxWidth:'480px', padding:'40px 36px', borderRadius:'22px', animation:'fadeInUp 0.4s ease' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:'14px', marginBottom:'24px' }}>
+          <BrandMark size={42} isDark={isDark} />
+          <span className="serif" style={{ fontSize:'34px', letterSpacing:'-0.02em' }}>Musi<i style={{ color:'oklch(62% 0.2 275)' }}>X</i></span>
+        </div>
+        <div className="mono" style={{ fontSize:'10px', color:c.red, letterSpacing:'0.22em', marginBottom:'10px' }}>
+          ● {lang==='ru'?'ОТКЛЮЧЕНО':'OFFLINE'}
+        </div>
+        <h2 className="serif" style={{ fontSize:'34px', lineHeight:'1', letterSpacing:'-0.02em', marginBottom:'14px' }}>
+          {lang==='ru'?<>Qdrant <i style={{ color: c.red }}>не запущен</i>.</> : <>Qdrant is <i style={{ color: c.red }}>offline</i>.</>}
+        </h2>
+        <p style={{ fontSize:'14px', color:c.textMuted, lineHeight:'1.6', marginBottom:'18px' }}>
+          {lang==='ru'?'Векторная база нужна для индексации и поиска. Запусти её одной командой:':'The vector store powers indexing and search. Boot it with one command:'}
+        </p>
+        <div className={ske('display', isDark)} style={{
+          padding:'14px 18px', borderRadius:'12px', marginBottom:'22px',
+          fontFamily:"'JetBrains Mono', monospace", fontSize:'14px', color: c.green,
+          textShadow: `0 0 8px ${c.green.replace(')', ' / 0.4)')}`,
+          userSelect:'all',
+        }}>docker-compose up -d</div>
+        <button onClick={() => window.location.reload()} className="ske-accent" style={{
+          width:'100%', padding:'12px 20px', borderRadius:'12px',
+          fontSize:'13px', fontWeight:'600', letterSpacing:'0.06em',
+        }}>
+          ↻ {lang==='ru'?'ПЕРЕПРОВЕРИТЬ':'RE-CHECK'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Delete confirm modal ─────────────────────────────────────────────────────
+function DeleteConfirm({ isDark, lang, name, onConfirm, onCancel }) {
+  const c = useColors(isDark);
+  return (
+    <div onClick={onCancel} style={{
+      position:'fixed', inset:0, zIndex:120,
+      background:'rgba(0,0,0,0.55)', backdropFilter:'blur(6px)',
+      display:'flex', alignItems:'center', justifyContent:'center',
+      animation:'fadeIn 0.2s ease',
+    }}>
+      <div className={ske('panel', isDark)} onClick={e=>e.stopPropagation()} style={{
+        width:'400px', maxWidth:'90vw', padding:'28px 30px', borderRadius:'18px',
+        animation:'scaleIn 0.25s cubic-bezier(.22,.9,.3,1)',
+      }}>
+        <div className="mono" style={{ fontSize:'10px', color:c.red, letterSpacing:'0.22em', marginBottom:'10px' }}>
+          ● {lang==='ru'?'УДАЛЕНИЕ':'DELETE'}
+        </div>
+        <div className="serif" style={{ fontSize:'26px', lineHeight:'1.05', letterSpacing:'-0.01em', marginBottom:'12px', color:c.text }}>
+          {lang==='ru'?<>Удалить <i>{name}</i>?</> : <>Delete <i>{name}</i>?</>}
+        </div>
+        <p style={{ fontSize:'13px', color:c.textMuted, marginBottom:'22px', lineHeight:'1.5' }}>
+          {lang==='ru'?'Коллекция и все векторы будут удалены безвозвратно.':'The collection and all its vectors will be removed permanently.'}
+        </p>
+        <div style={{ display:'flex', gap:'10px' }}>
+          <button onClick={onCancel} className={ske('btn', isDark)} style={{
+            flex:1, padding:'11px 18px', borderRadius:'10px', fontSize:'12px', fontWeight:'600',
+            color: c.textMuted, letterSpacing:'0.06em',
+          }}>{lang==='ru'?'ОТМЕНА':'CANCEL'}</button>
+          <button onClick={onConfirm} style={{
+            flex:1, padding:'11px 18px', borderRadius:'10px', fontSize:'12px', fontWeight:'600',
+            color:'white', letterSpacing:'0.06em',
+            background:'linear-gradient(180deg, oklch(60% 0.21 25), oklch(48% 0.22 25))',
+            boxShadow:'inset 0 1px 0 rgba(255,255,255,0.2), inset 0 -1px 0 rgba(0,0,0,0.25), 0 3px 10px oklch(58% 0.21 25 / 0.4)',
+          }}>{lang==='ru'?'УДАЛИТЬ':'DELETE'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── App ──────────────────────────────────────────────────────────────────────
+function App() {
+  const [isDark, setDark] = useState(() => (localStorage.getItem('musix_theme') || 'dark') === 'dark');
+  const [lang, setLang]   = useState(() => localStorage.getItem('musix_lang') || 'ru');
+  const [section, setSection] = useState('home'); // home | search | recommend | library
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [themeAnim, setThemeAnim] = useState(false);
+  const [appState, setAppState] = useState('checking');
+
+  const [collections, setCollections] = useState([]);
+  const [activeCollection, setActiveCollection] = useState(() => localStorage.getItem('active_collection') || '');
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [stats, setStats] = useState(null);
+
+  const c = useColors(isDark);
+
+  // Boot
+  useEffect(() => {
+    apiFetch('/library/collections')
+      .then(res => {
+        if (!res.qdrant_available) { setAppState('no-qdrant'); return; }
+        const cols = res.collections || [];
+        setCollections(cols);
+        const stored = localStorage.getItem('active_collection');
+        if (!stored && cols.length > 0) {
+          const best = cols.reduce((a,b) => b.count > a.count ? b : a, cols[0]);
+          setActiveCollection(best.name);
+          localStorage.setItem('active_collection', best.name);
+        }
+        setAppState((res.total_points || 0) > 0 ? 'ready' : 'onboarding');
+      })
+      .catch(() => setAppState('no-qdrant'));
+  }, []);
+
+  const loadCollections = useCallback(() =>
+    apiFetch('/library/collections').then(data => {
+      setCollections(data.collections || []);
+    }).catch(() => {}), []);
+
+  // Stats for landing
+  useEffect(() => {
+    if (appState !== 'ready' || !activeCollection) return;
+    const col = `?collection_name=${encodeURIComponent(activeCollection)}`;
+    apiFetch(`/library/stats${col}`).then(setStats).catch(()=>{});
+  }, [activeCollection, appState]);
+
+  const switchCollection = (name) => {
+    setActiveCollection(name);
+    localStorage.setItem('active_collection', name);
+  };
+
+  const deleteCollection = async (name) => {
+    try {
+      await apiFetch(`/library/collection/${encodeURIComponent(name)}`, { method:'DELETE' });
+      const res = await apiFetch('/library/collections');
+      const cols = res.collections || [];
+      setCollections(cols);
+      if (name === activeCollection) {
+        if (cols.length > 0) {
+          const best = cols.reduce((a,b) => b.count > a.count ? b : a, cols[0]);
+          setActiveCollection(best.name);
+          localStorage.setItem('active_collection', best.name);
+        } else {
+          setActiveCollection('');
+          localStorage.removeItem('active_collection');
+        }
+      }
+      setDeleteConfirm(null);
+    } catch (e) { alert((lang==='ru'?'Ошибка: ':'Error: ') + e.message); }
+  };
+
+  const handleTheme = () => {
+    setThemeAnim(true);
+    setTimeout(() => setThemeAnim(false), 380);
+    setDark(d => { const next = !d; localStorage.setItem('musix_theme', next?'dark':'light'); return next; });
+  };
+  const handleLang = (l) => { setLang(l); localStorage.setItem('musix_lang', l); };
+
+  // Boot state screens
+  if (appState === 'checking') return (
+    <div style={{ width:'100vw', height:'100vh', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
+      background: isDark ? '#0a0a0e' : '#f2f1f6', gap:'18px' }}>
+      <BrandMark size={50} isDark={isDark} />
+      <Spinner size={20} />
+    </div>
+  );
+  if (appState === 'no-qdrant') return <NoQdrantScreen isDark={isDark} lang={lang} />;
+  if (appState === 'onboarding') return (
+    <OnboardingScreen isDark={isDark} lang={lang} onLang={handleLang} onTheme={handleTheme}
+      onDone={() => { loadCollections(); setAppState('ready'); }} />
+  );
+
+  const sectionMap = {
+    search:    SearchSection,
+    recommend: RecommendSection,
+    library:   LibrarySection,
+  };
+  const ActiveSection = sectionMap[section];
+
+  return (
+    <div className={themeAnim ? 'theme-transition theme-fade' : ''} style={{
+      display:'flex', width:'100vw', height:'100vh', overflow:'hidden', background: c.bg,
+    }}>
+      {section === 'home' ? (
+        <LandingScreen
+          isDark={isDark} lang={lang}
+          onLang={handleLang} onTheme={handleTheme} onSettings={() => setSettingsOpen(true)}
+          onNav={(id) => setSection(id)}
+          activeCollection={activeCollection}
+          hasLibrary={collections.length > 0}
+          stats={stats}
+        />
+      ) : (
+        <Fragment>
+          <Sidebar
+            section={section} onNav={setSection} onHome={() => setSection('home')}
+            isDark={isDark} lang={lang}
+            collections={collections} activeCollection={activeCollection}
+            onCollectionSwitch={switchCollection}
+            onCollectionDelete={(name) => setDeleteConfirm(name)}
+            onSettings={() => setSettingsOpen(true)}
+          />
+          <div key={section} style={{ flex:1, minWidth:0, display:'flex', flexDirection:'column', overflow:'hidden', animation:'fadeIn 0.3s ease' }}>
+            <ActiveSection isDark={isDark} lang={lang} activeCollection={activeCollection} />
+          </div>
+        </Fragment>
+      )}
+
+      {settingsOpen && (
+        <SettingsPanel isDark={isDark} lang={lang}
+          onClose={() => setSettingsOpen(false)}
+          onCollectionsUpdate={loadCollections}
+          activeCollection={activeCollection} />
+      )}
+
+      {deleteConfirm && (
+        <DeleteConfirm isDark={isDark} lang={lang} name={deleteConfirm}
+          onCancel={() => setDeleteConfirm(null)}
+          onConfirm={() => deleteCollection(deleteConfirm)} />
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
+
