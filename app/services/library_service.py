@@ -39,6 +39,7 @@ class LibraryService:
         collection_name: str = "music_explorer",
         better_lyrics_quality: bool = False,
         text_model: Optional[str] = None,
+        enhance_by_musicbrainz: bool = False,
     ) -> dict:
         """
         Index all audio files in folder with progress tracking.
@@ -65,7 +66,9 @@ class LibraryService:
         logger.info("[LibraryService] Job created: %s", job.job_id)
 
         # Start indexing in background task to allow SSE progress updates
-        task = asyncio.create_task(self._run_indexing_job(job, better_lyrics_quality, text_model))
+        task = asyncio.create_task(
+            self._run_indexing_job(job, better_lyrics_quality, text_model, enhance_by_musicbrainz)
+        )
         logger.info("[LibraryService] Background task created: %s", task)
 
         return {
@@ -74,7 +77,10 @@ class LibraryService:
             "message": "Indexing started",
         }
 
-    async def _run_indexing_job(self, job, better_lyrics_quality: bool, text_model: Optional[str] = None):
+    async def _run_indexing_job(
+        self, job, better_lyrics_quality: bool, text_model: Optional[str] = None,
+        enhance_by_musicbrainz: bool = False,
+    ):
         """Execute the indexing process with progress updates."""
         folder_path = job.folder_path
         collection_name = job.collection_name
@@ -155,6 +161,15 @@ class LibraryService:
                     on_file_progress(c, t, m, d), loop
                 ),  # fire-and-forget — no .result() to avoid deadlock
             )
+
+            # Enrich metadata via MusicBrainz (optional, runs in thread pool)
+            if enhance_by_musicbrainz and processed_files:
+                try:
+                    await asyncio.to_thread(
+                        self._enrich_with_musicbrainz, processed_files, enhance_by_musicbrainz
+                    )
+                except Exception as e:
+                    logger.warning("[LibraryService] MusicBrainz enrichment skipped: %s", e)
 
             # Extract unique artists and start fetching facts in background
             unique_artists = sorted({
@@ -391,6 +406,70 @@ class LibraryService:
 
     # ── Helpers ──
 
+    def _enrich_with_musicbrainz(self, processed_files: dict, enhance: bool):
+        """Enrich track metadata via MusicBrainz API.
+
+        Args:
+            processed_files: dict keyed by "artist — title", values are metadata dicts.
+            enhance: if True, MB data replaces local; if False, MB is fallback only.
+        """
+        from musicbraniz_search import MusicBrainzLookup
+
+        mb = MusicBrainzLookup("MusiX", "1.0", "https://musix.local")
+        total = len(processed_files)
+        enriched = 0
+
+        for key, info in processed_files.items():
+            title = info.get("title", "").strip()
+            artist = info.get("artist", "").strip()
+            if not title or not artist:
+                continue
+
+            rec_id = mb.resolve_recording_id(title, artist)
+            if not rec_id:
+                continue
+
+            # Year — merge with existing based on flag
+            mb_year = mb.get_recording_year(rec_id)
+            local_year = info.get("year")
+            if mb_year:
+                info["year"] = mb_year if enhance else (local_year or mb_year)
+                enriched += 1
+
+            # Producer
+            producers = mb.get_recording_producers(rec_id)
+            if producers:
+                info["producer"] = ", ".join(producers) if enhance or not info.get("producer") else info["producer"]
+
+            # Labels
+            labels = mb.get_recording_labels(rec_id)
+            if labels:
+                label_name = labels[0].get("name", "")
+                if label_name:
+                    info["label"] = label_name if enhance else (info.get("label") or label_name)
+
+            # Samples
+            samples = mb.get_recording_samples(rec_id)
+            if samples:
+                sample_strs = [
+                    f"{s.get('artist', '?')} — {s.get('title', '?')}"
+                    for s in samples if s.get("title") or s.get("artist")
+                ]
+                info["samples"] = sample_strs if enhance or not info.get("samples") else info["samples"]
+
+            sampled_by = mb.get_recording_sampled_by(rec_id)
+            if sampled_by:
+                sampled_strs = [
+                    f"{s.get('artist', '?')} — {s.get('title', '?')}"
+                    for s in sampled_by if s.get("title") or s.get("artist")
+                ]
+                info["sampled_by"] = sampled_strs if enhance or not info.get("sampled_by") else info["sampled_by"]
+
+            logger.info(
+                "[LibraryService] MB enrichment %d/%d (enriched=%d): %s — %s",
+                enriched + 1, total, enriched, artist, title,
+            )
+
     def _metadata_to_tracks(self, metadata: dict) -> List[TrackMetadata]:
         """Convert FileProcessor metadata dict to TrackMetadata list.
 
@@ -441,6 +520,10 @@ class LibraryService:
                 file_path=file_path,
                 lyrics=info.get("lyrics"),
                 cover_art_path=cover_art_path,
+                producer=info.get("producer"),
+                label=info.get("label"),
+                samples=info.get("samples"),
+                sampled_by=info.get("sampled_by"),
             )
 
             if track.file_path:

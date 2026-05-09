@@ -13,6 +13,146 @@ from app.services.similarity_service import load_top_pairs
 router = APIRouter(prefix="/library", tags=["Library"])
 
 
+# ── Browse (payload-only search with relevance scoring) ────────────────────────
+
+def _score_query(q_words: list[str], q_full: str, value: str) -> float:
+    """Score a single field value against the query tokens."""
+    if not value:
+        return 0.0
+    low = value.lower()
+    s = 0.0
+    for w in q_words:
+        if w == low:
+            s += 10
+        elif low.startswith(w):
+            s += 5
+        elif w in low:
+            s += 2
+    # full-query bonus
+    if q_full in low:
+        s += 3
+    return s
+
+
+@router.get("/browse")
+async def browse_tracks(
+    q: str = Query(..., min_length=2, description="Search query (title / artist / album)"),
+    limit: int = Query(6, ge=1, le=50, description="Max results"),
+    collection_name: Optional[str] = Query(None, description="Collection to browse"),
+    request: Request = None,
+) -> list[dict]:
+    """Payload-only search across title, artist, album with relevance scoring.
+
+    Scrolls ALL points (paginated), scores each, returns top-K by score.
+    """
+    if request is None:
+        return []
+    db_client = request.app.state.db_client
+    if db_client is None:
+        return []
+
+    q_full = q.strip().lower()
+    q_words = list(set(q_full.split()))
+    if len(q_words) == 0:
+        return []
+
+    # Resolve target collection (same logic as /stats)
+    DEFAULT_COLLECTION = "music_explorer"
+    try:
+        qdrant = db_client.qdrant
+        cols = qdrant.get_collections().collections
+    except Exception:
+        return []
+
+    existing = {c.name for c in cols}
+    pick = collection_name if collection_name else DEFAULT_COLLECTION
+    target_col: str | None = pick if pick in existing else None
+
+    if not target_col:
+        # fall back to collection with most points
+        best_count = 0
+        for col in cols:
+            try:
+                info = qdrant.get_collection(col.name)
+                cnt = info.points_count or 0
+                if cnt > best_count:
+                    best_count = cnt
+                    target_col = col.name
+            except Exception:
+                pass
+
+    if not target_col:
+        return []
+
+    # Scroll ALL points, paginated
+    import heapq
+    top_k = []
+
+    offset = None
+    try:
+        while True:
+            results, next_offset = qdrant.scroll(
+                collection_name=target_col,
+                offset=offset,
+                limit=2500,
+                with_payload=["title", "artist", "album", "cover_art_path"],
+                with_vectors=False,
+            )
+            for point in results:
+                pl = point.payload or {}
+                title = pl.get("title") or ""
+                artist = pl.get("artist") or ""
+                album = pl.get("album") or ""
+
+                score = (
+                    _score_query(q_words, q_full, title) * 3.0
+                    + _score_query(q_words, q_full, artist) * 2.5
+                    + _score_query(q_words, q_full, album) * 1.5
+                )
+
+                # Multi-word bonus: extra +1 per additional matching word (beyond first)
+                match_count = sum(
+                    1 for w in q_words
+                    for v in (title, artist, album)
+                    if w in (v or "").lower()
+                )
+                if match_count > 1:
+                    score += (match_count - 1) * 1.0
+
+                if score <= 0:
+                    continue
+
+                entry = (
+                    -score,
+                    len(top_k),
+                    {
+                        "track_id": str(point.id),
+                        "title": title,
+                        "artist": artist,
+                        "album": album,
+                        "cover_art_path": pl.get("cover_art_path"),
+                        "score": round(score, 2),
+                    },
+                )
+                if len(top_k) < limit:
+                    heapq.heappush(top_k, entry)
+                else:
+                    heapq.heappushpop(top_k, entry)
+
+            if next_offset is None or not results:
+                break
+            offset = next_offset
+    except Exception:
+        pass
+
+    # Extract and sort by score desc
+    result = sorted(
+        [item for (_, _, item) in top_k],
+        key=lambda x: -x["score"],
+    )
+    return result
+
+
 # ── Collections info ──────────────────────────────────────────────────────────
 
 @router.get("/collections")
@@ -363,6 +503,7 @@ async def index_folder(req: IndexRequest, request: Request) -> dict:
         collection_name=req.collection_name,
         better_lyrics_quality=req.better_lyrics_quality,
         text_model=req.text_model,
+        enhance_by_musicbrainz=req.enhance_by_musicbrainz,
     )
     return result
 

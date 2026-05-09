@@ -16,6 +16,10 @@ class TrackMetadata(BaseModel):
     file_path: str
     lyrics: str | None = None
     cover_art_path: str | None = None  # путь к обложке /covers/{track_id}.{ext}
+    producer: str | None = None
+    label: str | None = None
+    samples: list[str] | None = None
+    sampled_by: list[str] | None = None
 
 
 class TrackHit(BaseModel):
@@ -62,6 +66,7 @@ class IndexRequest(BaseModel):
     collection_name: str = "music_explorer"
     better_lyrics_quality: bool = False
     text_model: Optional[str] = None
+    enhance_by_musicbrainz: bool = False
 
 
 class IndexProgress(BaseModel):

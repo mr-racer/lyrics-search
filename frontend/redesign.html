@@ -442,6 +442,50 @@ function MusixSelect({ value, onChange, options, isDark, style={} }) {
   );
 }
 
+// ─── ToggleSwitch (rocker button) ─────────────────────────────────────────────
+function ToggleSwitch({ checked, onChange, isDark }) {
+  const leftActive = !checked;
+  const rightActive = checked;
+  const active = 'linear-gradient(180deg, oklch(67% 0.18 270), oklch(54% 0.22 280))';
+  const activeShadow = 'inset 0 1px 3px rgba(0,0,0,0.35), 0 0 8px oklch(60% 0.18 270 / 0.4)';
+  const inactiveD = {
+    background: 'linear-gradient(180deg, #2c2c34, #1c1c23)',
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.12), 0 1px 2px rgba(0,0,0,0.4)',
+  };
+  const inactiveL = {
+    background: 'linear-gradient(180deg, #fff, #e1e0ea)',
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,1), 0 1px 2px rgba(40,30,60,0.1)',
+  };
+
+  return (
+    <button
+      onClick={() => onChange(!checked)}
+      style={{
+        width: '44px', height: '22px', borderRadius: '8px',
+        display: 'flex', flexShrink: 0, padding: '2px',
+        background: isDark ? '#15151a' : '#d8d7df',
+        boxShadow: isDark
+          ? 'inset 0 2px 4px rgba(0,0,0,0.6), 0 1px 0 rgba(255,255,255,0.04)'
+          : 'inset 0 2px 4px rgba(40,30,60,0.15), 0 1px 0 rgba(255,255,255,0.8)',
+        border: 'none', cursor: 'pointer', gap: '2px',
+      }}
+    >
+      <span style={{
+        flex: 1, borderRadius: '6px', transition: 'all 0.2s',
+        ...(leftActive
+          ? { background: active, boxShadow: activeShadow }
+          : (isDark ? inactiveD : inactiveL)),
+      }} />
+      <span style={{
+        flex: 1, borderRadius: '6px', transition: 'all 0.2s',
+        ...(rightActive
+          ? { background: active, boxShadow: activeShadow }
+          : (isDark ? inactiveD : inactiveL)),
+      }} />
+    </button>
+  );
+}
+
 // ─── Knob (skeuomorphic toggle) ───────────────────────────────────────────────
 function Knob({ angle = -45, size = 44, isDark, label, onClick, glow }) {
   const c = useColors(isDark);
@@ -1508,17 +1552,14 @@ function RecommendSection({ isDark, lang, activeCollection }) {
   const [pickedTrack, setPickedTrack] = useState(null);
   const [similarLoading, setSimilarLoading] = useState(false);
   const [similar, setSimilar] = useState([]);
+  const lookupTimer = useRef(null);
 
-  // Quick mixes — derived from /library/stats and /library/top-pairs
+  // Quick mixes — derived from /library/stats
   const [stats, setStats] = useState(null);
-  const [topPairs, setTopPairs] = useState(null);
-  const [topPairsLoading, setTopPairsLoading] = useState(true);
 
   useEffect(() => {
     const col = activeCollection ? `?collection_name=${encodeURIComponent(activeCollection)}` : '';
     apiFetch(`/library/stats${col}`).then(setStats).catch(()=>{});
-    setTopPairsLoading(true);
-    apiFetch(`/library/top-pairs${col}`).then(d => { setTopPairs(d); setTopPairsLoading(false); }).catch(()=>setTopPairsLoading(false));
   }, [activeCollection]);
 
   const runVibe = async () => {
@@ -1535,11 +1576,24 @@ function RecommendSection({ isDark, lang, activeCollection }) {
 
   const lookupTracks = async (q) => {
     if (!q.trim()) { setTrackOptions([]); setTrackPicker(false); return; }
+    const col = activeCollection ? `&collection_name=${encodeURIComponent(activeCollection)}` : '';
     try {
-      const res = await apiFetch('/search/', { method:'POST', body: JSON.stringify({
-        query: q, mode:'text', limit: 6, collection_name: activeCollection || undefined
-      })});
-      setTrackOptions(res.hits || []);
+      const res = await apiFetch(`/library/browse?q=${encodeURIComponent(q)}&limit=6${col}`);
+      const hits = (res || []).map(item => ({
+        track: {
+          track_id: item.track_id,
+          title: item.title,
+          artist: item.artist,
+          album: item.album,
+          cover_art_path: item.cover_art_path,
+          duration_sec: 0,
+          genre: null,
+          year: null,
+          file_path: '',
+        },
+        score: item.score || 0,
+      }));
+      setTrackOptions(hits);
       setTrackPicker(true);
     } catch(e) { setTrackOptions([]); }
   };
@@ -1701,7 +1755,7 @@ function RecommendSection({ isDark, lang, activeCollection }) {
             )}
             <div className={ske('inset', isDark)} style={{ padding:'10px 14px', borderRadius:'14px', display:'flex', gap:'10px', alignItems:'center', position:'relative' }}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={c.textSubtle} strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-5.5-5.5"/></svg>
-              <input value={trackQuery} onChange={e=>{ setTrackQuery(e.target.value); lookupTracks(e.target.value); }}
+              <input value={trackQuery} onChange={e=>{ const v=e.target.value; setTrackQuery(v); clearTimeout(lookupTimer.current); lookupTimer.current=setTimeout(()=>lookupTracks(v),250); }}
                 placeholder={lang==='ru'?'название или артист…':'title or artist…'}
                 style={{ flex:1, padding:'8px 0', border:'none', background:'transparent', color:c.text, fontSize:'14px', outline:'none' }} />
               {pickedTrack && (
@@ -1767,43 +1821,6 @@ function RecommendSection({ isDark, lang, activeCollection }) {
               </div>
             )}
           </>)}
-
-          {/* ── 4. TOP PAIRS — quick view of similar/dissimilar ── */}
-          {topPairs && (topPairs.similar?.length || topPairs.dissimilar?.length) ? (
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'18px' }}>
-              {[
-                { key:'similar', label:lang==='ru'?'≈ Самые похожие пары':'≈ Most similar pairs', hue:270 },
-                { key:'dissimilar', label:lang==='ru'?'≠ Самые разные пары':'≠ Most different pairs', hue:25 },
-              ].map(({ key, label, hue }) => {
-                const pairs = topPairs?.[key] || [];
-                const top = pairs
-                  .map(p => ({ main:p, best: p[`top_${key}`]?.[0] }))
-                  .filter(x => x.best)
-                  .sort((a,b) => key==='similar' ? b.best.score - a.best.score : a.best.score - b.best.score)
-                  .slice(0, 4);
-                const accent = `oklch(62% 0.18 ${hue})`;
-                return (
-                  <div key={key} className={ske('panel', isDark)} style={{ padding:'22px', borderRadius:'18px' }}>
-                    <div className="mono" style={{ fontSize:'14px', letterSpacing:'0.22em', color:accent, marginBottom:'14px' }}>
-                      {label}
-                    </div>
-                    <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
-                      {top.map((pair, i) => (
-                        <div key={i} className={ske('inset', isDark)} style={{ padding:'10px 12px', borderRadius:'12px', display:'flex', alignItems:'center', gap:'10px' }}>
-                          <AlbumCover title={pair.main.song?.split(' - ')[1]||''} artist={pair.main.song?.split(' - ')[0]||''} size={32} isDark={isDark} coverPath={pair.main.cover_art_path} />
-                          <span className="mono" style={{ fontSize:'14px', color:accent, letterSpacing:'0.1em' }}>{Math.round(pair.best.score)}%</span>
-                          <AlbumCover title={pair.best.name?.split(' - ')[1]||''} artist={pair.best.name?.split(' - ')[0]||''} size={32} isDark={isDark} coverPath={pair.best.cover_art_path} />
-                          <div style={{ flex:1, minWidth:0, fontSize:'15px', color:c.textMuted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }} className="serif">
-                            <i>{pair.main.song} ↔ {pair.best.name}</i>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ) : null}
 
         </div>
       </div>
@@ -2082,7 +2099,12 @@ function LibrarySection({ isDark, lang, activeCollection }) {
           </div>
 
           {/* Top pairs — tabbed */}
-          <div className={ske('panel', isDark)} style={{ padding:'24px 26px', borderRadius:'18px' }}>
+          <div className={ske('panel', isDark)} style={{ padding:'24px 26px', borderRadius:'18px', position:'relative', overflow:'hidden' }}>
+            {/* Subtle corner glow orbs near toggle */}
+            <div style={{ position:'absolute', top:'-30px', right:'-20px', width:'150px', height:'150px', borderRadius:'50%', pointerEvents:'none',
+              background: `oklch(60% 0.18 ${activePairsTab === 'similar' ? 270 : 25} / 0.07)` }} />
+            <div style={{ position:'absolute', top:'10px', right:'60px', width:'100px', height:'100px', borderRadius:'50%', pointerEvents:'none',
+              background: `oklch(60% 0.18 ${activePairsTab === 'similar' ? 310 : 55} / 0.06)` }} />
             <div style={{ display:'flex', alignItems:'flex-end', justifyContent:'space-between', marginBottom:'18px', gap:'12px', flexWrap:'wrap' }}>
               <div>
                 <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'6px' }}>
@@ -2308,6 +2330,7 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
   const [folderPath, setFolderPath] = useState('');
   const [picking, setPicking] = useState(false);
   const [betterLyrics, setBetterLyrics] = useState(false);
+  const [refineMetadata, setRefineMetadata] = useState(false);
   const [indexing, setIndexing] = useState(false);
   const [stepStatus, setStepStatus] = useState({});
   const [showModal, setShowModal] = useState(false);
@@ -2339,7 +2362,7 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
     setStepStatus({ metadata:'running', lyrics:'idle', audio:'idle', analysis:'idle' });
     try {
       const res = await apiFetch('/library/index', { method:'POST',
-        body: JSON.stringify({ folder_path:folderPath, collection_name:colName, better_lyrics_quality:betterLyrics, text_model:textModel }) });
+        body: JSON.stringify({ folder_path:folderPath, collection_name:colName, better_lyrics_quality:betterLyrics, text_model:textModel, enhance_by_musicbrainz:refineMetadata }) });
       if (res.status === 'failed') { setModalError(res.message); setIndexing(false); return; }
       if (!res.job_id) {
         setStepStatus({ metadata:'done', lyrics:'done', audio:'done', analysis:'done' });
@@ -2496,10 +2519,13 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
                 : [{value:'jinaai/jina-embeddings-v2-small-en', label:'jina-embeddings-v2-small-en'}]}
               style={{ width:'100%', marginBottom:'14px' }} />
 
-            <label style={{ display:'flex', alignItems:'center', gap:'8px', cursor:'pointer', fontSize:'14px', color:c.textMuted, marginBottom:'18px' }}>
-              <input type="checkbox" checked={betterLyrics} onChange={e=>setBetterLyrics(e.target.checked)}
-                style={{ accentColor:'oklch(60% 0.18 270)', width:'14px', height:'14px' }} />
+            <label style={{ display:'flex', alignItems:'center', gap:'8px', fontSize:'14px', color:c.textMuted, marginBottom:'8px' }}>
+              <ToggleSwitch checked={betterLyrics} onChange={v=>setBetterLyrics(v)} isDark={isDark} />
               {lang==='ru'?'Лучшее качество текстов (медленнее)':'Better lyrics quality (slower)'}
+            </label>
+            <label style={{ display:'flex', alignItems:'center', gap:'8px', fontSize:'14px', color:c.textMuted, marginBottom:'18px' }}>
+              <ToggleSwitch checked={refineMetadata} onChange={v=>setRefineMetadata(v)} isDark={isDark} />
+              {lang==='ru'?'Дополнить пропущенные метаданные из интернета':'Refine metadata with online lookup'}
             </label>
 
             <button onClick={handleIndex} disabled={indexing||!folderPath.trim()}
@@ -2577,6 +2603,7 @@ function OnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
   const [folderPath, setFolderPath] = useState('');
   const [collName, setCollName] = useState('my_collection');
   const [betterLyrics, setBetterLyrics] = useState(false);
+  const [refineMetadata, setRefineMetadata] = useState(false);
   const [picking, setPicking] = useState(false);
   const [error, setError] = useState('');
   const [indexing, setIndexing] = useState(false);
@@ -2600,7 +2627,7 @@ function OnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
     const c = collName.trim() || 'my_collection';
     try {
       const res = await apiFetch('/library/index', { method:'POST',
-        body: JSON.stringify({ folder_path:folderPath, collection_name:c, better_lyrics_quality:betterLyrics }) });
+        body: JSON.stringify({ folder_path:folderPath, collection_name:c, better_lyrics_quality:betterLyrics, enhance_by_musicbrainz:refineMetadata }) });
       if (res.status === 'failed') { setModalError(res.message); setIndexing(false); return; }
       if (!res.job_id) {
         setStepStatus({ metadata:'done', lyrics:'done', audio:'done', analysis:'done' });
@@ -2710,10 +2737,13 @@ function OnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
                 color:c.text, fontSize:'15px', outline:'none', fontFamily:"'JetBrains Mono', monospace" }} />
           </div>
 
-          <label style={{ display:'flex', alignItems:'center', gap:'8px', cursor:'pointer', fontSize:'14px', color:c.textMuted, marginBottom:'18px' }}>
-            <input type="checkbox" checked={betterLyrics} onChange={e=>setBetterLyrics(e.target.checked)}
-              style={{ accentColor:'oklch(60% 0.18 270)', width:'14px', height:'14px' }} />
+          <label style={{ display:'flex', alignItems:'center', gap:'8px', fontSize:'14px', color:c.textMuted, marginBottom:'8px' }}>
+            <ToggleSwitch checked={betterLyrics} onChange={v=>setBetterLyrics(v)} isDark={isDark} />
             {lang==='ru'?'Лучшее качество текстов (Musixmatch — медленнее)':'Better lyrics (Musixmatch — slower)'}
+          </label>
+          <label style={{ display:'flex', alignItems:'center', gap:'8px', fontSize:'14px', color:c.textMuted, marginBottom:'18px' }}>
+            <ToggleSwitch checked={refineMetadata} onChange={v=>setRefineMetadata(v)} isDark={isDark} />
+            {lang==='ru'?'Дополнить пропущенные метаданные из интернета':'Refine metadata with online lookup'}
           </label>
 
           <button onClick={handleIndex} disabled={indexing||!folderPath.trim()}
