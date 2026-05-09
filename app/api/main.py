@@ -27,7 +27,7 @@ from ..resources.model_registry import ModelRegistry
 from ..services.search_service import SearchService
 from ..services.library_service import LibraryService
 from ..services.job_tracker import JobTracker
-from .routes import search_router, library_router, chat_router
+from .routes import search_router, library_router, chat_router, metadata_router
 from .sse_utils import event_stream
 
 logger = logging.getLogger(__name__)
@@ -109,6 +109,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         app.state.job_tracker = JobTracker()
 
         logger.info("[OK] Qdrant connected, services ready — models will preload in background")
+
+        # Initialise SQLite metadata store and migrate legacy .txt cache
+        try:
+            from ..resources.metadata_db import MetadataDB
+            from ..services.migrate_facts import migrate_all
+            MetadataDB.init()
+            summary = migrate_all()
+            MetadataDB.close()
+            if summary["artists_migrated"] or summary["songs_migrated"]:
+                logger.info(
+                    "[OK] Facts migrated to SQLite: %d artists, %d songs",
+                    summary["artists_migrated"],
+                    summary["songs_migrated"],
+                )
+        except Exception as e:
+            logger.warning("[WARN] Facts migration skipped: %s", e)
 
         # Start background model preload (non-blocking)
         asyncio.create_task(_preload_models_in_background(db))
@@ -205,6 +221,7 @@ def create_app() -> FastAPI:
     app.include_router(search_router,  prefix="/api/v1")
     app.include_router(library_router, prefix="/api/v1")
     app.include_router(chat_router,    prefix="/api/v1")
+    app.include_router(metadata_router, prefix="/api/v1")
 
     # SPA catch-all — must be LAST so it doesn't shadow API routes
     @app.get("/{full_path:path}")

@@ -4,6 +4,14 @@ from typing import Literal, List, Optional
 from pydantic import BaseModel, Field
 
 
+class Fact(BaseModel):
+    """A single fact about an artist or song."""
+    fact: str
+    lang: str = "en"
+    category: str | None = None
+    source: str | None = None
+
+
 class TrackMetadata(BaseModel):
     """Метаданные трека."""
     track_id: str  # хэш file_path или UUID, стабильный между рестартами

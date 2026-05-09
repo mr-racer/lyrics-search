@@ -7,9 +7,6 @@ from sentence_transformers import SentenceTransformer
 import librosa
 import laion_clap
 
-from concurrent.futures import ProcessPoolExecutor
-from tqdm.auto import tqdm
-from file_processor.utils import get_metadata
 
 from qdrant_client import models
 
@@ -163,13 +160,18 @@ def extract_clap_features(path: str, model, duration: int = 300, device=DEVICE) 
     return unit_norm(clap_vec)
 
 
-def _encode_clap(tracks: list[dict], model_clap=None) -> dict[tuple, np.ndarray]:
+def _encode_clap(
+    tracks: list[dict],
+    model_clap=None,
+    progress_callback=None,
+) -> dict[tuple, np.ndarray]:
     """Encode audio files with CLAP.
 
     Args:
         tracks: list[dict] — уже готовые метаданные (из filtered).
                 Каждый dict должен содержать 'file_path', 'artist', 'title'.
         model_clap: загруженная CLAP-модель (или None — загрузится сама).
+        progress_callback: optional callable(current, total) called after each file.
 
     Returns:
         {(artist_lower, title_lower): np.ndarray} — маппинг ключей в CLAP-векторы.
@@ -203,6 +205,9 @@ def _encode_clap(tracks: list[dict], model_clap=None) -> dict[tuple, np.ndarray]
                 clap_map[key] = vec
         except Exception as e:
             log.warning("[CLAP] Failed to encode %s (%s — %s): %s", fp, *key, e)
+
+        if progress_callback:
+            progress_callback(idx, total)
 
         if idx % 50 == 0 or idx == total:
             log.info("[CLAP] Encoded %d / %d", idx, total)

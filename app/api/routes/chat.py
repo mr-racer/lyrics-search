@@ -21,7 +21,6 @@ Call 2…N  (agentic search loop, up to NUM_ATTEMPTS)
 
 from __future__ import annotations
 
-import textwrap
 from typing import Any
 
 from fastapi import APIRouter, Request

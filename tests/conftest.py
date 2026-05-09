@@ -1,0 +1,113 @@
+"""Shared fixtures for the MusiX test suite."""
+
+import pytest
+import sys
+from pathlib import Path
+from _pytest.python import Package
+
+
+def pytest_configure(config):
+    """Patch Package.setup to skip importing the project root __init__.py.
+
+    The project root has an __init__.py with relative imports that fail when
+    pytest tries to treat the root as a test package. We skip the import
+    for the project root only.
+    """
+    root_dir = Path(__file__).resolve().parent.parent
+    original_setup = Package.setup
+
+    def _patched_setup(self):
+        if self.path.parent == root_dir or self.path == root_dir:
+            return  # skip root __init__.py import
+        original_setup(self)
+
+    Package.setup = _patched_setup
+
+
+@pytest.fixture
+def sample_track():
+    """A standard track metadata dict for unit tests."""
+    return {
+        "title": "Blinding Lights",
+        "artist": "The Weeknd",
+        "album": "After Hours",
+        "year": 2020,
+        "genre": "Pop",
+        "duration": 200,
+        "lyrics": "I've been on my own for long enough\nNow I've got somebody...",
+        "file_path": "/music/the-weeknd/blinding-lights.flac",
+    }
+
+
+@pytest.fixture
+def sample_tracks_data():
+    """Dict keyed by 'Artist — Title' as prepare_metadata expects."""
+    return {
+        "The Weeknd — Blinding Lights": {
+            "title": "Blinding Lights",
+            "artist": "The Weeknd",
+            "album": "After Hours",
+            "year": 2020,
+            "genre": "Pop",
+            "duration": 200,
+            "lyrics": "lyrics here with enough length to pass the filter threshold comfortably",
+            "file_path": "/music/1.flac",
+        },
+        "Dua Lipa — Levitating": {
+            "title": "Levitating",
+            "artist": "Dua Lipa",
+            "album": "Future Nostalgia",
+            "year": 2020,
+            "genre": "Disco",
+            "duration": 180,
+            "lyrics": "another set of lyrics that is long enough to pass the minimum length filter check",
+            "file_path": "/music/2.flac",
+        },
+        "Kendrick — HUMBLE": {
+            "title": "HUMBLE.",
+            "artist": "Kendrick",
+            "album": "DAMN.",
+            "year": 2017,
+            "genre": "Hip-Hop",
+            "duration": 177,
+            "lyrics": "sir this is a fake but long enough lyrics text to ensure it passes the filter",
+            "file_path": "/music/3.flac",
+        },
+    }
+
+
+@pytest.fixture
+def sample_vectors():
+    """Small set of normalized vectors for similarity tests."""
+    return [
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.7071, 0.7071, 0.0],
+    ]
+
+
+@pytest.fixture
+def mock_qdrant_point():
+    """Factory for creating mock ScoredPoint objects."""
+    def _make_point(track_id="abc123", score=0.85, payload=None):
+        from qdrant_client.models import ScoredPoint
+
+        return ScoredPoint(
+            id=track_id,
+            version=1,
+            score=score,
+            payload=payload
+            or {
+                "title": "Test Song",
+                "artist": "Test Artist",
+                "album": "Test Album",
+                "year": 2020,
+                "genre": "Pop",
+                "duration": 200,
+                "lyrics": "test lyrics for the song that are long enough",
+                "file_path": "/test/file.flac",
+            },
+            vector={},
+        )
+
+    return _make_point

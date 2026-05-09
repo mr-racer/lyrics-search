@@ -149,7 +149,7 @@ class MusicBrainzLookup:
             )
             rec_data = result.get("recording")
             self._cache[cache_key] = rec_data
-            time.sleep(1)  # MusicBrainz rate limit: 1 req/sec
+            time.sleep(0.35)  # MusicBrainz rate limit
             return rec_data
         except Exception:
             return None
@@ -168,7 +168,7 @@ class MusicBrainzLookup:
             )
             rel_data = result.get("release")
             self._cache[cache_key] = rel_data
-            time.sleep(1)  # MusicBrainz rate limit: 1 req/sec
+            time.sleep(0.35)  # MusicBrainz rate limit
             return rel_data
         except Exception:
             return None

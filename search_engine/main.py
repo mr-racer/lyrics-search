@@ -4,7 +4,6 @@ from .utils import (
     load_model, prepare_metadata, build_filter,
     build_text_for_embedding, _encode_clap, load_model_clap
 )
-from file_processor.utils import get_metadata
 
 import asyncio
 import gc
@@ -13,9 +12,9 @@ import threading
 import uuid
 import torch
 import numpy as np
-from concurrent.futures import ProcessPoolExecutor
-from tqdm.auto import tqdm
 from pathlib import Path
+
+from tqdm.auto import tqdm
 
 from qdrant_client import QdrantClient, models
 
@@ -256,6 +255,10 @@ class LyricsDB:
                         "duration":   song_info.get("duration"),
                         "file_path":  song_info.get("file_path"),
                         "cover_art_path": song_info.get("cover_art_path"),
+                        "producer":   song_info.get("producer"),
+                        "label":      song_info.get("label"),
+                        "samples":    song_info.get("samples"),
+                        "sampled_by": song_info.get("sampled_by"),
                     },
                 ))
 
@@ -332,7 +335,16 @@ class LyricsDB:
             if paths:
                 if progress_callback:
                     progress_callback("audio", 0, total, "Encoding audio (CLAP)...")
-                clap_map = _encode_clap(filtered, self.model_clap if self.model_clap else None)
+
+                def _clap_cb(c, t):
+                    if progress_callback:
+                        progress_callback("audio", c, t, "Encoding audio (CLAP)...")
+
+                clap_map = _encode_clap(
+                    filtered,
+                    self.model_clap if self.model_clap else None,
+                    progress_callback=_clap_cb,
+                )
                 if progress_callback:
                     progress_callback("audio", total, total, "CLAP encoding done")
             else:

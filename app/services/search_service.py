@@ -4,7 +4,7 @@ import asyncio
 import logging
 from typing import List, Optional, Literal, Dict
 
-from ..domain.models import TrackMetadata, TrackHit, SearchRequest, SearchResponse, SearchFilters
+from ..domain.models import TrackMetadata, TrackHit, SearchFilters
 from ..existing.qdrant_db import LyricsDB
 from ..resources.model_registry import ModelRegistry
 from .artist_facts_service import load_all_facts_for_collection
@@ -354,6 +354,10 @@ class SearchService:
                 file_path=payload.get("file_path", ""),
                 cover_art_path=payload.get("cover_art_path"),
                 lyrics=raw_lyrics or None,
+                producer=payload.get("producer"),
+                label=payload.get("label"),
+                samples=payload.get("samples"),
+                sampled_by=payload.get("sampled_by"),
             )
             hits.append(TrackHit(
                 track=track,
@@ -390,6 +394,10 @@ class SearchService:
                 "lyrics": track.lyrics or "",
                 "file_path": track.file_path,
                 "cover_art_path": track.cover_art_path,
+                "producer": track.producer,
+                "label": track.label,
+                "samples": track.samples,
+                "sampled_by": track.sampled_by,
             }
 
         self.lyrics_db.fit(data, path=None, collection_name=collection_name)
@@ -440,6 +448,10 @@ class SearchService:
                 "lyrics": track.lyrics or "",
                 "file_path": track.file_path,
                 "cover_art_path": track.cover_art_path,
+                "producer": track.producer,
+                "label": track.label,
+                "samples": track.samples,
+                "sampled_by": track.sampled_by,
             }
 
         # Report progress: lyrics encoding started

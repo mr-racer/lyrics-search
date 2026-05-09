@@ -1,6 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from tqdm.auto import tqdm
 import datetime
 import hashlib
@@ -10,7 +10,7 @@ import re
 import syncedlyrics
 from mutagen import File as MutagenFile
 from mutagen.flac import FLAC
-from mutagen.mp4 import MP4, MP4Cover
+from mutagen.mp4 import MP4
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3NoHeaderError, APIC
 

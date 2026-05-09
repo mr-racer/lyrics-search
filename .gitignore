@@ -13,7 +13,11 @@ qdrant_storage
 .qwen/
 QWEN.md
 
+clap_rephrase.prompt
+docs/
+
 # Claude
+.claude/
 CLAUDE.MD
 
 # model weights

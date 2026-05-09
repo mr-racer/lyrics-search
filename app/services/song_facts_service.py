@@ -1,18 +1,25 @@
-"""Fetch and cache song facts from SongFacts."""
+"""Fetch and cache song facts from SongFacts.
+
+Facts are stored in SQLite (``MetadataDB``) for structured querying.
+A fallback to the legacy ``.txt`` cache is kept for backward compatibility.
+"""
 
 import asyncio
 import logging
 import re
 from html import unescape
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import requests
 from bs4 import BeautifulSoup
 
+from ..resources.metadata_db import MetadataDB
+
 logger = logging.getLogger(__name__)
 
-SONG_FACTS_CACHE_DIR = Path(__file__).resolve().parent.parent.parent / "cache" / "songfacts"
+# Legacy cache directory — kept for backward-compat fallback
+_SONG_FACTS_CACHE_DIR = Path(__file__).resolve().parent.parent.parent / "cache" / "songfacts"
 REQUEST_TIMEOUT = 10
 
 
@@ -55,26 +62,42 @@ def _parse_song_facts(html_string: str) -> List[str]:
     return facts
 
 
-def _cache_path(collection_name: str, artist: str, song: str) -> Path:
-    """Return path to cached song-facts file for a collection + song."""
-    coll_dir = SONG_FACTS_CACHE_DIR / collection_name
-    coll_dir.mkdir(parents=True, exist_ok=True)
-    # Use slug_artist_slug_song.txt as filename
+def _legacy_song_facts_path(collection_name: str, artist: str, song: str) -> Path:
+    """Return path to legacy cached song-facts file for a collection + song."""
+    coll_dir = _SONG_FACTS_CACHE_DIR / collection_name
     safe_name = f"{_slugify(artist)}-{_slugify(song)}"
     return coll_dir / f"{safe_name}.txt"
 
 
+def get_song_facts_key(artist: str, song: str) -> str:
+    """Build the cache-key for a song (matches file stem / DB slug)."""
+    return f"{_slugify(artist)}-{_slugify(song)}"
+
+
 def get_cached_song_facts(collection_name: str, artist: str, song: str) -> Optional[str]:
-    """Read cached song facts, or None."""
-    p = _cache_path(collection_name, artist, song)
+    """Read cached song facts, or None.
+
+    Prefers SQLite; falls back to legacy ``.txt`` files.
+    """
+    key = get_song_facts_key(artist, song)
+    try:
+        facts = MetadataDB.get_song_facts(key, collection_name)
+        if facts:
+            return "\n\n".join(facts)
+    except Exception as e:
+        logger.debug("[SongFacts] SQLite read failed for %s: %s", key, e)
+
+    # Fallback to legacy .txt
+    p = _legacy_song_facts_path(collection_name, artist, song)
     if p.exists():
         return p.read_text(encoding="utf-8").strip()
     return None
 
 
-def _save_song_facts(collection_name: str, artist: str, song: str, text: str) -> None:
-    p = _cache_path(collection_name, artist, song)
-    p.write_text(text, encoding="utf-8")
+def _save_song_facts_to_sqlite(collection_name: str, artist: str, song: str, facts: List[str]) -> None:
+    """Save parsed song facts to SQLite."""
+    key = get_song_facts_key(artist, song)
+    MetadataDB.add_song_facts_batch(key, collection_name, facts, source="songfacts.com")
 
 
 async def fetch_song_facts(
@@ -96,50 +119,59 @@ async def fetch_song_facts(
         logger.info("[SongFacts] No facts found for '%s — %s'", artist, song)
         return None
 
-    text = "\n\n".join(facts)
-    _save_song_facts(collection_name, artist, song, text)
+    _save_song_facts_to_sqlite(collection_name, artist, song, facts)
     logger.info("[SongFacts] Cached %d facts for '%s — %s'", len(facts), artist, song)
-    return text
+    return "\n\n".join(facts)
 
 
 async def fetch_facts_for_songs(
     songs: List[Tuple[str, str]],
     collection_name: str,
     delay: float = 0.5,
+    progress_callback: Optional[Callable[[int, int, str], None]] = None,
 ) -> Dict[str, str]:
     """Fetch facts for multiple songs sequentially with delay between requests.
 
     Args:
         songs: list of (artist, song_title) tuples.
+        collection_name: collection scope.
+        delay: seconds between requests.
+        progress_callback: optional callback(current, total, label) after each song.
     Returns:
         dict of '{artist} — {song}' -> facts text (only for songs that had facts).
     """
     results: Dict[str, str] = {}
-    for artist, song in songs:
+    total = len(songs)
+    for idx, (artist, song) in enumerate(songs, 1):
         key = f"{artist} — {song}"
         text = await fetch_song_facts(artist, song, collection_name)
         if text:
             results[key] = text
+        if progress_callback:
+            progress_callback(idx, total, f"{artist} — {song}")
         await asyncio.sleep(delay)
     return results
 
 
 def load_all_song_facts_for_collection(collection_name: str) -> Dict[str, str]:
-    """Load all cached song facts for a collection from disk (sync, no network).
+    """Load all cached song facts for a collection.
 
-    Returns dict of '{artist_slug}-{song_slug}' -> facts text.
+    Prefers SQLite; falls back to legacy ``.txt`` files if SQLite is empty.
     """
-    coll_dir = SONG_FACTS_CACHE_DIR / collection_name
+    try:
+        facts = MetadataDB.get_all_song_facts_by_collection(collection_name)
+        if facts:
+            return facts
+    except Exception as e:
+        logger.debug("[SongFacts] SQLite collection read failed: %s", e)
+
+    # Fallback to legacy .txt
+    coll_dir = _SONG_FACTS_CACHE_DIR / collection_name
     if not coll_dir.is_dir():
         return {}
 
-    facts: Dict[str, str] = {}
+    result: Dict[str, str] = {}
     for f in coll_dir.iterdir():
         if f.suffix == ".txt":
-            facts[f.stem] = f.read_text(encoding="utf-8").strip()
-    return facts
-
-
-def get_song_facts_key(artist: str, song: str) -> str:
-    """Build the cache-key for a song (matches file stem)."""
-    return f"{_slugify(artist)}-{_slugify(song)}"
+            result[f.stem] = f.read_text(encoding="utf-8").strip()
+    return result

@@ -4,7 +4,6 @@ import logging
 
 from qdrant_client import QdrantClient
 from ..existing.qdrant_db import LyricsDB
-from .model_registry import ModelRegistry
 
 logger = logging.getLogger(__name__)
 

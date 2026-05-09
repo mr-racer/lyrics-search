@@ -5,15 +5,17 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Dict, List, Optional
+from typing import Dict, List, Optional
 
 
 class IndexStage(str, Enum):
     """Stages of the indexing process."""
-    METADATA = "metadata"          # Поиск метаданных песен в интернете
-    LYRICS = "lyrics"             # Индексация текстов песен
-    AUDIO = "audio"               # Обработка звуковых особенностей песен
-    ANALYSIS = "analysis"         # Анализ схожих/разных треков
+    LYRICS = "lyrics"             # Поиск текстов (syncedlyrics)
+    FACTS = "facts"               # Поиск фактов (SongFacts)
+    METADATA = "metadata"         # Обогащение метаданных (MusicBrainz)
+    DENSE = "dense"               # Dense эмбеддинги (SentenceTransformer)
+    AUDIO = "audio"               # CLAP аудио-кодирование
+    ANALYSIS = "analysis"         # Анализ схожести
 
 
 class IndexStatus(str, Enum):
@@ -32,6 +34,8 @@ class StageProgress:
     current: int = 0
     total: Optional[int] = None
     message: Optional[str] = None
+    found: Optional[int] = None
+    not_found: Optional[int] = None
     started_at: Optional[float] = None
     completed_at: Optional[float] = None
 
@@ -85,6 +89,9 @@ class IndexJob:
                     "current": sp.current,
                     "total": sp.total,
                     "message": sp.message,
+                    "found": sp.found,
+                    "not_found": sp.not_found,
+                    "eta_seconds": self.calculate_eta_seconds(stage),
                 }
                 for stage, sp in self.stages.items()
             },
@@ -153,10 +160,12 @@ class JobTracker:
         """Get a summary of job progress for API responses."""
         overall_percent = 0
         stage_weights = {
-            IndexStage.METADATA: 0.40,   # 40% of total time
-            IndexStage.LYRICS: 0.30,     # 30% of total time
-            IndexStage.AUDIO: 0.20,      # 20% of total time
-            IndexStage.ANALYSIS: 0.10,   # 10% of total time
+            IndexStage.LYRICS: 0.25,     # Lyrics fetching (syncedlyrics)
+            IndexStage.FACTS: 0.10,      # Song facts
+            IndexStage.METADATA: 0.05,   # MusicBrainz enrichment
+            IndexStage.DENSE: 0.20,      # Text encoding
+            IndexStage.AUDIO: 0.25,      # CLAP encoding
+            IndexStage.ANALYSIS: 0.15,   # Similarity analysis
         }
         
         for stage, weight in stage_weights.items():
@@ -180,6 +189,8 @@ class JobTracker:
                     "current": sp.current,
                     "total": sp.total,
                     "message": sp.message,
+                    "found": sp.found,
+                    "not_found": sp.not_found,
                     "eta_seconds": job.calculate_eta_seconds(stage),
                 }
                 for stage, sp in job.stages.items()

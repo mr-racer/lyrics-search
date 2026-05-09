@@ -19,3 +19,8 @@ fastapi
 uvicorn[standard]
 httpx
 pytest-asyncio
+pytest>=8.0
+pytest-cov>=5.0
+pytest-mock>=3.12
+responses>=0.25
+musicbrainz

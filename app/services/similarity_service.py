@@ -10,7 +10,7 @@ from typing import Callable, Dict, List, Optional
 import numpy as np
 from sklearn.metrics import pairwise_distances
 
-from .job_tracker import IndexStage, IndexStatus
+from .job_tracker import IndexStage
 
 logger = logging.getLogger(__name__)
 

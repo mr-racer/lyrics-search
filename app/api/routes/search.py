@@ -1,6 +1,6 @@
 """Search endpoints."""
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 
 from app.domain.models import SearchRequest, SearchResponse, TrackHit
 from app.resources.model_registry import ModelRegistry

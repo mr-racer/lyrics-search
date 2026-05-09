@@ -1,0 +1,13 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+pythonpath = ["."]
+# importmode = "importlib"  # not needed with conftest Package.setup patch
+markers = [
+    "unit: Unit tests (fast, no external deps)",
+    "integration: Integration tests (SQLite, file I/O)",
+    "slow: Tests that take more than 1s",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
