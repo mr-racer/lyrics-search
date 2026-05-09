@@ -1413,14 +1413,6 @@ function SearchSection({ isDark, lang, activeCollection }) {
                     }}>{String(tag).toUpperCase()}</span>
                   ))}
                 </div>
-                {selectedHit.lyrics && (
-                  <div className={ske('inset', isDark)} style={{
-                    padding:'18px 22px', borderRadius:'14px', marginBottom:'24px',
-                    fontSize:'15px', color:c.textMuted, lineHeight:'1.7', textAlign:'center',
-                  }}>
-                    <span className="serif" style={{ fontStyle:'italic', fontSize:'18px' }}>"{selectedHit.lyrics.slice(0,250)}"</span>
-                  </div>
-                )}
                 {selectedHit.track?.lyrics && (
                   <div className={ske('panel', isDark)} style={{ borderRadius:'16px' }}>
                     <div className="mono" style={{ padding:'14px 20px', borderBottom:`1px solid ${c.border}`,
