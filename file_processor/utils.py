@@ -7,6 +7,8 @@ import hashlib
 import time
 import re
 
+import json
+import requests
 import syncedlyrics
 from mutagen import File as MutagenFile
 from mutagen.flac import FLAC
@@ -16,6 +18,7 @@ from mutagen.id3 import ID3NoHeaderError, APIC
 
 PROVIDERS = ["Musixmatch", "Lrclib", "NetEase", "Megalobiz"]
 TIME_BETWEEN_REQUESTS_STANDARD = 0.15
+TIME_BETWEEN_REQUESTS_OVH = 0.4
 TIME_BETWEEN_REQUESTS_ENHANCED_LYRICS = 3
 MAX_DURATION = 420 # filtering quite long songs
 
@@ -264,7 +267,30 @@ def normalize_genre(raw: str | None):
 # ONLINE REQUESTING FUNCTIONS
 
 
+def fetch_lyrics_ovh(artist: str, title: str) -> str | None:
+    """Fetch lyrics from lyrics.ovh API. Returns plain lyrics string or None."""
+    try:
+        url = f"https://api.lyrics.ovh/v1/{artist}/{title}"
+        resp = requests.get(url, timeout=5)
+        time.sleep(TIME_BETWEEN_REQUESTS_OVH)
+        if resp.status_code == 200:
+            data = json.loads(resp.text)
+            lyrics = data["lyrics"]
+            # Convert literal \n escape sequences to real newlines
+            lyrics = lyrics.replace("\\n", "\n")
+            return lyrics.strip()
+    except Exception:
+        pass
+    return None
+
+
 def get_lyrics(title: str, artist: str, better_lyrics_quality: bool) -> str | None:
+    # Primary: try lyrics.ovh
+    lyrics = fetch_lyrics_ovh(artist, title)
+    if lyrics:
+        return lyrics
+
+    # Fallback: syncedlyrics
     if better_lyrics_quality:
         providers = PROVIDERS
         time_to_sleep = TIME_BETWEEN_REQUESTS_ENHANCED_LYRICS

@@ -6,7 +6,7 @@ scoped to the currently selected Qdrant collection.
 
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
@@ -28,6 +28,13 @@ class FactOut(BaseModel):
     """Single fact returned by the API."""
     fact: str
     source: Optional[str] = None
+
+
+class RandomFact(BaseModel):
+    """Random fact with attribution context."""
+    fact: str
+    context: str
+    type: Literal["artist", "song"]
 
 
 # ── Artist facts ─────────────────────────────────────────────────────────────
@@ -80,3 +87,15 @@ def add_song_fact(
         source="manual",
     )
     return {"ok": True}
+
+
+# ── Random facts (landing page) ──────────────────────────────────────────────
+
+@router.get("/metadata/random-facts")
+def get_random_facts(
+    collection: str = Query(..., description="Qdrant collection name"),
+    limit: int = Query(5, ge=1, le=20, description="Number of random facts"),
+) -> List[RandomFact]:
+    """Return random facts from the collection's fact pool."""
+    raw = MetadataDB.get_random_facts(collection_name=collection, limit=limit)
+    return [RandomFact(**r) for r in raw]

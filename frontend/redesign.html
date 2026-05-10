@@ -209,6 +209,19 @@
     .marquee-track { display: flex; gap: 56px; width: max-content; animation: marquee 60s linear infinite; }
     .marquee-track:hover { animation-play-state: paused; }
 
+    /* ── Song detail split panel ──────────────────────────────── */
+    .song-detail-grid {
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 28px;
+      align-items: start;
+    }
+    @media (max-width: 900px) {
+      .song-detail-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
     .door {
       transition: transform 0.35s cubic-bezier(.22,.9,.3,1), box-shadow 0.35s ease;
     }
@@ -782,20 +795,38 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, activ
   const c = useColors(isDark);
   const [factIdx, setFactIdx] = useState(0);
   const [now, setNow] = useState(new Date());
+  const [dbFacts, setDbFacts] = useState([]);
+
+  // Fetch random facts from DB on collection change
+  useEffect(() => {
+    if (!activeCollection) { setDbFacts([]); return; }
+    apiFetch(`/metadata/random-facts?collection=${encodeURIComponent(activeCollection)}&limit=5`)
+      .then(r => setDbFacts(Array.isArray(r) ? r : []))
+      .catch(() => setDbFacts([]));
+  }, [activeCollection]);
 
   const trivia = TRIVIA[lang] || TRIVIA.en;
   const libFacts = useMemo(() => buildLibraryFacts(stats, lang), [stats, lang]);
-  // Interleave library facts with trivia (alternating), if libFacts present
+  // Interleave libFacts + dbFacts + trivia (alternating)
   const facts = useMemo(() => {
-    if (!libFacts.length) return trivia;
+    const db = dbFacts.map(f => ({
+      k: f.type === 'artist'
+        ? (lang === 'ru' ? 'ФАКТ' : 'FACT')
+        : (lang === 'ru' ? 'О ПЕСНЕ' : 'ABOUT SONG'),
+      v: `${f.context} — ${f.fact}`,
+      fromDb: true,
+    }));
+    const lib = libFacts.map(f => ({ ...f, live: true }));
+    const allDynamic = [...lib, ...db];
+    if (!allDynamic.length) return trivia;
     const out = [];
-    const max = Math.max(libFacts.length, trivia.length);
+    const max = Math.max(allDynamic.length, trivia.length);
     for (let i = 0; i < max; i++) {
-      if (libFacts[i % libFacts.length]) out.push({ ...libFacts[i % libFacts.length], live: true });
+      if (allDynamic[i % allDynamic.length]) out.push(allDynamic[i % allDynamic.length]);
       if (trivia[i % trivia.length]) out.push(trivia[i % trivia.length]);
     }
     return out;
-  }, [libFacts, trivia]);
+  }, [libFacts, dbFacts, trivia]);
 
   useEffect(() => {
     const t = setInterval(() => setFactIdx(i => (i + 1) % facts.length), 5500);
@@ -1049,8 +1080,10 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, activ
               flex:1, minWidth:0, display:'flex', alignItems:'baseline', gap:'14px',
               animation:'slideRight 0.5s cubic-bezier(.22,.9,.3,1)',
             }}>
-              <span style={{ fontSize:'14px', letterSpacing:'0.18em', color: fact.live ? 'oklch(70% 0.16 145)' : c.amber, opacity:0.85, flexShrink:0 }}>
-                {fact.live ? `${lang==='ru'?'LIVE':'LIVE'} · ` : ''}{(fact.k||'').toUpperCase()}
+              <span style={{ fontSize:'14px', letterSpacing:'0.18em', color: (fact.fromDb || fact.live) ? 'oklch(70% 0.16 145)' : c.amber, opacity:0.85, flexShrink:0 }}>
+                {fact.fromDb ? `${lang==='ru'?'ИЗ БИБЛИОТЕКИ':'FROM LIBRARY'} · ` : ''}
+                {fact.live ? `LIVE · ` : ''}
+                {(fact.k||'').toUpperCase()}
               </span>
               <span style={{ fontSize:'15px', color:c.text, lineHeight:'1.45', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }} className="serif">
                 {fact.v}
@@ -1075,7 +1108,9 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, activ
           <div className="marquee-track">
             {[...facts, ...facts].map((f, i) => (
               <div key={i} className="mono" style={{ display:'flex', alignItems:'center', gap:'10px', fontSize:'15px', color:c.textMuted, flexShrink:0 }}>
-                <span style={{ color: c.amber, letterSpacing:'0.2em' }}>◇</span>
+                <span style={{ color: f.fromDb ? 'oklch(70% 0.16 145)' : c.amber, letterSpacing:'0.2em' }}>
+                  {f.fromDb ? '●' : '◇'}
+                </span>
                 <span style={{ color: c.textSubtle, letterSpacing:'0.14em' }}>{(f.k||'').toUpperCase()}</span>
                 <span className="serif" style={{ fontFamily:"'Noto Sans', serif", fontSize:'14px', color: c.text, fontStyle:'italic' }}>{f.v}</span>
               </div>
@@ -1194,7 +1229,7 @@ function SearchSection({ isDark, lang, activeCollection }) {
       const res = await apiFetch('/chat/', { method:'POST', body: JSON.stringify({ message:userText, history, mode, auto_mode: autoMode, ...getLLMSettings() }) });
       const hits = res.hits || [];
       setResults(hits); setSelectedHit(null);
-      const finalMsgs = [...newMsgs, { role:'assistant', text:res.message||'…', hits, confidence:res.confidence, song:res.song, artist:res.artist, attempts:res.attempts, time:new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'}) }];
+      const finalMsgs = [...newMsgs, { role:'assistant', text:res.message||'…', hits, best_hit:res.best_hit, confidence:res.confidence, song:res.song, artist:res.artist, attempts:res.attempts, time:new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'}) }];
       setMessages(finalMsgs);
       saveSession(finalMsgs);
     } catch(e) {
@@ -1240,7 +1275,8 @@ function SearchSection({ isDark, lang, activeCollection }) {
           <div style={{ maxWidth:'96%', borderRadius:'12px', overflow:'hidden',
             background: c.surface,
             boxShadow: isDark?'inset 0 1px 0 rgba(255,255,255,0.04), inset 0 0 0 1px rgba(0,0,0,0.4), 0 3px 10px rgba(0,0,0,0.3)':'inset 0 1px 0 rgba(255,255,255,0.95), inset 0 0 0 1px rgba(0,0,0,0.07), 0 3px 10px rgba(40,30,60,0.08)' }}>
-            {msg.hits.slice(0,5).map((hit,hi) => <ResultCard key={hi} hit={hit} isDark={isDark} c={c} compact onClick={() => { setResults(msg.hits); setSelectedHit(hit); }} />)}
+            {(msg.best_hit ? [msg.best_hit] : msg.hits.slice(0,5))
+              .map((hit,hi) => <ResultCard key={hi} hit={hit} isDark={isDark} c={c} compact onClick={() => { setResults(msg.hits); setSelectedHit(hit); }} />)}
           </div>
         )}
         <div className="mono" style={{ display:'flex', gap:'10px', alignItems:'center', fontSize:'14px', letterSpacing:'0.12em' }}>
@@ -1434,67 +1470,168 @@ function SearchSection({ isDark, lang, activeCollection }) {
                   ← {lang==='ru'?'НАЗАД':'BACK'}
                 </button>
               </div>
-              <div style={{ flex:1, overflowY:'auto', padding:'40px 32px 64px', maxWidth:'780px', margin:'0 auto', width:'100%' }}>
-                <div style={{ display:'flex', justifyContent:'center', marginBottom:'28px', animation:'scaleIn 0.4s ease' }}>
-                  <AlbumCover title={selectedHit.track?.title||''} artist={selectedHit.track?.artist||''} size={240} isDark={isDark} coverPath={selectedHit.track?.cover_art_path} radius={20} />
-                </div>
-                <div style={{ textAlign:'center', marginBottom:'18px' }}>
-                  <h3 className="serif" style={{ fontSize:'42px', lineHeight:'1', letterSpacing:'-0.02em', color:c.text, fontWeight:'400' }}>
-                    {selectedHit.track?.title}
-                  </h3>
-                  <div className="serif" style={{ fontSize:'20px', color:c.textMuted, marginTop:'10px', fontStyle:'italic' }}>
-                    {selectedHit.track?.artist}
-                  </div>
-                  <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, marginTop:'10px', letterSpacing:'0.18em' }}>
-                    {[selectedHit.track?.album, selectedHit.track?.year].filter(Boolean).join(' · ').toUpperCase()}
-                  </div>
-                </div>
-                <div style={{ display:'flex', gap:'8px', flexWrap:'wrap', justifyContent:'center', marginBottom:'24px' }}>
-                  {[selectedHit.track?.genre, `${Math.round((selectedHit.score||0)*100)}% match`, selectedHit.matched_on].filter(Boolean).map((tag,i)=>(
-                    <span key={i} className="mono" style={{
-                      padding:'5px 14px', borderRadius:'20px', fontSize:'14px', letterSpacing:'0.15em',
-                      background:c.accentBg, color:c.accent, border:`1px solid ${c.accent.replace(')', ' / 0.25)')}`,
-                    }}>{String(tag).toUpperCase()}</span>
-                  ))}
-                </div>
-                {selectedHit.track?.lyrics && (
-                  <div className={ske('panel', isDark)} style={{ borderRadius:'16px' }}>
-                    <div className="mono" style={{ padding:'14px 20px', borderBottom:`1px solid ${c.border}`,
-                      fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em' }}>
-                      {lang==='ru'?'ТЕКСТ ПЕСНИ':'LYRICS'}
+              <div style={{
+                flex:1, overflowY:'auto', padding:'40px 32px 64px',
+                maxWidth: selectedHit.song_facts ? '1100px' : '780px',
+                margin:'0 auto', width:'100%',
+              }}>
+                {selectedHit.song_facts ? (
+                  <div className="song-detail-grid">
+                    {/* LEFT: album art, info, lyrics, artist facts */}
+                    <div>
+                      <div style={{ display:'flex', justifyContent:'center', marginBottom:'28px', animation:'scaleIn 0.4s ease' }}>
+                        <AlbumCover title={selectedHit.track?.title||''} artist={selectedHit.track?.artist||''} size={240} isDark={isDark} coverPath={selectedHit.track?.cover_art_path} radius={20} />
+                      </div>
+                      <div style={{ textAlign:'center', marginBottom:'18px' }}>
+                        <h3 className="serif" style={{ fontSize:'42px', lineHeight:'1', letterSpacing:'-0.02em', color:c.text, fontWeight:'400' }}>
+                          {selectedHit.track?.title}
+                        </h3>
+                        <div className="serif" style={{ fontSize:'20px', color:c.textMuted, marginTop:'10px', fontStyle:'italic' }}>
+                          {selectedHit.track?.artist}
+                        </div>
+                        <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, marginTop:'10px', letterSpacing:'0.18em' }}>
+                          {[selectedHit.track?.album, selectedHit.track?.year].filter(Boolean).join(' · ').toUpperCase()}
+                        </div>
+                      </div>
+                      <div style={{ display:'flex', gap:'8px', flexWrap:'wrap', justifyContent:'center', marginBottom:'24px' }}>
+                        {[selectedHit.track?.genre, `${Math.round((selectedHit.score||0)*100)}% match`, selectedHit.matched_on].filter(Boolean).map((tag,i)=>(
+                          <span key={i} className="mono" style={{
+                            padding:'5px 14px', borderRadius:'20px', fontSize:'14px', letterSpacing:'0.15em',
+                            background:c.accentBg, color:c.accent, border:`1px solid ${c.accent.replace(')', ' / 0.25)')}`,
+                          }}>{String(tag).toUpperCase()}</span>
+                        ))}
+                      </div>
+                      {selectedHit.track?.lyrics && (
+                        <div className={ske('panel', isDark)} style={{ borderRadius:'16px' }}>
+                          <div className="mono" style={{ padding:'14px 20px', borderBottom:`1px solid ${c.border}`,
+                            fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em' }}>
+                            {lang==='ru'?'ТЕКСТ ПЕСНИ':'LYRICS'}
+                          </div>
+                          <div style={{ padding:'20px 22px', fontSize:'14px', color:c.textMuted, lineHeight:'1.85',
+                            whiteSpace:'pre-wrap', wordBreak:'break-word' }}>
+                            {selectedHit.track.lyrics}
+                          </div>
+                        </div>
+                      )}
+                      {selectedHit.artist_facts && (
+                        <div className={ske('panel', isDark)} style={{ borderRadius:'16px', marginTop:'14px' }}>
+                          <div className="mono" style={{ padding:'14px 20px', borderBottom:`1px solid ${c.border}`,
+                            fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em' }}>
+                            {lang==='ru'?'ФАКТЫ ОБ АРТИСТЕ':'ABOUT THE ARTIST'}
+                          </div>
+                          <div style={{ padding:'20px 22px', fontSize:'14px', color:c.textMuted, lineHeight:'1.85',
+                            whiteSpace:'pre-wrap', wordBreak:'break-word' }}>
+                            {selectedHit.artist_facts.split('\n\n').map((fact, i) => (
+                              <p key={i} style={{ margin:'0 0 12px', lineHeight:'1.7' }}>{fact}</p>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                     </div>
-                    <div style={{ padding:'20px 22px', fontSize:'14px', color:c.textMuted, lineHeight:'1.85',
-                      whiteSpace:'pre-wrap', wordBreak:'break-word' }}>
-                      {selectedHit.track.lyrics}
+
+                    {/* RIGHT: song facts panel (sticky, skeuomorphic) */}
+                    <div className={ske('panel', isDark)} style={{
+                      borderRadius:'16px', position:'sticky', top:'24px',
+                      animation:'fadeIn 0.5s ease',
+                    }}>
+                      <div className="mono" style={{
+                        padding:'14px 20px',
+                        borderBottom:`1px solid ${c.border}`,
+                        fontSize:'14px',
+                        color:c.textSubtle,
+                        letterSpacing:'0.22em',
+                      }}>
+                        {lang==='ru'?'ФАКТЫ О ПЕСНЕ':'ABOUT THE SONG'}
+                      </div>
+                      <div style={{ padding:'16px 18px' }}>
+                        {selectedHit.song_facts.split('\n\n').map((f, i) => (
+                          <div key={i} style={{
+                            animation: `fadeIn 0.4s ease ${i * 0.1}s both`,
+                            padding: '12px 14px',
+                            marginBottom: '10px',
+                            borderRadius: '10px',
+                            background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+                            borderLeft: `3px solid ${c.accent}`,
+                            fontSize: '14px',
+                            color: c.textMuted,
+                            lineHeight: '1.7',
+                          }}>{f}</div>
+                        ))}
+                      </div>
                     </div>
                   </div>
-                )}
-                {selectedHit.artist_facts && (
-                  <div className={ske('panel', isDark)} style={{ borderRadius:'16px', marginTop:'14px' }}>
-                    <div className="mono" style={{ padding:'14px 20px', borderBottom:`1px solid ${c.border}`,
-                      fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em' }}>
-                      {lang==='ru'?'ФАКТЫ ОБ АРТИСТЕ':'ABOUT THE ARTIST'}
+                ) : (
+                  <div>
+                    <div style={{ display:'flex', justifyContent:'center', marginBottom:'28px', animation:'scaleIn 0.4s ease' }}>
+                      <AlbumCover title={selectedHit.track?.title||''} artist={selectedHit.track?.artist||''} size={240} isDark={isDark} coverPath={selectedHit.track?.cover_art_path} radius={20} />
                     </div>
-                    <div style={{ padding:'20px 22px', fontSize:'14px', color:c.textMuted, lineHeight:'1.85',
-                      whiteSpace:'pre-wrap', wordBreak:'break-word' }}>
-                      {selectedHit.artist_facts.split('\n\n').map((fact, i) => (
-                        <p key={i} style={{ margin:'0 0 12px', lineHeight:'1.7' }}>{i === 0 ? fact : fact}</p>
+                    <div style={{ textAlign:'center', marginBottom:'18px' }}>
+                      <h3 className="serif" style={{ fontSize:'42px', lineHeight:'1', letterSpacing:'-0.02em', color:c.text, fontWeight:'400' }}>
+                        {selectedHit.track?.title}
+                      </h3>
+                      <div className="serif" style={{ fontSize:'20px', color:c.textMuted, marginTop:'10px', fontStyle:'italic' }}>
+                        {selectedHit.track?.artist}
+                      </div>
+                      <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, marginTop:'10px', letterSpacing:'0.18em' }}>
+                        {[selectedHit.track?.album, selectedHit.track?.year].filter(Boolean).join(' · ').toUpperCase()}
+                      </div>
+                    </div>
+                    <div style={{ display:'flex', gap:'8px', flexWrap:'wrap', justifyContent:'center', marginBottom:'24px' }}>
+                      {[selectedHit.track?.genre, `${Math.round((selectedHit.score||0)*100)}% match`, selectedHit.matched_on].filter(Boolean).map((tag,i)=>(
+                        <span key={i} className="mono" style={{
+                          padding:'5px 14px', borderRadius:'20px', fontSize:'14px', letterSpacing:'0.15em',
+                          background:c.accentBg, color:c.accent, border:`1px solid ${c.accent.replace(')', ' / 0.25)')}`,
+                        }}>{String(tag).toUpperCase()}</span>
                       ))}
                     </div>
-                  </div>
-                )}
-                {selectedHit.song_facts && (
-                  <div className={ske('panel', isDark)} style={{ borderRadius:'16px', marginTop:'14px' }}>
-                    <div className="mono" style={{ padding:'14px 20px', borderBottom:`1px solid ${c.border}`,
-                      fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em' }}>
-                      {lang==='ru'?'ФАКТЫ О ПЕСНЕ':'ABOUT THE SONG'}
-                    </div>
-                    <div style={{ padding:'20px 22px', fontSize:'14px', color:c.textMuted, lineHeight:'1.85',
-                      whiteSpace:'pre-wrap', wordBreak:'break-word' }}>
-                      {selectedHit.song_facts.split('\n\n').map((fact, i) => (
-                        <p key={i} style={{ margin:'0 0 12px', lineHeight:'1.7' }}>{fact}</p>
-                      ))}
-                    </div>
+                    {selectedHit.track?.lyrics && (
+                      <div className={ske('panel', isDark)} style={{ borderRadius:'16px' }}>
+                        <div className="mono" style={{ padding:'14px 20px', borderBottom:`1px solid ${c.border}`,
+                          fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em' }}>
+                          {lang==='ru'?'ТЕКСТ ПЕСНИ':'LYRICS'}
+                        </div>
+                        <div style={{ padding:'20px 22px', fontSize:'14px', color:c.textMuted, lineHeight:'1.85',
+                          whiteSpace:'pre-wrap', wordBreak:'break-word' }}>
+                          {selectedHit.track.lyrics}
+                        </div>
+                      </div>
+                    )}
+                    {selectedHit.artist_facts && (
+                      <div className={ske('panel', isDark)} style={{ borderRadius:'16px', marginTop:'14px' }}>
+                        <div className="mono" style={{ padding:'14px 20px', borderBottom:`1px solid ${c.border}`,
+                          fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em' }}>
+                          {lang==='ru'?'ФАКТЫ ОБ АРТИСТЕ':'ABOUT THE ARTIST'}
+                        </div>
+                        <div style={{ padding:'20px 22px', fontSize:'14px', color:c.textMuted, lineHeight:'1.85',
+                          whiteSpace:'pre-wrap', wordBreak:'break-word' }}>
+                          {selectedHit.artist_facts.split('\n\n').map((fact, i) => (
+                            <p key={i} style={{ margin:'0 0 12px', lineHeight:'1.7' }}>{fact}</p>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {selectedHit.song_facts && (
+                      <div className={ske('panel', isDark)} style={{ borderRadius:'16px', marginTop:'14px' }}>
+                        <div className="mono" style={{ padding:'14px 20px', borderBottom:`1px solid ${c.border}`,
+                          fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em' }}>
+                          {lang==='ru'?'ФАКТЫ О ПЕСНЕ':'ABOUT THE SONG'}
+                        </div>
+                        <div style={{ padding:'18px 20px' }}>
+                          {selectedHit.song_facts.split('\n\n').map((f, i) => (
+                            <div key={i} style={{
+                              padding: '10px 12px',
+                              marginBottom: '8px',
+                              borderRadius: '8px',
+                              background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
+                              borderLeft: `3px solid ${c.accent}`,
+                              fontSize: '14px',
+                              color: c.textMuted,
+                              lineHeight: '1.7',
+                            }}>{f}</div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1781,7 +1918,7 @@ function RecommendSection({ isDark, lang, activeCollection }) {
                 <AlbumCover title={pickedTrack.track?.title} artist={pickedTrack.track?.artist} size={70} isDark={isDark} coverPath={pickedTrack.track?.cover_art_path} />
                 <div>
                   <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'4px' }}>
-                    {lang==='ru'?'СЕМЯ':'SEED'}
+                    {lang==='ru'?'ЗАПРОС':'QUERY'}
                   </div>
                   <div className="serif" style={{ fontSize:'24px', letterSpacing:'-0.01em', color:c.text, lineHeight:'1.1' }}>
                     {pickedTrack.track?.title}
@@ -2326,13 +2463,29 @@ function IndexingProgress({ stepStatus, stageProgress, lang, c, isDark }) {
                     </div>
                   )}
                   {done && (
-                    <div className="mono" style={{ fontSize:'12px', color:c.green, letterSpacing:'0.06em' }}>
-                      {prog && prog.message ? prog.message : (lang==='ru'?'Готово':'Done')}
+                    <div>
+                      <div className="mono" style={{ fontSize:'12px', color:c.green, letterSpacing:'0.06em' }}>
+                        {prog && prog.message ? prog.message : (lang==='ru'?'Готово':'Done')}
+                      </div>
+                      {prog && prog.found != null && prog.not_found != null && (
+                        <div className="mono" style={{ fontSize:'12px', color:c.textMuted, letterSpacing:'0.06em', marginTop:'2px' }}>
+                          <span style={{ color: c.green }}>{prog.found} {lang==='ru'?'найдено':'found'}</span>
+                          {prog.not_found > 0 && <span>, {prog.not_found} <span style={{ color: c.amber }}>{lang==='ru'?'не найдено':'not found'}</span></span>}
+                        </div>
+                      )}
                     </div>
                   )}
                   {partial && (
-                    <div className="mono" style={{ fontSize:'12px', color:c.amber, letterSpacing:'0.06em' }}>
-                      {prog && prog.message ? prog.message : ''}
+                    <div>
+                      <div className="mono" style={{ fontSize:'12px', color:c.amber, letterSpacing:'0.06em' }}>
+                        {prog && prog.message ? prog.message : ''}
+                      </div>
+                      {prog && prog.found != null && prog.not_found != null && (
+                        <div className="mono" style={{ fontSize:'12px', color:c.textMuted, letterSpacing:'0.06em', marginTop:'2px' }}>
+                          <span style={{ color: c.green }}>{prog.found} {lang==='ru'?'найдено':'found'}</span>
+                          {prog.not_found > 0 && <span>, {prog.not_found} <span style={{ color: c.amber }}>{lang==='ru'?'не найдено':'not found'}</span></span>}
+                        </div>
+                      )}
                     </div>
                   )}
                   {fail && (

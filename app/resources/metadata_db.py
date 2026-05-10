@@ -83,7 +83,7 @@ class MetadataDB:
     def _connect(cls) -> sqlite3.Connection:
         if cls._instance is None:
             DB_DIR.mkdir(parents=True, exist_ok=True)
-            conn = sqlite3.connect(str(DB_PATH), detect_types=sqlite3.PARSE_DECLTYPES)
+            conn = sqlite3.connect(str(DB_PATH), detect_types=sqlite3.PARSE_DECLTYPES, check_same_thread=False)
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA foreign_keys=ON")
             cls._instance = conn
@@ -328,6 +328,52 @@ class MetadataDB:
         for slug, fact in rows:
             result.setdefault(slug, []).append(fact)
         return {slug: "\n\n".join(facts) for slug, facts in result.items()}
+
+    # ── Random facts ──
+
+    @classmethod
+    def get_random_facts(
+        cls,
+        collection_name: str,
+        limit: int = 5,
+    ) -> List[dict]:
+        """Return ``limit`` random facts from the collection's fact pool.
+
+        Pool includes both ``artist_facts`` (with artist name as context) and
+        ``song_facts`` (with ``"Artist — Song"`` as context).  Filtered by
+        collection and ``lang='en'``.
+
+        Returns list of dicts: ``{"fact": str, "context": str, "type": str}``.
+        """
+        conn = cls._connect()
+        rows = conn.execute(
+            """
+            SELECT fact, context, type FROM (
+                SELECT
+                    af.fact,
+                    a.name AS context,
+                    'artist' AS type
+                FROM artist_facts af
+                JOIN artists a ON a.slug = af.artist_slug
+                WHERE a.collection_name = ? AND af.lang = 'en'
+
+                UNION ALL
+
+                SELECT
+                    sf.fact,
+                    a.name || ' — ' || s.title AS context,
+                    'song' AS type
+                FROM song_facts sf
+                JOIN songs s ON s.slug = sf.song_slug
+                JOIN artists a ON a.slug = s.artist_slug
+                WHERE s.collection_name = ? AND sf.lang = 'en'
+            )
+            ORDER BY RANDOM()
+            LIMIT ?
+            """,
+            (collection_name, collection_name, limit),
+        ).fetchall()
+        return [{"fact": r[0], "context": r[1], "type": r[2]} for r in rows]
 
     # ── Convenience helpers ──
 

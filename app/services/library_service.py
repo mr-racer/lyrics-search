@@ -5,7 +5,7 @@ import hashlib
 import logging
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from ..domain.models import TrackMetadata
 from ..resources.model_registry import ModelRegistry
@@ -239,33 +239,36 @@ class LibraryService:
                 facts_progress = {"artists": 0, "songs": 0}
                 facts_state = {"error": None}
 
-                async def on_artist_facts_progress(current: int, total: int, label: str):
+                def on_artist_facts_progress(current: int, total: int, label: str):
                     facts_progress["artists"] = current
                     combined = facts_progress["artists"] + facts_progress["songs"]
                     stage_facts.current = combined
                     stage_facts.message = f"Факты: {label}"
                     eta = job.calculate_eta_seconds(IndexStage.FACTS)
-                    await self._notify_progress(job, {
+                    asyncio.create_task(self._notify_progress(job, {
                         "stage": IndexStage.FACTS.value,
                         "current": combined,
                         "total": facts_total,
                         "message": stage_facts.message,
                         "eta_seconds": eta,
-                    })
+                    }))
 
-                async def on_song_facts_progress(current: int, total: int, label: str):
+                def on_song_facts_progress(current: int, total: int, label: str):
                     facts_progress["songs"] = current
                     combined = facts_progress["artists"] + facts_progress["songs"]
                     stage_facts.current = combined
                     stage_facts.message = f"Факты: {label}"
                     eta = job.calculate_eta_seconds(IndexStage.FACTS)
-                    await self._notify_progress(job, {
+                    asyncio.create_task(self._notify_progress(job, {
                         "stage": IndexStage.FACTS.value,
                         "current": combined,
                         "total": facts_total,
                         "message": stage_facts.message,
                         "eta_seconds": eta,
-                    })
+                    }))
+
+                artist_facts_result: Dict[str, str] = {}
+                song_facts_result: Dict[str, str] = {}
 
                 try:
                     facts_task = asyncio.create_task(
@@ -287,8 +290,8 @@ class LibraryService:
 
                     # Await facts (runs parallel to encoding, cached to disk)
                     try:
-                        await asyncio.wait_for(facts_task, timeout=60)
-                        logger.info("[LibraryService] Artist facts fetched")
+                        artist_facts_result = await asyncio.wait_for(facts_task, timeout=60)
+                        logger.info("[LibraryService] Artist facts fetched: %d found", len(artist_facts_result))
                     except (asyncio.TimeoutError, Exception) as e:
                         logger.warning("[LibraryService] Artist facts fetch timed out or failed: %s", e)
                         facts_task.cancel()
@@ -296,8 +299,8 @@ class LibraryService:
                             facts_state["error"] = str(e)
 
                     try:
-                        await asyncio.wait_for(song_facts_task, timeout=120)
-                        logger.info("[LibraryService] Song facts fetched")
+                        song_facts_result = await asyncio.wait_for(song_facts_task, timeout=120)
+                        logger.info("[LibraryService] Song facts fetched: %d found", len(song_facts_result))
                     except (asyncio.TimeoutError, Exception) as e:
                         logger.warning("[LibraryService] Song facts fetch timed out or failed: %s", e)
                         song_facts_task.cancel()
@@ -307,13 +310,18 @@ class LibraryService:
                     logger.warning("[LibraryService] Facts stage failed (non-critical): %s", e)
                     facts_state["error"] = str(e)
 
+                facts_found = len(artist_facts_result) + len(song_facts_result)
+                facts_not_found = facts_total - facts_found
+
                 stage_facts.status = IndexStatus.COMPLETED
-                stage_facts.current = facts_progress["artists"] + facts_progress["songs"]
+                stage_facts.current = facts_total
                 stage_facts.completed_at = time.time()
+                stage_facts.found = facts_found
+                stage_facts.not_found = facts_not_found
                 if facts_state["error"]:
                     stage_facts.message = f"Частично: {facts_state['error']}"
                 else:
-                    stage_facts.message = f"Факты: {stage_facts.current}/{facts_total} обработано"
+                    stage_facts.message = f"Факты: {facts_found} найдено из {facts_total}"
 
                 await self._notify_progress(job, {
                     "stage": IndexStage.FACTS.value,
@@ -321,6 +329,8 @@ class LibraryService:
                     "current": stage_facts.current,
                     "total": facts_total,
                     "message": stage_facts.message,
+                    "found": facts_found,
+                    "not_found": facts_not_found,
                     "stage_error": facts_state["error"],
                 })
 
@@ -343,10 +353,15 @@ class LibraryService:
                 })
 
                 mb_error = None
+                mb_found = 0
+                mb_not_found = 0
 
-                async def on_mb_progress(current: int, total: int, label: str):
+                async def on_mb_progress(current: int, total: int, label: str, found: int = 0, not_found: int = 0):
+                    nonlocal mb_found, mb_not_found
                     stage_meta.current = current
                     stage_meta.message = label
+                    mb_found = found
+                    mb_not_found = not_found
                     eta = job.calculate_eta_seconds(IndexStage.METADATA)
                     await self._notify_progress(job, {
                         "stage": IndexStage.METADATA.value,
@@ -354,6 +369,8 @@ class LibraryService:
                         "total": total,
                         "message": label,
                         "eta_seconds": eta,
+                        "found": found,
+                        "not_found": not_found,
                     })
 
                 try:
@@ -361,8 +378,8 @@ class LibraryService:
                         self._enrich_with_musicbrainz,
                         processed_files,
                         enhance_by_musicbrainz,
-                        lambda c, t, l: asyncio.run_coroutine_threadsafe(
-                            on_mb_progress(c, t, l), loop
+                        lambda c, t, label, f, nf: asyncio.run_coroutine_threadsafe(
+                            on_mb_progress(c, t, label, f, nf), loop
                         ),
                     )
                 except Exception as e:
@@ -372,10 +389,12 @@ class LibraryService:
                 stage_meta.status = IndexStatus.COMPLETED
                 stage_meta.current = stage_meta.current
                 stage_meta.completed_at = time.time()
+                stage_meta.found = mb_found
+                stage_meta.not_found = mb_not_found
                 if mb_error:
                     stage_meta.message = f"Ошибка: {mb_error}"
                 else:
-                    stage_meta.message = "Метаданные обогащены"
+                    stage_meta.message = f"Метаданные: {mb_found} найдено из {track_count}"
 
                 await self._notify_progress(job, {
                     "stage": IndexStage.METADATA.value,
@@ -383,6 +402,8 @@ class LibraryService:
                     "current": stage_meta.current,
                     "total": track_count,
                     "message": stage_meta.message,
+                    "found": mb_found,
+                    "not_found": mb_not_found,
                     "stage_error": mb_error,
                 })
             else:
@@ -596,23 +617,39 @@ class LibraryService:
         Args:
             processed_files: dict keyed by "artist — title", values are metadata dicts.
             enhance: if True, MB data replaces local; if False, MB is fallback only.
-            progress_callback: optional callable(current, total, label).
+            progress_callback: optional callable(current, total, label, found, not_found).
         """
         from musicbraniz_search import MusicBrainzLookup
 
         mb = MusicBrainzLookup("MusiX", "1.0", "https://musix.local")
         total = len(processed_files)
         enriched = 0
+        not_enriched = 0
         idx = 0
 
         for key, info in processed_files.items():
             title = info.get("title", "").strip()
             artist = info.get("artist", "").strip()
+            idx += 1
             if not title or not artist:
+                not_enriched += 1
+                logger.info(
+                    "[LibraryService] MB enrichment %d/%d: ✗ %s — %s (missing title/artist)",
+                    idx, total, artist or "?", title or "?",
+                )
+                if progress_callback:
+                    progress_callback(idx, total, f"{artist} — {title}", enriched, not_enriched)
                 continue
 
             rec_id = mb.resolve_recording_id(title, artist)
             if not rec_id:
+                not_enriched += 1
+                logger.info(
+                    "[LibraryService] MB enrichment %d/%d: ✗ %s — %s (no MB match)",
+                    idx, total, artist, title,
+                )
+                if progress_callback:
+                    progress_callback(idx, total, f"{artist} — {title}", enriched, not_enriched)
                 continue
 
             # Year — merge with existing based on flag
@@ -620,7 +657,6 @@ class LibraryService:
             local_year = info.get("year")
             if mb_year:
                 info["year"] = mb_year if enhance else (local_year or mb_year)
-                enriched += 1
 
             # Producer
             producers = mb.get_recording_producers(rec_id)
@@ -651,14 +687,13 @@ class LibraryService:
                 ]
                 info["sampled_by"] = sampled_strs if enhance or not info.get("sampled_by") else info["sampled_by"]
 
-            idx += 1
-            if progress_callback:
-                progress_callback(idx, total, f"{artist} — {title}")
-
+            enriched += 1
             logger.info(
-                "[LibraryService] MB enrichment %d/%d (enriched=%d): %s — %s",
-                idx, total, enriched, artist, title,
+                "[LibraryService] MB enrichment %d/%d: ✓ %s — %s (enriched=%d, not=%d)",
+                idx, total, artist, title, enriched, not_enriched,
             )
+            if progress_callback:
+                progress_callback(idx, total, f"{artist} — {title}", enriched, not_enriched)
 
     def _metadata_to_tracks(self, metadata: dict) -> List[TrackMetadata]:
         """Convert FileProcessor metadata dict to TrackMetadata list.

@@ -51,24 +51,59 @@ Return ONLY a JSON object with this shape:
 No prose before or after the JSON.
 """.strip()
 
-# Sound-query rephrasing prompt — used when classification == "sound".
-# The LLM rephrases the user's mood/vibe description into concrete keywords
-# optimized for CLAP cross-modal text→audio embeddings.
-# TODO: REPLACE WITH FINAL PROMPT — this is a placeholder.
-SOUND_QUERY_REPHRASING_SYSTEM_PROMPT: str = """
-PLACEHOLDER_SOUND_REPHRASING_PROMPT — TODO: replace with actual prompt.
+# CLAP rephrasing prompt — transforms mood-based queries into 3 optimized
+# English prompts for CLAP text-to-audio retrieval.
+CLAP_REPHRASE_SYSTEM_PROMPT: str = """\
+# ROLE & OBJECTIVE
+You are an expert audio retrieval prompt engineer specializing in the CLAP model (music_audioset_epoch_15_esc_90.14.pt). Transform Russian mood-based user queries into 3 optimized English prompts for text-to-audio retrieval.
 
-You are a query optimizer for cross-modal audio search (CLAP model).
-The user describes a song by feeling, vibe, atmosphere, or production style.
-Your job is to rephrase their description into 1-3 concise keyword phrases
-that will match well against CLAP text embeddings of audio.
+# CORE RULES
+1. TEMPLATE: Every prompt must start exactly with: "This song is a "
+2. SEMANTIC LOCK: Preserve the exact core intent of the original query. Do NOT change genre, primary instrument, or fundamental mood. Vary ONLY acoustic/production parameters.
+3. ACOUSTIC MAPPING: Replace abstract emotions with concrete proxies:
+   - Tempo: slow/medium/fast, steady/driving, relaxed/upbeat
+   - Key: major/minor
+   - Timbre: bright/warm/clean/distorted/muffled/electronic/acoustic
+   - Dynamics: soft/medium/loud, intimate/voluminous
+   - Texture: sparse/dense, rhythmic/pad-heavy, atmospheric
+4. STRUCTURE: [Genre/Style] + [Instrument] + [Tempo] + [1-2 Acoustic Details]
+5. VARIATION STRATEGY: Output exactly 3 prompts that are semantically identical but differ in acoustic focus:
+   - Variant 1: Tempo & Dynamics focus
+   - Variant 2: Timbre & Texture focus
+   - Variant 3: Key & Production style focus
+6. EXCLUSIONS: Strip artist names, titles, lyrics, and subjective adjectives (epic, dreamy, cinematic, nostalgic, chill, sad). Replace strictly with acoustic equivalents.
+7. CONSTRAINTS: English only. 8–15 words per prompt. Strict JSON output only.
 
-Return ONLY a JSON object:
-{
-  "rephrased_queries": ["phrase 1", "phrase 2"]
-}
+# OUTPUT FORMAT
+Return ONLY a raw JSON array of 3 strings. No markdown, no code blocks, no explanations.
+Example:
+["This song is a slow acoustic guitar piece with soft dynamics", "This song is a warm timbre fingerpicking guitar track in minor key", "This song is a relaxed acoustic guitar song with sparse atmospheric texture"]
 
-No prose before or after the JSON.
+# USER QUERY
+{user_query}
+""".strip()
+
+# Sound answer prompt — generates a conversational reply about the best match.
+# Placeholder: replace with a refined version later.
+SOUND_ANSWER_PROMPT: str = """\
+You are a music search assistant. The user described a song by mood or vibe,
+and the system found the best audio match in their local library.
+
+<user_query>{user_query}</user_query>
+<best_match>
+  Title: {title}
+  Artist: {artist}
+  Album: {album}
+  Year: {year}
+</best_match>
+
+Respond naturally in the user's language (match the language of <user_query>).
+Briefly paraphrase what the user was looking for, then name the best match.
+Example: "По вашему описанию — меланхоличная вещь с пианино — наиболее
+подходящий трек «{title}» от {artist}."
+
+Keep it under 40 words. Return ONLY a JSON object:
+{{"message": "your reply here"}}
 """.strip()
 
 # DEVELOPER_PROMPT: str = """
@@ -348,8 +383,13 @@ async def _run_searches(
     service,
     collection_name: str | None = None,
     forced_mode: str | None = None,  # когда auto_mode=False, используется этот mode для всех запросов
+    llm_kw: dict | None = None,
 ) -> tuple[str, str, list[TrackHit]]:
     """Execute the LLM's search queries against the library.
+
+    For queries typed as "sound" or "hybrid", the original query text is
+    rephrased through CLAP_REPHRASE_SYSTEM_PROMPT before being sent to
+    the CLAP audio search, producing better cross-modal results.
 
     Returns
     -------
@@ -366,13 +406,31 @@ async def _run_searches(
         if not query_text:
             continue
 
+        query_type = q.get("type", "hybrid")
         # mode = _TYPE_TO_MODE.get(q.get("type", "hybrid"), "hybrid")
-        mode = forced_mode if forced_mode else _TYPE_TO_MODE.get(q.get("type", "hybrid"), "hybrid")
+        mode = forced_mode if forced_mode else _TYPE_TO_MODE.get(query_type, "hybrid")
+        search_query = query_text
+
+        # Rephrase sound/hybrid queries through CLAP prompt for better audio retrieval
+        if query_type in ("sound", "hybrid") and CLAP_REPHRASE_SYSTEM_PROMPT.strip():
+            try:
+                rephrase_prompt = CLAP_REPHRASE_SYSTEM_PROMPT.format(user_query=query_text)
+                rephrased = await ask_llm(
+                    query_text,
+                    system_prompt=rephrase_prompt,
+                    parse_json=True,
+                    **(llm_kw or {}),
+                )
+                if isinstance(rephrased, list) and rephrased:
+                    search_query = rephrased[0]
+            except Exception as exc:
+                print(f"[chat] CLAP rephrasing in agentic loop (non-fatal): {exc}")
+
         query_strs.append(query_text)
 
         try:
             round_hits = await service.search(
-                query=query_text, mode=mode, limit=SEARCH_LIMIT,
+                query=search_query, mode=mode, limit=SEARCH_LIMIT,
                 collection_name=collection_name,
             )
             for hit in round_hits:
@@ -478,75 +536,106 @@ async def chat(req: ChatRequest, request: Request) -> dict:
     detected_type = classification.get("type", "hybrid") if req.auto_mode else None
     effective_mode = req.mode if not req.auto_mode else (detected_type or "hybrid")
 
-    # ── Sound fast path: rephrase → CLAP search → answer ─────────────────────
+    # ── Sound fast path: rephrase → 3× CLAP search → answer ─────────────────
     # When the query is classified as "sound" (or forced to "audio"), skip the
-    # agentic loop. Instead: ask LLM to rephrase the user's mood/vibe into
-    # CLAP-friendly keywords, run those through audio search, then format answer.
+    # agentic loop. Instead:
+    #   1. Ask LLM to rephrase user's mood/vibe into 3 CLAP-friendly prompts
+    #   2. Run each through CLAP audio search (10 results each)
+    #   3. Merge, pick top 5, send #1 to LLM for conversational answer
     if effective_mode == "sound" or (not req.auto_mode and req.mode == "audio"):
         sound_rephrased_queries: list[str] = []
 
-        if SOUND_QUERY_REPHRASING_SYSTEM_PROMPT.strip():
+        if CLAP_REPHRASE_SYSTEM_PROMPT.strip():
             try:
+                rephrase_prompt = CLAP_REPHRASE_SYSTEM_PROMPT.format(
+                    user_query=req.message,
+                )
                 rephrase_result = await ask_llm(
                     req.message,
-                    system_prompt=SOUND_QUERY_REPHRASING_SYSTEM_PROMPT,
+                    system_prompt=rephrase_prompt,
                     parse_json=True,
                     **llm_kw,
                 )
-                sound_rephrased_queries = rephrase_result.get("rephrased_queries", [])
+                if isinstance(rephrase_result, list) and rephrase_result:
+                    sound_rephrased_queries = rephrase_result
             except Exception as exc:
-                print(f"[chat] sound-rephrasing error (non-fatal): {exc}")
+                print(f"[chat] CLAP rephrasing error (non-fatal): {exc}")
 
         # Fallback: if rephrasing produced nothing, use the original query
         if not sound_rephrased_queries:
             sound_rephrased_queries = [req.message]
 
-        # Run each rephrased query through CLAP audio search
+        # Run each rephrased query through CLAP audio search (10 results each)
         all_hits: list[TrackHit] = []
         for rq in sound_rephrased_queries:
             try:
                 round_hits = await service.search(
-                    query=rq, mode="audio", limit=SEARCH_LIMIT,
+                    query=rq, mode="audio", limit=10,
                     collection_name=req.collection_name,
                 )
                 all_hits = _merge_hits(all_hits, round_hits)
             except Exception as exc:
                 print(f"[chat] audio search error for '{rq}': {exc}")
 
-        attempts_done = 1
+        # Sort by score, pick top 5
         all_hits.sort(key=lambda h: h.score, reverse=True)
+        top5 = all_hits[:5]
 
-        # Build a conversational answer from the results
-        if all_hits:
-            top = all_hits[0]
-            final_result = {
-                "action":     "answer",
+        if top5:
+            best = top5[0]
+
+            # Generate conversational answer via LLM
+            try:
+                answer_prompt = SOUND_ANSWER_PROMPT.format(
+                    user_query=req.message,
+                    title=best.track.title,
+                    artist=best.track.artist,
+                    album=best.track.album or "—",
+                    year=best.track.year or "—",
+                )
+                answer_result = await ask_llm(
+                    req.message,
+                    system_prompt=answer_prompt,
+                    parse_json=True,
+                    **llm_kw,
+                )
+                if isinstance(answer_result, dict):
+                    sound_message = answer_result.get("message", "")
+                else:
+                    sound_message = ""
+            except Exception as exc:
+                print(f"[chat] sound-answer LLM error (non-fatal): {exc}")
+                sound_message = ""
+
+            # Fallback message if LLM didn't produce one
+            if not sound_message:
+                album_part = f" [{best.track.album}]" if best.track.album else ""
+                sound_message = (
+                    f"По звучанию ближе всего — «{best.track.title}» "
+                    f"({best.track.artist}{album_part})."
+                )
+
+            return {
+                "message":    sound_message,
+                "song":       best.track.title,
+                "artist":     best.track.artist,
                 "confidence": "medium",
-                "song":       top.track.title,
-                "artist":     top.track.artist,
-                "message":    (
-                    f"По звучанию ближе всего — «{top.track.title}» "
-                    f"({top.track.artist}{' [' + top.track.album + ']' if top.track.album else ''})."
-                ),
+                "best_hit":   best.model_dump(),
+                "hits":       [h.model_dump() for h in top5],
+                "attempts":   1,
+                "classification": classification,
             }
         else:
-            final_result = {
-                "action":     "answer",
-                "confidence": "low",
+            return {
+                "message":    "Не удалось найти треков по описанию звука. Попробуй уточнить настроение, инструменты, или стиль вокала.",
                 "song":       None,
                 "artist":     None,
-                "message":    "Не удалось найти треков по описанию звука. Попробуй уточнить настроение, инструменты, или стиль вокала.",
+                "confidence": "low",
+                "best_hit":   None,
+                "hits":       [],
+                "attempts":   1,
+                "classification": classification,
             }
-
-        return {
-            "message":        final_result.get("message", ""),
-            "song":           final_result.get("song"),
-            "artist":         final_result.get("artist"),
-            "confidence":     final_result.get("confidence", "low"),
-            "hits":           [h.model_dump() for h in all_hits[:10]],
-            "attempts":       attempts_done,
-            "classification": classification,
-        }
 
     # ── Calls 2…N: agentic search loop (text / hybrid) ──────────────────────
     previous_queries = ""
@@ -589,7 +678,7 @@ async def chat(req: ChatRequest, request: Request) -> dict:
         if action == "search":
             queries = result.get("queries") or []
             forced_mode = req.mode if not req.auto_mode else None
-            new_pq, new_ctx, new_hits = await _run_searches(queries, service, collection_name=req.collection_name, forced_mode=forced_mode)
+            new_pq, new_ctx, new_hits = await _run_searches(queries, service, collection_name=req.collection_name, forced_mode=forced_mode, llm_kw=llm_kw)
 
             if new_pq:
                 previous_queries = (
