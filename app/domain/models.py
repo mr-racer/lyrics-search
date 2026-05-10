@@ -28,6 +28,7 @@ class TrackMetadata(BaseModel):
     label: str | None = None
     samples: list[str] | None = None
     sampled_by: list[str] | None = None
+    reaction: Literal["like", "dislike"] | None = None
 
 
 class TrackHit(BaseModel):
@@ -109,4 +110,17 @@ class ChatResponse(BaseModel):
     mode: Literal["text", "audio", "hybrid"]
     hits: List[TrackHit]
     llm_response: str
+
+
+class TrackReactionRequest(BaseModel):
+    """Запрос на установку реакции на трек."""
+    collection_name: str
+    reaction: Literal["like", "dislike"] | None = None  # None = remove reaction
+
+
+class TrackReactionResponse(BaseModel):
+    """Ответ с реакцией на трек."""
+    track_id: str
+    collection_name: str
+    reaction: Literal["like", "dislike"] | None
 

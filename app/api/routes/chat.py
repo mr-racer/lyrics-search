@@ -39,12 +39,12 @@ CLASSIFICATION_SYSTEM_PROMPT: str = """
 You are a query classifier for a music search system. Analyze the user's query and classify it into ONE of three types:
 
 1. **"text"** — User asks about concrete details that should literally appear in lyrics (specific words, phrases, themes, storylines).
-2. **"sound"** — User describes feelings, vibe, vocals, production, atmosphere, mood — not specific words.
+2. **"audio"** — User describes feelings, vibe, vocals, production, atmosphere, mood — not specific words.
 3. **"hybrid"** — Mix of both, or unclear which dominates.
 
 Return ONLY a JSON object with this shape:
 {
-  "type": "text" | "sound" | "hybrid",
+  "type": "text" | "audio" | "hybrid",
   "reasoning": "one short sentence explaining why"
 }
 
@@ -83,9 +83,9 @@ Example:
 {user_query}
 """.strip()
 
-# Sound answer prompt — generates a conversational reply about the best match.
+# Audio answer prompt — generates a conversational reply about the best match.
 # Placeholder: replace with a refined version later.
-SOUND_ANSWER_PROMPT: str = """\
+AUDIO_ANSWER_PROMPT: str = """\
 You are a music search assistant. The user described a song by mood or vibe,
 and the system found the best audio match in their local library.
 
@@ -174,7 +174,7 @@ Keep it under 40 words. Return ONLY a JSON object:
 #              in lyrics.
 #              Example: "Which songs mention luxury cars?"
 
-#   "sound"  — User describes feelings, vibe, vocals, production, atmosphere,
+#   "audio"  — User describes feelings, vibe, vocals, production, atmosphere,
 #              not specific words. No concrete lyric fragment given.
 #              Example: "Epic Lana Del Rey style song with male vocals."
 
@@ -183,9 +183,9 @@ Keep it under 40 words. Return ONLY a JSON object:
 
 # 3B. Generate queries based on type:
 
-#   IF type == "sound":
+#   IF type == "audio":
 #       Output exactly ONE query.
-#       Pack it with sound/feeling vocabulary from the user's message
+#       Pack it with audio/feeling vocabulary from the user's message
 #       (vocal type, instruments, era, mood, production style).
 
 #   IF type == "text" OR type == "hybrid":
@@ -233,9 +233,9 @@ Keep it under 40 words. Return ONLY a JSON object:
 #   "confidence": "low" | "medium",
 #   "reasoning": "one short sentence on why context is insufficient",
 #   "queries": [
-#     {{"query": "query text 1", "type": "text" | "sound" | "hybrid"}},
-#     {{"query": "query text 2", "type": "text" | "sound" | "hybrid"}},
-#     {{"query": "query text 3", "type": "text" | "sound" | "hybrid"}}
+#     {{"query": "query text 1", "type": "text" | "audio" | "hybrid"}},
+#     {{"query": "query text 2", "type": "text" | "audio" | "hybrid"}},
+#     {{"query": "query text 3", "type": "text" | "audio" | "hybrid"}}
 #   ]
 # }}
 
@@ -300,7 +300,7 @@ Keep it under 40 words. Return ONLY a JSON object:
 #     "message": "That's I Wanna Dance with Somebody by Whitney Houston, from 1987."
 #   }}
 
-# Example 3 — sound-type query, first attempt:
+# Example 3 — audio-type query, first attempt:
 #   user_query: "epic Lana Del Rey style song with male vocals, cinematic"
 #   context: (empty)
 #   attempt: 1 of 4
@@ -308,9 +308,9 @@ Keep it under 40 words. Return ONLY a JSON object:
 #   {{
 #     "action": "search",
 #     "confidence": "low",
-#     "reasoning": "Context is empty, query is sound-based.",
+#     "reasoning": "Context is empty, query is audio-based.",
 #     "queries": [
-#       {{"query": "cinematic male vocal Lana Del Rey style melancholic strings", "type": "sound"}}
+#       {{"query": "cinematic male vocal Lana Del Rey style melancholic strings", "type": "audio"}}
 #     ]
 #   }}
 
@@ -371,7 +371,7 @@ MAX_CTX_HITS  = 12  # max tracks in LLM context window
 # Map LLM query type → service search mode
 _TYPE_TO_MODE: dict[str, str] = {
     "text":   "text",
-    "sound":  "audio",
+    "audio":  "audio",
     "hybrid": "hybrid",
 }
 
@@ -387,7 +387,7 @@ async def _run_searches(
 ) -> tuple[str, str, list[TrackHit]]:
     """Execute the LLM's search queries against the library.
 
-    For queries typed as "sound" or "hybrid", the original query text is
+    For queries typed as "audio" or "hybrid", the original query text is
     rephrased through CLAP_REPHRASE_SYSTEM_PROMPT before being sent to
     the CLAP audio search, producing better cross-modal results.
 
@@ -411,8 +411,8 @@ async def _run_searches(
         mode = forced_mode if forced_mode else _TYPE_TO_MODE.get(query_type, "hybrid")
         search_query = query_text
 
-        # Rephrase sound/hybrid queries through CLAP prompt for better audio retrieval
-        if query_type in ("sound", "hybrid") and CLAP_REPHRASE_SYSTEM_PROMPT.strip():
+        # Rephrase audio/hybrid queries through CLAP prompt for better audio retrieval
+        if query_type in ("audio", "hybrid") and CLAP_REPHRASE_SYSTEM_PROMPT.strip():
             try:
                 rephrase_prompt = CLAP_REPHRASE_SYSTEM_PROMPT.format(user_query=query_text)
                 rephrased = await ask_llm(
@@ -536,14 +536,14 @@ async def chat(req: ChatRequest, request: Request) -> dict:
     detected_type = classification.get("type", "hybrid") if req.auto_mode else None
     effective_mode = req.mode if not req.auto_mode else (detected_type or "hybrid")
 
-    # ── Sound fast path: rephrase → 3× CLAP search → answer ─────────────────
-    # When the query is classified as "sound" (or forced to "audio"), skip the
+    # ── Audio fast path: rephrase → 3× CLAP search → answer ─────────────────
+    # When the query is classified as "audio" (or forced to "audio"), skip the
     # agentic loop. Instead:
     #   1. Ask LLM to rephrase user's mood/vibe into 3 CLAP-friendly prompts
     #   2. Run each through CLAP audio search (10 results each)
     #   3. Merge, pick top 5, send #1 to LLM for conversational answer
-    if effective_mode == "sound" or (not req.auto_mode and req.mode == "audio"):
-        sound_rephrased_queries: list[str] = []
+    if effective_mode == "audio" or (not req.auto_mode and req.mode == "audio"):
+        audio_rephrased_queries: list[str] = []
 
         if CLAP_REPHRASE_SYSTEM_PROMPT.strip():
             try:
@@ -557,17 +557,17 @@ async def chat(req: ChatRequest, request: Request) -> dict:
                     **llm_kw,
                 )
                 if isinstance(rephrase_result, list) and rephrase_result:
-                    sound_rephrased_queries = rephrase_result
+                    audio_rephrased_queries = rephrase_result
             except Exception as exc:
                 print(f"[chat] CLAP rephrasing error (non-fatal): {exc}")
 
         # Fallback: if rephrasing produced nothing, use the original query
-        if not sound_rephrased_queries:
-            sound_rephrased_queries = [req.message]
+        if not audio_rephrased_queries:
+            audio_rephrased_queries = [req.message]
 
         # Run each rephrased query through CLAP audio search (10 results each)
         all_hits: list[TrackHit] = []
-        for rq in sound_rephrased_queries:
+        for rq in audio_rephrased_queries:
             try:
                 round_hits = await service.search(
                     query=rq, mode="audio", limit=10,
@@ -586,7 +586,7 @@ async def chat(req: ChatRequest, request: Request) -> dict:
 
             # Generate conversational answer via LLM
             try:
-                answer_prompt = SOUND_ANSWER_PROMPT.format(
+                answer_prompt = AUDIO_ANSWER_PROMPT.format(
                     user_query=req.message,
                     title=best.track.title,
                     artist=best.track.artist,
@@ -600,23 +600,23 @@ async def chat(req: ChatRequest, request: Request) -> dict:
                     **llm_kw,
                 )
                 if isinstance(answer_result, dict):
-                    sound_message = answer_result.get("message", "")
+                    audio_message = answer_result.get("message", "")
                 else:
-                    sound_message = ""
+                    audio_message = ""
             except Exception as exc:
-                print(f"[chat] sound-answer LLM error (non-fatal): {exc}")
-                sound_message = ""
+                print(f"[chat] audio-answer LLM error (non-fatal): {exc}")
+                audio_message = ""
 
             # Fallback message if LLM didn't produce one
-            if not sound_message:
+            if not audio_message:
                 album_part = f" [{best.track.album}]" if best.track.album else ""
-                sound_message = (
+                audio_message = (
                     f"По звучанию ближе всего — «{best.track.title}» "
                     f"({best.track.artist}{album_part})."
                 )
 
             return {
-                "message":    sound_message,
+                "message":    audio_message,
                 "song":       best.track.title,
                 "artist":     best.track.artist,
                 "confidence": "medium",

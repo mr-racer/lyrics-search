@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,13 @@ _SCHEMA_SQL: Tuple[str, ...] = (
         category TEXT,
         source TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )""",
+    """CREATE TABLE IF NOT EXISTS track_reactions (
+        collection_name TEXT NOT NULL,
+        track_id TEXT NOT NULL,
+        reaction TEXT NOT NULL,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (collection_name, track_id)
     )""",
     "CREATE INDEX IF NOT EXISTS idx_af_artist_lang ON artist_facts(artist_slug, lang)",
     "CREATE INDEX IF NOT EXISTS idx_sf_song_lang ON song_facts(song_slug, lang)",
@@ -423,3 +430,44 @@ class MetadataDB:
         if conn:
             conn.close()
             cls._instance = None
+
+    # ── Track reactions ──
+
+    @classmethod
+    def set_reaction(
+        cls,
+        track_id: str,
+        collection_name: str,
+        reaction: Literal["like", "dislike"] | None,
+    ) -> None:
+        """Upsert or delete a track reaction scoped by collection."""
+        conn = cls._connect()
+        if reaction is None:
+            conn.execute(
+                "DELETE FROM track_reactions WHERE track_id = ? AND collection_name = ?",
+                (track_id, collection_name),
+            )
+        else:
+            conn.execute(
+                """INSERT INTO track_reactions (track_id, collection_name, reaction)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(track_id, collection_name) DO UPDATE SET
+                       reaction=excluded.reaction,
+                       updated_at=CURRENT_TIMESTAMP""",
+                (track_id, collection_name, reaction),
+            )
+        conn.commit()
+
+    @classmethod
+    def get_reaction(
+        cls,
+        track_id: str,
+        collection_name: str,
+    ) -> Literal["like", "dislike"] | None:
+        """Return the stored reaction for a track in a collection, or None."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT reaction FROM track_reactions WHERE track_id = ? AND collection_name = ?",
+            (track_id, collection_name),
+        ).fetchone()
+        return row[0] if row else None

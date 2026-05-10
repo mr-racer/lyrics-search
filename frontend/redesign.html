@@ -290,8 +290,6 @@ function useColors(isDark) {
     redBg:        isDark ? 'oklch(58% 0.21 25 / 0.14)' : 'oklch(58% 0.21 25 / 0.09)',
   }), [isDark]);
 }
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
 const ske = (kind, isDark) => `ske-${kind}-${isDark ? 'd' : 'l'}`;
 const brushed = (isDark) => `brushed-${isDark ? 'd' : 'l'}`;
 
@@ -533,7 +531,7 @@ function Knob({ angle = -45, size = 44, isDark, label, onClick, glow }) {
 }
 
 // ─── ResultCard ───────────────────────────────────────────────────────────────
-function ResultCard({ hit, isDark, c, compact=false, onClick }) {
+function ResultCard({ hit, isDark, c, compact=false, onClick, onPlay }) {
   const track = hit.track || {};
   const modeColor = { lyrics: c.accent, audio: 'oklch(60% 0.18 310)', hybrid: c.amber }[hit.matched_on] || c.accent;
   return (
@@ -549,6 +547,18 @@ function ResultCard({ hit, isDark, c, compact=false, onClick }) {
         <div style={{ fontSize:'14px', fontWeight:'600', color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', letterSpacing:'-0.01em' }}>{track.title||'—'}</div>
         <div style={{ fontSize:'14px', color:c.textMuted, marginTop:'2px' }}>{track.artist||'—'}{track.year?` · ${track.year}`:''}</div>
       </div>
+      {onPlay && (
+        <button onClick={(e) => { e.stopPropagation(); onPlay(hit); }}
+          title="Play"
+          style={{
+            width:'34px', height:'34px', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center',
+            flexShrink:0, background:'linear-gradient(180deg, oklch(60% 0.21 270), oklch(48% 0.22 285))',
+            boxShadow:'inset 0 1px 0 rgba(255,255,255,0.2), inset 0 -1px 0 rgba(0,0,0,0.25), 0 2px 8px oklch(58% 0.21 270 / 0.4)',
+            fontSize:'13px', color:'white',
+          }}>
+          ▶
+        </button>
+      )}
       <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:'4px', flexShrink:0 }}>
         <div className="mono" style={{ padding:'3px 9px', borderRadius:'20px', fontSize:'14px', fontWeight:'500',
           background: modeColor.replace(')', ' / 0.14)'),
@@ -665,6 +675,8 @@ function Sidebar({ section, onNav, onHome, isDark, lang, collections, activeColl
       icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33"/><circle cx="12" cy="12" r="9"/></svg> },
     { id:'library', label: lang==='ru'?'Библиотека':'Library',
       icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></svg> },
+    { id:'player', label: lang==='ru'?'Плеер':'Player',
+      icon: <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/></svg> },
   ];
 
   return (
@@ -848,7 +860,7 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, activ
       caption: lang==='ru'?'НАЙТИ':'FIND',
       title: lang==='ru'?'Поиск':'Search',
       titleAccent: lang==='ru'?'по смыслу':'by meaning',
-      hint: lang==='ru'?'По тексту, звуку или вместе.':'By lyrics, sound, or both.',
+      hint: lang==='ru'?'По тексту, звуку или вместе.':'By lyrics, audio, or both.',
       hue: 270,
       meta: lang==='ru'?'TEXT · AUDIO · HYBRID':'TEXT · AUDIO · HYBRID',
       icon: (
@@ -1177,7 +1189,7 @@ function Segmented({ value, onChange, options, isDark, size='md' }) {
 }
 
 // ─── SEARCH SECTION ───────────────────────────────────────────────────────────
-function SearchSection({ isDark, lang, activeCollection }) {
+function SearchSection({ isDark, lang, activeCollection, onPlayTrack }) {
   const c = useColors(isDark);
   const { sessions, saveSession, deleteSession } = useChatHistory(activeCollection);
 
@@ -1185,7 +1197,7 @@ function SearchSection({ isDark, lang, activeCollection }) {
     role:'assistant',
     text: lang==='ru'
       ? 'Опиши музыку, которую ищешь — настроение, текст, звук или жанр. Попробуй: «грустный синти-поп под ночь».'
-      : "Describe the music — mood, lyrics, sound, or genre. Try: \"melancholic synth-pop for late nights\".",
+      : "Describe the music — mood, lyrics, audio, or genre. Try: \"melancholic synth-pop for late nights\".",
     time: new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'}),
   }];
 
@@ -1276,7 +1288,7 @@ function SearchSection({ isDark, lang, activeCollection }) {
             background: c.surface,
             boxShadow: isDark?'inset 0 1px 0 rgba(255,255,255,0.04), inset 0 0 0 1px rgba(0,0,0,0.4), 0 3px 10px rgba(0,0,0,0.3)':'inset 0 1px 0 rgba(255,255,255,0.95), inset 0 0 0 1px rgba(0,0,0,0.07), 0 3px 10px rgba(40,30,60,0.08)' }}>
             {(msg.best_hit ? [msg.best_hit] : msg.hits.slice(0,5))
-              .map((hit,hi) => <ResultCard key={hi} hit={hit} isDark={isDark} c={c} compact onClick={() => { setResults(msg.hits); setDetailHit(hit); }} />)}
+              .map((hit,hi) => <ResultCard key={hi} hit={hit} isDark={isDark} c={c} compact onClick={() => { setResults(msg.hits); setDetailHit(hit); }} onPlay={() => onPlayTrack && onPlayTrack(hit, msg.hits)} />)}
           </div>
         )}
         <div className="mono" style={{ display:'flex', gap:'10px', alignItems:'center', fontSize:'14px', letterSpacing:'0.12em' }}>
@@ -1663,7 +1675,7 @@ function SearchSection({ isDark, lang, activeCollection }) {
                 {results.length} {lang==='ru'?'НАЙДЕНО':'FOUND'}
               </div>
               <div style={{ padding:'0 12px' }}>
-                {results.map((hit,i) => <ResultCard key={i} hit={hit} isDark={isDark} c={c} onClick={()=>setDetailHit(hit)} />)}
+                {results.map((hit,i) => <ResultCard key={i} hit={hit} isDark={isDark} c={c} onClick={()=>setDetailHit(hit)} onPlay={() => onPlayTrack && onPlayTrack(hit, results)} />)}
               </div>
             </div>
           )}
@@ -1674,13 +1686,14 @@ function SearchSection({ isDark, lang, activeCollection }) {
 }
 
 // ─── RECOMMEND SECTION ────────────────────────────────────────────────────────
-function RecommendSection({ isDark, lang, activeCollection }) {
+function RecommendSection({ isDark, lang, activeCollection, onPlayTrack }) {
   const c = useColors(isDark);
 
-  // Vibe (mood) input — runs hybrid search
-  const [vibeText, setVibeText] = useState('');
-  const [vibeLoading, setVibeLoading] = useState(false);
-  const [vibeResults, setVibeResults] = useState([]);
+  // Preset results
+  const [presetLoading, setPresetLoading] = useState(false);
+  const [presetResults, setPresetResults] = useState([]);
+  const [activePreset, setActivePreset] = useState(null);
+  const [presetLimit, setPresetLimit] = useState(10);
 
   // Track-similarity — picks a track from search results, then queries similar
   const [trackQuery, setTrackQuery] = useState('');
@@ -1698,18 +1711,6 @@ function RecommendSection({ isDark, lang, activeCollection }) {
     const col = activeCollection ? `?collection_name=${encodeURIComponent(activeCollection)}` : '';
     apiFetch(`/library/stats${col}`).then(setStats).catch(()=>{});
   }, [activeCollection]);
-
-  const runVibe = async () => {
-    if (!vibeText.trim() || vibeLoading) return;
-    setVibeLoading(true);
-    try {
-      const res = await apiFetch('/search/', { method:'POST', body: JSON.stringify({
-        query: vibeText, mode:'hybrid', limit: 12, collection_name: activeCollection || undefined
-      })});
-      setVibeResults(res.hits || []);
-    } catch(e) { setVibeResults([]); }
-    finally { setVibeLoading(false); }
-  };
 
   const lookupTracks = async (q) => {
     if (!q.trim()) { setTrackOptions([]); setTrackPicker(false); return; }
@@ -1751,32 +1752,30 @@ function RecommendSection({ isDark, lang, activeCollection }) {
     finally { setSimilarLoading(false); }
   };
 
-  // Quick mix presets — each runs a hybrid search with a curated query
-  const moodPresets = lang==='ru' ? [
-    { id:'late', label:'Под поздний вечер', q:'тихо, меланхолично, поздно ночью, размеренно', hue:265, icon:'🌙' },
-    { id:'walk', label:'Для прогулки', q:'бодро, позитивно, ритмично, движение', hue:140, icon:'⊜' },
-    { id:'focus', label:'Для фокуса', q:'инструментальное, минимализм, фон, концентрация', hue:200, icon:'◇' },
-    { id:'rain', label:'Дождь и кофе', q:'грустно, дождливо, уютно, акустика', hue:220, icon:'☁' },
-    { id:'energy', label:'Заряд энергии', q:'мощно, драйв, рок, быстро, агрессивно', hue:25, icon:'⚡' },
-    { id:'love', label:'Романтика', q:'нежно, лирично, любовь, тепло', hue:340, icon:'❤' },
-  ] : [
-    { id:'late', label:'Late night', q:'quiet, melancholic, slow, late night', hue:265, icon:'🌙' },
-    { id:'walk', label:'For a walk', q:'upbeat, positive, rhythmic, motion', hue:140, icon:'⊜' },
-    { id:'focus', label:'Focus', q:'instrumental, minimal, ambient, concentration', hue:200, icon:'◇' },
-    { id:'rain', label:'Rain & coffee', q:'sad, rainy, cozy, acoustic', hue:220, icon:'☁' },
-    { id:'energy', label:'Energy boost', q:'powerful, driving, rock, fast, aggressive', hue:25, icon:'⚡' },
-    { id:'love', label:'Romance', q:'gentle, lyrical, love, warm', hue:340, icon:'❤' },
+  // Quick mix presets — hardcoded query + mode per preset
+  const moodPresets = [
+    { id:'late', label: lang==='ru'?'Под поздний вечер':'Late night',
+      q:'Song with a smooth late-night jazz with velvet female vocals and soft piano', mode:'audio', hue:265, icon:'🌙' },
+    { id:'walk', label: lang==='ru'?'Для прогулки':'For a walk',
+      q:'Rhythmic lofi hip-hop beat for midnight walk through city streets', mode:'audio', hue:140, icon:'⊜' },
+    { id:'focus', label: lang==='ru'?'Для фокуса':'Focus',
+      q:'Atmospheric ambient piano track for focused study and mental clarity', mode:'audio', hue:200, icon:'◇' },
+    { id:'rain', label: lang==='ru'?'Дождь и кофе':'Rain & coffee',
+      q:'Acoustic ballad with poetic lyrics about rain and autumn longing', mode:'hybrid', hue:220, icon:'☁' },
+    { id:'energy', label: lang==='ru'?'Заряд энергии':'Energy boost',
+      q:'Powerful rock anthem with empowering lyrics and driving electric guitar', mode:'hybrid', hue:25, icon:'⚡' },
+    { id:'love', label: lang==='ru'?'Романтика':'Romance',
+      q:'Dreamy synth-pop track with poetic lyrics about falling in love', mode:'hybrid', hue:340, icon:'❤' },
   ];
-  const [activePreset, setActivePreset] = useState(null);
   const runPreset = async (p) => {
-    setActivePreset(p.id); setVibeLoading(true); setVibeText(p.q);
+    setActivePreset(p.id); setPresetLoading(true);
     try {
       const res = await apiFetch('/search/', { method:'POST', body: JSON.stringify({
-        query: p.q, mode:'hybrid', limit: 12, collection_name: activeCollection || undefined,
+        query: p.q, mode: p.mode, limit: presetLimit, collection_name: activeCollection || undefined,
       })});
-      setVibeResults(res.hits || []);
-    } catch(e) { setVibeResults([]); }
-    finally { setVibeLoading(false); }
+      setPresetResults(res.hits || []);
+    } catch(e) { setPresetResults([]); }
+    finally { setPresetLoading(false); }
   };
 
   const card = (children, extra={}) => (
@@ -1805,14 +1804,14 @@ function RecommendSection({ isDark, lang, activeCollection }) {
       <div style={{ flex:1, overflowY:'auto', padding:'30px 36px 60px' }}>
         <div style={{ maxWidth:'1180px', margin:'0 auto', display:'flex', flexDirection:'column', gap:'28px' }}>
 
-          {/* ── 1. QUICK MIXES — preset buttons ── */}
+          {/* ── 1. QUICK MIXES — preset buttons + slider + results ── */}
           {card(<>
             {blockTitle(
               lang==='ru'?'01 · БЫСТРЫЕ МИКСЫ':'01 · QUICK MIXES',
               lang==='ru'?'Подбери':'Pick',
               lang==='ru'?'настроение':'a mood',
             )}
-            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(180px, 1fr))', gap:'12px' }}>
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(180px, 1fr))', gap:'12px', marginBottom:'20px' }}>
               {moodPresets.map(p => {
                 const active = activePreset === p.id;
                 const accent = `oklch(62% 0.18 ${p.hue})`;
@@ -1843,42 +1842,48 @@ function RecommendSection({ isDark, lang, activeCollection }) {
                       {p.label}
                     </div>
                     <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.16em' }}>
-                      {active ? (vibeLoading ? (lang==='ru'?'ПОДБОР…':'MIXING…') : (lang==='ru'?'АКТИВНО':'ACTIVE')) : (lang==='ru'?'НАЖАТЬ':'TAP')}
+                      {active ? (presetLoading ? (lang==='ru'?'ПОДБОР…':'MIXING…') : (lang==='ru'?'АКТИВНО':'ACTIVE')) : (lang==='ru'?'НАЖАТЬ':'TAP')}
                     </div>
                   </button>
                 );
               })}
             </div>
-          </>)}
 
-          {/* ── 2. VIBE INPUT ── */}
-          {card(<>
-            {blockTitle(
-              lang==='ru'?'02 · ВЫРАЗИ СЛОВАМИ':'02 · DESCRIBE A VIBE',
-              lang==='ru'?'Опиши':'Describe',
-              lang==='ru'?'настроение':'the feeling',
-            )}
-            <div className={ske('inset', isDark)} style={{ padding:'10px 14px', borderRadius:'14px', display:'flex', gap:'12px', alignItems:'center', marginBottom:'14px' }}>
-              <span className="serif" style={{ fontSize:'22px', color: c.amber, fontStyle:'italic' }}>"</span>
-              <input value={vibeText} onChange={e=>setVibeText(e.target.value)}
-                onKeyDown={e=>e.key==='Enter'&&runVibe()}
-                placeholder={lang==='ru'?'тёплое лето, лёгкая ностальгия, гитара…':'warm summer, slight nostalgia, guitar…'}
-                style={{ flex:1, padding:'10px 0', border:'none', background:'transparent', color:c.text, fontSize:'15px', outline:'none', fontFamily:"'Noto Sans', serif", fontStyle:'italic' }} />
-              <button onClick={runVibe} disabled={vibeLoading || !vibeText.trim()} className="ske-accent"
-                style={{ padding:'8px 18px', borderRadius:'10px', fontSize:'14px', fontWeight:'600',
-                  opacity: vibeLoading||!vibeText.trim() ? 0.5 : 1,
-                  cursor: vibeLoading||!vibeText.trim() ? 'not-allowed' : 'pointer',
-                  letterSpacing:'0.06em',
-                }}>
-                {vibeLoading ? <Spinner size={13} color="white" /> : (lang==='ru'?'СОБРАТЬ':'BUILD')}
-              </button>
+            {/* Slider — track count */}
+            <div style={{ display:'flex', alignItems:'center', gap:'16px', marginBottom:'18px' }}>
+              <span className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.16em', minWidth:'100px' }}>
+                {lang==='ru'?'КОЛИЧЕСТВО':'TRACK COUNT'}
+              </span>
+              <input type="range" min={5} max={20} value={presetLimit}
+                onChange={e => setPresetLimit(parseInt(e.target.value))}
+                style={{ flex:1, accentColor: 'oklch(60% 0.18 270)' }} />
+              <span className="mono" style={{ fontSize:'14px', color:c.amber, minWidth:'30px', textAlign:'right' }}>
+                {presetLimit}
+              </span>
             </div>
-            {vibeResults.length > 0 && (
+
+            {/* Results */}
+            {presetLoading && (
+              <div style={{ display:'flex', flexDirection:'column', gap:'8px', animation:'fadeIn 0.3s ease' }}>
+                {[1,2,3].map(i => (
+                  <div key={i} style={{ height:'62px', borderRadius:'12px',
+                    background: isDark?'rgba(255,255,255,0.03)':'rgba(0,0,0,0.025)',
+                    boxShadow: isDark?'inset 0 1px 2px rgba(0,0,0,0.4)':'inset 0 1px 2px rgba(40,30,60,0.06)',
+                    animation:`pulse 1.4s ${i*0.1}s ease-in-out infinite` }} />
+                ))}
+              </div>
+            )}
+            {!presetLoading && presetResults.length > 0 && (
               <div style={{ display:'flex', flexDirection:'column', gap:'2px', animation:'fadeIn 0.4s ease' }}>
                 <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em', padding:'4px 0 8px' }}>
-                  {vibeResults.length} {lang==='ru'?'ТРЕКОВ В МИКСЕ':'TRACKS IN THE MIX'}
+                  {presetResults.length} {lang==='ru'?'ТРЕКОВ В МИКСЕ':'TRACKS IN THE MIX'}
                 </div>
-                {vibeResults.map((h, i) => <ResultCard key={i} hit={h} isDark={isDark} c={c} compact />)}
+                {presetResults.map((h, i) => <ResultCard key={i} hit={h} isDark={isDark} c={c} compact onPlay={() => onPlayTrack && onPlayTrack(h, presetResults)} />)}
+              </div>
+            )}
+            {!presetLoading && !presetResults.length && activePreset && (
+              <div className="serif" style={{ fontSize:'14px', color:c.textSubtle, fontStyle:'italic', textAlign:'center', padding:'24px' }}>
+                {lang==='ru'?'Ничего не нашлось':'No tracks found'}
               </div>
             )}
           </>)}
@@ -1886,7 +1891,7 @@ function RecommendSection({ isDark, lang, activeCollection }) {
           {/* ── 3. TRACK PICKER → SIMILAR ── */}
           {card(<>
             {blockTitle(
-              lang==='ru'?'03 · ПОХОЖЕЕ ПО ТРЕКУ':'03 · SIMILAR TO A TRACK',
+              lang==='ru'?'02 · ПОХОЖЕЕ ПО ТРЕКУ':'02 · SIMILAR TO A TRACK',
               lang==='ru'?'Выбери':'Pick',
               lang==='ru'?'трек':'a track',
             )}
@@ -1906,7 +1911,7 @@ function RecommendSection({ isDark, lang, activeCollection }) {
                 }}>
                   {trackOptions.map((h,i) => (
                     <div key={i} onClick={() => findSimilar(h)} style={{ cursor:'pointer' }}>
-                      <ResultCard hit={h} isDark={isDark} c={c} compact />
+                      <ResultCard hit={h} isDark={isDark} c={c} compact onPlay={() => onPlayTrack && onPlayTrack(h, similar)} />
                     </div>
                   ))}
                 </div>
@@ -1948,7 +1953,7 @@ function RecommendSection({ isDark, lang, activeCollection }) {
                   </div>
                 ) : similar.length > 0 ? (
                   <div style={{ display:'flex', flexDirection:'column', gap:'2px' }}>
-                    {similar.map((h,i) => <ResultCard key={i} hit={h} isDark={isDark} c={c} compact />)}
+                    {similar.map((h,i) => <ResultCard key={i} hit={h} isDark={isDark} c={c} compact onPlay={() => onPlayTrack && onPlayTrack(h, similar)} />)}
                   </div>
                 ) : (
                   <div className="serif" style={{ fontSize:'14px', color:c.textSubtle, fontStyle:'italic', textAlign:'center', padding:'24px' }}>
@@ -2237,11 +2242,11 @@ function LibrarySection({ isDark, lang, activeCollection }) {
 
           {/* Top pairs — tabbed */}
           <div className={ske('panel', isDark)} style={{ padding:'24px 26px', borderRadius:'18px', position:'relative', overflow:'hidden' }}>
-            {/* Subtle corner glow orbs near toggle */}
-            <div style={{ position:'absolute', top:'-30px', right:'-20px', width:'150px', height:'150px', borderRadius:'50%', pointerEvents:'none',
-              background: `oklch(60% 0.18 ${activePairsTab === 'similar' ? 270 : 25} / 0.07)` }} />
-            <div style={{ position:'absolute', top:'10px', right:'60px', width:'100px', height:'100px', borderRadius:'50%', pointerEvents:'none',
-              background: `oklch(60% 0.18 ${activePairsTab === 'similar' ? 310 : 55} / 0.06)` }} />
+            {/* Subtle corner glow orbs — anchored to top-right corner */}
+            <div style={{ position:'absolute', top:'-60px', right:'-40px', width:'180px', height:'180px', borderRadius:'50%', pointerEvents:'none',
+              background: `radial-gradient(circle, oklch(60% 0.18 ${activePairsTab === 'similar' ? 270 : 25} / 0.09) 0%, transparent 70%)` }} />
+            <div style={{ position:'absolute', top:'-20px', right:'-10px', width:'120px', height:'120px', borderRadius:'50%', pointerEvents:'none',
+              background: `radial-gradient(circle, oklch(60% 0.18 ${activePairsTab === 'similar' ? 310 : 55} / 0.07) 0%, transparent 70%)` }} />
             <div style={{ display:'flex', alignItems:'flex-end', justifyContent:'space-between', marginBottom:'18px', gap:'12px', flexWrap:'wrap' }}>
               <div>
                 <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'6px' }}>
@@ -2971,7 +2976,7 @@ function OnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
         <p style={{ fontSize:'15px', color:c.textMuted, lineHeight:'1.6', marginBottom:'34px' }}>
           {lang==='ru'
             ? 'MusiX индексирует музыкальную папку локально и позволяет искать треки по смыслу — текстам и звуку. Ничего не уходит в облако.'
-            : 'MusiX indexes a music folder locally so you can search tracks by meaning — lyrics and sound. Nothing leaves your machine.'}
+            : 'MusiX indexes a music folder locally so you can search tracks by meaning — lyrics and audio. Nothing leaves your machine.'}
         </p>
 
         <div className={ske('panel', isDark)} style={{ padding:'26px 28px', borderRadius:'18px' }}>
@@ -3113,11 +3118,322 @@ function DeleteConfirm({ isDark, lang, name, onConfirm, onCancel }) {
   );
 }
 
+// ─── PLAYER SECTION ─────────────────────────────────────────────────────────
+function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initialTrack, onPlayTrack }) {
+  const c = useColors(isDark);
+  const audioRef = useRef(null);
+
+  const [playlist, setPlaylist] = useState(initialPlaylist || []);
+  const [currentIndex, setCurrentIndex] = useState(-1);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [volume, setVolume] = useState(0.85);
+  const [liked, setLiked] = useState(null); // 'like' | 'dislike' | null
+  const [loading, setLoading] = useState(false);
+
+  const currentTrack = currentIndex >= 0 && currentIndex < playlist.length ? playlist[currentIndex].track : null;
+
+  // Sync playlist from parent
+  useEffect(() => {
+    if (initialPlaylist && initialPlaylist.length > 0) {
+      setPlaylist(initialPlaylist);
+    }
+  }, [initialPlaylist]);
+
+  // Play when initialTrack is set
+  useEffect(() => {
+    if (initialTrack && playlist.length > 0) {
+      const idx = playlist.findIndex(h => h.track?.track_id === initialTrack.track_id);
+      if (idx >= 0) {
+        setCurrentIndex(idx);
+        setIsPlaying(true);
+        fetchReaction(initialTrack.track_id);
+      }
+    }
+  }, [initialTrack]);
+
+  const fetchReaction = async (trackId) => {
+    if (!activeCollection || !trackId) return;
+    try {
+      const data = await apiFetch(`/search/tracks/${trackId}/reaction?collection_name=${encodeURIComponent(activeCollection)}`, { headers: {} });
+      setLiked(data.reaction || null);
+    } catch { setLiked(null); }
+  };
+
+  const playTrackAt = (index) => {
+    if (index < 0 || index >= playlist.length) return;
+    setCurrentIndex(index);
+    setIsPlaying(true);
+    fetchReaction(playlist[index].track.track_id);
+  };
+
+  const togglePlay = () => { setIsPlaying(p => !p); };
+
+  const nextTrack = () => {
+    if (currentIndex < playlist.length - 1) playTrackAt(currentIndex + 1);
+  };
+
+  const prevTrack = () => {
+    if (currentIndex > 0) playTrackAt(currentIndex - 1);
+  };
+
+  const seek = (time) => {
+    if (audioRef.current) audioRef.current.currentTime = time;
+    setCurrentTime(time);
+  };
+
+  const setReaction = async (val) => {
+    if (!currentTrack || !activeCollection) return;
+    try {
+      await apiFetch(`/search/tracks/${currentTrack.track_id}/reaction`, {
+        method: 'POST',
+        body: JSON.stringify({ collection_name: activeCollection, reaction: val }),
+      });
+      setLiked(val === liked ? null : val);
+    } catch (e) { console.error('Failed to set reaction:', e); }
+  };
+
+  // Sync audio element
+  useEffect(() => {
+    if (!audioRef.current) return;
+    if (isPlaying) { audioRef.current.play().catch(() => setIsPlaying(false)); }
+    else audioRef.current.pause();
+  }, [isPlaying, currentTrack]);
+
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.volume = volume;
+  }, [volume]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
+      if (e.code === 'ArrowLeft') seek(Math.max(0, currentTime - 10));
+      if (e.code === 'ArrowRight') seek(Math.min(duration, currentTime + 10));
+      if (e.code === 'ArrowUp') { e.preventDefault(); setVolume(v => Math.min(1, v + 0.05)); }
+      if (e.code === 'ArrowDown') { e.preventDefault(); setVolume(v => Math.max(0, v - 0.05)); }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [currentTime, duration]);
+
+  const fmt = (s) => {
+    if (!s || isNaN(s)) return '0:00';
+    const m = Math.floor(s / 60), sec = Math.floor(s % 60);
+    return `${m}:${sec.toString().padStart(2, '0')}`;
+  };
+
+  const streamUrl = currentTrack
+    ? `${API}/search/tracks/${currentTrack.track_id}/stream?collection_name=${encodeURIComponent(activeCollection || '')}`
+    : null;
+
+  return (
+    <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:c.bg }}>
+      <SectionHeader
+        isDark={isDark} lang={lang}
+        kicker={lang==='ru'?'РАЗДЕЛ 04 · ПЛЕЕР':'SECTION 04 · PLAYER'}
+        title={lang==='ru'?'Плеер':'Player'}
+      />
+      <div style={{ flex:1, display:'flex', overflow:'hidden', padding:'0 24px 24px' }}>
+        {/* LEFT: artwork + info + controls */}
+        <div style={{ width:'360px', minWidth:'300px', display:'flex', flexDirection:'column', gap:'20px', paddingTop:'8px' }}>
+
+          {/* Album art */}
+          <div style={{ display:'flex', justifyContent:'center', animation:'fadeIn 0.4s ease' }}>
+            <AlbumCover
+              title={currentTrack?.title || ''}
+              artist={currentTrack?.artist || ''}
+              size={280}
+              isDark={isDark}
+              coverPath={currentTrack?.cover_art_path}
+              radius={18}
+              spinning={isPlaying}
+            />
+          </div>
+
+          {/* Track info */}
+          {currentTrack ? (
+            <div style={{ textAlign:'center', animation:'fadeIn 0.35s' }}>
+              <div className="serif" style={{ fontSize:'28px', fontWeight:'400', color:c.text, letterSpacing:'-0.01em', lineHeight:'1.1' }}>
+                {currentTrack.title}
+              </div>
+              <div style={{ fontSize:'17px', color:c.textMuted, marginTop:'6px' }}>
+                {currentTrack.artist}
+              </div>
+              {currentTrack.album && (
+                <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, marginTop:'4px', letterSpacing:'0.1em' }}>
+                  {currentTrack.album}{currentTrack.year ? ` · ${currentTrack.year}` : ''}
+                </div>
+              )}
+              {/* Reaction buttons */}
+              <div style={{ display:'flex', justifyContent:'center', gap:'10px', marginTop:'14px' }}>
+                <button onClick={() => setReaction('like')}
+                  className={ske('btn', isDark)}
+                  style={{
+                    padding:'8px 16px', borderRadius:'10px', fontSize:'15px',
+                    color: liked === 'like' ? c.green : c.textMuted,
+                    background: liked === 'like' ? c.greenBg : undefined,
+                    border: liked === 'like' ? `1px solid ${c.green}` : undefined,
+                  }}>
+                  👍 <span style={{ fontSize:'13px', marginLeft:'4px' }}>{lang==='ru'?'Нравится':'Like'}</span>
+                </button>
+                <button onClick={() => setReaction('dislike')}
+                  className={ske('btn', isDark)}
+                  style={{
+                    padding:'8px 16px', borderRadius:'10px', fontSize:'15px',
+                    color: liked === 'dislike' ? c.red : c.textMuted,
+                    background: liked === 'dislike' ? c.redBg : undefined,
+                    border: liked === 'dislike' ? `1px solid ${c.red}` : undefined,
+                  }}>
+                  👎 <span style={{ fontSize:'13px', marginLeft:'4px' }}>{lang==='ru'?'Не нравится':'Dislike'}</span>
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div style={{ textAlign:'center', padding:'20px 0' }}>
+              <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.15em' }}>
+                {lang==='ru'?'ВЫБЕРИТЕ ТРЕК ИЗ СПИСКА':'SELECT A TRACK FROM THE LIST'}
+              </div>
+            </div>
+          )}
+
+          {/* Progress bar */}
+          <div style={{ padding:'0 4px' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
+              <span className="mono" style={{ fontSize:'12px', color:c.textSubtle, minWidth:'36px', textAlign:'right' }}>{fmt(currentTime)}</span>
+              <input
+                type="range" min={0} max={duration || 0} step={0.5}
+                value={currentTime}
+                onChange={e => seek(Number(e.target.value))}
+                className="seek-bar"
+                style={{
+                  flex:1, height:'6px', appearance:'none', cursor:'pointer',
+                  borderRadius:'3px',
+                  background: `linear-gradient(to right, ${c.accent} ${duration ? (currentTime/duration*100) : 0}%, ${c.surface3} 0%)`,
+                }}
+              />
+              <span className="mono" style={{ fontSize:'12px', color:c.textSubtle, minWidth:'36px' }}>{fmt(duration)}</span>
+            </div>
+          </div>
+
+          {/* Controls */}
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:'14px' }}>
+            <button onClick={prevTrack} className={ske('btn', isDark)}
+              style={{ width:'42px', height:'42px', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'16px' }}
+              disabled={currentIndex <= 0}>
+              ⏮
+            </button>
+            <button onClick={togglePlay}
+              style={{
+                width:'58px', height:'58px', borderRadius:'50%',
+                display:'flex', alignItems:'center', justifyContent:'center', fontSize:'22px',
+                background: 'linear-gradient(180deg, oklch(60% 0.21 270), oklch(48% 0.22 285))',
+                boxShadow:'inset 0 1px 0 rgba(255,255,255,0.2), inset 0 -1px 0 rgba(0,0,0,0.25), 0 4px 14px oklch(58% 0.21 270 / 0.5)',
+                color:'white',
+              }}>
+              {isPlaying ? '⏸' : '▶'}
+            </button>
+            <button onClick={nextTrack} className={ske('btn', isDark)}
+              style={{ width:'42px', height:'42px', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'16px' }}
+              disabled={currentIndex >= playlist.length - 1}>
+              ⏭
+            </button>
+          </div>
+
+          {/* Volume */}
+          <div style={{ display:'flex', alignItems:'center', gap:'10px', padding:'0 4px' }}>
+            <span style={{ fontSize:'14px' }}>🔊</span>
+            <input
+              type="range" min={0} max={1} step={0.01}
+              value={volume}
+              onChange={e => setVolume(Number(e.target.value))}
+              style={{
+                flex:1, height:'4px', appearance:'none', cursor:'pointer',
+                borderRadius:'2px',
+                background: `linear-gradient(to right, ${c.accent} ${volume*100}%, ${c.surface3} 0%)`,
+              }}
+            />
+          </div>
+
+          {/* Keyboard hint */}
+          <div className="mono" style={{ textAlign:'center', fontSize:'11px', color:c.textSubtle, letterSpacing:'0.1em' }}>
+            SPACE · ◄► · ▲▼
+          </div>
+        </div>
+
+        {/* RIGHT: playlist */}
+        <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', marginLeft:'28px', borderLeft:`1px solid ${c.border}`, paddingLeft:'28px' }}>
+          <div className="mono" style={{ fontSize:'13px', color:c.textSubtle, letterSpacing:'0.2em', marginBottom:'12px', paddingTop:'4px' }}>
+            {(lang==='ru'?'ПЛЕЙЛИСТ':'PLAYLIST').toUpperCase()} · {playlist.length}
+          </div>
+          <div style={{ flex:1, overflowY:'auto' }}>
+            {playlist.length === 0 ? (
+              <div style={{ textAlign:'center', padding:'40px 20px' }}>
+                <div className="mono" style={{ fontSize:'13px', color:c.textSubtle, letterSpacing:'0.15em' }}>
+                  {lang==='ru'?'Нет треков':'NO TRACKS'}
+                </div>
+                <div style={{ fontSize:'14px', color:c.textMuted, marginTop:'8px' }}>
+                  {lang==='ru'?'Поищите треки в Поиске или Рекомендациях':'Search for tracks in Search or Recommendations'}
+                </div>
+              </div>
+            ) : (
+              playlist.map((hit, i) => {
+                const t = hit.track || {};
+                const active = i === currentIndex;
+                return (
+                  <div key={t.track_id || i}
+                    onClick={() => playTrackAt(i)}
+                    style={{
+                      display:'flex', alignItems:'center', gap:'12px',
+                      padding:'10px 14px', borderRadius:'10px', cursor:'pointer',
+                      background: active ? (isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)') : 'transparent',
+                      transition:'background 0.15s',
+                    }}
+                    onMouseEnter={e => { if (!active) e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)'; }}
+                    onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent'; }}
+                  >
+                    <span className="mono" style={{ fontSize:'12px', color: active ? c.accent : c.textSubtle, minWidth:'20px' }}>
+                      {active && isPlaying ? '▶' : i + 1}
+                    </span>
+                    <AlbumCover title={t.title} artist={t.artist} size={42} isDark={isDark} coverPath={t.cover_art_path} />
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ fontSize:'14px', fontWeight: active ? '600' : '400', color: active ? c.text : c.textMuted,
+                        whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t.title}</div>
+                      <div style={{ fontSize:'13px', color:c.textSubtle, marginTop:'1px' }}>{t.artist}</div>
+                    </div>
+                    {t.genre && (
+                      <span className="mono" style={{ fontSize:'11px', color:c.textSubtle }}>{t.genre}</span>
+                    )}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Hidden audio element */}
+      <audio
+        ref={audioRef}
+        src={streamUrl}
+        onTimeUpdate={() => setCurrentTime(audioRef.current?.currentTime || 0)}
+        onLoadedMetadata={() => setDuration(audioRef.current?.duration || 0)}
+        onEnded={nextTrack}
+        onError={() => { setIsPlaying(false); }}
+        volume={volume}
+        crossOrigin="anonymous"
+      />
+    </div>
+  );
+}
+
 // ─── App ──────────────────────────────────────────────────────────────────────
 function App() {
   const [isDark, setDark] = useState(() => (localStorage.getItem('musix_theme') || 'dark') === 'dark');
   const [lang, setLang]   = useState(() => localStorage.getItem('musix_lang') || 'ru');
-  const [section, setSection] = useState('home'); // home | search | recommend | library
+  const [section, setSection] = useState('home'); // home | search | recommend | library | player
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [themeAnim, setThemeAnim] = useState(false);
   const [appState, setAppState] = useState('checking');
@@ -3126,6 +3442,10 @@ function App() {
   const [activeCollection, setActiveCollection] = useState(() => localStorage.getItem('active_collection') || '');
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [stats, setStats] = useState(null);
+
+  // Player state
+  const [playerPlaylist, setPlayerPlaylist] = useState([]);
+  const [playerTrack, setPlayerTrack] = useState(null);
 
   const c = useColors(isDark);
 
@@ -3151,6 +3471,12 @@ function App() {
     apiFetch('/library/collections').then(data => {
       setCollections(data.collections || []);
     }).catch(() => {}), []);
+
+  const handlePlayTrack = (track, results) => {
+    setPlayerPlaylist(results || []);
+    setPlayerTrack(track);
+    setSection('player');
+  };
 
   // Stats for landing
   useEffect(() => {
@@ -3209,6 +3535,7 @@ function App() {
     search:    SearchSection,
     recommend: RecommendSection,
     library:   LibrarySection,
+    player:    PlayerSection,
   };
   const ActiveSection = sectionMap[section];
 
@@ -3236,7 +3563,12 @@ function App() {
             onSettings={() => setSettingsOpen(true)}
           />
           <div key={section} style={{ flex:1, minWidth:0, display:'flex', flexDirection:'column', overflow:'hidden', animation:'fadeIn 0.3s ease' }}>
-            <ActiveSection isDark={isDark} lang={lang} activeCollection={activeCollection} />
+            <ActiveSection
+              isDark={isDark} lang={lang} activeCollection={activeCollection}
+              onPlayTrack={handlePlayTrack}
+              initialPlaylist={section === 'player' ? playerPlaylist : undefined}
+              initialTrack={section === 'player' ? playerTrack : undefined}
+            />
           </div>
         </Fragment>
       )}
