@@ -76,9 +76,15 @@ class SearchService:
         """Audio-based search: encode query with CLAP, search Qdrant by 'clap' vector only."""
         logger.info("[SearchService] _search_audio: query='%s', limit=%d, collection=%s",
                     query, limit, collection_name)
-        
-        clap_model = ModelRegistry._clap_model
-        if clap_model is None:
+
+        if not ModelRegistry.is_clap_available():
+            raise RuntimeError("Audio search unavailable: CLAP module not installed (pip install laion-clap)")
+
+        try:
+            clap_model = await asyncio.get_running_loop().run_in_executor(
+                None, ModelRegistry.get_clap
+            )
+        except RuntimeError:
             logger.info("[SearchService] CLAP not yet loaded — loading now (lazy)")
             try:
                 clap_model = await asyncio.get_running_loop().run_in_executor(

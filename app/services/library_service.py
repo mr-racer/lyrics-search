@@ -237,12 +237,17 @@ class LibraryService:
             else:
                 # Launch facts fetches with progress callbacks
                 facts_progress = {"artists": 0, "songs": 0}
+                facts_found = {"artists": 0, "songs": 0}
                 facts_state = {"error": None}
 
-                def on_artist_facts_progress(current: int, total: int, label: str):
+                def on_artist_facts_progress(current: int, total: int, label: str, found: bool):
                     facts_progress["artists"] = current
+                    if found:
+                        facts_found["artists"] += 1
                     combined = facts_progress["artists"] + facts_progress["songs"]
                     stage_facts.current = combined
+                    stage_facts.found = facts_found["artists"] + facts_found["songs"]
+                    stage_facts.not_found = facts_total - stage_facts.found
                     stage_facts.message = f"Факты: {label}"
                     eta = job.calculate_eta_seconds(IndexStage.FACTS)
                     asyncio.create_task(self._notify_progress(job, {
@@ -250,13 +255,19 @@ class LibraryService:
                         "current": combined,
                         "total": facts_total,
                         "message": stage_facts.message,
+                        "found": stage_facts.found,
+                        "not_found": stage_facts.not_found,
                         "eta_seconds": eta,
                     }))
 
-                def on_song_facts_progress(current: int, total: int, label: str):
+                def on_song_facts_progress(current: int, total: int, label: str, found: bool):
                     facts_progress["songs"] = current
+                    if found:
+                        facts_found["songs"] += 1
                     combined = facts_progress["artists"] + facts_progress["songs"]
                     stage_facts.current = combined
+                    stage_facts.found = facts_found["artists"] + facts_found["songs"]
+                    stage_facts.not_found = facts_total - stage_facts.found
                     stage_facts.message = f"Факты: {label}"
                     eta = job.calculate_eta_seconds(IndexStage.FACTS)
                     asyncio.create_task(self._notify_progress(job, {
@@ -264,6 +275,8 @@ class LibraryService:
                         "current": combined,
                         "total": facts_total,
                         "message": stage_facts.message,
+                        "found": stage_facts.found,
+                        "not_found": stage_facts.not_found,
                         "eta_seconds": eta,
                     }))
 
@@ -641,57 +654,65 @@ class LibraryService:
                     progress_callback(idx, total, f"{artist} — {title}", enriched, not_enriched)
                 continue
 
-            rec_id = mb.resolve_recording_id(title, artist)
-            if not rec_id:
-                not_enriched += 1
+            try:
+                rec_id = mb.resolve_recording_id(title, artist)
+                if not rec_id:
+                    not_enriched += 1
+                    logger.info(
+                        "[LibraryService] MB enrichment %d/%d: ✗ %s — %s (no MB match)",
+                        idx, total, artist, title,
+                    )
+                    if progress_callback:
+                        progress_callback(idx, total, f"{artist} — {title}", enriched, not_enriched)
+                    continue
+
+                # Year — merge with existing based on flag
+                mb_year = mb.get_recording_year(rec_id)
+                local_year = info.get("year")
+                if mb_year:
+                    info["year"] = mb_year if enhance else (local_year or mb_year)
+
+                # Producer
+                producers = mb.get_recording_producers(rec_id)
+                if producers:
+                    info["producer"] = ", ".join(producers) if enhance or not info.get("producer") else info["producer"]
+
+                # Labels
+                labels = mb.get_recording_labels(rec_id)
+                if labels:
+                    label_name = labels[0].get("name", "")
+                    if label_name:
+                        info["label"] = label_name if enhance else (info.get("label") or label_name)
+
+                # Samples
+                samples = mb.get_recording_samples(rec_id)
+                if samples:
+                    sample_strs = [
+                        f"{s.get('artist', '?')} — {s.get('title', '?')}"
+                        for s in samples if s.get("title") or s.get("artist")
+                    ]
+                    info["samples"] = sample_strs if enhance or not info.get("samples") else info["samples"]
+
+                sampled_by = mb.get_recording_sampled_by(rec_id)
+                if sampled_by:
+                    sampled_strs = [
+                        f"{s.get('artist', '?')} — {s.get('title', '?')}"
+                        for s in sampled_by if s.get("title") or s.get("artist")
+                    ]
+                    info["sampled_by"] = sampled_strs if enhance or not info.get("sampled_by") else info["sampled_by"]
+
+                enriched += 1
                 logger.info(
-                    "[LibraryService] MB enrichment %d/%d: ✗ %s — %s (no MB match)",
-                    idx, total, artist, title,
+                    "[LibraryService] MB enrichment %d/%d: ✓ %s — %s (enriched=%d, not=%d)",
+                    idx, total, artist, title, enriched, not_enriched,
                 )
-                if progress_callback:
-                    progress_callback(idx, total, f"{artist} — {title}", enriched, not_enriched)
-                continue
+            except Exception as e:
+                logger.warning(
+                    "[LibraryService] MB enrichment %d/%d: ✗ %s — %s (error: %s — %s)",
+                    idx, total, artist, title, type(e).__name__, e,
+                )
+                not_enriched += 1
 
-            # Year — merge with existing based on flag
-            mb_year = mb.get_recording_year(rec_id)
-            local_year = info.get("year")
-            if mb_year:
-                info["year"] = mb_year if enhance else (local_year or mb_year)
-
-            # Producer
-            producers = mb.get_recording_producers(rec_id)
-            if producers:
-                info["producer"] = ", ".join(producers) if enhance or not info.get("producer") else info["producer"]
-
-            # Labels
-            labels = mb.get_recording_labels(rec_id)
-            if labels:
-                label_name = labels[0].get("name", "")
-                if label_name:
-                    info["label"] = label_name if enhance else (info.get("label") or label_name)
-
-            # Samples
-            samples = mb.get_recording_samples(rec_id)
-            if samples:
-                sample_strs = [
-                    f"{s.get('artist', '?')} — {s.get('title', '?')}"
-                    for s in samples if s.get("title") or s.get("artist")
-                ]
-                info["samples"] = sample_strs if enhance or not info.get("samples") else info["samples"]
-
-            sampled_by = mb.get_recording_sampled_by(rec_id)
-            if sampled_by:
-                sampled_strs = [
-                    f"{s.get('artist', '?')} — {s.get('title', '?')}"
-                    for s in sampled_by if s.get("title") or s.get("artist")
-                ]
-                info["sampled_by"] = sampled_strs if enhance or not info.get("sampled_by") else info["sampled_by"]
-
-            enriched += 1
-            logger.info(
-                "[LibraryService] MB enrichment %d/%d: ✓ %s — %s (enriched=%d, not=%d)",
-                idx, total, artist, title, enriched, not_enriched,
-            )
             if progress_callback:
                 progress_callback(idx, total, f"{artist} — {title}", enriched, not_enriched)
 
@@ -731,8 +752,8 @@ class LibraryService:
             if file_path and track_id:
                 try:
                     cover_art_path = save_cover_art(file_path, track_id)
-                except Exception:
-                    pass  # cover art is optional, don't fail indexing
+                except Exception as e:
+                    logger.warning("[LibraryService] Cover art extraction failed for %s: %s", file_path, e)
 
             track = TrackMetadata(
                 track_id=track_id,
@@ -762,7 +783,7 @@ class LibraryService:
         if file_path:
             return hashlib.sha256(file_path.encode()).hexdigest()[:16]
         else:
-            print('Error while resolving file path')
+            logger.warning("[LibraryService] Error while resolving file path")
             return None
 
     @staticmethod

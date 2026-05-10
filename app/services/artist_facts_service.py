@@ -117,7 +117,7 @@ async def fetch_facts_for_artists(
     artists: List[str],
     collection_name: str,
     delay: float = 0.5,
-    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    progress_callback: Optional[Callable[[int, int, str, bool], None]] = None,
 ) -> Dict[str, str]:
     """Fetch facts for multiple artists sequentially with delay between requests.
 
@@ -127,10 +127,11 @@ async def fetch_facts_for_artists(
     total = len(artists)
     for idx, artist in enumerate(artists, 1):
         text = await fetch_artist_facts(artist, collection_name)
-        if text:
+        found = bool(text)
+        if found:
             results[artist] = text
         if progress_callback:
-            progress_callback(idx, total, artist)
+            progress_callback(idx, total, artist, found)
         await asyncio.sleep(delay)
     return results
 

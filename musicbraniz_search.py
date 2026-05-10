@@ -1,6 +1,11 @@
+"""MusicBrainz API wrapper for enriched metadata lookups."""
+
+import logging
 import time
 import musicbrainzngs
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 class MusicBrainzLookup:
@@ -33,7 +38,9 @@ class MusicBrainzLookup:
             rec_id = rec_search["recording-list"][0]["id"]
             self._cache[cache_key] = rec_id
             return rec_id
-        except Exception:
+        except Exception as e:
+            logger.warning("MusicBrainz resolve_recording_id failed for '%s' by '%s': %s — %s",
+                           title, artist, type(e).__name__, e)
             return None
 
     def resolve_release_id(
@@ -151,7 +158,9 @@ class MusicBrainzLookup:
             self._cache[cache_key] = rec_data
             time.sleep(0.35)  # MusicBrainz rate limit
             return rec_data
-        except Exception:
+        except Exception as e:
+            logger.warning("MusicBrainz _get_recording failed for '%s': %s — %s",
+                           recording_id, type(e).__name__, e)
             return None
 
     def _get_release(
@@ -170,7 +179,9 @@ class MusicBrainzLookup:
             self._cache[cache_key] = rel_data
             time.sleep(0.35)  # MusicBrainz rate limit
             return rel_data
-        except Exception:
+        except Exception as e:
+            logger.warning("MusicBrainz _get_release failed for '%s': %s — %s",
+                           release_id, type(e).__name__, e)
             return None
 
     def _get_sample_relations(

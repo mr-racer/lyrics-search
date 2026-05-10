@@ -1202,9 +1202,10 @@ function SearchSection({ isDark, lang, activeCollection }) {
   const [searchError, setSearchError] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [filters, setFilters] = useState({ artist:'', album:'', genre:'' });
-  const [detailHit, setDetailHit] = useState(null);
+  const [selectedHit, setSelectedHit] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
   const [chatOpen, setChatOpen] = useState(true);
+  const [detailModal, setDetailModal] = useState(null); // modal overlay for track detail
   const chatEndRef = useRef(null);
 
   const getLLMSettings = () => ({
@@ -1228,7 +1229,7 @@ function SearchSection({ isDark, lang, activeCollection }) {
       const history = messages.filter(m=>!m.loading).map(m=>({ role:m.role==='assistant'?'assistant':'user', content:m.text||'' }));
       const res = await apiFetch('/chat/', { method:'POST', body: JSON.stringify({ message:userText, history, mode, auto_mode: autoMode, ...getLLMSettings() }) });
       const hits = res.hits || [];
-      setResults(hits); setDetailHit(null);
+      setResults(hits); setSelectedHit(null);
       const finalMsgs = [...newMsgs, { role:'assistant', text:res.message||'…', hits, best_hit:res.best_hit, confidence:res.confidence, song:res.song, artist:res.artist, attempts:res.attempts, time:new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'}) }];
       setMessages(finalMsgs);
       saveSession(finalMsgs);
@@ -1239,7 +1240,7 @@ function SearchSection({ isDark, lang, activeCollection }) {
 
   const handleSearch = async () => {
     if (!searchQuery.trim() || searchLoading) return;
-    setSearchLoading(true); setSearchError(''); setDetailHit(null);
+    setSearchLoading(true); setSearchError(''); setSelectedHit(null);
     try {
       const f = {};
       ['artist','album','genre'].forEach(k => { if (filters[k]) f[k] = filters[k]; });
@@ -1276,7 +1277,7 @@ function SearchSection({ isDark, lang, activeCollection }) {
             background: c.surface,
             boxShadow: isDark?'inset 0 1px 0 rgba(255,255,255,0.04), inset 0 0 0 1px rgba(0,0,0,0.4), 0 3px 10px rgba(0,0,0,0.3)':'inset 0 1px 0 rgba(255,255,255,0.95), inset 0 0 0 1px rgba(0,0,0,0.07), 0 3px 10px rgba(40,30,60,0.08)' }}>
             {(msg.best_hit ? [msg.best_hit] : msg.hits.slice(0,5))
-              .map((hit,hi) => <ResultCard key={hi} hit={hit} isDark={isDark} c={c} compact onClick={() => { setResults(msg.hits); setDetailHit(hit); }} />)}
+              .map((hit,hi) => <ResultCard key={hi} hit={hit} isDark={isDark} c={c} compact onClick={() => { setResults(msg.hits); setSelectedHit(hit); }} />)}
           </div>
         )}
         <div className="mono" style={{ display:'flex', gap:'10px', alignItems:'center', fontSize:'14px', letterSpacing:'0.12em' }}>
@@ -1288,7 +1289,7 @@ function SearchSection({ isDark, lang, activeCollection }) {
     );
   };
 
-  const isEmpty = !detailHit && results.length === 0;
+  const isEmpty = !selectedHit && results.length === 0;
 
   return (
     <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:c.bg }}>
@@ -1462,46 +1463,46 @@ function SearchSection({ isDark, lang, activeCollection }) {
 
         {/* RIGHT: results */}
         <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
-          {detailHit ? (
+          {selectedHit ? (
             <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
               <div style={{ padding:'14px 24px', borderBottom:`1px solid ${c.border}` }}>
-                <button onClick={() => setDetailHit(null)} className="mono"
+                <button onClick={() => setSelectedHit(null)} className="mono"
                   style={{ fontSize:'15px', color:c.textMuted, letterSpacing:'0.12em' }}>
                   ← {lang==='ru'?'НАЗАД':'BACK'}
                 </button>
               </div>
               <div style={{
                 flex:1, overflowY:'auto', padding:'40px 32px 64px',
-                maxWidth: detailHit.song_facts ? '1100px' : '780px',
+                maxWidth: selectedHit.song_facts ? '1100px' : '780px',
                 margin:'0 auto', width:'100%',
               }}>
-                {detailHit.song_facts ? (
+                {selectedHit.song_facts ? (
                   <div className="song-detail-grid">
                     {/* LEFT: album art, info, lyrics, artist facts */}
                     <div>
                       <div style={{ display:'flex', justifyContent:'center', marginBottom:'28px', animation:'scaleIn 0.4s ease' }}>
-                        <AlbumCover title={detailHit.track?.title||''} artist={detailHit.track?.artist||''} size={240} isDark={isDark} coverPath={detailHit.track?.cover_art_path} radius={20} />
+                        <AlbumCover title={selectedHit.track?.title||''} artist={selectedHit.track?.artist||''} size={240} isDark={isDark} coverPath={selectedHit.track?.cover_art_path} radius={20} />
                       </div>
                       <div style={{ textAlign:'center', marginBottom:'18px' }}>
                         <h3 className="serif" style={{ fontSize:'42px', lineHeight:'1', letterSpacing:'-0.02em', color:c.text, fontWeight:'400' }}>
-                          {detailHit.track?.title}
+                          {selectedHit.track?.title}
                         </h3>
                         <div className="serif" style={{ fontSize:'20px', color:c.textMuted, marginTop:'10px', fontStyle:'italic' }}>
-                          {detailHit.track?.artist}
+                          {selectedHit.track?.artist}
                         </div>
                         <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, marginTop:'10px', letterSpacing:'0.18em' }}>
-                          {[detailHit.track?.album, detailHit.track?.year].filter(Boolean).join(' · ').toUpperCase()}
+                          {[selectedHit.track?.album, selectedHit.track?.year].filter(Boolean).join(' · ').toUpperCase()}
                         </div>
                       </div>
                       <div style={{ display:'flex', gap:'8px', flexWrap:'wrap', justifyContent:'center', marginBottom:'24px' }}>
-                        {[detailHit.track?.genre, `${Math.round((detailHit.score||0)*100)}% match`, detailHit.matched_on].filter(Boolean).map((tag,i)=>(
+                        {[selectedHit.track?.genre, `${Math.round((selectedHit.score||0)*100)}% match`, selectedHit.matched_on].filter(Boolean).map((tag,i)=>(
                           <span key={i} className="mono" style={{
                             padding:'5px 14px', borderRadius:'20px', fontSize:'14px', letterSpacing:'0.15em',
                             background:c.accentBg, color:c.accent, border:`1px solid ${c.accent.replace(')', ' / 0.25)')}`,
                           }}>{String(tag).toUpperCase()}</span>
                         ))}
                       </div>
-                      {detailHit.track?.lyrics && (
+                      {selectedHit.track?.lyrics && (
                         <div className={ske('panel', isDark)} style={{ borderRadius:'16px' }}>
                           <div className="mono" style={{ padding:'14px 20px', borderBottom:`1px solid ${c.border}`,
                             fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em' }}>
@@ -1509,11 +1510,11 @@ function SearchSection({ isDark, lang, activeCollection }) {
                           </div>
                           <div style={{ padding:'20px 22px', fontSize:'14px', color:c.textMuted, lineHeight:'1.85',
                             whiteSpace:'pre-wrap', wordBreak:'break-word' }}>
-                            {detailHit.track.lyrics}
+                            {selectedHit.track.lyrics}
                           </div>
                         </div>
                       )}
-                      {detailHit.artist_facts && (
+                      {selectedHit.artist_facts && (
                         <div className={ske('panel', isDark)} style={{ borderRadius:'16px', marginTop:'14px' }}>
                           <div className="mono" style={{ padding:'14px 20px', borderBottom:`1px solid ${c.border}`,
                             fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em' }}>
@@ -1521,7 +1522,7 @@ function SearchSection({ isDark, lang, activeCollection }) {
                           </div>
                           <div style={{ padding:'20px 22px', fontSize:'14px', color:c.textMuted, lineHeight:'1.85',
                             whiteSpace:'pre-wrap', wordBreak:'break-word' }}>
-                            {detailHit.artist_facts.split('\n\n').map((fact, i) => (
+                            {selectedHit.artist_facts.split('\n\n').map((fact, i) => (
                               <p key={i} style={{ margin:'0 0 12px', lineHeight:'1.7' }}>{fact}</p>
                             ))}
                           </div>
@@ -1544,7 +1545,7 @@ function SearchSection({ isDark, lang, activeCollection }) {
                         {lang==='ru'?'ФАКТЫ О ПЕСНЕ':'ABOUT THE SONG'}
                       </div>
                       <div style={{ padding:'16px 18px' }}>
-                        {detailHit.song_facts.split('\n\n').map((f, i) => (
+                        {selectedHit.song_facts.split('\n\n').map((f, i) => (
                           <div key={i} style={{
                             animation: `fadeIn 0.4s ease ${i * 0.1}s both`,
                             padding: '12px 14px',
@@ -1563,28 +1564,28 @@ function SearchSection({ isDark, lang, activeCollection }) {
                 ) : (
                   <div>
                     <div style={{ display:'flex', justifyContent:'center', marginBottom:'28px', animation:'scaleIn 0.4s ease' }}>
-                      <AlbumCover title={detailHit.track?.title||''} artist={detailHit.track?.artist||''} size={240} isDark={isDark} coverPath={detailHit.track?.cover_art_path} radius={20} />
+                      <AlbumCover title={selectedHit.track?.title||''} artist={selectedHit.track?.artist||''} size={240} isDark={isDark} coverPath={selectedHit.track?.cover_art_path} radius={20} />
                     </div>
                     <div style={{ textAlign:'center', marginBottom:'18px' }}>
                       <h3 className="serif" style={{ fontSize:'42px', lineHeight:'1', letterSpacing:'-0.02em', color:c.text, fontWeight:'400' }}>
-                        {detailHit.track?.title}
+                        {selectedHit.track?.title}
                       </h3>
                       <div className="serif" style={{ fontSize:'20px', color:c.textMuted, marginTop:'10px', fontStyle:'italic' }}>
-                        {detailHit.track?.artist}
+                        {selectedHit.track?.artist}
                       </div>
                       <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, marginTop:'10px', letterSpacing:'0.18em' }}>
-                        {[detailHit.track?.album, detailHit.track?.year].filter(Boolean).join(' · ').toUpperCase()}
+                        {[selectedHit.track?.album, selectedHit.track?.year].filter(Boolean).join(' · ').toUpperCase()}
                       </div>
                     </div>
                     <div style={{ display:'flex', gap:'8px', flexWrap:'wrap', justifyContent:'center', marginBottom:'24px' }}>
-                      {[detailHit.track?.genre, `${Math.round((detailHit.score||0)*100)}% match`, detailHit.matched_on].filter(Boolean).map((tag,i)=>(
+                      {[selectedHit.track?.genre, `${Math.round((selectedHit.score||0)*100)}% match`, selectedHit.matched_on].filter(Boolean).map((tag,i)=>(
                         <span key={i} className="mono" style={{
                           padding:'5px 14px', borderRadius:'20px', fontSize:'14px', letterSpacing:'0.15em',
                           background:c.accentBg, color:c.accent, border:`1px solid ${c.accent.replace(')', ' / 0.25)')}`,
                         }}>{String(tag).toUpperCase()}</span>
                       ))}
                     </div>
-                    {detailHit.track?.lyrics && (
+                    {selectedHit.track?.lyrics && (
                       <div className={ske('panel', isDark)} style={{ borderRadius:'16px' }}>
                         <div className="mono" style={{ padding:'14px 20px', borderBottom:`1px solid ${c.border}`,
                           fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em' }}>
@@ -1592,11 +1593,11 @@ function SearchSection({ isDark, lang, activeCollection }) {
                         </div>
                         <div style={{ padding:'20px 22px', fontSize:'14px', color:c.textMuted, lineHeight:'1.85',
                           whiteSpace:'pre-wrap', wordBreak:'break-word' }}>
-                          {detailHit.track.lyrics}
+                          {selectedHit.track.lyrics}
                         </div>
                       </div>
                     )}
-                    {detailHit.artist_facts && (
+                    {selectedHit.artist_facts && (
                       <div className={ske('panel', isDark)} style={{ borderRadius:'16px', marginTop:'14px' }}>
                         <div className="mono" style={{ padding:'14px 20px', borderBottom:`1px solid ${c.border}`,
                           fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em' }}>
@@ -1604,20 +1605,20 @@ function SearchSection({ isDark, lang, activeCollection }) {
                         </div>
                         <div style={{ padding:'20px 22px', fontSize:'14px', color:c.textMuted, lineHeight:'1.85',
                           whiteSpace:'pre-wrap', wordBreak:'break-word' }}>
-                          {detailHit.artist_facts.split('\n\n').map((fact, i) => (
+                          {selectedHit.artist_facts.split('\n\n').map((fact, i) => (
                             <p key={i} style={{ margin:'0 0 12px', lineHeight:'1.7' }}>{fact}</p>
                           ))}
                         </div>
                       </div>
                     )}
-                    {detailHit.song_facts && (
+                    {selectedHit.song_facts && (
                       <div className={ske('panel', isDark)} style={{ borderRadius:'16px', marginTop:'14px' }}>
                         <div className="mono" style={{ padding:'14px 20px', borderBottom:`1px solid ${c.border}`,
                           fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em' }}>
                           {lang==='ru'?'ФАКТЫ О ПЕСНЕ':'ABOUT THE SONG'}
                         </div>
                         <div style={{ padding:'18px 20px' }}>
-                          {detailHit.song_facts.split('\n\n').map((f, i) => (
+                          {selectedHit.song_facts.split('\n\n').map((f, i) => (
                             <div key={i} style={{
                               padding: '10px 12px',
                               marginBottom: '8px',
@@ -1663,7 +1664,7 @@ function SearchSection({ isDark, lang, activeCollection }) {
                 {results.length} {lang==='ru'?'НАЙДЕНО':'FOUND'}
               </div>
               <div style={{ padding:'0 12px' }}>
-                {results.map((hit,i) => <ResultCard key={i} hit={hit} isDark={isDark} c={c} onClick={()=>setDetailHit(hit)} />)}
+                {results.map((hit,i) => <ResultCard key={i} hit={hit} isDark={isDark} c={c} onClick={()=>setSelectedHit(hit)} />)}
               </div>
             </div>
           )}
@@ -1752,32 +1753,49 @@ function RecommendSection({ isDark, lang, activeCollection }) {
   };
 
   // Quick mix presets — each runs a hybrid search with a curated query
+  // TODO: Add query and mode for each preset manually (user will specify)
+  // Format: { id, label, hue, icon, q: 'search query', mode: 'hybrid|text|audio' }
   const moodPresets = lang==='ru' ? [
-    { id:'late', label:'Под поздний вечер', q:'тихо, меланхолично, поздно ночью, размеренно', hue:265, icon:'🌙' },
-    { id:'walk', label:'Для прогулки', q:'бодро, позитивно, ритмично, движение', hue:140, icon:'⊜' },
-    { id:'focus', label:'Для фокуса', q:'инструментальное, минимализм, фон, концентрация', hue:200, icon:'◇' },
-    { id:'rain', label:'Дождь и кофе', q:'грустно, дождливо, уютно, акустика', hue:220, icon:'☁' },
-    { id:'energy', label:'Заряд энергии', q:'мощно, драйв, рок, быстро, агрессивно', hue:25, icon:'⚡' },
-    { id:'love', label:'Романтика', q:'нежно, лирично, любовь, тепло', hue:340, icon:'❤' },
+    { id:'late', label:'Под поздний вечер', hue:265, icon:'🌙' },
+    { id:'walk', label:'Для прогулки', hue:140, icon:'⊜' },
+    { id:'focus', label:'Для фокуса', hue:200, icon:'◇' },
+    { id:'rain', label:'Дождь и кофе', hue:220, icon:'☁' },
+    { id:'energy', label:'Заряд энергии', hue:25, icon:'⚡' },
+    { id:'love', label:'Романтика', hue:340, icon:'❤' },
   ] : [
-    { id:'late', label:'Late night', q:'quiet, melancholic, slow, late night', hue:265, icon:'🌙' },
-    { id:'walk', label:'For a walk', q:'upbeat, positive, rhythmic, motion', hue:140, icon:'⊜' },
-    { id:'focus', label:'Focus', q:'instrumental, minimal, ambient, concentration', hue:200, icon:'◇' },
-    { id:'rain', label:'Rain & coffee', q:'sad, rainy, cozy, acoustic', hue:220, icon:'☁' },
-    { id:'energy', label:'Energy boost', q:'powerful, driving, rock, fast, aggressive', hue:25, icon:'⚡' },
-    { id:'love', label:'Romance', q:'gentle, lyrical, love, warm', hue:340, icon:'❤' },
+    { id:'late', label:'Late night', hue:265, icon:'🌙' },
+    { id:'walk', label:'For a walk', hue:140, icon:'⊜' },
+    { id:'focus', label:'Focus', hue:200, icon:'◇' },
+    { id:'rain', label:'Rain & coffee', hue:220, icon:'☁' },
+    { id:'energy', label:'Energy boost', hue:25, icon:'⚡' },
+    { id:'love', label:'Romance', hue:340, icon:'❤' },
   ];
   const [activePreset, setActivePreset] = useState(null);
+  const [presetCount, setPresetCount] = useState(8); // song count slider (1-20)
+  const [presetLoading, setPresetLoading] = useState(false);
+
+  // When preset is selected, fetch with current count
   const runPreset = async (p) => {
-    setActivePreset(p.id); setVibeLoading(true); setVibeText(p.q);
+    setActivePreset(p.id); setPresetLoading(true);
     try {
       const res = await apiFetch('/search/', { method:'POST', body: JSON.stringify({
-        query: p.q, mode:'hybrid', limit: 12, collection_name: activeCollection || undefined,
+        query: p.q || 'ambient', mode: p.mode || 'hybrid', limit: presetCount, collection_name: activeCollection || undefined,
       })});
       setVibeResults(res.hits || []);
     } catch(e) { setVibeResults([]); }
-    finally { setVibeLoading(false); }
+    finally { setPresetLoading(false); }
   };
+
+  // Fetch when count changes (if a preset is active)
+  useEffect(() => {
+    if (!activePreset) return;
+    const p = moodPresets.find(m => m.id === activePreset);
+    if (!p) return;
+    setPresetLoading(true);
+    apiFetch('/search/', { method:'POST', body: JSON.stringify({
+      query: p.q || 'ambient', mode: p.mode || 'hybrid', limit: presetCount, collection_name: activeCollection || undefined,
+    })}).then(r => setVibeResults(r.hits || [])).catch(()=>{}).finally(()=>setPresetLoading(false));
+  }, [presetCount]);
 
   const card = (children, extra={}) => (
     <div className={ske('panel', isDark)} style={{ padding:'24px 26px', borderRadius:'18px', ...extra }}>
@@ -1843,47 +1861,52 @@ function RecommendSection({ isDark, lang, activeCollection }) {
                       {p.label}
                     </div>
                     <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.16em' }}>
-                      {active ? (vibeLoading ? (lang==='ru'?'ПОДБОР…':'MIXING…') : (lang==='ru'?'АКТИВНО':'ACTIVE')) : (lang==='ru'?'НАЖАТЬ':'TAP')}
+                      {active ? (presetLoading ? (lang==='ru'?'ПОДБОР…':'MIXING…') : (lang==='ru'?'АКТИВНО':'ACTIVE')) : (lang==='ru'?'НАЖАТЬ':'TAP')}
                     </div>
                   </button>
                 );
               })}
             </div>
-          </>)}
 
-          {/* ── 2. VIBE INPUT ── */}
-          {card(<>
-            {blockTitle(
-              lang==='ru'?'02 · ВЫРАЗИ СЛОВАМИ':'02 · DESCRIBE A VIBE',
-              lang==='ru'?'Опиши':'Describe',
-              lang==='ru'?'настроение':'the feeling',
-            )}
-            <div className={ske('inset', isDark)} style={{ padding:'10px 14px', borderRadius:'14px', display:'flex', gap:'12px', alignItems:'center', marginBottom:'14px' }}>
-              <span className="serif" style={{ fontSize:'22px', color: c.amber, fontStyle:'italic' }}>"</span>
-              <input value={vibeText} onChange={e=>setVibeText(e.target.value)}
-                onKeyDown={e=>e.key==='Enter'&&runVibe()}
-                placeholder={lang==='ru'?'тёплое лето, лёгкая ностальгия, гитара…':'warm summer, slight nostalgia, guitar…'}
-                style={{ flex:1, padding:'10px 0', border:'none', background:'transparent', color:c.text, fontSize:'15px', outline:'none', fontFamily:"'Noto Sans', serif", fontStyle:'italic' }} />
-              <button onClick={runVibe} disabled={vibeLoading || !vibeText.trim()} className="ske-accent"
-                style={{ padding:'8px 18px', borderRadius:'10px', fontSize:'14px', fontWeight:'600',
-                  opacity: vibeLoading||!vibeText.trim() ? 0.5 : 1,
-                  cursor: vibeLoading||!vibeText.trim() ? 'not-allowed' : 'pointer',
-                  letterSpacing:'0.06em',
-                }}>
-                {vibeLoading ? <Spinner size={13} color="white" /> : (lang==='ru'?'СОБРАТЬ':'BUILD')}
-              </button>
-            </div>
-            {vibeResults.length > 0 && (
-              <div style={{ display:'flex', flexDirection:'column', gap:'2px', animation:'fadeIn 0.4s ease' }}>
-                <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em', padding:'4px 0 8px' }}>
-                  {vibeResults.length} {lang==='ru'?'ТРЕКОВ В МИКСЕ':'TRACKS IN THE MIX'}
+            {/* Song count slider — appears when a preset is active */}
+            {activePreset && (
+              <div style={{ marginTop:'20px', animation:'fadeIn 0.35s ease' }}>
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:'12px', flexWrap:'wrap', gap:'12px' }}>
+                  <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em' }}>
+                    {lang==='ru'?'КОЛИЧЕСТВО ТРЕКОВ':'TRACK COUNT'}
+                  </div>
+                  <div style={{ display:'flex', alignItems:'center', gap:'14px' }}>
+                    <button onClick={() => setPresetCount(c => Math.max(1, c - 1))}
+                      className={ske('btn', isDark)}
+                      style={{ width:'32px', height:'32px', borderRadius:'8px', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'16px', fontWeight:'600', color:c.text, padding:'0' }}>−</button>
+                    <span className="mono" style={{ fontSize:'22px', color:c.text, minWidth:'28px', textAlign:'center', letterSpacing:'0.05em' }}>{presetCount}</span>
+                    <button onClick={() => setPresetCount(c => Math.min(20, c + 1))}
+                      className={ske('btn', isDark)}
+                      style={{ width:'32px', height:'32px', borderRadius:'8px', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'16px', fontWeight:'600', color:c.text, padding:'0' }}>+</button>
+                    <div className={ske('inset', isDark)} style={{ width:'120px', height:'6px', borderRadius:'3px', position:'relative', overflow:'hidden' }}>
+                      <div style={{
+                        position:'absolute', left:0, top:0, height:'100%', borderRadius:'3px',
+                        width:`${(presetCount / 20) * 100}%`,
+                        background: `linear-gradient(90deg, oklch(62% 0.18 270), oklch(70% 0.16 275))`,
+                        boxShadow:'0 0 6px oklch(62% 0.18 270 / 0.4)',
+                        transition:'width 0.2s ease',
+                      }} />
+                    </div>
+                  </div>
                 </div>
-                {vibeResults.map((h, i) => <ResultCard key={i} hit={h} isDark={isDark} c={c} compact />)}
+                {vibeResults.length > 0 && (
+                  <div style={{ display:'flex', flexDirection:'column', gap:'2px', animation:'fadeIn 0.4s ease' }}>
+                    <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em', padding:'4px 0 10px' }}>
+                      {lang==='ru'?`${vibeResults.length} ТРЕКОВ В МИКСЕ`:`${vibeResults.length} TRACKS IN THE MIX`}
+                    </div>
+                    {vibeResults.map((h, i) => <ResultCard key={i} hit={h} isDark={isDark} c={c} compact />)}
+                  </div>
+                )}
               </div>
             )}
           </>)}
 
-          {/* ── 3. TRACK PICKER → SIMILAR ── */}
+          {/* ── 2. TRACK PICKER → SIMILAR (renumbered from 03) ── */}
           {card(<>
             {blockTitle(
               lang==='ru'?'03 · ПОХОЖЕЕ ПО ТРЕКУ':'03 · SIMILAR TO A TRACK',
@@ -2038,13 +2061,16 @@ function LibrarySection({ isDark, lang, activeCollection }) {
   const [statsLoading, setStatsLoading] = useState(true);
   const [topPairsLoading, setTopPairsLoading] = useState(true);
   const [activePairsTab, setActivePairsTab] = useState('similar');
+  // Track whether pairs animation has played — only animate meterBars on first data load
+  const [pairsAnimPlayed, setPairsAnimPlayed] = useState(false);
 
   useEffect(() => {
     const col = activeCollection ? `?collection_name=${encodeURIComponent(activeCollection)}` : '';
     setStatsLoading(true);
     apiFetch(`/library/stats${col}`).then(s => { setStats(s); setStatsLoading(false); }).catch(()=>setStatsLoading(false));
     setTopPairsLoading(true);
-    apiFetch(`/library/top-pairs${col}`).then(d => { setTopPairs(d); setTopPairsLoading(false); }).catch(()=>setTopPairsLoading(false));
+    setPairsAnimPlayed(false); // reset so new data gets fresh animation
+    apiFetch(`/library/top-pairs${col}`).then(d => { setTopPairs(d); setTopPairsLoading(false); setTimeout(()=>setPairsAnimPlayed(true), 1200); }).catch(()=>setTopPairsLoading(false));
   }, [activeCollection]);
 
   const card = (children, extra={}) => (
@@ -2237,12 +2263,14 @@ function LibrarySection({ isDark, lang, activeCollection }) {
 
           {/* Top pairs — tabbed */}
           <div className={ske('panel', isDark)} style={{ padding:'24px 26px', borderRadius:'18px', position:'relative', overflow:'hidden' }}>
-            {/* Subtle corner glow orbs near toggle */}
-            <div style={{ position:'absolute', top:'-30px', right:'-20px', width:'150px', height:'150px', borderRadius:'50%', pointerEvents:'none',
-              background: `oklch(60% 0.18 ${activePairsTab === 'similar' ? 270 : 25} / 0.07)` }} />
-            <div style={{ position:'absolute', top:'10px', right:'60px', width:'100px', height:'100px', borderRadius:'50%', pointerEvents:'none',
-              background: `oklch(60% 0.18 ${activePairsTab === 'similar' ? 310 : 55} / 0.06)` }} />
-            <div style={{ display:'flex', alignItems:'flex-end', justifyContent:'space-between', marginBottom:'18px', gap:'12px', flexWrap:'wrap' }}>
+            {/* Atmospheric diffuse glow — layered radial gradients */}
+            <div style={{ position:'absolute', top:'-70px', right:'-100px', width:'320px', height:'320px', pointerEvents:'none', borderRadius:'50%',
+              background: `radial-gradient(circle, oklch(60% 0.18 ${activePairsTab === 'similar' ? 270 : 25} / 0.22) 0%, oklch(60% 0.18 ${activePairsTab === 'similar' ? 270 : 25} / 0.08) 45%, transparent 70%)`,
+              filter: 'blur(45px)', transition: 'background 0.7s ease', zIndex:0 }} />
+            <div style={{ position:'absolute', top:'-30px', right:'20px', width:'200px', height:'200px', pointerEvents:'none', borderRadius:'50%',
+              background: `radial-gradient(circle, oklch(60% 0.18 ${activePairsTab === 'similar' ? 310 : 55} / 0.16) 0%, oklch(60% 0.18 ${activePairsTab === 'similar' ? 310 : 55} / 0.05) 50%, transparent 75%)`,
+              filter: 'blur(55px)', transition: 'background 0.7s ease', zIndex:0 }} />
+            <div style={{ display:'flex', alignItems:'flex-end', justifyContent:'space-between', marginBottom:'18px', gap:'12px', flexWrap:'wrap', position:'relative', zIndex:1 }}>
               <div>
                 <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'6px' }}>
                   {lang==='ru'?'CLAP-ПАРЫ':'CLAP PAIRS'}
@@ -2329,8 +2357,10 @@ function LibrarySection({ isDark, lang, activeCollection }) {
                             <div style={{ width:`${meterPct}%`, height:'100%',
                               background:`linear-gradient(90deg, ${accent}, ${accent.replace(')', ' / 0.5)')})`,
                               boxShadow:`0 0 6px ${accent.replace(')', ' / 0.4)')}`,
-                              transform:'scaleX(0)', transformOrigin:'left',
-                              animation:`meterTick 0.8s cubic-bezier(.22,.9,.3,1) ${idx*0.07}s forwards` }} />
+                              transform: pairsAnimPlayed ? `scaleX(${meterPct/100})` : 'scaleX(0)',
+                              transformOrigin:'left',
+                              animation: pairsAnimPlayed ? 'none' : `meterTick 0.8s cubic-bezier(.22,.9,.3,1) ${idx*0.07}s forwards`,
+                            }} />
                           </div>
                         </div>
                       </div>

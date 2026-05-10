@@ -11,8 +11,11 @@ Configuration (lowest → highest priority):
 from __future__ import annotations
 
 import json
+import logging
 import os
 from openai import AsyncOpenAI
+
+logger = logging.getLogger(__name__)
 
 # Cached clients keyed by resolved base_url (avoids creating a new httpx
 # session on every request).
@@ -82,7 +85,7 @@ async def ask_llm(
     if extra_body:
         call_kwargs["extra_body"] = extra_body
 
-    print(call_kwargs)
+    logger.debug("LLM call: %s", call_kwargs)
 
     response = await client.chat.completions.create(**call_kwargs)
     content: str = (response.choices[0].message.content or "").strip()

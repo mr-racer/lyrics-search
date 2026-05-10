@@ -168,8 +168,11 @@ class MetadataDB:
         conn = cls._connect()
         artist_name = slug.replace("-", " ")
         conn.execute(
-            """INSERT OR IGNORE INTO artists (slug, name, collection_name)
-               VALUES (?, ?, ?)""",
+            """INSERT INTO artists (slug, name, collection_name)
+               VALUES (?, ?, ?)
+               ON CONFLICT(slug) DO UPDATE SET
+                   name=excluded.name,
+                   collection_name=excluded.collection_name""",
             (slug, artist_name, collection_name),
         )
         conn.executemany(
@@ -230,7 +233,9 @@ class MetadataDB:
                VALUES (?, ?, ?, ?, ?)
                ON CONFLICT(slug) DO UPDATE SET
                    title=excluded.title,
-                   artist_slug=excluded.artist_slug""",
+                   artist_slug=excluded.artist_slug,
+                   collection_name=excluded.collection_name,
+                   recording_mbid=excluded.recording_mbid""",
             (slug, title, artist_slug, collection_name, recording_mbid),
         )
         conn.commit()
@@ -253,13 +258,20 @@ class MetadataDB:
         artist_name = artist_slug.replace("-", " ")
         # Ensure artist exists before inserting song (foreign key constraint)
         conn.execute(
-            """INSERT OR IGNORE INTO artists (slug, name, collection_name)
-               VALUES (?, ?, ?)""",
+            """INSERT INTO artists (slug, name, collection_name)
+               VALUES (?, ?, ?)
+               ON CONFLICT(slug) DO UPDATE SET
+                   name=excluded.name,
+                   collection_name=excluded.collection_name""",
             (artist_slug, artist_name, collection_name),
         )
         conn.execute(
-            """INSERT OR IGNORE INTO songs (slug, title, artist_slug, collection_name)
-               VALUES (?, ?, ?, ?)""",
+            """INSERT INTO songs (slug, title, artist_slug, collection_name)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(slug) DO UPDATE SET
+                   title=excluded.title,
+                   artist_slug=excluded.artist_slug,
+                   collection_name=excluded.collection_name""",
             (slug, slug.replace("-", " "), artist_slug, collection_name),
         )
         conn.execute(
@@ -283,13 +295,20 @@ class MetadataDB:
         artist_name = artist_slug.replace("-", " ")
         # Ensure artist exists before inserting song (foreign key constraint)
         conn.execute(
-            """INSERT OR IGNORE INTO artists (slug, name, collection_name)
-               VALUES (?, ?, ?)""",
+            """INSERT INTO artists (slug, name, collection_name)
+               VALUES (?, ?, ?)
+               ON CONFLICT(slug) DO UPDATE SET
+                   name=excluded.name,
+                   collection_name=excluded.collection_name""",
             (artist_slug, artist_name, collection_name),
         )
         conn.execute(
-            """INSERT OR IGNORE INTO songs (slug, title, artist_slug, collection_name)
-               VALUES (?, ?, ?, ?)""",
+            """INSERT INTO songs (slug, title, artist_slug, collection_name)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(slug) DO UPDATE SET
+                   title=excluded.title,
+                   artist_slug=excluded.artist_slug,
+                   collection_name=excluded.collection_name""",
             (slug, slug.replace("-", " "), artist_slug, collection_name),
         )
         conn.executemany(

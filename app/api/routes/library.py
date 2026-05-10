@@ -1,10 +1,14 @@
 """Library endpoints."""
 
 import asyncio
+import heapq
+import logging
 from collections import Counter
 from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, Request
+
+logger = logging.getLogger(__name__)
 
 from app.domain.models import IndexRequest, IndexProgress
 from app.services.library_service import LibraryService
@@ -85,7 +89,6 @@ async def browse_tracks(
         return []
 
     # Scroll ALL points, paginated
-    import heapq
     top_k = []
 
     offset = None
@@ -143,7 +146,7 @@ async def browse_tracks(
                 break
             offset = next_offset
     except Exception:
-        pass
+        logger.debug("[LibraryService] browse: scroll failed (partial results returned)")
 
     # Extract and sort by score desc
     result = sorted(
@@ -308,7 +311,7 @@ async def get_stats(
                 break
             offset = next_offset
     except Exception:
-        pass  # data unavailable — still return total count
+        logger.debug("[LibraryService] stats: scroll failed (partial stats returned)")
 
     total_sampled = sum(genre_counter.values()) or 1
     unique_genre_count = len(genre_counter)

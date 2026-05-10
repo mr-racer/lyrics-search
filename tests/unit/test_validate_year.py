@@ -50,4 +50,5 @@ class TestValidateYearInvalid:
         assert validate_year("-200") is None
 
     def test_float_string(self):
-        assert validate_year("2020.5") is not None
+        # Regex extracts "2020" from "2020.5" — this is the actual (documented) behavior
+        assert validate_year("2020.5") == 2020

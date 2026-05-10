@@ -33,7 +33,7 @@ CLAP_WEIGHTS_PATH = Path(__file__).parent.parent.parent / "weights" / "music_aud
 
 # Available text embedding models
 TEXT_MODELS = {
-    "jinaai/jina-embeddings-v2-small-en": {"dim": 512, "desc": "Lightweight model with CPU optimisatiobn"},
+    "jinaai/jina-embeddings-v2-small-en": {"dim": 512, "desc": "Lightweight model with CPU optimisation"},
     "Qwen/Qwen3-Embedding-0.6B": {"dim": 1024, "desc": "Higher quality, slower"},
 }
 

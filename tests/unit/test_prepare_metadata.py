@@ -10,7 +10,7 @@ class TestPrepareMetadata:
     def _make_data(self, tracks):
         """Build a dict keyed by 'Artist — Title'."""
         return {
-            f"{t['artist']} — {t['title']}: t"
+            f"{t['artist']} — {t['title']}": t
             for t in tracks
         }
 

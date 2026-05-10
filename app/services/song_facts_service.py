@@ -128,7 +128,7 @@ async def fetch_facts_for_songs(
     songs: List[Tuple[str, str]],
     collection_name: str,
     delay: float = 0.5,
-    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    progress_callback: Optional[Callable[[int, int, str, bool], None]] = None,
 ) -> Dict[str, str]:
     """Fetch facts for multiple songs sequentially with delay between requests.
 
@@ -136,7 +136,7 @@ async def fetch_facts_for_songs(
         songs: list of (artist, song_title) tuples.
         collection_name: collection scope.
         delay: seconds between requests.
-        progress_callback: optional callback(current, total, label) after each song.
+        progress_callback: optional callback(current, total, label, found) after each song.
     Returns:
         dict of '{artist} — {song}' -> facts text (only for songs that had facts).
     """
@@ -145,10 +145,11 @@ async def fetch_facts_for_songs(
     for idx, (artist, song) in enumerate(songs, 1):
         key = f"{artist} — {song}"
         text = await fetch_song_facts(artist, song, collection_name)
-        if text:
+        found = bool(text)
+        if found:
             results[key] = text
         if progress_callback:
-            progress_callback(idx, total, f"{artist} — {song}")
+            progress_callback(idx, total, f"{artist} — {song}", found)
         await asyncio.sleep(delay)
     return results
 
