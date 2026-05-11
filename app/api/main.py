@@ -64,15 +64,10 @@ async def _preload_models_in_background(db_client: DbClient):
         logger.info("[preload] Largest collection: %s (%d points)",
                     largest_col, largest_count)
 
-        # TODO - CHANGE PRELOADING TEXT DENSE MODEL TO THE MOMENT UNTIL IT WILL BE USED FIRST TIME - DO NOT PRELOAD ANY TEXT MODEL BEFORE IT WILL BE USED (DIFFERENT COLLECTIONS CAN USE DIFFERENT EMBED MODELS)
-        # ── Step 2: Load default text model ──
-        try:
-            ModelRegistry.load_text_model("jinaai/jina-embeddings-v2-small-en")
-            logger.info("[preload] Text model (jina) loaded")
-        except Exception as e:
-            logger.warning("[preload] Text model load failed: %s", e)
+        # Text models are loaded lazily on first use (per-collection, different collections
+        # can use different embedding models). No background preload needed here.
 
-        # ── Step 3: Load CLAP ──
+        # ── Step 2: Load CLAP ──
         try:
             ModelRegistry.load_clap()
             logger.info("[preload] CLAP model loaded")

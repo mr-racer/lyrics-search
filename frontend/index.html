@@ -2602,9 +2602,9 @@ function VUMeter({ value, max=100, label, sub, isDark, hue=265, size=180 }) {
 }
 
 // ─── LLM bridge: generate insights from stats ────────────────────────────────
-// TODO: Replace with real LLM endpoint (/api/v1/insights) when available.
-// For now, generates insights from hardcoded templates using /library/stats data.
-// Future: send stats to LLM, receive personalized narrative insights.
+// [Planned feature] Replace with real LLM endpoint (POST /api/v1/insights) that
+// accepts stats + lang and returns personalized narrative insights via LLM.
+// Current implementation uses template-based insights from /library/stats data.
 function generateInsights(stats, lang) {
   if (!stats || !stats.total_tracks) return [];
   const t = lang === 'ru';

@@ -3,7 +3,7 @@
 Flow per user message
 ─────────────────────
 Call 1  (classification)
-    System: CLASSIFICATION_SYSTEM_PROMPT   ← fill in yourself
+    System: CLASSIFICATION_SYSTEM_PROMPT
     User:   req.message
     → dict  (passed as `classification` in the response; also available to
              extend DEVELOPER_PROMPT if you want)
@@ -34,7 +34,6 @@ router = APIRouter(prefix="/chat", tags=["Chat"])
 # ─── Prompts ──────────────────────────────────────────────────────────────────
 
 # Classification prompt — asks LLM to determine the search type for the user's query.
-# The call is skipped entirely when this string is empty.
 CLASSIFICATION_SYSTEM_PROMPT: str = """
 You are a query classifier for a music search system. Analyze the user's query and classify it into ONE of three types:
 
@@ -43,17 +42,17 @@ You are a query classifier for a music search system. Analyze the user's query a
 3. **"hybrid"** — Mix of both, or unclear which dominates.
 
 Return ONLY a JSON object with this shape:
-{
+{{
   "type": "text" | "audio" | "hybrid",
   "reasoning": "one short sentence explaining why"
-}
+}}
 
 No prose before or after the JSON.
 """.strip()
 
 # CLAP rephrasing prompt — transforms mood-based queries into 3 optimized
 # English prompts for CLAP text-to-audio retrieval.
-CLAP_REPHRASE_SYSTEM_PROMPT: str = """\
+CLAP_REPHRASE_SYSTEM_PROMPT: str = """
 # ROLE & OBJECTIVE
 You are an expert audio retrieval prompt engineer specializing in the CLAP model (music_audioset_epoch_15_esc_90.14.pt). Transform Russian mood-based user queries into 3 optimized English prompts for text-to-audio retrieval.
 
@@ -62,7 +61,6 @@ You are an expert audio retrieval prompt engineer specializing in the CLAP model
 2. SEMANTIC LOCK: Preserve the exact core intent of the original query. Do NOT change genre, primary instrument, or fundamental mood. Vary ONLY acoustic/production parameters.
 3. ACOUSTIC MAPPING: Replace abstract emotions with concrete proxies:
    - Tempo: slow/medium/fast, steady/driving, relaxed/upbeat
-   - Key: major/minor
    - Timbre: bright/warm/clean/distorted/muffled/electronic/acoustic
    - Dynamics: soft/medium/loud, intimate/voluminous
    - Texture: sparse/dense, rhythmic/pad-heavy, atmospheric
@@ -77,19 +75,19 @@ You are an expert audio retrieval prompt engineer specializing in the CLAP model
 # OUTPUT FORMAT
 Return ONLY a raw JSON array of 3 strings. No markdown, no code blocks, no explanations.
 Example:
-["This song is a slow acoustic guitar piece with soft dynamics", "This song is a warm timbre fingerpicking guitar track in minor key", "This song is a relaxed acoustic guitar song with sparse atmospheric texture"]
+["This song is a slow acoustic guitar piece with soft dynamics", "This song is a warm timbre fingerpicking guitar track", "This song is a relaxed acoustic guitar song with sparse atmospheric texture"]
 
 # USER QUERY
 {user_query}
 """.strip()
 
 # Audio answer prompt — generates a conversational reply about the best match.
-# Placeholder: replace with a refined version later.
-AUDIO_ANSWER_PROMPT: str = """\
+AUDIO_ANSWER_PROMPT: str = """
 You are a music search assistant. The user described a song by mood or vibe,
 and the system found the best audio match in their local library.
 
 <user_query>{user_query}</user_query>
+
 <best_match>
   Title: {title}
   Artist: {artist}
@@ -99,10 +97,10 @@ and the system found the best audio match in their local library.
 
 Respond naturally in the user's language (match the language of <user_query>).
 Briefly paraphrase what the user was looking for, then name the best match.
-Example: "По вашему описанию — меланхоличная вещь с пианино — наиболее
+Example: "По вашему описанию — песня с приятным женским голосом и динамичным припевом — наиболее
 подходящий трек «{title}» от {artist}."
 
-Keep it under 40 words. Return ONLY a JSON object:
+Keep it under 50 words. Return ONLY a JSON object:
 {{"message": "your reply here"}}
 """.strip()
 

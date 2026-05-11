@@ -1,11 +1,13 @@
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import os
 from pathlib import Path
 from tqdm.auto import tqdm
 import datetime
 import hashlib
 import time
 import re
+import subprocess
 
 import json
 import requests
@@ -39,7 +41,7 @@ genre_map = {
     'album rock': 'Rock', 'soft rock': 'Rock', 'pop-rock': 'Rock',
     'pop/rock': 'Rock', 'blues/pop rock': 'Rock', 'dance-punk': 'Rock',
     'acid punk': 'Rock', 'stoner rock': 'Rock', 'alternative metal': 'Rock',
-    'nu metal': 'Nu-Metal',
+    'nu metal': 'Rock', 'goth rock': 'Rock',
 
     # Electronic
     'electronic': 'Electronic', 'synthpop': 'Electronic', 'synth-pop': 'Electronic',
@@ -48,7 +50,7 @@ genre_map = {
     'brostep': 'Electronic', 'eurodance': 'Electronic', 'club': 'Electronic',
     'downtempo': 'Electronic', 'ambient': 'Electronic', 'nu-disco': 'Electronic',
     'disco': 'Electronic', 'trance': 'Electronic', 'dance & dj': 'Electronic',
-    'club/dance': 'Electronic',
+    'club/dance': 'Electronic', 'dance': 'Electronic',
 
     # Hip-Hop
     'hip hop': 'Hip-Hop', 'rap': 'Hip-Hop', 'hip-hop': 'Hip-Hop',
@@ -57,18 +59,12 @@ genre_map = {
     # R&B / Soul
     'r&b': 'R&B/Soul', 'soul': 'R&B/Soul', 'contemporary r&b': 'R&B/Soul',
     'alternative r&b': 'R&B/Soul', 'funk': 'R&B/Soul', 'boogie': 'R&B/Soul',
-    'r&b/soul': 'R&B/Soul', 'acid jazz': 'R&B/Soul',
+    'r&b/soul': 'R&B/Soul', 'acid jazz': 'R&B/Soul', 'blues': 'R&B/Soul',
 
     # Alternative
     'alternative': 'Alternative', 'new wave': 'Alternative', 'indie': 'Alternative',
-    'goth rock': 'Alternative', 'experimental': 'Alternative',
+    'experimental': 'Alternative',
     'alternative & indie': 'Alternative',
-
-    # Dance (самостоятельный)
-    'dance': 'Dance',
-
-    # Blues
-    'blues': 'Blues',
 
     # Soundtrack
     'soundtrack': 'Soundtrack',
@@ -94,10 +90,30 @@ COVERS_DIR = Path(__file__).parent.parent / "frontend" / "covers"
 
 # FILE OPERATING FUNCTIONS
 
+from PIL import Image
+import io
+
+def normalize_image(image_data: bytes) -> bytes:
+    """Normalize image to consistent RGB/JPEG format.
+    
+    Handles CMYK, RGBA, palette modes, and strips ICC profiles
+    for consistent appearance across all extracted cover art.
+    """
+    img = Image.open(io.BytesIO(image_data))
+
+    # Convert to RGB for consistent output (handles CMYK, RGBA, palette, etc.)
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+
+    output = io.BytesIO()
+    img.save(output, format="JPEG", quality=90, icc_profile=None)
+    return output.getvalue()
+
 def extract_cover_art(filepath: str) -> tuple[bytes, str] | None:
     """Extract embedded cover art from an audio file.
 
-    Returns (image_bytes, mime_extension) or None if no artwork is found.
+    Returns (image_bytes, "jpg") or None if no artwork is found.
+    All extracted images are normalized to JPEG via normalize_image().
     Supported formats: MP3 (APIC), FLAC (embedded picture), M4A (covr).
     """
     audio = MutagenFile(filepath)
@@ -108,24 +124,32 @@ def extract_cover_art(filepath: str) -> tuple[bytes, str] | None:
     if hasattr(audio, "tags") and audio.tags is not None:
         for tag in audio.tags.values():
             if isinstance(tag, APIC):
-                ext = "jpg" if tag.mime == "image/jpeg" else "png"
-                return tag.data, ext
+                try:
+                    return normalize_image(tag.data), "jpg"
+                except Exception:
+                    return tag.data, ("jpg" if tag.mime == "image/jpeg" else "png")
 
     # FLAC — embedded pictures
     if hasattr(audio, "pictures") and audio.pictures:
         pic = audio.pictures[0]
-        ext = "png" if "png" in pic.mime else "jpg"
-        return pic.data, ext
+        try:
+            return normalize_image(pic.data), "jpg"
+        except Exception:
+            ext = "png" if "png" in pic.mime else "jpg"
+            return pic.data, ext
 
-    # M4A/MP4 — covr atom
+    # M4A/MP4 — covr atom (MP4Cover object from mutagen)
     if hasattr(audio, "get") and "covr" in audio:
         covers = audio["covr"]
         if covers:
-            raw = covers[0]
-            # MP4Cover data: first 32 bytes are a header, then the image
-            # Try to detect format from content
-            ext = "png" if raw.startswith(b'\x89PNG') else "jpg"
-            return raw, ext
+            cover = covers[0]
+            # MP4Cover.raw_data gives the actual image bytes (no header padding)
+            raw = cover.raw_data if hasattr(cover, "raw_data") else bytes(cover)
+            try:
+                return normalize_image(raw), "jpg"
+            except Exception:
+                ext = "png" if raw.startswith(b'\x89PNG') else "jpg"
+                return raw, ext
 
     return None
 
@@ -266,7 +290,6 @@ def normalize_genre(raw: str | None):
 
 # ONLINE REQUESTING FUNCTIONS
 
-
 def fetch_lyrics_ovh(artist: str, title: str) -> str | None:
     """Fetch lyrics from lyrics.ovh API. Returns plain lyrics string or None."""
     try:
@@ -318,8 +341,6 @@ def get_lyrics(title: str, artist: str, better_lyrics_quality: bool) -> str | No
 def research_with_musixmatch(song: str) -> str:
     try:
         info = song.split(' — ', maxsplit=1)
-        if len(info) < 2:
-            return None
         new_text = syncedlyrics.search(
         f"{info[0]} {info[1]}",
         providers=['Musixmatch'],
@@ -338,13 +359,48 @@ def research_with_musixmatch(song: str) -> str:
 
 # MAIN FUNCTIONS
 
+def optimize_m4a_for_streaming(file_path: str) -> bool:
+    """Re-encode M4A file to move moov atom to the beginning (enables HTTP 206 Range requests).
+
+    Uses ffmpeg with -movflags +faststart for streamable output.
+    Returns True if optimization was applied, False if skipped or failed.
+    """
+    tmp_path = file_path + ".tmp.m4a"
+    try:
+        subprocess.run([
+            "ffmpeg", "-i", file_path,
+            "-c", "copy",
+            "-movflags", "+faststart",
+            tmp_path, "-y"
+        ], check=True, capture_output=True, timeout=60)
+
+        os.replace(tmp_path, file_path)
+        return True
+    except FileNotFoundError:
+        # ffmpeg not available — skip gracefully
+        return False
+    except subprocess.TimeoutExpired:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        return False
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        return False
+
 
 def process_file(filepath: Path, better_lyrics_quality: bool) -> dict | None:
     """Load metadata, enrich online where needed, then fetch lyrics.
 
+    For M4A files, optimizes the file first to enable HTTP Range requests.
+
     Returns:
         Full metadata dict or None if the track should be skipped.
     """
+    # Optimize M4A files for streaming (move moov atom to beginning)
+    if filepath.suffix.lower() == ".m4a":
+        optimize_m4a_for_streaming(str(filepath))
+
     meta = get_metadata(filepath)
     if not meta or not meta["title"] or not meta["artist"]:
         print(f"  Пропуск: {filepath.name}")
@@ -353,7 +409,6 @@ def process_file(filepath: Path, better_lyrics_quality: bool) -> dict | None:
     lyrics = get_lyrics(meta["title"], meta["artist"], better_lyrics_quality)
     if not lyrics:
         print(f"✗ {meta['artist']} — {meta['title']}")
-        return None
 
     if meta.get('genre'):
         meta['genre'] = normalize_genre(meta['genre'])
@@ -393,12 +448,13 @@ def fetch_lyrics_bulk(music_folder: str, workers: int = 8, better_lyrics_quality
             meta = future.result()
             processed_count += 1
 
-            if meta:
+            if meta.get("lyrics"):
                 found_count += 1
                 key = f"{meta['artist']} — {meta['title']}"
                 results.setdefault(key, meta)
             else:
                 not_found_count += 1
+                meta['lyrics'] = 'No lyrics were found :('
 
             if progress_callback:
                 fp = futures[future]

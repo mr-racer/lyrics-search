@@ -1,6 +1,6 @@
 """Domain models for Music Explorer."""
 
-from typing import Literal, List, Optional
+from typing import Literal, List, Optional, Annotated
 from pydantic import BaseModel, Field
 
 
@@ -124,3 +124,22 @@ class TrackReactionResponse(BaseModel):
     collection_name: str
     reaction: Literal["like", "dislike"] | None
 
+# LLM MODELS
+
+class QueryItem(BaseModel):
+    query: str
+    type: Literal["text", "audio", "hybrid"] = "hybrid"
+
+class SearchAction(BaseModel):
+    action: Literal["search"]
+    confidence: Literal["low", "medium", "high"]
+    queries: list[QueryItem]
+
+class AnswerAction(BaseModel):
+    action: Literal["answer"]
+    confidence: Literal["high", "medium", "low"]
+    song: str | None
+    artist: str | None
+    message: str
+
+LLMResponse = Annotated[SearchAction | AnswerAction, Field(discriminator="action")]

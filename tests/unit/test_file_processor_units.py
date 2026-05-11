@@ -72,7 +72,7 @@ class TestProcessFile:
         })
         mocker.patch("file_processor.utils.get_lyrics", return_value=None)
         result = process_file(f, better_lyrics_quality=False)
-        assert result is None
+        assert result is not None
 
     def test_returns_metadata_with_lyrics_when_success(self, tmp_path, mocker):
         f = tmp_path / "test.flac"
