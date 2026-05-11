@@ -263,21 +263,6 @@ class SearchService:
             "genre": filters.genre,
         }
 
-    def _build_qdrant_filter(self, filters: Optional[SearchFilters]) -> dict | None:
-        """Build raw Qdrant filter dict (for future use)."""
-        if not filters or all(v is None for v in [filters.artist, filters.album, filters.genre]):
-            return None
-
-        conditions = []
-        if filters.artist:
-            conditions.append({"key": "artist", "match": {"value": filters.artist}})
-        if filters.album:
-            conditions.append({"key": "album", "match": {"value": filters.album}})
-        if filters.genre:
-            conditions.append({"key": "genre", "match": {"value": filters.genre}})
-
-        return {"must": conditions} if conditions else None
-
     def _build_qdrant_filter_models(self, filters: Optional[SearchFilters]):
         """Build proper qdrant_client.models.Filter object for query_points()."""
         from qdrant_client import models
@@ -374,39 +359,6 @@ class SearchService:
                 song_facts=song_facts,
             ))
         return hits
-
-    async def index_tracks(self, tracks: List[TrackMetadata], collection_name: Optional[str] = None) -> None:
-        """Index tracks into Qdrant.
-
-        Note: LyricsDB.fit() calls prepare_metadata() which expects a dict keyed by
-        "Artist — Title". Duration must be raw seconds (int/float), not "MM:SS" string,
-        because prepare_metadata() computes IQR buckets from numeric durations.
-        """
-        if not tracks:
-            return
-
-        # Build dict as prepare_metadata() expects: {"Artist — Title": {...}}
-        data: dict[str, dict] = {}
-        for track in tracks:
-            key = f"{track.artist} — {track.title}"
-            data[key] = {
-                "title": track.title,
-                "artist": track.artist,
-                "album": track.album,
-                "year": track.year,
-                "genre": track.genre,
-                # duration must be numeric seconds for prepare_metadata() IQR bucketing
-                "duration": int(track.duration_sec) if track.duration_sec else 0,
-                "lyrics": track.lyrics or "",
-                "file_path": track.file_path,
-                "cover_art_path": track.cover_art_path,
-                "producer": track.producer,
-                "label": track.label,
-                "samples": track.samples,
-                "sampled_by": track.sampled_by,
-            }
-
-        self.lyrics_db.fit(data, path=None, collection_name=collection_name)
 
     async def index_tracks_with_progress(
         self,

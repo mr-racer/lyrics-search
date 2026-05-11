@@ -21,7 +21,7 @@ class TestExtractFilterKwargs:
         result = svc._extract_filter_kwargs(f)
         assert result == {"artist": "A", "album": "B", "genre": "C"}
 
-
+# TODO UPDATE WITH CURRENTLY USED FUCNTION LOGIC - _build_qdrant_filter_models
 class TestBuildQdrantFilter:
     def test_no_filters_returns_none(self):
         svc = SearchService.__new__(SearchService)

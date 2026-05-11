@@ -15,6 +15,7 @@ from .artist_facts_service import fetch_facts_for_artists
 from .job_tracker import JobTracker, IndexStage, IndexStatus
 from .similarity_service import analyze_collection
 from .song_facts_service import fetch_facts_for_songs
+from ._WIP_musicbraniz_search import MusicBrainzLookup
 
 logger = logging.getLogger(__name__)
 
@@ -351,83 +352,86 @@ class LibraryService:
             logger.info("[LibraryService] Stage METADATA: MusicBrainz enrichment")
             stage_meta = job.stages[IndexStage.METADATA]
 
-            if enhance_by_musicbrainz and processed_files:
-                stage_meta.status = IndexStatus.RUNNING
-                stage_meta.started_at = time.time()
-                stage_meta.total = track_count
-                stage_meta.message = "Обогащение метаданных (MusicBrainz)..."
+            # CURRENTLY MUSICBRAINZ API IS DISABLED DUE TO GIVING UNSTABLE PARSING RESULTS
 
-                await self._notify_progress(job, {
-                    "stage": IndexStage.METADATA.value,
-                    "stage_status": IndexStatus.RUNNING.value,
-                    "message": stage_meta.message,
-                    "current": 0,
-                    "total": track_count,
-                })
+            # if enhance_by_musicbrainz and processed_files:
+            #     stage_meta.status = IndexStatus.RUNNING
+            #     stage_meta.started_at = time.time()
+            #     stage_meta.total = track_count
+            #     stage_meta.message = "Обогащение метаданных (MusicBrainz)..."
 
-                mb_error = None
-                mb_found = 0
-                mb_not_found = 0
+            #     await self._notify_progress(job, {
+            #         "stage": IndexStage.METADATA.value,
+            #         "stage_status": IndexStatus.RUNNING.value,
+            #         "message": stage_meta.message,
+            #         "current": 0,
+            #         "total": track_count,
+            #     })
 
-                async def on_mb_progress(current: int, total: int, label: str, found: int = 0, not_found: int = 0):
-                    nonlocal mb_found, mb_not_found
-                    stage_meta.current = current
-                    stage_meta.message = label
-                    mb_found = found
-                    mb_not_found = not_found
-                    eta = job.calculate_eta_seconds(IndexStage.METADATA)
-                    await self._notify_progress(job, {
-                        "stage": IndexStage.METADATA.value,
-                        "current": current,
-                        "total": total,
-                        "message": label,
-                        "eta_seconds": eta,
-                        "found": found,
-                        "not_found": not_found,
-                    })
+            #     mb_error = None
+            #     mb_found = 0
+            #     mb_not_found = 0
 
-                try:
-                    await asyncio.to_thread(
-                        self._enrich_with_musicbrainz,
-                        processed_files,
-                        enhance_by_musicbrainz,
-                        lambda c, t, label, f, nf: asyncio.run_coroutine_threadsafe(
-                            on_mb_progress(c, t, label, f, nf), loop
-                        ),
-                    )
-                except Exception as e:
-                    logger.warning("[LibraryService] MusicBrainz enrichment failed (non-critical): %s", e)
-                    mb_error = str(e)
+            #     async def on_mb_progress(current: int, total: int, label: str, found: int = 0, not_found: int = 0):
+            #         nonlocal mb_found, mb_not_found
+            #         stage_meta.current = current
+            #         stage_meta.message = label
+            #         mb_found = found
+            #         mb_not_found = not_found
+            #         eta = job.calculate_eta_seconds(IndexStage.METADATA)
+            #         await self._notify_progress(job, {
+            #             "stage": IndexStage.METADATA.value,
+            #             "current": current,
+            #             "total": total,
+            #             "message": label,
+            #             "eta_seconds": eta,
+            #             "found": found,
+            #             "not_found": not_found,
+            #         })
 
-                stage_meta.status = IndexStatus.COMPLETED
-                stage_meta.current = stage_meta.current
-                stage_meta.completed_at = time.time()
-                stage_meta.found = mb_found
-                stage_meta.not_found = mb_not_found
-                if mb_error:
-                    stage_meta.message = f"Ошибка: {mb_error}"
-                else:
-                    stage_meta.message = f"Метаданные: {mb_found} найдено из {track_count}"
+            #     try:
+            #         await asyncio.to_thread(
+            #             self._enrich_with_musicbrainz,
+            #             processed_files,
+            #             enhance_by_musicbrainz,
+            #             lambda c, t, label, f, nf: asyncio.run_coroutine_threadsafe(
+            #                 on_mb_progress(c, t, label, f, nf), loop
+            #             ),
+            #         )
+            #     except Exception as e:
+            #         logger.warning("[LibraryService] MusicBrainz enrichment failed (non-critical): %s", e)
+            #         mb_error = str(e)
 
-                await self._notify_progress(job, {
-                    "stage": IndexStage.METADATA.value,
-                    "stage_status": IndexStatus.COMPLETED.value,
-                    "current": stage_meta.current,
-                    "total": track_count,
-                    "message": stage_meta.message,
-                    "found": mb_found,
-                    "not_found": mb_not_found,
-                    "stage_error": mb_error,
-                })
-            else:
-                stage_meta.status = IndexStatus.COMPLETED
-                stage_meta.message = "Пропущено"
+            #     stage_meta.status = IndexStatus.COMPLETED
+            #     stage_meta.current = stage_meta.current
+            #     stage_meta.completed_at = time.time()
+            #     stage_meta.found = mb_found
+            #     stage_meta.not_found = mb_not_found
+            #     if mb_error:
+            #         stage_meta.message = f"Ошибка: {mb_error}"
+            #     else:
+            #         stage_meta.message = f"Метаданные: {mb_found} найдено из {track_count}"
 
-                await self._notify_progress(job, {
-                    "stage": IndexStage.METADATA.value,
-                    "stage_status": IndexStatus.COMPLETED.value,
-                    "message": stage_meta.message,
-                })
+            #     await self._notify_progress(job, {
+            #         "stage": IndexStage.METADATA.value,
+            #         "stage_status": IndexStatus.COMPLETED.value,
+            #         "current": stage_meta.current,
+            #         "total": track_count,
+            #         "message": stage_meta.message,
+            #         "found": mb_found,
+            #         "not_found": mb_not_found,
+            #         "stage_error": mb_error,
+            #     })
+            # else:
+
+            stage_meta.status = IndexStatus.COMPLETED
+            stage_meta.message = "Пропущено"
+
+            await self._notify_progress(job, {
+                "stage": IndexStage.METADATA.value,
+                "stage_status": IndexStatus.COMPLETED.value,
+                "message": stage_meta.message,
+            })
 
             # ── Convert to TrackMetadata ──────────────────────────────────────
             logger.info("[LibraryService] Converting to TrackMetadata...")
@@ -619,102 +623,102 @@ class LibraryService:
 
     # ── Helpers ──
 
-    def _enrich_with_musicbrainz(
-        self,
-        processed_files: dict,
-        enhance: bool,
-        progress_callback=None,
-    ):
-        """Enrich track metadata via MusicBrainz API.
+    # def _enrich_with_musicbrainz(
+    #     self,
+    #     processed_files: dict,
+    #     enhance: bool,
+    #     progress_callback=None,
+    # ):
+    #     """Enrich track metadata via MusicBrainz API.
 
-        Args:
-            processed_files: dict keyed by "artist — title", values are metadata dicts.
-            enhance: if True, MB data replaces local; if False, MB is fallback only.
-            progress_callback: optional callable(current, total, label, found, not_found).
-        """
-        from musicbraniz_search import MusicBrainzLookup
+    #     Args:
+    #         processed_files: dict keyed by "artist — title", values are metadata dicts.
+    #         enhance: if True, MB data replaces local; if False, MB is fallback only.
+    #         progress_callback: optional callable(current, total, label, found, not_found).
+    #     """
+    #     from musicbraniz_search import MusicBrainzLookup
 
-        mb = MusicBrainzLookup("MusiX", "1.0", "https://musix.local")
-        total = len(processed_files)
-        enriched = 0
-        not_enriched = 0
-        idx = 0
+    #     mb = MusicBrainzLookup("MusiX", "1.0", "https://musix.local")
+    #     total = len(processed_files)
+    #     enriched = 0
+    #     not_enriched = 0
+    #     idx = 0
 
-        for key, info in processed_files.items():
-            title = info.get("title", "").strip()
-            artist = info.get("artist", "").strip()
-            idx += 1
-            if not title or not artist:
-                not_enriched += 1
-                logger.info(
-                    "[LibraryService] MB enrichment %d/%d: ✗ %s — %s (missing title/artist)",
-                    idx, total, artist or "?", title or "?",
-                )
-                if progress_callback:
-                    progress_callback(idx, total, f"{artist} — {title}", enriched, not_enriched)
-                continue
+    #     for key, info in processed_files.items():
+    #         title = info.get("title", "").strip()
+    #         artist = info.get("artist", "").strip()
+    #         idx += 1
+    #         if not title or not artist:
+    #             not_enriched += 1
+    #             logger.info(
+    #                 "[LibraryService] MB enrichment %d/%d: ✗ %s — %s (missing title/artist)",
+    #                 idx, total, artist or "?", title or "?",
+    #             )
+    #             if progress_callback:
+    #                 progress_callback(idx, total, f"{artist} — {title}", enriched, not_enriched)
+    #             continue
 
-            try:
-                rec_id = mb.resolve_recording_id(title, artist)
-                if not rec_id:
-                    not_enriched += 1
-                    logger.info(
-                        "[LibraryService] MB enrichment %d/%d: ✗ %s — %s (no MB match)",
-                        idx, total, artist, title,
-                    )
-                    if progress_callback:
-                        progress_callback(idx, total, f"{artist} — {title}", enriched, not_enriched)
-                    continue
+    #         try:
+    #             rec_id = mb.resolve_recording_id(title, artist)
+    #             if not rec_id:
+    #                 not_enriched += 1
+    #                 logger.info(
+    #                     "[LibraryService] MB enrichment %d/%d: ✗ %s — %s (no MB match)",
+    #                     idx, total, artist, title,
+    #                 )
+    #                 if progress_callback:
+    #                     progress_callback(idx, total, f"{artist} — {title}", enriched, not_enriched)
+    #                 continue
 
-                # Year — merge with existing based on flag
-                mb_year = mb.get_recording_year(rec_id)
-                local_year = info.get("year")
-                if mb_year:
-                    info["year"] = mb_year if enhance else (local_year or mb_year)
+    #             # Year — merge with existing based on flag
+    #             mb_year = mb.get_recording_year(rec_id)
+    #             local_year = info.get("year")
+    #             if mb_year:
+    #                 info["year"] = mb_year if enhance else (local_year or mb_year)
 
-                # Producer
-                producers = mb.get_recording_producers(rec_id)
-                if producers:
-                    info["producer"] = ", ".join(producers) if enhance or not info.get("producer") else info["producer"]
+    #             # Producer
+    #             producers = mb.get_recording_producers(rec_id)
+    #             if producers:
+    #                 info["producer"] = ", ".join(producers) if enhance or not info.get("producer") else info["producer"]
 
-                # Labels
-                labels = mb.get_recording_labels(rec_id)
-                if labels:
-                    label_name = labels[0].get("name", "")
-                    if label_name:
-                        info["label"] = label_name if enhance else (info.get("label") or label_name)
+    #             # Labels
+    #             labels = mb.get_recording_labels(rec_id)
+    #             if labels:
+    #                 label_name = labels[0].get("name", "")
+    #                 if label_name:
+    #                     info["label"] = label_name if enhance else (info.get("label") or label_name)
 
-                # Samples
-                samples = mb.get_recording_samples(rec_id)
-                if samples:
-                    sample_strs = [
-                        f"{s.get('artist', '?')} — {s.get('title', '?')}"
-                        for s in samples if s.get("title") or s.get("artist")
-                    ]
-                    info["samples"] = sample_strs if enhance or not info.get("samples") else info["samples"]
+    #             # Samples
+    #             samples = mb.get_recording_samples(rec_id)
+    #             if samples:
+    #                 sample_strs = [
+    #                     f"{s.get('artist', '?')} — {s.get('title', '?')}"
+    #                     for s in samples if s.get("title") or s.get("artist")
+    #                 ]
+    #                 info["samples"] = sample_strs if enhance or not info.get("samples") else info["samples"]
 
-                sampled_by = mb.get_recording_sampled_by(rec_id)
-                if sampled_by:
-                    sampled_strs = [
-                        f"{s.get('artist', '?')} — {s.get('title', '?')}"
-                        for s in sampled_by if s.get("title") or s.get("artist")
-                    ]
-                    info["sampled_by"] = sampled_strs if enhance or not info.get("sampled_by") else info["sampled_by"]
+    #             sampled_by = mb.get_recording_sampled_by(rec_id)
+    #             if sampled_by:
+    #                 sampled_strs = [
+    #                     f"{s.get('artist', '?')} — {s.get('title', '?')}"
+    #                     for s in sampled_by if s.get("title") or s.get("artist")
+    #                 ]
+    #                 info["sampled_by"] = sampled_strs if enhance or not info.get("sampled_by") else info["sampled_by"]
 
-                enriched += 1
-                logger.info(
-                    "[LibraryService] MB enrichment %d/%d: ✓ %s — %s (enriched=%d, not=%d)",
-                    idx, total, artist, title, enriched, not_enriched,
-                )
-            except Exception as e:
-                logger.warning(
-                    "[LibraryService] MB enrichment %d/%d: ✗ %s — %s (error: %s — %s)",
-                    idx, total, artist, title, type(e).__name__, e,
-                )
-                not_enriched += 1
+    #             enriched += 1
+    #             logger.info(
+    #                 "[LibraryService] MB enrichment %d/%d: ✓ %s — %s (enriched=%d, not=%d)",
+    #                 idx, total, artist, title, enriched, not_enriched,
+    #             )
+    #         except Exception as e:
+    #             logger.warning(
+    #                 "[LibraryService] MB enrichment %d/%d: ✗ %s — %s (error: %s — %s)",
+    #                 idx, total, artist, title, type(e).__name__, e,
+    #             )
+    #             not_enriched += 1
 
-            if progress_callback:
-                progress_callback(idx, total, f"{artist} — {title}", enriched, not_enriched)
+    #         if progress_callback:
+    #             progress_callback(idx, total, f"{artist} — {title}", enriched, not_enriched)
 
     def _metadata_to_tracks(self, metadata: dict) -> List[TrackMetadata]:
         """Convert FileProcessor metadata dict to TrackMetadata list.

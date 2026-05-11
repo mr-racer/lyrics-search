@@ -64,14 +64,14 @@ class ModelRegistry:
         return cls._text_models[model_name]
 
     @classmethod
-    def get_text_model(cls, model_name: str = "jinaai/jina-embeddings-v2-small-en") -> Any:
-        """Get a loaded text model by name (default: jinaai/jina-embeddings-v2-small-en)."""
+    def get_text_model(cls, model_name: str) -> Any:
+        """Get a loaded text model by name"""
         if model_name not in cls._text_models:
             raise RuntimeError(f"Text model '{model_name}' not loaded. Call load_text_model first.")
         return cls._text_models[model_name][0]
 
     @classmethod
-    def get_text_model_config(cls, model_name: str = "jinaai/jina-embeddings-v2-small-en") -> tuple[str, int]:
+    def get_text_model_config(cls, model_name: str) -> tuple[str, int]:
         """Get vector_name and dim for a loaded text model."""
         if model_name not in cls._text_models:
             raise RuntimeError(f"Text model '{model_name}' not loaded.")

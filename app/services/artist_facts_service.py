@@ -25,7 +25,10 @@ REQUEST_TIMEOUT = 10  # seconds
 
 def _slugify(artist: str) -> str:
     """'The Weeknd' -> 'the-weeknd'"""
-    return "-".join(artist.lower().split())
+    cleaned_artist = re.sub(r'[‐‑‒–—―−]', '-', artist)
+    # clean from cringe symbols
+    cleaned_artist = re.sub(r'[+&.]', '', cleaned_artist)
+    return "-".join(cleaned_artist.lower().split())
 
 
 def _fetch_facts_html(artist: str) -> Optional[str]:

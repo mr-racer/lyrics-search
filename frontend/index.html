@@ -3326,7 +3326,7 @@ function IndexingModal({ isDark, lang, collectionName, stepStatus, trackCount, e
 function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeCollection }) {
   const c = useColors(isDark);
   const [models, setModels] = useState({});
-  const [textModel, setTextModel] = useState(() => localStorage.getItem('text_model') || 'jinaai/jina-embeddings-v2-small-en');
+  const [textModel, setTextModel] = useState(() => localStorage.getItem('text_model'));
   const [collName, setCollName] = useState('');
   const [folderPath, setFolderPath] = useState('');
   const [picking, setPicking] = useState(false);

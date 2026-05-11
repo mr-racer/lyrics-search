@@ -25,7 +25,12 @@ REQUEST_TIMEOUT = 10
 
 def _slugify(text: str) -> str:
     """'All Falls Down' -> 'all-falls-down'"""
-    return "-".join(text.lower().split())
+    cleaned_title = re.sub(r"['`,?!]", '', text)
+
+    brackets_delete_pattern = r'^(.+?)\s*\(.*'
+    cleaned_title = re.sub(brackets_delete_pattern, r'\1', cleaned_title)
+
+    return "-".join(cleaned_title.lower().split())
 
 
 def _fetch_song_facts_html(artist: str, song: str) -> Optional[str]:

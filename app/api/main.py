@@ -64,6 +64,7 @@ async def _preload_models_in_background(db_client: DbClient):
         logger.info("[preload] Largest collection: %s (%d points)",
                     largest_col, largest_count)
 
+        # TODO - CHANGE PRELOADING TEXT DENSE MODEL TO THE MOMENT UNTIL IT WILL BE USED FIRST TIME - DO NOT PRELOAD ANY TEXT MODEL BEFORE IT WILL BE USED (DIFFERENT COLLECTIONS CAN USE DIFFERENT EMBED MODELS)
         # ── Step 2: Load default text model ──
         try:
             ModelRegistry.load_text_model("jinaai/jina-embeddings-v2-small-en")
