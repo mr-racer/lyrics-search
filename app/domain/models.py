@@ -46,6 +46,9 @@ class SearchFilters(BaseModel):
     artist: str | None = None
     album: str | None = None
     genre: str | None = None
+    year_range: str | None = None
+    
+    # TODO - проверить что пункты ниже нигде не применяются и удалить их
     year_from: int | None = None
     year_to: int | None = None
     duration_min_sec: float | None = None
@@ -125,15 +128,19 @@ class TrackReactionResponse(BaseModel):
     reaction: Literal["like", "dislike"] | None
 
 # LLM MODELS
+# TODO поменял QueryItem на BaseQueryItem, проверь что в нужных местах поменялось.
 
-class QueryItem(BaseModel):
+class BaseQueryItem(BaseModel):
     query: str
     type: Literal["text", "audio", "hybrid"] = "hybrid"
+
+class RephrasedQuery(BaseModel):
+    new_queries: list[str]
 
 class SearchAction(BaseModel):
     action: Literal["search"]
     confidence: Literal["low", "medium", "high"]
-    queries: list[QueryItem]
+    queries: list[BaseQueryItem]
 
 class AnswerAction(BaseModel):
     action: Literal["answer"]
@@ -141,5 +148,29 @@ class AnswerAction(BaseModel):
     song: str | None
     artist: str | None
     message: str
+
+
+class PlannerOutput(BaseModel):
+    action: Literal["request filter", "search"]
+    filters: SearchFilters | None
+    filter_lookup: SearchFilters | None
+    # queries: 
+
+# {
+#   "action": "request_filter" | "search",
+#   "filters": {
+#     "Artist": "..." | null,
+#     "Album": "..." | null,
+#     "Genre": "..." | null,
+#     "year_range": "YYYY-YYYY" | null
+#   } | null,
+#   "filter_lookup": {
+#     "Artist": "raw user input to resolve" | null,
+#     "Album": "..." | null,
+#     "Genre": "..." | null
+#   } | null,
+#   "queries": [{"query": "..."}],
+#   "search_mode": "CONSERVATIVE" | "AGGRESSIVE"
+# }
 
 LLMResponse = Annotated[SearchAction | AnswerAction, Field(discriminator="action")]

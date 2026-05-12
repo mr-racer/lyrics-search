@@ -59,9 +59,16 @@ async def search_tracks(
     if service is None:
         raise HTTPException(status_code=503, detail="Search service unavailable — is Qdrant running?")
 
-    # Load text model if specified
+    # Load + switch text model if specified
     if req.text_model:
-        ModelRegistry.load_text_model(req.text_model)
+        model, vector_name, vector_dim = ModelRegistry.load_text_model(req.text_model)
+        # Switch LyricsDB to use the requested model
+        db = request.app.state.db_client
+        if db:
+            db.lyrics_db.model_name = req.text_model
+            db.lyrics_db._model = model
+            db.lyrics_db._vector_name = vector_name
+            db.lyrics_db._vector_dim = vector_dim
 
     hits = await service.search(
         query=req.query,

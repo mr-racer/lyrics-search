@@ -40,14 +40,14 @@ def _score_query(q_words: list[str], q_full: str, value: str) -> float:
 
 @router.get("/browse")
 async def browse_tracks(
-    q: str = Query(..., min_length=2, description="Search query (title / artist / album)"),
+    q: Optional[str] = Query(None, min_length=2, description="Search query (title / artist / album). Omit to return all tracks."),
     limit: int = Query(6, ge=1, le=50, description="Max results"),
     collection_name: Optional[str] = Query(None, description="Collection to browse"),
     request: Request = None,
 ) -> list[dict]:
     """Payload-only search across title, artist, album with relevance scoring.
 
-    Scrolls ALL points (paginated), scores each, returns top-K by score.
+    When q is omitted, returns first N tracks without scoring (scroll mode).
     """
     if request is None:
         return []
@@ -55,10 +55,9 @@ async def browse_tracks(
     if db_client is None:
         return []
 
-    q_full = q.strip().lower()
-    q_words = list(set(q_full.split()))
-    if len(q_words) == 0:
-        return []
+    has_query = q is not None and len(q.strip()) >= 2
+    q_full = q.strip().lower() if has_query else ""
+    q_words = list(set(q_full.split())) if has_query else []
 
     # Resolve target collection (same logic as /stats)
     DEFAULT_COLLECTION = "music_explorer"
@@ -88,7 +87,37 @@ async def browse_tracks(
     if not target_col:
         return []
 
-    # Scroll ALL points, paginated
+    # ── No query: simple scroll, return first N tracks ─────────
+    if not has_query:
+        result = []
+        offset = None
+        try:
+            while len(result) < limit:
+                batch_size = limit - len(result)
+                results, next_offset = qdrant.scroll(
+                    collection_name=target_col,
+                    offset=offset,
+                    limit=batch_size,
+                    with_payload=["title", "artist", "album", "cover_art_path"],
+                    with_vectors=False,
+                )
+                for point in results:
+                    pl = point.payload or {}
+                    result.append({
+                        "track_id": str(point.id),
+                        "title": pl.get("title") or "",
+                        "artist": pl.get("artist") or "",
+                        "album": pl.get("album") or "",
+                        "cover_art_path": pl.get("cover_art_path"),
+                    })
+                if next_offset is None or not results:
+                    break
+                offset = next_offset
+        except Exception:
+            logger.debug("[LibraryService] browse: scroll failed (partial results returned)")
+        return result
+
+    # ── With query: score all points, return top-K ──────────────
     top_k = []
 
     offset = None

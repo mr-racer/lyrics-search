@@ -51,6 +51,10 @@ class SearchService:
         collection_name: Optional[str] = None,
     ) -> List[TrackHit]:
         """Text-based search using dense + BM25 fusion."""
+        # Auto-detect collection's text model from Qdrant vector config
+        col = collection_name or self.lyrics_db.collection_name
+        await self._ensure_model_for_collection(col)
+
         filter_kwargs = self._extract_filter_kwargs(filters)
 
         results = self.lyrics_db.search(
@@ -63,6 +67,55 @@ class SearchService:
         )
 
         return self._points_to_hits(results[:limit], matched_on="lyrics", collection_name=collection_name)
+
+    async def _ensure_model_for_collection(self, collection_name: str) -> None:
+        """Ensure LyricsDB uses the correct text model for the given collection.
+
+        Reads the collection's vector config from Qdrant to find which text
+        embedding model was used during indexing, then switches LyricsDB
+        to match it.
+        """
+        try:
+            info = self.lyrics_db.qdrant_client.get_collection(collection_name)
+            vec_names = list(info.config.params.vectors.keys())
+        except Exception:
+            return
+
+        # Find text vector name (not 'bm25', not 'clap')
+        text_vec = None
+        for vn in vec_names:
+            if vn in ('bm25', 'clap'):
+                continue
+            if vn.startswith('text_'):
+                text_vec = vn
+                break
+        if text_vec is None:
+            # Fallback: pick first non-special vector
+            for vn in vec_names:
+                if vn not in ('bm25', 'clap'):
+                    text_vec = vn
+                    break
+
+        if text_vec is None or text_vec == self.lyrics_db._vector_name:
+            return
+
+        # Derive model name from vector name (text_{org}_{model} -> org/model)
+        vec_without_prefix = text_vec[len('text_'):]
+        parts = vec_without_prefix.split('_', 1)
+        if len(parts) == 2:
+            model_name = f"{parts[0]}/{parts[1]}"
+        else:
+            model_name = vec_without_prefix
+
+        # Try to load from ModelRegistry
+        if model_name in ModelRegistry._text_models:
+            logger.info("[SearchService] Auto-switching model for collection '%s': %s",
+                        collection_name, model_name)
+            model, vector_name, vector_dim = ModelRegistry.load_text_model(model_name)
+            self.lyrics_db.model_name = model_name
+            self.lyrics_db._model = model
+            self.lyrics_db._vector_name = vector_name
+            self.lyrics_db._vector_dim = vector_dim
 
     # ── Audio search (CLAP only) ──
 

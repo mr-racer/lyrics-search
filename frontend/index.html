@@ -32,6 +32,14 @@
     button { background: none; border: none; color: inherit; cursor: pointer; }
     a { color: inherit; text-decoration: none; }
 
+    /* ── Landing player range inputs ──────────────────────────── */
+    input[type=range] { -webkit-appearance:none; appearance:none; outline:none; cursor:pointer; background:transparent; }
+    input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:13px; height:13px; border-radius:50%; background:#fff; box-shadow:0 0 5px rgba(100,70,255,0.5); cursor:grab; transition:transform 0.15s; }
+    input[type=range]::-webkit-slider-thumb:hover { transform:scale(1.3); }
+
+    /* ── Landing player queue item ────────────────────────────── */
+    .queue-item { transition: background 0.15s ease; }
+
     /* ── Animations ───────────────────────────────────────────── */
     @keyframes fadeIn       { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
     @keyframes fadeInUp     { from { opacity:0; transform:translateY(20px); } to { opacity:1; transform:translateY(0); } }
@@ -52,6 +60,13 @@
     @keyframes slideRight   { from { opacity:0; transform: translateX(-12px); } to { opacity:1; transform: translateX(0); } }
     @keyframes scaleIn      { from { opacity:0; transform: scale(0.92); } to { opacity:1; transform: scale(1); } }
     @keyframes bgDrift      { 0%{background-position:0% 0%} 50%{background-position:100% 100%} 100%{background-position:0% 0%} }
+    @keyframes ambientIn    { from{opacity:0} to{opacity:1} }
+    @keyframes eqBar1       { 0%,100%{height:4px}  50%{height:16px} }
+    @keyframes eqBar2       { 0%,100%{height:10px} 50%{height:20px} }
+    @keyframes eqBar3       { 0%,100%{height:6px}  50%{height:14px} }
+    @keyframes eqBar4       { 0%,100%{height:8px}  50%{height:18px} }
+    @keyframes eqBar5       { 0%,100%{height:5px}  50%{height:12px} }
+    @keyframes staggerIn    { from{opacity:0;transform:translateY(16px)} to{opacity:1;transform:translateY(0)} }
 
     .stagger > * { opacity: 0; animation: fadeInUp 0.6s cubic-bezier(.22,.9,.3,1) forwards; }
     .stagger > *:nth-child(1) { animation-delay: 0.05s; }
@@ -542,6 +557,40 @@
     }
     .player-art-glow { animation: albumGlow 4s ease-in-out infinite; }
 
+    /* ── 3D tilt effect on album art (from Spatial concept) ───────── */
+    .player-art-wrap {
+      perspective: 1400px;
+      width: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      cursor: pointer;
+    }
+    .player-art-inner {
+      position: relative;
+      width: 320px;
+      height: 320px;
+      max-width: 100%;
+      max-height: 100%;
+      flex-shrink: 0;
+      border-radius: 24px;
+      overflow: hidden;
+      transform-style: preserve-3d;
+      transition: transform 0.5s cubic-bezier(0.2, 0.7, 0.1, 1);
+      box-shadow:
+        0 30px 80px rgba(0,0,0,0.45),
+        0 0 0 1px rgba(255,255,255,0.08) inset;
+    }
+    .player-art-shine {
+      position: absolute;
+      inset: 0;
+      border-radius: 24px;
+      pointer-events: none;
+      mix-blend-mode: overlay;
+      z-index: 2;
+      transition: background 0.15s ease;
+    }
+
     /* Play button pulse */
     @keyframes playPulse {
       0%, 100% { box-shadow: 0 0 0 0 rgba(124,91,255,0.35); }
@@ -685,6 +734,73 @@ function useColors(isDark) {
 const ske = (kind, isDark) => `ske-${kind}-${isDark ? 'd' : 'l'}`;
 const brushed = (isDark) => `brushed-${isDark ? 'd' : 'l'}`;
 
+// ─── useAudioPlayer — shared audio controller (lives at App level) ──────────
+function useAudioPlayer() {
+  const audioRef = useRef(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentSrc, setCurrentSrc] = useState(null);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+
+  const setSrc = useCallback((src) => { setCurrentSrc(src); }, []);
+
+  const play = useCallback(() => {
+    if (!audioRef.current || !currentSrc) return;
+    audioRef.current.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
+  }, [currentSrc]);
+
+  const pause = useCallback(() => {
+    if (!audioRef.current) return;
+    audioRef.current.pause();
+    setIsPlaying(false);
+  }, []);
+
+  const togglePlay = useCallback(() => {
+    if (!audioRef.current) return;
+    if (isPlaying) { audioRef.current.pause(); setIsPlaying(false); }
+    else { audioRef.current.play().catch(() => setIsPlaying(false)); }
+  }, [isPlaying]);
+
+  const seek = useCallback((time) => {
+    if (!audioRef.current) return;
+    audioRef.current.currentTime = time;
+    setCurrentTime(time);
+  }, []);
+
+  const setVolume = useCallback((vol) => {
+    if (!audioRef.current) return;
+    audioRef.current.volume = vol;
+  }, []);
+
+  // Sync time from audio element
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el) return;
+    const onTime = () => setCurrentTime(el.currentTime || 0);
+    const onMeta = () => setDuration(el.duration || 0);
+    const onEnd = () => setIsPlaying(false);
+    const onPlay = () => setIsPlaying(true);
+    const onPause = () => setIsPlaying(false);
+    el.addEventListener('timeupdate', onTime);
+    el.addEventListener('loadedmetadata', onMeta);
+    el.addEventListener('ended', onEnd);
+    el.addEventListener('play', onPlay);
+    el.addEventListener('pause', onPause);
+    return () => {
+      el.removeEventListener('timeupdate', onTime);
+      el.removeEventListener('loadedmetadata', onMeta);
+      el.removeEventListener('ended', onEnd);
+      el.removeEventListener('play', onPlay);
+      el.removeEventListener('pause', onPause);
+    };
+  }, []);
+
+  return {
+    audioRef, isPlaying, currentSrc, currentTime, duration,
+    play, pause, togglePlay, seek, setSrc, setVolume,
+  };
+}
+
 function secsToMMSS(s) {
   if (s == null || isNaN(s)) return s || '—';
   const m = Math.floor(s / 60);
@@ -700,6 +816,312 @@ function formatDurationRange(raw) {
     if (!isNaN(a) && !isNaN(b)) return `${secsToMMSS(a)} – ${secsToMMSS(b)}`;
   }
   return raw;
+}
+
+// ─── EqBars (mini equalizer animation) ──────────────────────────────────────
+function EqBars({ playing, color='oklch(60% 0.18 270)' }) {
+  const bars = [
+    { h:10, a:'eqBar1', d:'0.0s' }, { h:14, a:'eqBar2', d:'0.1s' },
+    { h:8,  a:'eqBar3', d:'0.05s' }, { h:16, a:'eqBar4', d:'0.15s' },
+    { h:6,  a:'eqBar5', d:'0.08s' },
+  ];
+  return (
+    <div style={{ display:'flex', alignItems:'flex-end', gap:'2px', height:20 }}>
+      {bars.map((b,i) => (
+        <div key={i} style={{
+          width:3, borderRadius:2, background:color, flexShrink:0,
+          height: playing ? b.h : 3,
+          animation: playing ? `${b.a} ${0.5+i*0.1}s ease-in-out ${b.d} infinite` : 'none',
+          transition:'height 0.3s ease',
+        }} />
+      ))}
+    </div>
+  );
+}
+
+// ─── CtrlBtn (skeuomorphic control button) ────────────────────────────────────
+function CtrlBtn({ icon, size=30, isDark, onClick, active, title }) {
+  const c = useColors(isDark);
+  return (
+    <button onClick={onClick} title={title} className={`ske-btn-${isDark?'d':'l'}`} style={{
+      width:size, height:size, borderRadius:'50%',
+      display:'flex', alignItems:'center', justifyContent:'center',
+      color: active ? 'oklch(60% 0.18 270)' : c.textMuted,
+      fontSize:size*0.45, flexShrink:0,
+      transition:'transform 0.18s,color 0.18s',
+    }}
+    onMouseEnter={e=>e.currentTarget.style.transform='scale(1.1)'}
+    onMouseLeave={e=>e.currentTarget.style.transform='scale(1)'}
+    >{icon}</button>
+  );
+}
+
+// ─── LandingPlayer (AmbientStage adaptation) ─────────────────────────────────
+function LandingPlayer({ isDark, lang, tracks, currentTrack, onTrackSelect, onOpenPlayer, isPlaying: isPlayingProp, audio, activeCollection }) {
+  const c = useColors(isDark);
+  const [shuffle, setShuffle] = useState(false);
+  const [repeat, setRepeat] = useState(false);
+  const [volume, setVolume] = useState(0.75);
+
+  // Sync volume to audio
+  useEffect(() => { if (audio) audio.setVolume(volume); }, [volume]);
+
+  // Use real audio state when available, fallback to prop
+  const playing = audio?.isPlaying ?? isPlayingProp ?? false;
+
+  // Real progress from audio element
+  const progress = audio?.duration
+    ? (audio?.currentTime || 0) / audio.duration
+    : 0;
+
+  const track = currentTrack;
+  if (!track || !tracks.length) return null;
+
+  // Derive track hue
+  const hue = ((track.title?.charCodeAt(0)||65)*37 + (track.artist?.charCodeAt(0)||65)*17) % 360;
+  const trackColor = `oklch(50% 0.16 ${hue})`;
+  const trackGlow = `oklch(55% 0.18 ${hue} / 0.22)`;
+
+  const progressPct = Math.round(progress * 100);
+  const progressTrackStyle = {
+    background:`linear-gradient(90deg, oklch(60% 0.18 270) ${progressPct}%, ${isDark?'rgba(255,255,255,0.1)':'rgba(0,0,0,0.12)'} ${progressPct}%)`,
+    height:4, borderRadius:2, width:'100%', WebkitAppearance:'none', appearance:'none', outline:'none', cursor:'pointer', border:'none',
+  };
+
+  const fmtTime = (t) => {
+    if (!t || isNaN(t)) return '0:00';
+    const m = Math.floor(t / 60), s = Math.floor(t % 60);
+    return `${m}:${String(s).padStart(2, '0')}`;
+  };
+
+  // Build stream URL for a track
+  const getStreamUrl = (t) => {
+    if (!activeCollection) return null;
+    return `${API}/search/tracks/${t.track_id}/stream?collection_name=${encodeURIComponent(activeCollection)}`;
+  };
+
+  const selectAndPlay = (t) => {
+    onTrackSelect?.(t);
+    const url = getStreamUrl(t);
+    if (url && audio) {
+      audio.setSrc(url);
+      // Give React a moment to re-render the <audio> src before playing
+      setTimeout(() => audio.play(), 50);
+    }
+  };
+
+  const prevTrack = () => {
+    const idx = tracks.findIndex(t => t.track_id === track.track_id);
+    if (idx > 0) selectAndPlay(tracks[idx - 1]);
+  };
+  const nextTrack = () => {
+    const idx = tracks.findIndex(t => t.track_id === track.track_id);
+    if (idx < tracks.length - 1) selectAndPlay(tracks[idx + 1]);
+  };
+
+  // Set audio source when currentTrack changes (and audio exists)
+  useEffect(() => {
+    if (!track || !audio) return;
+    const url = getStreamUrl(track);
+    if (url) audio.setSrc(url);
+  }, [track?.track_id]);
+
+  return (
+    <div style={{ position:'relative', borderRadius:20, overflow:'hidden',
+      boxShadow: isDark
+        ? 'inset 0 1px 0 rgba(255,255,255,0.09),inset 0 0 0 1px rgba(255,255,255,0.05),0 8px 32px rgba(0,0,0,0.6)'
+        : 'inset 0 1px 0 #fff,inset 0 0 0 1px rgba(0,0,0,0.07),0 8px 28px rgba(40,30,60,0.14)',
+    }}>
+      {/* Ambient background */}
+      <div key={track.track_id} style={{
+        position:'absolute', inset:0, pointerEvents:'none', zIndex:0,
+        animation:'ambientIn 0.7s ease',
+        background: isDark
+          ? `radial-gradient(ellipse 70% 140% at 25% 50%, ${trackGlow}, transparent 65%),
+             radial-gradient(ellipse 50% 120% at 80% 50%, oklch(35% 0.10 ${(hue+160)%360} / 0.10), transparent 70%),
+             linear-gradient(180deg, #1a1a22 0%, #111116 100%)`
+          : `radial-gradient(ellipse 70% 140% at 25% 50%, oklch(72% 0.10 ${hue} / 0.18), transparent 65%),
+             linear-gradient(180deg, #fafaff 0%, #eff0f6 100%)`,
+      }} />
+      {/* Grain */}
+      <div style={{ position:'absolute', inset:0, zIndex:0, opacity:0.025, pointerEvents:'none',
+        backgroundImage:`url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")`,
+        mixBlendMode:'overlay',
+      }} />
+
+      {/* Main layout */}
+      <div style={{ position:'relative', zIndex:1, display:'grid', gridTemplateColumns:'1fr 260px' }}>
+
+        {/* Left: Player */}
+        <div style={{ padding:'28px 30px 26px', display:'flex', flexDirection:'column', gap:20 }}>
+
+          {/* Row 1: now playing tag + full player btn */}
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+              <EqBars playing={playing} color={trackColor} />
+              <span className="mono" style={{ fontSize:11, letterSpacing:'0.22em', color: playing ? trackColor : c.textSubtle }}>
+                {playing ? (lang==='ru'?'СЕЙЧАС ИГРАЕТ':'NOW PLAYING') : (lang==='ru'?'ПАУЗА':'PAUSED')}
+              </span>
+            </div>
+            <button onClick={onOpenPlayer} className={`ske-btn-${isDark?'d':'l'}`} style={{
+              display:'flex', alignItems:'center', gap:7, padding:'8px 16px', borderRadius:10,
+              color:'oklch(70% 0.13 75)', fontSize:13, fontWeight:600, letterSpacing:'0.02em',
+            }}
+            onMouseEnter={e=>e.currentTarget.style.color='oklch(80% 0.15 75)'}
+            onMouseLeave={e=>e.currentTarget.style.color='oklch(70% 0.13 75)'}
+            >
+              <span>{lang==='ru'?'Полный плеер':'Full player'}</span>
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M2 10 L10 2 M5.5 2 H10 V6.5"/></svg>
+            </button>
+          </div>
+
+          {/* Row 2: art + headline */}
+          <div style={{ display:'flex', gap:20, alignItems:'flex-start' }}>
+            <div style={{ position:'relative', flexShrink:0 }}>
+              <AlbumCover title={track.title||''} artist={track.artist||''} size={88} isDark={true} coverPath={track.cover_art_path} radius={14} />
+              {playing && (
+                <div style={{ position:'absolute', inset:-5, borderRadius:'50%', border:`1.5px solid ${trackColor}`, opacity:0.25,
+                  animation:'spin 8s linear infinite', pointerEvents:'none',
+                  background:`conic-gradient(${trackColor}22, transparent, ${trackColor}22)`,
+                }} />
+              )}
+            </div>
+            <div style={{ flex:1, minWidth:0 }}>
+              <h1 className="serif" style={{
+                fontSize:'clamp(28px, 3vw, 44px)', lineHeight:1.0, letterSpacing:'-0.025em',
+                color:c.text, fontWeight:400, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+              }}>
+                {(track.title||'—').split(' ').map((w,i) => i===0
+                  ? <span key={i}>{w} </span>
+                  : <i key={i} style={{ color: trackColor }}>{w} </i>
+                )}
+              </h1>
+              <div style={{ marginTop:5, display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+                <span style={{ fontSize:15, color:c.textMuted }}>{track.artist||'—'}</span>
+                <span style={{ width:3, height:3, borderRadius:'50%', background:c.textSubtle, flexShrink:0 }} />
+                <span className="mono" style={{ fontSize:12, color:c.textSubtle }}>{track.year||'—'}</span>
+                {track.genre && (
+                  <div style={{ padding:'2px 9px', borderRadius:99, border:`1px solid ${isDark?'rgba(255,255,255,0.12)':'rgba(0,0,0,0.12)'}`,
+                    fontSize:11, color:c.textSubtle, letterSpacing:'0.06em' }}>
+                    {track.genre}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Row 3: progress */}
+          <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+            <input type="range" min={0} max={1} step={0.001} value={progress}
+              onChange={e => {
+                const val = parseFloat(e.target.value);
+                if (audio && audio.duration) audio.seek(val * audio.duration);
+              }}
+              style={{ ...progressTrackStyle }} />
+            <div style={{ display:'flex', justifyContent:'space-between' }}>
+              <span className="mono" style={{ fontSize:11, color:c.textSubtle }}>{fmtTime(audio?.currentTime ?? 0)}</span>
+              <span className="mono" style={{ fontSize:11, color:c.textSubtle }}>{fmtTime(audio?.duration ?? (track.duration || 0))}</span>
+            </div>
+          </div>
+
+          {/* Row 4: controls */}
+          <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+            <CtrlBtn icon="⏮" isDark={isDark} onClick={prevTrack} title="Previous" />
+            <button onClick={() => { if (audio) audio.togglePlay(); }} style={{
+              width:50, height:50, borderRadius:'50%', flexShrink:0,
+              background:'linear-gradient(180deg, oklch(67% 0.18 270), oklch(52% 0.22 285))',
+              boxShadow: playing
+                ? `inset 0 1px 0 rgba(255,255,255,0.25),0 4px 16px oklch(60% 0.18 270 / 0.5),0 0 0 1px oklch(50% 0.2 275 / 0.5)`
+                : `inset 0 1px 0 rgba(255,255,255,0.2),0 3px 10px oklch(60% 0.18 270 / 0.35)`,
+              display:'flex', alignItems:'center', justifyContent:'center',
+              animation: playing ? 'playPulse 2.5s ease-in-out infinite' : 'none',
+              transition:'transform 0.15s', color:'white',
+            }}
+            onMouseEnter={e=>e.currentTarget.style.transform='scale(1.07)'}
+            onMouseLeave={e=>e.currentTarget.style.transform='scale(1)'}
+            >
+              {playing
+                ? <svg width="16" height="16" viewBox="0 0 16 16" fill="white"><rect x="3" y="2" width="4" height="12" rx="1.5"/><rect x="9" y="2" width="4" height="12" rx="1.5"/></svg>
+                : <svg width="16" height="16" viewBox="0 0 14 16" fill="white"><polygon points="2,1 13,8 2,15"/></svg>
+              }
+            </button>
+            <CtrlBtn icon="⏭" isDark={isDark} onClick={nextTrack} title="Next" />
+
+            <div style={{ width:1, height:22, background:c.border, margin:'0 2px', flexShrink:0 }} />
+
+            <CtrlBtn icon="🔀" size={28} isDark={isDark} active={shuffle} onClick={() => setShuffle(s=>!s)} title="Shuffle" />
+            <CtrlBtn icon="🔁" size={28} isDark={isDark} active={repeat} onClick={() => setRepeat(r=>!r)} title="Repeat" />
+
+            <div style={{ flex:1 }} />
+
+            {/* Volume */}
+            <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+              <span style={{ fontSize:14, opacity:0.5 }}>🔊</span>
+              <input type="range" min={0} max={1} step={0.01} value={volume}
+                onChange={e => setVolume(parseFloat(e.target.value))}
+                style={{
+                  width:72, height:3, borderRadius:2, cursor:'pointer', border:'none', outline:'none',
+                  WebkitAppearance:'none', appearance:'none',
+                  background:`linear-gradient(90deg, ${isDark?'rgba(255,255,255,0.55)':'rgba(0,0,0,0.4)'} ${Math.round(volume*100)}%, ${isDark?'rgba(255,255,255,0.1)':'rgba(0,0,0,0.1)'} ${Math.round(volume*100)}%)`,
+                }} />
+            </div>
+          </div>
+        </div>
+
+        {/* Right: Queue */}
+        <div style={{
+          borderLeft:`1px solid ${c.border}`,
+          background: isDark ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.55)',
+          backdropFilter:'blur(8px)', WebkitBackdropFilter:'blur(8px)',
+          display:'flex', flexDirection:'column', overflow:'hidden',
+        }}>
+          <div style={{ padding:'18px 18px 12px', borderBottom:`1px solid ${c.border}` }}>
+            <span className="mono" style={{ fontSize:11, letterSpacing:'0.22em', color:c.textSubtle }}>
+              {lang==='ru'?'ОЧЕРЕДЬ':'QUEUE'}
+            </span>
+          </div>
+          <div style={{ flex:1, overflowY:'auto' }}>
+            {tracks.map((t, i) => {
+              const isActive = t.track_id === track.track_id;
+              return (
+                <button key={t.track_id || i} onClick={() => selectAndPlay(t)} className="queue-item"
+                  style={{
+                    width:'100%', display:'flex', alignItems:'center', gap:11, padding:'10px 16px',
+                    borderBottom:`1px solid ${c.border}`,
+                    background: isActive
+                      ? (isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.05)')
+                      : 'transparent',
+                    textAlign:'left',
+                  }}
+                  onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.03)'; }}
+                  onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
+                >
+                  <div style={{ position:'relative', flexShrink:0 }}>
+                    <AlbumCover title={t.title||''} artist={t.artist||''} size={36} isDark={true} coverPath={t.cover_art_path} radius={6} />
+                    {isActive && playing && (
+                      <div style={{ position:'absolute', inset:0, borderRadius:6, background:'rgba(0,0,0,0.45)', display:'flex', alignItems:'center', justifyContent:'center' }}>
+                        <EqBars playing={true} color="white" />
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:13, fontWeight:isActive?'600':'400', color:c.text,
+                      whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+                      letterSpacing:'-0.01em',
+                    }}>{t.title||'—'}</div>
+                    <div style={{ fontSize:12, color:c.textMuted, marginTop:2 }}>{t.artist||'—'}</div>
+                  </div>
+                  <span className="mono" style={{ fontSize:11, color:c.textSubtle, flexShrink:0 }}>
+                    {t.duration ? secsToMMSS(t.duration) : '—'}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ─── Curated music trivia (general) ───────────────────────────────────────────
@@ -1200,11 +1622,15 @@ function Sidebar({ section, onNav, onHome, isDark, lang, collections, activeColl
 }
 
 // ─── LANDING SCREEN ───────────────────────────────────────────────────────────
-function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, activeCollection, hasLibrary, stats }) {
+function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, activeCollection, hasLibrary, stats, playerTrack, playerPlaylist, audio }) {
   const c = useColors(isDark);
   const [factIdx, setFactIdx] = useState(0);
   const [now, setNow] = useState(new Date());
   const [dbFacts, setDbFacts] = useState([]);
+
+  // Landing player state
+  const [lpTracks, setLpTracks] = useState([]);
+  const [lpCurrent, setLpCurrent] = useState(null);
 
   // Fetch random facts from DB on collection change
   useEffect(() => {
@@ -1212,6 +1638,20 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, activ
     apiFetch(`/metadata/random-facts?collection=${encodeURIComponent(activeCollection)}&limit=5`)
       .then(r => setDbFacts(Array.isArray(r) ? r : []))
       .catch(() => setDbFacts([]));
+  }, [activeCollection]);
+
+  // Fetch tracks for landing player queue
+  useEffect(() => {
+    if (!activeCollection) { setLpTracks([]); setLpCurrent(null); return; }
+    apiFetch(`/browse?collection_name=${encodeURIComponent(activeCollection)}&limit=8`)
+      .then(r => {
+        const tracks = Array.isArray(r) ? r : (r.tracks || []);
+        if (tracks.length > 0) {
+          setLpTracks(tracks);
+          setLpCurrent(tracks[0]);
+        }
+      })
+      .catch(() => { setLpTracks([]); setLpCurrent(null); });
   }, [activeCollection]);
 
   const trivia = TRIVIA[lang] || TRIVIA.en;
@@ -1346,53 +1786,24 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, activ
       </div>
 
       {/* Hero */}
-      <div style={{ position:'relative', maxWidth:'1280px', margin:'0 auto', padding:'34px 40px 0' }}>
+      <div style={{ position:'relative', maxWidth:'1280px', margin:'0 auto', padding:'28px 40px 0' }}>
 
-        {/* Display strip — clock + collection + status */}
-        <div className={`${ske('display', isDark)} mono`} style={{
-          padding:'14px 22px', borderRadius:'14px',
-          display:'flex', alignItems:'center', justifyContent:'space-between', gap:'24px',
-          marginBottom:'42px', animation:'fadeIn 0.5s ease',
-          color: c.amber,
-        }}>
-          <div style={{ display:'flex', alignItems:'center', gap:'18px' }}>
-            <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
-              <div style={{ width:'8px', height:'8px', borderRadius:'50%', background:c.amber, boxShadow:`0 0 10px ${c.amberGlow}, 0 0 20px ${c.amberGlow}`, animation:'flicker 3s infinite' }} />
-              <span style={{ fontSize:'15px', letterSpacing:'0.2em' }}>ONLINE</span>
-            </div>
-            <span style={{ opacity:0.4 }}>·</span>
-            <span style={{ fontSize:'15px', letterSpacing:'0.1em' }}>{timeStr}</span>
-            <span style={{ opacity:0.4 }}>·</span>
-            <span style={{ fontSize:'15px', letterSpacing:'0.16em', opacity:0.85 }}>
-              {activeCollection
-                ? (lang==='ru'?'КОЛЛЕКЦИЯ ':'COLL ') + activeCollection
-                : (lang==='ru'?'КОЛЛЕКЦИЯ НЕ ВЫБРАНА':'NO COLLECTION')}
-            </span>
+        {/* Landing Player — uses global player state when something is playing, fallback to local browse */}
+        {((playerTrack && playerPlaylist.length) || lpTracks.length > 0) && (
+          <div style={{ marginBottom:'28px', animation:'fadeIn 0.6s ease' }}>
+            <LandingPlayer
+              isDark={isDark}
+              lang={lang}
+              tracks={playerPlaylist.length ? playerPlaylist : lpTracks}
+              currentTrack={playerTrack || lpCurrent}
+              onTrackSelect={playerPlaylist.length ? () => {} : setLpCurrent}
+              onOpenPlayer={() => onNav('player')}
+              isPlaying={audio?.isPlaying ?? false}
+              audio={audio}
+              activeCollection={activeCollection}
+            />
           </div>
-          <div style={{ fontSize:'14px', letterSpacing:'0.2em', opacity:0.6 }}>
-            {hasLibrary
-              ? (stats?.total_tracks ? `${stats.total_tracks.toLocaleString(lang==='ru'?'ru':'en')} ${lang==='ru'?'TRACKS':'TRACKS'}` : '')
-              : (lang==='ru'?'СНАЧАЛА ИНДЕКСИРУЙ ПАПКУ':'INDEX A FOLDER FIRST')}
-          </div>
-        </div>
-
-        {/* Headline */}
-        <div style={{ marginBottom:'48px', maxWidth:'780px', animation:'fadeInUp 0.7s cubic-bezier(.22,.9,.3,1)' }}>
-          <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.32em', marginBottom:'18px' }}>
-            — {lang==='ru'?'ПЛАНШЕТ ОПЕРАТОРА':'OPERATOR DECK'}
-          </div>
-          <h1 className="serif" style={{
-            fontSize:'clamp(54px, 7vw, 96px)', lineHeight:'1.02', letterSpacing:'-0.025em',
-            color: c.text, fontWeight:'400',
-          }}>
-            {lang==='ru' ? <>Слушай <i style={{ color:'oklch(62% 0.2 275)' }}>смысл</i>,<br/>не названия.</> : <>Listen to the <i style={{ color:'oklch(62% 0.2 275)' }}>meaning</i>,<br/>not the titles.</>}
-          </h1>
-          <p style={{ marginTop:'20px', fontSize:'15px', color:c.textMuted, lineHeight:'1.6', maxWidth:'560px' }}>
-            {lang==='ru'
-              ? 'Локальный поисковик музыки по тексту и звуку. Никакой облачной слежки — только твоя коллекция и быстрая семантика.'
-              : "A local music search engine across lyrics and audio. No cloud tracking — just your library and fast semantic recall."}
-          </p>
-        </div>
+        )}
 
         {/* Doors */}
         <div className="stagger" style={{
@@ -3886,16 +4297,39 @@ function getSongFacts(track, lang) {
 }
 
 // ─── PLAYER SECTION ─────────────────────────────────────────────────────────
-function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initialTrack, onPlayTrack }) {
-  const audioRef = useRef(null);
-
+function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initialTrack, onPlayTrack, audio, visible }) {
   const [playlist, setPlaylist] = useState(initialPlaylist || []);
   const [currentIndex, setCurrentIndex] = useState(-1);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [volume, setVolume] = useState(0.85);
   const [liked, setLiked] = useState(null);
+
+  // Derive playback state from shared audio hook
+  const isPlaying = audio?.isPlaying ?? false;
+  const currentTime = audio?.currentTime ?? 0;
+  const duration = audio?.duration ?? 0;
+  const [volume, setVolume] = useState(0.85);
+
+  // Sync volume to audio
+  useEffect(() => { if (audio) audio.setVolume(volume); }, [volume]);
+
+  // 3D tilt state for album art (Spatial concept)
+  const [tilt, setTilt] = useState({ x: 0, y: 0 });
+  const [isHovering, setIsHovering] = useState(false);
+  const artWrapRef = useRef(null);
+
+  const handleArtMouseMove = useCallback((e) => {
+    if (!artWrapRef.current) return;
+    const r = artWrapRef.current.getBoundingClientRect();
+    const nx = ((e.clientX - r.left) / r.width - 0.5) * 2;  // -1..+1
+    const ny = ((e.clientY - r.top) / r.height - 0.5) * 2;
+    setTilt({ x: ny, y: nx });
+  }, []);
+  const handleArtMouseLeave = useCallback(() => {
+    setTilt({ x: 0, y: 0 });
+    setIsHovering(false);
+  }, []);
+  const handleArtMouseEnter = useCallback(() => {
+    setIsHovering(true);
+  }, []);
 
   const currentTrack = currentIndex >= 0 && currentIndex < playlist.length ? playlist[currentIndex].track : null;
 
@@ -3929,11 +4363,33 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
       const idx = playlist.findIndex(h => h.track?.track_id === initialTrack.track_id);
       if (idx >= 0) {
         setCurrentIndex(idx);
-        setIsPlaying(true);
+        // Set audio source and play
+        const track = playlist[idx].track;
+        const url = `${API}/search/tracks/${track.track_id}/stream?collection_name=${encodeURIComponent(activeCollection || '')}`;
+        if (audio) { audio.setSrc(url); setTimeout(() => audio.play(), 50); }
         fetchReaction(initialTrack.track_id);
       }
     }
   }, [initialTrack]);
+
+  // Sync audio source when current track changes
+  useEffect(() => {
+    if (!currentTrack || !audio) return;
+    const url = `${API}/search/tracks/${currentTrack.track_id}/stream?collection_name=${encodeURIComponent(activeCollection || '')}`;
+    audio.setSrc(url);
+    // Only auto-play when section is visible
+    if (visible && isPlaying) setTimeout(() => audio.play(), 50);
+  }, [currentTrack?.track_id]);
+
+  // Pause when navigating away, resume when coming back
+  useEffect(() => {
+    if (!audio || !currentTrack) return;
+    if (visible && isPlaying) {
+      setTimeout(() => audio.play(), 50);
+    } else if (!visible && isPlaying) {
+      // Don't pause — audio continues in background
+    }
+  }, [visible]);
 
   const fetchReaction = async (trackId) => {
     if (!activeCollection || !trackId) return;
@@ -3946,14 +4402,16 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
   const playTrackAt = (index) => {
     if (index < 0 || index >= playlist.length) return;
     setCurrentIndex(index);
-    setIsPlaying(true);
-    fetchReaction(playlist[index].track.track_id);
+    const track = playlist[index].track;
+    const url = `${API}/search/tracks/${track.track_id}/stream?collection_name=${encodeURIComponent(activeCollection || '')}`;
+    if (audio) { audio.setSrc(url); setTimeout(() => audio.play(), 50); }
+    fetchReaction(track.track_id);
   };
 
-  const togglePlay = () => { setIsPlaying(p => !p); };
+  const togglePlay = () => { if (audio) audio.togglePlay(); };
   const nextTrack = () => { if (currentIndex < playlist.length - 1) playTrackAt(currentIndex + 1); };
   const prevTrack = () => { if (currentIndex > 0) playTrackAt(currentIndex - 1); };
-  const seek = (time) => { if (audioRef.current) audioRef.current.currentTime = time; setCurrentTime(time); };
+  const seek = (time) => { if (audio) audio.seek(time); };
 
   const setReaction = async (val) => {
     if (!currentTrack || !activeCollection) return;
@@ -3967,14 +4425,6 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
   };
 
   useEffect(() => {
-    if (!audioRef.current) return;
-    if (isPlaying) { audioRef.current.play().catch(() => setIsPlaying(false)); }
-    else audioRef.current.pause();
-  }, [isPlaying, currentTrack]);
-
-  useEffect(() => { if (audioRef.current) audioRef.current.volume = volume; }, [volume]);
-
-  useEffect(() => {
     const handler = (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
       if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
@@ -3985,7 +4435,7 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [currentTime, duration]);
+  }, [currentTime, duration, audio]);
 
   const fmt = (s) => {
     if (!s || isNaN(s)) return '0:00';
@@ -4029,17 +4479,40 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
           gap:'24px', paddingTop:'12px', position:'relative', zIndex:1,
         }}>
 
-          {/* Album art with glow */}
-          <div className="player-art-glow" style={{ display:'flex', justifyContent:'center' }}>
-            <AlbumCover
-              title={currentTrack?.title || ''}
-              artist={currentTrack?.artist || ''}
-              size={320}
-              isDark={true}
-              coverPath={currentTrack?.cover_art_path}
-              radius={24}
-              spinning={isPlaying}
-            />
+          {/* Album art with 3D tilt (Spatial concept) */}
+          <div
+            ref={artWrapRef}
+            className="player-art-wrap"
+            onMouseEnter={handleArtMouseEnter}
+            onMouseMove={handleArtMouseMove}
+            onMouseLeave={handleArtMouseLeave}
+          >
+            <div
+              className="player-art-inner"
+              style={{
+                transform: isHovering
+                  ? `rotateY(${tilt.y * 12}deg) rotateX(${-tilt.x * 12}deg) scale(1.04)`
+                  : 'rotateY(0deg) rotateX(0deg) scale(1)',
+              }}
+            >
+              <AlbumCover
+                title={currentTrack?.title || ''}
+                artist={currentTrack?.artist || ''}
+                size={320}
+                isDark={true}
+                coverPath={currentTrack?.cover_art_path}
+                radius={24}
+                spinning={isPlaying}
+              />
+              <div
+                className="player-art-shine"
+                style={{
+                  background: isHovering
+                    ? `linear-gradient(${135 + tilt.y * 20}deg, rgba(255,255,255,0) 30%, rgba(255,255,255,0.22) ${48 + tilt.y * 8}%, rgba(255,255,255,0) 65%)`
+                    : 'linear-gradient(135deg, rgba(255,255,255,0) 35%, rgba(255,255,255,0) 65%)',
+                }}
+              />
+            </div>
           </div>
 
           {/* Track info */}
@@ -4288,17 +4761,7 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
         </div>
       </div>
 
-      {/* Hidden audio */}
-      <audio
-        ref={audioRef}
-        src={streamUrl}
-        onTimeUpdate={() => setCurrentTime(audioRef.current?.currentTime || 0)}
-        onLoadedMetadata={() => setDuration(audioRef.current?.duration || 0)}
-        onEnded={nextTrack}
-        onError={() => { setIsPlaying(false); }}
-        volume={volume}
-        crossOrigin="anonymous"
-      />
+      {/* Audio is managed at App level via useAudioPlayer hook */}
     </div>
   );
 }
@@ -4320,6 +4783,9 @@ function App() {
   // Player state
   const [playerPlaylist, setPlayerPlaylist] = useState([]);
   const [playerTrack, setPlayerTrack] = useState(null);
+
+  // Shared audio controller — lives at App level so audio survives navigation
+  const audio = useAudioPlayer();
 
   const c = useColors(isDark);
 
@@ -4425,6 +4891,9 @@ function App() {
           activeCollection={activeCollection}
           hasLibrary={collections.length > 0}
           stats={stats}
+          playerTrack={playerTrack}
+          playerPlaylist={playerPlaylist}
+          audio={audio}
         />
       ) : (
         <Fragment>
@@ -4436,14 +4905,29 @@ function App() {
             onCollectionDelete={(name) => setDeleteConfirm(name)}
             onSettings={() => setSettingsOpen(true)}
           />
-          <div key={section} style={{ flex:1, minWidth:0, display:'flex', flexDirection:'column', overflow:'hidden', animation:'fadeIn 0.3s ease' }}>
-            <ActiveSection
-              isDark={isDark} lang={lang} activeCollection={activeCollection}
-              onPlayTrack={handlePlayTrack}
-              initialPlaylist={section === 'player' ? playerPlaylist : undefined}
-              initialTrack={section === 'player' ? playerTrack : undefined}
-            />
-          </div>
+          {/* Render all sections; visibility toggled (NOT display:none) to preserve audio across navigation */}
+          {Object.entries(sectionMap).map(([id, Comp]) => (
+            <div key={id} style={{
+              display: 'flex',
+              flex: section === id ? 1 : 0,
+              width: section === id ? 'auto' : 0,
+              minWidth: 0,
+              flexDirection: 'column',
+              overflow: 'hidden',
+              position: section === id ? 'relative' : 'absolute',
+              visibility: section === id ? 'visible' : 'hidden',
+              animation: section === id ? 'fadeIn 0.3s ease' : 'none',
+            }}>
+              <Comp
+                isDark={isDark} lang={lang} activeCollection={activeCollection}
+                onPlayTrack={handlePlayTrack}
+                audio={id === 'player' ? audio : undefined}
+                initialPlaylist={id === 'player' ? playerPlaylist : undefined}
+                initialTrack={id === 'player' ? playerTrack : undefined}
+                visible={section === id}
+              />
+            </div>
+          ))}
         </Fragment>
       )}
 
@@ -4459,6 +4943,15 @@ function App() {
           onCancel={() => setDeleteConfirm(null)}
           onConfirm={() => deleteCollection(deleteConfirm)} />
       )}
+
+      {/* Root-level audio — survives navigation since it's never unmounted or hidden */}
+      <audio
+        ref={audio.audioRef}
+        src={audio.currentSrc}
+        volume={0.85}
+        crossOrigin="anonymous"
+        style={{ position:'absolute', width:0, height:0, pointerEvents:'none' }}
+      />
     </div>
   );
 }
