@@ -102,3 +102,31 @@ def test_predict_class_respects_confidence_threshold(svc, tmp_path):
     # Confidence below threshold → label suppressed, but conf still reported
     assert label is None
     assert conf is not None and conf < 0.99
+
+
+def test_apply_classifier_bulk_persists_sonic_class(svc, tmp_path, monkeypatch):
+    fake_qdrant, X, slugs = _stage_two_clusters(svc, collection="bulk_test")
+    svc.train_classifier(qdrant=fake_qdrant, collection="bulk_test", audio_vector_name="audio")
+
+    # Re-stage qdrant to return same points for bulk apply pass
+    points = []
+    for i, s in enumerate(slugs):
+        p = MagicMock()
+        p.id = f"id-{i}"
+        p.payload = {"slug": s}
+        p.vector = {"audio": X[i].tolist()}
+        points.append(p)
+    fake_qdrant.scroll.side_effect = [(points, None)]
+
+    persisted: list[tuple] = []
+    monkeypatch.setattr(
+        "app.resources.metadata_db.MetadataDB.upsert_sonic_descriptor",
+        lambda song_slug, tags=None, sonic_class=None, confidence=None, audio_signature=None: persisted.append((song_slug, sonic_class, confidence)),
+    )
+
+    n = svc.apply_classifier_bulk(qdrant=fake_qdrant, collection="bulk_test", audio_vector_name="audio")
+    assert n == 40
+    # Cluster A members should predict "Cluster A"
+    cluster_a_slugs = {s for s in slugs[:20]}
+    cluster_a_predictions = [(slug, cls) for slug, cls, _ in persisted if slug in cluster_a_slugs]
+    assert all(cls == "Cluster A" for _, cls in cluster_a_predictions)

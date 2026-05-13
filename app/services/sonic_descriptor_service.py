@@ -428,3 +428,48 @@ class SonicDescriptorService:
         if conf < self.min_class_confidence:
             return None, conf
         return label, conf
+
+    def apply_classifier_bulk(
+        self,
+        qdrant,
+        collection: str,
+        audio_vector_name: str = "audio",
+        batch_size: int = 500,
+    ) -> int:
+        """Predict sonic_class for every track in collection and persist to MetadataDB.
+
+        Skips tracks where the classifier returns (None, None) (no classifier trained).
+        Returns the count of tracks processed.
+        """
+        from app.resources.metadata_db import MetadataDB
+
+        # If no classifier exists, return 0 — nothing to do
+        if self._load_classifier(collection) is None:
+            logger.info("[SonicDescriptor] apply_classifier_bulk: no classifier for %s", collection)
+            return 0
+
+        offset = None
+        n = 0
+        while True:
+            points, next_offset = qdrant.scroll(
+                collection_name=collection,
+                offset=offset,
+                limit=batch_size,
+                with_payload=["slug"],
+                with_vectors=[audio_vector_name],
+            )
+            if not points:
+                break
+            for p in points:
+                vec = (p.vector or {}).get(audio_vector_name) if isinstance(p.vector, dict) else None
+                if vec is None:
+                    continue
+                slug = (p.payload or {}).get("slug") or str(p.id)
+                label, conf = self.predict_class(collection=collection, audio_vector=np.asarray(vec, dtype=np.float32))
+                MetadataDB.upsert_sonic_descriptor(song_slug=slug, sonic_class=label, confidence=conf)
+                n += 1
+            if next_offset is None:
+                break
+            offset = next_offset
+        logger.info("[SonicDescriptor] applied classifier to %d tracks in %s", n, collection)
+        return n
