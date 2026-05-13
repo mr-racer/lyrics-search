@@ -121,3 +121,42 @@ class SonicDescriptorService:
         sims = prompt_unit @ audio  # shape (N_prompts,)
         order = np.argsort(-sims)[: self.top_k_tags]
         return [{"tag": prompts[i], "score": float(sims[i])} for i in order]
+
+    def compute_tags_bulk(
+        self,
+        qdrant,
+        collection: str,
+        audio_vector_name: str = "audio",
+        batch_size: int = 500,
+    ) -> int:
+        """Scroll all points in ``collection``, compute tags per track, persist to MetadataDB.
+
+        Returns the number of tracks processed.
+        """
+        from app.resources.metadata_db import MetadataDB
+
+        offset = None
+        n_processed = 0
+        while True:
+            points, next_offset = qdrant.scroll(
+                collection_name=collection,
+                offset=offset,
+                limit=batch_size,
+                with_payload=["slug", "title", "artist"],
+                with_vectors=[audio_vector_name],
+            )
+            if not points:
+                break
+            for p in points:
+                vec = (p.vector or {}).get(audio_vector_name) if isinstance(p.vector, dict) else None
+                if vec is None:
+                    continue
+                slug = (p.payload or {}).get("slug") or str(p.id)
+                tags = self.compute_tags(np.asarray(vec, dtype=np.float32))
+                MetadataDB.upsert_sonic_descriptor(song_slug=slug, tags=tags)
+                n_processed += 1
+            if next_offset is None:
+                break
+            offset = next_offset
+        logger.info("[SonicDescriptor] bulk-tagged %d tracks in collection %s", n_processed, collection)
+        return n_processed

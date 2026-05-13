@@ -112,3 +112,44 @@ def test_compute_tags_returns_top_k_sorted(sample_vocab_file, tmp_path, monkeypa
     assert tags[0]["score"] > tags[1]["score"] >= tags[2]["score"]
     # All scores in 0..1 range (cosine of unit vectors)
     assert all(0 <= t["score"] <= 1 for t in tags)
+
+
+def test_compute_tags_bulk_persists_per_track(sample_vocab_file, tmp_path, monkeypatch):
+    # Pre-stage prompt embeddings
+    embeddings_path = tmp_path / "embeds.npy"
+    prompt_embs = np.eye(4, dtype=np.float32)  # 4 unit vectors
+    np.save(embeddings_path, prompt_embs)
+
+    svc = SonicDescriptorService(
+        prompt_vocab_path=sample_vocab_file,
+        embeddings_path=embeddings_path,
+        top_k_tags=2,
+    )
+
+    # Mock Qdrant scroll: 3 points, each with a known vector + slug
+    fake_points = []
+    for i, vec in enumerate([
+        np.array([1.0, 0.0, 0.0, 0.0]),
+        np.array([0.0, 1.0, 0.0, 0.0]),
+        np.array([0.0, 0.0, 1.0, 0.0]),
+    ]):
+        p = MagicMock()
+        p.id = f"track-{i}"
+        p.payload = {"slug": f"slug-{i}", "title": f"T{i}", "artist": f"A{i}"}
+        p.vector = {"audio": vec.tolist()}
+        fake_points.append(p)
+
+    fake_qdrant = MagicMock()
+    fake_qdrant.scroll.side_effect = [(fake_points, None)]
+
+    persisted: list[tuple] = []
+    monkeypatch.setattr(
+        "app.resources.metadata_db.MetadataDB.upsert_sonic_descriptor",
+        lambda song_slug, tags=None, sonic_class=None, confidence=None, audio_signature=None: persisted.append((song_slug, tags)),
+    )
+
+    svc.compute_tags_bulk(qdrant=fake_qdrant, collection="test_col", audio_vector_name="audio")
+    assert len(persisted) == 3
+    # First track should match "prompt 0" (eye matrix → prompt 0 is [1,0,0,0])
+    assert persisted[0][0] == "slug-0"
+    assert persisted[0][1][0]["tag"] == "punchy"  # first prompt in vocab
