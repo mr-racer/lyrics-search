@@ -41,3 +41,43 @@ def test_index_one_track_persists_descriptor(monkeypatch, tmp_path):
     assert slug == "abc"
     assert tags[0]["tag"] == "punchy"  # closest to (0.9, 0.1)
     assert sclass is None  # no classifier trained → class is None
+
+
+def test_index_track_descriptor_persists_when_song_row_absent(monkeypatch, tmp_path):
+    """Hook should ensure the songs row exists before persisting descriptors."""
+    from app.services.sonic_descriptor_service import SonicDescriptorService
+    from app.resources.metadata_db import MetadataDB
+
+    # Patch DB to tmp
+    db_path = tmp_path / "metadata_test.db"
+    monkeypatch.setattr("app.resources.metadata_db.DB_PATH", db_path)
+    monkeypatch.setattr("app.resources.metadata_db.DB_DIR", tmp_path)
+    MetadataDB._instance = None
+    MetadataDB.init()
+
+    vocab_path = tmp_path / "prompts.json"
+    vocab_path.write_text('{"version":1,"groups":{"e":["punchy","ambient"]}}')
+    embs_path = tmp_path / "embs.npy"
+    np.save(embs_path, np.eye(2, dtype=np.float32))
+    svc = SonicDescriptorService(
+        prompt_vocab_path=vocab_path,
+        embeddings_path=embs_path,
+        cluster_dir=tmp_path / "c",
+        classifier_dir=tmp_path / "cls",
+        top_k_tags=2,
+    )
+
+    # Simulate the bulk hook's per-track invocation: ensure_song first, then index
+    MetadataDB.ensure_song(artist="Test Artist", title="Sample Song", collection_name="col1")
+    audio_vec = np.array([0.9, 0.1], dtype=np.float32)
+    svc.index_track_descriptor(
+        collection="col1",
+        slug="test-artist-sample-song",
+        audio_vector=audio_vec,
+    )
+
+    desc = MetadataDB.get_sonic_descriptor("test-artist-sample-song")
+    assert desc is not None
+    assert len(desc["tags"]) == 2
+    assert desc["tags"][0]["tag"] == "punchy"
+    MetadataDB._instance = None

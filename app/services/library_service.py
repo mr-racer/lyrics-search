@@ -654,6 +654,10 @@ class LibraryService:
                     continue
                 song_slug = "-".join(artist.lower().split()) + "-" + "-".join(title.lower().split())
                 try:
+                    # Ensure songs row exists (idempotent); SongFacts may have skipped this track,
+                    # in which case upsert_sonic_descriptor's UPDATE would silently no-op.
+                    from app.resources.metadata_db import MetadataDB
+                    MetadataDB.ensure_song(artist=artist, title=title, collection_name=collection_name)
                     self.sonic_descriptor_service.index_track_descriptor(
                         collection=collection_name,
                         slug=song_slug,
