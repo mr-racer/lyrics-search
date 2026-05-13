@@ -202,3 +202,37 @@ def test_get_sonic_clusters_empty_when_no_labels(client, monkeypatch):
     r = client.get("/api/v1/library/sonic-clusters?collection=anything")
     assert r.status_code == 200
     assert r.json() == []
+
+
+def test_post_train_classifier_returns_job_id(client, monkeypatch):
+    captured: dict = {}
+
+    async def fake_train(collection: str):
+        captured["collection"] = collection
+        return {"status": "ready", "accuracy": 0.85, "classes": ["A", "B"]}
+
+    monkeypatch.setattr(
+        "app.api.routes.library._run_classifier_training_job",
+        fake_train,
+    )
+
+    r = client.post("/api/v1/library/sonic-classifier/train?collection=test_col")
+    assert r.status_code == 202
+    body = r.json()
+    assert "job_id" in body
+
+
+def test_get_classifier_status_passes_through(client, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.sonic_descriptor_service.SonicDescriptorService.get_classifier_status",
+        lambda self, collection: {
+            "status": "ready",
+            "trained_at": 12345.0,
+            "accuracy": 0.78,
+            "classes": ["Lo-fi indie", "Drone"],
+        },
+    )
+    r = client.get("/api/v1/library/sonic-classifier/status?collection=test_col")
+    assert r.status_code == 200
+    assert r.json()["status"] == "ready"
+    assert r.json()["classes"] == ["Lo-fi indie", "Drone"]

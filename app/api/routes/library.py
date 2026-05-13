@@ -752,3 +752,63 @@ async def get_sonic_clusters(
         }
         for cid, slugs in by_id.items()
     ]
+
+
+# ── Sonic classifier (MLP training job) ───────────────────────────────────────
+
+_TRAINING_JOBS: dict[str, dict] = {}
+
+
+async def _run_classifier_training_job(collection: str) -> dict:
+    """Run MLP classifier training in a thread."""
+    import functools
+    svc = _APP_STATE.get("sonic_descriptor_service")
+    db = _APP_STATE.get("db_client")
+    if svc is None or db is None:
+        raise RuntimeError("services unavailable")
+    loop = asyncio.get_running_loop()
+    fn = functools.partial(svc.train_classifier, db.qdrant, collection)
+    return await loop.run_in_executor(None, fn)
+
+
+@router.post("/sonic-classifier/train", status_code=202)
+async def post_train_classifier(
+    request: Request,
+    collection: str = Query(..., description="Collection to train classifier on"),
+) -> dict:
+    """Train MLP classifier on labeled clusters. Returns job_id immediately."""
+    job_id = uuid.uuid4().hex[:12]
+    _TRAINING_JOBS[job_id] = {"status": "running", "result": None, "error": None}
+
+    async def _runner():
+        try:
+            from app.api.routes import library as _self_mod
+            result = await _self_mod._run_classifier_training_job(collection)
+            _TRAINING_JOBS[job_id] = {"status": "completed", "result": result, "error": None}
+        except Exception as e:
+            logger.exception("[Classifier Training] job %s failed", job_id)
+            _TRAINING_JOBS[job_id] = {"status": "failed", "result": None, "error": str(e)}
+
+    asyncio.create_task(_runner())
+    return {"job_id": job_id, "status": "pending"}
+
+
+@router.get("/sonic-classifier/status")
+async def get_sonic_classifier_status(
+    request: Request,
+    collection: str = Query(..., description="Collection name"),
+) -> dict:
+    """Return readiness of the classifier."""
+    svc = request.app.state.sonic_descriptor_service
+    if svc is None:
+        raise HTTPException(status_code=503, detail="Sonic Descriptor Service unavailable")
+    return svc.get_classifier_status(collection=collection)
+
+
+@router.get("/sonic-classifier/jobs/{job_id}")
+async def get_training_job(job_id: str) -> dict:
+    """Inspect the state of a training job."""
+    job = _TRAINING_JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Training job {job_id} not found")
+    return {"job_id": job_id, **job}
