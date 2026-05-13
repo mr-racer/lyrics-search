@@ -150,7 +150,7 @@ class SonicDescriptorService:
         self,
         qdrant,
         collection: str,
-        audio_vector_name: str = "audio",
+        audio_vector_name: str = "clap",
         batch_size: int = 500,
     ) -> int:
         """Scroll all points in ``collection``, compute tags per track, persist to MetadataDB.
@@ -189,7 +189,7 @@ class SonicDescriptorService:
         self,
         qdrant,
         collection: str,
-        audio_vector_name: str = "audio",
+        audio_vector_name: str = "clap",
         min_cluster_size: int = 5,
     ) -> dict:
         """Run HDBSCAN over all CLAP vectors in collection, persist assignments + representatives.
@@ -322,7 +322,7 @@ class SonicDescriptorService:
         self,
         qdrant,
         collection: str,
-        audio_vector_name: str = "audio",
+        audio_vector_name: str = "clap",
         test_size: float = 0.2,
         random_state: int = 0,
     ) -> dict:
@@ -413,6 +413,8 @@ class SonicDescriptorService:
         }
         meta_path = self.classifier_dir / f"{collection}_meta.json"
         meta_path.write_text(json.dumps(meta))
+        # Invalidate cached classifier so subsequent predict_class calls reload from disk
+        self._classifier_cache.pop(collection, None)
         logger.info(
             "[SonicDescriptor] trained classifier for '%s': accuracy=%.3f, classes=%s",
             collection, accuracy, classes,
@@ -474,7 +476,7 @@ class SonicDescriptorService:
         self,
         qdrant,
         collection: str,
-        audio_vector_name: str = "audio",
+        audio_vector_name: str = "clap",
         batch_size: int = 500,
     ) -> int:
         """Predict sonic_class for every track in collection and persist to MetadataDB.

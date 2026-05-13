@@ -146,3 +146,50 @@ def test_get_classifier_status_ready(svc):
     assert status["status"] == "ready"
     assert status["accuracy"] >= 0.9
     assert "Cluster A" in status["classes"]
+
+
+def test_train_classifier_invalidates_predict_cache(svc):
+    """Retraining must invalidate the in-memory classifier cache so predict_class sees fresh weights."""
+    fake_qdrant, X, slugs = _stage_two_clusters(svc, collection="invalidate_test")
+    svc.train_classifier(qdrant=fake_qdrant, collection="invalidate_test", audio_vector_name="audio")
+
+    # Prime the cache
+    v = np.array([4.9, 0.1, 0.0, 0.0], dtype=np.float32)
+    label_before, _ = svc.predict_class(collection="invalidate_test", audio_vector=v)
+    assert label_before == "Cluster A"
+    # Cache populated
+    assert "invalidate_test" in svc._classifier_cache
+
+    # Retrain with relabeled clusters — flip labels to verify the new model is loaded
+    svc.save_cluster_labels(collection="invalidate_test", labels={0: "Renamed A", 1: "Renamed B"})
+
+    # Re-stage qdrant points for the retrain pass
+    points = []
+    for i, s in enumerate(slugs):
+        p = MagicMock()
+        p.id = f"id-{i}"
+        p.payload = {"slug": s}
+        p.vector = {"audio": X[i].tolist()}
+        points.append(p)
+    fake_qdrant.scroll.side_effect = [(points, None)]
+
+    svc.train_classifier(qdrant=fake_qdrant, collection="invalidate_test", audio_vector_name="audio")
+    # Cache must be invalidated
+    assert "invalidate_test" not in svc._classifier_cache
+
+    # New prediction must reflect the new labels
+    label_after, _ = svc.predict_class(collection="invalidate_test", audio_vector=v)
+    assert label_after == "Renamed A"
+
+
+def test_service_defaults_to_clap_vector_name(svc):
+    """The audio_vector_name parameter defaults to 'clap' to match the Qdrant vector storage."""
+    import inspect
+    sig = inspect.signature(svc.compute_tags_bulk)
+    assert sig.parameters["audio_vector_name"].default == "clap"
+    sig = inspect.signature(svc.cluster_library)
+    assert sig.parameters["audio_vector_name"].default == "clap"
+    sig = inspect.signature(svc.train_classifier)
+    assert sig.parameters["audio_vector_name"].default == "clap"
+    sig = inspect.signature(svc.apply_classifier_bulk)
+    assert sig.parameters["audio_vector_name"].default == "clap"
