@@ -70,6 +70,11 @@ _SCHEMA_SQL: Tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_sf_song_lang ON song_facts(song_slug, lang)",
     "CREATE INDEX IF NOT EXISTS idx_artists_collection ON artists(collection_name)",
     "CREATE INDEX IF NOT EXISTS idx_songs_collection ON songs(collection_name)",
+    # Sonic Descriptor columns (added in Plan 1)
+    "ALTER TABLE songs ADD COLUMN sonic_tags_json TEXT",
+    "ALTER TABLE songs ADD COLUMN sonic_class TEXT",
+    "ALTER TABLE songs ADD COLUMN sonic_class_confidence REAL",
+    "ALTER TABLE songs ADD COLUMN audio_signature TEXT",
 )
 
 
@@ -104,10 +109,15 @@ class MetadataDB:
 
     @classmethod
     def init(cls) -> None:
-        """Create tables & indexes if they don't exist yet."""
+        """Create tables, indexes, and any new ALTER TABLE statements idempotently."""
         conn = cls._connect()
         for sql in _SCHEMA_SQL:
-            conn.execute(sql)
+            try:
+                conn.execute(sql)
+            except sqlite3.OperationalError as e:
+                # ALTER TABLE ... ADD COLUMN re-runs raise "duplicate column name"; ignore.
+                if "duplicate column" not in str(e).lower():
+                    raise
         conn.commit()
         logger.info("[MetadataDB] Schema initialised")
 
@@ -471,3 +481,56 @@ class MetadataDB:
             (track_id, collection_name),
         ).fetchone()
         return row[0] if row else None
+
+    # ── Sonic Descriptor ──
+
+    @classmethod
+    def upsert_sonic_descriptor(
+        cls,
+        song_slug: str,
+        tags: Optional[List[Dict]] = None,
+        sonic_class: Optional[str] = None,
+        confidence: Optional[float] = None,
+        audio_signature: Optional[str] = None,
+    ) -> None:
+        """Persist Sonic Descriptor fields for a track. Pass None to leave a field unchanged."""
+        import json as _json
+        conn = cls._connect()
+        sets = []
+        params: list = []
+        if tags is not None:
+            sets.append("sonic_tags_json = ?")
+            params.append(_json.dumps(tags))
+        if sonic_class is not None:
+            sets.append("sonic_class = ?")
+            params.append(sonic_class)
+        if confidence is not None:
+            sets.append("sonic_class_confidence = ?")
+            params.append(confidence)
+        if audio_signature is not None:
+            sets.append("audio_signature = ?")
+            params.append(audio_signature)
+        if not sets:
+            return
+        params.append(song_slug)
+        conn.execute(f"UPDATE songs SET {', '.join(sets)} WHERE slug = ?", params)
+        conn.commit()
+
+    @classmethod
+    def get_sonic_descriptor(cls, song_slug: str) -> Optional[Dict]:
+        """Return dict with tags / sonic_class / sonic_class_confidence / audio_signature, or None if song unknown."""
+        import json as _json
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT sonic_tags_json, sonic_class, sonic_class_confidence, audio_signature FROM songs WHERE slug = ?",
+            (song_slug,),
+        ).fetchone()
+        if row is None:
+            return None
+        tags_json, sclass, conf, sig = row
+        return {
+            "tags": _json.loads(tags_json) if tags_json else [],
+            "sonic_class": sclass,
+            "sonic_class_confidence": conf,
+            "audio_signature": sig,
+        }
