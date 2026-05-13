@@ -130,3 +130,19 @@ def test_apply_classifier_bulk_persists_sonic_class(svc, tmp_path, monkeypatch):
     cluster_a_slugs = {s for s in slugs[:20]}
     cluster_a_predictions = [(slug, cls) for slug, cls, _ in persisted if slug in cluster_a_slugs]
     assert all(cls == "Cluster A" for _, cls in cluster_a_predictions)
+
+
+def test_get_classifier_status_untrained(svc):
+    status = svc.get_classifier_status(collection="nothing_here")
+    assert status["status"] == "untrained"
+    assert status["trained_at"] is None
+    assert status["classes"] == []
+
+
+def test_get_classifier_status_ready(svc):
+    fake_qdrant, X, slugs = _stage_two_clusters(svc, collection="status_test")
+    svc.train_classifier(qdrant=fake_qdrant, collection="status_test", audio_vector_name="audio")
+    status = svc.get_classifier_status(collection="status_test")
+    assert status["status"] == "ready"
+    assert status["accuracy"] >= 0.9
+    assert "Cluster A" in status["classes"]

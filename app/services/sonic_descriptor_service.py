@@ -429,6 +429,19 @@ class SonicDescriptorService:
             return None, conf
         return label, conf
 
+    def get_classifier_status(self, collection: str) -> dict:
+        """Return readiness info for the classifier on this collection."""
+        meta_path = self.classifier_dir / f"{collection}_meta.json"
+        if not meta_path.exists():
+            return {"status": "untrained", "trained_at": None, "accuracy": None, "classes": []}
+        meta = json.loads(meta_path.read_text())
+        return {
+            "status": meta.get("status", "ready"),
+            "trained_at": meta.get("trained_at"),
+            "accuracy": meta.get("accuracy"),
+            "classes": meta.get("classes", []),
+        }
+
     def apply_classifier_bulk(
         self,
         qdrant,
