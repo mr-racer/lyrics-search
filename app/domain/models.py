@@ -174,3 +174,42 @@ class PlannerOutput(BaseModel):
 # }
 
 LLMResponse = Annotated[SearchAction | AnswerAction, Field(discriminator="action")]
+
+
+# SONIC DESCRIPTOR MODELS
+
+
+class SonicTag(BaseModel):
+    """One adjective tag with similarity score from CLAP prompt-probing."""
+    tag: str
+    score: float
+
+
+class SonicDescriptor(BaseModel):
+    """Combined interpretable descriptor for a track."""
+    track_id: str
+    tags: list[SonicTag] = []
+    sonic_class: str | None = None
+    sonic_class_confidence: float | None = None
+
+
+class ClassifierStatus(BaseModel):
+    """Readiness state of the custom sonic-class MLP classifier."""
+    status: Literal["untrained", "training", "ready", "failed"]
+    trained_at: float | None = None
+    accuracy: float | None = None
+    classes: list[str] = []
+
+
+class ClusterRepresentative(BaseModel):
+    """One cluster's id, size, and top-N representative tracks (closest to centroid)."""
+    cluster_id: int
+    size: int
+    representative_tracks: list[dict]  # [{track_id, title, artist, cover_art_path}, ...]
+    current_label: str | None = None
+
+
+class ClusterLabelsRequest(BaseModel):
+    """Body for POST /library/clusters/labels — user-assigned cluster names."""
+    collection: str
+    labels: dict[int, str]  # {0: "Lo-fi indie", 1: "Cinematic drone", ...}
