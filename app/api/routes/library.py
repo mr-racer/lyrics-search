@@ -594,3 +594,42 @@ async def get_sonic_descriptor(track_slug: str) -> dict:
     if desc is None:
         raise HTTPException(status_code=404, detail=f"Track {track_slug} not found")
     return {"track_id": track_slug, **desc}
+
+
+@router.get("/sonic-prompts")
+async def get_sonic_prompts(request: Request) -> dict:
+    """Return the current prompt vocabulary JSON."""
+    svc = request.app.state.sonic_descriptor_service
+    if svc is None:
+        raise HTTPException(status_code=503, detail="Sonic Descriptor Service unavailable")
+    import json as _json
+    if not svc.prompt_vocab_path.exists():
+        return {"version": 0, "groups": {}}
+    return _json.loads(svc.prompt_vocab_path.read_text(encoding="utf-8"))
+
+
+@router.put("/sonic-prompts")
+async def put_sonic_prompts(payload: dict, request: Request) -> dict:
+    """Overwrite the prompt vocabulary. Invalidates cached embeddings — re-tagging required.
+
+    The caller is responsible for triggering bulk re-tagging via a separate endpoint or
+    by running a background job.
+    """
+    svc = request.app.state.sonic_descriptor_service
+    if svc is None:
+        raise HTTPException(status_code=503, detail="Sonic Descriptor Service unavailable")
+    if "groups" not in payload:
+        raise HTTPException(status_code=400, detail="payload must contain 'groups' object")
+
+    import json as _json
+    svc.prompt_vocab_path.parent.mkdir(parents=True, exist_ok=True)
+    svc.prompt_vocab_path.write_text(_json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    # Invalidate caches
+    svc._prompts = None
+    svc._prompt_embeddings = None
+    if svc.embeddings_path.exists():
+        svc.embeddings_path.unlink()
+
+    n_prompts = sum(len(v) for v in payload.get("groups", {}).values())
+    return {"ok": True, "n_prompts": n_prompts}
