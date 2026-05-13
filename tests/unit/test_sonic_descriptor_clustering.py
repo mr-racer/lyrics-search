@@ -58,3 +58,19 @@ def test_cluster_library_writes_assignments_and_representatives(svc, tmp_path):
     assert all(r["cluster_id"] >= 0 for r in reps)
     for r in reps:
         assert 1 <= len(r["representative_tracks"]) <= 5
+
+
+def test_save_cluster_labels_writes_and_round_trips(svc):
+    svc.save_cluster_labels(collection="test", labels={0: "Lo-fi indie", 1: "Cinematic drone"})
+    labels_path = svc.cluster_dir / "test_labels.json"
+    assert labels_path.exists()
+    persisted = json.loads(labels_path.read_text())
+    # JSON keys are strings
+    assert persisted == {"0": "Lo-fi indie", "1": "Cinematic drone"}
+
+
+def test_save_cluster_labels_overwrites(svc):
+    svc.save_cluster_labels(collection="test", labels={0: "First name"})
+    svc.save_cluster_labels(collection="test", labels={0: "New name", 1: "Added"})
+    persisted = json.loads((svc.cluster_dir / "test_labels.json").read_text())
+    assert persisted == {"0": "New name", "1": "Added"}

@@ -270,3 +270,19 @@ class SonicDescriptorService:
         for r in reps:
             r["current_label"] = labels.get(str(r["cluster_id"]))
         return reps
+
+    def save_cluster_labels(self, collection: str, labels: dict[int, str]) -> None:
+        """Persist user-assigned cluster names. Overwrites any existing labels file."""
+        self.cluster_dir.mkdir(parents=True, exist_ok=True)
+        path = self.cluster_dir / f"{collection}_labels.json"
+        # JSON-safe keys (stringify ints)
+        path.write_text(json.dumps({str(k): v for k, v in labels.items()}, ensure_ascii=False))
+        logger.info("[SonicDescriptor] saved %d cluster labels for %s", len(labels), collection)
+
+    def load_cluster_labels(self, collection: str) -> dict[int, str]:
+        """Return labels dict with int keys, or empty dict if no labels file exists."""
+        path = self.cluster_dir / f"{collection}_labels.json"
+        if not path.exists():
+            return {}
+        raw = json.loads(path.read_text())
+        return {int(k): v for k, v in raw.items()}
