@@ -286,3 +286,104 @@ class SonicDescriptorService:
             return {}
         raw = json.loads(path.read_text())
         return {int(k): v for k, v in raw.items()}
+
+    def train_classifier(
+        self,
+        qdrant,
+        collection: str,
+        audio_vector_name: str = "audio",
+        test_size: float = 0.2,
+        random_state: int = 0,
+    ) -> dict:
+        """Train sklearn MLP on (CLAP vector, cluster_label) pairs for this collection.
+
+        Returns ``{"status": "ready"|"failed", "accuracy": float, "trained_at": ts, "classes": [...]}``.
+        Persists model to ``classifier_dir/<collection>.joblib`` and meta to ``<collection>_meta.json``.
+        """
+        import time
+        import joblib
+        from sklearn.model_selection import train_test_split
+        from sklearn.neural_network import MLPClassifier
+
+        labels_map = self.load_cluster_labels(collection)
+        if not labels_map:
+            raise RuntimeError(f"No cluster labels found for collection '{collection}'. Run curator first.")
+
+        assignments_path = self.cluster_dir / f"{collection}_assignments.json"
+        if not assignments_path.exists():
+            raise RuntimeError(f"No cluster assignments for '{collection}'. Run cluster_library first.")
+        assignments: dict[str, int] = json.loads(assignments_path.read_text())
+
+        # Build labeled set: only tracks whose cluster has a user-assigned label, exclude noise (-1)
+        labeled_slugs: list[str] = []
+        labeled_y: list[str] = []
+        for slug, cid in assignments.items():
+            if cid == -1:
+                continue
+            label = labels_map.get(int(cid))
+            if label is None:
+                continue  # cluster not yet labeled
+            labeled_slugs.append(slug)
+            labeled_y.append(label)
+
+        if len(labeled_slugs) < 2:
+            raise RuntimeError(f"Need at least 2 labeled tracks to train; got {len(labeled_slugs)}.")
+
+        # Fetch vectors for labeled slugs only
+        slug_to_vec: dict[str, np.ndarray] = {}
+        offset = None
+        while True:
+            points, next_offset = qdrant.scroll(
+                collection_name=collection,
+                offset=offset,
+                limit=500,
+                with_payload=["slug"],
+                with_vectors=[audio_vector_name],
+            )
+            if not points:
+                break
+            for p in points:
+                pl_slug = (p.payload or {}).get("slug") or str(p.id)
+                vec = (p.vector or {}).get(audio_vector_name) if isinstance(p.vector, dict) else None
+                if vec is not None and pl_slug in set(labeled_slugs):
+                    slug_to_vec[pl_slug] = np.asarray(vec, dtype=np.float32)
+            if next_offset is None:
+                break
+            offset = next_offset
+
+        X = np.vstack([slug_to_vec[s] for s in labeled_slugs if s in slug_to_vec])
+        y = [labeled_y[i] for i, s in enumerate(labeled_slugs) if s in slug_to_vec]
+
+        if len(set(y)) < 2:
+            raise RuntimeError(f"Need at least 2 distinct class labels to train; got {set(y)}.")
+
+        # Train/test split (stratified if possible)
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=test_size, random_state=random_state, stratify=y if len(set(y)) > 1 else None
+        )
+
+        model = MLPClassifier(hidden_layer_sizes=(256, 128), max_iter=300, random_state=random_state)
+        model.fit(X_train, y_train)
+        accuracy = float(model.score(X_test, y_test))
+
+        # Persist
+        self.classifier_dir.mkdir(parents=True, exist_ok=True)
+        model_path = self.classifier_dir / f"{collection}.joblib"
+        joblib.dump(model, model_path)
+
+        classes = sorted(set(y))
+        meta = {
+            "status": "ready",
+            "trained_at": time.time(),
+            "accuracy": accuracy,
+            "classes": classes,
+            "n_train": len(X_train),
+            "n_test": len(X_test),
+        }
+        meta_path = self.classifier_dir / f"{collection}_meta.json"
+        meta_path.write_text(json.dumps(meta))
+        logger.info(
+            "[SonicDescriptor] trained classifier for '%s': accuracy=%.3f, classes=%s",
+            collection, accuracy, classes,
+        )
+        return meta
