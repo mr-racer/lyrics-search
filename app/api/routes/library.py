@@ -3,6 +3,7 @@
 import asyncio
 import heapq
 import logging
+import uuid
 from collections import Counter
 from pathlib import Path
 from typing import Optional
@@ -633,3 +634,58 @@ async def put_sonic_prompts(payload: dict, request: Request) -> dict:
 
     n_prompts = sum(len(v) for v in payload.get("groups", {}).values())
     return {"ok": True, "n_prompts": n_prompts}
+
+
+# ── Cluster discovery (HDBSCAN job) ───────────────────────────────────────────
+
+_CLUSTER_JOBS: dict[str, dict] = {}
+_APP_STATE: dict = {}
+
+
+def register_app_state(app) -> None:
+    """Called from main.py startup to expose services to module-level helpers."""
+    _APP_STATE["sonic_descriptor_service"] = app.state.sonic_descriptor_service
+    _APP_STATE["db_client"] = app.state.db_client
+
+
+async def _run_cluster_discovery_job(collection: str) -> dict:
+    """Run HDBSCAN clustering for ``collection`` in a thread (CPU-bound)."""
+    import functools
+    svc = _APP_STATE.get("sonic_descriptor_service")
+    db = _APP_STATE.get("db_client")
+    if svc is None or db is None:
+        raise RuntimeError("services unavailable")
+    loop = asyncio.get_running_loop()
+    fn = functools.partial(svc.cluster_library, db.qdrant, collection)
+    return await loop.run_in_executor(None, fn)
+
+
+@router.post("/cluster-discovery", status_code=202)
+async def post_cluster_discovery(
+    request: Request,
+    collection: str = Query(..., description="Collection to cluster"),
+) -> dict:
+    """Trigger HDBSCAN clustering. Returns immediately with a job_id."""
+    job_id = uuid.uuid4().hex[:12]
+    _CLUSTER_JOBS[job_id] = {"status": "running", "result": None, "error": None}
+
+    async def _runner():
+        try:
+            from app.api.routes import library as _self_mod
+            result = await _self_mod._run_cluster_discovery_job(collection)
+            _CLUSTER_JOBS[job_id] = {"status": "completed", "result": result, "error": None}
+        except Exception as e:
+            logger.exception("[Cluster Discovery] job %s failed", job_id)
+            _CLUSTER_JOBS[job_id] = {"status": "failed", "result": None, "error": str(e)}
+
+    asyncio.create_task(_runner())
+    return {"job_id": job_id, "status": "pending"}
+
+
+@router.get("/cluster-jobs/{job_id}")
+async def get_cluster_job(job_id: str) -> dict:
+    """Return the current state of a clustering job."""
+    job = _CLUSTER_JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    return {"job_id": job_id, **job}

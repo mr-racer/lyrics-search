@@ -107,6 +107,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         app.state.job_tracker = JobTracker()
 
+        # Expose services to module-level helpers in library routes (for async jobs)
+        from app.api.routes.library import register_app_state as _register_lib_state
+        _register_lib_state(app)
+
         logger.info("[OK] Qdrant connected, services ready — models will preload in background")
 
         # Initialise SQLite metadata store and migrate legacy .txt cache

@@ -87,3 +87,40 @@ def test_put_sonic_prompts_updates_vocab_and_invalidates_cache(client, tmp_path,
     assert json.loads(vocab_path.read_text()) == new_vocab
     # Embeddings cache should be deleted
     assert not emb_path.exists()
+
+
+def test_post_cluster_discovery_returns_job_id(client, monkeypatch):
+    captured: dict = {}
+
+    async def fake_run_clustering(collection: str):
+        captured["called_with"] = collection
+        return {"n_tracks": 10, "n_clusters": 2}
+
+    monkeypatch.setattr(
+        "app.api.routes.library._run_cluster_discovery_job",
+        fake_run_clustering,
+    )
+
+    r = client.post("/api/v1/library/cluster-discovery?collection=test_col")
+    assert r.status_code == 202
+    body = r.json()
+    assert "job_id" in body
+    assert body["status"] == "pending"
+
+
+def test_get_cluster_job_status_returns_state(client, monkeypatch):
+    from app.api.routes import library as lib_routes
+    lib_routes._CLUSTER_JOBS["job-xyz"] = {
+        "status": "completed",
+        "result": {"n_tracks": 10, "n_clusters": 2},
+        "error": None,
+    }
+    r = client.get("/api/v1/library/cluster-jobs/job-xyz")
+    assert r.status_code == 200
+    assert r.json()["status"] == "completed"
+    assert r.json()["result"]["n_clusters"] == 2
+
+
+def test_get_cluster_job_unknown_returns_404(client):
+    r = client.get("/api/v1/library/cluster-jobs/does-not-exist")
+    assert r.status_code == 404
