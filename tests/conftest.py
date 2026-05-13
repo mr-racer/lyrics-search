@@ -2,8 +2,12 @@
 
 import pytest
 import sys
+import types
 from pathlib import Path
 from _pytest.python import Package
+
+# Stub heavy optional deps (laion_clap) before any app.* module loads them.
+sys.modules.setdefault("laion_clap", types.ModuleType("laion_clap"))
 
 
 def pytest_configure(config):

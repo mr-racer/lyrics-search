@@ -125,6 +125,27 @@ class SonicDescriptorService:
         order = np.argsort(-sims)[: self.top_k_tags]
         return [{"tag": prompts[i], "score": float(sims[i])} for i in order]
 
+    def index_track_descriptor(
+        self,
+        collection: str,
+        slug: str,
+        audio_vector: np.ndarray,
+    ) -> None:
+        """Convenience hook for the indexing pipeline: compute tags + class for one track, persist.
+
+        Used by ``LibraryService`` after each CLAP-encoded track is upserted to Qdrant.
+        Safe to call without a trained classifier — class will be persisted as NULL.
+        """
+        from app.resources.metadata_db import MetadataDB
+        tags = self.compute_tags(audio_vector=audio_vector)
+        label, conf = self.predict_class(collection=collection, audio_vector=audio_vector)
+        MetadataDB.upsert_sonic_descriptor(
+            song_slug=slug,
+            tags=tags,
+            sonic_class=label,
+            confidence=conf,
+        )
+
     def compute_tags_bulk(
         self,
         qdrant,

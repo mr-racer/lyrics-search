@@ -27,6 +27,7 @@ from ..resources.model_registry import ModelRegistry
 from ..services.search_service import SearchService
 from ..services.library_service import LibraryService
 from ..services.job_tracker import JobTracker
+from ..services.sonic_descriptor_service import SonicDescriptorService
 from .routes import search_router, library_router, chat_router, metadata_router
 from .sse_utils import event_stream
 
@@ -98,9 +99,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         app.state.db_client = db
         app.state.search_service = SearchService(db.lyrics_db)
+        app.state.sonic_descriptor_service = SonicDescriptorService()
         app.state.library_service = LibraryService(
             search_service=app.state.search_service,
             db_client=db,
+            sonic_descriptor_service=app.state.sonic_descriptor_service,
         )
         app.state.job_tracker = JobTracker()
 
@@ -131,6 +134,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.warning("   App is running in limited mode (Qdrant unavailable).")
         app.state.db_client = None
         app.state.search_service = None
+        app.state.sonic_descriptor_service = None
         app.state.library_service = None
         app.state.job_tracker = JobTracker()
 
