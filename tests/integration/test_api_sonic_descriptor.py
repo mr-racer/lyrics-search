@@ -124,3 +124,23 @@ def test_get_cluster_job_status_returns_state(client, monkeypatch):
 def test_get_cluster_job_unknown_returns_404(client):
     r = client.get("/api/v1/library/cluster-jobs/does-not-exist")
     assert r.status_code == 404
+
+
+def test_get_cluster_representatives_returns_list(client, monkeypatch):
+    fake_reps = [
+        {
+            "cluster_id": 0,
+            "size": 12,
+            "representative_tracks": [
+                {"track_id": "t1", "title": "Song", "artist": "Artist", "cover_art_path": None},
+            ],
+            "current_label": "Lo-fi indie",
+        }
+    ]
+    monkeypatch.setattr(
+        "app.services.sonic_descriptor_service.SonicDescriptorService.get_cluster_representatives",
+        lambda self, collection: fake_reps,
+    )
+    r = client.get("/api/v1/library/clusters/representatives?collection=test_col")
+    assert r.status_code == 200
+    assert r.json() == fake_reps

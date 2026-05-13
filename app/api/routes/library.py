@@ -689,3 +689,15 @@ async def get_cluster_job(job_id: str) -> dict:
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
     return {"job_id": job_id, **job}
+
+
+@router.get("/clusters/representatives")
+async def get_cluster_representatives(
+    request: Request,
+    collection: str = Query(..., description="Collection name"),
+) -> list[dict]:
+    """Return the cluster grid for the curator UI: id, size, representatives, current label."""
+    svc = request.app.state.sonic_descriptor_service
+    if svc is None:
+        raise HTTPException(status_code=503, detail="Sonic Descriptor Service unavailable")
+    return svc.get_cluster_representatives(collection=collection)
