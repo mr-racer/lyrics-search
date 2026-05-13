@@ -144,3 +144,24 @@ def test_get_cluster_representatives_returns_list(client, monkeypatch):
     r = client.get("/api/v1/library/clusters/representatives?collection=test_col")
     assert r.status_code == 200
     assert r.json() == fake_reps
+
+
+def test_post_cluster_labels_persists(client, monkeypatch):
+    captured: dict = {}
+
+    def fake_save(self, collection, labels):
+        captured["collection"] = collection
+        captured["labels"] = labels
+
+    monkeypatch.setattr(
+        "app.services.sonic_descriptor_service.SonicDescriptorService.save_cluster_labels",
+        fake_save,
+    )
+
+    r = client.post(
+        "/api/v1/library/clusters/labels",
+        json={"collection": "test_col", "labels": {"0": "Lo-fi indie", "1": "Cinematic drone"}},
+    )
+    assert r.status_code == 200
+    assert captured["collection"] == "test_col"
+    assert captured["labels"] == {0: "Lo-fi indie", 1: "Cinematic drone"}

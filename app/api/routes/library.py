@@ -701,3 +701,24 @@ async def get_cluster_representatives(
     if svc is None:
         raise HTTPException(status_code=503, detail="Sonic Descriptor Service unavailable")
     return svc.get_cluster_representatives(collection=collection)
+
+
+@router.post("/clusters/labels")
+async def post_cluster_labels(payload: dict, request: Request) -> dict:
+    """Persist user-assigned cluster labels.
+
+    Body: ``{"collection": str, "labels": {"<cluster_id_int>": "Label name", ...}}``.
+    """
+    svc = request.app.state.sonic_descriptor_service
+    if svc is None:
+        raise HTTPException(status_code=503, detail="Sonic Descriptor Service unavailable")
+    collection = payload.get("collection")
+    raw_labels = payload.get("labels", {})
+    if not collection or not isinstance(raw_labels, dict):
+        raise HTTPException(status_code=400, detail="Body must include 'collection' and 'labels' dict")
+    try:
+        labels = {int(k): v for k, v in raw_labels.items()}
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Label keys must be integer cluster ids")
+    svc.save_cluster_labels(collection=collection, labels=labels)
+    return {"ok": True, "n_labels": len(labels)}
