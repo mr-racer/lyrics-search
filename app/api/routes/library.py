@@ -722,3 +722,33 @@ async def post_cluster_labels(payload: dict, request: Request) -> dict:
         raise HTTPException(status_code=400, detail="Label keys must be integer cluster ids")
     svc.save_cluster_labels(collection=collection, labels=labels)
     return {"ok": True, "n_labels": len(labels)}
+
+
+@router.get("/sonic-clusters")
+async def get_sonic_clusters(
+    request: Request,
+    collection: str = Query(..., description="Collection name"),
+) -> list[dict]:
+    """Return labeled clusters for Sonic Map overlay. Empty list if curator not run yet."""
+    svc = request.app.state.sonic_descriptor_service
+    if svc is None:
+        raise HTTPException(status_code=503, detail="Sonic Descriptor Service unavailable")
+    labels = svc.load_cluster_labels(collection=collection)
+    assignments = svc.load_cluster_assignments(collection=collection)
+    if not labels or not assignments:
+        return []
+
+    by_id: dict[int, list[str]] = {}
+    for slug, cid in assignments.items():
+        if cid == -1:
+            continue
+        by_id.setdefault(cid, []).append(slug)
+    return [
+        {
+            "cluster_id": cid,
+            "label": labels.get(cid, f"Cluster {cid}"),
+            "size": len(slugs),
+            "member_slugs": slugs,
+        }
+        for cid, slugs in by_id.items()
+    ]

@@ -311,6 +311,13 @@ class SonicDescriptorService:
         raw = json.loads(path.read_text())
         return {int(k): v for k, v in raw.items()}
 
+    def load_cluster_assignments(self, collection: str) -> dict[str, int]:
+        """Return {slug: cluster_id} mapping for a collection, or {} if no clustering done."""
+        path = self.cluster_dir / f"{collection}_assignments.json"
+        if not path.exists():
+            return {}
+        return json.loads(path.read_text())
+
     def train_classifier(
         self,
         qdrant,

@@ -165,3 +165,40 @@ def test_post_cluster_labels_persists(client, monkeypatch):
     assert r.status_code == 200
     assert captured["collection"] == "test_col"
     assert captured["labels"] == {0: "Lo-fi indie", 1: "Cinematic drone"}
+
+
+def test_get_sonic_clusters_merges_labels_with_assignments(client, monkeypatch):
+    fake_labels = {0: "Lo-fi indie", 1: "Cinematic drone"}
+    fake_assignments = {"slug-a": 0, "slug-b": 0, "slug-c": 1, "slug-d": -1}
+
+    monkeypatch.setattr(
+        "app.services.sonic_descriptor_service.SonicDescriptorService.load_cluster_labels",
+        lambda self, collection: fake_labels,
+    )
+    monkeypatch.setattr(
+        "app.services.sonic_descriptor_service.SonicDescriptorService.load_cluster_assignments",
+        lambda self, collection: fake_assignments,
+    )
+
+    r = client.get("/api/v1/library/sonic-clusters?collection=test_col")
+    assert r.status_code == 200
+    body = r.json()
+    by_id = {c["cluster_id"]: c for c in body}
+    assert by_id[0]["label"] == "Lo-fi indie"
+    assert by_id[0]["size"] == 2
+    assert sorted(by_id[0]["member_slugs"]) == ["slug-a", "slug-b"]
+    assert -1 not in by_id
+
+
+def test_get_sonic_clusters_empty_when_no_labels(client, monkeypatch):
+    monkeypatch.setattr(
+        "app.services.sonic_descriptor_service.SonicDescriptorService.load_cluster_labels",
+        lambda self, collection: {},
+    )
+    monkeypatch.setattr(
+        "app.services.sonic_descriptor_service.SonicDescriptorService.load_cluster_assignments",
+        lambda self, collection: {},
+    )
+    r = client.get("/api/v1/library/sonic-clusters?collection=anything")
+    assert r.status_code == 200
+    assert r.json() == []
