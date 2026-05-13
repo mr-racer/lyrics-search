@@ -96,3 +96,28 @@ class SonicDescriptorService:
         self._prompt_embeddings = arr
         logger.info("[SonicDescriptor] computed and cached %s prompt embeddings to %s", arr.shape, self.embeddings_path)
         return arr
+
+    def compute_tags(self, audio_vector: np.ndarray) -> list[dict]:
+        """Return top-K {tag, score} for the given audio embedding via CLAP-prompt cosine sim.
+
+        ``audio_vector`` should already be normalized (CLAP output is). Prompt embeddings are
+        normalized inside this method to make scores interpretable as cosines in [-1, 1] —
+        in practice CLAP outputs are unit-norm so scores fall in [0, 1].
+        """
+        prompts = self.load_prompt_vocab()
+        prompt_embs = self.load_or_compute_prompt_embeddings()
+
+        # Normalize prompt embeddings row-wise
+        norms = np.linalg.norm(prompt_embs, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0  # avoid div-by-zero
+        prompt_unit = prompt_embs / norms
+
+        # Normalize audio vector
+        audio = audio_vector.astype(np.float32)
+        a_norm = np.linalg.norm(audio)
+        if a_norm > 0:
+            audio = audio / a_norm
+
+        sims = prompt_unit @ audio  # shape (N_prompts,)
+        order = np.argsort(-sims)[: self.top_k_tags]
+        return [{"tag": prompts[i], "score": float(sims[i])} for i in order]
