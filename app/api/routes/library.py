@@ -581,3 +581,16 @@ async def delete_collection(collection_name: str, request: Request):
         pass
 
     return {"deleted": True, "collection_name": collection_name}
+
+
+# ── Sonic Descriptor ──────────────────────────────────────────────────────────
+
+@router.get("/sonic-descriptor/{track_slug}")
+async def get_sonic_descriptor(track_slug: str) -> dict:
+    """Return tags + sonic_class + audio_signature for a track. 404 if track unknown."""
+    from app.resources.metadata_db import MetadataDB
+    MetadataDB.init()
+    desc = MetadataDB.get_sonic_descriptor(track_slug)
+    if desc is None:
+        raise HTTPException(status_code=404, detail=f"Track {track_slug} not found")
+    return {"track_id": track_slug, **desc}
