@@ -160,3 +160,113 @@ class SonicDescriptorService:
             offset = next_offset
         logger.info("[SonicDescriptor] bulk-tagged %d tracks in collection %s", n_processed, collection)
         return n_processed
+
+    def cluster_library(
+        self,
+        qdrant,
+        collection: str,
+        audio_vector_name: str = "audio",
+        min_cluster_size: int = 5,
+    ) -> dict:
+        """Run HDBSCAN over all CLAP vectors in collection, persist assignments + representatives.
+
+        Returns ``{"n_tracks": int, "n_clusters": int}``.
+        """
+        import hdbscan
+
+        # 1. Collect all vectors + slugs (need both for persistence + representatives)
+        vectors: list[np.ndarray] = []
+        slugs: list[str] = []
+        payloads: list[dict] = []
+
+        offset = None
+        while True:
+            points, next_offset = qdrant.scroll(
+                collection_name=collection,
+                offset=offset,
+                limit=500,
+                with_payload=["slug", "title", "artist", "cover_art_path"],
+                with_vectors=[audio_vector_name],
+            )
+            if not points:
+                break
+            for p in points:
+                vec = (p.vector or {}).get(audio_vector_name) if isinstance(p.vector, dict) else None
+                if vec is None:
+                    continue
+                vectors.append(np.asarray(vec, dtype=np.float32))
+                pl = p.payload or {}
+                slugs.append(pl.get("slug") or str(p.id))
+                payloads.append({
+                    "track_id": str(p.id),
+                    "title": pl.get("title") or "",
+                    "artist": pl.get("artist") or "",
+                    "cover_art_path": pl.get("cover_art_path"),
+                })
+            if next_offset is None:
+                break
+            offset = next_offset
+
+        if not vectors:
+            logger.warning("[SonicDescriptor] cluster_library: collection %s is empty", collection)
+            return {"n_tracks": 0, "n_clusters": 0}
+
+        X = np.vstack(vectors).astype(np.float32)
+        clusterer = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size, metric="euclidean")
+        labels = clusterer.fit_predict(X)
+
+        # 2. Persist assignments {slug: cluster_id}. Noise (label=-1) preserved but
+        #    excluded from representatives.
+        self.cluster_dir.mkdir(parents=True, exist_ok=True)
+        assignments_path = self.cluster_dir / f"{collection}_assignments.json"
+        assignments = {slugs[i]: int(labels[i]) for i in range(len(slugs))}
+        assignments_path.write_text(json.dumps(assignments))
+
+        # 3. Compute representatives (top-5 closest to centroid per cluster)
+        clusters_meta = self._compute_representatives(X, labels, payloads, top_n=5)
+        reps_path = self.cluster_dir / f"{collection}_representatives.json"
+        reps_path.write_text(json.dumps(clusters_meta))
+
+        unique_labels = set(int(l) for l in labels) - {-1}
+        logger.info(
+            "[SonicDescriptor] clustered %d tracks into %d clusters (collection=%s)",
+            len(slugs), len(unique_labels), collection,
+        )
+        return {"n_tracks": len(slugs), "n_clusters": len(unique_labels)}
+
+    def _compute_representatives(
+        self,
+        X: np.ndarray,
+        labels: np.ndarray,
+        payloads: list[dict],
+        top_n: int = 5,
+    ) -> list[dict]:
+        """For each non-noise cluster, return top-N tracks closest to its centroid."""
+        out: list[dict] = []
+        for cid in sorted({int(l) for l in labels} - {-1}):
+            idxs = np.where(labels == cid)[0]
+            if len(idxs) == 0:
+                continue
+            centroid = X[idxs].mean(axis=0)
+            dists = np.linalg.norm(X[idxs] - centroid, axis=1)
+            order = np.argsort(dists)[:top_n]
+            reps = [payloads[idxs[k]] for k in order]
+            out.append({"cluster_id": cid, "size": int(len(idxs)), "representative_tracks": reps})
+        return out
+
+    def get_cluster_representatives(self, collection: str) -> list[dict]:
+        """Read persisted representatives JSON for a collection.
+
+        Returns empty list if cluster_library was never run for this collection.
+        Merges current_label from labels JSON if present.
+        """
+        reps_path = self.cluster_dir / f"{collection}_representatives.json"
+        if not reps_path.exists():
+            return []
+        reps = json.loads(reps_path.read_text())
+
+        labels_path = self.cluster_dir / f"{collection}_labels.json"
+        labels = json.loads(labels_path.read_text()) if labels_path.exists() else {}
+        for r in reps:
+            r["current_label"] = labels.get(str(r["cluster_id"]))
+        return reps
