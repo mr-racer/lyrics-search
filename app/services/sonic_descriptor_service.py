@@ -70,3 +70,29 @@ class SonicDescriptorService:
         self._prompts = flat
         logger.info("[SonicDescriptor] loaded %d prompts from %s", len(flat), self.prompt_vocab_path)
         return flat
+
+    def load_or_compute_prompt_embeddings(self) -> np.ndarray:
+        """Return CLAP text embeddings for the vocabulary, computing & caching on first call.
+
+        Cache invalidation is tied to the vocab file: callers who edit ``sonic_prompts.json``
+        should also delete ``sonic_prompts_embeddings.npy`` (or the PUT endpoint does it).
+        """
+        if self._prompt_embeddings is not None:
+            return self._prompt_embeddings
+
+        if self.embeddings_path.exists():
+            arr = np.load(self.embeddings_path)
+            self._prompt_embeddings = arr
+            logger.info("[SonicDescriptor] loaded cached prompt embeddings %s from %s", arr.shape, self.embeddings_path)
+            return arr
+
+        from app.resources.model_registry import ModelRegistry
+        clap = ModelRegistry.load_clap()
+        prompts = self.load_prompt_vocab()
+        emb = clap.get_text_embedding(prompts, use_tensor=False)
+        arr = np.asarray(emb, dtype=np.float32)
+        self.embeddings_path.parent.mkdir(parents=True, exist_ok=True)
+        np.save(self.embeddings_path, arr)
+        self._prompt_embeddings = arr
+        logger.info("[SonicDescriptor] computed and cached %s prompt embeddings to %s", arr.shape, self.embeddings_path)
+        return arr
