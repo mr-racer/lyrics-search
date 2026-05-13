@@ -38,6 +38,9 @@ class SonicDescriptorService:
         # → [SonicTag(tag="anxious", score=0.72), ...]
     """
 
+    # Lazy classifier cache to avoid disk reads on every prediction
+    _classifier_cache: dict[str, tuple] = {}
+
     def __init__(
         self,
         prompt_vocab_path: Path = DEFAULT_VOCAB_PATH,
@@ -387,3 +390,41 @@ class SonicDescriptorService:
             collection, accuracy, classes,
         )
         return meta
+
+    def _load_classifier(self, collection: str) -> Optional[tuple]:
+        """Return (model, classes_list) tuple, or None if no trained classifier exists."""
+        if collection in self._classifier_cache:
+            return self._classifier_cache[collection]
+        model_path = self.classifier_dir / f"{collection}.joblib"
+        meta_path = self.classifier_dir / f"{collection}_meta.json"
+        if not model_path.exists() or not meta_path.exists():
+            return None
+        import joblib
+        model = joblib.load(model_path)
+        meta = json.loads(meta_path.read_text())
+        self._classifier_cache[collection] = (model, meta["classes"])
+        return self._classifier_cache[collection]
+
+    def predict_class(
+        self,
+        collection: str,
+        audio_vector: np.ndarray,
+    ) -> tuple[Optional[str], Optional[float]]:
+        """Predict sonic_class for an audio vector. Returns (label, confidence).
+
+        Returns (None, None) if no classifier exists for this collection.
+        Returns (None, conf) if conf < ``self.min_class_confidence`` (label suppressed but score reported).
+        """
+        loaded = self._load_classifier(collection)
+        if loaded is None:
+            return None, None
+        model, _classes = loaded
+        v = audio_vector.reshape(1, -1)
+        probs = model.predict_proba(v)[0]
+        top_idx = int(np.argmax(probs))
+        conf = float(probs[top_idx])
+        # model.classes_ holds the class labels (string array)
+        label = str(model.classes_[top_idx])
+        if conf < self.min_class_confidence:
+            return None, conf
+        return label, conf

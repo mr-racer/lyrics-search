@@ -71,3 +71,34 @@ def test_train_classifier_aborts_when_no_labels(svc):
     fake_qdrant = MagicMock()
     with pytest.raises(RuntimeError, match="No cluster labels"):
         svc.train_classifier(qdrant=fake_qdrant, collection="empty", audio_vector_name="audio")
+
+
+def test_predict_class_returns_label_and_confidence(svc):
+    fake_qdrant, X, slugs = _stage_two_clusters(svc, collection="predict_test")
+    svc.train_classifier(qdrant=fake_qdrant, collection="predict_test", audio_vector_name="audio")
+
+    # Vector very close to cluster A's center [5,0,0,0]
+    v = np.array([4.9, 0.1, 0.0, 0.0], dtype=np.float32)
+    label, conf = svc.predict_class(collection="predict_test", audio_vector=v)
+    assert label == "Cluster A"
+    assert 0.0 < conf <= 1.0
+    assert conf > 0.5  # high confidence for synthetic well-separated data
+
+
+def test_predict_class_returns_none_when_no_classifier(svc):
+    label, conf = svc.predict_class(collection="never_trained", audio_vector=np.zeros(4, dtype=np.float32))
+    assert label is None
+    assert conf is None
+
+
+def test_predict_class_respects_confidence_threshold(svc, tmp_path):
+    fake_qdrant, X, slugs = _stage_two_clusters(svc, collection="thresh_test")
+    svc.train_classifier(qdrant=fake_qdrant, collection="thresh_test", audio_vector_name="audio")
+
+    # Set a deliberately high threshold; ambiguous vector should return None for label
+    svc.min_class_confidence = 0.99
+    ambiguous = np.array([2.5, 2.5, 0.0, 0.0], dtype=np.float32)
+    label, conf = svc.predict_class(collection="thresh_test", audio_vector=ambiguous)
+    # Confidence below threshold → label suppressed, but conf still reported
+    assert label is None
+    assert conf is not None and conf < 0.99
