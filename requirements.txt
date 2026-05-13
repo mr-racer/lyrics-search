@@ -10,6 +10,8 @@ tqdm
 numpy
 librosa
 scikit-learn
+hdbscan
+joblib
 transformers
 openai
 pydantic-ai
