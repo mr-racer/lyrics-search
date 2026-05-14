@@ -1669,9 +1669,14 @@ function FloatingIconNav({ section, onNav, isDark, lang, onSettings, currentTrac
         </svg>
       </button>
 
-      {/* Now Playing Pebble slot — filled by Task 7 */}
-      <div style={{ height:48, width:48, marginTop:8 }} data-pebble-slot="reserved">
-        {/* Empty placeholder; NowPlayingPebble component wired in Task 7 */}
+      {/* Now Playing Pebble — Task 7 */}
+      <div style={{ height:48, width:48, marginTop:8, display:'grid', placeItems:'center' }} data-pebble-slot="active">
+        <NowPlayingPebble
+          track={currentTrack}
+          isPlaying={!!(audio && audio.isPlaying)}
+          onClick={() => { if (currentTrack) onNav('player'); }}
+          onHoverChange={(/* hovered */) => { /* popout wired in Task 9 */ }}
+        />
       </div>
     </div>
   );
