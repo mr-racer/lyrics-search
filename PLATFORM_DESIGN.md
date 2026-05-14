@@ -1,0 +1,1297 @@
+# MusiX → Smart Companion Platform · Design Document
+
+**Дата:** 2026-05-13
+**Брейнсторм session:** `.superpowers/brainstorm/410-1778623356/content/` (6 итераций мокапов)
+
+---
+
+## 1. Context
+
+**Текущее состояние**: приложение `lyrics-search` (MusiX) сейчас — это **аналитический инструмент** для музыкальной библиотеки. Пять разделов (Home/Search/Recommend/Library/Player) организованы как **инструменты аналитика**: "поиск", "рекомендации", "статистика". Плеер был добавлен последним коммитом (28425b4) и пока живёт как ещё одна "вкладка".
+
+**Проблема**: бэкенд готов на ~70% к полноценной музыкальной платформе (facts harvesting, similarity engine, CLAP audio embeddings, LLM-driven chat), но **UI этого не раскрывает**. Пользователь не получает погружения "в исполнителя и в песню", потому что архитектура экранов — инструментальная, а не story-driven.
+
+**Цель**: трансформировать MusiX из "library analytics" в **"music platform for deep listening"**. Сохранить тактильный premium-character существующего скевоморфного UI, но добавить атмосферность и сделать каждую песню "open book" с фактами, прозрачным ранжированием похожих, LLM-обсуждением и автоплеем.
+
+**Чем отличается от Spotify**: не социал и не daily mix, а **глубокое знание про эту конкретную песню**: факты из SongFacts, прозрачное ранжирование (видно ПОЧЕМУ трек похож), Sonic Sibling (ближайший CLAP-сосед из другой эпохи/артиста), LLM-объяснения.
+
+---
+
+## 2. Vision
+
+> **"Listen smart"** — каждый трек = open book: факты, истории, related треки, lyrics-объяснения, поэтичные характеристики звука. AI помогает, но в центре — погружение.
+
+**Архитектурный принцип**: **Artist as universe**. Клик по треку → попадаешь в "вселенную артиста" (Artist Atlas). Песня — это динамический контекст (Player screen), артист — статический контекст (Atlas).
+
+**Scope**: **Full platform** = Smart Companion (Artist Atlas + Player + autoplay + transparent ranking + LLM-объяснения + Sonic Vibe + Sonic Sibling) **+** Home (Discovery Magazine) **+** Library Search (mode-aware semantic) **+** Library Stats (Sonic Map + catalog) **+** Recommendations (Prompt-to-Playlist + For You stream + Quick-Rate cold start) **+** Spotify-like MVP (Recently Played, Liked Songs, Custom Playlists CRUD, Manual Queue).
+
+Это полное замещение текущего приложения, а не аддитивное расширение.
+
+**Платформа PC-only** в этой итерации. Mobile — отдельный design pass позже.
+
+---
+
+## 3. Style Language: Hybrid v3
+
+Гибрид двух направлений: **Atmospheric base** (C) + **Skeuomorphic depth** (A). Пропорция ~40/60 — атмосфера как акцент, скевоморф как tactile база.
+
+### 3.1 Cвет
+- **Base**: `linear-gradient(180deg, #161420 0%, #0c0a14 70%)` (близко к текущему `#0d0d10`)
+- **Hue accents**: radial-gradients в углах:
+  - Top-right: `rgba(124,91,255,0.22)` (purple, ~10% canvas)
+  - Bottom-left: `rgba(255,120,200,0.08-0.10)` (pink)
+- **Accent**: `oklch(60% 0.18 270)` (purple), `oklch(72% 0.13 75)` (amber для секондари)
+- **Текст**: `#eeeef3` базовый, `rgba(238,238,243,0.6)` muted, `#d8ccff` accent text
+
+### 3.2 Типографика
+- **Body / UI**: `system-ui` / `Geist` sans-serif
+- **Display / Quotes**: `'Noto Serif Display'`, Georgia, serif italic (для Sonic Vibe и LLM-фраз)
+- **Labels / Mono**: `ui-monospace` / `JetBrains Mono` с letter-spacing 0.18–0.22em (CAPS labels)
+
+### 3.3 Materials
+
+**Panel (default)** — glass + skeuomorphic depth:
+```css
+background: linear-gradient(180deg, rgba(255,255,255,0.07) 0%, rgba(255,255,255,0.02) 60%);
+backdrop-filter: blur(22px) saturate(1.1);
+border: 1px solid rgba(255,255,255,0.07);
+box-shadow:
+  inset 0 1px 0 rgba(255,255,255,0.13),   /* top light edge */
+  inset 0 -1px 0 rgba(0,0,0,0.28),         /* bottom dark edge */
+  0 5px 20px rgba(0,0,0,0.3);              /* outer lift */
+```
+
+**CTA button** — gradient + 3D press:
+```css
+background: linear-gradient(180deg, oklch(72% 0.2 275) 0%, oklch(52% 0.24 282) 100%);
+box-shadow:
+  inset 0 1px 0 rgba(255,255,255,0.42),
+  inset 0 -1px 0 rgba(0,0,0,0.4),
+  0 8px 22px oklch(60% 0.18 270 / 0.5);
+```
+
+**Ask AI button** (special: gradient × glass):
+```css
+background:
+  radial-gradient(ellipse at 25% 20%, rgba(255,235,200,0.32) 0%, transparent 60%),
+  linear-gradient(180deg, oklch(70% 0.16 75 / 0.55) 0%, oklch(48% 0.18 75 / 0.4) 100%),
+  rgba(255,255,255,0.02);
+backdrop-filter: blur(20px) saturate(1.2);
+animation: askGlow 3.8s infinite;
+```
+
+### 3.4 Анимации
+- `coverBreath` 4.2s — лёгкое расширение outer shadow вокруг обложки (имитация "alive playback")
+- `eq1-4` 0.75–1.05s — анимация EQ-баров рядом с "NOW PLAYING"
+- `askGlow` 3.8s — лёгкое усиление glow на Ask AI кнопке
+- `vinylSpin` — переиспользовать из существующего кода (есть в `frontend/index.html`)
+
+---
+
+## 4. Screens
+
+### 4.1 Global navigation: Floating Icon Sidebar
+
+Заменяет текущий sidebar (232px wide с label-ами) на **64px-узкую плавающую полосу иконок**:
+- Без правой границы (нет "rigid column")
+- Glass material фоном (наследует atmospheric gradient)
+- Иконки: `⌂ HOME`, `🔍 SRCH`, `▣ LIB`, `📊 STAT`, `✨ REC`, `♫ PLAY`, `⚙ SET`
+- Активный пункт в glass-капсуле с oklch purple glow
+- Под иконкой — тонкий 8.5px моно-label (HOME/SRCH/LIB/STAT/REC/...)
+
+**At the bottom of the sidebar — Now Playing pebble**:
+- 40×40 круглая обложка текущего трека (если плеер активен)
+- Лёгкая золотая обводка + breath-animation (slow pulse если playing)
+- Hover/click → выезжает мини-floating panel справа от sidebar (~320×80):
+  - Mini cover 60×60, title + artist (truncated)
+  - Кнопки: `⏮ ⏯ ⏭` (3 cherry icons)
+  - Scrubber: `1:24 ──●── 4:21`
+  - Action: `↕ Open Player` → expand в полный Player screen
+- Если no track playing → pebble показывает placeholder ("MusiX" mono label), без panel
+
+**Global keyboard shortcuts** (работают везде, если focus не в input/textarea):
+- `Space` — play/pause
+- `→` / `←` — skip ±10s
+- `Shift+→` / `Shift+←` — next/prev track
+- `M` — mute toggle
+- `L` — like current
+- `D` — dislike current
+- `/` — focus Search bar (если на Search screen, иначе noop)
+
+### 4.2 Artist Atlas (revised L2)
+
+**Когда открывается**: клик по любому артисту/треку в результатах поиска / library / related artists.
+
+**Layout** (сверху вниз):
+1. **Breadcrumb**: `LIBRARY / ARTISTS / RADIOHEAD` (10px моно, opacity 0.4)
+2. **Hero row**: cover 138px + название (44px serif weight 300) + контекст (Oxford · alt-rock · 9 albums) + CTA `▶ Spin from here`
+3. **Tab pills**: `Bio` (active) `Discography` `Facts ·27` `Related` `Eras`
+4. **Bio panel** (full-width glass panel): абзац текста + source link `→ читать полностью`
+5. **Discography rail**: горизонтальный scroll, карточки 138×138 (обложка + название + год · трекс)
+
+**Behavior**:
+- Click трека → начинает играть, mini-player активируется
+- Click `▶ Spin from here` → запуск autoplay queue от seed-трека/артиста
+- Mini-player снизу с кнопкой `↕ EXPAND TO PLAYER`
+
+**Что НЕТ на этом экране**: lyrics, song facts, similar — это всё на Player screen.
+
+### 4.3 Player screen (v6)
+
+**Самый info-плотный экран платформы.** Открывается клик-ом на `↕ EXPAND TO PLAYER` в mini-bar или на иконке `♫ PLAY` в sidebar.
+
+**Layout**:
+
+```
+┌─ [floating icon sidebar] ──────────────────────────────────────────┐
+│  ← BACK TO RADIOHEAD                                                │
+│                                                                      │
+│  ┌─────────────────────────── HERO ──────────────────────────────┐ │
+│  │ [Cover 180px      [NOW PLAYING + EQ bars]      ❝ vibe        │ │
+│  │  3D tilt           Karma Police                  phrase ❞    │ │
+│  │  breathing]        Radiohead                     — SONIC...]  │ │
+│  │                    OK COMPUTER · 1997 · 4:21                  │ │
+│  │ [📜 LYRICS]        ♥ Liked  ⨯ Skip  ↻ Loop                    │ │
+│  │                    [✨ ASK AI ABOUT THIS SONG]                 │ │
+│  └────────────────────────────────────────────────────────────────┘ │
+│                                                                      │
+│  ┌─ BODY: 2 columns ──────────────────────────────────────────────┐ │
+│  │  LEFT (1.4fr): FACTS              RIGHT (1fr): NETWORK         │ │
+│  │  ABOUT THIS SONG                  SONIC SIBLING (hero)         │ │
+│  │  • Yorke's "karma cops"...        [J.D. — Atmosphere 1980]     │ │
+│  │  • Recorded at St. Catherine's... ✨ "twin tonal landscape..."  │ │
+│  │  • The line "for a minute..."     [▶ PLAY] · 87% sonic match   │ │
+│  │  • The piano riff was originally..                              │ │
+│  │  • Yorke originally intended...   [▽ SEE OTHER SIMILAR · 4]    │ │
+│  │  → 2 more facts                                                 │ │
+│  └────────────────────────────────────────────────────────────────┘ │
+│                                                                      │
+│  ⏮ ▶ ⏭  1:24 ───●──── 4:21    🔊 ──●──    ≡                       │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+**Tier-структура default state**:
+- **Tier 1 (always visible)**: Hero (cover/meta/Sonic Vibe quote), Facts panel, Sonic Sibling card, Ask AI button
+- **Tier 2 (one click away)**:
+  - `📜 LYRICS` под обложкой → раскрывает lyrics-панель в левой колонке под Facts (inline accordion). Каждая строка `click → ✨ explain` мини-пилюля → popover с LLM-ответом.
+  - `▽ SEE OTHER SIMILAR · 4 tracks` под Sonic Sibling → разворачивает список other similar (cover-mini + title + score%)
+- **Tier 3 (AI chat)**: клик по `✨ ASK AI` → drawer выезжает справа (400px), с pre-filled context, suggested prompts, chat thread, input
+
+**Sonic Vibe** оформлен как **pull-quote**:
+- Большие ❝ ❞ в Noto Serif (56px, розовый glow)
+- Центрированный 22px italic phrase
+- Attribution `— SONIC VIBE · CLAP × LLM` справа внизу
+- Без panel-chrome, только лёгкая hue-wash
+
+**NOW PLAYING signals**:
+- 4 анимированных EQ bars (eq1-4 keyframes)
+- Label `NOW PLAYING` в oklch purple с text-shadow glow
+- Обложка дышит (`coverBreath` 4.2s)
+
+### 4.4 Home (Landing) — Discovery Magazine
+
+Открывается при запуске приложения. Концепция: **discovery magazine, не библиотечный resume**. Это первый touchpoint, и он формирует identity "Listen smart".
+
+**Layout** (сверху вниз):
+```
+┌──────────────────────────────────────────────────────────────┐
+│ [floating sidebar]                                            │
+│                                                                │
+│ ┌─ HERO ROW (двойной блок) ─────────────────────────────────┐│
+│ │ TODAY'S REDISCOVERY (60%)    │  FEATURED ARTIST (40%)      ││
+│ │ ┌──── ┐                       │  [Cover stack 220x140]      ││
+│ │ │COVER│ Track Title           │  ARTIST NAME                ││
+│ │ │ XL  │ Artist Name           │  genre · X tracks · era     ││
+│ │ │160px│ ❝ teaser fact ❞      │  "one-line bio summary..."   ││
+│ │ └──── ┘ [▶ PLAY]  [+ queue]   │  [→ OPEN ATLAS]             ││
+│ └────────────────────────────────────────────────────────────┘│
+│                                                                │
+│ ┌─ SHELF: Recently played ──────────────────── more →────────┐│
+│ │ [■][■][■][■][■][■][■][■][■] (horizontal scroll)             ││
+│ └────────────────────────────────────────────────────────────┘│
+│ ┌─ SHELF: Your liked songs ─────────────────── more →────────┐│
+│ │ [■][■][■][■][■][■][■][■][■]                                  ││
+│ └────────────────────────────────────────────────────────────┘│
+│ ┌─ SHELF: Try something different ──────────── more →────────┐│
+│ │ [■][■][■][■][■][■][■][■][■]                                  ││
+│ └────────────────────────────────────────────────────────────┘│
+│ ┌─ CTA STRIP: ▶ Start "For You" personalized stream ─────────┐│
+│ └────────────────────────────────────────────────────────────┘│
+└────────────────────────────────────────────────────────────────┘
+```
+
+**Hero — двойной блок**:
+- **Left (60%) — Today's Rediscovery**: рандомный трек из библиотеки, который юзер давно не слушал (longest gap since last play по playback_history). Big 160px cover, title, artist, teaser-фраза из существующих SongFacts (первый интересный fact из таблицы, например *"Yorke wrote the lyrics after a bad encounter with paparazzi..."*). CTA `[▶ PLAY]` — immediately начинает + adds to queue.
+- **Right (40%) — Featured Artist of the Day**: ротируемый артист (deterministic per-date hash). Cover stack из 3 albums, artist name, library stats ("5 tracks in your library, oldest 1971"), one-line bio summary. CTA `[→ OPEN ATLAS]` → Artist Atlas.
+
+**Shelves under Hero** (horizontal-scroll rails):
+1. **Recently played** — из `playback_history` (limit 12)
+2. **Your liked songs** — из `track_reactions WHERE reaction='like'`
+3. **Try something different** — top-pairs dissimilar entries (anti-similar to user's top-listened)
+
+Каждая shelf-карточка ~120×120 cover + title + artist (2 lines truncated). Hover показывает quick-play overlay. Click cover → Player. Click artist text → Artist Atlas.
+
+**Bottom CTA strip**: persistent `▶ Start For You stream` — главный entry point в personalized ranking без предварительной конфигурации. Если `playback_history` пустой → CTA меняется на `Start with Quick-Rate (2 min) → personalized stream`.
+
+**Empty state** (свежая библиотека, no playback_history yet):
+- Hero остаётся активным (использует random track + featured artist)
+- Shelves заменяются единым "Quick-Rate session" prompt: "Tell us what you like in 2 minutes — rate 10 tracks → get a personalized starter mix."
+
+**Backend dependencies**:
+- `GET /library/rediscover?collection=...` — least-recently-played random pick (new)
+- `GET /library/featured-artist?collection=...&date=YYYY-MM-DD` — deterministic daily rotation (new)
+- `GET /playback/recent?limit=12` — recent plays (existing in MVP plan)
+- `GET /library/liked-songs?limit=12` — liked tracks (existing in MVP plan)
+- `GET /library/top-pairs` — dissimilar pairs (already exists, repurpose)
+
+### 4.5 Library Search
+
+Открывается через иконку `🔍` в sidebar. Замещает текущий SearchSection в `frontend/index.html`.
+
+**Layout**:
+```
+┌──────────────────────────────────────────────────────────────┐
+│ ┌─ MODE TOGGLE ──────────────────────────────────────────────┐│
+│ │ [Название] [Текст песни] [Схожий звук] [Hybrid]            ││
+│ └────────────────────────────────────────────────────────────┘│
+│                                                                │
+│ ┌─ SEARCH FIELD ─────────────────────────────────────────────┐│
+│ │ 🔍 placeholder per mode...                                  ││
+│ └────────────────────────────────────────────────────────────┘│
+│   hint (per mode): "e.g. Yacht Holiday" / "about loneliness"  │
+│                                                                │
+│ recent: [chip] [chip] [chip] [chip]                            │
+│ ▼ filters (collapsed)                                          │
+│                                                                │
+│ ┌─ RESULTS GRID (4 cols) ───────────────────────────────────┐ │
+│ │ [Cover]    [Cover]    [Cover]    [Cover]                  │ │
+│ │ Title      Title      Title      Title                    │ │
+│ │ Artist     Artist     Artist     Artist                   │ │
+│ │ ● 0.87     ● 0.82     ● 0.79     ● 0.74                  │ │
+│ │ (hover → breakdown tooltip text/audio/bm25)               │ │
+│ └────────────────────────────────────────────────────────────┘ │
+└────────────────────────────────────────────────────────────────┘
+```
+
+**Mode toggle** (segmented control в Hybrid v3 стиле, panel-v3 + active pill):
+- **Название** — uses `GET /library/browse?q=...` (relevance scoring по title/artist/album, exact-match boost)
+- **Текст песни** — uses `POST /search/ {mode: "text"}` (CLAP disabled, dense lyrics + BM25 only)
+- **Схожий звук** — uses `POST /search/ {mode: "audio"}` (CLAP text-prompt → audio space)
+- **Hybrid** — uses `POST /search/ {mode: "hybrid"}` (все три)
+
+Каждый mode меняет placeholder, hint, и иконку (магнифай / pencil / waveform / chain).
+
+**Filters row** (collapsed by default, expandable accordion с smooth transition):
+- Genre multi-select (chips)
+- Decade range slider
+- Duration range slider (0:30 – 10:00)
+- Liked-only toggle
+- **Sonic class** multi-select (chips) — из user-curated taxonomy (§5.7). Доступно только если classifier натренирован; иначе hidden.
+- **Sonic tags** multi-select (chips) — из adjective vocabulary; "match all selected tags" semantics
+
+**Recent searches** — chip-row над field-ом, сохраняется в `localStorage` под ключом `recent_searches:<collection>`. Click chip = restore query + mode.
+
+**Results grid**: 4-column responsive (adapts: 3 cols at <1100px), cards ~140px wide. Поля:
+- Cover (90×90, rounded 8px)
+- Title (1 line, truncated, 14px)
+- Artist (1 line, 12px muted)
+- Score badge `● 0.87` (только в semantic modes; в "Название" mode — score не показывается)
+- Hover: card lift + reveal quick-play + quick-like icons; tooltip с breakdown bars (text / audio / bm25 contribution)
+
+Click card → запускается Player (auto-start playback). Click artist name (отдельно от карточки) → Artist Atlas.
+
+**Empty state**: chips с примерами per mode — `"rainy guitars"` / `"about regret"` / `"punchy drums"` / `"yacht holiday"`.
+
+**Backend dependencies**:
+- `GET /library/browse` (existing) — для Название mode
+- `POST /search/` (existing, extended with `score_breakdown` per MVP Section 6) — для остальных modes
+
+### 4.6 Library Stats — Sonic Map
+
+Открывается через иконку `📊` в sidebar.
+
+**Layout** (сверху вниз):
+```
+┌──────────────────────────────────────────────────────────────┐
+│ ┌─ SONIC MAP ─────────────────────────────────────────────── ┐│
+│ │ Color: [by genre ▼] | View: [scatter | clusters]           ││
+│ │ ┌────────────────────────────────────────────────────────┐ ││
+│ │ │       . . :⋆.⋆⋆⋆ ⋆ . .         <Canvas scatter>        │ ││
+│ │ │    . . :⋆.⋆⋆⋆. ⋆ . .                                   │ ││
+│ │ │    . . ⋆ ⋆ :⋆ . . .                                    │ ││
+│ │ │    . . . . . . . . .  (~1500 dots)                     │ ││
+│ │ │  liked = ⋆ (golden)    other = · (muted)               │ ││
+│ │ └────────────────────────────────────────────────────────┘ ││
+│ │ hover dot → tooltip [cover, title, artist, genre]          ││
+│ │ click dot → Player                                          ││
+│ └────────────────────────────────────────────────────────────┘│
+│                                                                │
+│ ┌─ KPI TILES (4 column row) ─────────────────────────────────┐│
+│ │ 1480       286         1965–2024      14 genres            ││
+│ │ tracks     artists     era            unique               ││
+│ └────────────────────────────────────────────────────────────┘│
+│                                                                │
+│ ┌─ DECADES TIMELINE ─────────────────────────────────────────┐│
+│ │ ████ ██████ █████████ █████████ ██████ █████ ███████        ││
+│ │ 60s    70s    80s       90s     00s   10s   20s             ││
+│ └────────────────────────────────────────────────────────────┘│
+│                                                                │
+│ ┌─ TOP GENRES (bar) ──┐ ┌─ TOP ARTISTS (list) ─┐              │
+│ │ rock     ████████   │ │ 1. Radiohead    47   │              │
+│ │ pop      █████      │ │ 2. Beatles      32   │              │
+│ │ jazz     ████       │ │ ...                  │              │
+│ └─────────────────────┘ └──────────────────────┘              │
+└────────────────────────────────────────────────────────────────┘
+```
+
+**Sonic Map** — якорная фича. HTML5 `<canvas>` (2D context) scatter ~1500 точек. Каждая точка = трек, координаты x/y = UMAP проекция CLAP audio embedding.
+
+**Color modes** (dropdown):
+- **by genre** (default) — palette {rock=red, pop=pink, jazz=amber, electronic=cyan, ...}
+- **by decade** — chronological gradient (1960s→2020s navy→amber)
+- **by reaction** — liked=gold, disliked=red, neutral=muted
+
+**Liked tracks** — слегка увеличенные точки с золотой обводкой (всегда поверх остальных).
+
+**Interactions**:
+- Hover dot → tooltip floating panel (cover thumb 60×60, title, artist, genre). Spatial index (grid bucket) для fast hit-test.
+- Click dot → play track в Player + navigate to Player screen.
+- Drag pan, scroll-wheel zoom (clamped 0.5–4x).
+- Reset view button bottom-right corner.
+
+**View toggle**:
+- **Scatter** — все точки видны (default)
+- **Clusters** — HDBSCAN кластеры из Sonic Descriptor Layer (§5.7), labels = user-curated names через cluster curator. Подсвечены полупрозрачными convex hulls с floating labels рядом с centroids. View disabled если classifier ещё не натренирован.
+
+**KPI tiles** — 4 компактных `panel-v3` тайла. Из существующего `/library/stats`.
+
+**Decades timeline** — bar chart, ширина column proportional to track count per decade.
+
+**Top genres** — bar chart с labels. **Top artists** — нумерованный list. Click genre/artist → Search screen с pre-filled query в Название mode.
+
+**Backend dependencies**:
+- `GET /library/sonic-map?collection=...` — new endpoint. Возвращает `[{track_id, x, y, genre, year, reaction}]`. Computed once via UMAP at indexing completion, cached at `cache/sonic_map/<collection>.json`. Recomputed when library changes by >5% (new collection point count vs cached point count).
+- `GET /library/stats` (existing) — KPI tiles, decades, top genres/artists.
+- `GET /library/sonic-clusters?collection=...` — HDBSCAN cluster centroids + user-curated labels (см. §5.7). Empty list if curator не запускался.
+
+### 4.7 Recommendations
+
+Открывается через иконку `✨` в sidebar.
+
+**Layout**:
+```
+┌──────────────────────────────────────────────────────────────┐
+│ ┌─ MODE PICKER (3 cards row) ────────────────────────────────┐│
+│ │ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐        ││
+│ │ │ ▶ FOR YOU    │ │ ✍ DESCRIBE   │ │ ⚡ QUICK-RATE │        ││
+│ │ │ endless mix  │ │ a playlist   │ │ session       │        ││
+│ │ │ from your    │ │ in words     │ │ rate 10 tracks│        ││
+│ │ │ history      │ │              │ │ get a mix     │        ││
+│ │ │ [▶ START]    │ │ [start]      │ │ [start]       │        ││
+│ │ └──────────────┘ └──────────────┘ └──────────────┘        ││
+│ └────────────────────────────────────────────────────────────┘│
+│                                                                │
+│ ┌─ ACTIVE PANEL (varies by selected mode) ───────────────────┐│
+│ │ (e.g. Prompt-to-Playlist):                                  ││
+│ │  ┌─────────────────────────────────────────────────────┐    ││
+│ │  │ ✍ rainy afternoon, intricate guitars, melancholic   │    ││
+│ │  └─────────────────────────────────────────────────────┘    ││
+│ │  Length: [10 ▼] tracks    [✨ GENERATE PLAYLIST]            ││
+│ │                                                              ││
+│ │ ┌─ Generated playlist ─────────────────────────────────┐   ││
+│ │ │ "rainy afternoon mix"                  ▶ Play all     │   ││
+│ │ │ ✨ Why this set: "These tracks share a slow-burn      │   ││
+│ │ │   tempo and finger-picked guitar palette..."          │   ││
+│ │ │ ─────                                                  │   ││
+│ │ │ 1. [■] Track Title — Artist  3:45    ● breakdown      │   ││
+│ │ │ 2. [■] Track Title — Artist  4:21    ● breakdown      │   ││
+│ │ │ ...                                                    │   ││
+│ │ │ [💾 SAVE AS PLAYLIST]                                  │   ││
+│ │ └────────────────────────────────────────────────────────┘   ││
+│ └────────────────────────────────────────────────────────────┘│
+│                                                                │
+│ ┌─ SAVED RECOMMENDATIONS ─────────────────────────────────────┐│
+│ │ history of generated playlists / saved For You snapshots    ││
+│ └────────────────────────────────────────────────────────────┘│
+└────────────────────────────────────────────────────────────────┘
+```
+
+**Three primary modes** (cards в верхней row, click → switches active panel):
+
+#### Mode 1: For You — Endless Personalized Stream
+- One-click action: `[▶ START]` → играет всю библиотеку, отсортированную по personalized score, начиная с самого релевантного.
+- **Algorithm**:
+  ```
+  user_vector = normalize(mean(liked_vectors) − 0.3 * mean(skipped_vectors))
+  score(track)  = cosine(track.dense_vector, user_vector) − recency_penalty
+  queue         = sorted(library, by=-score) filtered (not recently played)
+  ```
+- **Rationale chip**: каждый трек в For You queue имеет clickable `i` icon → popover "Почему этот трек: matches your usual sonic palette + lyrically near recent likes" (transparent ranking value prop). LLM lazy-generated, cached per `(track_id, user_vector_hash)`.
+- Если playback_history пустой → CTA блокирован, активируется альтернативный CTA "Start with Quick-Rate first".
+- Skip в For You queue marks track as `skipped` в current session и recomputes downstream ordering.
+
+#### Mode 2: Prompt-to-Playlist
+- Free-text field: "rainy afternoon, intricate guitars, melancholic"
+- Length selector: 5 / 10 / 15 / 20 tracks
+- `[✨ GENERATE PLAYLIST]` button.
+- **Pipeline**:
+  1. LLM разбивает prompt на параллельные queries (audio mood + text theme + genre hint)
+  2. Hybrid search извлекает кандидатов из library
+  3. LLM делает diversification + финальный set
+  4. LLM пишет "Why this set"-пояснительную фразу
+- Result: list треков с score breakdown + одна "Why this set" фраза (как Sonic Sibling LLM, в Noto Serif italic).
+- Action `[💾 SAVE AS PLAYLIST]` → создаёт named playlist в Custom Playlists.
+
+#### Mode 3: Quick-Rate Session (cold start)
+- Опросная мини-сессия. Card-stack или wizard step.
+- Каждая карточка: обложка + 30-сек snippet (autoplay middle of track) + кнопки `👍 норм` / `👎 не`.
+- N карточек (default 10), sampled diversely (по жанрам / decades / sonic clusters).
+- После N → `[✨ GENERATE PLAYLIST]` → playlist из похожих на 👍 + анти-похожих на 👎.
+- **Side effect**: ratings сохраняются в `track_reactions` (как обычные likes/dislikes) → обогащают For You signal.
+
+**Saved Recommendations** — внизу page, list of ранее сгенерированных playlists и сохранённых For You snapshots. Click → play или edit (если playlist saved).
+
+**Backend dependencies**:
+- `POST /recommend/prompt-to-playlist` — body: `{prompt, length, collection}` → response: `{title, why_phrase, tracks: [TrackHit with breakdown]}`
+- `GET /recommend/for-you?collection=...&limit=...&offset=...` — paginated ranked traversal
+- `GET /recommend/for-you/rationale?track_id=...&collection=...` — lazy per-track rationale (на `i` click)
+- `POST /recommend/quick-rate/batch?collection=...&size=10` — returns 10 diverse candidate tracks
+- `POST /recommend/quick-rate/finish` — body: `{ratings: [{track_id, rating}], collection}` → playlist response
+
+### 4.8 Cross-cutting: where can user pick a track to play?
+
+Track-picker — не отдельный экран, а UX-pattern, повторяемый везде где видны треки:
+
+| Source | Action |
+|--------|--------|
+| Home hero card | `[▶ PLAY]` button — auto-start |
+| Home shelves | Click cover anywhere — auto-start |
+| Search results grid | Click card — auto-start |
+| Stats Sonic Map | Click dot — auto-start |
+| Recommendations (any mode) | `[▶ Play all]` / click track in list |
+| Artist Atlas discog rail | Click cover — auto-start |
+| Player screen Sonic Sibling / Other Similar | Click card — auto-start |
+| Playlists detail | Click track row — auto-start from that position |
+| Liked Songs view | Click track row — auto-start from that position |
+| Keyboard | `Space` (resume), `Shift+→` (next in queue) |
+
+Все эти actions делают одно: starts the track в Player + navigates to Player screen (либо просто triggers playback если уже в Player). Double-click на covers — same as single-click.
+
+---
+
+## 5. Features
+
+### 5.1 Smart Companion core (новое)
+
+#### `▶ Spin from here` — One play button / Autoplay queue
+**Где**: Hero Artist Atlas (CTA), а также context-menu любого трека.
+**Что делает**: запускает алгоритмический autoplay queue от seed-трека/артиста. Каждый следующий трек выбирается через гибридный CLAP+text similarity с user-feedback factor (likes boost, dislikes filter).
+**Backend**: новый endpoint `GET /recommend/autoplay-queue?seed_track_id=...&collection=...&limit=20`. Использует Qdrant gibrid search, фильтрует disliked, кэширует на 24h.
+
+#### Transparent ranking — Score breakdown
+**Где**: в Other Similar list (когда expanded).
+**Что делает**: каждый similar трек = title + score% + **breakdown bars** (розовый `text`, голубой `audio`). Юзер видит "лирика похожа 72%, звук похож 91%".
+**Backend**: расширить `TrackHit.score_breakdown: ScoreBreakdown` в `app/domain/models.py`. Поля: `text_dense_score`, `text_bm25_score`, `audio_score`, `final_score`, `weights`. Модифицировать `_merge_hits()` в `app/services/search_service.py:236-294` чтобы сохранять intermediate scores.
+
+#### LLM "Explain this lyric" + AI Chat
+**Где**:
+- Inline `✨ explain` на конкретной строке lyrics (line-level)
+- Кнопка `✨ ASK AI ABOUT THIS SONG` под реакциями (song-level conversation)
+**Что делает**:
+- Line-level: popover с LLM-ответом, контекст = строка + facts + artist info
+- Song-level: drawer справа с pre-filled context, suggested prompts ("What is this song about?", "Compare to Atmosphere by Joy Division", "What was Radiohead doing in 1997?"), chat history, input
+**Backend**: переиспользует существующий `POST /chat/` endpoint (`app/api/routes/chat.py`) с двумя новыми system prompts: `LYRIC_EXPLAIN_PROMPT` и `SONG_DISCUSS_PROMPT`.
+
+#### Sonic Vibe (новый ML-параметр #1)
+**Где**: правая часть hero Player screen, как pull-quote.
+**Что делает**: одна поэтичная фраза, генерируемая LLM из **Sonic Descriptor** (top-K adjective tags) + lyrics + facts. Пример: *"anxious hypnotic drift, with piano spirals that loop until they unravel"*.
+**Зависимость**: требует Sonic Descriptor Layer (см. **§5.7**) — LLM получает на вход interpretable tags вроде `["anxious"=0.72, "atmospheric"=0.68, "piano-led"=0.61]`, а **не** raw CLAP vector (LLM не способен прочитать opaque embedding).
+**Backend**: новое поле `TrackMetadata.audio_signature: str | None` (LLM-summary). Генерируется при индексации после descriptor computation, или lazy on first request. Endpoint: `GET /metadata/tracks/{track_id}/sonic-vibe`. Кэширован в `MetadataDB` (новая колонка в `songs` table).
+
+#### Sonic Sibling (новый ML-параметр #2)
+**Где**: правая колонка Player screen, верхняя hero-карточка.
+**Что делает**: показывает ближайший трек по CLAP embedding **из другой эпохи и/или артиста**. Это превращает похожесть в discovery. Пример: твой *Karma Police* 1997 → *Atmosphere* Joy Division 1980 (87% sonic match).
+**Зависимость**: для LLM-фразы "почему похож" нужны descriptors двух треков. LLM получает: `track_A.tags ∩ track_B.tags` (общие черты, например `["atmospheric", "drifting"]`) + diff (`track_A.sonic_class="indie melancholic"`, `track_B.sonic_class="post-punk gloom"`). Из этого LLM пишет фразу про "сходство в текстуре, разная эпоха".
+**Backend**: новый endpoint `GET /recommend/sonic-sibling?track_id=...&collection=...`. Один Qdrant query с payload-фильтрами `artist != current_artist AND year_range != current_year_range`. Плюс LLM-фраза "почему похож" (одним вызовом, descriptors-driven). Кэширование 30 days.
+
+### 5.2 Spotify-like MVP additions (выбраны)
+
+#### Recently Played
+**Backend**: новая SQLite-таблица `playback_history(collection_name, track_id, played_at, duration_played)`. Endpoints:
+- `POST /playback/record` — записать начало проигрывания
+- `GET /playback/recent?limit=20` — последние N
+**Frontend**: блок на Home / Library с горизонтальным rail обложек.
+
+#### Liked Songs view
+**Backend**: использует существующий `track_reactions` в `MetadataDB`. Новый endpoint:
+- `GET /library/liked-songs?collection=...&limit=...&offset=...`
+**Frontend**: новый раздел внутри Library — карточки/строки треков с `reaction=='like'`.
+
+#### Custom Playlists CRUD
+**Backend**: новая SQLite модель `Playlist` и `PlaylistTrack`:
+```sql
+playlists(id, name, description, collection_name, created_at, cover_track_id)
+playlist_tracks(playlist_id, track_id, position, added_at)
+```
+Endpoints:
+- `POST /playlists` (create)
+- `GET /playlists?collection=...` (list)
+- `GET /playlists/{id}` (detail with tracks)
+- `PUT /playlists/{id}` (rename/edit)
+- `POST /playlists/{id}/tracks` (add track)
+- `DELETE /playlists/{id}/tracks/{track_id}` (remove)
+- `POST /playlists/{id}/reorder` (drag-drop)
+- `DELETE /playlists/{id}` (delete)
+**Frontend**: новый раздел в Library — список плейлистов + детальная страница + UI для добавления (context-menu "Add to playlist").
+
+#### Manual Queue (Up Next override)
+**Frontend-only feature** (нет нужды в backend storage — сессионное состояние).
+**Что делает**: поверх autoplay queue, пользователь может вручную добавлять треки в "Up Next" через context-menu "Add to queue". Drag-drop reorder в Queue panel.
+**UI**: панель queue выезжает из иконки `≡` в playback bar.
+
+### 5.3 Prompt-to-Playlist
+
+**Где**: Recommendations → Mode 2. Якорная фича раздела.
+**Что делает**: пользователь описывает плейлист в свободной форме → LLM декомпозирует prompt на audio/text queries → hybrid search извлекает кандидатов → LLM делает diversification и пишет "why this set"-фразу.
+
+**Pipeline detail**:
+1. **Decompose**: LLM с system-prompt "extract sonic / lyrical / genre / era hints from this query" → структурированный JSON `{audio_prompt, text_prompt, genre_hint?, decade_hint?}`
+2. **Search**: parallel `/search/ {mode: audio, query: audio_prompt}` + `{mode: text, query: text_prompt}` + payload-filter по genre/decade если есть hints. Берём top-50 от каждого, объединяем по track_id.
+3. **Re-rank**: LLM получает объединённый набор + original prompt → выбирает top-N (`length` parameter), оптимизируя для diversity (не два подряд трека одного артиста / одной эпохи).
+4. **Why-phrase**: LLM генерирует одну italic-фразу "что объединяет этот набор".
+
+**Backend**: новый endpoint `POST /recommend/prompt-to-playlist`. Internal pipeline в `app/services/prompt_to_playlist_service.py` (new).
+
+**Edge cases**:
+- Empty library → graceful "No tracks match" + suggest indexing
+- Слишком узкий prompt (single match) → still returns 1 track + "we only found one — try broadening"
+- Слишком широкий prompt → fallback к top-genre + recency
+
+### 5.4 For You — Personalized Stream
+
+**Где**: Recommendations → Mode 1. Также CTA strip на Home bottom.
+**Что делает**: one-click → играет всю библиотеку, отсортированную по personalized score from listening history + reactions.
+
+**Algorithm**:
+```python
+liked_vectors    = qdrant.retrieve(track_ids=liked_track_ids, with_vectors=["dense"])
+skipped_vectors  = qdrant.retrieve(track_ids=skipped_track_ids, with_vectors=["dense"])
+user_vector      = normalize(mean(liked_vectors) − 0.3 * mean(skipped_vectors))
+
+for track in library:
+    base_score    = cosine(track.dense_vector, user_vector)
+    recency_pen   = 0.5 * exp(-hours_since_played(track) / 24)
+    score         = base_score − recency_pen
+
+queue = sorted(library, by=-score)
+queue = filter(queue, not_played_within(window=1h))
+```
+
+**Backend**:
+- `GET /recommend/for-you?collection=...&limit=50&offset=0` — paginated ordered list
+- `GET /recommend/for-you/rationale?track_id=...&collection=...` — lazy LLM call. **Inputs to LLM**: top-3 пересекающихся descriptor tags между current track и aggregated user-profile descriptors (computed как top tags по liked-треках). Plus shared sonic_class между current track и user's most-liked sonic_class. Из этого LLM пишет фразу: *"matches your usual lush + warm + acoustic palette; same Lo-fi indie cluster as 12 of your liked tracks."*
+- `user_vector` cached in-memory per collection с TTL 1h. Invalidated на каждый `track_reactions` insert/update + каждый `playback_history` insert.
+- `app/services/personalization_service.py` (new) — handles user_vector compute + cache + queue generation + aggregate descriptor profile.
+
+**Skip behavior**: Если юзер skip-ает трек в For You queue:
+- Track marked as `skipped` in current session
+- Triggers user_vector recompute (если набралось >5 skips since last recompute)
+- Downstream queue resorted
+
+### 5.5 Quick-Rate Session (cold start)
+
+**Где**: Recommendations → Mode 3. Также empty-state CTA на Home если no playback_history.
+**Что делает**: 10-track snippet rating mini-session → generates starter playlist + populates initial user_vector signal.
+
+**UX flow**:
+1. User clicks `[Start Quick-Rate session]`
+2. Modal/wizard opens, blocking sidebar (для focus)
+3. Card 1 of 10: обложка 280×280, title, artist, autoplay 30-сек snippet (from middle of track, `audio currentTime = duration / 2`)
+4. Two big buttons: `👍 норм` / `👎 не`. После клика — переход к следующей карточке (fade transition).
+5. Progress indicator ("4 of 10") + skip button (rate as neutral).
+6. После всех 10 — `[✨ GENERATE PLAYLIST]` button, generates playlist using same Prompt-to-Playlist pipeline + user_vector bootstrapped из ratings.
+
+**Sampling strategy для batch**:
+- Distribute по genre (один трек per top-5 genres, остальные random)
+- Distribute по decade (минимум 1 трек из каждого присутствующего decade)
+- Exclude already-rated tracks (track_reactions)
+
+**Backend**:
+- `POST /recommend/quick-rate/batch?collection=...&size=10` — returns 10 diverse candidate tracks
+- `POST /recommend/quick-rate/finish` — body: `{ratings: [{track_id, rating}], collection}` → playlist response. Side-effect: writes ratings as `track_reactions`.
+
+### 5.6 Sonic Map visualization (Stats core)
+
+**Где**: Stats screen, основной блок сверху.
+**Что делает**: 2D UMAP проекция CLAP audio embeddings всей библиотеки → interactive scatter, color-encoded.
+
+**Backend**:
+- `app/services/sonic_map_service.py` (new) — computes UMAP at indexing completion + on library change. Использует `umap-learn` (~150MB depend) или `pacmap` (lighter). Saves `cache/sonic_map/<collection>.json` со списком `{track_id, x, y, genre, year, reaction, sonic_class}`.
+- `GET /library/sonic-map?collection=...` returns full point list (~1500 entries × ~80 bytes = ~120KB — fine для one-shot fetch).
+- `GET /library/sonic-clusters?collection=...` — возвращает manually-curated cluster labels из **Sonic Descriptor Layer** (см. §5.7). НЕ k-means + LLM-naming автоматически — labels приходят из user-curated cluster taxonomy. Если curator ещё не запускался — endpoint возвращает empty list, и Sonic Map работает без cluster overlay (только scatter).
+
+**Cluster overlay rendering** (когда labels доступны):
+- Каждая точка окрашивается по своему `sonic_class` (из custom classifier)
+- Convex hull или soft-blob fill за группами точек одного class (полупрозрачный, не блокирует точки)
+- Class labels плавают рядом с centroid'ом каждой группы
+
+**Frontend**:
+- HTML5 canvas (2D context, не WebGL — overkill для 1500 точек)
+- Spatial index (uniform grid, ~50×50 cells) для fast hover hit-test
+- Smooth pan via mouse-drag, zoom via wheel
+- Animated entrance (точки fade-in поочерёдно)
+- Color-mode toggle: `by sonic_class` (default if available, иначе `by genre`) / `by decade` / `by reaction`
+
+### 5.7 Sonic Descriptor Layer (foundation for §5.1 Vibe/Sibling, §5.4 rationale, §5.6 clusters)
+
+**Проблема**: CLAP даёт 512-dim opaque vector. LLM не может прочитать его и описать словами. Все features которые делают взаимодействие "Listen smart" (Sonic Vibe фраза, Sonic Sibling "почему похож", For You rationale, cluster labels на Sonic Map) — требуют **interpretable descriptors**, не вектора.
+
+**Решение**: Sonic Descriptor Layer — промежуточный слой между CLAP embedding и LLM/UI. Состоит из **двух independent моделей** на одном входе (CLAP vector):
+
+#### 5.7.1 Track 1: Prompt-Probing Tags (zero-shot)
+
+**Что**: получаем top-K descriptive tags для каждого трека через CLAP cross-modal text-encoder.
+
+**Как работает**:
+```python
+# offline (once per app start)
+prompt_vocab = ["a sad song", "punchy drums", "lush strings", "lo-fi production",
+                "atmospheric ambient", "acoustic guitar", "warm vocals", ...]  # ~30-50 prompts
+prompt_embeddings = CLAP.encode_text(prompt_vocab)  # shape: (N_prompts, 512)
+
+# per track at indexing
+track_emb = CLAP.encode_audio(audio)  # shape: (512,)
+sims = cosine(track_emb, prompt_embeddings)  # shape: (N_prompts,)
+top_K = top-K by sims  # e.g. K=5
+# Result: [("anxious", 0.72), ("atmospheric", 0.68), ("piano-led", 0.61), ...]
+```
+
+**Преимущества**:
+- Zero training — работает сразу
+- Iterable — можно менять prompt vocabulary без re-индексации (только пересчитать sims)
+- Adjective-уровень (для Sonic Vibe phrasing)
+
+**Vocabulary file**: `cache/sonic_prompts.json` — список prompts. Стартовый словарь предлагается ~30-50 prompts, организованных по группам:
+- **Energy**: explosive, driving, mid-tempo, languid, ambient, drone
+- **Valence**: euphoric, hopeful, neutral, melancholy, anxious, dark
+- **Density**: minimal, sparse, lush, wall-of-sound
+- **Texture**: clean, warm, raw, lo-fi, polished, saturated, crystalline
+- **Instrumentation**: acoustic guitar, piano-led, orchestral, synth-heavy, electronic
+- **Vocal**: instrumental, sparse vocals, lead vocals prominent, harmony-rich
+- **Rhythm**: 4/4 steady, swung, syncopated, free-time, motorik
+- **Era hints**: vintage, contemporary, 80s synth, 90s indie, post-punk
+
+Юзер может редактировать словарь — `cache/sonic_prompts.json` watchable, пересчёт sims триггерится сам.
+
+#### 5.7.2 Track 2: Custom Sonic Class Classifier
+
+**Что**: твоя личная таксономия music classes — обученный MLP, который выдаёт one-of-N cluster name по CLAP vector.
+
+**Как обучается** (one-time setup, опционально повторяется):
+1. **Cluster discovery** (`sonic_descriptor_service.cluster_library()`):
+   - Clustering CLAP-vectors всей библиотеки. Default — `HDBSCAN` (auto-detects k, не требует guess; альтернатива — hierarchical с silhouette tuning).
+   - Output: assignment `track_id → cluster_id`, + representative tracks per cluster (top-5 closest to centroid).
+2. **Cluster curator tool** — UI или CLI, в котором юзер:
+   - Видит представителей каждого cluster (cover + title + artist + play button)
+   - Слушает 30-сек snippet
+   - Даёт имя кластеру (например "Lo-fi indie", "Cinematic drone")
+   - Может merge'ить близкие clusters / разделить confused ones
+   - Saves labels → `cache/sonic_clusters/<collection>_labels.json`
+3. **Train classifier** (`sonic_descriptor_service.train_classifier()`):
+   - Input: CLAP vectors треков с known cluster labels (после curator)
+   - sklearn `MLPClassifier(hidden_layer_sizes=(256, 128), max_iter=200)` — простая 2-layer MLP, ~30 sec training на 1500 треков
+   - Output: trained model → `cache/sonic_classifier/<collection>.joblib`
+4. **Apply at indexing**:
+   - Для каждого нового трека: `model.predict_proba(clap_vector)` → softmax над all classes
+   - Top-1 class = `sonic_class`, его score = `sonic_class_confidence`
+
+**Преимущества**:
+- Personal taxonomy — твоя карта music, не generic genres
+- Cluster-aware visualization for Sonic Map
+- Discrete labels for Search facets ("show me Lo-fi indie only")
+- Stable assignments (для curator tool — re-label не требует re-clustering всей библиотеки)
+
+#### 5.7.3 Combined output
+
+Финальный record для трека (хранится в MetadataDB):
+```python
+{
+    "sonic_tags_json": [
+        {"tag": "anxious",     "score": 0.72},
+        {"tag": "atmospheric", "score": 0.68},
+        {"tag": "piano-led",   "score": 0.61},
+        {"tag": "warm",        "score": 0.54},
+        {"tag": "mid-tempo",   "score": 0.49}
+    ],
+    "sonic_class": "Lo-fi indie",
+    "sonic_class_confidence": 0.81
+}
+```
+
+**Consumers**:
+- **Sonic Vibe** (§5.1) — top tags + facts + lyrics → LLM phrase
+- **Sonic Sibling** (§5.1) — common tags + class diff → LLM "почему похож"
+- **For You rationale** (§5.4) — aggregated user descriptor profile → LLM personalized phrase
+- **Sonic Map** (§5.6) — `sonic_class` for color/overlay, tags as hover-tooltip
+- **Search facets** (§4.5) — filter by `sonic_class` или присутствие конкретного `tag`
+
+#### 5.7.4 Cluster Curator Tool
+
+**MVP delivery**: CLI script `scripts/cluster_curator.py` (interactive prompts), достаточен для one-time setup.
+
+**Future enhancement**: встроенный screen в Stats — `Stats → Curate Clusters` tab. Показывает cluster grid (один блок на cluster: covers grid + name input + merge/split actions + play button per representative). Будет реализован после MVP когда core platform работает.
+
+**Backend endpoints для curator** (used by both CLI and future UI):
+- `POST /library/cluster-discovery?collection=...` — запускает HDBSCAN, returns clusters + representatives. Long-running, returns job_id.
+- `GET /library/cluster-jobs/{job_id}` — статус discovery
+- `GET /library/clusters/representatives?collection=...` — listing of clusters + their top tracks (после discovery)
+- `POST /library/clusters/labels` — сохранить mapping `cluster_id → label`
+- `POST /library/sonic-classifier/train?collection=...` — train MLP, returns job_id
+- `GET /library/sonic-classifier/status?collection=...` — `untrained` / `training` / `ready` + last training date
+
+#### 5.7.5 Empty/incremental states
+
+- **Свежая библиотека, classifier не натренирован**:
+  - Sonic Vibe фраза генерируется только из prompt-probing tags (LLM получает `["anxious", "atmospheric", ...]` без cluster context). Quality OK.
+  - Sonic Sibling — "почему похож" фраза генерируется только из common tags, без class diff.
+  - For You rationale — только descriptor tags aggregated, без class match.
+  - Sonic Map работает в "by genre" / "by decade" color mode (cluster mode disabled).
+- **Pacrtially curated** (некоторые clusters labeled, classifier trained):
+  - All features работают, но некоторые tracks могут иметь `sonic_class=null` если confidence < threshold (e.g. 0.4).
+- **Fully curated**:
+  - Full functionality.
+
+---
+
+## 6. Backend Changes
+
+### 6.1 New / Updated endpoints
+
+| Endpoint | Method | File | Покрывает |
+|----------|--------|------|-----------|
+| `/artists/{slug}` | GET | new route file `app/api/routes/artists.py` | Artist universe aggregate (bio, discog, facts, related) |
+| `/recommend/autoplay-queue` | POST | `app/api/routes/recommend.py` (new) | Spin from here |
+| `/recommend/sonic-sibling` | GET | `app/api/routes/recommend.py` | Sonic Sibling |
+| `/metadata/tracks/{id}/sonic-vibe` | GET | `app/api/routes/metadata.py` | Sonic Vibe (lazy LLM) |
+| `/search/` (modified) | POST | `app/api/routes/search.py` | Add `score_breakdown` to response |
+| `/playback/record` | POST | `app/api/routes/playback.py` (new) | Recently Played |
+| `/playback/recent` | GET | `app/api/routes/playback.py` | Recently Played list |
+| `/library/liked-songs` | GET | `app/api/routes/library.py` | Liked songs filter |
+| `/playlists/*` | various | `app/api/routes/playlists.py` (new) | Playlists CRUD |
+| `/chat/` (modified) | POST | `app/api/routes/chat.py` | Add `LYRIC_EXPLAIN` and `SONG_DISCUSS` modes |
+| `/library/sonic-map` | GET | `app/api/routes/library.py` | Sonic Map (Stats) |
+| `/library/sonic-clusters` | GET | `app/api/routes/library.py` | Optional cluster names |
+| `/library/rediscover` | GET | `app/api/routes/library.py` | Today's Rediscovery (Home Hero) |
+| `/library/featured-artist` | GET | `app/api/routes/library.py` | Featured Artist of the Day (Home Hero) |
+| `/recommend/prompt-to-playlist` | POST | `app/api/routes/recommend.py` | Prompt-to-Playlist |
+| `/recommend/for-you` | GET | `app/api/routes/recommend.py` | Personalized stream |
+| `/recommend/for-you/rationale` | GET | `app/api/routes/recommend.py` | Lazy per-track rationale |
+| `/recommend/quick-rate/batch` | POST | `app/api/routes/recommend.py` | Quick-Rate session start |
+| `/recommend/quick-rate/finish` | POST | `app/api/routes/recommend.py` | Quick-Rate finish + generate |
+| `/recommend/snapshots` | POST | `app/api/routes/recommend.py` | Save generated playlist snapshot |
+| `/recommend/snapshots` | GET | `app/api/routes/recommend.py` | List saved snapshots |
+| `/recommend/snapshots/{id}` | GET | `app/api/routes/recommend.py` | Get snapshot detail |
+| `/recommend/snapshots/{id}` | DELETE | `app/api/routes/recommend.py` | Delete snapshot |
+| `/library/sonic-descriptor/{track_id}` | GET | `app/api/routes/library.py` | Per-track tags + sonic_class (lazy compute if missing) |
+| `/library/cluster-discovery` | POST | `app/api/routes/library.py` | Trigger HDBSCAN on collection (returns job_id) |
+| `/library/cluster-jobs/{job_id}` | GET | `app/api/routes/library.py` | Cluster discovery job status |
+| `/library/clusters/representatives` | GET | `app/api/routes/library.py` | Cluster grid (id → top tracks) for curator |
+| `/library/clusters/labels` | POST | `app/api/routes/library.py` | Persist cluster_id → label mapping |
+| `/library/sonic-classifier/train` | POST | `app/api/routes/library.py` | Train MLP on labeled clusters (returns job_id) |
+| `/library/sonic-classifier/status` | GET | `app/api/routes/library.py` | Classifier readiness state |
+| `/library/sonic-prompts` | GET | `app/api/routes/library.py` | Current prompt vocabulary |
+| `/library/sonic-prompts` | PUT | `app/api/routes/library.py` | Update vocabulary, triggers re-tagging |
+
+### 6.2 Updated models (`app/domain/models.py`)
+
+```python
+class ScoreBreakdown(BaseModel):
+    text_dense_score: float = 0.0
+    text_bm25_score: float = 0.0
+    audio_score: float = 0.0
+    final_score: float
+    weights: dict[str, float] = {"text": 0.5, "audio": 0.5}
+
+class TrackHit(BaseModel):
+    track: TrackMetadata
+    score: float
+    matched_on: Literal["lyrics", "audio", "hybrid"]
+    score_breakdown: Optional[ScoreBreakdown] = None  # NEW
+    lyrics: str | None = None
+    artist_facts: str | None = None
+    song_facts: str | None = None
+
+class TrackMetadata(BaseModel):
+    # ... existing fields ...
+    audio_signature: str | None = None  # NEW (Sonic Vibe LLM phrase)
+```
+
+### 6.3 New services
+
+- `app/services/sonic_vibe_service.py` — генерация LLM-фразы (CLAP vector + facts → italic phrase)
+- `app/services/playlist_service.py` — CRUD для плейлистов
+- `app/services/playback_history_service.py` — запись и retrieval play history
+- `app/services/sonic_map_service.py` — UMAP computation + cache management (`cache/sonic_map/<collection>.json`)
+- `app/services/personalization_service.py` — user_vector compute (mean liked − 0.3 × mean skipped), in-memory cache TTL 1h, For You queue generation
+- `app/services/prompt_to_playlist_service.py` — LLM-driven playlist generation (decompose → search → re-rank → why-phrase)
+- `app/services/quick_rate_service.py` — diversity-sampled batch creation + post-rating playlist gen
+- `app/services/sonic_descriptor_service.py` — CLAP-prompt-probing (zero-shot tags) + HDBSCAN clustering + sklearn MLP train/predict. Управляет `cache/sonic_prompts.json`, `cache/sonic_classifier/<col>.joblib`, `cache/sonic_clusters/<col>_labels.json`. Per-track output stored в SQLite (`songs.sonic_tags_json`, `songs.sonic_class`).
+- `scripts/cluster_curator.py` (CLI tool, не сервис) — interactive cluster labeling. Запускает discovery → показывает clusters + представителей → принимает labels от пользователя → инициирует training.
+
+### 6.4 MusicBrainz: scaffolded, populating deferred
+
+**Status**: MusicBrainz API нестабилен — на больших библиотеках matching конкретной записи неконсистентен, samples-relations плохо populated. Поэтому активное обогащение откладывается. Но **концепция полей сохраняется** в schema, чтобы будущий harvesting не требовал миграции.
+
+**Что делаем сейчас**:
+1. Оставить `app/services/_WIP_musicbraniz_search.py` отключённым (no Phase 1 work).
+2. Добавить в `MetadataDB` пустые scaffold-колонки/таблицы для будущего использования:
+   ```sql
+   -- songs: дополнительные nullable поля
+   ALTER TABLE songs ADD COLUMN producers TEXT;       -- JSON list or null
+   ALTER TABLE songs ADD COLUMN label TEXT;           -- null by default
+   ALTER TABLE songs ADD COLUMN samples_json TEXT;    -- JSON list of {sampled_track_id?, raw_text} or null
+
+   -- artists: scaffolded
+   ALTER TABLE artists ADD COLUMN mbid TEXT;          -- MusicBrainz ID for future re-lookup
+   ```
+3. В Artist Atlas UI и Player Facts panel: рендеринг producers/samples блоков **только if non-null** (graceful empty state — секция просто отсутствует).
+4. Все backend endpoints возвращают эти поля как nullable — frontend не делает на них hard dependency.
+
+**Что НЕ делаем**:
+- Активный MusicBrainz API matching на этапе indexing
+- Парсинг samples-of связей
+- Сетка producers / labels в Artist Atlas (Hero context остаётся короткий: city · genre · album count, без producer list)
+
+**Future migration path** (когда API стабилизируется или появится альтернативный источник):
+- Включить parser → стабилизировать на test-batch
+- Backfill script `app/services/_WIP_musicbraniz_search.py:backfill_all()` — fill scaffold columns по существующей библиотеке
+- Frontend сам подхватит данные без code-changes (graceful conditional rendering уже на месте)
+
+### 6.5 MetadataDB schema additions
+
+```sql
+-- New columns on songs
+ALTER TABLE songs ADD COLUMN audio_signature TEXT;       -- Sonic Vibe LLM phrase cache
+ALTER TABLE songs ADD COLUMN sonic_tags_json TEXT;       -- top-K {tag, score} from prompt-probing
+ALTER TABLE songs ADD COLUMN sonic_class TEXT;           -- predicted cluster label
+ALTER TABLE songs ADD COLUMN sonic_class_confidence REAL; -- 0..1
+
+-- New tables
+CREATE TABLE playback_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  collection_name TEXT NOT NULL,
+  track_id TEXT NOT NULL,
+  played_at REAL NOT NULL,
+  duration_played REAL DEFAULT 0
+);
+CREATE INDEX idx_playback_recent ON playback_history (collection_name, played_at DESC);
+
+CREATE TABLE playlists (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  collection_name TEXT NOT NULL,
+  created_at REAL NOT NULL,
+  cover_track_id TEXT
+);
+
+CREATE TABLE playlist_tracks (
+  playlist_id TEXT NOT NULL,
+  track_id TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  added_at REAL NOT NULL,
+  PRIMARY KEY (playlist_id, track_id),
+  FOREIGN KEY (playlist_id) REFERENCES playlists(id) ON DELETE CASCADE
+);
+
+-- Cache table for quick-rate / for-you generated playlists (saved snapshots)
+CREATE TABLE recommendation_snapshots (
+  id TEXT PRIMARY KEY,
+  collection_name TEXT NOT NULL,
+  source TEXT NOT NULL,         -- 'prompt' | 'for_you' | 'quick_rate'
+  prompt TEXT,                  -- original prompt (если source='prompt')
+  why_phrase TEXT,              -- LLM why-this-set фраза
+  track_ids_json TEXT NOT NULL, -- JSON array of track_ids
+  created_at REAL NOT NULL
+);
+```
+
+### 6.6 New file system caches
+
+- `cache/sonic_map/<collection>.json` — UMAP scatter (one-time compute per collection, re-computed when track count drifts >5%)
+- `cache/personalization/<collection>.json` — user_vector snapshot + computed_at (TTL 1h, also invalidated on reactions/playback changes)
+- `cache/sonic_prompts.json` — adjective vocabulary для prompt-probing (editable by user). Шаблон стартового vocabulary поставляется при первой инициализации.
+- `cache/sonic_prompts_embeddings.npy` — pre-computed CLAP text embeddings для prompts (re-compute если vocabulary меняется)
+- `cache/sonic_clusters/<collection>_assignments.json` — HDBSCAN result: `{track_id: cluster_id, ...}`
+- `cache/sonic_clusters/<collection>_labels.json` — user-assigned labels: `{cluster_id: "Lo-fi indie", ...}` (persisted from curator)
+- `cache/sonic_classifier/<collection>.joblib` — trained sklearn MLP (predicts sonic_class from CLAP vector)
+- `cache/sonic_classifier/<collection>_meta.json` — training metadata (training date, accuracy on held-out, class list)
+
+### 6.7 New Python dependencies
+
+- `umap-learn` (~150MB indirect via numpy/scikit-learn — уже частично) **OR** `pacmap` (~lighter) для Sonic Map UMAP projection. Choose `umap-learn` для quality, `pacmap` для cold-start speed.
+- `hdbscan` (~30MB) — для cluster discovery в Sonic Descriptor Layer (auto k-detection, не требует guess как у k-means).
+- Existing `scikit-learn` уже доступен — use it для MLPClassifier (custom sonic classifier).
+- Existing `numpy` — для cosine-similarity bulk operations в prompt-probing.
+
+---
+
+## 7. Frontend Changes
+
+### 7.1 Critical file
+
+`frontend/index.html` — single-file React via in-browser Babel. **ВСЕ изменения тут**, без разделения на отдельные файлы (так требует текущая архитектура).
+
+### 7.2 Component changes
+
+**Modified**:
+- `App` (lines ~4957–5145) — добавить новые routes (artist atlas, liked songs, playlists)
+- `Sidebar` — заменить на `<FloatingIconNav>` (64px, без border, glass)
+- `PlayerSection` (lines 4487–4954) — рестрактурировать на v6 layout
+- `SearchSection` — клик на трек → перейти на Artist Atlas (не Detail Panel)
+
+**New components** (внутри `index.html`):
+
+**Core (Smart Companion)**:
+- `ArtistAtlasSection` — hero + tabs (Bio/Discog/Facts/Related/Eras) + content + mini-player
+- `AIChatDrawer` — выезжающая правая панель с suggested prompts, history, input
+- `LyricsPanel` — collapsible панель с lyrics + click-to-explain
+- `SonicSiblingCard` — янтарная hero-карточка с LLM-фразой
+- `SonicVibeQuote` — pull-quote с декоративными ❝❞
+- `BreakdownBars` — две цветные мини-полоски (text + audio)
+- `PlaylistsSection` — CRUD UI
+- `LikedSongsView` — фильтр reactions=='like'
+- `RecentlyPlayedRail` — горизонтальный rail
+- `QueuePanel` — drag-drop Up Next
+
+**Home (Discovery Magazine)**:
+- `HomeSection` — основной layout (Hero row + shelves + CTA strip)
+- `HeroRediscoveryCard` — левый Hero блок с teaser-фактом
+- `HeroFeaturedArtistCard` — правый Hero блок с cover stack + bio summary
+- `Shelf` — generic horizontal-scroll rail (используется для Recently played / Liked / Try different)
+- `ForYouCTAStrip` — bottom-of-Home gradient bar с одним button
+
+**Search redesign**:
+- `SearchSectionV2` — replaces existing SearchSection
+- `SearchModeToggle` — segmented control (Название / Текст / Звук / Hybrid)
+- `SearchFiltersAccordion` — collapsible filters row (genre / decade / duration / liked)
+- `SearchResultsGrid` — 4-column responsive grid с hover-breakdown tooltip
+- `RecentSearchesChips` — chip-row из localStorage
+
+**Stats (Sonic Map + KPI)**:
+- `StatsSection` — главный layout
+- `SonicMapCanvas` — HTML5 canvas с pan / zoom / hover / click (uses spatial-grid hit-test)
+- `SonicMapTooltip` — floating cover+title tooltip on hover
+- `SonicMapControls` — color-mode dropdown + view toggle (scatter/clusters)
+- `KPITiles` — 4-column compact panel-v3 tiles
+- `DecadesTimeline` — horizontal bar chart (SVG или CSS bars)
+- `TopGenresBar` — vertical bars list
+- `TopArtistsList` — нумерованный list с counts
+
+**Recommendations**:
+- `RecommendationsSection` — главный layout (mode picker + active panel + saved snapshots)
+- `RecommendModePicker` — 3 cards row (For You / Prompt / Quick-Rate)
+- `ForYouPanel` — endless queue + rationale popover
+- `PromptToPlaylistPanel` — text input + length selector + generate + result list + save action
+- `WhyThisSetQuote` — italic pull-quote (style like Sonic Vibe)
+- `QuickRateSessionWizard` — card-stack rating (modal overlay)
+- `QuickRateCard` — single track snippet + 👍/👎 buttons
+- `RecommendationSnapshotsList` — saved generated playlists list
+
+**Sidebar enhancements**:
+- `FloatingIconNav` (replaces current sidebar) — иконки + active glow
+- `NowPlayingPebble` — sidebar bottom playback indicator (40×40 cover circle)
+- `MiniPlaybackPopout` — floating ~320×80 panel from pebble hover (cover/title/⏮⏯⏭/scrubber/expand)
+- `GlobalKeyboardShortcuts` — invisible global key listener (hook)
+
+### 7.3 Style updates (CSS)
+
+Добавить в `<style>` блок:
+- Все `.h3-*` / `.v3-*` / `.pv6-*` классы из мокапов
+- Keyframes: `eq1`–`eq4`, `coverBreath`, `askGlow`
+- Materials: `.panel-v3`, `.cta-v3`, `.pill-v3`, `.ask-ai-btn`, `.vibe-quote`
+
+Сохранить существующие `.ske-*` классы — они теперь base layer для tactile depth.
+
+### 7.4 Reactions row update
+
+Текущие like/dislike pills (`frontend/index.html` PlayerSection) → расширить:
+- `♥ Liked` / `⨯ Skip` / `↻ Loop` (pills)
+- Под ними отдельной строкой: `✨ ASK AI ABOUT THIS SONG` (gradient × glass)
+
+### 7.5 useChatHistory hook
+
+Существующий `useChatHistory(collectionName)` (для chat в SearchSection) — переиспользовать в AIChatDrawer но с **per-song context**: ключ `chat_history:song:${track_id}` вместо `chat_history:${collectionName}`.
+
+---
+
+## 8. Critical Files Reference
+
+| Файл | Что меняется |
+|------|--------------|
+| `frontend/index.html` | Основная UI-перестройка (sidebar, ArtistAtlas, Player v6, AIChatDrawer, и все остальные новые компоненты + styles) |
+| `app/api/routes/search.py` | TrackHit с score_breakdown |
+| `app/api/routes/chat.py` | LYRIC_EXPLAIN_PROMPT, SONG_DISCUSS_PROMPT |
+| `app/api/routes/metadata.py` | sonic-vibe endpoint |
+| `app/api/routes/library.py` | liked-songs endpoint |
+| `app/api/routes/artists.py` (new) | Artist universe aggregate |
+| `app/api/routes/recommend.py` (new) | autoplay-queue, sonic-sibling |
+| `app/api/routes/playlists.py` (new) | Playlists CRUD |
+| `app/api/routes/playback.py` (new) | Playback history |
+| `app/domain/models.py` | ScoreBreakdown, audio_signature |
+| `app/services/search_service.py:236-294` | _merge_hits возвращает breakdown |
+| `app/services/sonic_vibe_service.py` (new) | LLM-фраза generation |
+| `app/services/playlist_service.py` (new) | Playlists business logic |
+| `app/services/playback_history_service.py` (new) | History recording |
+| `app/services/sonic_map_service.py` (new) | UMAP computation + cache management |
+| `app/services/personalization_service.py` (new) | user_vector compute + For You queue |
+| `app/services/prompt_to_playlist_service.py` (new) | LLM-driven playlist generation pipeline |
+| `app/services/quick_rate_service.py` (new) | Diversity-sampled batch + post-rate generation |
+| `app/services/sonic_descriptor_service.py` (new) | Prompt-probing + HDBSCAN + MLP train/predict; populates `songs.sonic_tags_json` / `sonic_class` |
+| `scripts/cluster_curator.py` (new, CLI) | Interactive cluster labeling tool (one-time setup, future UI in Stats) |
+| `app/services/_WIP_musicbraniz_search.py` | Оставить отключённым; future re-enable когда API/source стабилизируется |
+| `app/resources/metadata_db.py` | New tables (playback_history, playlists, playlist_tracks, recommendation_snapshots) + audio_signature column |
+| `app/main.py` | Register new routes (`artists`, `recommend`, `playlists`, `playback`) |
+| `cache/sonic_map/<collection>.json` (new) | UMAP scatter cache |
+| `cache/personalization/<collection>.json` (new) | user_vector cache |
+| `cache/sonic_prompts.json` (new) | Editable prompt vocabulary (adjective set) |
+| `cache/sonic_prompts_embeddings.npy` (new) | Pre-computed CLAP text embeddings for prompts |
+| `cache/sonic_clusters/<collection>_assignments.json` (new) | HDBSCAN cluster assignments |
+| `cache/sonic_clusters/<collection>_labels.json` (new) | User-curated cluster labels |
+| `cache/sonic_classifier/<collection>.joblib` (new) | Trained sklearn MLP classifier |
+
+---
+
+## 9. Build Sequence
+
+Рекомендуемый порядок имплементации (каждый шаг можно проверить независимо):
+
+### Phase 1: Backend foundations (без UI-изменений)
+1. **ScoreBreakdown в TrackHit** — модифицировать `_merge_hits()` в `search_service.py`, добавить breakdown в response. Verify: вызов `/search/` возвращает breakdown поля.
+2. **MusicBrainz scaffolding (data-only)** — добавить nullable columns в `songs`/`artists` tables (`producers`, `label`, `samples_json`, `mbid`) **без** активного парсинга. UI рендерит conditionally if non-null. Verify: schema migration работает, существующие данные не повреждены, columns пустые.
+3. **Sonic Vibe service** [depends on Phase 1c.1-1c.2] — LLM генерация фразы из tags (prompt-probing output) + facts + lyrics. Endpoint `/metadata/tracks/{id}/sonic-vibe`. SQLite кэширование. Verify: запрос возвращает разумные phrase-ы для разных треков; фраза семантически отражает top tags.
+4. **Sonic Sibling endpoint** [depends on Phase 1c.1-1c.2; class diff requires 1c.5-1c.6] — `/recommend/sonic-sibling`. Qdrant query с payload filters. Plus LLM-фраза из common_tags ∩ + class_diff. Verify: для известного трека возвращает sensible sibling (different artist, different era); "почему похож" фраза ссылается на конкретные tags/classes.
+5. **Autoplay queue endpoint** — `/recommend/autoplay-queue`. Hybrid CLAP+text + reaction filtering. Verify: returns 20 диверсифицированных треков.
+
+### Phase 1c: Sonic Descriptor Layer (prerequisite для Sonic Vibe / Sibling / Map cluster overlay / For You rationale)
+1c.1. **Prompt vocabulary scaffolding** — создать `cache/sonic_prompts.json` со стартовым набором ~30-50 prompts по группам (energy/valence/density/texture/instrumentation/vocal/rhythm/era). Pre-compute их CLAP text embeddings в `.npy`. Verify: vocab loadable, embeddings shape correct.
+1c.2. **Prompt-probing tagger** — `sonic_descriptor_service.compute_tags(track_id)`: cosine между track_emb и prompt_embeddings, top-K. Persist в `songs.sonic_tags_json`. Trigger automatically на indexing (incremental: new tracks get tagged immediately, existing — bulk script). Verify: 5 tracks возвращают sensible top-5 tags каждый.
+1c.3. **HDBSCAN clustering** — `sonic_descriptor_service.cluster_library(collection)`: clusterise все CLAP-vectors. Save assignments → `cache/sonic_clusters/<col>_assignments.json` + representatives (top-5 closest to centroid per cluster). Endpoint `POST /library/cluster-discovery`. Verify: returns sensible cluster count (5-30 для test library of 500 tracks), representatives визуально похожи.
+1c.4. **Cluster curator CLI** — `scripts/cluster_curator.py`: interactive prompts (list clusters → show representatives — `[1] play 'Track A by Artist'`, etc. — accept name input, merge/split commands). On finish — writes `<col>_labels.json`. Verify: end-to-end на test cluster set, labels persisted.
+1c.5. **MLP classifier training** — `sonic_descriptor_service.train_classifier(collection)`: sklearn `MLPClassifier`, hidden=(256, 128), trained on (CLAP_vec, cluster_label) pairs. Save → `cache/sonic_classifier/<col>.joblib`. Endpoint `POST /library/sonic-classifier/train`. Verify: training completes <60 sec on 1500 tracks, accuracy >0.7 on 80/20 split.
+1c.6. **Apply classifier at indexing** — для каждого нового трека после CLAP embedding: `predict_proba` → top-class + confidence → write to `songs.sonic_class` / `sonic_class_confidence`. Verify: existing library re-classified в bulk script, new tracks classified inline.
+1c.7. **Empty/incremental state guards** — if classifier not trained, all consumers (Sonic Vibe, Sibling, Map overlay) gracefully fall back (tags only, no class). Verify: features работают на свежей библиотеке без curator pass.
+
+### Phase 1b: Additional backend foundations (Home / Stats / Recommendations)
+1b.1. **Sonic Map service** — `sonic_map_service.py`, UMAP computation, cache file `cache/sonic_map/<col>.json`. Endpoint `/library/sonic-map`. Trigger compute on indexing completion. Verify: запрос возвращает ~N points для test collection.
+1b.2. **Home Hero endpoints** — `/library/rediscover` (least-recently-played; requires `playback_history` table populated), `/library/featured-artist` (date-deterministic rotation hash). Verify: rediscover varies per call, featured-artist stable per date.
+1b.3. **Personalization service** — `personalization_service.py`, user_vector compute, in-memory cache TTL 1h, invalidation hooks. Endpoint `/recommend/for-you` + `/recommend/for-you/rationale`. Verify: меняется при new like/dislike, queue order reflects user_vector.
+1b.4. **Prompt-to-Playlist pipeline** — `prompt_to_playlist_service.py`, LLM decompose → parallel hybrid search → LLM re-rank+why-phrase. Endpoint `/recommend/prompt-to-playlist`. Verify: end-to-end на 3 разных prompts (sad / energetic / specific era), результаты sensible.
+1b.5. **Quick-Rate endpoints** — `quick_rate_service.py`, diversity-sampled batch + finish. Endpoints `/recommend/quick-rate/batch` + `.../finish`. Verify: 10 diverse candidates returned (spread по genre/decade); finish persists ratings + generates playlist.
+1b.6. **Recommendation snapshots** — SQLite table + save endpoint (`POST /recommend/snapshots`) + list endpoint (`GET /recommend/snapshots`). Verify: save и retrieve работают, восстановление playlist по id.
+
+### Phase 2: Frontend foundation
+6. **Floating icon sidebar** — заменить current sidebar на `FloatingIconNav`. Сохранить routing к существующим разделам + добавить новые pivot-ы (Home/Search/Lib/Stats/Recom/Player/Set). Verify: visual change без regression в navigation.
+7. **Style updates** — добавить v3 hybrid CSS (panels, pills, CTAs, animations) в `<style>`. Существующие компоненты постепенно мигрируют на новые классы.
+7a. **Now Playing Pebble + MiniPlaybackPopout** — sidebar bottom indicator с hover-popout. Verify: pebble виден везде, popout появляется при hover, controls работают.
+7b. **Global keyboard shortcuts** — Space / arrows / Shift+arrows / M / L / D / `/`. Verify: shortcuts работают на любом экране, не вызывают конфликта когда focus в input.
+
+### Phase 3: Artist Atlas
+8. **ArtistAtlasSection component** — новый view. Использует существующий `/library/browse` + новый `/artists/{slug}` aggregate. Hero, tabs, bio panel, discog rail.
+9. **Click-to-artist routing** — из SearchSection и других мест клик на трек/артиста → Artist Atlas, не Detail Panel.
+
+### Phase 4: Player v6 redesign
+10. **PlayerSection restructure** — hero с 3 zones, breathing cover, EQ bars, Sonic Vibe quote, Ask AI inline.
+11. **Facts panel** — slot для song-facts (через `/metadata/tracks/{id}/facts`).
+12. **Sonic Sibling card** — янтарная hero-карточка с LLM "why similar" phrase.
+13. **Progressive disclosure**: lyrics-btn под cover (toggle), see-other-similar btn (toggle).
+14. **Breakdown bars** в other similar list.
+
+### Phase 5: AI Chat & lyrics-explain
+15. **AIChatDrawer component** — слайд из правой стороны. Pre-filled context current song. Suggested prompts. Reuse `useChatHistory` с per-song ключом.
+16. **Inline ✨ explain** на lyric line — popover с LLM-ответом. Reuse `/chat/` endpoint с `LYRIC_EXPLAIN_PROMPT`.
+
+### Phase 6: Spotify-like MVP
+17. **Playback history backend** + `RecentlyPlayedRail` на Home/Library.
+18. **Liked Songs view** — фильтр + UI.
+19. **Playlists CRUD** — backend tables + endpoints + UI (создать, добавить, реордер, удалить, context-menu "Add to playlist").
+20. **Manual Queue panel** — frontend-only, drag-drop reorder, выезжает из ≡ кнопки.
+
+### Phase 6a: Home (Discovery Magazine)
+6a.1. **HomeSection layout** — Hero row (двойной блок) + 3 shelves + bottom CTA.
+6a.2. **HeroRediscoveryCard** — uses `/library/rediscover` + facts из existing `/metadata/tracks/{id}/facts`. `[▶ PLAY]` запускает Player.
+6a.3. **HeroFeaturedArtistCard** — uses `/library/featured-artist`. Cover stack, bio summary, CTA → Artist Atlas.
+6a.4. **Shelf components** для Recently played / Your liked / Try different. Re-uses `RecentlyPlayedRail` pattern из Phase 6.
+6a.5. **ForYouCTAStrip** — gradient bar внизу, обрабатывает empty-state (no playback_history → Quick-Rate suggestion).
+6a.6. Verify: Home рендерится на свежей библиотеке (empty state), на богатой библиотеке, при отсутствии playback_history.
+
+### Phase 6b: Search redesign
+6b.1. **SearchSectionV2** + **SearchModeToggle** — replace existing SearchSection. Сохранить backward-compat для existing search params (если есть deep-link).
+6b.2. **SearchFiltersAccordion** — collapsed by default, smooth expand.
+6b.3. **RecentSearchesChips** — localStorage persistent.
+6b.4. **SearchResultsGrid** + hover breakdown tooltip.
+6b.5. Verify: каждый mode возвращает результаты, breakdown показывается в semantic modes, hint меняется per mode.
+
+### Phase 6c: Stats redesign (Sonic Map)
+6c.1. **SonicMapCanvas** — компонент с pan/zoom/hover/click. Performance test: 1500+ points smooth at 60fps.
+6c.2. **SonicMapControls** — color-mode dropdown (by genre / by decade / by reaction).
+6c.3. **KPITiles + DecadesTimeline + TopGenres/Artists** — auxiliary visualizations.
+6c.4. (Optional) **Cluster overlay** — if `/library/sonic-clusters` endpoint ready.
+6c.5. Verify: map renders на 100/1000/3000 points, click-to-play работает, KPI tiles tally с `/library/stats`.
+
+### Phase 6d: Recommendations
+6d.1. **RecommendationsSection** + **RecommendModePicker** — 3-card mode picker.
+6d.2. **PromptToPlaylistPanel** — text input, length selector, generate, result list с breakdown + WhyThisSetQuote. Save-as-playlist action.
+6d.3. **ForYouPanel** — endless queue с per-track `i` icon → rationale popover. Recompute trigger.
+6d.4. **QuickRateSessionWizard** — modal overlay, card-stack, 30-сек snippet autoplay, 👍/👎 buttons, progress, finish-generate.
+6d.5. **RecommendationSnapshotsList** — bottom of screen, list of saved generated playlists.
+6d.6. Verify: каждый mode end-to-end работает; ratings из Quick-Rate переходят в track_reactions; saved playlists появляются в Custom Playlists.
+
+### Phase 7: Polish
+21. Анимации (coverBreath, eq, askGlow, pebble pulse, hero fade-in) — финальная настройка.
+22. Empty states, loading states, error handling по всем screens (Home, Search, Stats, Recommend, Artist Atlas, Player).
+23. Visual consistency pass — проверить что все screens используют panel-v3 materials uniformly, без regression в существующей navigation/playback.
+24. Accessibility pass — focus rings, keyboard navigation в каждом screen, semantic HTML, aria-labels на иконках.
+25. Performance pass — Sonic Map smooth at 60fps, no jank при переходах между screens, lazy-load обложек в shelves.
+
+---
+
+## 10. Verification
+
+### Smoke tests (manual)
+1. Запустить dev server, открыть приложение.
+2. **Floating sidebar**: иконки видны, активный пункт светится, navigation работает.
+3. **Artist Atlas**:
+   - Search "Radiohead" → клик на любой трек/артист → попадаешь на Artist Atlas
+   - Видно hero с обложкой, биографией, дискографией rail
+   - Click `▶ Spin from here` → начинается воспроизведение, autoplay queue заполнена
+4. **Player screen**:
+   - Click `↕ EXPAND TO PLAYER` в mini-bar
+   - Cover дышит (subtle pulse), EQ bars анимированы, NOW PLAYING label виден
+   - Sonic Vibe фраза отображается как quote с декоративными ❝❞
+   - Facts panel показывает 5 фактов из songfacts + "more"
+   - Sonic Sibling card показывает реальный different-era трек с LLM "why similar"
+   - Click `📜 LYRICS` → lyrics-панель раскрывается в левой колонке
+   - Click строку lyrics → `✨ explain` пилюля → popover с LLM-ответом
+   - Click `▽ SEE OTHER SIMILAR` → раскрывается список с breakdown bars
+   - Click `✨ ASK AI ABOUT THIS SONG` → drawer выезжает справа, видны suggested prompts
+5. **Spotify-like features**:
+   - Like несколько треков → `♥ Liked Songs` секция в Library показывает их
+   - Recently Played обновляется после прослушивания
+   - Создать playlist, добавить трек через context-menu, удалить
+   - Add to queue → manual queue panel показывает их в Up Next
+
+### API smoke tests
+```bash
+# ScoreBreakdown
+curl -X POST localhost:8000/api/v1/search/ -d '{"query":"sad", "mode":"hybrid"}' | jq '.hits[0].score_breakdown'
+
+# Sonic Sibling
+curl localhost:8000/api/v1/recommend/sonic-sibling?track_id=...
+
+# Autoplay queue
+curl -X POST localhost:8000/api/v1/recommend/autoplay-queue -d '{"seed_track_id":"...", "limit":20}'
+
+# Sonic Vibe
+curl localhost:8000/api/v1/metadata/tracks/.../sonic-vibe
+
+# Playlists
+curl -X POST localhost:8000/api/v1/playlists -d '{"name":"Late night"}'
+curl localhost:8000/api/v1/playlists
+
+# Liked songs
+curl localhost:8000/api/v1/library/liked-songs
+
+# Recently played
+curl localhost:8000/api/v1/playback/recent
+
+# Sonic Map
+curl 'localhost:8000/api/v1/library/sonic-map?collection=music_explorer'
+
+# Home Hero
+curl 'localhost:8000/api/v1/library/rediscover?collection=music_explorer'
+curl 'localhost:8000/api/v1/library/featured-artist?collection=music_explorer&date=2026-05-13'
+
+# For You
+curl 'localhost:8000/api/v1/recommend/for-you?collection=music_explorer&limit=20'
+curl 'localhost:8000/api/v1/recommend/for-you/rationale?track_id=...&collection=...'
+
+# Prompt-to-Playlist
+curl -X POST localhost:8000/api/v1/recommend/prompt-to-playlist \
+  -d '{"prompt":"rainy afternoon with guitars", "length":10, "collection":"music_explorer"}'
+
+# Quick-Rate
+curl -X POST 'localhost:8000/api/v1/recommend/quick-rate/batch?collection=music_explorer&size=10'
+curl -X POST localhost:8000/api/v1/recommend/quick-rate/finish \
+  -d '{"ratings":[{"track_id":"...","rating":"up"}], "collection":"..."}'
+
+# Snapshots
+curl -X POST localhost:8000/api/v1/recommend/snapshots \
+  -d '{"source":"prompt", "prompt":"...", "why_phrase":"...", "track_ids":[...], "collection":"..."}'
+curl 'localhost:8000/api/v1/recommend/snapshots?collection=music_explorer'
+
+# Sonic Clusters (after curator pass)
+curl 'localhost:8000/api/v1/library/sonic-clusters?collection=music_explorer'
+
+# Sonic Descriptor per track
+curl 'localhost:8000/api/v1/library/sonic-descriptor/abc-123'
+# expected: {"sonic_tags_json":[...], "sonic_class":"Lo-fi indie", "sonic_class_confidence":0.81}
+
+# Prompt vocabulary
+curl 'localhost:8000/api/v1/library/sonic-prompts'
+
+# Trigger cluster discovery
+curl -X POST 'localhost:8000/api/v1/library/cluster-discovery?collection=music_explorer'
+# expected: {"job_id":"..."}
+
+# Curator workflow
+curl 'localhost:8000/api/v1/library/clusters/representatives?collection=music_explorer'
+curl -X POST localhost:8000/api/v1/library/clusters/labels \
+  -d '{"collection":"music_explorer", "labels":{"0":"Lo-fi indie", "1":"Cinematic drone"}}'
+
+# Train classifier
+curl -X POST 'localhost:8000/api/v1/library/sonic-classifier/train?collection=music_explorer'
+curl 'localhost:8000/api/v1/library/sonic-classifier/status?collection=music_explorer'
+# expected (after training): {"status":"ready", "trained_at":..., "accuracy":0.78, "classes":["Lo-fi indie", ...]}
+```
+
+### What NOT to verify (explicit non-goals в MVP)
+- Synced lyrics (mp3 не имеет .lrc, отложено)
+- Sleep timer (не выбрано в MVP)
+- Mobile responsive — отложено, PC-only
+- Equalizer / audio quality / crossfade
+- Daily Mix / автогенерация persona-плейлистов (заменён нашим For You stream)
+- Social / sharing / collaborative playlists
+
+---
+
+## 11. Open questions для будущих итераций
+
+После завершения этого MVP, кандидаты для следующего pass-а:
+- **MusicBrainz populating** — когда найдётся стабильный matching pipeline (или альтернативный источник: Discogs, AcousticBrainz, custom scraper), включить backfill в scaffolded columns (`producers`, `label`, `samples_json`, `mbid`). UI уже готов рендерить conditionally — данные сами подхватятся.
+- **Sonic Descriptor refinement** — после первого MVP с initial vocabulary, проанализировать какие prompts наиболее differentiating (variance across library), какие redundant (correlated). Tune `cache/sonic_prompts.json` по результатам. Возможно ввести **multi-level taxonomy** (super-classes над sonic_class — e.g. "Indie/Folk/Acoustic" → ["Lo-fi indie", "Bedroom pop", "Folk revival"]).
+- **Cluster Curator screen (UI)** — когда CLI MVP проверен, перенести функционал в `Stats → Curate Clusters` tab: cluster grid с covers, inline play, label editing, merge/split actions.
+- **Sonic Descriptor confidence as quality signal** — tracks с низким `sonic_class_confidence` (<0.4) могут означать outlier треки (хорошие кандидаты для Featured Artist of the Day или "Try something different" shelf).
+- **Synced lyrics**: интеграция syncedlyrics + timeline highlight (требует `.lrc` parsing)
+- **Mobile responsive** — second design pass
+- **Sleep timer** — простой add
+- **Multi-user / accounts** — если когда-то понадобится shareability
+- **Cluster auto-naming improvement** — LLM иногда даёт generic labels ("Mixed group"), стоит experimental tune
+- **For You diversity floor** — sometimes ranking даёт repetitive bunches (one artist подряд); может потребоваться MMR-style diversity at fetch time
+- **Stats: listening patterns** — week/hour heatmap, скип-распределение по song length, "когда ты больше всего слушаешь" (требует обогащения playback_history)
+- **Recommendation snapshots search** — full-text search по prompt history
+- **Sonic Map sub-views** — drill-down в кластер (open cluster → mini-map с N точками)
+
+---
+
+## 12. Appendix: брейнсторм-артефакты
+
+Все 6 итераций мокапов сохранены в `.superpowers/brainstorm/410-1778623356/content/`:
+- `style-direction.html` — выбор A/B/C/D direction (C выбран)
+- `style-hybrid.html` / `-v2.html` / `-v3.html` — три итерации гибрида C+A (v3 финал)
+- `artist-atlas-layout.html` — L1/L2/L3 layouts (L2 выбран)
+- `artist-atlas-revised.html` — L2 с лёгкой границей, без правой панели
+- `player-screen.html` / `player-facts-centric.html` / `player-v2/v3/v4/v5/v6.html` — 7 итераций player layout
+- `style-hybrid-v3.html` — финальный визуальный baseline
+
+Эти файлы можно открывать в браузере (server в `.superpowers/brainstorm/410-1778623356/` или просто как static HTML) — они полезны как visual reference при имплементации.

@@ -19,6 +19,11 @@ docs/
 # Claude
 .claude/
 CLAUDE.MD
+.superpowers/
+
+# local-only tooling and mockups
+.tmp/
+demo.html
 
 # model weights
 /weights
