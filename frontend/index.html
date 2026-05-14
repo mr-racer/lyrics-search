@@ -5154,13 +5154,14 @@ function App() {
         />
       ) : (
         <Fragment>
-          <Sidebar
-            section={section} onNav={setSection} onHome={() => setSection('home')}
-            isDark={isDark} lang={lang}
-            collections={collections} activeCollection={activeCollection}
-            onCollectionSwitch={switchCollection}
-            onCollectionDelete={(name) => setDeleteConfirm(name)}
+          <FloatingIconNav
+            section={section}
+            onNav={setSection}
+            isDark={isDark}
+            lang={lang}
             onSettings={() => setSettingsOpen(true)}
+            currentTrack={playerTrack}
+            audio={audio}
           />
           {/* Render all sections; visibility toggled (NOT display:none) to preserve audio across navigation */}
           {Object.entries(sectionMap).map(([id, Comp]) => (
