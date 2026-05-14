@@ -603,8 +603,11 @@ class MetadataDB:
     ) -> int:
         """Insert a playback event. Returns the new row id.
 
-        ``skipped_early`` is derived server-side: True if played_sec < 30 OR
-        (total_dur > 0 AND played_sec / total_dur < 0.30).
+        ``skipped_early`` is derived server-side: when ``total_dur`` is known,
+        ``True`` requires BOTH ``played_sec < 30`` AND
+        ``played_sec / total_dur < 0.30`` (so a short track played to completion
+        is not falsely flagged). When ``total_dur`` is missing, falls back to
+        the absolute 30-second threshold alone.
         """
         if total_dur and total_dur > 0.0:
             # Both signals required to count as a skip — short play AND short ratio.
