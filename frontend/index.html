@@ -1677,6 +1677,41 @@ function FloatingIconNav({ section, onNav, isDark, lang, onSettings, currentTrac
   );
 }
 
+// ─── NowPlayingPebble — 40×40 circular cover indicator at bottom of sidebar ─────
+function NowPlayingPebble({ track, isPlaying, onClick, onHoverChange }) {
+  const hasTrack = !!track;
+  const cover = track && (track.cover_art_path || track.coverArt) || null;
+  const animation = (hasTrack && isPlaying) ? 'pebblePulse 2.4s ease-in-out infinite' : 'none';
+
+  return (
+    <button
+      onClick={onClick}
+      onMouseEnter={() => onHoverChange?.(true)}
+      onMouseLeave={() => onHoverChange?.(false)}
+      onFocus={() => onHoverChange?.(true)}
+      onBlur={() => onHoverChange?.(false)}
+      title={hasTrack ? `${track.title || ''} — ${track.artist || ''}` : 'No track playing'}
+      style={{
+        width: 40, height: 40, borderRadius: '50%', padding: 0,
+        background: hasTrack ? '#1a1a22' : 'rgba(255,255,255,0.04)',
+        border: '1px solid ' + (hasTrack ? 'rgba(212,165,90,0.5)' : 'rgba(255,255,255,0.08)'),
+        cursor: hasTrack ? 'pointer' : 'default',
+        display: 'grid', placeItems: 'center', overflow: 'hidden',
+        animation, transition: 'border-color 0.25s ease',
+      }}>
+      {hasTrack && cover ? (
+        <img src={cover} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+      ) : hasTrack ? (
+        <span className="serif-display" style={{ color: '#d4a55a', fontSize: 18, fontStyle: 'normal' }}>
+          {(track.title || '?')[0]?.toUpperCase()}
+        </span>
+      ) : (
+        <span className="mono-label" style={{ fontSize: 7, color: 'rgba(238,238,243,0.4)' }}>MX</span>
+      )}
+    </button>
+  );
+}
+
 // ─── Sidebar (shown inside sections, not on landing) ──────────────────────────
 function Sidebar({ section, onNav, onHome, isDark, lang, collections, activeCollection, onCollectionSwitch, onCollectionDelete, onSettings }) {
   const c = useColors(isDark);
