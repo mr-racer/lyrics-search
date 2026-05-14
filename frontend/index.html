@@ -5267,6 +5267,9 @@ function App() {
   // Shared audio controller — lives at App level so audio survives navigation
   const audio = useAudioPlayer();
 
+  // Global keyboard shortcuts (Task 11)
+  useGlobalKeyboardShortcuts({ audio, onNavToSection: setSection });
+
   const c = useColors(isDark);
 
   // Boot
