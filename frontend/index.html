@@ -1600,6 +1600,83 @@ function TopRightControls({ isDark, lang, onLang, onTheme, onSettings, floating=
   );
 }
 
+// ─── FloatingIconNav (v3) — 64px-wide vertical bar with icons + labels + Now Playing pebble ──
+function FloatingIconNav({ section, onNav, isDark, lang, onSettings, currentTrack, audio }) {
+  const navItems = [
+    { id:'home',      label: lang==='ru'?'ДОМ':'HOME',
+      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg> },
+    { id:'search',    label: lang==='ru'?'ПОИСК':'SRCH',
+      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg> },
+    { id:'library',   label: lang==='ru'?'БИБЛ':'LIB',
+      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></svg> },
+    { id:'recommend', label: lang==='ru'?'РЕК':'REC',
+      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2 15 8l6 1-4.5 4.5L18 20l-6-3-6 3 1.5-6.5L3 9l6-1z"/></svg> },
+    { id:'player',    label: lang==='ru'?'ПЛЕЕР':'PLAY',
+      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/></svg> },
+  ];
+
+  return (
+    <div className="panel-v3" style={{
+      width:'64px', minWidth:'64px', height:'100vh', display:'flex', flexDirection:'column',
+      alignItems:'center', padding:'18px 0 14px', borderRadius:0,
+      borderRight:'1px solid rgba(255,255,255,0.05)', borderTop:0, borderBottom:0, borderLeft:0,
+      gap:'4px', zIndex:10, flexShrink:0,
+    }}>
+      {/* Brand mark (clickable, returns to home) */}
+      <button onClick={() => onNav('home')} title={lang==='ru'?'На главную':'Home'}
+        style={{ width:36, height:36, borderRadius:10, display:'grid', placeItems:'center', cursor:'pointer',
+                 background:'transparent', border:0, color:'#eeeef3', marginBottom:14 }}>
+        <span className="serif-display" style={{ fontSize:22, lineHeight:1, fontStyle:'normal' }}>
+          M<i style={{ color:'oklch(60% 0.18 270)' }}>X</i>
+        </span>
+      </button>
+
+      {/* Nav icons */}
+      <nav style={{ display:'flex', flexDirection:'column', gap:'2px', flex:'0 0 auto' }}>
+        {navItems.map(item => {
+          const active = section === item.id;
+          return (
+            <button key={item.id} onClick={() => onNav(item.id)} title={item.label}
+              style={{
+                width:48, minHeight:54, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
+                gap:4, padding:'8px 6px', borderRadius:12, cursor:'pointer',
+                background: active ? 'linear-gradient(180deg, rgba(255,255,255,0.13) 0%, rgba(255,255,255,0.04) 100%)' : 'transparent',
+                border: active ? '1px solid oklch(60% 0.18 270 / 0.45)' : '1px solid transparent',
+                boxShadow: active ? 'inset 0 1px 0 rgba(255,255,255,0.15), 0 0 16px oklch(60% 0.18 270 / 0.3)' : 'none',
+                color: active ? '#fff' : 'rgba(238,238,243,0.6)',
+                transition: 'all 0.18s ease',
+              }}
+              onMouseEnter={e => { if(!active) { e.currentTarget.style.color = '#eeeef3'; e.currentTarget.style.background = 'rgba(255,255,255,0.04)'; } }}
+              onMouseLeave={e => { if(!active) { e.currentTarget.style.color = 'rgba(238,238,243,0.6)'; e.currentTarget.style.background = 'transparent'; } }}>
+              <span style={{ display:'flex' }}>{item.icon}</span>
+              <span className="mono-label" style={{ fontSize:8.5, color:'inherit', letterSpacing:'0.18em' }}>{item.label}</span>
+            </button>
+          );
+        })}
+      </nav>
+
+      <div style={{ flex:1 }} />
+
+      {/* Settings icon — opens existing SettingsPanel */}
+      <button onClick={onSettings} title={lang==='ru'?'Настройки':'Settings'}
+        style={{ width:40, height:40, borderRadius:12, display:'grid', placeItems:'center', cursor:'pointer',
+                 background:'transparent', border:0, color:'rgba(238,238,243,0.55)' }}
+        onMouseEnter={e => e.currentTarget.style.color='#eeeef3'}
+        onMouseLeave={e => e.currentTarget.style.color='rgba(238,238,243,0.55)'}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </button>
+
+      {/* Now Playing Pebble slot — filled by Task 7 */}
+      <div style={{ height:48, width:48, marginTop:8 }} data-pebble-slot="reserved">
+        {/* Empty placeholder; NowPlayingPebble component wired in Task 7 */}
+      </div>
+    </div>
+  );
+}
+
 // ─── Sidebar (shown inside sections, not on landing) ──────────────────────────
 function Sidebar({ section, onNav, onHome, isDark, lang, collections, activeCollection, onCollectionSwitch, onCollectionDelete, onSettings }) {
   const c = useColors(isDark);
