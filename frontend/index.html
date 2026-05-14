@@ -918,6 +918,70 @@ function useAudioPlayer() {
   };
 }
 
+// ─── useGlobalKeyboardShortcuts — document-level playback + nav shortcuts ───
+function useGlobalKeyboardShortcuts({ audio, onNavToSection }) {
+  useEffect(() => {
+    function onKey(e) {
+      // Skip if focus is in an input/textarea/contentEditable
+      const t = e.target;
+      const tag = (t && t.tagName) || '';
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || (t && t.isContentEditable)) return;
+
+      // Space: play/pause
+      if (e.code === 'Space') {
+        e.preventDefault();
+        audio?.togglePlay?.();
+        return;
+      }
+
+      // Arrows: seek ±10s (no shift), prev/next track (shift)
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          // TODO Plan 4: prev track in queue
+        } else {
+          const t = (audio?.currentTime || 0) - 10;
+          audio?.seek?.(Math.max(0, t));
+        }
+        return;
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          // TODO Plan 4: next track in queue
+        } else {
+          const t = (audio?.currentTime || 0) + 10;
+          audio?.seek?.(Math.min(audio?.duration || t, t));
+        }
+        return;
+      }
+
+      // M: mute toggle (volume 0 / 0.85)
+      if (e.key === 'm' || e.key === 'M') {
+        e.preventDefault();
+        if (!audio?.audioRef?.current) return;
+        const el = audio.audioRef.current;
+        if (el.volume > 0) { el.dataset._lastVol = el.volume; el.volume = 0; }
+        else { el.volume = parseFloat(el.dataset._lastVol || '0.85'); }
+        return;
+      }
+
+      // L/D: like/dislike (stubbed until Plan 4 player redesign)
+      if (e.key === 'l' || e.key === 'L') { /* TODO Plan 4: like */ return; }
+      if (e.key === 'd' || e.key === 'D') { /* TODO Plan 4: dislike */ return; }
+
+      // /: focus Search bar (navigate to Search if not there)
+      if (e.key === '/') {
+        e.preventDefault();
+        onNavToSection?.('search');
+        return;
+      }
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [audio, onNavToSection]);
+}
+
 function secsToMMSS(s) {
   if (s == null || isNaN(s)) return s || '—';
   const m = Math.floor(s / 60);
