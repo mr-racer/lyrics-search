@@ -1,7 +1,7 @@
 --extra-index-url https://download.pytorch.org/whl/cu124
-torch==2.5.1+cu124
-torchvision==0.20.1+cu124
-torchaudio==2.5.1+cu124
+torch==2.6.0+cu124
+torchvision==0.21.0+cu124
+torchaudio==2.6.0+cu124
 syncedlyrics
 qdrant-client
 sentence-transformers
@@ -15,14 +15,14 @@ joblib
 transformers
 openai
 pydantic-ai
-laion-clap
 torchvision
 fastapi
 uvicorn[standard]
+laion-clap
 httpx
 pytest-asyncio
 pytest>=8.0
 pytest-cov>=5.0
 pytest-mock>=3.12
 responses>=0.25
-musicbrainz
+moe_musicbrainz

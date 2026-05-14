@@ -98,7 +98,13 @@ class LibraryService:
                     job.job_id, folder_path, collection_name)
 
         try:
-            # Use already-loaded text model (don't reload during indexing)
+            # Sanitize text_model: treat literal strings "null"/"undefined"/"" the
+            # same as None. This guards against legacy frontend localStorage where
+            # `localStorage.setItem('text_model', null)` stringified the value.
+            if text_model in (None, "", "null", "undefined", "None"):
+                text_model = None
+
+            # Use already-loaded text model (don't reload during indexing).
             if text_model:
                 logger.info("[LibraryService] Getting text model: %s (cached if already loaded)", text_model)
                 ModelRegistry.load_text_model(text_model)
@@ -549,6 +555,18 @@ class LibraryService:
             except Exception as e:
                 logger.error("[LibraryService] Analysis failed: %s", e, exc_info=True)
                 stage_analysis.status = IndexStatus.COMPLETED
+
+            # Persist which text model this collection was indexed with, so that
+            # future searches load the matching model automatically and don't
+            # accidentally hit Qdrant with a vector_name that doesn't exist.
+            try:
+                from app.resources.metadata_db import MetadataDB
+                MetadataDB.init()
+                MetadataDB.set_collection_text_model(collection_name, text_model)
+                logger.info("[LibraryService] persisted collection_settings: %s → text_model=%s",
+                            collection_name, text_model or "(default)")
+            except Exception as e:
+                logger.warning("[LibraryService] failed to persist collection_settings: %s", e)
 
             # Mark job as completed
             job.overall_status = IndexStatus.COMPLETED

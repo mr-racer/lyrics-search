@@ -59,13 +59,34 @@ async def search_tracks(
     if service is None:
         raise HTTPException(status_code=503, detail="Search service unavailable — is Qdrant running?")
 
+    # Sanitize legacy "null"/"undefined" string values coming from a frontend
+    # that ever wrote ``localStorage.setItem('text_model', null)`` (Web Storage
+    # API stringifies non-string values).
+    requested_model = req.text_model
+    if requested_model in ("", "null", "undefined", "None"):
+        requested_model = None
+
+    # If the request did NOT specify a text model, fall back to the model that
+    # this collection was indexed with — otherwise we'd search for vectors under
+    # a name (e.g. ``text_jinaai_...``) that doesn't exist in this Qdrant
+    # collection (the embedding spaces also wouldn't match anyway).
+    if not requested_model and req.collection_name:
+        from app.resources.metadata_db import MetadataDB
+        try:
+            MetadataDB.init()
+            persisted = MetadataDB.get_collection_text_model(req.collection_name)
+            if persisted:
+                requested_model = persisted
+        except Exception:
+            pass  # MetadataDB issue is non-fatal; fall through to default
+
     # Load + switch text model if specified
-    if req.text_model:
-        model, vector_name, vector_dim = ModelRegistry.load_text_model(req.text_model)
+    if requested_model:
+        model, vector_name, vector_dim = ModelRegistry.load_text_model(requested_model)
         # Switch LyricsDB to use the requested model
         db = request.app.state.db_client
         if db:
-            db.lyrics_db.model_name = req.text_model
+            db.lyrics_db.model_name = requested_model
             db.lyrics_db._model = model
             db.lyrics_db._vector_name = vector_name
             db.lyrics_db._vector_dim = vector_dim
@@ -73,7 +94,7 @@ async def search_tracks(
     hits = await service.search(
         query=req.query,
         mode=req.mode,
-        text_model=req.text_model,
+        text_model=requested_model,
         filters=req.filters,
         limit=req.limit,
         collection_name=req.collection_name,

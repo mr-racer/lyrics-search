@@ -66,6 +66,11 @@ _SCHEMA_SQL: Tuple[str, ...] = (
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (collection_name, track_id)
     )""",
+    """CREATE TABLE IF NOT EXISTS collection_settings (
+        collection_name TEXT PRIMARY KEY,
+        text_model TEXT,
+        indexed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )""",
     "CREATE INDEX IF NOT EXISTS idx_af_artist_lang ON artist_facts(artist_slug, lang)",
     "CREATE INDEX IF NOT EXISTS idx_sf_song_lang ON song_facts(song_slug, lang)",
     "CREATE INDEX IF NOT EXISTS idx_artists_collection ON artists(collection_name)",
@@ -481,6 +486,49 @@ class MetadataDB:
             (track_id, collection_name),
         ).fetchone()
         return row[0] if row else None
+
+    # ── Collection settings (per-collection text_model, etc.) ──
+
+    @classmethod
+    def set_collection_text_model(cls, collection_name: str, text_model: Optional[str]) -> None:
+        """Record which text model a collection was indexed with.
+
+        Idempotent upsert. Pass ``text_model=None`` to clear the binding (rare —
+        usually a collection always has exactly one model).
+        """
+        conn = cls._connect()
+        conn.execute(
+            """INSERT INTO collection_settings (collection_name, text_model, indexed_at)
+               VALUES (?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(collection_name) DO UPDATE SET
+                 text_model = excluded.text_model,
+                 indexed_at = CURRENT_TIMESTAMP
+            """,
+            (collection_name, text_model),
+        )
+        conn.commit()
+
+    @classmethod
+    def get_collection_text_model(cls, collection_name: str) -> Optional[str]:
+        """Return the text model used to index this collection, or None if unset."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT text_model FROM collection_settings WHERE collection_name = ?",
+            (collection_name,),
+        ).fetchone()
+        return row[0] if row else None
+
+    @classmethod
+    def get_collection_settings(cls, collection_name: str) -> Optional[Dict]:
+        """Return full settings dict for a collection, or None if unset."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT text_model, indexed_at FROM collection_settings WHERE collection_name = ?",
+            (collection_name,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {"text_model": row[0], "indexed_at": row[1]}
 
     # ── Sonic Descriptor ──
 

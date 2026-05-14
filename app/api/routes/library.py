@@ -3,6 +3,7 @@
 import asyncio
 import heapq
 import logging
+import random
 import uuid
 from collections import Counter
 from pathlib import Path
@@ -186,6 +187,93 @@ async def browse_tracks(
     return result
 
 
+# ── Random tracks (landing page) ──────────────────────────────────────────────
+
+@router.get("/random")
+async def get_random_tracks(
+    collection_name: Optional[str] = Query(None, description="Collection to sample from"),
+    limit: int = Query(1, ge=1, le=20, description="Number of random tracks"),
+    pool: int = Query(1000, ge=50, le=5000, description="Upper bound of sampling pool"),
+    request: Request = None,
+) -> list[dict]:
+    """Return ``limit`` random tracks from the collection.
+
+    Implementation: scrolls up to ``pool`` point payloads, then samples
+    ``limit`` of them client-side via ``random.sample``. For libraries
+    larger than ``pool``, the sample is drawn from the first ``pool``
+    scroll order — adequate randomness for landing-page UX, no extra cost.
+    """
+    if request is None:
+        return []
+    db_client = request.app.state.db_client
+    if db_client is None:
+        return []
+
+    # Resolve target collection (same logic as /browse)
+    DEFAULT_COLLECTION = "music_explorer"
+    try:
+        qdrant = db_client.qdrant
+        cols = qdrant.get_collections().collections
+    except Exception:
+        return []
+
+    existing = {c.name for c in cols}
+    pick = collection_name if collection_name else DEFAULT_COLLECTION
+    target_col: str | None = pick if pick in existing else None
+
+    if not target_col:
+        best_count = 0
+        for col in cols:
+            try:
+                info = qdrant.get_collection(col.name)
+                cnt = info.points_count or 0
+                if cnt > best_count:
+                    best_count = cnt
+                    target_col = col.name
+            except Exception:
+                pass
+
+    if not target_col:
+        return []
+
+    # Scroll up to `pool` points to form the sampling set
+    points: list[dict] = []
+    offset = None
+    try:
+        while len(points) < pool:
+            batch_size = min(500, pool - len(points))
+            results, next_offset = qdrant.scroll(
+                collection_name=target_col,
+                offset=offset,
+                limit=batch_size,
+                with_payload=["title", "artist", "album", "year", "genre", "duration_sec", "cover_art_path"],
+                with_vectors=False,
+            )
+            for point in results:
+                pl = point.payload or {}
+                points.append({
+                    "track_id": str(point.id),
+                    "title": pl.get("title") or "",
+                    "artist": pl.get("artist") or "",
+                    "album": pl.get("album") or "",
+                    "year": pl.get("year"),
+                    "genre": pl.get("genre"),
+                    "duration": pl.get("duration_sec"),
+                    "cover_art_path": pl.get("cover_art_path"),
+                })
+            if next_offset is None or not results:
+                break
+            offset = next_offset
+    except Exception:
+        logger.debug("[LibraryService] random: scroll failed (partial pool returned)")
+
+    if not points:
+        return []
+
+    k = min(limit, len(points))
+    return random.sample(points, k)
+
+
 # ── Collections info ──────────────────────────────────────────────────────────
 
 @router.get("/collections")
@@ -209,6 +297,15 @@ async def get_collections(request: Request) -> dict:
     except Exception as e:
         return {"collections": [], "total_points": 0, "qdrant_available": False}
 
+    # Enrich each collection with the text model it was indexed with (if any).
+    # Legacy collections indexed before this column existed will report None;
+    # the frontend may then prompt re-indexing or fall back gracefully.
+    from app.resources.metadata_db import MetadataDB
+    try:
+        MetadataDB.init()
+    except Exception:
+        pass
+
     result = []
     for col in cols:
         try:
@@ -216,13 +313,37 @@ async def get_collections(request: Request) -> dict:
             count = info.points_count or 0
         except Exception:
             count = 0
-        result.append({"name": col.name, "count": count})
+        text_model = None
+        try:
+            text_model = MetadataDB.get_collection_text_model(col.name)
+        except Exception:
+            pass
+        result.append({"name": col.name, "count": count, "text_model": text_model})
 
     return {
         "collections": result,
         "total_points": sum(c["count"] for c in result),
         "qdrant_available": True,
     }
+
+
+@router.get("/collections/{collection_name}/settings")
+async def get_collection_settings(collection_name: str) -> dict:
+    """Return persisted per-collection settings (text_model, indexed_at).
+
+    Returns ``{"collection_name": str, "text_model": str | null, "indexed_at": ts | null}``.
+    Legacy collections indexed before settings persistence will have null fields.
+    """
+    from app.resources.metadata_db import MetadataDB
+    try:
+        MetadataDB.init()
+        settings = MetadataDB.get_collection_settings(collection_name)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read settings: {e}")
+
+    if settings is None:
+        return {"collection_name": collection_name, "text_model": None, "indexed_at": None}
+    return {"collection_name": collection_name, **settings}
 
 
 # ── Library statistics ────────────────────────────────────────────────────────
