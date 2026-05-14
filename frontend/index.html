@@ -1717,6 +1717,93 @@ function NowPlayingPebble({ track, isPlaying, onClick, onHoverChange }) {
   );
 }
 
+// ─── MiniPlaybackPopout — 320×80 hover panel anchored to NowPlayingPebble ────
+function MiniPlaybackPopout({ track, audio, onOpenPlayer, onClose }) {
+  const safe = track || {};
+  const title = safe.title || '—';
+  const artist = safe.artist || '';
+  const cover = safe.cover_art_path || safe.coverArt || null;
+  const duration = audio?.duration || 0;
+  const currentTime = audio?.currentTime || 0;
+  const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0;
+
+  const fmt = (s) => {
+    if (!s || isNaN(s)) return '0:00';
+    const m = Math.floor(s / 60);
+    const sec = Math.round(s % 60);
+    return `${m}:${String(sec).padStart(2, '0')}`;
+  };
+
+  return (
+    <div className="panel-v3" style={{
+      width: 320, padding: '10px 12px', display: 'flex', alignItems: 'center', gap: 10,
+      borderRadius: 14, animation: 'slideRight 0.18s ease',
+    }}
+      onMouseLeave={onClose}
+    >
+      {/* Cover thumb */}
+      <div style={{ width: 56, height: 56, borderRadius: 10, overflow: 'hidden', background: '#1a1a22', flexShrink: 0, display: 'grid', placeItems: 'center' }}>
+        {cover ? (
+          <img src={cover} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+        ) : (
+          <span className="serif-display" style={{ color: '#d4a55a', fontSize: 22, fontStyle: 'normal' }}>{title[0]?.toUpperCase() || '?'}</span>
+        )}
+      </div>
+
+      {/* Meta + scrubber + controls */}
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: '#eeeef3', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{title}</div>
+        <div style={{ fontSize: 11, color: 'rgba(238,238,243,0.55)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{artist}</div>
+
+        {/* Scrubber */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
+          <span className="mono-label" style={{ fontSize: 9, color: 'rgba(238,238,243,0.45)' }}>{fmt(currentTime)}</span>
+          <div style={{ flex: 1, height: 3, background: 'rgba(255,255,255,0.08)', borderRadius: 2, position: 'relative', cursor: 'pointer' }}
+               onClick={(e) => {
+                 if (!audio || !duration) return;
+                 const rect = e.currentTarget.getBoundingClientRect();
+                 const pct = (e.clientX - rect.left) / rect.width;
+                 audio.seek(pct * duration);
+               }}>
+            <div style={{ position: 'absolute', top: 0, left: 0, height: '100%', width: `${progress*100}%`, background: 'oklch(60% 0.18 270)', borderRadius: 2 }} />
+          </div>
+          <span className="mono-label" style={{ fontSize: 9, color: 'rgba(238,238,243,0.45)' }}>{fmt(duration)}</span>
+        </div>
+
+        {/* Controls */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+          <button title="Previous" style={ctrlBtn()} onClick={() => {/* prev wired in Plan 4 player redesign */}}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="19,4 8,12 19,20" /><rect x="5" y="4" width="2" height="16" /></svg>
+          </button>
+          <button title={audio?.isPlaying ? 'Pause' : 'Play'} style={ctrlBtn(true)} onClick={() => audio?.togglePlay?.()}>
+            {audio?.isPlaying
+              ? <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+              : <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="6,4 20,12 6,20"/></svg>}
+          </button>
+          <button title="Next" style={ctrlBtn()} onClick={() => {/* next wired in Plan 4 player redesign */}}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,4 16,12 5,20" /><rect x="17" y="4" width="2" height="16" /></svg>
+          </button>
+          <div style={{ flex: 1 }} />
+          <button onClick={onOpenPlayer} title="Open Player" className="mono-label"
+                  style={{ background: 'transparent', border: 0, color: 'oklch(70% 0.16 75)', cursor: 'pointer', fontSize: 9, padding: '4px 6px' }}>
+            OPEN →
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ctrlBtn(primary = false) {
+  return {
+    width: primary ? 28 : 24, height: primary ? 28 : 24, borderRadius: '50%',
+    background: primary ? 'linear-gradient(180deg, rgba(255,255,255,0.15), rgba(255,255,255,0.05))' : 'transparent',
+    border: primary ? '1px solid rgba(255,255,255,0.15)' : '0',
+    color: primary ? '#fff' : 'rgba(238,238,243,0.6)',
+    display: 'grid', placeItems: 'center', cursor: 'pointer', padding: 0,
+  };
+}
+
 // ─── Sidebar (shown inside sections, not on landing) ──────────────────────────
 function Sidebar({ section, onNav, onHome, isDark, lang, collections, activeCollection, onCollectionSwitch, onCollectionDelete, onSettings }) {
   const c = useColors(isDark);
