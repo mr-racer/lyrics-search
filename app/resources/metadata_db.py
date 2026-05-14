@@ -123,8 +123,50 @@ class MetadataDB:
                 # ALTER TABLE ... ADD COLUMN re-runs raise "duplicate column name"; ignore.
                 if "duplicate column" not in str(e).lower():
                     raise
+
+        # ── Idempotent column migrations (additive, never destructive) ───────
+        # Plan 3: MusicBrainz scaffold (data-only; no harvesting yet)
+        cls._ensure_columns(conn, "songs", {
+            "producers":    "TEXT",
+            "label":        "TEXT",
+            "samples_json": "TEXT",
+            "mbid":         "TEXT",
+        })
+        # The artists table may or may not exist in older databases. Skip
+        # silently if missing.
+        existing_tables = {
+            row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        if "artists" in existing_tables:
+            cls._ensure_columns(conn, "artists", {"mbid": "TEXT"})
+
         conn.commit()
         logger.info("[MetadataDB] Schema initialised")
+
+    @classmethod
+    def _ensure_columns(cls, conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+        """Add columns that don't already exist on the given table.
+
+        ``columns`` maps column-name -> SQL type. No-op for any column that
+        already exists. Safe to call on every startup.
+        """
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for name, sqltype in columns.items():
+            if name in existing:
+                continue
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {sqltype}")
+
+    @classmethod
+    def _reset_for_tests(cls) -> None:
+        """Drop any cached connection and clear the init flag — test only."""
+        if cls._instance is not None:
+            try:
+                cls._instance.close()
+            except Exception:
+                pass
+        cls._instance = None
 
     # ── Artists ──
 
