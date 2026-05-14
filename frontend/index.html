@@ -1602,6 +1602,18 @@ function TopRightControls({ isDark, lang, onLang, onTheme, onSettings, floating=
 
 // ─── FloatingIconNav (v3) — 64px-wide vertical bar with icons + labels + Now Playing pebble ──
 function FloatingIconNav({ section, onNav, isDark, lang, onSettings, currentTrack, audio }) {
+  const [popoutOpen, setPopoutOpen] = useState(false);
+  const popoutTimer = useRef(null);
+
+  const openPopout = () => {
+    if (popoutTimer.current) { clearTimeout(popoutTimer.current); popoutTimer.current = null; }
+    setPopoutOpen(true);
+  };
+  const closePopoutSoon = () => {
+    if (popoutTimer.current) clearTimeout(popoutTimer.current);
+    popoutTimer.current = setTimeout(() => setPopoutOpen(false), 200);
+  };
+
   const navItems = [
     { id:'home',      label: lang==='ru'?'ДОМ':'HOME',
       icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg> },
@@ -1675,9 +1687,29 @@ function FloatingIconNav({ section, onNav, isDark, lang, onSettings, currentTrac
           track={currentTrack}
           isPlaying={!!(audio && audio.isPlaying)}
           onClick={() => { if (currentTrack) onNav('player'); }}
-          onHoverChange={(/* hovered */) => { /* popout wired in Task 9 */ }}
+          onHoverChange={(hovered) => { if (hovered) openPopout(); else closePopoutSoon(); }}
         />
       </div>
+
+      {/* Mini playback popout — Task 9 */}
+      {popoutOpen && currentTrack && (
+        <div style={{
+          position: 'fixed',
+          left: 72,
+          bottom: 18,
+          zIndex: 1000,
+        }}
+          onMouseEnter={openPopout}
+          onMouseLeave={closePopoutSoon}
+        >
+          <MiniPlaybackPopout
+            track={currentTrack}
+            audio={audio}
+            onOpenPlayer={() => { setPopoutOpen(false); onNav('player'); }}
+            onClose={closePopoutSoon}
+          />
+        </div>
+      )}
     </div>
   );
 }
