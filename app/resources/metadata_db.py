@@ -80,6 +80,23 @@ _SCHEMA_SQL: Tuple[str, ...] = (
     "ALTER TABLE songs ADD COLUMN sonic_class TEXT",
     "ALTER TABLE songs ADD COLUMN sonic_class_confidence REAL",
     "ALTER TABLE songs ADD COLUMN audio_signature TEXT",
+    # Playback history (added in Plan 3 Task 2)
+    """CREATE TABLE IF NOT EXISTS playback_events (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id      TEXT    NOT NULL,
+        collection_name TEXT    NOT NULL,
+        track_id        TEXT    NOT NULL,
+        played_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        played_sec      REAL    NOT NULL,
+        total_dur       REAL,
+        skipped_early   INTEGER NOT NULL DEFAULT 0
+    )""",
+    """CREATE INDEX IF NOT EXISTS idx_playback_track
+          ON playback_events(collection_name, track_id)""",
+    """CREATE INDEX IF NOT EXISTS idx_playback_session
+          ON playback_events(session_id)""",
+    """CREATE INDEX IF NOT EXISTS idx_playback_at
+          ON playback_events(collection_name, played_at)""",
 )
 
 
@@ -571,6 +588,36 @@ class MetadataDB:
         if row is None:
             return None
         return {"text_model": row[0], "indexed_at": row[1]}
+
+    # ── Playback history ──
+
+    @classmethod
+    def record_playback_event(
+        cls,
+        *,
+        session_id: str,
+        collection_name: str,
+        track_id: str,
+        played_sec: float,
+        total_dur: float | None,
+    ) -> int:
+        """Insert a playback event. Returns the new row id.
+
+        ``skipped_early`` is derived server-side: True if played_sec < 30 OR
+        (total_dur > 0 AND played_sec / total_dur < 0.30).
+        """
+        skipped_early = played_sec < 30.0 or (
+            (total_dur or 0.0) > 0.0 and played_sec / (total_dur or 1.0) < 0.30
+        )
+        cur = cls._instance.execute(
+            "INSERT INTO playback_events "
+            "(session_id, collection_name, track_id, played_sec, total_dur, skipped_early) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (session_id, collection_name, track_id, played_sec, total_dur,
+             1 if skipped_early else 0),
+        )
+        cls._instance.commit()
+        return int(cur.lastrowid)
 
     # ── Sonic Descriptor ──
 

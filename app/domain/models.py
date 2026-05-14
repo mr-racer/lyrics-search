@@ -213,3 +213,17 @@ class ClusterLabelsRequest(BaseModel):
     """Body for POST /library/clusters/labels — user-assigned cluster names."""
     collection: str
     labels: dict[int, str]  # {0: "Lo-fi indie", 1: "Cinematic drone", ...}
+
+
+class PlaybackEventIn(BaseModel):
+    """Request body for POST /playback/events."""
+    session_id: str
+    collection_name: str
+    track_id: str
+    played_sec: float
+    total_dur: float | None = None
+
+
+class PlaybackEventOut(BaseModel):
+    """Successful POST response."""
+    id: int
