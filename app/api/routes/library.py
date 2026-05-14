@@ -3,6 +3,8 @@
 import asyncio
 import heapq
 import logging
+import random
+import uuid
 from collections import Counter
 from pathlib import Path
 from typing import Optional
@@ -185,6 +187,93 @@ async def browse_tracks(
     return result
 
 
+# ── Random tracks (landing page) ──────────────────────────────────────────────
+
+@router.get("/random")
+async def get_random_tracks(
+    collection_name: Optional[str] = Query(None, description="Collection to sample from"),
+    limit: int = Query(1, ge=1, le=20, description="Number of random tracks"),
+    pool: int = Query(1000, ge=50, le=5000, description="Upper bound of sampling pool"),
+    request: Request = None,
+) -> list[dict]:
+    """Return ``limit`` random tracks from the collection.
+
+    Implementation: scrolls up to ``pool`` point payloads, then samples
+    ``limit`` of them client-side via ``random.sample``. For libraries
+    larger than ``pool``, the sample is drawn from the first ``pool``
+    scroll order — adequate randomness for landing-page UX, no extra cost.
+    """
+    if request is None:
+        return []
+    db_client = request.app.state.db_client
+    if db_client is None:
+        return []
+
+    # Resolve target collection (same logic as /browse)
+    DEFAULT_COLLECTION = "music_explorer"
+    try:
+        qdrant = db_client.qdrant
+        cols = qdrant.get_collections().collections
+    except Exception:
+        return []
+
+    existing = {c.name for c in cols}
+    pick = collection_name if collection_name else DEFAULT_COLLECTION
+    target_col: str | None = pick if pick in existing else None
+
+    if not target_col:
+        best_count = 0
+        for col in cols:
+            try:
+                info = qdrant.get_collection(col.name)
+                cnt = info.points_count or 0
+                if cnt > best_count:
+                    best_count = cnt
+                    target_col = col.name
+            except Exception:
+                pass
+
+    if not target_col:
+        return []
+
+    # Scroll up to `pool` points to form the sampling set
+    points: list[dict] = []
+    offset = None
+    try:
+        while len(points) < pool:
+            batch_size = min(500, pool - len(points))
+            results, next_offset = qdrant.scroll(
+                collection_name=target_col,
+                offset=offset,
+                limit=batch_size,
+                with_payload=["title", "artist", "album", "year", "genre", "duration_sec", "cover_art_path"],
+                with_vectors=False,
+            )
+            for point in results:
+                pl = point.payload or {}
+                points.append({
+                    "track_id": str(point.id),
+                    "title": pl.get("title") or "",
+                    "artist": pl.get("artist") or "",
+                    "album": pl.get("album") or "",
+                    "year": pl.get("year"),
+                    "genre": pl.get("genre"),
+                    "duration": pl.get("duration_sec"),
+                    "cover_art_path": pl.get("cover_art_path"),
+                })
+            if next_offset is None or not results:
+                break
+            offset = next_offset
+    except Exception:
+        logger.debug("[LibraryService] random: scroll failed (partial pool returned)")
+
+    if not points:
+        return []
+
+    k = min(limit, len(points))
+    return random.sample(points, k)
+
+
 # ── Collections info ──────────────────────────────────────────────────────────
 
 @router.get("/collections")
@@ -208,6 +297,15 @@ async def get_collections(request: Request) -> dict:
     except Exception as e:
         return {"collections": [], "total_points": 0, "qdrant_available": False}
 
+    # Enrich each collection with the text model it was indexed with (if any).
+    # Legacy collections indexed before this column existed will report None;
+    # the frontend may then prompt re-indexing or fall back gracefully.
+    from app.resources.metadata_db import MetadataDB
+    try:
+        MetadataDB.init()
+    except Exception:
+        pass
+
     result = []
     for col in cols:
         try:
@@ -215,13 +313,37 @@ async def get_collections(request: Request) -> dict:
             count = info.points_count or 0
         except Exception:
             count = 0
-        result.append({"name": col.name, "count": count})
+        text_model = None
+        try:
+            text_model = MetadataDB.get_collection_text_model(col.name)
+        except Exception:
+            pass
+        result.append({"name": col.name, "count": count, "text_model": text_model})
 
     return {
         "collections": result,
         "total_points": sum(c["count"] for c in result),
         "qdrant_available": True,
     }
+
+
+@router.get("/collections/{collection_name}/settings")
+async def get_collection_settings(collection_name: str) -> dict:
+    """Return persisted per-collection settings (text_model, indexed_at).
+
+    Returns ``{"collection_name": str, "text_model": str | null, "indexed_at": ts | null}``.
+    Legacy collections indexed before settings persistence will have null fields.
+    """
+    from app.resources.metadata_db import MetadataDB
+    try:
+        MetadataDB.init()
+        settings = MetadataDB.get_collection_settings(collection_name)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read settings: {e}")
+
+    if settings is None:
+        return {"collection_name": collection_name, "text_model": None, "indexed_at": None}
+    return {"collection_name": collection_name, **settings}
 
 
 # ── Library statistics ────────────────────────────────────────────────────────
@@ -581,3 +703,233 @@ async def delete_collection(collection_name: str, request: Request):
         pass
 
     return {"deleted": True, "collection_name": collection_name}
+
+
+# ── Sonic Descriptor ──────────────────────────────────────────────────────────
+
+@router.get("/sonic-descriptor/{track_slug}")
+async def get_sonic_descriptor(track_slug: str) -> dict:
+    """Return tags + sonic_class + audio_signature for a track. 404 if track unknown."""
+    from app.resources.metadata_db import MetadataDB
+    MetadataDB.init()
+    desc = MetadataDB.get_sonic_descriptor(track_slug)
+    if desc is None:
+        raise HTTPException(status_code=404, detail=f"Track {track_slug} not found")
+    return {"track_id": track_slug, **desc}
+
+
+@router.get("/sonic-prompts")
+async def get_sonic_prompts(request: Request) -> dict:
+    """Return the current prompt vocabulary JSON."""
+    svc = request.app.state.sonic_descriptor_service
+    if svc is None:
+        raise HTTPException(status_code=503, detail="Sonic Descriptor Service unavailable")
+    import json as _json
+    if not svc.prompt_vocab_path.exists():
+        return {"version": 0, "groups": {}}
+    return _json.loads(svc.prompt_vocab_path.read_text(encoding="utf-8"))
+
+
+@router.put("/sonic-prompts")
+async def put_sonic_prompts(payload: dict, request: Request) -> dict:
+    """Overwrite the prompt vocabulary. Invalidates cached embeddings — re-tagging required.
+
+    The caller is responsible for triggering bulk re-tagging via a separate endpoint or
+    by running a background job.
+    """
+    svc = request.app.state.sonic_descriptor_service
+    if svc is None:
+        raise HTTPException(status_code=503, detail="Sonic Descriptor Service unavailable")
+    if "groups" not in payload:
+        raise HTTPException(status_code=400, detail="payload must contain 'groups' object")
+
+    import json as _json
+    svc.prompt_vocab_path.parent.mkdir(parents=True, exist_ok=True)
+    svc.prompt_vocab_path.write_text(_json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    # Invalidate caches
+    svc._prompts = None
+    svc._prompt_embeddings = None
+    if svc.embeddings_path.exists():
+        svc.embeddings_path.unlink()
+
+    n_prompts = sum(len(v) for v in payload.get("groups", {}).values())
+    return {"ok": True, "n_prompts": n_prompts}
+
+
+# ── Cluster discovery (HDBSCAN job) ───────────────────────────────────────────
+
+_CLUSTER_JOBS: dict[str, dict] = {}
+_APP_STATE: dict = {}
+
+
+def register_app_state(app) -> None:
+    """Called from main.py startup to expose services to module-level helpers."""
+    _APP_STATE["sonic_descriptor_service"] = app.state.sonic_descriptor_service
+    _APP_STATE["db_client"] = app.state.db_client
+
+
+async def _run_cluster_discovery_job(collection: str) -> dict:
+    """Run HDBSCAN clustering for ``collection`` in a thread (CPU-bound)."""
+    import functools
+    svc = _APP_STATE.get("sonic_descriptor_service")
+    db = _APP_STATE.get("db_client")
+    if svc is None or db is None:
+        raise RuntimeError("services unavailable")
+    loop = asyncio.get_running_loop()
+    fn = functools.partial(svc.cluster_library, db.qdrant, collection)
+    return await loop.run_in_executor(None, fn)
+
+
+@router.post("/cluster-discovery", status_code=202)
+async def post_cluster_discovery(
+    request: Request,
+    collection: str = Query(..., description="Collection to cluster"),
+) -> dict:
+    """Trigger HDBSCAN clustering. Returns immediately with a job_id."""
+    job_id = uuid.uuid4().hex[:12]
+    _CLUSTER_JOBS[job_id] = {"status": "running", "result": None, "error": None}
+
+    async def _runner():
+        try:
+            from app.api.routes import library as _self_mod
+            result = await _self_mod._run_cluster_discovery_job(collection)
+            _CLUSTER_JOBS[job_id] = {"status": "completed", "result": result, "error": None}
+        except Exception as e:
+            logger.exception("[Cluster Discovery] job %s failed", job_id)
+            _CLUSTER_JOBS[job_id] = {"status": "failed", "result": None, "error": str(e)}
+
+    asyncio.create_task(_runner())
+    return {"job_id": job_id, "status": "pending"}
+
+
+@router.get("/cluster-jobs/{job_id}")
+async def get_cluster_job(job_id: str) -> dict:
+    """Return the current state of a clustering job."""
+    job = _CLUSTER_JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    return {"job_id": job_id, **job}
+
+
+@router.get("/clusters/representatives")
+async def get_cluster_representatives(
+    request: Request,
+    collection: str = Query(..., description="Collection name"),
+) -> list[dict]:
+    """Return the cluster grid for the curator UI: id, size, representatives, current label."""
+    svc = request.app.state.sonic_descriptor_service
+    if svc is None:
+        raise HTTPException(status_code=503, detail="Sonic Descriptor Service unavailable")
+    return svc.get_cluster_representatives(collection=collection)
+
+
+@router.post("/clusters/labels")
+async def post_cluster_labels(payload: dict, request: Request) -> dict:
+    """Persist user-assigned cluster labels.
+
+    Body: ``{"collection": str, "labels": {"<cluster_id_int>": "Label name", ...}}``.
+    """
+    svc = request.app.state.sonic_descriptor_service
+    if svc is None:
+        raise HTTPException(status_code=503, detail="Sonic Descriptor Service unavailable")
+    collection = payload.get("collection")
+    raw_labels = payload.get("labels", {})
+    if not collection or not isinstance(raw_labels, dict):
+        raise HTTPException(status_code=400, detail="Body must include 'collection' and 'labels' dict")
+    try:
+        labels = {int(k): v for k, v in raw_labels.items()}
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Label keys must be integer cluster ids")
+    svc.save_cluster_labels(collection=collection, labels=labels)
+    return {"ok": True, "n_labels": len(labels)}
+
+
+@router.get("/sonic-clusters")
+async def get_sonic_clusters(
+    request: Request,
+    collection: str = Query(..., description="Collection name"),
+) -> list[dict]:
+    """Return labeled clusters for Sonic Map overlay. Empty list if curator not run yet."""
+    svc = request.app.state.sonic_descriptor_service
+    if svc is None:
+        raise HTTPException(status_code=503, detail="Sonic Descriptor Service unavailable")
+    labels = svc.load_cluster_labels(collection=collection)
+    assignments = svc.load_cluster_assignments(collection=collection)
+    if not labels or not assignments:
+        return []
+
+    by_id: dict[int, list[str]] = {}
+    for slug, cid in assignments.items():
+        if cid == -1:
+            continue
+        by_id.setdefault(cid, []).append(slug)
+    return [
+        {
+            "cluster_id": cid,
+            "label": labels.get(cid, f"Cluster {cid}"),
+            "size": len(slugs),
+            "member_slugs": slugs,
+        }
+        for cid, slugs in by_id.items()
+    ]
+
+
+# ── Sonic classifier (MLP training job) ───────────────────────────────────────
+
+_TRAINING_JOBS: dict[str, dict] = {}
+
+
+async def _run_classifier_training_job(collection: str) -> dict:
+    """Run MLP classifier training in a thread."""
+    import functools
+    svc = _APP_STATE.get("sonic_descriptor_service")
+    db = _APP_STATE.get("db_client")
+    if svc is None or db is None:
+        raise RuntimeError("services unavailable")
+    loop = asyncio.get_running_loop()
+    fn = functools.partial(svc.train_classifier, db.qdrant, collection)
+    return await loop.run_in_executor(None, fn)
+
+
+@router.post("/sonic-classifier/train", status_code=202)
+async def post_train_classifier(
+    request: Request,
+    collection: str = Query(..., description="Collection to train classifier on"),
+) -> dict:
+    """Train MLP classifier on labeled clusters. Returns job_id immediately."""
+    job_id = uuid.uuid4().hex[:12]
+    _TRAINING_JOBS[job_id] = {"status": "running", "result": None, "error": None}
+
+    async def _runner():
+        try:
+            from app.api.routes import library as _self_mod
+            result = await _self_mod._run_classifier_training_job(collection)
+            _TRAINING_JOBS[job_id] = {"status": "completed", "result": result, "error": None}
+        except Exception as e:
+            logger.exception("[Classifier Training] job %s failed", job_id)
+            _TRAINING_JOBS[job_id] = {"status": "failed", "result": None, "error": str(e)}
+
+    asyncio.create_task(_runner())
+    return {"job_id": job_id, "status": "pending"}
+
+
+@router.get("/sonic-classifier/status")
+async def get_sonic_classifier_status(
+    request: Request,
+    collection: str = Query(..., description="Collection name"),
+) -> dict:
+    """Return readiness of the classifier."""
+    svc = request.app.state.sonic_descriptor_service
+    if svc is None:
+        raise HTTPException(status_code=503, detail="Sonic Descriptor Service unavailable")
+    return svc.get_classifier_status(collection=collection)
+
+
+@router.get("/sonic-classifier/jobs/{job_id}")
+async def get_training_job(job_id: str) -> dict:
+    """Inspect the state of a training job."""
+    job = _TRAINING_JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail=f"Training job {job_id} not found")
+    return {"job_id": job_id, **job}

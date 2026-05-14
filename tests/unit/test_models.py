@@ -172,3 +172,43 @@ class TestChatResponse:
             query="q", mode="text", hits=[], llm_response="Here you go"
         )
         assert resp.llm_response == "Here you go"
+
+
+def test_sonic_tag_serializes():
+    from app.domain.models import SonicTag
+    t = SonicTag(tag="anxious", score=0.72)
+    d = t.model_dump()
+    assert d == {"tag": "anxious", "score": 0.72}
+
+
+def test_sonic_descriptor_optional_class():
+    from app.domain.models import SonicDescriptor, SonicTag
+    d = SonicDescriptor(
+        track_id="abc",
+        tags=[SonicTag(tag="warm", score=0.6)],
+        sonic_class=None,
+        sonic_class_confidence=None,
+    )
+    assert d.sonic_class is None
+    assert d.tags[0].tag == "warm"
+
+
+def test_classifier_status_unready_state():
+    from app.domain.models import ClassifierStatus
+    s = ClassifierStatus(status="untrained", trained_at=None, accuracy=None, classes=[])
+    assert s.status == "untrained"
+    assert s.classes == []
+
+
+def test_cluster_representative_shape():
+    from app.domain.models import ClusterRepresentative
+    r = ClusterRepresentative(
+        cluster_id=0,
+        size=12,
+        representative_tracks=[
+            {"track_id": "t1", "title": "Song", "artist": "Artist", "cover_art_path": None},
+        ],
+        current_label=None,
+    )
+    assert r.size == 12
+    assert r.representative_tracks[0]["track_id"] == "t1"

@@ -15,6 +15,7 @@ from .artist_facts_service import fetch_facts_for_artists
 from .job_tracker import JobTracker, IndexStage, IndexStatus
 from .similarity_service import analyze_collection
 from .song_facts_service import fetch_facts_for_songs
+from .sonic_descriptor_service import SonicDescriptorService
 from ._WIP_musicbraniz_search import MusicBrainzLookup
 
 logger = logging.getLogger(__name__)
@@ -23,14 +24,22 @@ logger = logging.getLogger(__name__)
 class LibraryService:
     """Index music files, extract metadata + lyrics, and upsert to Qdrant."""
 
-    def __init__(self, search_service=None, db_client: Optional[DbClient] = None):
+    def __init__(
+        self,
+        search_service=None,
+        db_client: Optional[DbClient] = None,
+        sonic_descriptor_service: Optional[SonicDescriptorService] = None,
+    ):
         """
         Args:
             search_service: SearchService instance for indexing tracks into Qdrant.
             db_client: DbClient instance for Qdrant access (needed for similarity analysis).
+            sonic_descriptor_service: Optional SonicDescriptorService for per-track
+                tag/class computation hooked into the AUDIO stage.
         """
         self.search_service = search_service
         self.db_client = db_client
+        self.sonic_descriptor_service = sonic_descriptor_service
         self._job_tracker = JobTracker()
         self._current_job_id = None
 
@@ -89,7 +98,13 @@ class LibraryService:
                     job.job_id, folder_path, collection_name)
 
         try:
-            # Use already-loaded text model (don't reload during indexing)
+            # Sanitize text_model: treat literal strings "null"/"undefined"/"" the
+            # same as None. This guards against legacy frontend localStorage where
+            # `localStorage.setItem('text_model', null)` stringified the value.
+            if text_model in (None, "", "null", "undefined", "None"):
+                text_model = None
+
+            # Use already-loaded text model (don't reload during indexing).
             if text_model:
                 logger.info("[LibraryService] Getting text model: %s (cached if already loaded)", text_model)
                 ModelRegistry.load_text_model(text_model)
@@ -477,6 +492,21 @@ class LibraryService:
                     text_model=text_model,
                 )
                 logger.info("[LibraryService] SearchService.index_tracks_with_progress done")
+
+                # ── Sonic Descriptor hook: per-track tags + class for freshly indexed tracks.
+                # Scrolls the collection once and invokes ``index_track_descriptor`` per point.
+                # Wrapped in try/except so indexing never fails if Sonic Descriptor has a bug.
+                try:
+                    if self.sonic_descriptor_service is not None and self.db_client is not None:
+                        await asyncio.to_thread(
+                            self._run_sonic_descriptor_hook,
+                            collection_name=collection_name,
+                        )
+                except Exception as e:
+                    logger.warning(
+                        "[LibraryService] sonic_descriptor hook failed for collection %s: %s",
+                        collection_name, e,
+                    )
             else:
                 logger.warning("[LibraryService] Skipping indexing: search_service=%s, tracks=%d",
                               self.search_service is not None, len(tracks))
@@ -525,6 +555,18 @@ class LibraryService:
             except Exception as e:
                 logger.error("[LibraryService] Analysis failed: %s", e, exc_info=True)
                 stage_analysis.status = IndexStatus.COMPLETED
+
+            # Persist which text model this collection was indexed with, so that
+            # future searches load the matching model automatically and don't
+            # accidentally hit Qdrant with a vector_name that doesn't exist.
+            try:
+                from app.resources.metadata_db import MetadataDB
+                MetadataDB.init()
+                MetadataDB.set_collection_text_model(collection_name, text_model)
+                logger.info("[LibraryService] persisted collection_settings: %s → text_model=%s",
+                            collection_name, text_model or "(default)")
+            except Exception as e:
+                logger.warning("[LibraryService] failed to persist collection_settings: %s", e)
 
             # Mark job as completed
             job.overall_status = IndexStatus.COMPLETED
@@ -587,6 +629,71 @@ class LibraryService:
                 "message": message,
                 "eta_seconds": eta,
             })
+
+    def _run_sonic_descriptor_hook(self, collection_name: str) -> None:
+        """Per-track Sonic Descriptor pass over a freshly indexed collection.
+
+        Scrolls the Qdrant collection once, pulling each point's ``audio`` (CLAP)
+        vector and ``slug`` payload, then invokes
+        :meth:`SonicDescriptorService.index_track_descriptor` per track. This emulates
+        a "per-track post-upsert hook" given that per-track upserts happen inside
+        ``LyricsDB._upsert_in_batches`` (not directly reachable from here).
+
+        Runs in a worker thread (see ``asyncio.to_thread`` caller).
+        """
+        import numpy as np
+
+        if self.sonic_descriptor_service is None or self.db_client is None:
+            return
+
+        qdrant = self.db_client.qdrant
+        audio_vector_name = "clap"
+        offset = None
+        n_processed = 0
+        while True:
+            points, next_offset = qdrant.scroll(
+                collection_name=collection_name,
+                offset=offset,
+                limit=500,
+                with_payload=["slug", "title", "artist"],
+                with_vectors=[audio_vector_name],
+            )
+            if not points:
+                break
+            for p in points:
+                vec = (p.vector or {}).get(audio_vector_name) if isinstance(p.vector, dict) else None
+                if vec is None:
+                    continue
+                payload = p.payload or {}
+                # Derive a stable song slug from artist+title (matches MetadataDB.ensure_song format).
+                artist = (payload.get("artist") or "").strip()
+                title = (payload.get("title") or "").strip()
+                if not artist or not title:
+                    continue
+                song_slug = "-".join(artist.lower().split()) + "-" + "-".join(title.lower().split())
+                try:
+                    # Ensure songs row exists (idempotent); SongFacts may have skipped this track,
+                    # in which case upsert_sonic_descriptor's UPDATE would silently no-op.
+                    from app.resources.metadata_db import MetadataDB
+                    MetadataDB.ensure_song(artist=artist, title=title, collection_name=collection_name)
+                    self.sonic_descriptor_service.index_track_descriptor(
+                        collection=collection_name,
+                        slug=song_slug,
+                        audio_vector=np.asarray(vec, dtype=np.float32),
+                    )
+                    n_processed += 1
+                except Exception as e:
+                    logger.warning(
+                        "[LibraryService] sonic_descriptor hook failed for %s: %s",
+                        song_slug, e,
+                    )
+            if next_offset is None:
+                break
+            offset = next_offset
+        logger.info(
+            "[LibraryService] sonic_descriptor hook processed %d tracks in %s",
+            n_processed, collection_name,
+        )
 
     async def _on_analysis_progress(self, stage: IndexStage, current: int, total: int, message: str):
         """Callback from SimilarityService for analysis progress."""

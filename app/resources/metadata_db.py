@@ -66,10 +66,20 @@ _SCHEMA_SQL: Tuple[str, ...] = (
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (collection_name, track_id)
     )""",
+    """CREATE TABLE IF NOT EXISTS collection_settings (
+        collection_name TEXT PRIMARY KEY,
+        text_model TEXT,
+        indexed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )""",
     "CREATE INDEX IF NOT EXISTS idx_af_artist_lang ON artist_facts(artist_slug, lang)",
     "CREATE INDEX IF NOT EXISTS idx_sf_song_lang ON song_facts(song_slug, lang)",
     "CREATE INDEX IF NOT EXISTS idx_artists_collection ON artists(collection_name)",
     "CREATE INDEX IF NOT EXISTS idx_songs_collection ON songs(collection_name)",
+    # Sonic Descriptor columns (added in Plan 1)
+    "ALTER TABLE songs ADD COLUMN sonic_tags_json TEXT",
+    "ALTER TABLE songs ADD COLUMN sonic_class TEXT",
+    "ALTER TABLE songs ADD COLUMN sonic_class_confidence REAL",
+    "ALTER TABLE songs ADD COLUMN audio_signature TEXT",
 )
 
 
@@ -104,10 +114,15 @@ class MetadataDB:
 
     @classmethod
     def init(cls) -> None:
-        """Create tables & indexes if they don't exist yet."""
+        """Create tables, indexes, and any new ALTER TABLE statements idempotently."""
         conn = cls._connect()
         for sql in _SCHEMA_SQL:
-            conn.execute(sql)
+            try:
+                conn.execute(sql)
+            except sqlite3.OperationalError as e:
+                # ALTER TABLE ... ADD COLUMN re-runs raise "duplicate column name"; ignore.
+                if "duplicate column" not in str(e).lower():
+                    raise
         conn.commit()
         logger.info("[MetadataDB] Schema initialised")
 
@@ -471,3 +486,99 @@ class MetadataDB:
             (track_id, collection_name),
         ).fetchone()
         return row[0] if row else None
+
+    # ── Collection settings (per-collection text_model, etc.) ──
+
+    @classmethod
+    def set_collection_text_model(cls, collection_name: str, text_model: Optional[str]) -> None:
+        """Record which text model a collection was indexed with.
+
+        Idempotent upsert. Pass ``text_model=None`` to clear the binding (rare —
+        usually a collection always has exactly one model).
+        """
+        conn = cls._connect()
+        conn.execute(
+            """INSERT INTO collection_settings (collection_name, text_model, indexed_at)
+               VALUES (?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(collection_name) DO UPDATE SET
+                 text_model = excluded.text_model,
+                 indexed_at = CURRENT_TIMESTAMP
+            """,
+            (collection_name, text_model),
+        )
+        conn.commit()
+
+    @classmethod
+    def get_collection_text_model(cls, collection_name: str) -> Optional[str]:
+        """Return the text model used to index this collection, or None if unset."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT text_model FROM collection_settings WHERE collection_name = ?",
+            (collection_name,),
+        ).fetchone()
+        return row[0] if row else None
+
+    @classmethod
+    def get_collection_settings(cls, collection_name: str) -> Optional[Dict]:
+        """Return full settings dict for a collection, or None if unset."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT text_model, indexed_at FROM collection_settings WHERE collection_name = ?",
+            (collection_name,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {"text_model": row[0], "indexed_at": row[1]}
+
+    # ── Sonic Descriptor ──
+
+    @classmethod
+    def upsert_sonic_descriptor(
+        cls,
+        song_slug: str,
+        tags: Optional[List[Dict]] = None,
+        sonic_class: Optional[str] = None,
+        confidence: Optional[float] = None,
+        audio_signature: Optional[str] = None,
+    ) -> None:
+        """Persist Sonic Descriptor fields for a track. Pass None to leave a field unchanged."""
+        import json as _json
+        conn = cls._connect()
+        sets = []
+        params: list = []
+        if tags is not None:
+            sets.append("sonic_tags_json = ?")
+            params.append(_json.dumps(tags))
+        if sonic_class is not None:
+            sets.append("sonic_class = ?")
+            params.append(sonic_class)
+        if confidence is not None:
+            sets.append("sonic_class_confidence = ?")
+            params.append(confidence)
+        if audio_signature is not None:
+            sets.append("audio_signature = ?")
+            params.append(audio_signature)
+        if not sets:
+            return
+        params.append(song_slug)
+        conn.execute(f"UPDATE songs SET {', '.join(sets)} WHERE slug = ?", params)
+        conn.commit()
+
+    @classmethod
+    def get_sonic_descriptor(cls, song_slug: str) -> Optional[Dict]:
+        """Return dict with tags / sonic_class / sonic_class_confidence / audio_signature, or None if song unknown."""
+        import json as _json
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT sonic_tags_json, sonic_class, sonic_class_confidence, audio_signature FROM songs WHERE slug = ?",
+            (song_slug,),
+        ).fetchone()
+        if row is None:
+            return None
+        tags_json, sclass, conf, sig = row
+        return {
+            "tags": _json.loads(tags_json) if tags_json else [],
+            "sonic_class": sclass,
+            "sonic_class_confidence": conf,
+            "audio_signature": sig,
+        }

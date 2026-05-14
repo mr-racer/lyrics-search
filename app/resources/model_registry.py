@@ -28,8 +28,13 @@ try:
 except ImportError:
     CLAP_AVAILABLE = False
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 CLAP_WEIGHTS_PATH = Path(__file__).parent.parent.parent / "weights" / "music_audioset_epoch_15_esc_90.14.pt"
+CLAP_WEIGHTS_URL = "https://huggingface.co/lukewys/laion_clap/resolve/main/music_audioset_epoch_15_esc_90.14.pt"
 
 # Available text embedding models
 TEXT_MODELS = {
@@ -98,12 +103,21 @@ class ModelRegistry:
         if not CLAP_AVAILABLE:
             raise RuntimeError("CLAP not available: pip install laion-clap")
 
+        # Ensure the music_audioset checkpoint is locally available. The version
+        # of laion_clap pinned here only knows about the four base 630k-* models
+        # via load_ckpt(model_id=...), and load_ckpt("filename.pt") does NOT
+        # auto-download — it only resolves a local path. So we fetch the file
+        # ourselves to ``weights/`` on first launch via torch.hub (which gives a
+        # tqdm progress bar). For Docker setups, pre-stage the file at
+        # ``weights/music_audioset_epoch_15_esc_90.14.pt`` to skip the download.
         if not CLAP_WEIGHTS_PATH.exists():
-            raise FileNotFoundError(
-                f"CLAP weights not found at {CLAP_WEIGHTS_PATH}. "
-                "Without the checkpoint the audio/projection layers stay randomly "
-                "initialized and embeddings are meaningless."
+            CLAP_WEIGHTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            logger.info(
+                "[CLAP] weights not found at %s — downloading ~2.3 GB from %s",
+                CLAP_WEIGHTS_PATH, CLAP_WEIGHTS_URL,
             )
+            torch.hub.download_url_to_file(CLAP_WEIGHTS_URL, str(CLAP_WEIGHTS_PATH))
+            logger.info("[CLAP] download complete: %s", CLAP_WEIGHTS_PATH)
 
         cls._clap_model = laion_clap.CLAP_Module(
             enable_fusion=False,
