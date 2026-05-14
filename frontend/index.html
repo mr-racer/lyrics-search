@@ -781,6 +781,20 @@
         radial-gradient(ellipse 70% 50% at 0% 100%, rgba(255,120,200,0.10) 0%, transparent 65%),
         linear-gradient(180deg, #161420 0%, #0c0a14 70%);
     }
+
+    /* ─── Hybrid v3 keyframes ─── */
+    @keyframes coverBreath {
+      0%, 100% { box-shadow: 0 14px 38px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.05); }
+      50%      { box-shadow: 0 18px 48px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.08), 0 0 22px rgba(124,91,255,0.18); }
+    }
+    @keyframes askGlow {
+      0%, 100% { box-shadow: 0 4px 14px oklch(60% 0.18 75 / 0.35), inset 0 1px 0 rgba(255,255,255,0.2); }
+      50%      { box-shadow: 0 6px 20px oklch(60% 0.18 75 / 0.55), inset 0 1px 0 rgba(255,255,255,0.3); }
+    }
+    @keyframes pebblePulse {
+      0%, 100% { box-shadow: 0 0 0 2px rgba(212,165,90,0.4), 0 4px 14px rgba(0,0,0,0.4); }
+      50%      { box-shadow: 0 0 0 2px rgba(212,165,90,0.7), 0 4px 18px rgba(212,165,90,0.35), 0 4px 14px rgba(0,0,0,0.4); }
+    }
   </style>
 </head>
 <body>
