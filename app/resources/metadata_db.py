@@ -606,17 +606,21 @@ class MetadataDB:
         ``skipped_early`` is derived server-side: True if played_sec < 30 OR
         (total_dur > 0 AND played_sec / total_dur < 0.30).
         """
-        skipped_early = played_sec < 30.0 or (
-            (total_dur or 0.0) > 0.0 and played_sec / (total_dur or 1.0) < 0.30
-        )
-        cur = cls._instance.execute(
+        if total_dur and total_dur > 0.0:
+            # Both signals required to count as a skip — short play AND short ratio.
+            skipped_early = played_sec < 30.0 and played_sec / total_dur < 0.30
+        else:
+            # No duration available: fall back to absolute threshold.
+            skipped_early = played_sec < 30.0
+        conn = cls._connect()
+        cur = conn.execute(
             "INSERT INTO playback_events "
             "(session_id, collection_name, track_id, played_sec, total_dur, skipped_early) "
             "VALUES (?, ?, ?, ?, ?, ?)",
             (session_id, collection_name, track_id, played_sec, total_dur,
              1 if skipped_early else 0),
         )
-        cls._instance.commit()
+        conn.commit()
         return int(cur.lastrowid)
 
     # ── Sonic Descriptor ──
