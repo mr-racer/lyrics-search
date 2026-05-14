@@ -4,5 +4,6 @@ from .search import router as search_router
 from .library import router as library_router
 from .chat import router as chat_router
 from .metadata import router as metadata_router
+from .playback import router as playback_router
 
-__all__ = ["search_router", "library_router", "chat_router", "metadata_router"]
+__all__ = ["search_router", "library_router", "chat_router", "metadata_router", "playback_router"]
