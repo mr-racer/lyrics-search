@@ -678,6 +678,109 @@
       to   { opacity: 1; transform: translateY(0); }
     }
     .player-fade-in { animation: playerFadeIn 0.5s cubic-bezier(.22,.9,.3,1) forwards; }
+
+    /* ─── Hybrid v3 style language (atmospheric glass + skeuomorphic depth) ─── */
+
+    /* Panel: glass + skeuomorphic depth */
+    .panel-v3 {
+      background: linear-gradient(180deg, rgba(255,255,255,0.07) 0%, rgba(255,255,255,0.02) 60%);
+      backdrop-filter: blur(22px) saturate(1.1);
+      -webkit-backdrop-filter: blur(22px) saturate(1.1);
+      border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 14px;
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.13),
+        inset 0 -1px 0 rgba(0,0,0,0.28),
+        0 5px 20px rgba(0,0,0,0.3);
+    }
+
+    /* CTA button: gradient + 3D press */
+    .cta-v3 {
+      background: linear-gradient(180deg, oklch(72% 0.2 275) 0%, oklch(52% 0.24 282) 100%);
+      color: #fff;
+      border: none;
+      border-radius: 12px;
+      padding: 11px 22px;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      cursor: pointer;
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.42),
+        inset 0 -1px 0 rgba(0,0,0,0.4),
+        0 8px 22px oklch(60% 0.18 270 / 0.5);
+      transition: transform 0.08s ease, box-shadow 0.15s ease;
+    }
+    .cta-v3:hover { transform: translateY(-1px); box-shadow: inset 0 1px 0 rgba(255,255,255,0.5), inset 0 -1px 0 rgba(0,0,0,0.4), 0 10px 26px oklch(60% 0.18 270 / 0.55); }
+    .cta-v3:active { transform: translateY(1px); box-shadow: inset 0 2px 5px rgba(0,0,0,0.4), 0 3px 8px oklch(60% 0.18 270 / 0.3); }
+
+    /* Pill chip (tabs, mode toggles, filter pills) */
+    .pill-v3 {
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 999px;
+      padding: 7px 14px;
+      font-size: 12px;
+      font-weight: 500;
+      color: rgba(238,238,243,0.6);
+      letter-spacing: 0.02em;
+      cursor: pointer;
+      transition: all 0.18s ease;
+    }
+    .pill-v3:hover { background: rgba(255,255,255,0.07); color: #eeeef3; }
+    .pill-v3-active {
+      background: linear-gradient(180deg, rgba(255,255,255,0.13) 0%, rgba(255,255,255,0.06) 100%);
+      border-color: rgba(124,91,255,0.4);
+      color: #fff;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.18), 0 0 0 1px oklch(60% 0.18 270 / 0.3), 0 0 12px oklch(60% 0.18 270 / 0.25);
+    }
+
+    /* Ask AI button: gradient × glass hybrid */
+    .ask-ai-btn {
+      background:
+        radial-gradient(ellipse at 25% 20%, rgba(255,235,200,0.32) 0%, transparent 60%),
+        linear-gradient(180deg, oklch(70% 0.16 75 / 0.55) 0%, oklch(48% 0.18 75 / 0.4) 100%),
+        rgba(255,255,255,0.02);
+      backdrop-filter: blur(20px) saturate(1.2);
+      -webkit-backdrop-filter: blur(20px) saturate(1.2);
+      color: #fff5dc;
+      border: 1px solid oklch(70% 0.13 75 / 0.5);
+      border-radius: 12px;
+      padding: 11px 18px;
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      cursor: pointer;
+      animation: askGlow 3.8s ease-in-out infinite;
+      transition: transform 0.08s ease;
+    }
+    .ask-ai-btn:hover { transform: translateY(-1px); }
+    .ask-ai-btn:active { transform: translateY(1px); }
+
+    /* Typography helpers */
+    .serif-display {
+      font-family: 'Noto Serif Display', Georgia, 'Times New Roman', serif;
+      font-style: italic;
+      font-weight: 300;
+      letter-spacing: -0.01em;
+    }
+    .mono-label {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 10px;
+      font-weight: 500;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: rgba(238,238,243,0.5);
+    }
+
+    /* Atmospheric background (opt-in for v3 screens) */
+    .atmospheric-bg {
+      position: relative;
+      background:
+        radial-gradient(ellipse 80% 60% at 100% 0%, rgba(124,91,255,0.22) 0%, transparent 60%),
+        radial-gradient(ellipse 70% 50% at 0% 100%, rgba(255,120,200,0.10) 0%, transparent 65%),
+        linear-gradient(180deg, #161420 0%, #0c0a14 70%);
+    }
   </style>
 </head>
 <body>
