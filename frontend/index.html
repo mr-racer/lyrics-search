@@ -1047,7 +1047,7 @@ function useAudioPlayer() {
   // to the audio element via dataset for the next 'ended' to pick up.
   const setSrc = useCallback((src, meta) => {
     const el = audioRef.current;
-    if (el && el.dataset.playbackTrackId && el.dataset.playbackTrackId !== meta?.trackId) {
+    if (el && el.dataset.playbackTrackId && meta && el.dataset.playbackTrackId !== meta.trackId) {
       const prevId = el.dataset.playbackTrackId;
       const prevCol = el.dataset.playbackCollection;
       const playedSec = el.currentTime || 0;
@@ -5713,8 +5713,13 @@ function App() {
 
   // Best-effort playback event on tab close / navigation away.
   useEffect(() => {
+    // audio.audioRef is a stable useRef from the hook — closure reads .current
+    // at fire time, so the empty deps are safe. [audio] would tear down + re-add
+    // on every App re-render (audio is a new object literal each useAudioPlayer
+    // render) for no benefit, and could in principle leave a gap if a re-render
+    // races with unload.
     const onUnload = () => {
-      const el = audio?.audioRef?.current;
+      const el = audio.audioRef.current;
       if (!el || !el.dataset.playbackTrackId) return;
       const playedSec = el.currentTime || 0;
       if (playedSec <= 0) return;
@@ -5727,7 +5732,8 @@ function App() {
     };
     window.addEventListener('beforeunload', onUnload);
     return () => window.removeEventListener('beforeunload', onUnload);
-  }, [audio]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const c = useColors(isDark);
 
