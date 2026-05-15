@@ -5202,7 +5202,7 @@ function getSongFacts(track, lang) {
 }
 
 // ─── PLAYER SECTION ─────────────────────────────────────────────────────────
-function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, audio, visible }) {
+function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, audio, visible }) {
   const [playlist, setPlaylist] = useState(initialPlaylist || []);
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [liked, setLiked] = useState(null);
@@ -5321,6 +5321,26 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
     // even after the user skipped to a different one inside the playlist.
     if (onTrackChange) onTrackChange(track);
   };
+
+  // When audio ends: advance within the current playlist if there's a next
+  // track; otherwise request the autoplay queue from App (which fetches
+  // similar tracks from the backend and appends them).
+  useEffect(() => {
+    const el = audio?.audioRef?.current;
+    if (!el) return;
+    const onEnded = () => {
+      const lastIdx = playlist.length - 1;
+      if (currentIndex >= 0 && currentIndex < lastIdx) {
+        // Plain auto-advance — reuse playTrackAt's logic
+        playTrackAt(currentIndex + 1);
+      } else if (onRequestAutoplay && currentTrack) {
+        // Exhausted current playlist — ask App to fetch more
+        onRequestAutoplay(currentTrack);
+      }
+    };
+    el.addEventListener('ended', onEnded);
+    return () => el.removeEventListener('ended', onEnded);
+  }, [currentIndex, playlist.length, audio, currentTrack, onRequestAutoplay]);
 
   const togglePlay = () => { if (audio) audio.togglePlay(); };
   const nextTrack = () => { if (currentIndex < playlist.length - 1) playTrackAt(currentIndex + 1); };
@@ -5704,6 +5724,7 @@ function App() {
   // Player state
   const [playerPlaylist, setPlayerPlaylist] = useState([]);
   const [playerTrack, setPlayerTrack] = useState(null);
+  const [playedTrackIds, setPlayedTrackIds] = useState(() => new Set());
 
   // Shared audio controller — lives at App level so audio survives navigation
   const audio = useAudioPlayer();
@@ -5775,7 +5796,38 @@ function App() {
   // item — keeps App.playerTrack in lockstep with what's actually playing,
   // so Landing/Pebble/Popout don't go stale.
   const handleTrackChange = (track) => {
-    if (track) setPlayerTrack(track);
+    if (!track) return;
+    setPlayerTrack(track);
+    setPlayedTrackIds(prev => {
+      if (prev.has(track.track_id)) return prev;
+      const next = new Set(prev);
+      next.add(track.track_id);
+      return next;
+    });
+  };
+
+  // When the current playlist runs out, this fetches similar tracks from the
+  // backend and appends them. Called by PlayerSection's 'ended' handler when
+  // there is no next track left in playerPlaylist.
+  const ensureAutoplayQueue = async (seedTrack) => {
+    if (!seedTrack?.track_id || !activeCollection) return;
+    const excluded = Array.from(playedTrackIds).slice(-200).join(',');
+    try {
+      const data = await apiFetch(
+        `/recommend/autoplay-queue?collection=${encodeURIComponent(activeCollection)}` +
+        `&seed_track_id=${encodeURIComponent(seedTrack.track_id)}` +
+        (excluded ? `&exclude_ids=${encodeURIComponent(excluded)}` : '') +
+        `&limit=20`
+      );
+      const newTracks = data.tracks || [];
+      if (newTracks.length === 0) return;
+      // PlayerSection's playlist is HIT[]-shaped ({track, score, matched_on}),
+      // so wrap each fetched TrackMetadata accordingly.
+      const newHits = newTracks.map(t => ({ track: t, score: 0, matched_on: 'audio' }));
+      setPlayerPlaylist(prev => [...prev, ...newHits]);
+    } catch (e) {
+      console.warn('[autoplay] failed to fetch queue', e);
+    }
   };
 
   // Stats for landing
@@ -5886,6 +5938,7 @@ function App() {
                 isDark={isDark} lang={lang} activeCollection={activeCollection}
                 onPlayTrack={handlePlayTrack}
                 onTrackChange={id === 'player' ? handleTrackChange : undefined}
+                onRequestAutoplay={id === 'player' ? ensureAutoplayQueue : undefined}
                 audio={id === 'player' ? audio : undefined}
                 initialPlaylist={id === 'player' ? playerPlaylist : undefined}
                 initialTrack={id === 'player' ? playerTrack : undefined}
