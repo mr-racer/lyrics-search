@@ -132,6 +132,7 @@ def test_merge_hits_combines_text_and_audio():
     assert abs(bd.final_score - 1.0) < 1e-9
     assert abs(bd.final_score - by_id["t1"].score) < 1e-9
     assert bd.weights == {"text_dense": 0.6, "audio": 0.4}
+    assert by_id["t1"].matched_on == "hybrid"
 
 
 def test_merge_hits_track_only_in_one_modality_other_is_none():
@@ -151,8 +152,10 @@ def test_merge_hits_track_only_in_one_modality_other_is_none():
     assert bd1 is not None
     assert bd1.text_dense_score is not None
     assert bd1.audio_score is None
+    assert by_id["t1"].matched_on == "lyrics"
 
     bd2 = by_id["t2"].score_breakdown
     assert bd2 is not None
     assert bd2.text_dense_score is None
     assert bd2.audio_score is not None
+    assert by_id["t2"].matched_on == "audio"

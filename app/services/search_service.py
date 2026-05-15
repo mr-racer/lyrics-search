@@ -298,8 +298,13 @@ class SearchService:
         merged: List[TrackHit] = []
         for entry in score_map.values():
             lead = entry["lead"]
-            t_score = entry["text_norm"] or 0.0
-            a_score = entry["audio_norm"] or 0.0
+            text_present = entry["text_norm"] is not None
+            audio_present = entry["audio_norm"] is not None
+            # Use `is not None` rather than `or 0.0` so a legitimate 0.0
+            # (e.g. the lowest-scoring track after min-max normalization) is
+            # not confused with "absent modality" when reading the breakdown.
+            t_score = entry["text_norm"] if text_present else 0.0
+            a_score = entry["audio_norm"] if audio_present else 0.0
             final = t_score * text_weight + a_score * clap_weight
 
             breakdown = ScoreBreakdown(
@@ -309,10 +314,18 @@ class SearchService:
                 weights=weights_dict,
             )
 
+            # matched_on reflects which modalities actually contributed.
+            if text_present and audio_present:
+                matched_on = "hybrid"
+            elif text_present:
+                matched_on = "lyrics"
+            else:
+                matched_on = "audio"
+
             merged.append(TrackHit(
                 track=lead.track,
                 score=final,
-                matched_on="hybrid",
+                matched_on=matched_on,
                 lyrics=lead.lyrics,
                 artist_facts=lead.artist_facts,
                 song_facts=lead.song_facts,
