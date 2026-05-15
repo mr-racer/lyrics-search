@@ -4,7 +4,7 @@ import asyncio
 import logging
 from typing import List, Optional, Literal, Dict
 
-from ..domain.models import TrackMetadata, TrackHit, SearchFilters
+from ..domain.models import TrackMetadata, TrackHit, SearchFilters, ScoreBreakdown
 from ..existing.qdrant_db import LyricsDB
 from ..resources.model_registry import ModelRegistry
 from .artist_facts_service import load_all_facts_for_collection
@@ -240,54 +240,83 @@ class SearchService:
         clap_weight: float = 0.5,
     ) -> List[TrackHit]:
         """Merge two hit lists by track_id, applying weighted score fusion.
-        
+
         Tracks appearing in both lists get combined score:
             final_score = normalized_text_score * text_weight + normalized_clap_score * clap_weight
-        
+
         Scores are min-max normalized within each list before fusion to ensure
         fair weighting across different vector spaces.
+
+        Each returned hit carries a ``score_breakdown`` with per-modality
+        normalized scores (``None`` when a track was absent from that modality)
+        and the weights formula used, enabling consumers to explain ranking.
         """
-        def normalize(hits: List[TrackHit]) -> List[TrackHit]:
-            """Normalize scores to [0, 1] range within a hit list."""
+        def _normalize_scores(hits: List[TrackHit]) -> List[tuple[TrackHit, float]]:
+            """Return (hit, normalized_score) pairs; single-item list gets score 1.0."""
             if not hits:
-                return hits
+                return []
             scores = [h.score for h in hits]
             min_s, max_s = min(scores), max(scores)
             range_s = max_s - min_s if max_s > min_s else 1.0
-            return [
-                TrackHit(track=h.track, score=(h.score - min_s) / range_s,
-                         matched_on=h.matched_on, lyrics=h.lyrics,
-                         artist_facts=h.artist_facts, song_facts=h.song_facts)
-                for h in hits
-            ]
+            return [(h, (h.score - min_s) / range_s) for h in hits]
 
-        text_hits = normalize(text_hits)
-        clap_hits = normalize(clap_hits)
+        norm_text = _normalize_scores(text_hits)
+        norm_clap = _normalize_scores(clap_hits)
 
+        # score_map[tid] = {
+        #   "track": TrackMetadata,
+        #   "text_norm": float | None,   # normalized text score
+        #   "audio_norm": float | None,  # normalized audio score
+        #   "lead": TrackHit,            # first hit seen (for lyrics/facts)
+        # }
         score_map: Dict[str, dict] = {}
 
-        for hit in text_hits:
+        for hit, norm_score in norm_text:
             tid = hit.track.track_id
-            score_map[tid] = {"score": hit.score * text_weight, "lead": hit}
+            score_map[tid] = {
+                "track": hit.track,
+                "text_norm": norm_score,
+                "audio_norm": None,
+                "lead": hit,
+            }
 
-        for hit in clap_hits:
+        for hit, norm_score in norm_clap:
             tid = hit.track.track_id
             if tid in score_map:
-                score_map[tid]["score"] += hit.score * clap_weight
+                score_map[tid]["audio_norm"] = norm_score
             else:
-                score_map[tid] = {"score": hit.score * clap_weight, "lead": hit}
+                score_map[tid] = {
+                    "track": hit.track,
+                    "text_norm": None,
+                    "audio_norm": norm_score,
+                    "lead": hit,
+                }
+
+        weights_dict = {"text_dense": text_weight, "audio": clap_weight}
 
         # Build final list, sorted by merged score descending
         merged: List[TrackHit] = []
         for entry in score_map.values():
             lead = entry["lead"]
+            t_score = entry["text_norm"] or 0.0
+            a_score = entry["audio_norm"] or 0.0
+            final = t_score * text_weight + a_score * clap_weight
+
+            breakdown = ScoreBreakdown(
+                text_dense_score=entry["text_norm"],
+                audio_score=entry["audio_norm"],
+                final_score=final,
+                weights=weights_dict,
+            )
+
             merged.append(TrackHit(
                 track=lead.track,
-                score=entry["score"],
+                score=final,
                 matched_on="hybrid",
                 lyrics=lead.lyrics,
                 artist_facts=lead.artist_facts,
                 song_facts=lead.song_facts,
+                score_breakdown=breakdown,
             ))
 
         merged.sort(key=lambda h: h.score, reverse=True)
