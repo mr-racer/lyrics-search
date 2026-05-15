@@ -4532,6 +4532,163 @@ function IndexingModal({ isDark, lang, collectionName, stepStatus, trackCount, e
   );
 }
 
+// ─── AI Indexing card (inside SettingsPanel) ──────────────────────────────────
+function AIIndexingCard({ isDark, lang, activeCollection }) {
+  const c = useColors(isDark);
+  const [status, setStatus] = useState({ sonic_vibe: null, refined_facts: null });
+  const [busy, setBusy] = useState({ sonic_vibe: false, refined_facts: false });
+  const [error, setError] = useState(null);
+  const pollRef = useRef(null);
+
+  const refresh = useCallback(async () => {
+    if (!activeCollection) return;
+    try {
+      const data = await apiFetch(`/library/ai-index/status?collection=${encodeURIComponent(activeCollection)}`);
+      setStatus(data);
+    } catch { /* swallow — surface via error state only if Run/Reset fails */ }
+  }, [activeCollection]);
+
+  useEffect(() => {
+    refresh();
+    return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+  }, [refresh]);
+
+  const isRunning = (s) => s && s.status === 'running';
+  const someRunning = isRunning(status.sonic_vibe) || isRunning(status.refined_facts);
+
+  useEffect(() => {
+    if (someRunning && !pollRef.current) {
+      pollRef.current = setInterval(refresh, 3000);
+    } else if (!someRunning && pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+      // One last refresh to capture the final state.
+      refresh();
+    }
+  }, [someRunning, refresh]);
+
+  const runJob = async (taskType) => {
+    if (!activeCollection) { setError(lang === 'ru' ? 'Выбери коллекцию' : 'Pick a collection first'); return; }
+    setError(null);
+    setBusy(b => ({ ...b, [taskType]: true }));
+    try {
+      await apiFetch(`/library/ai-index/${taskType}`, {
+        method: 'POST',
+        body: JSON.stringify({ collection_name: activeCollection, lang }),
+      });
+      refresh();
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setBusy(b => ({ ...b, [taskType]: false }));
+    }
+  };
+
+  const resetCache = async (taskType) => {
+    if (!activeCollection) return;
+    const confirmMsg = lang === 'ru'
+      ? 'Сбросить кэш для этой задачи?'
+      : 'Reset cache for this task?';
+    if (!window.confirm(confirmMsg)) return;
+    setError(null);
+    try {
+      await apiFetch(
+        `/library/ai-index/${taskType}/cache?collection=${encodeURIComponent(activeCollection)}`,
+        { method: 'DELETE' },
+      );
+      refresh();
+    } catch (e) {
+      setError(e?.message || String(e));
+    }
+  };
+
+  const fmtStatus = (s) => {
+    if (!s) return lang === 'ru' ? 'Никогда не запускалась' : 'Never run';
+    const parts = [
+      `${lang === 'ru' ? 'Статус' : 'Status'}: ${s.status}`,
+      `${s.n_done}/${s.n_total} ${lang === 'ru' ? 'выполнено' : 'done'}`,
+    ];
+    if (s.n_failed) {
+      parts.push(`${s.n_failed} ${lang === 'ru' ? 'ошибок' : 'failed'}`);
+    }
+    if (s.lang) parts.push(s.lang.toUpperCase());
+    return parts.join(' · ');
+  };
+
+  const Row = ({ title, taskType }) => {
+    const s = status[taskType];
+    const running = isRunning(s);
+    return (
+      <div style={{ padding: '12px 0', borderBottom: `1px solid ${c.border}` }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+          <div style={{ fontWeight: 600, color: c.text, fontSize: 14 }}>{title}</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              disabled={busy[taskType] || running || !activeCollection}
+              onClick={() => runJob(taskType)}
+              style={{
+                padding: '6px 12px', borderRadius: 8, cursor: (busy[taskType] || running || !activeCollection) ? 'not-allowed' : 'pointer',
+                fontSize: 12, fontWeight: 500,
+                background: isDark ? 'rgba(124,91,255,0.18)' : 'rgba(124,91,255,0.10)',
+                color: isDark ? '#cdb8ff' : '#5b3fd6',
+                border: `1px solid ${isDark ? 'rgba(124,91,255,0.35)' : 'rgba(124,91,255,0.30)'}`,
+                opacity: (busy[taskType] || running || !activeCollection) ? 0.5 : 1,
+              }}>
+              {running
+                ? (lang === 'ru' ? 'Идёт…' : 'Running…')
+                : (lang === 'ru' ? '▶ Запустить' : '▶ Run')}
+            </button>
+            <button
+              onClick={() => resetCache(taskType)}
+              disabled={!activeCollection}
+              style={{
+                padding: '6px 12px', borderRadius: 8, cursor: activeCollection ? 'pointer' : 'not-allowed',
+                fontSize: 12, fontWeight: 500,
+                background: 'transparent', color: c.textMuted,
+                border: `1px solid ${c.border}`,
+                opacity: activeCollection ? 1 : 0.5,
+              }}>
+              ↻ {lang === 'ru' ? 'Сброс' : 'Reset'}
+            </button>
+          </div>
+        </div>
+        <div style={{ marginTop: 6, fontSize: 11, color: c.textMuted, fontFamily: "'JetBrains Mono', monospace" }}>
+          {fmtStatus(s)}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{
+      padding: '16px 18px', borderRadius: 12,
+      border: `1px solid ${c.border}`, marginTop: 18,
+      background: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+        <div className="mono-label" style={{ color: c.textMuted, fontSize: 11, letterSpacing: '0.15em' }}>
+          AI INDEXING
+        </div>
+        <div style={{ fontSize: 11, color: c.textSubtle }}>
+          {lang === 'ru' ? 'Текущий язык' : 'Current language'}: {lang.toUpperCase()}
+        </div>
+      </div>
+      <Row title="Sonic Vibe" taskType="sonic_vibe" />
+      <Row title={lang === 'ru' ? 'Уточнённые факты' : 'Refined Facts'} taskType="refined_facts" />
+      <div style={{ fontSize: 11, color: c.textMuted, marginTop: 12, lineHeight: 1.5 }}>
+        ⚠ {lang === 'ru'
+          ? 'AI-индексация использует текущий язык фронта. Чтобы получить результат на другом языке, смени язык и запусти повторно.'
+          : 'AI indexing uses your current frontend language. To get results in another language, switch language and re-run.'}
+      </div>
+      {error && (
+        <div style={{ marginTop: 10, fontSize: 12, color: 'oklch(62% 0.18 25)' }}>
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Settings overlay (slides in from right) ─────────────────────────────────
 function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeCollection, onTheme, onLang, collections, onCollectionSwitch, onCollectionDelete }) {
   const c = useColors(isDark);
@@ -4893,6 +5050,9 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
               {llmSaved ? (lang==='ru'?'✓ СОХРАНЕНО':'✓ SAVED') : (lang==='ru'?'СОХРАНИТЬ':'SAVE')}
             </button>
           </>)}
+
+          {/* AI Indexing */}
+          <AIIndexingCard isDark={isDark} lang={lang} activeCollection={activeCollection} />
 
           {/* About */}
           <div style={{ padding:'18px 22px', textAlign:'center' }}>
