@@ -28,7 +28,7 @@ from ..services.search_service import SearchService
 from ..services.library_service import LibraryService
 from ..services.job_tracker import JobTracker
 from ..services.sonic_descriptor_service import SonicDescriptorService
-from .routes import search_router, library_router, chat_router, metadata_router, playback_router
+from .routes import search_router, library_router, chat_router, metadata_router, playback_router, recommend_router
 from .sse_utils import event_stream
 
 logger = logging.getLogger(__name__)
@@ -222,11 +222,12 @@ def create_app() -> FastAPI:
 
     # Routers — MUST be registered BEFORE the SPA catch-all so Starlette
     # matches /api/v1/... routes first (routes are evaluated in order).
-    app.include_router(search_router,   prefix="/api/v1")
-    app.include_router(library_router,  prefix="/api/v1")
-    app.include_router(chat_router,     prefix="/api/v1")
-    app.include_router(metadata_router, prefix="/api/v1")
-    app.include_router(playback_router, prefix="/api/v1")
+    app.include_router(search_router,    prefix="/api/v1")
+    app.include_router(library_router,   prefix="/api/v1")
+    app.include_router(chat_router,      prefix="/api/v1")
+    app.include_router(metadata_router,  prefix="/api/v1")
+    app.include_router(playback_router,  prefix="/api/v1")
+    app.include_router(recommend_router, prefix="/api/v1")
 
     # SPA catch-all — must be LAST so it doesn't shadow API routes
     @app.get("/{full_path:path}")
