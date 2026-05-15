@@ -546,6 +546,31 @@ class MetadataDB:
         ).fetchone()
         return row[0] if row else None
 
+    @classmethod
+    def get_reactions_for_tracks(
+        cls, collection_name: str, track_ids: list[str]
+    ) -> dict[str, str]:
+        """Return a mapping of track_id -> reaction for known tracks only.
+
+        Tracks without a reaction row are omitted from the result.
+        Caller should treat missing keys as 'no reaction'.
+
+        Uses a single SELECT with ``IN (?, ?, ...)`` placeholders to avoid
+        N+1 queries when the autoplay pipeline filters dozens of candidates.
+        ``track_ids`` is interpolated as positional parameters — no SQL
+        injection surface despite the dynamic placeholder count.
+        """
+        if not track_ids:
+            return {}
+        placeholders = ",".join("?" * len(track_ids))
+        conn = cls._connect()
+        rows = conn.execute(
+            f"SELECT track_id, reaction FROM track_reactions "
+            f"WHERE collection_name = ? AND track_id IN ({placeholders})",
+            (collection_name, *track_ids),
+        ).fetchall()
+        return {r[0]: r[1] for r in rows}
+
     # ── Collection settings (per-collection text_model, etc.) ──
 
     @classmethod

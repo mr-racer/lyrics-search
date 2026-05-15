@@ -237,3 +237,19 @@ class PlaybackEventIn(BaseModel):
 class PlaybackEventOut(BaseModel):
     """Successful POST response."""
     id: int
+
+
+class AutoplayQueueDiagnostics(BaseModel):
+    """Counters from the autoplay filter pipeline — for telemetry / debug."""
+    candidates_fetched: int
+    dropped_excluded: int
+    dropped_disliked: int
+    dropped_diversity: int
+    returned: int
+
+
+class AutoplayQueueResponse(BaseModel):
+    """Result of GET /recommend/autoplay-queue."""
+    seed_track_id: str
+    tracks: list[TrackMetadata]
+    diagnostics: AutoplayQueueDiagnostics
