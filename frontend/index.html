@@ -5325,6 +5325,11 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
   // When audio ends: advance within the current playlist if there's a next
   // track; otherwise request the autoplay queue from App (which fetches
   // similar tracks from the backend and appends them).
+  //
+  // Dep choice: audio?.audioRef (a stable useRef) rather than audio
+  // (a new object literal each useAudioPlayer render). Without this,
+  // listener teardown+re-add would fire on every timeupdate (~4Hz),
+  // briefly leaving the element without any 'ended' listener.
   useEffect(() => {
     const el = audio?.audioRef?.current;
     if (!el) return;
@@ -5340,7 +5345,9 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
     };
     el.addEventListener('ended', onEnded);
     return () => el.removeEventListener('ended', onEnded);
-  }, [currentIndex, playlist.length, audio, currentTrack, onRequestAutoplay]);
+    // activeCollection included so a mid-session collection switch
+    // rebinds against a fresh playTrackAt closure with the new URL prefix.
+  }, [currentIndex, playlist.length, audio?.audioRef, currentTrack, onRequestAutoplay, activeCollection]);
 
   const togglePlay = () => { if (audio) audio.togglePlay(); };
   const nextTrack = () => { if (currentIndex < playlist.length - 1) playTrackAt(currentIndex + 1); };
@@ -5724,7 +5731,11 @@ function App() {
   // Player state
   const [playerPlaylist, setPlayerPlaylist] = useState([]);
   const [playerTrack, setPlayerTrack] = useState(null);
-  const [playedTrackIds, setPlayedTrackIds] = useState(() => new Set());
+  // Played track ids live in a ref (not React state) because they only get
+  // read from the autoplay-queue exclude_ids param — never rendered. A ref
+  // sidesteps the stale-closure trap that would force every consumer to
+  // re-subscribe via useCallback deps to see the latest set.
+  const playedTrackIdsRef = useRef(new Set());
 
   // Shared audio controller — lives at App level so audio survives navigation
   const audio = useAudioPlayer();
@@ -5798,12 +5809,12 @@ function App() {
   const handleTrackChange = (track) => {
     if (!track) return;
     setPlayerTrack(track);
-    setPlayedTrackIds(prev => {
-      if (prev.has(track.track_id)) return prev;
-      const next = new Set(prev);
-      next.add(track.track_id);
-      return next;
-    });
+    // Mutate the ref directly — no re-render needed since nothing reads
+    // playedTrackIds during render. The autoplay-queue fetcher reads the
+    // current value at call time, so it always sees the freshest set.
+    if (!playedTrackIdsRef.current.has(track.track_id)) {
+      playedTrackIdsRef.current.add(track.track_id);
+    }
   };
 
   // When the current playlist runs out, this fetches similar tracks from the
@@ -5811,7 +5822,7 @@ function App() {
   // there is no next track left in playerPlaylist.
   const ensureAutoplayQueue = async (seedTrack) => {
     if (!seedTrack?.track_id || !activeCollection) return;
-    const excluded = Array.from(playedTrackIds).slice(-200).join(',');
+    const excluded = Array.from(playedTrackIdsRef.current).slice(-200).join(',');
     try {
       const data = await apiFetch(
         `/recommend/autoplay-queue?collection=${encodeURIComponent(activeCollection)}` +
