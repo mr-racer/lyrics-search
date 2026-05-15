@@ -964,6 +964,44 @@ async function apiFetch(path, opts = {}) {
   return res.json();
 }
 
+// ─── Playback event helpers ───────────────────────────────────────────────────
+
+// Mint or retrieve a per-tab session ID. Cleared when the tab closes.
+function getSessionId() {
+  let id = sessionStorage.getItem('musix_session_id');
+  if (!id) {
+    id = (crypto.randomUUID ? crypto.randomUUID() :
+      'sess-' + Math.random().toString(36).slice(2) + '-' + Date.now());
+    sessionStorage.setItem('musix_session_id', id);
+  }
+  return id;
+}
+
+async function postPlaybackEvent({ trackId, collectionName, playedSec, totalDur }) {
+  if (!trackId || !collectionName || playedSec == null) return;
+  const body = JSON.stringify({
+    session_id: getSessionId(),
+    collection_name: collectionName,
+    track_id: trackId,
+    played_sec: playedSec,
+    total_dur: totalDur ?? null,
+  });
+  try {
+    if (navigator.sendBeacon) {
+      const blob = new Blob([body], { type: 'application/json' });
+      navigator.sendBeacon(`${API}/playback/events`, blob);
+    } else {
+      await fetch(`${API}/playback/events`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+    }
+  } catch (e) {
+    console.warn('[playback] failed to post event', e);
+  }
+}
+
 // ─── Color tokens ─────────────────────────────────────────────────────────────
 function useColors(isDark) {
   return useMemo(() => ({
@@ -1004,7 +1042,29 @@ function useAudioPlayer() {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
 
-  const setSrc = useCallback((src) => { setCurrentSrc(src); }, []);
+  // When src changes mid-playback, fire a playback event for the *previous*
+  // track using audio.currentTime as played_sec, then attach the new track id
+  // to the audio element via dataset for the next 'ended' to pick up.
+  const setSrc = useCallback((src, meta) => {
+    const el = audioRef.current;
+    if (el && el.dataset.playbackTrackId && el.dataset.playbackTrackId !== meta?.trackId) {
+      const prevId = el.dataset.playbackTrackId;
+      const prevCol = el.dataset.playbackCollection;
+      const playedSec = el.currentTime || 0;
+      const totalDur = el.duration || null;
+      if (playedSec > 0) {
+        postPlaybackEvent({
+          trackId: prevId, collectionName: prevCol,
+          playedSec, totalDur,
+        });
+      }
+    }
+    if (el && meta) {
+      el.dataset.playbackTrackId = meta.trackId || '';
+      el.dataset.playbackCollection = meta.collectionName || '';
+    }
+    setCurrentSrc(src);
+  }, []);
 
   // Read playback state from the live <audio> element rather than React state.
   // The setSrc + setTimeout(play, 50) pattern used by callers schedules the
@@ -1060,7 +1120,20 @@ function useAudioPlayer() {
     el.addEventListener('timeupdate',     () => setCurrentTime(el.currentTime || 0));
     el.addEventListener('loadedmetadata', () => setDuration(el.duration || 0));
     el.addEventListener('durationchange', () => setDuration(el.duration || 0));
-    el.addEventListener('ended',          () => setIsPlaying(false));
+    el.addEventListener('ended', () => {
+      setIsPlaying(false);
+      // Fire-and-forget playback event for the track that just finished.
+      const trackId = el.dataset.playbackTrackId;
+      const collectionName = el.dataset.playbackCollection;
+      if (trackId && collectionName) {
+        postPlaybackEvent({
+          trackId,
+          collectionName,
+          playedSec: el.duration || el.currentTime || 0,
+          totalDur: el.duration || null,
+        });
+      }
+    });
     el.addEventListener('play',           () => setIsPlaying(true));
     el.addEventListener('pause',          () => setIsPlaying(false));
     listenersAttached.current = true;
@@ -1249,7 +1322,7 @@ function LandingPlayer({ isDark, lang, tracks, currentTrack, onTrackSelect, onTr
     onTrackChange?.(t);
     const url = getStreamUrl(t);
     if (url && audio) {
-      audio.setSrc(url);
+      audio.setSrc(url, { trackId: t.track_id, collectionName: activeCollection });
       setHasInteracted(true);
       setTimeout(() => audio.play(), 50);
     }
@@ -1261,7 +1334,7 @@ function LandingPlayer({ isDark, lang, tracks, currentTrack, onTrackSelect, onTr
       // First click — load the source, then play.
       const url = getStreamUrl(track);
       if (url) {
-        audio.setSrc(url);
+        audio.setSrc(url, { trackId: track.track_id, collectionName: activeCollection });
         setHasInteracted(true);
         setTimeout(() => audio.play(), 50);
       }
@@ -1285,7 +1358,7 @@ function LandingPlayer({ isDark, lang, tracks, currentTrack, onTrackSelect, onTr
   useEffect(() => {
     if (!track || !audio || !hasInteracted) return;
     const url = getStreamUrl(track);
-    if (url) audio.setSrc(url);
+    if (url) audio.setSrc(url, { trackId: track.track_id, collectionName: activeCollection });
   }, [track?.track_id, hasInteracted]);
 
   const handleRoll = async () => {
@@ -5204,7 +5277,7 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
     setCurrentIndex(idx);
     const track = initialPlaylist[idx].track;
     const url = `${API}/search/tracks/${track.track_id}/stream?collection_name=${encodeURIComponent(activeCollection || '')}`;
-    if (audio) { audio.setSrc(url); setTimeout(() => audio.play(), 50); }
+    if (audio) { audio.setSrc(url, { trackId: track.track_id, collectionName: activeCollection }); setTimeout(() => audio.play(), 50); }
     fetchReaction(initialTrack.track_id);
   }, [initialPlaylist, initialTrack]);
 
@@ -5212,7 +5285,7 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
   useEffect(() => {
     if (!currentTrack || !audio) return;
     const url = `${API}/search/tracks/${currentTrack.track_id}/stream?collection_name=${encodeURIComponent(activeCollection || '')}`;
-    audio.setSrc(url);
+    audio.setSrc(url, { trackId: currentTrack.track_id, collectionName: activeCollection });
     // Only auto-play when section is visible
     if (visible && isPlaying) setTimeout(() => audio.play(), 50);
   }, [currentTrack?.track_id]);
@@ -5240,7 +5313,7 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
     setCurrentIndex(index);
     const track = playlist[index].track;
     const url = `${API}/search/tracks/${track.track_id}/stream?collection_name=${encodeURIComponent(activeCollection || '')}`;
-    if (audio) { audio.setSrc(url); setTimeout(() => audio.play(), 50); }
+    if (audio) { audio.setSrc(url, { trackId: track.track_id, collectionName: activeCollection }); setTimeout(() => audio.play(), 50); }
     fetchReaction(track.track_id);
     // Propagate the new track up so App.playerTrack stays in sync. Without
     // this, LandingScreen / NowPlayingPebble / MiniPlaybackPopout (which all
@@ -5637,6 +5710,24 @@ function App() {
 
   // Global keyboard shortcuts (Task 11)
   useGlobalKeyboardShortcuts({ audio, onNavToSection: setSection });
+
+  // Best-effort playback event on tab close / navigation away.
+  useEffect(() => {
+    const onUnload = () => {
+      const el = audio?.audioRef?.current;
+      if (!el || !el.dataset.playbackTrackId) return;
+      const playedSec = el.currentTime || 0;
+      if (playedSec <= 0) return;
+      postPlaybackEvent({
+        trackId: el.dataset.playbackTrackId,
+        collectionName: el.dataset.playbackCollection,
+        playedSec,
+        totalDur: el.duration || null,
+      });
+    };
+    window.addEventListener('beforeunload', onUnload);
+    return () => window.removeEventListener('beforeunload', onUnload);
+  }, [audio]);
 
   const c = useColors(isDark);
 
