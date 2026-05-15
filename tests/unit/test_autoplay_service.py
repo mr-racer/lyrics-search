@@ -127,3 +127,41 @@ def test_filter_pipeline_respects_limit():
         cands, seed_track_id="seed", exclude_ids=set(), dislikes=set(), limit=5,
     )
     assert len(result) == 5
+
+
+def test_next_queue_handles_seed_without_clap_vector():
+    """Legacy tracks (pre-CLAP indexing) have no 'clap' named vector — the
+    service must return an empty queue gracefully, not crash."""
+    seed_pt = MagicMock()
+    seed_pt.id = "seed"
+    seed_pt.vector = {}  # no 'clap' key — simulates pre-CLAP indexed track
+    qdrant = MagicMock()
+    qdrant.retrieve.return_value = [seed_pt]
+
+    result = autoplay_service.next_queue(
+        qdrant_client=qdrant,
+        collection_name="music",
+        seed_track_id="seed",
+        exclude_ids=[],
+        limit=20,
+    )
+    assert result.seed_track_id == "seed"
+    assert result.tracks == []
+    assert result.diagnostics.returned == 0
+    qdrant.search.assert_not_called()  # crucial: we must not have tried to search
+
+
+def test_next_queue_handles_seed_not_found():
+    """If Qdrant returns nothing for the seed id, return an empty queue."""
+    qdrant = MagicMock()
+    qdrant.retrieve.return_value = []  # seed missing
+
+    result = autoplay_service.next_queue(
+        qdrant_client=qdrant,
+        collection_name="music",
+        seed_track_id="missing-seed",
+        exclude_ids=[],
+        limit=20,
+    )
+    assert result.tracks == []
+    qdrant.search.assert_not_called()

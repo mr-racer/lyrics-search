@@ -85,7 +85,15 @@ def _apply_filters(
     demoted_inserted: set[int] = set()
 
     if len(out) < limit:
-        # Top up with demoted ones — re-insert unconditionally to meet the limit.
+        # Top up with demoted ones — re-insert UNCONDITIONALLY, without
+        # re-applying the >2-consecutive-same-artist rule.
+        #
+        # Rationale: when the entire candidate pool is dominated by one artist
+        # (e.g. a tiny library, or a query whose neighbors happen to cluster on
+        # one artist's catalog), enforcing diversity here would leave the queue
+        # under-filled — a worse UX than mild rule-bending. Diversity was already
+        # maximised by the main loop above; topup only fires when no
+        # diversity-safe candidate remained to fill the remaining slots.
         for i, track in enumerate(demoted_tail):
             if len(out) >= limit:
                 break
@@ -143,6 +151,19 @@ def next_queue(
         if isinstance(seed_pts[0].vector, dict)
         else seed_pts[0].vector
     )
+    # A track may exist in Qdrant without a 'clap' named vector (legacy points
+    # indexed before CLAP support). In that case we can't form a neighbor
+    # query — return an empty queue gracefully instead of crashing in
+    # qdrant_client.search().
+    if not seed_vec:
+        return AutoplayQueueResponse(
+            seed_track_id=seed_track_id,
+            tracks=[],
+            diagnostics=AutoplayQueueDiagnostics(
+                candidates_fetched=0, dropped_excluded=0, dropped_disliked=0,
+                dropped_diversity=0, returned=0,
+            ),
+        )
 
     # 2. Query top-K neighbors.
     k = max(limit * 3, 30)
