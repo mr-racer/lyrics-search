@@ -122,6 +122,16 @@ _SCHEMA_SQL: Tuple[str, ...] = (
         generated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (track_id, collection_name, lang)
     )""",
+    # Refined Facts cache (added in Plan 3 Task 15)
+    """CREATE TABLE IF NOT EXISTS refined_facts (
+        scope           TEXT NOT NULL,         -- 'song' or 'artist'
+        scope_key       TEXT NOT NULL,         -- track_id (song) or artist_slug (artist)
+        collection_name TEXT NOT NULL,
+        lang            TEXT NOT NULL,
+        refined_json    TEXT NOT NULL,         -- JSON array of {"text": str}
+        generated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (scope, scope_key, collection_name, lang)
+    )""",
 )
 
 
@@ -842,6 +852,63 @@ class MetadataDB:
         conn = cls._connect()
         cur = conn.execute(
             "DELETE FROM sonic_vibes WHERE collection_name = ?",
+            (collection_name,),
+        )
+        conn.commit()
+        return int(cur.rowcount)
+
+    # ── Refined Facts cache (Plan 3 Task 15) ──
+
+    @classmethod
+    def get_refined_facts(
+        cls, *, scope: str, scope_key: str, collection_name: str, lang: str,
+    ) -> Optional[list[str]]:
+        """Return refined facts as a plain text list, or None if no refined row exists.
+
+        Note: an EXPLICIT empty list (set_refined_facts(refined=[])) is a valid
+        signal — "AI indexed, judged nothing interesting". The caller should
+        respect that by returning [] instead of falling back to originals.
+        """
+        import json as _json
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT refined_json FROM refined_facts "
+            "WHERE scope = ? AND scope_key = ? AND collection_name = ? AND lang = ?",
+            (scope, scope_key, collection_name, lang),
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            arr = _json.loads(row[0])
+            return [item.get("text", "") for item in arr if isinstance(item, dict)]
+        except Exception:
+            return []
+
+    @classmethod
+    def set_refined_facts(
+        cls, *, scope: str, scope_key: str, collection_name: str,
+        lang: str, refined: list[str],
+    ) -> None:
+        """Upsert a refined-facts row. Empty `refined=[]` is explicit and
+        signals 'AI judged nothing interesting' — not 'no AI run yet'."""
+        import json as _json
+        payload = _json.dumps([{"text": t} for t in refined])
+        conn = cls._connect()
+        conn.execute(
+            "INSERT INTO refined_facts (scope, scope_key, collection_name, lang, refined_json) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(scope, scope_key, collection_name, lang) DO UPDATE SET "
+            "refined_json = excluded.refined_json, generated_at = CURRENT_TIMESTAMP",
+            (scope, scope_key, collection_name, lang, payload),
+        )
+        conn.commit()
+
+    @classmethod
+    def delete_refined_facts(cls, collection_name: str) -> int:
+        """Drop all refined-fact rows for the given collection. Returns rows deleted."""
+        conn = cls._connect()
+        cur = conn.execute(
+            "DELETE FROM refined_facts WHERE collection_name = ?",
             (collection_name,),
         )
         conn.commit()

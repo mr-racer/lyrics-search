@@ -116,12 +116,14 @@ class TrackFacts(BaseModel):
 def get_track_facts(
     track_id: str,
     collection: str = Query(..., description="Qdrant collection name"),
+    lang: str = Query("en"),
     request: Request = None,
 ) -> TrackFacts:
     """Return merged artist + song facts for a single track.
 
-    Resolves ``track_id`` against the Qdrant payload to recover the artist
-    and title, then looks up cached facts via :class:`MetadataDB`.
+    Refined facts (from AI Indexing) take precedence per scope when present.
+    An EXPLICIT empty refined list (AI ran but kept nothing) returns [],
+    not a fallback to originals.
     """
     empty = TrackFacts(artist_name="", title="", song_facts=[], artist_facts=[])
     if request is None:
@@ -152,11 +154,27 @@ def get_track_facts(
     artist_slug = _slugify(artist)
     song_key = get_song_facts_key(artist, title)
 
+    # Prefer refined; fall back to originals if no refined row for that scope.
+    # `is not None` is critical — an explicit [] from refined must short-circuit.
+    refined_song = MetadataDB.get_refined_facts(
+        scope="song", scope_key=track_id, collection_name=collection, lang=lang,
+    )
+    refined_artist = MetadataDB.get_refined_facts(
+        scope="artist", scope_key=artist_slug, collection_name=collection, lang=lang,
+    )
+
+    song_facts = (
+        refined_song if refined_song is not None
+        else MetadataDB.get_song_facts(song_key, collection)
+    )
+    artist_facts = (
+        refined_artist if refined_artist is not None
+        else MetadataDB.get_artist_facts(artist_slug, collection)
+    )
+
     return TrackFacts(
-        artist_name=artist,
-        title=title,
-        song_facts=MetadataDB.get_song_facts(song_key, collection),
-        artist_facts=MetadataDB.get_artist_facts(artist_slug, collection),
+        artist_name=artist, title=title,
+        song_facts=song_facts, artist_facts=artist_facts,
     )
 
 
