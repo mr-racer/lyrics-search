@@ -1,0 +1,133 @@
+"""Generic job runner for user-triggered AI indexing tasks.
+
+The framework is task-agnostic: each task type registers a coroutine of
+signature ``async def run(job: JobState, db_client, llm_client) -> None``.
+``start_job`` creates a JobState, persists to ``ai_indexing_jobs``, and
+spawns an asyncio task that drives state transitions (queued -> running ->
+done/failed/cancelled).
+
+Concurrency policy: at most one active job per (collection_name, task_type).
+Different collections OR different task types can run concurrently.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import uuid
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Awaitable, Callable
+
+from app.resources.metadata_db import MetadataDB
+
+logger = logging.getLogger(__name__)
+
+TaskFunc = Callable[["JobState", object, object], Awaitable[None]]
+
+# Module-level registries — single-process job state.
+_registry: dict[str, TaskFunc] = {}
+_active: dict[tuple[str, str], "JobState"] = {}
+_running_tasks: dict[str, asyncio.Task] = {}
+
+
+@dataclass
+class JobState:
+    job_id: str
+    task_type: str
+    collection_name: str
+    lang: str
+    n_total: int
+    n_done: int = 0
+    n_failed: int = 0
+    status: str = "queued"
+    started_at: datetime = field(default_factory=datetime.utcnow)
+
+
+def register_task(task_type: str, fn: TaskFunc) -> None:
+    """Register a task implementation. Idempotent — last registration wins."""
+    _registry[task_type] = fn
+
+
+def start_job(
+    *,
+    task_type: str,
+    collection_name: str,
+    lang: str,
+    db_client,
+    llm_client,
+    n_total: int,
+) -> str:
+    """Start a new AI indexing job.
+
+    Returns the new job_id. Raises ValueError if (a) task_type is not
+    registered or (b) a job is already running for this (collection, task_type).
+    """
+    if task_type not in _registry:
+        raise ValueError(f"unknown task_type: {task_type}")
+
+    key = (collection_name, task_type)
+    existing = _active.get(key)
+    if existing is not None and existing.status in {"queued", "running"}:
+        raise ValueError(
+            f"job for {task_type} on {collection_name} is already running "
+            f"(job_id={existing.job_id})"
+        )
+
+    job_id = str(uuid.uuid4())
+    job = JobState(
+        job_id=job_id, task_type=task_type,
+        collection_name=collection_name, lang=lang, n_total=n_total,
+    )
+    _active[key] = job
+    MetadataDB.record_ai_job(job_id, task_type, collection_name, lang, n_total)
+
+    async def _run():
+        job.status = "running"
+        MetadataDB.update_ai_job(job_id=job_id, status="running")
+        try:
+            await _registry[task_type](job, db_client, llm_client)
+            job.status = "done"
+            MetadataDB.update_ai_job(
+                job_id=job_id, status="done", finished=True,
+            )
+        except asyncio.CancelledError:
+            job.status = "cancelled"
+            MetadataDB.update_ai_job(
+                job_id=job_id, status="cancelled", finished=True,
+            )
+            raise
+        except Exception as e:
+            logger.exception(
+                "[ai-indexing] task %s job %s failed", task_type, job_id,
+            )
+            job.status = "failed"
+            MetadataDB.update_ai_job(
+                job_id=job_id, status="failed",
+                error=str(e)[:500], finished=True,
+            )
+
+    _running_tasks[job_id] = asyncio.create_task(_run())
+    return job_id
+
+
+async def _wait_for_job(job_id: str) -> None:
+    """Test helper — block until the job task is finished (or cancelled)."""
+    task = _running_tasks.get(job_id)
+    if task is not None:
+        try:
+            await task
+        except Exception:
+            # Failures are recorded in DB by _run's except handler; the
+            # task itself may re-raise from CancelledError. Swallow here so
+            # tests that wait for completion don't blow up on cancel.
+            pass
+
+
+def cancel_job(job_id: str) -> bool:
+    """Cancel a running job. Returns True if the job was running."""
+    task = _running_tasks.get(job_id)
+    if task is not None and not task.done():
+        task.cancel()
+        return True
+    return False
