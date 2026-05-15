@@ -1,6 +1,3 @@
-"""AI Indexing task implementations.
+"""AI Indexing task implementations — importing this package registers them."""
 
-Task modules live here and self-register via ai_indexing_service.register_task()
-at import time. This file is intentionally empty — concrete tasks (sonic_vibe,
-refined_facts) are imported from here in T14/T15.
-"""
+from app.services.ai_tasks import sonic_vibe  # noqa: F401 — side effect: register

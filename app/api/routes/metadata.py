@@ -158,3 +158,26 @@ def get_track_facts(
         song_facts=MetadataDB.get_song_facts(song_key, collection),
         artist_facts=MetadataDB.get_artist_facts(artist_slug, collection),
     )
+
+
+# ── Sonic Vibe (Plan 3 Task 14) ──────────────────────────────────────────────
+
+class SonicVibeOut(BaseModel):
+    track_id: str
+    lang: str
+    phrase: Optional[str] = None
+    generated_at: Optional[str] = None
+
+
+@router.get("/metadata/tracks/{track_id}/sonic-vibe", response_model=SonicVibeOut)
+def get_sonic_vibe_endpoint(
+    track_id: str,
+    collection: str = Query(...),
+    lang: str = Query("en"),
+) -> SonicVibeOut:
+    """Return the cached Sonic Vibe phrase. Does NOT lazy-generate — population
+    happens through the AI Indexing batch job."""
+    cached = MetadataDB.get_sonic_vibe(track_id, collection, lang)
+    if cached:
+        return SonicVibeOut(track_id=track_id, lang=lang, **cached)
+    return SonicVibeOut(track_id=track_id, lang=lang)

@@ -113,6 +113,15 @@ _SCHEMA_SQL: Tuple[str, ...] = (
     )""",
     """CREATE INDEX IF NOT EXISTS idx_ai_jobs_lookup
           ON ai_indexing_jobs(collection_name, task_type, started_at DESC)""",
+    # Sonic Vibe cache (added in Plan 3 Task 14)
+    """CREATE TABLE IF NOT EXISTS sonic_vibes (
+        track_id        TEXT NOT NULL,
+        collection_name TEXT NOT NULL,
+        lang            TEXT NOT NULL,
+        phrase          TEXT NOT NULL,
+        generated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (track_id, collection_name, lang)
+    )""",
 )
 
 
@@ -794,3 +803,46 @@ class MetadataDB:
             "sonic_class_confidence": conf,
             "audio_signature": sig,
         }
+
+    # ── Sonic Vibe cache (Plan 3 Task 14) ──
+
+    @classmethod
+    def get_sonic_vibe(
+        cls, track_id: str, collection_name: str, lang: str,
+    ) -> Optional[dict]:
+        """Return cached vibe ({phrase, generated_at}) or None."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT phrase, generated_at FROM sonic_vibes "
+            "WHERE track_id = ? AND collection_name = ? AND lang = ?",
+            (track_id, collection_name, lang),
+        ).fetchone()
+        if not row:
+            return None
+        return {"phrase": row[0], "generated_at": str(row[1])}
+
+    @classmethod
+    def set_sonic_vibe(
+        cls, track_id: str, collection_name: str, lang: str, phrase: str,
+    ) -> None:
+        """Upsert a vibe. Overwrites existing row for same (track, collection, lang)."""
+        conn = cls._connect()
+        conn.execute(
+            "INSERT INTO sonic_vibes (track_id, collection_name, lang, phrase) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(track_id, collection_name, lang) DO UPDATE SET "
+            "phrase = excluded.phrase, generated_at = CURRENT_TIMESTAMP",
+            (track_id, collection_name, lang, phrase),
+        )
+        conn.commit()
+
+    @classmethod
+    def delete_sonic_vibes(cls, collection_name: str) -> int:
+        """Drop all cached vibes for the given collection. Returns rows deleted."""
+        conn = cls._connect()
+        cur = conn.execute(
+            "DELETE FROM sonic_vibes WHERE collection_name = ?",
+            (collection_name,),
+        )
+        conn.commit()
+        return int(cur.rowcount)
