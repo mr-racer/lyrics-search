@@ -23,10 +23,12 @@ class TestMergeHits:
         assert result == []
 
     def test_only_text_hits(self):
+        # Plan 3 / T6 change: matched_on reflects which modalities actually
+        # contributed. Text-only hits get "lyrics", not "hybrid".
         hits = [_make_hit("a", 0.9), _make_hit("b", 0.5)]
         result = SearchService._merge_hits(hits, [])
         assert len(result) == 2
-        assert all(h.matched_on == "hybrid" for h in result)
+        assert all(h.matched_on == "lyrics" for h in result)
 
     def test_only_clap_hits(self):
         hits = [_make_hit("a", 0.8)]
@@ -85,10 +87,25 @@ class TestMergeHits:
         scores = [h.score for h in result]
         assert scores == sorted(scores, reverse=True)
 
-    def test_matched_on_set_to_hybrid(self):
-        text = [_make_hit("a", 0.9)]
-        result = SearchService._merge_hits(text, [])
-        assert result[0].matched_on == "hybrid"
+    def test_matched_on_reflects_contributing_modalities(self):
+        # Plan 3 / T6: text-only -> "lyrics", audio-only -> "audio",
+        # both present -> "hybrid". Pre-T6 every hit was "hybrid".
+        track = TrackMetadata(
+            track_id="a", title="S", artist="A", duration_sec=200, file_path="/a",
+        )
+        text_only = SearchService._merge_hits([_make_hit("a", 0.9)], [])
+        assert text_only[0].matched_on == "lyrics"
+
+        audio_only = SearchService._merge_hits(
+            [], [TrackHit(track=track, score=0.7, matched_on="audio")],
+        )
+        assert audio_only[0].matched_on == "audio"
+
+        both = SearchService._merge_hits(
+            [_make_hit("a", 0.9)],
+            [TrackHit(track=track, score=0.7, matched_on="audio")],
+        )
+        assert both[0].matched_on == "hybrid"
 
     def test_facts_preserved_from_lead_hit(self):
         track = TrackMetadata(
