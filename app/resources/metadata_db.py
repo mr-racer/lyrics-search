@@ -97,6 +97,22 @@ _SCHEMA_SQL: Tuple[str, ...] = (
           ON playback_events(session_id)""",
     """CREATE INDEX IF NOT EXISTS idx_playback_at
           ON playback_events(collection_name, played_at)""",
+    # AI Indexing (added in Plan 3 Task 11)
+    """CREATE TABLE IF NOT EXISTS ai_indexing_jobs (
+        job_id          TEXT PRIMARY KEY,
+        task_type       TEXT NOT NULL,
+        collection_name TEXT NOT NULL,
+        lang            TEXT NOT NULL,
+        status          TEXT NOT NULL DEFAULT 'queued',
+        n_total         INTEGER NOT NULL DEFAULT 0,
+        n_done          INTEGER NOT NULL DEFAULT 0,
+        n_failed        INTEGER NOT NULL DEFAULT 0,
+        started_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        finished_at     TIMESTAMP,
+        error           TEXT
+    )""",
+    """CREATE INDEX IF NOT EXISTS idx_ai_jobs_lookup
+          ON ai_indexing_jobs(collection_name, task_type, started_at DESC)""",
 )
 
 
@@ -650,6 +666,81 @@ class MetadataDB:
         )
         conn.commit()
         return int(cur.lastrowid)
+
+    # ── AI Indexing jobs (Plan 3 Task 11) ──
+
+    @classmethod
+    def record_ai_job(
+        cls, job_id: str, task_type: str, collection_name: str,
+        lang: str, n_total: int,
+    ) -> None:
+        """Insert a new job row in 'queued' status."""
+        conn = cls._connect()
+        conn.execute(
+            "INSERT INTO ai_indexing_jobs "
+            "(job_id, task_type, collection_name, lang, status, n_total) "
+            "VALUES (?, ?, ?, ?, 'queued', ?)",
+            (job_id, task_type, collection_name, lang, n_total),
+        )
+        conn.commit()
+
+    @classmethod
+    def update_ai_job(
+        cls,
+        job_id: str,
+        *,
+        status: Optional[str] = None,
+        n_done: Optional[int] = None,
+        n_failed: Optional[int] = None,
+        error: Optional[str] = None,
+        finished: bool = False,
+    ) -> None:
+        """Patch a job row. Only non-None fields are written.
+
+        ``finished=True`` sets ``finished_at = CURRENT_TIMESTAMP``.
+        """
+        sets: list[str] = []
+        params: list = []
+        if status is not None:
+            sets.append("status = ?"); params.append(status)
+        if n_done is not None:
+            sets.append("n_done = ?"); params.append(n_done)
+        if n_failed is not None:
+            sets.append("n_failed = ?"); params.append(n_failed)
+        if error is not None:
+            sets.append("error = ?"); params.append(error)
+        if finished:
+            sets.append("finished_at = CURRENT_TIMESTAMP")
+        if not sets:
+            return
+        params.append(job_id)
+        conn = cls._connect()
+        conn.execute(
+            f"UPDATE ai_indexing_jobs SET {', '.join(sets)} WHERE job_id = ?",
+            params,
+        )
+        conn.commit()
+
+    @classmethod
+    def get_latest_ai_job(
+        cls, collection_name: str, task_type: str,
+    ) -> Optional[dict]:
+        """Return the most-recent job row for the given (collection, task_type)
+        as a plain dict, or None if no job exists."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT job_id, task_type, collection_name, lang, status, "
+            "       n_total, n_done, n_failed, started_at, finished_at, error "
+            "FROM ai_indexing_jobs "
+            "WHERE collection_name = ? AND task_type = ? "
+            "ORDER BY started_at DESC, rowid DESC LIMIT 1",
+            (collection_name, task_type),
+        ).fetchone()
+        if not row:
+            return None
+        keys = ["job_id", "task_type", "collection_name", "lang", "status",
+                "n_total", "n_done", "n_failed", "started_at", "finished_at", "error"]
+        return dict(zip(keys, row))
 
     # ── Sonic Descriptor ──
 

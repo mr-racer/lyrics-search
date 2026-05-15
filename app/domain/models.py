@@ -253,3 +253,18 @@ class AutoplayQueueResponse(BaseModel):
     seed_track_id: str
     tracks: list[TrackMetadata]
     diagnostics: AutoplayQueueDiagnostics
+
+
+class AIJobStatus(BaseModel):
+    """Public surface for an AI Indexing job's state."""
+    job_id: str
+    task_type: str  # "sonic_vibe" | "refined_facts"
+    collection_name: str
+    lang: str
+    status: str    # "queued" | "running" | "done" | "failed" | "cancelled"
+    n_total: int
+    n_done: int
+    n_failed: int
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    error: Optional[str] = None
