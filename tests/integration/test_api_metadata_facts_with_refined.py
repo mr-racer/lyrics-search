@@ -1,0 +1,80 @@
+"""Integration test: /metadata/tracks/{id}/facts prefers refined over originals."""
+
+from unittest.mock import MagicMock
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.api.main import app
+from app.resources.metadata_db import MetadataDB
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.resources.metadata_db.DB_PATH", tmp_path / "musix.db")
+    MetadataDB._reset_for_tests()
+    MetadataDB.init()
+
+    qdrant = MagicMock()
+    qdrant.retrieve.return_value = [MagicMock(payload={"title": "Foo", "artist": "Bar"})]
+    db_stub = MagicMock()
+    db_stub.qdrant = qdrant
+    app.state.db_client = db_stub
+
+    # Seed original song + artist facts directly into the underlying tables.
+    # get_song_facts_key("Bar", "Foo") -> "bar-foo"  (hyphens, not "::")
+    conn = MetadataDB._connect()
+    conn.execute("INSERT INTO artists (slug, name, collection_name) VALUES ('bar', 'Bar', 'music')")
+    conn.execute(
+        "INSERT INTO songs (slug, title, artist_slug, collection_name) "
+        "VALUES ('bar-foo', 'Foo', 'bar', 'music')"
+    )
+    conn.execute(
+        "INSERT INTO song_facts (song_slug, fact) VALUES (?, ?), (?, ?)",
+        ("bar-foo", "Original song fact 1", "bar-foo", "Original song fact 2"),
+    )
+    conn.execute("INSERT INTO artist_facts (artist_slug, fact) VALUES (?, ?)",
+                 ("bar", "Original artist fact"))
+    conn.commit()
+
+    yield TestClient(app)
+    MetadataDB._reset_for_tests()
+
+
+def test_facts_returns_originals_without_refined(client):
+    resp = client.get(
+        "/api/v1/metadata/tracks/t1/facts",
+        params={"collection": "music", "lang": "en"},
+    )
+    body = resp.json()
+    assert "Original song fact 1" in body["song_facts"]
+    assert body["artist_facts"] == ["Original artist fact"]
+
+
+def test_facts_returns_refined_when_present(client):
+    MetadataDB.set_refined_facts(
+        scope="song", scope_key="t1", collection_name="music", lang="en",
+        refined=["Refined and sharper"],
+    )
+    resp = client.get(
+        "/api/v1/metadata/tracks/t1/facts",
+        params={"collection": "music", "lang": "en"},
+    )
+    body = resp.json()
+    assert body["song_facts"] == ["Refined and sharper"]
+    # Artist refinement absent → fall back to original
+    assert body["artist_facts"] == ["Original artist fact"]
+
+
+def test_facts_empty_refined_does_not_fall_back(client):
+    """Explicit empty list from refined_facts must override originals."""
+    MetadataDB.set_refined_facts(
+        scope="song", scope_key="t1", collection_name="music", lang="en",
+        refined=[],
+    )
+    resp = client.get(
+        "/api/v1/metadata/tracks/t1/facts",
+        params={"collection": "music", "lang": "en"},
+    )
+    body = resp.json()
+    assert body["song_facts"] == []  # not original

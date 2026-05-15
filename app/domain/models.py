@@ -1,6 +1,6 @@
 """Domain models for Music Explorer."""
 
-from typing import Literal, List, Optional, Annotated
+from typing import Literal, List, Optional, Annotated, Dict
 from pydantic import BaseModel, Field
 
 
@@ -31,6 +31,15 @@ class TrackMetadata(BaseModel):
     reaction: Literal["like", "dislike"] | None = None
 
 
+class ScoreBreakdown(BaseModel):
+    """Per-modality contributions to a TrackHit's final ranking score."""
+    text_dense_score: Optional[float] = None  # cosine sim from sentence-transformer
+    text_bm25_score: Optional[float] = None  # raw BM25 score
+    audio_score: Optional[float] = None  # cosine sim from CLAP
+    final_score: float  # combined score used for ranking
+    weights: Dict[str, float] = Field(default_factory=dict)
+
+
 class TrackHit(BaseModel):
     """Результат поиска с трек-метаданными, score и matched_on."""
     track: TrackMetadata
@@ -39,6 +48,7 @@ class TrackHit(BaseModel):
     lyrics: str | None = None  # выдержка из лирики для lyrics-поиска
     artist_facts: str | None = None  # interesting facts about the artist
     song_facts: str | None = None  # interesting facts about the song
+    score_breakdown: Optional[ScoreBreakdown] = None
 
 
 class SearchFilters(BaseModel):
@@ -213,3 +223,48 @@ class ClusterLabelsRequest(BaseModel):
     """Body for POST /library/clusters/labels — user-assigned cluster names."""
     collection: str
     labels: dict[int, str]  # {0: "Lo-fi indie", 1: "Cinematic drone", ...}
+
+
+class PlaybackEventIn(BaseModel):
+    """Request body for POST /playback/events."""
+    session_id: str
+    collection_name: str
+    track_id: str
+    played_sec: float
+    total_dur: float | None = None
+
+
+class PlaybackEventOut(BaseModel):
+    """Successful POST response."""
+    id: int
+
+
+class AutoplayQueueDiagnostics(BaseModel):
+    """Counters from the autoplay filter pipeline — for telemetry / debug."""
+    candidates_fetched: int
+    dropped_excluded: int
+    dropped_disliked: int
+    dropped_diversity: int
+    returned: int
+
+
+class AutoplayQueueResponse(BaseModel):
+    """Result of GET /recommend/autoplay-queue."""
+    seed_track_id: str
+    tracks: list[TrackMetadata]
+    diagnostics: AutoplayQueueDiagnostics
+
+
+class AIJobStatus(BaseModel):
+    """Public surface for an AI Indexing job's state."""
+    job_id: str
+    task_type: str  # "sonic_vibe" | "refined_facts"
+    collection_name: str
+    lang: str
+    status: str    # "queued" | "running" | "done" | "failed" | "cancelled"
+    n_total: int
+    n_done: int
+    n_failed: int
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    error: Optional[str] = None

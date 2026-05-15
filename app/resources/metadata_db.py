@@ -80,6 +80,58 @@ _SCHEMA_SQL: Tuple[str, ...] = (
     "ALTER TABLE songs ADD COLUMN sonic_class TEXT",
     "ALTER TABLE songs ADD COLUMN sonic_class_confidence REAL",
     "ALTER TABLE songs ADD COLUMN audio_signature TEXT",
+    # Playback history (added in Plan 3 Task 2)
+    """CREATE TABLE IF NOT EXISTS playback_events (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id      TEXT    NOT NULL,
+        collection_name TEXT    NOT NULL,
+        track_id        TEXT    NOT NULL,
+        played_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        played_sec      REAL    NOT NULL,
+        total_dur       REAL,
+        skipped_early   INTEGER NOT NULL DEFAULT 0
+    )""",
+    """CREATE INDEX IF NOT EXISTS idx_playback_track
+          ON playback_events(collection_name, track_id)""",
+    """CREATE INDEX IF NOT EXISTS idx_playback_session
+          ON playback_events(session_id)""",
+    """CREATE INDEX IF NOT EXISTS idx_playback_at
+          ON playback_events(collection_name, played_at)""",
+    # AI Indexing (added in Plan 3 Task 11)
+    """CREATE TABLE IF NOT EXISTS ai_indexing_jobs (
+        job_id          TEXT PRIMARY KEY,
+        task_type       TEXT NOT NULL,
+        collection_name TEXT NOT NULL,
+        lang            TEXT NOT NULL,
+        status          TEXT NOT NULL DEFAULT 'queued',
+        n_total         INTEGER NOT NULL DEFAULT 0,
+        n_done          INTEGER NOT NULL DEFAULT 0,
+        n_failed        INTEGER NOT NULL DEFAULT 0,
+        started_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        finished_at     TIMESTAMP,
+        error           TEXT
+    )""",
+    """CREATE INDEX IF NOT EXISTS idx_ai_jobs_lookup
+          ON ai_indexing_jobs(collection_name, task_type, started_at DESC)""",
+    # Sonic Vibe cache (added in Plan 3 Task 14)
+    """CREATE TABLE IF NOT EXISTS sonic_vibes (
+        track_id        TEXT NOT NULL,
+        collection_name TEXT NOT NULL,
+        lang            TEXT NOT NULL,
+        phrase          TEXT NOT NULL,
+        generated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (track_id, collection_name, lang)
+    )""",
+    # Refined Facts cache (added in Plan 3 Task 15)
+    """CREATE TABLE IF NOT EXISTS refined_facts (
+        scope           TEXT NOT NULL,         -- 'song' or 'artist'
+        scope_key       TEXT NOT NULL,         -- track_id (song) or artist_slug (artist)
+        collection_name TEXT NOT NULL,
+        lang            TEXT NOT NULL,
+        refined_json    TEXT NOT NULL,         -- JSON array of {"text": str}
+        generated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (scope, scope_key, collection_name, lang)
+    )""",
 )
 
 
@@ -123,8 +175,50 @@ class MetadataDB:
                 # ALTER TABLE ... ADD COLUMN re-runs raise "duplicate column name"; ignore.
                 if "duplicate column" not in str(e).lower():
                     raise
+
+        # ── Idempotent column migrations (additive, never destructive) ───────
+        # Plan 3: MusicBrainz scaffold (data-only; no harvesting yet)
+        cls._ensure_columns(conn, "songs", {
+            "producers":    "TEXT",
+            "label":        "TEXT",
+            "samples_json": "TEXT",
+            "mbid":         "TEXT",
+        })
+        # The artists table may or may not exist in older databases. Skip
+        # silently if missing.
+        existing_tables = {
+            row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        if "artists" in existing_tables:
+            cls._ensure_columns(conn, "artists", {"mbid": "TEXT"})
+
         conn.commit()
         logger.info("[MetadataDB] Schema initialised")
+
+    @classmethod
+    def _ensure_columns(cls, conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+        """Add columns that don't already exist on the given table.
+
+        ``columns`` maps column-name -> SQL type. No-op for any column that
+        already exists. Safe to call on every startup.
+        """
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for name, sqltype in columns.items():
+            if name in existing:
+                continue
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {sqltype}")
+
+    @classmethod
+    def _reset_for_tests(cls) -> None:
+        """Drop any cached connection and clear the init flag — test only."""
+        if cls._instance is not None:
+            try:
+                cls._instance.close()
+            except Exception:
+                pass
+        cls._instance = None
 
     # ── Artists ──
 
@@ -487,6 +581,31 @@ class MetadataDB:
         ).fetchone()
         return row[0] if row else None
 
+    @classmethod
+    def get_reactions_for_tracks(
+        cls, collection_name: str, track_ids: list[str]
+    ) -> dict[str, str]:
+        """Return a mapping of track_id -> reaction for known tracks only.
+
+        Tracks without a reaction row are omitted from the result.
+        Caller should treat missing keys as 'no reaction'.
+
+        Uses a single SELECT with ``IN (?, ?, ...)`` placeholders to avoid
+        N+1 queries when the autoplay pipeline filters dozens of candidates.
+        ``track_ids`` is interpolated as positional parameters — no SQL
+        injection surface despite the dynamic placeholder count.
+        """
+        if not track_ids:
+            return {}
+        placeholders = ",".join("?" * len(track_ids))
+        conn = cls._connect()
+        rows = conn.execute(
+            f"SELECT track_id, reaction FROM track_reactions "
+            f"WHERE collection_name = ? AND track_id IN ({placeholders})",
+            (collection_name, *track_ids),
+        ).fetchall()
+        return {r[0]: r[1] for r in rows}
+
     # ── Collection settings (per-collection text_model, etc.) ──
 
     @classmethod
@@ -529,6 +648,118 @@ class MetadataDB:
         if row is None:
             return None
         return {"text_model": row[0], "indexed_at": row[1]}
+
+    # ── Playback history ──
+
+    @classmethod
+    def record_playback_event(
+        cls,
+        *,
+        session_id: str,
+        collection_name: str,
+        track_id: str,
+        played_sec: float,
+        total_dur: float | None,
+    ) -> int:
+        """Insert a playback event. Returns the new row id.
+
+        ``skipped_early`` is derived server-side: when ``total_dur`` is known,
+        ``True`` requires BOTH ``played_sec < 30`` AND
+        ``played_sec / total_dur < 0.30`` (so a short track played to completion
+        is not falsely flagged). When ``total_dur`` is missing, falls back to
+        the absolute 30-second threshold alone.
+        """
+        if total_dur and total_dur > 0.0:
+            # Both signals required to count as a skip — short play AND short ratio.
+            skipped_early = played_sec < 30.0 and played_sec / total_dur < 0.30
+        else:
+            # No duration available: fall back to absolute threshold.
+            skipped_early = played_sec < 30.0
+        conn = cls._connect()
+        cur = conn.execute(
+            "INSERT INTO playback_events "
+            "(session_id, collection_name, track_id, played_sec, total_dur, skipped_early) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (session_id, collection_name, track_id, played_sec, total_dur,
+             1 if skipped_early else 0),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+
+    # ── AI Indexing jobs (Plan 3 Task 11) ──
+
+    @classmethod
+    def record_ai_job(
+        cls, job_id: str, task_type: str, collection_name: str,
+        lang: str, n_total: int,
+    ) -> None:
+        """Insert a new job row in 'queued' status."""
+        conn = cls._connect()
+        conn.execute(
+            "INSERT INTO ai_indexing_jobs "
+            "(job_id, task_type, collection_name, lang, status, n_total) "
+            "VALUES (?, ?, ?, ?, 'queued', ?)",
+            (job_id, task_type, collection_name, lang, n_total),
+        )
+        conn.commit()
+
+    @classmethod
+    def update_ai_job(
+        cls,
+        job_id: str,
+        *,
+        status: Optional[str] = None,
+        n_done: Optional[int] = None,
+        n_failed: Optional[int] = None,
+        error: Optional[str] = None,
+        finished: bool = False,
+    ) -> None:
+        """Patch a job row. Only non-None fields are written.
+
+        ``finished=True`` sets ``finished_at = CURRENT_TIMESTAMP``.
+        """
+        sets: list[str] = []
+        params: list = []
+        if status is not None:
+            sets.append("status = ?"); params.append(status)
+        if n_done is not None:
+            sets.append("n_done = ?"); params.append(n_done)
+        if n_failed is not None:
+            sets.append("n_failed = ?"); params.append(n_failed)
+        if error is not None:
+            sets.append("error = ?"); params.append(error)
+        if finished:
+            sets.append("finished_at = CURRENT_TIMESTAMP")
+        if not sets:
+            return
+        params.append(job_id)
+        conn = cls._connect()
+        conn.execute(
+            f"UPDATE ai_indexing_jobs SET {', '.join(sets)} WHERE job_id = ?",
+            params,
+        )
+        conn.commit()
+
+    @classmethod
+    def get_latest_ai_job(
+        cls, collection_name: str, task_type: str,
+    ) -> Optional[dict]:
+        """Return the most-recent job row for the given (collection, task_type)
+        as a plain dict, or None if no job exists."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT job_id, task_type, collection_name, lang, status, "
+            "       n_total, n_done, n_failed, started_at, finished_at, error "
+            "FROM ai_indexing_jobs "
+            "WHERE collection_name = ? AND task_type = ? "
+            "ORDER BY started_at DESC, rowid DESC LIMIT 1",
+            (collection_name, task_type),
+        ).fetchone()
+        if not row:
+            return None
+        keys = ["job_id", "task_type", "collection_name", "lang", "status",
+                "n_total", "n_done", "n_failed", "started_at", "finished_at", "error"]
+        return dict(zip(keys, row))
 
     # ── Sonic Descriptor ──
 
@@ -582,3 +813,103 @@ class MetadataDB:
             "sonic_class_confidence": conf,
             "audio_signature": sig,
         }
+
+    # ── Sonic Vibe cache (Plan 3 Task 14) ──
+
+    @classmethod
+    def get_sonic_vibe(
+        cls, track_id: str, collection_name: str, lang: str,
+    ) -> Optional[dict]:
+        """Return cached vibe ({phrase, generated_at}) or None."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT phrase, generated_at FROM sonic_vibes "
+            "WHERE track_id = ? AND collection_name = ? AND lang = ?",
+            (track_id, collection_name, lang),
+        ).fetchone()
+        if not row:
+            return None
+        return {"phrase": row[0], "generated_at": str(row[1])}
+
+    @classmethod
+    def set_sonic_vibe(
+        cls, track_id: str, collection_name: str, lang: str, phrase: str,
+    ) -> None:
+        """Upsert a vibe. Overwrites existing row for same (track, collection, lang)."""
+        conn = cls._connect()
+        conn.execute(
+            "INSERT INTO sonic_vibes (track_id, collection_name, lang, phrase) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(track_id, collection_name, lang) DO UPDATE SET "
+            "phrase = excluded.phrase, generated_at = CURRENT_TIMESTAMP",
+            (track_id, collection_name, lang, phrase),
+        )
+        conn.commit()
+
+    @classmethod
+    def delete_sonic_vibes(cls, collection_name: str) -> int:
+        """Drop all cached vibes for the given collection. Returns rows deleted."""
+        conn = cls._connect()
+        cur = conn.execute(
+            "DELETE FROM sonic_vibes WHERE collection_name = ?",
+            (collection_name,),
+        )
+        conn.commit()
+        return int(cur.rowcount)
+
+    # ── Refined Facts cache (Plan 3 Task 15) ──
+
+    @classmethod
+    def get_refined_facts(
+        cls, *, scope: str, scope_key: str, collection_name: str, lang: str,
+    ) -> Optional[list[str]]:
+        """Return refined facts as a plain text list, or None if no refined row exists.
+
+        Note: an EXPLICIT empty list (set_refined_facts(refined=[])) is a valid
+        signal — "AI indexed, judged nothing interesting". The caller should
+        respect that by returning [] instead of falling back to originals.
+        """
+        import json as _json
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT refined_json FROM refined_facts "
+            "WHERE scope = ? AND scope_key = ? AND collection_name = ? AND lang = ?",
+            (scope, scope_key, collection_name, lang),
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            arr = _json.loads(row[0])
+            return [item.get("text", "") for item in arr if isinstance(item, dict)]
+        except Exception:
+            return []
+
+    @classmethod
+    def set_refined_facts(
+        cls, *, scope: str, scope_key: str, collection_name: str,
+        lang: str, refined: list[str],
+    ) -> None:
+        """Upsert a refined-facts row. Empty `refined=[]` is explicit and
+        signals 'AI judged nothing interesting' — not 'no AI run yet'."""
+        import json as _json
+        payload = _json.dumps([{"text": t} for t in refined])
+        conn = cls._connect()
+        conn.execute(
+            "INSERT INTO refined_facts (scope, scope_key, collection_name, lang, refined_json) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(scope, scope_key, collection_name, lang) DO UPDATE SET "
+            "refined_json = excluded.refined_json, generated_at = CURRENT_TIMESTAMP",
+            (scope, scope_key, collection_name, lang, payload),
+        )
+        conn.commit()
+
+    @classmethod
+    def delete_refined_facts(cls, collection_name: str) -> int:
+        """Drop all refined-fact rows for the given collection. Returns rows deleted."""
+        conn = cls._connect()
+        cur = conn.execute(
+            "DELETE FROM refined_facts WHERE collection_name = ?",
+            (collection_name,),
+        )
+        conn.commit()
+        return int(cur.rowcount)

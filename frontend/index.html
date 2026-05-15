@@ -964,6 +964,44 @@ async function apiFetch(path, opts = {}) {
   return res.json();
 }
 
+// ─── Playback event helpers ───────────────────────────────────────────────────
+
+// Mint or retrieve a per-tab session ID. Cleared when the tab closes.
+function getSessionId() {
+  let id = sessionStorage.getItem('musix_session_id');
+  if (!id) {
+    id = (crypto.randomUUID ? crypto.randomUUID() :
+      'sess-' + Math.random().toString(36).slice(2) + '-' + Date.now());
+    sessionStorage.setItem('musix_session_id', id);
+  }
+  return id;
+}
+
+async function postPlaybackEvent({ trackId, collectionName, playedSec, totalDur }) {
+  if (!trackId || !collectionName || playedSec == null) return;
+  const body = JSON.stringify({
+    session_id: getSessionId(),
+    collection_name: collectionName,
+    track_id: trackId,
+    played_sec: playedSec,
+    total_dur: totalDur ?? null,
+  });
+  try {
+    if (navigator.sendBeacon) {
+      const blob = new Blob([body], { type: 'application/json' });
+      navigator.sendBeacon(`${API}/playback/events`, blob);
+    } else {
+      await fetch(`${API}/playback/events`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      });
+    }
+  } catch (e) {
+    console.warn('[playback] failed to post event', e);
+  }
+}
+
 // ─── Color tokens ─────────────────────────────────────────────────────────────
 function useColors(isDark) {
   return useMemo(() => ({
@@ -1004,7 +1042,29 @@ function useAudioPlayer() {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
 
-  const setSrc = useCallback((src) => { setCurrentSrc(src); }, []);
+  // When src changes mid-playback, fire a playback event for the *previous*
+  // track using audio.currentTime as played_sec, then attach the new track id
+  // to the audio element via dataset for the next 'ended' to pick up.
+  const setSrc = useCallback((src, meta) => {
+    const el = audioRef.current;
+    if (el && el.dataset.playbackTrackId && meta && el.dataset.playbackTrackId !== meta.trackId) {
+      const prevId = el.dataset.playbackTrackId;
+      const prevCol = el.dataset.playbackCollection;
+      const playedSec = el.currentTime || 0;
+      const totalDur = el.duration || null;
+      if (playedSec > 0) {
+        postPlaybackEvent({
+          trackId: prevId, collectionName: prevCol,
+          playedSec, totalDur,
+        });
+      }
+    }
+    if (el && meta) {
+      el.dataset.playbackTrackId = meta.trackId || '';
+      el.dataset.playbackCollection = meta.collectionName || '';
+    }
+    setCurrentSrc(src);
+  }, []);
 
   // Read playback state from the live <audio> element rather than React state.
   // The setSrc + setTimeout(play, 50) pattern used by callers schedules the
@@ -1060,7 +1120,20 @@ function useAudioPlayer() {
     el.addEventListener('timeupdate',     () => setCurrentTime(el.currentTime || 0));
     el.addEventListener('loadedmetadata', () => setDuration(el.duration || 0));
     el.addEventListener('durationchange', () => setDuration(el.duration || 0));
-    el.addEventListener('ended',          () => setIsPlaying(false));
+    el.addEventListener('ended', () => {
+      setIsPlaying(false);
+      // Fire-and-forget playback event for the track that just finished.
+      const trackId = el.dataset.playbackTrackId;
+      const collectionName = el.dataset.playbackCollection;
+      if (trackId && collectionName) {
+        postPlaybackEvent({
+          trackId,
+          collectionName,
+          playedSec: el.duration || el.currentTime || 0,
+          totalDur: el.duration || null,
+        });
+      }
+    });
     el.addEventListener('play',           () => setIsPlaying(true));
     el.addEventListener('pause',          () => setIsPlaying(false));
     listenersAttached.current = true;
@@ -1249,7 +1322,7 @@ function LandingPlayer({ isDark, lang, tracks, currentTrack, onTrackSelect, onTr
     onTrackChange?.(t);
     const url = getStreamUrl(t);
     if (url && audio) {
-      audio.setSrc(url);
+      audio.setSrc(url, { trackId: t.track_id, collectionName: activeCollection });
       setHasInteracted(true);
       setTimeout(() => audio.play(), 50);
     }
@@ -1261,7 +1334,7 @@ function LandingPlayer({ isDark, lang, tracks, currentTrack, onTrackSelect, onTr
       // First click — load the source, then play.
       const url = getStreamUrl(track);
       if (url) {
-        audio.setSrc(url);
+        audio.setSrc(url, { trackId: track.track_id, collectionName: activeCollection });
         setHasInteracted(true);
         setTimeout(() => audio.play(), 50);
       }
@@ -1285,7 +1358,7 @@ function LandingPlayer({ isDark, lang, tracks, currentTrack, onTrackSelect, onTr
   useEffect(() => {
     if (!track || !audio || !hasInteracted) return;
     const url = getStreamUrl(track);
-    if (url) audio.setSrc(url);
+    if (url) audio.setSrc(url, { trackId: track.track_id, collectionName: activeCollection });
   }, [track?.track_id, hasInteracted]);
 
   const handleRoll = async () => {
@@ -4459,6 +4532,163 @@ function IndexingModal({ isDark, lang, collectionName, stepStatus, trackCount, e
   );
 }
 
+// ─── AI Indexing card (inside SettingsPanel) ──────────────────────────────────
+function AIIndexingCard({ isDark, lang, activeCollection }) {
+  const c = useColors(isDark);
+  const [status, setStatus] = useState({ sonic_vibe: null, refined_facts: null });
+  const [busy, setBusy] = useState({ sonic_vibe: false, refined_facts: false });
+  const [error, setError] = useState(null);
+  const pollRef = useRef(null);
+
+  const refresh = useCallback(async () => {
+    if (!activeCollection) return;
+    try {
+      const data = await apiFetch(`/library/ai-index/status?collection=${encodeURIComponent(activeCollection)}`);
+      setStatus(data);
+    } catch { /* swallow — surface via error state only if Run/Reset fails */ }
+  }, [activeCollection]);
+
+  useEffect(() => {
+    refresh();
+    return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+  }, [refresh]);
+
+  const isRunning = (s) => s && s.status === 'running';
+  const someRunning = isRunning(status.sonic_vibe) || isRunning(status.refined_facts);
+
+  useEffect(() => {
+    if (someRunning && !pollRef.current) {
+      pollRef.current = setInterval(refresh, 3000);
+    } else if (!someRunning && pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+      // One last refresh to capture the final state.
+      refresh();
+    }
+  }, [someRunning, refresh]);
+
+  const runJob = async (taskType) => {
+    if (!activeCollection) { setError(lang === 'ru' ? 'Выбери коллекцию' : 'Pick a collection first'); return; }
+    setError(null);
+    setBusy(b => ({ ...b, [taskType]: true }));
+    try {
+      await apiFetch(`/library/ai-index/${taskType}`, {
+        method: 'POST',
+        body: JSON.stringify({ collection_name: activeCollection, lang }),
+      });
+      refresh();
+    } catch (e) {
+      setError(e?.message || String(e));
+    } finally {
+      setBusy(b => ({ ...b, [taskType]: false }));
+    }
+  };
+
+  const resetCache = async (taskType) => {
+    if (!activeCollection) return;
+    const confirmMsg = lang === 'ru'
+      ? 'Сбросить кэш для этой задачи?'
+      : 'Reset cache for this task?';
+    if (!window.confirm(confirmMsg)) return;
+    setError(null);
+    try {
+      await apiFetch(
+        `/library/ai-index/${taskType}/cache?collection=${encodeURIComponent(activeCollection)}`,
+        { method: 'DELETE' },
+      );
+      refresh();
+    } catch (e) {
+      setError(e?.message || String(e));
+    }
+  };
+
+  const fmtStatus = (s) => {
+    if (!s) return lang === 'ru' ? 'Никогда не запускалась' : 'Never run';
+    const parts = [
+      `${lang === 'ru' ? 'Статус' : 'Status'}: ${s.status}`,
+      `${s.n_done}/${s.n_total} ${lang === 'ru' ? 'выполнено' : 'done'}`,
+    ];
+    if (s.n_failed) {
+      parts.push(`${s.n_failed} ${lang === 'ru' ? 'ошибок' : 'failed'}`);
+    }
+    if (s.lang) parts.push(s.lang.toUpperCase());
+    return parts.join(' · ');
+  };
+
+  const Row = ({ title, taskType }) => {
+    const s = status[taskType];
+    const running = isRunning(s);
+    return (
+      <div style={{ padding: '12px 0', borderBottom: `1px solid ${c.border}` }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+          <div style={{ fontWeight: 600, color: c.text, fontSize: 14 }}>{title}</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              disabled={busy[taskType] || running || !activeCollection}
+              onClick={() => runJob(taskType)}
+              style={{
+                padding: '6px 12px', borderRadius: 8, cursor: (busy[taskType] || running || !activeCollection) ? 'not-allowed' : 'pointer',
+                fontSize: 12, fontWeight: 500,
+                background: isDark ? 'rgba(124,91,255,0.18)' : 'rgba(124,91,255,0.10)',
+                color: isDark ? '#cdb8ff' : '#5b3fd6',
+                border: `1px solid ${isDark ? 'rgba(124,91,255,0.35)' : 'rgba(124,91,255,0.30)'}`,
+                opacity: (busy[taskType] || running || !activeCollection) ? 0.5 : 1,
+              }}>
+              {running
+                ? (lang === 'ru' ? 'Идёт…' : 'Running…')
+                : (lang === 'ru' ? '▶ Запустить' : '▶ Run')}
+            </button>
+            <button
+              onClick={() => resetCache(taskType)}
+              disabled={!activeCollection}
+              style={{
+                padding: '6px 12px', borderRadius: 8, cursor: activeCollection ? 'pointer' : 'not-allowed',
+                fontSize: 12, fontWeight: 500,
+                background: 'transparent', color: c.textMuted,
+                border: `1px solid ${c.border}`,
+                opacity: activeCollection ? 1 : 0.5,
+              }}>
+              ↻ {lang === 'ru' ? 'Сброс' : 'Reset'}
+            </button>
+          </div>
+        </div>
+        <div style={{ marginTop: 6, fontSize: 11, color: c.textMuted, fontFamily: "'JetBrains Mono', monospace" }}>
+          {fmtStatus(s)}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{
+      padding: '16px 18px', borderRadius: 12,
+      border: `1px solid ${c.border}`, marginTop: 18,
+      background: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+        <div className="mono-label" style={{ color: c.textMuted, fontSize: 11, letterSpacing: '0.15em' }}>
+          AI INDEXING
+        </div>
+        <div style={{ fontSize: 11, color: c.textSubtle }}>
+          {lang === 'ru' ? 'Текущий язык' : 'Current language'}: {lang.toUpperCase()}
+        </div>
+      </div>
+      <Row title="Sonic Vibe" taskType="sonic_vibe" />
+      <Row title={lang === 'ru' ? 'Уточнённые факты' : 'Refined Facts'} taskType="refined_facts" />
+      <div style={{ fontSize: 11, color: c.textMuted, marginTop: 12, lineHeight: 1.5 }}>
+        ⚠ {lang === 'ru'
+          ? 'AI-индексация использует текущий язык фронта. Чтобы получить результат на другом языке, смени язык и запусти повторно.'
+          : 'AI indexing uses your current frontend language. To get results in another language, switch language and re-run.'}
+      </div>
+      {error && (
+        <div style={{ marginTop: 10, fontSize: 12, color: 'oklch(62% 0.18 25)' }}>
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Settings overlay (slides in from right) ─────────────────────────────────
 function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeCollection, onTheme, onLang, collections, onCollectionSwitch, onCollectionDelete }) {
   const c = useColors(isDark);
@@ -4821,6 +5051,9 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
             </button>
           </>)}
 
+          {/* AI Indexing */}
+          <AIIndexingCard isDark={isDark} lang={lang} activeCollection={activeCollection} />
+
           {/* About */}
           <div style={{ padding:'18px 22px', textAlign:'center' }}>
             <div className="serif" style={{ fontSize:'18px', color:c.textMuted, fontStyle:'italic', lineHeight:'1.4' }}>
@@ -5129,7 +5362,7 @@ function getSongFacts(track, lang) {
 }
 
 // ─── PLAYER SECTION ─────────────────────────────────────────────────────────
-function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, audio, visible }) {
+function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, audio, visible }) {
   const [playlist, setPlaylist] = useState(initialPlaylist || []);
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [liked, setLiked] = useState(null);
@@ -5204,7 +5437,7 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
     setCurrentIndex(idx);
     const track = initialPlaylist[idx].track;
     const url = `${API}/search/tracks/${track.track_id}/stream?collection_name=${encodeURIComponent(activeCollection || '')}`;
-    if (audio) { audio.setSrc(url); setTimeout(() => audio.play(), 50); }
+    if (audio) { audio.setSrc(url, { trackId: track.track_id, collectionName: activeCollection }); setTimeout(() => audio.play(), 50); }
     fetchReaction(initialTrack.track_id);
   }, [initialPlaylist, initialTrack]);
 
@@ -5212,7 +5445,7 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
   useEffect(() => {
     if (!currentTrack || !audio) return;
     const url = `${API}/search/tracks/${currentTrack.track_id}/stream?collection_name=${encodeURIComponent(activeCollection || '')}`;
-    audio.setSrc(url);
+    audio.setSrc(url, { trackId: currentTrack.track_id, collectionName: activeCollection });
     // Only auto-play when section is visible
     if (visible && isPlaying) setTimeout(() => audio.play(), 50);
   }, [currentTrack?.track_id]);
@@ -5240,7 +5473,7 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
     setCurrentIndex(index);
     const track = playlist[index].track;
     const url = `${API}/search/tracks/${track.track_id}/stream?collection_name=${encodeURIComponent(activeCollection || '')}`;
-    if (audio) { audio.setSrc(url); setTimeout(() => audio.play(), 50); }
+    if (audio) { audio.setSrc(url, { trackId: track.track_id, collectionName: activeCollection }); setTimeout(() => audio.play(), 50); }
     fetchReaction(track.track_id);
     // Propagate the new track up so App.playerTrack stays in sync. Without
     // this, LandingScreen / NowPlayingPebble / MiniPlaybackPopout (which all
@@ -5248,6 +5481,33 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
     // even after the user skipped to a different one inside the playlist.
     if (onTrackChange) onTrackChange(track);
   };
+
+  // When audio ends: advance within the current playlist if there's a next
+  // track; otherwise request the autoplay queue from App (which fetches
+  // similar tracks from the backend and appends them).
+  //
+  // Dep choice: audio?.audioRef (a stable useRef) rather than audio
+  // (a new object literal each useAudioPlayer render). Without this,
+  // listener teardown+re-add would fire on every timeupdate (~4Hz),
+  // briefly leaving the element without any 'ended' listener.
+  useEffect(() => {
+    const el = audio?.audioRef?.current;
+    if (!el) return;
+    const onEnded = () => {
+      const lastIdx = playlist.length - 1;
+      if (currentIndex >= 0 && currentIndex < lastIdx) {
+        // Plain auto-advance — reuse playTrackAt's logic
+        playTrackAt(currentIndex + 1);
+      } else if (onRequestAutoplay && currentTrack) {
+        // Exhausted current playlist — ask App to fetch more
+        onRequestAutoplay(currentTrack);
+      }
+    };
+    el.addEventListener('ended', onEnded);
+    return () => el.removeEventListener('ended', onEnded);
+    // activeCollection included so a mid-session collection switch
+    // rebinds against a fresh playTrackAt closure with the new URL prefix.
+  }, [currentIndex, playlist.length, audio?.audioRef, currentTrack, onRequestAutoplay, activeCollection]);
 
   const togglePlay = () => { if (audio) audio.togglePlay(); };
   const nextTrack = () => { if (currentIndex < playlist.length - 1) playTrackAt(currentIndex + 1); };
@@ -5631,12 +5891,41 @@ function App() {
   // Player state
   const [playerPlaylist, setPlayerPlaylist] = useState([]);
   const [playerTrack, setPlayerTrack] = useState(null);
+  // Played track ids live in a ref (not React state) because they only get
+  // read from the autoplay-queue exclude_ids param — never rendered. A ref
+  // sidesteps the stale-closure trap that would force every consumer to
+  // re-subscribe via useCallback deps to see the latest set.
+  const playedTrackIdsRef = useRef(new Set());
 
   // Shared audio controller — lives at App level so audio survives navigation
   const audio = useAudioPlayer();
 
   // Global keyboard shortcuts (Task 11)
   useGlobalKeyboardShortcuts({ audio, onNavToSection: setSection });
+
+  // Best-effort playback event on tab close / navigation away.
+  useEffect(() => {
+    // audio.audioRef is a stable useRef from the hook — closure reads .current
+    // at fire time, so the empty deps are safe. [audio] would tear down + re-add
+    // on every App re-render (audio is a new object literal each useAudioPlayer
+    // render) for no benefit, and could in principle leave a gap if a re-render
+    // races with unload.
+    const onUnload = () => {
+      const el = audio.audioRef.current;
+      if (!el || !el.dataset.playbackTrackId) return;
+      const playedSec = el.currentTime || 0;
+      if (playedSec <= 0) return;
+      postPlaybackEvent({
+        trackId: el.dataset.playbackTrackId,
+        collectionName: el.dataset.playbackCollection,
+        playedSec,
+        totalDur: el.duration || null,
+      });
+    };
+    window.addEventListener('beforeunload', onUnload);
+    return () => window.removeEventListener('beforeunload', onUnload);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const c = useColors(isDark);
 
@@ -5678,7 +5967,38 @@ function App() {
   // item — keeps App.playerTrack in lockstep with what's actually playing,
   // so Landing/Pebble/Popout don't go stale.
   const handleTrackChange = (track) => {
-    if (track) setPlayerTrack(track);
+    if (!track) return;
+    setPlayerTrack(track);
+    // Mutate the ref directly — no re-render needed since nothing reads
+    // playedTrackIds during render. The autoplay-queue fetcher reads the
+    // current value at call time, so it always sees the freshest set.
+    if (!playedTrackIdsRef.current.has(track.track_id)) {
+      playedTrackIdsRef.current.add(track.track_id);
+    }
+  };
+
+  // When the current playlist runs out, this fetches similar tracks from the
+  // backend and appends them. Called by PlayerSection's 'ended' handler when
+  // there is no next track left in playerPlaylist.
+  const ensureAutoplayQueue = async (seedTrack) => {
+    if (!seedTrack?.track_id || !activeCollection) return;
+    const excluded = Array.from(playedTrackIdsRef.current).slice(-200).join(',');
+    try {
+      const data = await apiFetch(
+        `/recommend/autoplay-queue?collection=${encodeURIComponent(activeCollection)}` +
+        `&seed_track_id=${encodeURIComponent(seedTrack.track_id)}` +
+        (excluded ? `&exclude_ids=${encodeURIComponent(excluded)}` : '') +
+        `&limit=20`
+      );
+      const newTracks = data.tracks || [];
+      if (newTracks.length === 0) return;
+      // PlayerSection's playlist is HIT[]-shaped ({track, score, matched_on}),
+      // so wrap each fetched TrackMetadata accordingly.
+      const newHits = newTracks.map(t => ({ track: t, score: 0, matched_on: 'audio' }));
+      setPlayerPlaylist(prev => [...prev, ...newHits]);
+    } catch (e) {
+      console.warn('[autoplay] failed to fetch queue', e);
+    }
   };
 
   // Stats for landing
@@ -5789,6 +6109,7 @@ function App() {
                 isDark={isDark} lang={lang} activeCollection={activeCollection}
                 onPlayTrack={handlePlayTrack}
                 onTrackChange={id === 'player' ? handleTrackChange : undefined}
+                onRequestAutoplay={id === 'player' ? ensureAutoplayQueue : undefined}
                 audio={id === 'player' ? audio : undefined}
                 initialPlaylist={id === 'player' ? playerPlaylist : undefined}
                 initialTrack={id === 'player' ? playerTrack : undefined}
