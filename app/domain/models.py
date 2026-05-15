@@ -1,6 +1,6 @@
 """Domain models for Music Explorer."""
 
-from typing import Literal, List, Optional, Annotated
+from typing import Literal, List, Optional, Annotated, Dict
 from pydantic import BaseModel, Field
 
 
@@ -31,6 +31,15 @@ class TrackMetadata(BaseModel):
     reaction: Literal["like", "dislike"] | None = None
 
 
+class ScoreBreakdown(BaseModel):
+    """Per-modality contributions to a TrackHit's final ranking score."""
+    text_dense_score: Optional[float] = None  # cosine sim from sentence-transformer
+    text_bm25_score: Optional[float] = None  # raw BM25 score
+    audio_score: Optional[float] = None  # cosine sim from CLAP
+    final_score: float  # combined score used for ranking
+    weights: Dict[str, float] = Field(default_factory=dict)
+
+
 class TrackHit(BaseModel):
     """Результат поиска с трек-метаданными, score и matched_on."""
     track: TrackMetadata
@@ -39,6 +48,7 @@ class TrackHit(BaseModel):
     lyrics: str | None = None  # выдержка из лирики для lyrics-поиска
     artist_facts: str | None = None  # interesting facts about the artist
     song_facts: str | None = None  # interesting facts about the song
+    score_breakdown: Optional[ScoreBreakdown] = None
 
 
 class SearchFilters(BaseModel):
