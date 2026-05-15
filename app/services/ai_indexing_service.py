@@ -16,7 +16,7 @@ import asyncio
 import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Awaitable, Callable
 
 from app.resources.metadata_db import MetadataDB
@@ -41,7 +41,8 @@ class JobState:
     n_done: int = 0
     n_failed: int = 0
     status: str = "queued"
-    started_at: datetime = field(default_factory=datetime.utcnow)
+    # tz-aware now() — datetime.utcnow() is deprecated in Python 3.12+
+    started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 def register_task(task_type: str, fn: TaskFunc) -> None:
@@ -106,6 +107,12 @@ def start_job(
                 job_id=job_id, status="failed",
                 error=str(e)[:500], finished=True,
             )
+        finally:
+            # Free both module-level dicts so finished jobs don't accumulate
+            # over the server's lifetime. Subsequent start_job() calls for the
+            # same (collection, task_type) will re-create entries fresh.
+            _active.pop(key, None)
+            _running_tasks.pop(job_id, None)
 
     _running_tasks[job_id] = asyncio.create_task(_run())
     return job_id

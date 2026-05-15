@@ -118,26 +118,23 @@ async def _noop_task(job, db_client, llm_client):
         MetadataDB.update_ai_job(job_id=job.job_id, n_done=i + 1)
 
 
-def test_register_task_and_start_job():
+async def test_register_task_and_start_job():
     """Register a task, start a job, wait for completion, verify DB state."""
     from app.services import ai_indexing_service
 
     ai_indexing_service.register_task("test_noop", _noop_task)
 
-    async def _scenario():
-        job_id = ai_indexing_service.start_job(
-            task_type="test_noop",
-            collection_name="music",
-            lang="en",
-            db_client=MagicMock(),
-            llm_client=MagicMock(),
-            n_total=5,
-        )
-        assert job_id
-        await ai_indexing_service._wait_for_job(job_id)
-        return job_id
+    job_id = ai_indexing_service.start_job(
+        task_type="test_noop",
+        collection_name="music",
+        lang="en",
+        db_client=MagicMock(),
+        llm_client=MagicMock(),
+        n_total=5,
+    )
+    assert job_id
+    await ai_indexing_service._wait_for_job(job_id)
 
-    job_id = asyncio.run(_scenario())
     job = MetadataDB.get_latest_ai_job("music", "test_noop")
     assert job["status"] == "done"
     assert job["n_done"] == 5
@@ -159,7 +156,7 @@ def test_unknown_task_type_raises():
     assert "unknown task_type" in str(excinfo.value).lower()
 
 
-def test_concurrent_job_rejected():
+async def test_concurrent_job_rejected():
     """Starting a second job for the same (collection, task_type) while one is
     already active must raise ValueError."""
     from app.services import ai_indexing_service
@@ -170,29 +167,26 @@ def test_concurrent_job_rejected():
 
     ai_indexing_service.register_task("test_blocker", _blocking_task)
 
-    async def _scenario():
-        job_id = ai_indexing_service.start_job(
+    job_id = ai_indexing_service.start_job(
+        task_type="test_blocker", collection_name="music", lang="en",
+        db_client=MagicMock(), llm_client=MagicMock(), n_total=1000,
+    )
+    # Immediately try to start another for the same (collection, task_type).
+    with pytest.raises(ValueError) as excinfo:
+        ai_indexing_service.start_job(
             task_type="test_blocker", collection_name="music", lang="en",
-            db_client=MagicMock(), llm_client=MagicMock(), n_total=1000,
+            db_client=MagicMock(), llm_client=MagicMock(), n_total=10,
         )
-        # Immediately try to start another for the same (collection, task_type).
-        with pytest.raises(ValueError) as excinfo:
-            ai_indexing_service.start_job(
-                task_type="test_blocker", collection_name="music", lang="en",
-                db_client=MagicMock(), llm_client=MagicMock(), n_total=10,
-            )
-        assert "already running" in str(excinfo.value).lower()
-        # Cleanup — cancel so the test doesn't hold a pending task.
-        ai_indexing_service.cancel_job(job_id)
-        try:
-            await ai_indexing_service._wait_for_job(job_id)
-        except asyncio.CancelledError:
-            pass
-
-    asyncio.run(_scenario())
+    assert "already running" in str(excinfo.value).lower()
+    # Cleanup — cancel so the test doesn't hold a pending task.
+    ai_indexing_service.cancel_job(job_id)
+    try:
+        await ai_indexing_service._wait_for_job(job_id)
+    except asyncio.CancelledError:
+        pass
 
 
-def test_failed_task_marks_job_failed():
+async def test_failed_task_marks_job_failed():
     from app.services import ai_indexing_service
 
     async def _failing_task(job, db_client, llm_client):
@@ -200,21 +194,19 @@ def test_failed_task_marks_job_failed():
 
     ai_indexing_service.register_task("test_failer", _failing_task)
 
-    async def _scenario():
-        job_id = ai_indexing_service.start_job(
-            task_type="test_failer", collection_name="music", lang="en",
-            db_client=MagicMock(), llm_client=MagicMock(), n_total=1,
-        )
-        await ai_indexing_service._wait_for_job(job_id)
+    job_id = ai_indexing_service.start_job(
+        task_type="test_failer", collection_name="music", lang="en",
+        db_client=MagicMock(), llm_client=MagicMock(), n_total=1,
+    )
+    await ai_indexing_service._wait_for_job(job_id)
 
-    asyncio.run(_scenario())
     job = MetadataDB.get_latest_ai_job("music", "test_failer")
     assert job["status"] == "failed"
     assert "simulated LLM error" in (job["error"] or "")
     assert job["finished_at"] is not None
 
 
-def test_different_collection_or_task_type_allowed_concurrent():
+async def test_different_collection_or_task_type_allowed_concurrent():
     """Same task_type but different collection — should be allowed concurrently.
     Same collection but different task_type — should also be allowed."""
     from app.services import ai_indexing_service
@@ -225,25 +217,21 @@ def test_different_collection_or_task_type_allowed_concurrent():
     ai_indexing_service.register_task("test_slow_a", _slow_task)
     ai_indexing_service.register_task("test_slow_b", _slow_task)
 
-    async def _scenario():
-        a = ai_indexing_service.start_job(
-            task_type="test_slow_a", collection_name="music_x", lang="en",
-            db_client=MagicMock(), llm_client=MagicMock(), n_total=1,
-        )
-        # Different collection — must be accepted.
-        b = ai_indexing_service.start_job(
-            task_type="test_slow_a", collection_name="music_y", lang="en",
-            db_client=MagicMock(), llm_client=MagicMock(), n_total=1,
-        )
-        # Same collection but different task type — must be accepted.
-        c = ai_indexing_service.start_job(
-            task_type="test_slow_b", collection_name="music_x", lang="en",
-            db_client=MagicMock(), llm_client=MagicMock(), n_total=1,
-        )
-        await ai_indexing_service._wait_for_job(a)
-        await ai_indexing_service._wait_for_job(b)
-        await ai_indexing_service._wait_for_job(c)
-        return a, b, c
-
-    a, b, c = asyncio.run(_scenario())
+    a = ai_indexing_service.start_job(
+        task_type="test_slow_a", collection_name="music_x", lang="en",
+        db_client=MagicMock(), llm_client=MagicMock(), n_total=1,
+    )
+    # Different collection — must be accepted.
+    b = ai_indexing_service.start_job(
+        task_type="test_slow_a", collection_name="music_y", lang="en",
+        db_client=MagicMock(), llm_client=MagicMock(), n_total=1,
+    )
+    # Same collection but different task type — must be accepted.
+    c = ai_indexing_service.start_job(
+        task_type="test_slow_b", collection_name="music_x", lang="en",
+        db_client=MagicMock(), llm_client=MagicMock(), n_total=1,
+    )
+    await ai_indexing_service._wait_for_job(a)
+    await ai_indexing_service._wait_for_job(b)
+    await ai_indexing_service._wait_for_job(c)
     assert a != b != c
