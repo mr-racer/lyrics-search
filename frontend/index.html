@@ -6099,57 +6099,78 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
                     {lang==='ru'?'Поиските треки в Поиске':'Search for tracks in Search'}
                   </div>
                 </div>
-              ) : (
-                playlist.map((hit, i) => {
+              ) : (() => {
+                const firstAutoplayIdx = playlist.findIndex(h => h && h._autoplay);
+                return playlist.map((hit, i) => {
                   const t = hit.track || {};
                   const active = i === currentIndex;
                   return (
-                    <div key={t.track_id || i}
-                      className={`player-playlist-item${active ? ' player-active' : ''}`}
-                      onClick={() => playTrackAt(i)}
-                      style={{
-                        display:'flex', alignItems:'center', gap:'14px',
-                        padding:'10px 14px', cursor:'pointer', marginBottom:'2px',
-                      }}>
-                      {/* Index or equalizer */}
-                      <div style={{ width:'22px', textAlign:'center', flexShrink:0 }}>
-                        {active && isPlaying ? (
-                          <div style={{ display:'inline-flex', alignItems:'flex-end', height:'16px', gap:'0' }}>
-                            <span className="player-eq-bar" style={{ height:'4px' }} />
-                            <span className="player-eq-bar" style={{ height:'8px' }} />
-                            <span className="player-eq-bar" style={{ height:'6px' }} />
-                          </div>
-                        ) : (
+                    <Fragment key={t.track_id || i}>
+                      {i === firstAutoplayIdx && firstAutoplayIdx !== -1 && (
+                        <div style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          margin: '6px 0 4px',
+                          color: isDark ? '#666' : '#8a8275',
+                          fontSize: 9,
+                          fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+                          letterSpacing: '0.18em',
+                        }}>
+                          <span style={{ flex: 1, height: 1, background: isDark ? '#2a2a32' : 'rgba(22,22,32,0.10)' }} />
+                          <span>{lang === 'ru' ? 'АВТОПОДБОР · CLAP' : 'AUTOPLAY · CLAP-SIMILAR'}</span>
+                          <span style={{ flex: 1, height: 1, background: isDark ? '#2a2a32' : 'rgba(22,22,32,0.10)' }} />
+                        </div>
+                      )}
+                      <div
+                        className={`player-playlist-item${active ? ' player-active' : ''}`}
+                        onClick={() => playTrackAt(i)}
+                        style={{
+                          display:'flex', alignItems:'center', gap:'14px',
+                          padding:'10px 14px', cursor:'pointer', marginBottom:'2px',
+                          opacity: hit._autoplay && !active ? 0.75 : 1,
+                        }}>
+                        {/* Index or equalizer */}
+                        <div style={{ width:'22px', textAlign:'center', flexShrink:0 }}>
+                          {active && isPlaying ? (
+                            <div style={{ display:'inline-flex', alignItems:'flex-end', height:'16px', gap:'0' }}>
+                              <span className="player-eq-bar" style={{ height:'4px' }} />
+                              <span className="player-eq-bar" style={{ height:'8px' }} />
+                              <span className="player-eq-bar" style={{ height:'6px' }} />
+                            </div>
+                          ) : (
+                            <span style={{
+                              fontSize:'12px', fontFamily:"'JetBrains Mono', monospace",
+                              color: active ? pAccent : pTextSubtle,
+                            }}>{i + 1}</span>
+                          )}
+                        </div>
+
+                        <AlbumCover title={t.title} artist={t.artist} size={46} isDark={isDark} coverPath={t.cover_art_path} radius={10} />
+
+                        <div style={{ flex:1, minWidth:0 }}>
+                          <div style={{
+                            fontSize:'14px', fontWeight: active ? '600' : '400',
+                            color: active ? pText : pTextMuted,
+                            whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+                            letterSpacing:'-0.01em',
+                          }}>{t.title || '—'}</div>
+                          <div style={{ fontSize:'13px', color:pTextSubtle, marginTop:'1px' }}>{t.artist || '—'}</div>
+                        </div>
+
+                        {t.genre && (
                           <span style={{
-                            fontSize:'12px', fontFamily:"'JetBrains Mono', monospace",
-                            color: active ? pAccent : pTextSubtle,
-                          }}>{i + 1}</span>
+                            fontSize:'11px', color:pTextSubtle, fontFamily:"'JetBrains Mono', monospace",
+                            padding:'3px 8px', borderRadius:'9999px',
+                            background: pPillBg,
+                            border: `1px solid ${pBorderSubtle}`,
+                          }}>{t.genre}</span>
                         )}
                       </div>
-
-                      <AlbumCover title={t.title} artist={t.artist} size={46} isDark={isDark} coverPath={t.cover_art_path} radius={10} />
-
-                      <div style={{ flex:1, minWidth:0 }}>
-                        <div style={{
-                          fontSize:'14px', fontWeight: active ? '600' : '400',
-                          color: active ? pText : pTextMuted,
-                          whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
-                          letterSpacing:'-0.01em',
-                        }}>{t.title || '—'}</div>
-                        <div style={{ fontSize:'13px', color:pTextSubtle, marginTop:'1px' }}>{t.artist || '—'}</div>
-                      </div>
-
-                      {t.genre && (
-                        <span style={{
-                          fontSize:'11px', color:pTextSubtle, fontFamily:"'JetBrains Mono', monospace",
-                          padding:'3px 8px', borderRadius:'9999px',
-                          background: pPillBg,
-                          border: `1px solid ${pBorderSubtle}`,
-                        }}>{t.genre}</span>
-                      )}
-                    </div>
+                    </Fragment>
                   );
-                })
+                });
+              })()
               )}
             </div>
           </div>
@@ -6288,7 +6309,12 @@ function App() {
       if (newTracks.length === 0) return;
       // PlayerSection's playlist is HIT[]-shaped ({track, score, matched_on}),
       // so wrap each fetched TrackMetadata accordingly.
-      const newHits = newTracks.map(t => ({ track: t, score: 0, matched_on: 'audio' }));
+      const newHits = newTracks.map(t => ({
+        track: t,
+        score: 0,
+        matched_on: 'audio',
+        _autoplay: true,
+      }));
       setPlayerPlaylist(prev => [...prev, ...newHits]);
     } catch (e) {
       console.warn('[autoplay] failed to fetch queue', e);
