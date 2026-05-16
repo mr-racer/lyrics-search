@@ -132,6 +132,15 @@ _SCHEMA_SQL: Tuple[str, ...] = (
         generated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (scope, scope_key, collection_name, lang)
     )""",
+    # Artist Bio cache (Plan 5)
+    """CREATE TABLE IF NOT EXISTS artist_bios (
+        artist_slug     TEXT NOT NULL,
+        collection_name TEXT NOT NULL,
+        lang            TEXT NOT NULL,
+        bio_text        TEXT NOT NULL,
+        generated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (artist_slug, collection_name, lang)
+    )""",
 )
 
 
