@@ -5172,9 +5172,112 @@ function IndexingProgress({ stepStatus, stageProgress, lang, c, isDark }) {
 }
 
 // ─── Indexing Modal ──────────────────────────────────────────────────────────
-function IndexingModal({ isDark, lang, collectionName, stepStatus, trackCount, errorMessage, onClose, stageProgress }) {
+function IndexingModal({
+  isDark, lang, collectionName, stepStatus, trackCount, errorMessage, onClose, stageProgress,
+  phase, onAiConfirm, onAiSkip, onAiBootstrapRun, onAiBootstrapLater, aiStatus,
+}) {
   const c = useColors(isDark);
   const allDone = Object.values(stepStatus).length > 0 && Object.values(stepStatus).every(s => s === 'done');
+
+  if (phase === 'ai-setup') {
+    return (
+      <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose?.(); }}>
+        <div className="modal-content" style={{ maxWidth: 540, padding: 28 }}>
+          <h2 className="serif" style={{ fontSize: 24, marginTop: 0, marginBottom: 8 }}>
+            {lang==='ru'?'AI-фичи для этой коллекции?':'AI features for this collection?'}
+          </h2>
+          <ul style={{ paddingLeft: 18, fontSize: 13, lineHeight: 1.6, color: isDark?'#bbb':'#444' }}>
+            <li>{lang==='ru'?'Чат-поиск в естественном языке':'Natural-language chat search'}</li>
+            <li>{lang==='ru'?'Sonic Vibe (атмосферные подписи треков)':'Sonic Vibe (mood phrases per track)'}</li>
+            <li>{lang==='ru'?'Refined Facts, Artist Bio':'Refined Facts, Artist Bio'}</li>
+            <li>{lang==='ru'?'Ask AI, объяснение строк lyrics':'Ask AI, lyric explain'}</li>
+          </ul>
+          <p style={{ fontSize: 12, color: isDark?'#888':'#666', marginTop: 12 }}>
+            {lang==='ru'
+              ? 'Требуется LLM endpoint (LM Studio, Ollama, OpenAI-совместимый API).'
+              : 'Requires an LLM endpoint (LM Studio, Ollama, or OpenAI-compatible API).'}
+          </p>
+          {aiStatus?.aiAvailable === true && (
+            <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 8,
+              background: 'rgba(40,160,80,0.10)', fontSize: 12 }}>
+              ✅ {lang==='ru'?'LLM подключён':'LLM connected'}{aiStatus.llmInfo?.model ? ` · ${aiStatus.llmInfo.model}` : ''}
+            </div>
+          )}
+          {aiStatus?.aiAvailable === false && (
+            <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 8,
+              background: 'rgba(239,68,68,0.10)', fontSize: 12 }}>
+              ⚠ {lang==='ru'?'LLM не отвечает.':'LLM not responding.'} {lang==='ru'?'Можно включить и настроить позже.':'You can enable and configure later.'}
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 10, marginTop: 24 }}>
+            <button
+              onClick={() => onAiConfirm?.(true)}
+              style={{
+                flex: 1, padding: '10px 16px', borderRadius: 10, fontSize: 14, fontWeight: 600,
+                background: 'linear-gradient(135deg, oklch(67% 0.18 270), oklch(52% 0.22 285))',
+                color: '#fff', border: 'none', cursor: 'pointer',
+              }}
+            >{lang==='ru'?'Включить AI':'Enable AI'}</button>
+            <button
+              onClick={() => onAiConfirm?.(false)}
+              style={{
+                flex: 1, padding: '10px 16px', borderRadius: 10, fontSize: 14, fontWeight: 500,
+                background: 'transparent', color: isDark?'#aaa':'#555',
+                border: `1px solid ${isDark?'rgba(255,255,255,0.18)':'rgba(0,0,0,0.18)'}`,
+                cursor: 'pointer',
+              }}
+            >{lang==='ru'?'Без AI':'No AI'}</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (phase === 'ai-bootstrap') {
+    return (
+      <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onAiBootstrapLater?.(); }}>
+        <div className="modal-content" style={{ maxWidth: 540, padding: 28 }}>
+          <h2 className="serif" style={{ fontSize: 24, marginTop: 0, marginBottom: 8 }}>
+            ✅ {lang==='ru'?'Индексация готова':'Indexing complete'}
+          </h2>
+          <p style={{ fontSize: 13, color: isDark?'#bbb':'#444', lineHeight: 1.5 }}>
+            {trackCount ? `${trackCount} ${lang==='ru'?'треков проиндексировано.':'tracks indexed.'}` : ''}
+          </p>
+          <p style={{ fontSize: 14, color: isDark?'#ddd':'#222', marginTop: 16 }}>
+            {lang==='ru'?'Запустить AI-индексацию артефактов?':'Run AI artifact indexing?'}
+          </p>
+          <ul style={{ paddingLeft: 18, fontSize: 12, color: isDark?'#aaa':'#555', lineHeight: 1.6 }}>
+            <li>{lang==='ru'?'Sonic Vibe — атмосферная фраза для каждого трека':'Sonic Vibe — mood phrase per track'}</li>
+            <li>{lang==='ru'?'Refined Facts — отфильтрованные/сжатые факты':'Refined Facts — filtered/shortened facts'}</li>
+            <li>{lang==='ru'?'Artist Bio — биография для каждого артиста':'Artist Bio — bio per artist'}</li>
+          </ul>
+          <p style={{ fontSize: 11, color: isDark?'#777':'#888', marginTop: 12 }}>
+            {lang==='ru'?'Это можно сделать позже в Settings → AI Indexing.':'You can run this later in Settings → AI Indexing.'}
+          </p>
+          <div style={{ display: 'flex', gap: 10, marginTop: 24 }}>
+            <button
+              onClick={() => onAiBootstrapRun?.()}
+              style={{
+                flex: 1, padding: '10px 16px', borderRadius: 10, fontSize: 14, fontWeight: 600,
+                background: 'linear-gradient(135deg, oklch(67% 0.18 270), oklch(52% 0.22 285))',
+                color: '#fff', border: 'none', cursor: 'pointer',
+              }}
+            >{lang==='ru'?'Запустить сейчас':'Run now'}</button>
+            <button
+              onClick={() => onAiBootstrapLater?.()}
+              style={{
+                flex: 1, padding: '10px 16px', borderRadius: 10, fontSize: 14, fontWeight: 500,
+                background: 'transparent', color: isDark?'#aaa':'#555',
+                border: `1px solid ${isDark?'rgba(255,255,255,0.18)':'rgba(0,0,0,0.18)'}`,
+                cursor: 'pointer',
+              }}
+            >{lang==='ru'?'Позже':'Later'}</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{
       position:'fixed', inset:0, zIndex:100,
@@ -5507,6 +5610,8 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
   const [modalTrackCount, setModalTrackCount] = useState(null);
   const [modalError, setModalError] = useState(null);
   const [stageProgress, setStageProgress] = useState({});
+  const [indexPhase, setIndexPhase] = useState('ai-setup');  // 'ai-setup' | 'indexing' | 'ai-bootstrap'
+  const [enabledForNewCollection, setEnabledForNewCollection] = useState(true);
 
   const [llmBaseUrl, setLlmBaseUrl] = useState(() => localStorage.getItem('llm_base_url') || '');
   const [llmModel, setLlmModel] = useState(() => localStorage.getItem('llm_model') || '');
@@ -5532,10 +5637,15 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
     catch {} finally { setPicking(false); }
   };
 
-  const handleIndex = async () => {
+  const handleIndex = () => {
     if (!folderPath.trim() || indexing) return;
+    setIndexPhase('ai-setup');
+    setShowModal(true);
+  };
+
+  const startIndexing = async () => {
     const colName = collName.trim() || 'my_collection';
-    setIndexing(true); setModalError(null); setModalTrackCount(null); setStageProgress({}); setShowModal(true);
+    setIndexing(true); setModalError(null); setModalTrackCount(null); setStageProgress({});
     setStepStatus({ lyrics:'idle', facts:'idle', metadata:'idle', dense:'idle', audio:'idle', analysis:'idle' });
     try {
       // Only send text_model if user picked one — omit otherwise so backend
@@ -5549,6 +5659,12 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
         setModalTrackCount(res.count || 0);
         localStorage.setItem('active_collection', colName);
         onCollectionsUpdate && onCollectionsUpdate();
+        // Phase transition (Plan 6): if AI is on for this collection and LLM probes ok, advance to ai-bootstrap
+        if (aiStatus?.aiAvailable && enabledForNewCollection) {
+          setIndexPhase('ai-bootstrap');
+        } else {
+          setIndexPhase('indexing');  // stay in 'indexing' phase showing Done UI
+        }
         return;
       }
       const evt = new EventSource(`${API}/index/progress/${res.job_id}`);
@@ -5596,6 +5712,12 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
             setIndexing(false);
             localStorage.setItem('active_collection', colName);
             onCollectionsUpdate && onCollectionsUpdate();
+            // Phase transition (Plan 6): if AI is on for this collection and LLM probes ok, advance to ai-bootstrap
+            if (aiStatus?.aiAvailable && enabledForNewCollection) {
+              setIndexPhase('ai-bootstrap');
+            } else {
+              setIndexPhase('indexing');  // stay in 'indexing' phase showing Done UI
+            }
           } else if (data.overall_status === 'failed') {
             evt.close();
             setModalError(data.error || data.message);
@@ -5946,7 +6068,40 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
           <IndexingModal isDark={isDark} lang={lang} collectionName={collName||'my_collection'}
             stepStatus={stepStatus} trackCount={modalTrackCount} errorMessage={modalError}
             onClose={() => { setShowModal(false); setStepStatus({}); setModalError(null); setModalTrackCount(null); }}
-            stageProgress={stageProgress} />
+            stageProgress={stageProgress}
+            phase={indexPhase}
+            aiStatus={aiStatus}
+            onAiConfirm={async (enabled) => {
+              setEnabledForNewCollection(enabled);
+              const colName = collName.trim() || 'my_collection';
+              try {
+                await apiFetch(`/library/collections/${encodeURIComponent(colName)}/ai-enabled`, {
+                  method: 'PATCH', body: JSON.stringify({ enabled }),
+                });
+              } catch (e) { console.error('failed to persist ai_enabled', e); }
+              if (enabled) {
+                localStorage.setItem('llm_base_url', llmBaseUrl.trim());
+                localStorage.setItem('llm_model', llmModel.trim());
+                await aiStatus?.refresh?.();
+              }
+              setIndexPhase('indexing');
+              await startIndexing();
+            }}
+            onAiSkip={() => { setEnabledForNewCollection(false); setIndexPhase('indexing'); startIndexing(); }}
+            onAiBootstrapRun={async () => {
+              const colName = collName.trim() || 'my_collection';
+              const lang2 = lang || 'en';
+              try {
+                await Promise.all([
+                  apiFetch('/library/ai-index/sonic_vibe',    { method:'POST', body: JSON.stringify({ collection_name: colName, lang: lang2 }) }),
+                  apiFetch('/library/ai-index/refined_facts', { method:'POST', body: JSON.stringify({ collection_name: colName, lang: lang2 }) }),
+                  apiFetch('/library/ai-index/artist_bio',    { method:'POST', body: JSON.stringify({ collection_name: colName, lang: lang2 }) }),
+                ]);
+              } catch (e) { console.error('failed to start AI indexing', e); }
+              setShowModal(false);
+            }}
+            onAiBootstrapLater={() => setShowModal(false)}
+          />
         )}
       </div>
     </>
