@@ -1072,19 +1072,20 @@ CREATE TABLE recommendation_snapshots (
 > |---|---|---|
 > | **1**  Backend foundations            | ✅ Shipped (Plan 3)                       | `docs/superpowers/plans/2026-05-14-plan-3-backend-foundations.md` |
 > | **1b** Additional backend services    | ⏳ Not started                            | — |
-> | **1c** Sonic Descriptor Layer         | ⏳ Not started — **unblocks** Sonic Sibling, Sonic Map cluster overlay, For You rationale | — |
+> | **1c** Sonic Descriptor Layer         | ✅ Shipped (merged from `feature/sonic-descriptor-layer`) — unblocks Sonic Sibling, Sonic Map cluster overlay, For You rationale | `app/services/sonic_descriptor_service.py`, `scripts/cluster_curator.py` |
 > | **2**  Frontend foundation            | ✅ Shipped (out-of-band — landed alongside Plan 4 timeframe) | inline in `frontend/index.html` |
 > | **3**  Artist Atlas                   | ✅ Shipped (Plan 5)                       | `docs/superpowers/plans/2026-05-16-plan-5-artist-atlas.md` |
 > | **4**  Player v6 redesign             | ✅ Shipped (Plan 4) + post-plan polish round | `docs/superpowers/plans/2026-05-16-plan-4-player-redesign.md` |
 > | **5**  AI Chat & lyrics-explain       | ⏳ Not started — Ask AI button shows toast stub | — |
 > | **6**  Spotify-like MVP               | ⏳ Not started                            | — |
 > | **6a** Home (Discovery Magazine)      | ⏳ Not started                            | — |
-> | **6b** Search redesign                | 🔜 **Next plan** — see "Plan B (SearchSectionV2)" below | — |
+> | **6b-B1** Search visual redesign      | 📝 **Spec + Plan drafted** — execute first | `docs/superpowers/specs/2026-05-16-plan-b1-search-section-redesign-design.md`, `docs/superpowers/plans/2026-05-16-plan-b1-search-section-redesign.md` |
+> | **6b-B2** Search AI gating + functional | 📝 **Spec + Plan drafted** — execute after B1 | `docs/superpowers/specs/2026-05-16-plan-b2-search-section-ai-gating-design.md`, `docs/superpowers/plans/2026-05-16-plan-b2-search-section-ai-gating.md` |
 > | **6c** Stats redesign (Sonic Map)     | ⏳ Not started — partly blocked on 1c    | — |
 > | **6d** Recommendations                | ⏳ Not started — partly blocked on 1b    | — |
 > | **7**  Polish                         | ⏳ Not started                            | — |
 >
-> **Next plan up — Plan B: SearchSectionV2 redesign** (Phase 6b, unblocked by Plan 6's `aiActive` infra):
+> **Next to execute — Plan B1 then B2** (specs + plans drafted 2026-05-16; refs in table above). Plan B was split because the original SearchSection still uses old skeuomorphic materials (`ske('inset')`, plain Segmented) while Player and Atlas already shipped Hybrid v3. **B1** is a pure visual redesign + three opinionated additions (recent searches chips, hover breakdown tooltip, sonic class/tags filter chips backed by new `/library/sonic-facets` endpoint that surfaces Phase 1c data). **B2** layers behavior on top: aiActive gating of the Chat tab, decade filter, card-click → Player auto-play, hover play/like buttons added to B1's overlay, autocomplete fix, and SearchFilters dead-field cleanup. Plan B1 also extends `SearchFilters` with `sonic_class: list[str]` (OR semantics) + `sonic_tags: list[str]` (AND semantics) and wires both into `LyricsDB.search()`. **Original Plan B scope (single-PR with both visual + functional)** was rejected on 2026-05-16 because (a) the visual redesign benefits from brainstorm-style iteration that B2's behavioral work would obscure, and (b) PR diffs stay smaller / reviewable when materials land before behavior.
 > - Split today's chat-only SearchSection into two modes gated on `aiStatus.aiActive`:
 >   - **AI on (`aiActive === true`)** — keep the existing natural-language chat experience.
 >   - **AI off / LLM offline** — render a non-chat results UI: query input → `SearchResultsGrid` of cards (cover + title + artist), no LLM dependency.
@@ -1094,7 +1095,7 @@ CREATE TABLE recommendation_snapshots (
 > - **Autocomplete fix** — Artist/Album typeahead suggestions are currently broken in chat-search; bundle this fix into Plan B.
 >
 > **Deferred from shipped plans** (slots reserved, will return as smaller plans):
-> - **Sonic Sibling** (Phase 1 item 4 + Phase 4 item 12) — `/recommend/sonic-sibling` returns 501; depends on Phase 1c.1-1c.2 (sonic tags) + 1c.5-1c.6 (classifier for class-diff phrase).
+> - **Sonic Sibling** (Phase 1 item 4 + Phase 4 item 12) — `/recommend/sonic-sibling` returns 501. Dependencies on Phase 1c.1-1c.2 (sonic tags) and 1c.5-1c.6 (classifier for class-diff phrase) are **now satisfied** (Phase 1c shipped 2026-05-16); endpoint awaits its own plan to wire the Qdrant payload-filter query + LLM `common_tags ∩ class_diff` phrasing.
 > - **Related artists tab** + **Eras tab** (Phase 3) — Related needs CLAP artist centroids (Phase 1c products); Eras is a small standalone follow-up.
 > - **Click-to-artist routing in Library / RecentlyPlayed** — those sections haven't been redesigned yet; routing will be added when each ships.
 > - **OnboardingScreen 3-phase wizard** (Plan 6 follow-up) — `OnboardingScreen.handleIndex` still ships its own pre-wizard copy; lift `startIndexing` into a shared helper so first-run users get the same ai-setup → indexing → ai-bootstrap flow as SettingsPanel.
@@ -1114,13 +1115,13 @@ CREATE TABLE recommendation_snapshots (
 1. **ScoreBreakdown в TrackHit** — модифицировать `_merge_hits()` в `search_service.py`, добавить breakdown в response. Verify: вызов `/search/` возвращает breakdown поля.
 2. **MusicBrainz scaffolding (data-only)** — добавить nullable columns в `songs`/`artists` tables (`producers`, `label`, `samples_json`, `mbid`) **без** активного парсинга. UI рендерит conditionally if non-null. Verify: schema migration работает, существующие данные не повреждены, columns пустые.
 3. **AI Indexing subsystem** [depends on Phase 1c.1-1c.2 for sonic_vibe task] — user-triggered batch job runner (`POST /library/ai-index/{task_type}`, `GET /status`, `DELETE /cache`). Two task types ship in Plan 3: **Sonic Vibe** (one-sentence atmospheric phrase per track via LLM, cached in `sonic_vibes` table); **Refined Facts** (batch-filter+shorten song/artist facts via LLM, replacement semantics on `/metadata/tracks/{id}/facts`, system prompt operator-filled). Settings UI card surfaces Run/Reset/status per task. Verify: запрос возвращает разумные phrase-ы; refined facts перекрывают originals; lang капчурится из текущего фронта при запуске.
-4. **Sonic Sibling endpoint** [DEFERRED — slot reserved, returns 501] [depends on Phase 1c.1-1c.2; class diff requires 1c.5-1c.6] — `/recommend/sonic-sibling`. Qdrant query с payload filters. Plus LLM-фраза из common_tags ∩ + class_diff.
+4. **Sonic Sibling endpoint** [DEFERRED — slot reserved, returns 501] [**unblocked** — Phase 1c.1-1c.2 + 1c.5-1c.6 shipped 2026-05-16; awaits its own plan] — `/recommend/sonic-sibling`. Qdrant query с payload filters. Plus LLM-фраза из common_tags ∩ + class_diff.
 5. **Autoplay queue endpoint** — `/recommend/autoplay-queue`. Pure CLAP CLAP neighbors + reaction/session filtering + diversity demotion. Verify: returns up to 20 диверсифицированных треков.
 6. **Playback history** [lifted from Phase 6 because needed by future Rediscover / Personalization] — `playback_events` table with full session tracking (`session_id`, `played_sec`, `total_dur`, server-derived `skipped_early`). Frontend mints `session_id` in `sessionStorage` and POSTs on track end / track switch / `beforeunload` (via `sendBeacon`).
 
 ### Phase 1c: Sonic Descriptor Layer (prerequisite для Sonic Vibe / Sibling / Map cluster overlay / For You rationale)
 
-> **Status (2026-05-16)**: ⏳ **Not started.** Sonic Vibe currently runs facts-only (no `sonic_tags_json` in Qdrant payload), Sonic Sibling endpoint returns 501, Map cluster overlay is hidden. Unblocking 1c.1 + 1c.2 alone gives Vibe much richer input; the full chain through 1c.5-1c.6 enables the class-diff phrase for Sibling and the cluster-tinted Sonic Map.
+> **Status (2026-05-16)**: ✅ **Shipped** via `feature/sonic-descriptor-layer` (22 commits, `c4b5493` → `c9ac6ec`, fully landed in `main`). All seven checklist items (1c.1 vocab + embeddings cache → 1c.2 prompt-probing tagger → 1c.3 HDBSCAN discovery → 1c.4 cluster curator CLI → 1c.5 MLP classifier training → 1c.6 classifier-at-indexing → 1c.7 empty-state guards) are live. `SonicDescriptorService` is wired into the indexing pipeline (commit `abc151d`); per-track output is persisted to `songs.sonic_tags_json` / `sonic_class` / `sonic_class_confidence` and surfaced via `GET /library/sonic-descriptor/{slug}`. **Follow-ups still pending**: (a) Sonic Vibe task does not yet ingest `sonic_tags_json` (still facts-only) — needs `ai_tasks/sonic_vibe.py` extension; (b) Sonic Sibling endpoint still returns 501; (c) Sonic Map cluster overlay still hidden behind unshipped Phase 6c. Plan for (a) is small and can ship standalone.
 
 1c.1. **Prompt vocabulary scaffolding** — создать `cache/sonic_prompts.json` со стартовым набором ~30-50 prompts по группам (energy/valence/density/texture/instrumentation/vocal/rhythm/era). Pre-compute их CLAP text embeddings в `.npy`. Verify: vocab loadable, embeddings shape correct.
 1c.2. **Prompt-probing tagger** — `sonic_descriptor_service.compute_tags(track_id)`: cosine между track_emb и prompt_embeddings, top-K. Persist в `songs.sonic_tags_json`. Trigger automatically на indexing (incremental: new tracks get tagged immediately, existing — bulk script). Verify: 5 tracks возвращают sensible top-5 tags каждый.
