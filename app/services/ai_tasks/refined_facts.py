@@ -16,20 +16,27 @@ from typing import Any
 from app.resources.metadata_db import MetadataDB
 from app.services import ai_indexing_service
 from app.services.llm_client import ask_llm
+from app.services.song_facts_service import get_song_facts_key
+# Use the SAME slugify that artist_facts_service used when saving to DB,
+# otherwise a name like "Guns N' Roses" resolves to a different slug here
+# than in storage and we miss its facts.
+from app.services.artist_facts_service import _slugify as _slugify_artist
 
 logger = logging.getLogger(__name__)
 
 REFINED_FACTS_BATCH_SIZE = 5  # tunable; valid range 3-5 per spec
 MAX_REFINED_LEN = 200
 
-# OPERATOR-FILLED — tune this to taste.
-# Example content (delete and replace as you wish):
-#   "Filter and shorten music facts. Drop generic/uninteresting ones
-#    (birthdays, generic chart positions, common label info). Keep the
-#    unusual, specific, or unexpectedly revealing facts. Shorten kept
-#    facts to one sharp sentence. Output strictly the JSON array described
-#    in the user message — no preamble, no explanation."
-_SYSTEM_PROMPT = ""
+# Default prompt — tune to taste. Was previously left literally empty, which
+# caused jobs to silently report "done" with zero work performed.
+_SYSTEM_PROMPT = (
+    "You filter and shorten music facts. Drop generic or uninteresting items "
+    "(birthdays, generic chart positions, common label info, well-known "
+    "trivia). Keep the unusual, specific, or unexpectedly revealing facts. "
+    "Shorten kept facts to one sharp sentence, preserving the concrete detail. "
+    "Output strictly the JSON array described in the user message — no "
+    "preamble, no explanation, no markdown fences."
+)
 
 
 def _build_user_prompt(*, facts: list[str], lang: str) -> str:
@@ -118,9 +125,17 @@ async def _process_one_scope(
 async def run(job, db_client, llm) -> None:
     """Iterate songs in the collection; for each, refine its song facts and
     (one pass per artist) its artist facts."""
+    if not _SYSTEM_PROMPT.strip():
+        # Fail fast and visibly instead of silently iterating with no work.
+        raise RuntimeError(
+            "refined_facts: _SYSTEM_PROMPT is empty — set it in "
+            "app/services/ai_tasks/refined_facts.py before running this task."
+        )
+
     qdrant = db_client.qdrant
     n_done = 0
     n_failed = 0
+    n_skipped = 0
     offset = None
     seen_artist_slugs: set[str] = set()
 
@@ -138,8 +153,14 @@ async def run(job, db_client, llm) -> None:
         for pt in points:
             tid = str(pt.id)
             p = pt.payload or {}
-            song_slug = p.get("song_slug") or p.get("song_key") or ""
-            artist_slug = p.get("artist_slug") or ""
+            # Compute slugs from artist+title — see sonic_vibe.run for the
+            # rationale. Qdrant payload does not carry precomputed slugs.
+            artist_name = (p.get("artist") or "").strip()
+            title_text = (p.get("title") or "").strip()
+            song_slug = get_song_facts_key(artist_name, title_text) if (artist_name and title_text) else ""
+            artist_slug = _slugify_artist(artist_name) if artist_name else ""
+
+            did_work = False
 
             # Song facts.
             if song_slug:
@@ -153,6 +174,7 @@ async def run(job, db_client, llm) -> None:
                         collection_name=job.collection_name, lang=job.lang,
                     )
                     n_failed += fail
+                    did_work = True
 
             # Artist facts — once per artist.
             if artist_slug and artist_slug not in seen_artist_slugs:
@@ -167,14 +189,27 @@ async def run(job, db_client, llm) -> None:
                         collection_name=job.collection_name, lang=job.lang,
                     )
                     n_failed += fail
+                    did_work = True
 
-            n_done += 1
+            if did_work:
+                n_done += 1
+            else:
+                # No facts (song or artist) — nothing to refine for this track.
+                n_skipped += 1
             MetadataDB.update_ai_job(
-                job_id=job.job_id, n_done=n_done, n_failed=n_failed,
+                job_id=job.job_id,
+                n_done=n_done, n_failed=n_failed, n_skipped=n_skipped,
             )
 
         if offset is None:
             break
+
+    if n_done == 0 and n_skipped > 0 and n_failed == 0:
+        logger.warning(
+            "[refined_facts] all %d tracks skipped — no song_facts or "
+            "artist_facts in collection %s. Run facts indexing first.",
+            n_skipped, job.collection_name,
+        )
 
 
 # Register at import time

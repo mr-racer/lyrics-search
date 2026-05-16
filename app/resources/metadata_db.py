@@ -194,6 +194,14 @@ class MetadataDB:
         if "artists" in existing_tables:
             cls._ensure_columns(conn, "artists", {"mbid": "TEXT"})
 
+        # AI indexing — distinguish "processed" from "silently skipped" so the
+        # UI can tell when a job completed with literally zero LLM work done
+        # (e.g. tracks lacked sonic_tags + facts). Without this column the
+        # status payload reports n_done = n_total and looks like a real run.
+        cls._ensure_columns(conn, "ai_indexing_jobs", {
+            "n_skipped": "INTEGER NOT NULL DEFAULT 0",
+        })
+
         conn.commit()
         logger.info("[MetadataDB] Schema initialised")
 
@@ -711,6 +719,7 @@ class MetadataDB:
         status: Optional[str] = None,
         n_done: Optional[int] = None,
         n_failed: Optional[int] = None,
+        n_skipped: Optional[int] = None,
         error: Optional[str] = None,
         finished: bool = False,
     ) -> None:
@@ -726,6 +735,8 @@ class MetadataDB:
             sets.append("n_done = ?"); params.append(n_done)
         if n_failed is not None:
             sets.append("n_failed = ?"); params.append(n_failed)
+        if n_skipped is not None:
+            sets.append("n_skipped = ?"); params.append(n_skipped)
         if error is not None:
             sets.append("error = ?"); params.append(error)
         if finished:
@@ -749,7 +760,8 @@ class MetadataDB:
         conn = cls._connect()
         row = conn.execute(
             "SELECT job_id, task_type, collection_name, lang, status, "
-            "       n_total, n_done, n_failed, started_at, finished_at, error "
+            "       n_total, n_done, n_failed, n_skipped, "
+            "       started_at, finished_at, error "
             "FROM ai_indexing_jobs "
             "WHERE collection_name = ? AND task_type = ? "
             "ORDER BY started_at DESC, rowid DESC LIMIT 1",
@@ -758,7 +770,8 @@ class MetadataDB:
         if not row:
             return None
         keys = ["job_id", "task_type", "collection_name", "lang", "status",
-                "n_total", "n_done", "n_failed", "started_at", "finished_at", "error"]
+                "n_total", "n_done", "n_failed", "n_skipped",
+                "started_at", "finished_at", "error"]
         return dict(zip(keys, row))
 
     # ── Sonic Descriptor ──

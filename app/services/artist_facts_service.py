@@ -25,9 +25,15 @@ REQUEST_TIMEOUT = 10  # seconds
 
 def _slugify(artist: str) -> str:
     """'The Weeknd' -> 'the-weeknd'"""
+    # Normalize all dash variants to ASCII hyphen.
     cleaned_artist = re.sub(r'[‐‑‒–—―−]', '-', artist)
-    # clean from cringe symbols
-    cleaned_artist = re.sub(r'[+&.]', '', cleaned_artist)
+    # Strip noisy punctuation (apostrophes — straight + curly, quotes, +, &, .)
+    # so that artists like "Guns N' Roses" produce a stable slug regardless
+    # of which apostrophe codepoint shows up in source metadata.
+    cleaned_artist = re.sub(
+        "[+&.'`‘’‚‛“”„‟′″ʼ«»]",
+        '', cleaned_artist,
+    )
     return "-".join(cleaned_artist.lower().split())
 
 

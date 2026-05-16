@@ -24,9 +24,19 @@ REQUEST_TIMEOUT = 10
 
 
 def _slugify(text: str) -> str:
-    """'All Falls Down' -> 'all-falls-down'"""
-    cleaned_title = re.sub(r"['`,?!]", '', text)
+    """'All Falls Down' -> 'all-falls-down'
 
+    Strips noisy punctuation (apostrophes, quotes, commas, ?, !) before
+    slugifying. Covers both straight ASCII and the various smart-quote
+    codepoints that leak in from iTunes/ID3 tags and pasted web text —
+    most importantly U+2019 (RIGHT SINGLE QUOTATION MARK '), which the
+    original regex missed and which produced broken songfacts.com URLs
+    for any track with a possessive (e.g. "We're Good", "Don't Start Now").
+    """
+    cleaned_title = re.sub(
+        "['`,?!‘’‚‛“”„‟′″ʼ«»]",
+        '', text,
+    )
     brackets_delete_pattern = r'^(.+?)\s*\(.*'
     cleaned_title = re.sub(brackets_delete_pattern, r'\1', cleaned_title)
 

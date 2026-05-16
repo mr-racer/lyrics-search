@@ -17,6 +17,7 @@ import logging
 from app.resources.metadata_db import MetadataDB
 from app.services import ai_indexing_service
 from app.services.llm_client import ask_llm
+from app.services.song_facts_service import get_song_facts_key
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,7 @@ async def run(job, db_client, llm) -> None:
 
     n_done = 0
     n_failed = 0
+    n_skipped = 0
     offset = None
 
     while True:
@@ -91,7 +93,8 @@ async def run(job, db_client, llm) -> None:
             tid = str(pt.id)
             p = pt.payload or {}
 
-            # Skip if already cached.
+            # Cache hit counts as "done" — the track is already processed
+            # from a previous run, even though no LLM call happened now.
             if MetadataDB.get_sonic_vibe(tid, job.collection_name, lang):
                 n_done += 1
                 MetadataDB.update_ai_job(job_id=job.job_id, n_done=n_done)
@@ -106,19 +109,26 @@ async def run(job, db_client, llm) -> None:
                 except Exception:
                     tags = []
 
-            # Facts via song_slug, if available in payload.
+            # Resolve song-fact slug from artist+title in the Qdrant payload.
+            # Indexing does NOT write a precomputed song_slug to the payload;
+            # facts live in SQLite keyed by get_song_facts_key(artist, title)
+            # (e.g. "dua-lipa-break-my-heart"). Reading p["song_slug"] used
+            # to silently return None and pretend every track had no facts.
             facts: list[str] = []
-            song_slug = p.get("song_slug") or p.get("song_key")
-            if song_slug:
+            artist_name = (p.get("artist") or "").strip()
+            title_text = (p.get("title") or "").strip()
+            if artist_name and title_text:
+                song_slug = get_song_facts_key(artist_name, title_text)
                 try:
                     facts = MetadataDB.get_song_facts(song_slug, job.collection_name)
                 except Exception:
                     facts = []
 
             if not tags and not facts:
-                # Nothing to feed the model — skip without LLM call.
-                n_done += 1
-                MetadataDB.update_ai_job(job_id=job.job_id, n_done=n_done)
+                # Nothing to feed the model — count as skipped (NOT done) so
+                # the UI can tell when a job completed without any real work.
+                n_skipped += 1
+                MetadataDB.update_ai_job(job_id=job.job_id, n_skipped=n_skipped)
                 continue
 
             user = _build_user_prompt(tags=tags, payload=p, facts=facts, lang=lang)
@@ -147,6 +157,15 @@ async def run(job, db_client, llm) -> None:
 
         if offset is None:
             break
+
+    if n_done == 0 and n_skipped > 0 and n_failed == 0:
+        # The whole collection lacks the inputs sonic_vibe needs — surface
+        # this as a job-level note so the UI can show why nothing happened.
+        logger.warning(
+            "[sonic_vibe] all %d tracks skipped — no sonic_tags_json and no "
+            "song_facts in collection %s. Run sonic-prompt-probing and/or "
+            "facts indexing first.", n_skipped, job.collection_name,
+        )
 
 
 # Register at import time

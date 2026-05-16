@@ -263,8 +263,9 @@ class AIJobStatus(BaseModel):
     lang: str
     status: str    # "queued" | "running" | "done" | "failed" | "cancelled"
     n_total: int
-    n_done: int
-    n_failed: int
+    n_done: int     # actually processed (LLM called OR cache hit)
+    n_failed: int   # LLM / validation / persistence error
+    n_skipped: int = 0  # default for forward-compat with rows from old schema
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
     error: Optional[str] = None

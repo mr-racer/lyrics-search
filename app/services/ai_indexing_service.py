@@ -38,8 +38,9 @@ class JobState:
     collection_name: str
     lang: str
     n_total: int
-    n_done: int = 0
-    n_failed: int = 0
+    n_done: int = 0       # actually processed (LLM called OR served from cache)
+    n_failed: int = 0     # LLM call / validation / persistence error
+    n_skipped: int = 0    # eligible track but task had nothing to feed the LLM
     status: str = "queued"
     # tz-aware now() — datetime.utcnow() is deprecated in Python 3.12+
     started_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
