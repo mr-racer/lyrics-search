@@ -56,3 +56,14 @@ def test_patch_creates_row_when_missing(client):
     )
     assert r.status_code == 200
     assert MetadataDB.get_collection_ai_enabled("brand_new") is False
+
+
+def test_patch_re_enables_after_disable(client):
+    """ai_enabled defaults to True, so a broken write for enabled=True
+    would be masked by the default. Exercise the full False -> True
+    round-trip explicitly."""
+    client.patch("/api/v1/library/collections/colA/ai-enabled", json={"enabled": False})
+    r = client.patch("/api/v1/library/collections/colA/ai-enabled", json={"enabled": True})
+    assert r.status_code == 200
+    assert r.json()["ai_enabled"] is True
+    assert client.get("/api/v1/library/collections/colA/settings").json()["ai_enabled"] is True
