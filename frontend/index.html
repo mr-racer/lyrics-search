@@ -626,6 +626,7 @@
        become absurd on 4K monitors. Section header was removed app-wide
        to free the vertical budget this 60vh target consumes. */
     .player-art-wrap {
+      position: relative;  /* positioning context for outgoing snapshot + overlay */
       perspective: 1400px;
       width: clamp(220px, 60vh, 640px);
       aspect-ratio: 1;
@@ -655,7 +656,10 @@
       width: 100%;
       height: 100%;
       transform-style: preserve-3d;
-      /* No transition: tilt must be 1:1 with cursor for the "real glass" feel. */
+      /* Short transition softens micro-jitter of mousemove without re-stacking
+         on the flipper's 720ms toggle (separated layer). 90ms covers ~5 frames
+         — well under the 720ms threshold that tanked perf in Plan 4 hotfix. */
+      transition: transform 90ms ease-out;
     }
     .player-art-flipper {
       position: relative;
@@ -663,6 +667,268 @@
       height: 100%;
       transform-style: preserve-3d;
       transition: transform 720ms cubic-bezier(0.34, 1.35, 0.64, 1);
+    }
+    /* Vinyl-stack transition. Outgoing cover snapshot animates "into the stack"
+       (recedes + rotates door-style). Incoming cover bounces in from the side.
+       Direction mirrored for prev. */
+    .player-art-outgoing {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 5;
+      transform-style: preserve-3d;
+      will-change: transform, opacity;
+    }
+    /* Sequential timing: outgoing leaves over 420ms (ease-in), then the
+       incoming enters 320ms later with a 600ms bounce. There's a brief ~100ms
+       crossover near the doorway, but visually the cover is clearly "out
+       first, in second" — fixes the previous simultaneous-stack feel. */
+    .player-art-outgoing--next { animation: vinylExitNext 420ms cubic-bezier(0.5, 0, 0.75, 0) forwards; }
+    .player-art-outgoing--prev { animation: vinylExitPrev 420ms cubic-bezier(0.5, 0, 0.75, 0) forwards; }
+    @keyframes vinylExitNext {
+      0%   { transform: translate3d(0,0,0) rotateY(0deg) scale(1); opacity: 1; }
+      100% { transform: translate3d(18%, -3%, -480px) rotateY(-78deg) scale(0.55); opacity: 0; }
+    }
+    @keyframes vinylExitPrev {
+      0%   { transform: translate3d(0,0,0) rotateY(0deg) scale(1); opacity: 1; }
+      100% { transform: translate3d(-18%, -3%, -480px) rotateY(78deg) scale(0.55); opacity: 0; }
+    }
+    .player-art-entry { position: relative; width: 100%; height: 100%; transform-style: preserve-3d; }
+    .player-art-entry--next { animation: vinylEnterNext 600ms cubic-bezier(0.34, 1.56, 0.64, 1) 320ms both; }
+    .player-art-entry--prev { animation: vinylEnterPrev 600ms cubic-bezier(0.34, 1.56, 0.64, 1) 320ms both; }
+    @keyframes vinylEnterNext {
+      0%   { transform: translate3d(60%, 0, 120px) rotateY(-72deg) scale(0.6); opacity: 0; }
+      20%  { opacity: 1; }
+      100% { transform: translate3d(0, 0, 0) rotateY(0deg) scale(1); opacity: 1; }
+    }
+    @keyframes vinylEnterPrev {
+      0%   { transform: translate3d(-60%, 0, 120px) rotateY(72deg) scale(0.6); opacity: 0; }
+      20%  { opacity: 1; }
+      100% { transform: translate3d(0, 0, 0) rotateY(0deg) scale(1); opacity: 1; }
+    }
+
+    /* Press-down feedback on cover click. Separate transform layer so the
+       scale doesn't fight with tilt/flip/entry transforms on inner elements. */
+    .player-art-press {
+      position: relative;
+      width: 100%; height: 100%;
+      transform-style: preserve-3d;
+      transition: transform 140ms cubic-bezier(0.22, 0.9, 0.3, 1);
+    }
+    .player-art-wrap:active .player-art-press { transform: scale(0.96); }
+
+    /* Glassy play/pause indicator — ~50% cover area, appears on toggle and
+       fades out over ~1200ms. Sits OUTSIDE the tilt+flip layers so it stays
+       upright (no rotation with the cover). */
+    .player-art-feedback {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      pointer-events: none;
+      z-index: 6;
+      animation: playerFeedbackPulse 1200ms cubic-bezier(0.22, 0.9, 0.3, 1) forwards;
+    }
+    /* The icon shape ITSELF is the glass surface — no surrounding circle.
+       CSS mask-image clips the element to the play/pause silhouette so
+       backdrop-filter only blurs through the icon shape. drop-shadow is
+       applied after mask, so the shadow traces the icon outline instead
+       of a rectangle. Layered diagonal gradient on top of an opaque-ish
+       white base gives the "polished glass" reading; a third drop-shadow
+       with 0 offset adds a subtle rim glow simulating an edge highlight. */
+    .player-art-feedback-icon {
+      width: 60%;
+      aspect-ratio: 1;
+      background:
+        linear-gradient(155deg,
+          rgba(255,255,255,0.65) 0%,
+          rgba(255,255,255,0.42) 48%,
+          rgba(255,255,255,0.58) 100%),
+        rgba(255,255,255,0.55);
+      backdrop-filter: blur(22px) saturate(1.6) brightness(1.08);
+      -webkit-backdrop-filter: blur(22px) saturate(1.6) brightness(1.08);
+      filter:
+        drop-shadow(0 10px 22px rgba(0,0,0,0.55))
+        drop-shadow(0 3px 6px rgba(0,0,0,0.40))
+        drop-shadow(0 0 1px rgba(255,255,255,0.70));
+      -webkit-mask-position: center;
+              mask-position: center;
+      -webkit-mask-repeat: no-repeat;
+              mask-repeat: no-repeat;
+      -webkit-mask-size: 100% 100%;
+              mask-size: 100% 100%;
+    }
+    .player-art-feedback-icon--play {
+      -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><polygon points='7 4 20 12 7 20 7 4' fill='white'/></svg>");
+              mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><polygon points='7 4 20 12 7 20 7 4' fill='white'/></svg>");
+    }
+    .player-art-feedback-icon--pause {
+      -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect x='5.5' y='3.5' width='4.5' height='17' rx='1.2' fill='white'/><rect x='14' y='3.5' width='4.5' height='17' rx='1.2' fill='white'/></svg>");
+              mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect x='5.5' y='3.5' width='4.5' height='17' rx='1.2' fill='white'/><rect x='14' y='3.5' width='4.5' height='17' rx='1.2' fill='white'/></svg>");
+    }
+    @keyframes playerFeedbackPulse {
+      0%   { opacity: 0; transform: scale(0.78); }
+      12%  { opacity: 1; transform: scale(1); }
+      70%  { opacity: 1; transform: scale(1); }
+      100% { opacity: 0; transform: scale(1.08); }
+    }
+
+    /* Frosted-glass blur overlay that briefly blurs the cover image during
+       the play/pause feedback window. Lives INSIDE .player-art-front so it
+       rotates/flips with the cover and inherits the rounded corners. */
+    .player-art-blur-overlay {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 1;  /* above the cover image, below the shine */
+      backdrop-filter: blur(9px) saturate(0.85);
+      -webkit-backdrop-filter: blur(9px) saturate(0.85);
+      background: rgba(0,0,0,0.12);
+      border-radius: inherit;
+      animation: playerFeedbackBlur 1200ms cubic-bezier(0.22, 0.9, 0.3, 1) forwards;
+    }
+    @keyframes playerFeedbackBlur {
+      0%   { opacity: 0; }
+      14%  { opacity: 1; }
+      70%  { opacity: 1; }
+      100% { opacity: 0; }
+    }
+
+    /* Segmented pill toggle for the player's facts rail — replaces the
+       "О ПЕСНЕ" header. Buttons get .disabled = grey-out + not-allowed when
+       the scope has no facts for the current track. */
+    .facts-scope-toggle {
+      display: inline-flex;
+      border-radius: 99px;
+      padding: 2px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+    body[data-theme="light"] .facts-scope-toggle {
+      background: rgba(22,22,32,0.04);
+      border-color: rgba(22,22,32,0.10);
+    }
+    .facts-scope-toggle > button {
+      padding: 4px 11px;
+      border-radius: 99px;
+      border: 0;
+      background: transparent;
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 10px;
+      letter-spacing: 0.18em;
+      color: rgba(255,255,255,0.45);
+      cursor: pointer;
+      transition: background 200ms ease, color 200ms ease, opacity 200ms ease;
+      outline: none;
+    }
+    .facts-scope-toggle > button[data-active="true"] {
+      background: rgba(255,255,255,0.12);
+      color: rgba(255,255,255,0.95);
+    }
+    .facts-scope-toggle > button:disabled {
+      cursor: not-allowed;
+      opacity: 0.32;
+    }
+    .facts-scope-toggle > button:not(:disabled):hover {
+      color: rgba(255,255,255,0.85);
+    }
+    body[data-theme="light"] .facts-scope-toggle > button { color: rgba(22,22,32,0.45); }
+    body[data-theme="light"] .facts-scope-toggle > button[data-active="true"] {
+      background: rgba(22,22,32,0.10);
+      color: rgba(22,22,32,0.92);
+    }
+    body[data-theme="light"] .facts-scope-toggle > button:not(:disabled):hover {
+      color: rgba(22,22,32,0.82);
+    }
+
+    /* Mono-label hint above the cover row — shown for the first 3 cover
+       clicks (localStorage-backed), then fades out gracefully. */
+    .player-art-hint {
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 10px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.45);
+      transition: opacity 500ms ease, transform 500ms ease;
+      pointer-events: none;
+      text-align: center;
+      flex-shrink: 0;
+    }
+    body[data-theme="light"] .player-art-hint { color: rgba(22,22,32,0.45); }
+    .player-art-hint--hidden { opacity: 0; transform: translateY(-4px); }
+
+    /* Side prev/next buttons flanking cover */
+    .player-side-btn {
+      width: 56px; height: 56px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.08);
+      color: rgba(255,255,255,0.55);
+      cursor: pointer;
+      opacity: 0.55;
+      transition: opacity 200ms ease, transform 200ms ease, color 200ms ease, border-color 200ms ease;
+      flex-shrink: 0;
+      padding: 0;
+    }
+    .player-side-btn:hover:not(:disabled) {
+      opacity: 1;
+      transform: scale(1.07);
+      color: #fff;
+      border-color: rgba(255,255,255,0.22);
+    }
+    .player-side-btn:active:not(:disabled) { transform: scale(0.96); }
+    .player-side-btn:disabled { cursor: default; opacity: 0.16; }
+    body[data-theme="light"] .player-side-btn {
+      border-color: rgba(22,22,32,0.10);
+      color: rgba(22,22,32,0.50);
+    }
+    body[data-theme="light"] .player-side-btn:hover:not(:disabled) {
+      color: #161620;
+      border-color: rgba(22,22,32,0.28);
+    }
+
+    /* Compact icon buttons in title row (like/dislike/lyrics/AI) + burst */
+    .player-icon-btn {
+      position: relative;
+      width: 34px; height: 34px;
+      border-radius: 50%;
+      display: inline-flex; align-items: center; justify-content: center;
+      background: transparent;
+      border: 1px solid transparent;
+      color: rgba(255,255,255,0.50);
+      cursor: pointer;
+      transition: color 160ms ease, background 160ms ease, transform 160ms ease;
+      padding: 0;
+      overflow: visible;
+    }
+    .player-icon-btn:hover { color: #fff; transform: scale(1.10); }
+    .player-icon-btn:active { transform: scale(0.94); }
+    .player-icon-btn[data-active="like"] { color: #cdb8ff; background: rgba(124,91,255,0.14); }
+    .player-icon-btn[data-active="dislike"] { color: #fb6f6f; background: rgba(239,68,68,0.14); }
+    .player-icon-btn[data-active="lyrics"] { color: #cdb8ff; background: rgba(124,91,255,0.14); }
+    body[data-theme="light"] .player-icon-btn { color: rgba(22,22,32,0.50); }
+    body[data-theme="light"] .player-icon-btn:hover { color: #161620; }
+    body[data-theme="light"] .player-icon-btn[data-active="like"]    { color: #5b3fd6; background: rgba(124,91,255,0.10); }
+    body[data-theme="light"] .player-icon-btn[data-active="dislike"] { color: #c0392b; background: rgba(239,68,68,0.10); }
+    body[data-theme="light"] .player-icon-btn[data-active="lyrics"]  { color: #5b3fd6; background: rgba(124,91,255,0.10); }
+
+    .player-icon-burst {
+      position: absolute;
+      inset: 0;
+      margin: auto;
+      width: 22px; height: 22px;
+      border-radius: 50%;
+      pointer-events: none;
+      animation: playerIconBurst 620ms cubic-bezier(0.22, 0.9, 0.3, 1) forwards;
+    }
+    .player-icon-burst--like    { background: radial-gradient(circle, rgba(124,91,255,0.65) 0%, rgba(124,91,255,0) 70%); }
+    .player-icon-burst--dislike { background: radial-gradient(circle, rgba(239,68,68,0.70) 0%, rgba(239,68,68,0) 70%); }
+    @keyframes playerIconBurst {
+      0%   { transform: scale(0.4); opacity: 0; }
+      18%  { opacity: 0.9; }
+      100% { transform: scale(4.5); opacity: 0; }
     }
     .player-art-front,
     .player-art-back {
@@ -695,7 +961,16 @@
     }
     /* Respect motion-reduction preference: instant swap, no flip. */
     @media (prefers-reduced-motion: reduce) {
-      .player-art-flipper { transition: none; }
+      .player-art-flipper,
+      .player-art-tilt,
+      .player-art-press { transition: none; }
+      .player-art-outgoing--next,
+      .player-art-outgoing--prev,
+      .player-art-entry--next,
+      .player-art-entry--prev,
+      .player-art-feedback,
+      .player-art-blur-overlay,
+      .player-icon-burst { animation: none; }
     }
 
     /* ─── Plan 4: Custom scrollbar for player surfaces ────────────────── */
@@ -1645,44 +1920,90 @@ function LandingPlayer({ isDark, lang, tracks, currentTrack, onTrackSelect, onTr
   );
 }
 
+// Fisher-Yates partial shuffle — return up to n unique random elements from arr.
+// If arr has <= n items, returns a shuffled copy of the whole array.
+function sampleN(arr, n) {
+  if (!Array.isArray(arr)) return [];
+  if (arr.length <= n) return arr.slice();
+  const copy = arr.slice();
+  for (let i = 0; i < n; i++) {
+    const j = i + Math.floor(Math.random() * (copy.length - i));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy.slice(0, n);
+}
+
+const ARTIST_SAMPLE_SIZE = 5;
+
 // ─── FactsRail (right-side panel: per-track "Did you know" facts) ─────────────
+// Two variants:
+//   - landing: combined song+artist items, random-collection fallback, type chips
+//   - player:  explicit scope toggle (SONG | ARTIST). No mixing, no random
+//              fallback. Sticky scope across tracks with auto fall-back when
+//              the chosen scope has no data for the current track.
 function FactsRail({ trackId, activeCollection, isDark, lang, accent, variant = "landing" }) {
   const c = useColors(isDark);
-  const [state, setState] = useState({ status: 'loading', items: [] });
+  const isPlayer = variant === "player";
+
+  // Raw source data — kept separate so the player variant can toggle between
+  // them without remixing. Landing variant combines them at render time.
+  const [songFacts, setSongFacts] = useState([]);
+  const [artistFactsAll, setArtistFactsAll] = useState([]);
+  // Random-sampled subset of artist facts (≤5). Reshuffled per track only,
+  // so the rotation through them within a single track is stable.
+  const [artistFactsSampled, setArtistFactsSampled] = useState([]);
+  // Landing-only fallback to /metadata/random-facts when the track has none.
+  const [fallbackItems, setFallbackItems] = useState([]);
+  const [status, setStatus] = useState('loading');
+  // Player scope is sticky across tracks. effectiveScope (derived below) may
+  // differ when the chosen scope has no data for the current track.
+  const [scope, setScope] = useState('song');
   const [idx, setIdx] = useState(0);
   const [paused, setPaused] = useState(false);
 
-  const intervalMs = variant === "player" ? 12000 : 6500;
-  const showTypeChips = variant !== "player";
-  const playerHeadingLabel = lang === "ru" ? "О ПЕСНЕ" : "ABOUT THIS SONG";
-  const factFontSize = variant === "player" ? 14 : 15;
+  const intervalMs = isPlayer ? 12000 : 6500;
+  const factFontSize = isPlayer ? 14 : 15;
 
-  // Type → label/color
+  // Type → label/color (used by landing variant's type chip + dot accent)
   const TYPE_META = {
     song:   { label: lang==='ru'?'О ПЕСНЕ':'ABOUT SONG',     color: 'oklch(60% 0.18 270)' },
     artist: { label: lang==='ru'?'АРТИСТ':'ARTIST',          color: 'oklch(70% 0.13 75)'  },
     misc:   { label: lang==='ru'?'ИЗ КОЛЛЕКЦИИ':'COLLECTION', color: c.textMuted          },
   };
 
-  // Fetch facts when track changes
+  // Fetch facts on track change
   useEffect(() => {
-    if (!trackId || !activeCollection) { setState({ status:'empty', items: [] }); return; }
+    if (!trackId || !activeCollection) {
+      setStatus('empty');
+      setSongFacts([]); setArtistFactsAll([]); setArtistFactsSampled([]); setFallbackItems([]);
+      return;
+    }
     let cancelled = false;
-    setState({ status:'loading', items: [] });
+    setStatus('loading');
     setIdx(0);
 
     apiFetch(`/metadata/tracks/${encodeURIComponent(trackId)}/facts?collection=${encodeURIComponent(activeCollection)}`)
       .then(res => {
         if (cancelled) return;
-        const items = [];
-        for (const f of (res.song_facts || []))   items.push({ text: f, type: 'song'   });
-        for (const f of (res.artist_facts || [])) items.push({ text: f, type: 'artist' });
+        const songs = res.song_facts || [];
+        const artists = res.artist_facts || [];
+        setSongFacts(songs);
+        setArtistFactsAll(artists);
+        setArtistFactsSampled(sampleN(artists, ARTIST_SAMPLE_SIZE));
 
-        if (items.length) {
-          setState({ status:'loaded', items });
+        if (songs.length || artists.length) {
+          setStatus('loaded');
+          setFallbackItems([]);
           return;
         }
-        // Fallback — random collection facts
+        // Player variant: no random-collection fallback — user explicitly
+        // complained about misleading "random facts on the song header".
+        // Landing variant keeps the legacy fallback to fill the rail.
+        if (isPlayer) {
+          setStatus('empty');
+          setFallbackItems([]);
+          return;
+        }
         apiFetch(`/metadata/random-facts?collection=${encodeURIComponent(activeCollection)}&limit=5`)
           .then(rand => {
             if (cancelled) return;
@@ -1690,23 +2011,55 @@ function FactsRail({ trackId, activeCollection, isDark, lang, accent, variant = 
               text: `${r.context} — ${r.fact}`,
               type: r.type === 'artist' ? 'artist' : (r.type === 'song' ? 'song' : 'misc'),
             }));
-            setState({ status: arr.length ? 'loaded' : 'empty', items: arr });
+            setFallbackItems(arr);
+            setStatus(arr.length ? 'loaded' : 'empty');
           })
-          .catch(() => setState({ status:'empty', items: [] }));
+          .catch(() => { setFallbackItems([]); setStatus('empty'); });
       })
-      .catch(() => { if (!cancelled) setState({ status:'empty', items: [] }); });
+      .catch(() => {
+        if (cancelled) return;
+        setSongFacts([]); setArtistFactsAll([]); setArtistFactsSampled([]); setFallbackItems([]);
+        setStatus('empty');
+      });
 
     return () => { cancelled = true; };
-  }, [trackId, activeCollection]);
+  }, [trackId, activeCollection, isPlayer]);
+
+  // Compute what the rail actually shows. Player variant: respects toggle
+  // with auto-fall-back to the other scope when the chosen one is empty.
+  const haveSong = songFacts.length > 0;
+  const haveArtist = artistFactsSampled.length > 0;
+  const effectiveScope =
+    (scope === 'song'   && !haveSong   && haveArtist) ? 'artist' :
+    (scope === 'artist' && !haveArtist && haveSong)   ? 'song'   :
+    scope;
+
+  // Items used for rotation/render. Player: single-scope; landing: combined.
+  let items;
+  if (isPlayer) {
+    items = effectiveScope === 'song'
+      ? songFacts.map(f => ({ text: f, type: 'song'   }))
+      : artistFactsSampled.map(f => ({ text: f, type: 'artist' }));
+  } else if (fallbackItems.length) {
+    items = fallbackItems;
+  } else {
+    items = [
+      ...songFacts.map(f => ({ text: f, type: 'song'   })),
+      ...artistFactsAll.map(f => ({ text: f, type: 'artist' })),
+    ];
+  }
+
+  // Reset idx whenever the source list changes (scope flip or new track)
+  useEffect(() => { setIdx(0); }, [effectiveScope, trackId]);
 
   // Auto-rotate (paused on hover)
   useEffect(() => {
-    if (state.status !== 'loaded' || state.items.length < 2 || paused) return;
-    const t = setInterval(() => setIdx(i => (i + 1) % state.items.length), intervalMs);
+    if (status !== 'loaded' || items.length < 2 || paused) return;
+    const t = setInterval(() => setIdx(i => (i + 1) % items.length), intervalMs);
     return () => clearInterval(t);
-  }, [state.status, state.items.length, paused]);
-
-  const isPlayer = variant === "player";
+    // items.length is the load-bearing dep — `items` itself is a fresh array
+    // every render, so depending on it would restart the interval each tick.
+  }, [status, items.length, paused, intervalMs]);
 
   const containerStyle = {
     borderLeft: isPlayer ? 'none' : `1px solid ${c.border}`,
@@ -1723,11 +2076,12 @@ function FactsRail({ trackId, activeCollection, isDark, lang, accent, variant = 
     padding: isPlayer ? '0 0 8px' : '18px 22px 12px',
     borderBottom: isPlayer ? 'none' : `1px solid ${c.border}`,
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    gap: 8,
   };
 
   // Body content selector
   let body;
-  if (state.status === 'loading') {
+  if (status === 'loading') {
     body = (
       <div style={{ padding:'24px 22px', display:'flex', flexDirection:'column', gap:10 }}>
         {[0,1,2,3].map(i => (
@@ -1742,22 +2096,29 @@ function FactsRail({ trackId, activeCollection, isDark, lang, accent, variant = 
         ))}
       </div>
     );
-  } else if (state.status === 'empty' || !state.items.length) {
-    body = (
-      <div style={{ padding:'28px 22px', display:'flex', flexDirection:'column', gap:10, color: c.textMuted, fontSize:13, lineHeight:1.55 }}>
-        <span style={{ width:24, height:1, background:c.border, marginBottom:4 }} />
-        <span>{lang==='ru'
+  } else if (status === 'empty' || !items.length) {
+    const emptyPad = isPlayer ? '10px 22px 18px' : '28px 22px';
+    // Player variant: tailor message to the active scope so user knows what's missing.
+    const emptyMsg = isPlayer
+      ? (effectiveScope === 'artist'
+          ? (lang==='ru' ? 'Фактов об артисте пока нет.' : 'No artist facts yet.')
+          : (lang==='ru' ? 'Фактов о песне пока нет.'    : 'No song facts yet.'))
+      : (lang==='ru'
           ? 'Факты появятся, когда библиотека будет обогащена.'
-          : 'Facts will appear here once your library is enriched.'}</span>
+          : 'Facts will appear here once your library is enriched.');
+    body = (
+      <div style={{ padding: emptyPad, display:'flex', flexDirection:'column', gap:10, color: c.textMuted, fontSize:13, lineHeight:1.55 }}>
+        <span style={{ width:24, height:1, background:c.border, marginBottom:4 }} />
+        <span>{emptyMsg}</span>
       </div>
     );
   } else {
-    const cur = state.items[idx] || state.items[0];
+    const cur = items[idx] || items[0];
     const meta = TYPE_META[cur.type] || TYPE_META.misc;
     body = (
       <div style={{ position:'relative', flex:1, display:'flex', flexDirection:'column', minHeight:0 }}>
-        {/* Type chip */}
-        {showTypeChips && (
+        {/* Type chip — landing only; player has the scope toggle in the header */}
+        {!isPlayer && (
         <div style={{
           position:'absolute', top:14, right:18, zIndex:2,
           padding:'3px 9px', borderRadius:99,
@@ -1769,8 +2130,11 @@ function FactsRail({ trackId, activeCollection, isDark, lang, accent, variant = 
         }}>{meta.label}</div>
         )}
 
-        {/* Fact body — keyed on idx so animation replays on change */}
-        <div key={idx}
+        {/* Fact body — key includes scope+trackId so factIn animation replays
+            on EVERY transition, not just idx changes. Without scope in the key,
+            toggling tabs while at idx=0 reused the same React node and the
+            new fact text appeared silently with no transition. */}
+        <div key={`${trackId}-${effectiveScope}-${idx}`}
           onMouseEnter={() => setPaused(true)}
           onMouseLeave={() => setPaused(false)}
           style={{
@@ -1789,13 +2153,13 @@ function FactsRail({ trackId, activeCollection, isDark, lang, accent, variant = 
         </div>
 
         {/* Dot indicator — landing variant only (player dots are in header) */}
-        {variant !== "player" && state.items.length > 1 && (
+        {!isPlayer && items.length > 1 && (
           <div style={{
             display:'flex', justifyContent:'center', alignItems:'center', gap:7,
             padding:'10px 22px 16px',
             borderTop:`1px solid ${c.border}`,
           }}>
-            {state.items.slice(0, 8).map((_, i) => {
+            {items.slice(0, 8).map((_, i) => {
               const active = i === idx;
               return (
                 <button key={i}
@@ -1810,9 +2174,9 @@ function FactsRail({ trackId, activeCollection, isDark, lang, accent, variant = 
                 />
               );
             })}
-            {state.items.length > 8 && (
+            {items.length > 8 && (
               <span className="mono" style={{ fontSize:10, color:c.textSubtle, marginLeft:4 }}>
-                +{state.items.length - 8}
+                +{items.length - 8}
               </span>
             )}
           </div>
@@ -1824,17 +2188,38 @@ function FactsRail({ trackId, activeCollection, isDark, lang, accent, variant = 
   return (
     <aside style={containerStyle}>
       <div style={headerStyle}>
-        <span className="mono-label" style={{
-          fontSize: isPlayer ? 10 : 11,
-          letterSpacing: isPlayer ? '0.20em' : '0.22em',
-          color: isPlayer ? c.textMuted : c.textSubtle,
-        }}>
-          {isPlayer ? playerHeadingLabel : (lang==='ru'?'※ ЗНАЕШЬ ЛИ ТЫ':'※ DID YOU KNOW')}
-        </span>
+        {isPlayer ? (
+          <div className="facts-scope-toggle">
+            <button
+              type="button"
+              data-active={effectiveScope === 'song'}
+              disabled={!haveSong}
+              onClick={() => { if (haveSong) setScope('song'); }}
+              aria-pressed={effectiveScope === 'song'}
+              title={haveSong ? '' : (lang==='ru'?'Нет фактов о песне':'No song facts')}
+            >{lang==='ru'?'ПЕСНЯ':'SONG'}</button>
+            <button
+              type="button"
+              data-active={effectiveScope === 'artist'}
+              disabled={!haveArtist}
+              onClick={() => { if (haveArtist) setScope('artist'); }}
+              aria-pressed={effectiveScope === 'artist'}
+              title={haveArtist ? '' : (lang==='ru'?'Нет фактов об артисте':'No artist facts')}
+            >{lang==='ru'?'АРТИСТ':'ARTIST'}</button>
+          </div>
+        ) : (
+          <span className="mono-label" style={{
+            fontSize: 11,
+            letterSpacing: '0.22em',
+            color: c.textSubtle,
+          }}>
+            {lang==='ru'?'※ ЗНАЕШЬ ЛИ ТЫ':'※ DID YOU KNOW'}
+          </span>
+        )}
         {/* Player variant: inline pagination dots */}
-        {isPlayer && state.status === 'loaded' && state.items.length > 1 && (
+        {isPlayer && status === 'loaded' && items.length > 1 && (
           <div style={{ display: 'flex', gap: 4 }}>
-            {state.items.map((_, i) => (
+            {items.map((_, i) => (
               <button
                 key={i}
                 onClick={() => {
@@ -1842,7 +2227,7 @@ function FactsRail({ trackId, activeCollection, isDark, lang, accent, variant = 
                   setPaused(true);
                   setTimeout(() => setPaused(false), 5000);
                 }}
-                aria-label={`Show fact ${i + 1} of ${state.items.length}`}
+                aria-label={`Show fact ${i + 1} of ${items.length}`}
                 style={{
                   width: 5,
                   height: 5,
@@ -1857,9 +2242,9 @@ function FactsRail({ trackId, activeCollection, isDark, lang, accent, variant = 
           </div>
         )}
         {/* Landing variant: numeric counter */}
-        {!isPlayer && state.status === 'loaded' && state.items.length > 1 && (
+        {!isPlayer && status === 'loaded' && items.length > 1 && (
           <span className="mono" style={{ fontSize:10, color:c.textSubtle, letterSpacing:'0.1em' }}>
-            {String(idx+1).padStart(2,'0')} / {String(state.items.length).padStart(2,'0')}
+            {String(idx+1).padStart(2,'0')} / {String(items.length).padStart(2,'0')}
           </span>
         )}
       </div>
@@ -4742,15 +5127,36 @@ function AIIndexingCard({ isDark, lang, activeCollection }) {
 
   const fmtStatus = (s) => {
     if (!s) return lang === 'ru' ? 'Никогда не запускалась' : 'Never run';
+    const skipped = s.n_skipped || 0;
     const parts = [
       `${lang === 'ru' ? 'Статус' : 'Status'}: ${s.status}`,
-      `${s.n_done}/${s.n_total} ${lang === 'ru' ? 'выполнено' : 'done'}`,
+      `${s.n_done}/${s.n_total} ${lang === 'ru' ? 'обработано' : 'processed'}`,
     ];
+    if (skipped) {
+      parts.push(`${skipped} ${lang === 'ru' ? 'пропущено' : 'skipped'}`);
+    }
     if (s.n_failed) {
       parts.push(`${s.n_failed} ${lang === 'ru' ? 'ошибок' : 'failed'}`);
     }
     if (s.lang) parts.push(s.lang.toUpperCase());
     return parts.join(' · ');
+  };
+
+  // Detect the "completed with zero real work" case so we can surface a
+  // distinct note instead of letting "done · 0/N processed · N skipped"
+  // get lost in the muted-mono line.
+  const isEmptyDone = (s) =>
+    s && s.status === 'done' && (s.n_done || 0) === 0 && (s.n_skipped || 0) > 0;
+
+  const skipReasonHint = (taskType) => {
+    if (taskType === 'sonic_vibe') {
+      return lang === 'ru'
+        ? 'Нет входных данных: ни sonic_tags, ни фактов. Сначала запусти SONIC PROMPT-PROBING и/или обогащение фактами в библиотеке.'
+        : 'No inputs available: neither sonic_tags nor song facts. Run sonic prompt-probing and/or facts enrichment in the library first.';
+    }
+    return lang === 'ru'
+      ? 'Нет фактов о треках/артистах для уточнения. Сначала обогати библиотеку фактами.'
+      : 'No song or artist facts to refine. Enrich your library with facts first.';
   };
 
   const Row = ({ title, taskType }) => {
@@ -4793,6 +5199,22 @@ function AIIndexingCard({ isDark, lang, activeCollection }) {
         <div style={{ marginTop: 6, fontSize: 11, color: c.textMuted, fontFamily: "'JetBrains Mono', monospace" }}>
           {fmtStatus(s)}
         </div>
+        {isEmptyDone(s) && (
+          <div style={{
+            marginTop: 6, fontSize: 11, lineHeight: 1.5,
+            color: 'oklch(70% 0.13 75)',
+          }}>
+            ⚠ {lang === 'ru'
+              ? 'Завершено без реальной работы — все треки пропущены.'
+              : 'Completed with no real work — every track was skipped.'}
+            <br />{skipReasonHint(taskType)}
+          </div>
+        )}
+        {s && s.error && (
+          <div style={{ marginTop: 6, fontSize: 11, lineHeight: 1.5, color: 'oklch(62% 0.18 25)' }}>
+            ✗ {s.error}
+          </div>
+        )}
       </div>
     );
   };
@@ -5552,78 +5974,6 @@ function LyricsBackFace({ track, isVisible, activeCollection, isDark, lang }) {
   );
 }
 
-// ─── PLAYER ACTION PILLS ────────────────────────────────────────────────────
-function PlayerActionPills({
-  liked, onLike, onDislike,
-  lyricsMode, onToggleLyrics,
-  onAskAI,
-  isDark, lang,
-}) {
-  const c = useColors(isDark);
-  const baseStyle = {
-    padding: '6px 14px',
-    borderRadius: 99,
-    fontSize: 12,
-    fontWeight: 500,
-    cursor: 'pointer',
-    border: `1px solid ${isDark ? 'rgba(255,255,255,0.10)' : 'rgba(22,22,32,0.14)'}`,
-    background: 'transparent',
-    color: c.textMuted,
-    transition: 'all 150ms ease',
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: 5,
-    fontFamily: 'inherit',
-  };
-  const activePurple = {
-    background: isDark ? 'rgba(124,91,255,0.15)' : 'rgba(124,91,255,0.10)',
-    color: isDark ? '#cdb8ff' : '#5b3fd6',
-    borderColor: 'rgba(124,91,255,0.40)',
-  };
-  const activeRed = {
-    background: isDark ? 'rgba(239,68,68,0.12)' : 'rgba(239,68,68,0.10)',
-    color: isDark ? '#fb6f6f' : '#c0392b',
-    borderColor: 'rgba(239,68,68,0.40)',
-  };
-  const aiTint = {
-    background: isDark ? 'rgba(124,91,255,0.10)' : 'rgba(124,91,255,0.06)',
-    color: isDark ? '#cdb8ff' : '#5b3fd6',
-    borderColor: 'rgba(124,91,255,0.30)',
-  };
-
-  return (
-    <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
-      <button
-        type="button"
-        style={{ ...baseStyle, ...(liked === 'like' ? activePurple : {}) }}
-        aria-pressed={liked === 'like'}
-        onClick={onLike}
-      >♥ {lang === 'ru' ? 'Нравится' : 'Like'}</button>
-
-      <button
-        type="button"
-        style={{ ...baseStyle, ...(liked === 'dislike' ? activeRed : {}) }}
-        aria-pressed={liked === 'dislike'}
-        onClick={onDislike}
-      >✕ {lang === 'ru' ? 'Пропустить' : 'Skip'}</button>
-
-      <button
-        type="button"
-        style={{ ...baseStyle, ...(lyricsMode ? activePurple : {}) }}
-        aria-pressed={lyricsMode}
-        onClick={onToggleLyrics}
-      >📜 {lang === 'ru' ? 'Текст' : 'Lyrics'}</button>
-
-      <button
-        type="button"
-        style={{ ...baseStyle, ...aiTint }}
-        onClick={onAskAI}
-        title={lang === 'ru' ? 'Спросить AI (Plan 5)' : 'Ask AI (Plan 5)'}
-      >✨ {lang === 'ru' ? 'Спросить AI' : 'Ask AI'}</button>
-    </div>
-  );
-}
-
 // ─── VIBE LINE ───────────────────────────────────────────────────────────────
 function VibeLine({ trackId, collection, lang, isDark }) {
   const [phrase, setPhrase] = useState(null);
@@ -5751,6 +6101,73 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
   const [isHovering, setIsHovering] = useState(false);
   const artWrapRef = useRef(null);
 
+  // Vinyl-stack transition: snapshot of outgoing track + direction, plus a
+  // nonce that bumps on every track change to re-trigger the CSS entry
+  // animation (CSS animations only replay when the keyed element remounts).
+  const [outgoingTrack, setOutgoingTrack] = useState(null);
+  const [transitionDir, setTransitionDir] = useState('next');
+  const [entryNonce, setEntryNonce] = useState(0);
+  const transitionTimerRef = useRef(null);
+
+  // Burst feedback for like/dislike icon clicks (single active burst at a time)
+  const [burstFor, setBurstFor] = useState(null);
+  const burstTimerRef = useRef(null);
+
+  // Play/pause glassy indicator: 'play' | 'pause' | null. Keyed nonce
+  // re-mounts the element so the CSS animation replays on every toggle.
+  const [playFeedback, setPlayFeedback] = useState(null);
+  const [playFeedbackKey, setPlayFeedbackKey] = useState(0);
+  const playFeedbackTimerRef = useRef(null);
+  const PLAY_FEEDBACK_MS = 1200;
+
+  // First-3-clicks hint, persisted across page loads via localStorage so
+  // returning users don't see it forever. Counter is incremented on each
+  // cover-click toggle, not on every play/pause from other surfaces.
+  const HINT_LIMIT = 3;
+  const HINT_STORAGE_KEY = 'musix_cover_play_hint_count';
+  const [hintVisible, setHintVisible] = useState(() => {
+    try {
+      const n = parseInt(localStorage.getItem(HINT_STORAGE_KEY) || '0', 10);
+      return n < HINT_LIMIT;
+    } catch { return true; }
+  });
+  const hintHideTimerRef = useRef(null);
+
+  // Cleanup transient timers on unmount
+  useEffect(() => () => {
+    if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current);
+    if (burstTimerRef.current) clearTimeout(burstTimerRef.current);
+    if (playFeedbackTimerRef.current) clearTimeout(playFeedbackTimerRef.current);
+    if (hintHideTimerRef.current) clearTimeout(hintHideTimerRef.current);
+  }, []);
+
+  const flashPlayFeedback = (kind) => {
+    setPlayFeedback(kind);
+    setPlayFeedbackKey(k => k + 1);
+    if (playFeedbackTimerRef.current) clearTimeout(playFeedbackTimerRef.current);
+    playFeedbackTimerRef.current = setTimeout(() => setPlayFeedback(null), PLAY_FEEDBACK_MS);
+  };
+
+  // Cover-specific click handler: triggers togglePlay (which also flashes the
+  // glassy indicator) and ticks the hint counter. Hint is cover-specific —
+  // Space-bar users don't need to be reminded which surface they just used.
+  const handleCoverClick = () => {
+    if (!currentTrack) return;
+    togglePlay();
+    if (hintVisible) {
+      try {
+        const cur = parseInt(localStorage.getItem(HINT_STORAGE_KEY) || '0', 10);
+        const next = cur + 1;
+        localStorage.setItem(HINT_STORAGE_KEY, String(next));
+        if (next >= HINT_LIMIT) {
+          // Let user see the hint during this final click, then fade.
+          if (hintHideTimerRef.current) clearTimeout(hintHideTimerRef.current);
+          hintHideTimerRef.current = setTimeout(() => setHintVisible(false), 700);
+        }
+      } catch { /* ignore localStorage failures (private mode etc.) */ }
+    }
+  };
+
   const handleArtMouseMove = useCallback((e) => {
     if (!artWrapRef.current) return;
     const r = artWrapRef.current.getBoundingClientRect();
@@ -5857,13 +6274,34 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
   // (a new object literal each useAudioPlayer render). Without this,
   // listener teardown+re-add would fire on every timeupdate (~4Hz),
   // briefly leaving the element without any 'ended' listener.
+  // Trigger the vinyl transition: snapshot current track for the outgoing
+  // animation, bump entryNonce to remount the entry wrapper, and schedule
+  // cleanup once the longest animation (720ms entry) finishes.
+  const triggerVinyl = (dir) => {
+    if (currentTrack) {
+      setOutgoingTrack(currentTrack);
+      setTransitionDir(dir);
+    }
+    setEntryNonce(n => n + 1);
+    if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current);
+    // 320ms delay + 600ms bounce = 920ms total; small buffer for jitter.
+    transitionTimerRef.current = setTimeout(() => setOutgoingTrack(null), 960);
+  };
+
+  const triggerBurst = (kind) => {
+    setBurstFor(kind);
+    if (burstTimerRef.current) clearTimeout(burstTimerRef.current);
+    burstTimerRef.current = setTimeout(() => setBurstFor(null), 640);
+  };
+
   useEffect(() => {
     const el = audio?.audioRef?.current;
     if (!el) return;
     const onEnded = () => {
       const lastIdx = playlist.length - 1;
       if (currentIndex >= 0 && currentIndex < lastIdx) {
-        // Plain auto-advance — reuse playTrackAt's logic
+        // Plain auto-advance — vinyl transition for visual continuity
+        triggerVinyl('next');
         playTrackAt(currentIndex + 1);
       } else if (onRequestAutoplay && currentTrack) {
         // Exhausted current playlist — ask App to fetch more
@@ -5876,13 +6314,32 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
     // rebinds against a fresh playTrackAt closure with the new URL prefix.
   }, [currentIndex, playlist.length, audio?.audioRef, currentTrack, onRequestAutoplay, activeCollection]);
 
-  const togglePlay = () => { if (audio) audio.togglePlay(); };
-  const nextTrack = () => { if (currentIndex < playlist.length - 1) playTrackAt(currentIndex + 1); };
-  const prevTrack = () => { if (currentIndex > 0) playTrackAt(currentIndex - 1); };
+  const togglePlay = () => {
+    if (!audio) return;
+    // Capture current isPlaying BEFORE toggling so we know which icon to
+    // flash. Fired only from intentional user toggles (cover click, Space)
+    // — auto-events on the audio element bypass this and don't flash.
+    const willPause = isPlaying;
+    audio.togglePlay();
+    flashPlayFeedback(willPause ? 'pause' : 'play');
+  };
+  const nextTrack = () => {
+    if (currentIndex < playlist.length - 1) {
+      triggerVinyl('next');
+      playTrackAt(currentIndex + 1);
+    }
+  };
+  const prevTrack = () => {
+    if (currentIndex > 0) {
+      triggerVinyl('prev');
+      playTrackAt(currentIndex - 1);
+    }
+  };
   const seek = (time) => { if (audio) audio.seek(time); };
 
   const setReaction = async (val) => {
     if (!currentTrack || !activeCollection) return;
+    triggerBurst(val);  // visual feedback fires immediately, even if API is slow
     try {
       await apiFetch(`/search/tracks/${currentTrack.track_id}/reaction`, {
         method: 'POST',
@@ -5924,15 +6381,9 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
       background: `linear-gradient(180deg, ${pBg} 0%, ${pBgEnd} 100%)`,
       position: 'relative',
     }}>
-      {/* Section header */}
-      <SectionHeader
-        isDark={isDark} lang={lang}
-        kicker={lang==='ru'?'РАЗДЕЛ 04 · ПЛЕЕР':'SECTION 04 · PLAYER'}
-        title={lang==='ru'?'Плеер':'Player'}
-      />
-
-      {/* Main content area */}
-      <div style={{ flex:1, display:'flex', overflow:'hidden', padding:'0 32px 28px', gap:'28px', position:'relative' }}>
+      {/* Main content area — top padding gives the cover breathing room from
+          the (now collapsed) section header bar. */}
+      <div style={{ flex:1, display:'flex', overflow:'hidden', padding:'clamp(24px, 5vh, 56px) 32px 24px', gap:'28px', position:'relative' }}>
 
         {/* Ambient glow orb behind left panel */}
         <div className="player-ambient-orb" style={{
@@ -5942,232 +6393,334 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
         }} />
 
         {/* ════════════════ LEFT: Player ════════════════
-            Outer column flex-grows; inner content is constrained to the cover
-            width so the playback controls don't stretch across the whole 60%
-            column ("constrained reading width" — keeps the airy aesthetic). */}
+            justifyContent:center keeps the cover+controls visually centered
+            within the column when there's vertical slack. The cover-row sits
+            outside the constrained-width inner wrapper so prev/next side
+            buttons can flank the cover in the column's empty horizontal slack. */}
         <div className="player-fade-in" style={{
           flex:1, minWidth:0,
           display:'flex', flexDirection:'column',
-          alignItems:'center',
-          gap:'20px', paddingTop:'12px', position:'relative', zIndex:1,
-          overflow:'hidden',
-        }}>
-        <div style={{
-          width:'100%',
-          maxWidth:'clamp(220px, 60vh, 640px)',
-          display:'flex', flexDirection:'column', gap:'20px',
-          minHeight:0,
+          alignItems:'center', justifyContent:'center',
+          gap:'clamp(14px, 2vh, 24px)', position:'relative', zIndex:1,
+          overflow:'hidden', padding:'clamp(8px, 2vh, 24px) 0',
         }}>
 
-          {/* Album art: flip card — front=cover, back=lyrics (Plan 4) */}
-          <div
-            ref={artWrapRef}
-            className="player-art-wrap"
-            onMouseMove={lyricsMode ? undefined : handleArtMouseMove}
-            onMouseEnter={lyricsMode ? undefined : handleArtMouseEnter}
-            onMouseLeave={handleArtMouseLeave}
-          >
+          {/* First-3-clicks hint above the cover row. Stays in the DOM so the
+              fade-out animates; collapses to a near-zero footprint when hidden
+              so it doesn't push the cover down for returning users. */}
+          {currentTrack && (
             <div
-              className="player-art-tilt"
-              style={{
-                transform: lyricsMode
-                  ? 'none'
-                  : `rotateY(${tilt.y * 10}deg) rotateX(${-tilt.x * 10}deg) scale(${isHovering ? 1.04 : 1})`,
-              }}
+              className={`player-art-hint${hintVisible ? '' : ' player-art-hint--hidden'}`}
+              style={{ height: hintVisible ? 'auto' : 0, marginBottom: hintVisible ? 4 : 0 }}
+              aria-hidden={!hintVisible}
             >
-            <div
-              className="player-art-flipper"
-              style={{
-                transform: lyricsMode ? 'rotateY(180deg)' : 'none',
-              }}
-            >
-              <div className="player-art-front">
-                <AlbumCover
-                  title={currentTrack?.title || ''}
-                  artist={currentTrack?.artist || ''}
-                  fluid
-                  isDark={isDark}
-                  coverPath={currentTrack?.cover_art_path}
-                  radius={20}
-                  spinning={isPlaying}
-                />
-                {/* Shine overlay — kept on front face so tilt highlight stays on cover side.
-                    Removed from back face intentionally: lyrics surface should be flat/readable. */}
-                <div
-                  className="player-art-shine"
-                  style={{
-                    background: isHovering
-                      ? `linear-gradient(${135 + tilt.y * 20}deg, rgba(255,255,255,0) 30%, rgba(255,255,255,0.22) ${48 + tilt.y * 8}%, rgba(255,255,255,0) 65%)`
-                      : 'linear-gradient(135deg, rgba(255,255,255,0) 35%, rgba(255,255,255,0) 65%)',
-                  }}
-                />
-              </div>
-              <div className="player-art-back">
-                <LyricsBackFace
-                  track={currentTrack}
-                  isVisible={lyricsMode}
-                  activeCollection={activeCollection}
-                  isDark={isDark}
-                  lang={lang}
-                />
-              </div>
-            </div>
-            </div>
-          </div>
-
-          {/* Track info — font sizes track viewport height so they pair with
-              the 60vh cover above instead of looking dwarfed on big screens. */}
-          {currentTrack ? (
-            <div style={{ textAlign:'center', paddingLeft:'20px', paddingRight:'20px' }}>
-              <div style={{
-                fontSize:'clamp(20px, 2.6vh, 32px)', fontWeight:'700', color:pText, letterSpacing:'-0.02em',
-                lineHeight:'1.15', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
-              }}>
-                {currentTrack.title}
-              </div>
-              <div style={{ fontSize:'clamp(14px, 1.75vh, 20px)', color:pTextMuted, marginTop:'6px', fontWeight:'400' }}>
-                {currentTrack.artist}
-              </div>
-              {currentTrack.album && (
-                <div style={{ fontSize:'clamp(12px, 1.4vh, 16px)', color:pTextSubtle, marginTop:'3px' }}>
-                  {currentTrack.album}{currentTrack.year ? ` · ${currentTrack.year}` : ''}
-                </div>
-              )}
-              <VibeLine
-                trackId={currentTrack?.track_id}
-                collection={activeCollection}
-                lang={lang}
-                isDark={isDark}
-              />
-
-              {/* Reaction / action pills */}
-              <div style={{ marginTop:'16px' }}>
-                <PlayerActionPills
-                  liked={liked}
-                  onLike={() => setReaction('like')}
-                  onDislike={() => setReaction('dislike')}
-                  lyricsMode={lyricsMode}
-                  onToggleLyrics={onToggleLyrics}
-                  onAskAI={() => showToast?.(lang === 'ru'
-                    ? 'AI-чат появится в следующем плане (Plan 5)'
-                    : 'AI Chat coming in Plan 5')}
-                  isDark={isDark}
-                  lang={lang}
-                />
-              </div>
-            </div>
-          ) : (
-            <div style={{ textAlign:'center', padding:'30px 0' }}>
-              <div style={{ fontSize:'14px', color:pTextSubtle, fontFamily:"'JetBrains Mono', monospace", letterSpacing:'0.15em' }}>
-                {lang==='ru'?'ВЫБЕРИТЕ ТРЕК':'SELECT A TRACK'}
-              </div>
+              {lang === 'ru'
+                ? 'Нажми на обложку, чтобы поставить на паузу'
+                : 'Tap the cover to play or pause'}
             </div>
           )}
 
-          {/* Progress bar */}
-          <div style={{ padding:'0 20px' }}>
-            <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
-              <span style={{ fontSize:'12px', color:pTextSubtle, fontFamily:"'JetBrains Mono', monospace", minWidth:'38px', textAlign:'right', fontSize:'11px' }}>
-                {fmt(currentTime)}
-              </span>
+          {/* Cover row: [◄] [cover] [►] */}
+          <div style={{
+            display:'flex', alignItems:'center', justifyContent:'center',
+            gap:'clamp(12px, 2.5vw, 36px)', width:'100%', flexShrink:0,
+          }}>
+            <button
+              type="button" className="player-side-btn"
+              onClick={prevTrack} disabled={currentIndex <= 0}
+              title={lang==='ru'?'Предыдущий':'Previous'}
+              aria-label={lang==='ru'?'Предыдущий':'Previous'}
+            >
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="15 18 9 12 15 6"/>
+              </svg>
+            </button>
+
+            {/* Album art: flip card + vinyl-stack transition. Clicking toggles
+                play and flashes the glassy feedback indicator. */}
+            <div
+              ref={artWrapRef}
+              className="player-art-wrap"
+              onMouseMove={lyricsMode || outgoingTrack ? undefined : handleArtMouseMove}
+              onMouseEnter={lyricsMode ? undefined : handleArtMouseEnter}
+              onMouseLeave={handleArtMouseLeave}
+              onClick={currentTrack ? handleCoverClick : undefined}
+              style={{ cursor: currentTrack ? 'pointer' : 'default' }}
+            >
+              {/* Outgoing cover snapshot — animates "into the stack". Keyed on
+                  entryNonce so rapid next-spam restarts the exit cleanly. */}
+              {outgoingTrack && (
+                <div key={`outgoing-${entryNonce}`}
+                  className={`player-art-outgoing player-art-outgoing--${transitionDir}`}>
+                  <div className="player-art-front">
+                    <AlbumCover
+                      title={outgoingTrack.title || ''}
+                      artist={outgoingTrack.artist || ''}
+                      fluid
+                      isDark={isDark}
+                      coverPath={outgoingTrack.cover_art_path}
+                      radius={20}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Press wrapper: own transform layer for the physical-button
+                  scale-down on click. Sits between wrap and entry so its
+                  scale doesn't fight with the entry/tilt/flip transforms. */}
+              <div className="player-art-press">
+                {/* Incoming cover — keyed on entryNonce so the CSS entry
+                    animation replays on every track change. Direction class
+                    is applied only after a real transition has been triggered;
+                    the initial mount stays still so the cover doesn't fly in
+                    on first page load. */}
+                <div
+                  key={entryNonce}
+                  className={`player-art-entry${entryNonce > 0 ? ` player-art-entry--${transitionDir}` : ''}`}
+                >
+                  <div
+                    className="player-art-tilt"
+                    style={{
+                      transform: lyricsMode || outgoingTrack
+                        ? 'none'
+                        : `rotateY(${tilt.y * 10}deg) rotateX(${-tilt.x * 10}deg) scale(${isHovering ? 1.04 : 1})`,
+                    }}
+                  >
+                    <div
+                      className="player-art-flipper"
+                      style={{ transform: lyricsMode ? 'rotateY(180deg)' : 'none' }}
+                    >
+                      <div className="player-art-front">
+                        <AlbumCover
+                          title={currentTrack?.title || ''}
+                          artist={currentTrack?.artist || ''}
+                          fluid
+                          isDark={isDark}
+                          coverPath={currentTrack?.cover_art_path}
+                          radius={20}
+                          spinning={isPlaying}
+                        />
+                        {/* Frosted blur overlay during play/pause feedback.
+                            Keyed on playFeedbackKey to restart animation. */}
+                        {playFeedback && (
+                          <div key={`blur-${playFeedbackKey}`}
+                            className="player-art-blur-overlay" />
+                        )}
+                        {/* Shine — halved alpha (was 0.22 → 0.11) per request */}
+                        <div
+                          className="player-art-shine"
+                          style={{
+                            background: isHovering
+                              ? `linear-gradient(${135 + tilt.y * 20}deg, rgba(255,255,255,0) 30%, rgba(255,255,255,0.11) ${48 + tilt.y * 8}%, rgba(255,255,255,0) 65%)`
+                              : 'linear-gradient(135deg, rgba(255,255,255,0) 35%, rgba(255,255,255,0) 65%)',
+                          }}
+                        />
+                      </div>
+                      <div className="player-art-back">
+                        <LyricsBackFace
+                          track={currentTrack}
+                          isVisible={lyricsMode}
+                          activeCollection={activeCollection}
+                          isDark={isDark}
+                          lang={lang}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Glassy play/pause indicator — appears on cover click, fades
+                  out over ~1200ms. Outside tilt/flip so it stays upright.
+                  The icon shape itself is the glass surface (CSS mask + backdrop-
+                  filter); no surrounding circle. */}
+              {playFeedback && (
+                <div key={`fb-${playFeedbackKey}`} className="player-art-feedback">
+                  <div className={`player-art-feedback-icon player-art-feedback-icon--${playFeedback}`} />
+                </div>
+              )}
+            </div>
+
+            <button
+              type="button" className="player-side-btn"
+              onClick={nextTrack} disabled={currentIndex >= playlist.length - 1}
+              title={lang==='ru'?'Следующий':'Next'}
+              aria-label={lang==='ru'?'Следующий':'Next'}
+            >
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="9 18 15 12 9 6"/>
+              </svg>
+            </button>
+          </div>
+
+          {/* Controls + meta column, constrained to cover width. The cover-row
+              above is the only element allowed to spill outside this clamp. */}
+          <div style={{
+            width:'100%',
+            maxWidth:'clamp(220px, 60vh, 640px)',
+            display:'flex', flexDirection:'column',
+            gap:'clamp(10px, 1.6vh, 18px)',
+            minHeight:0,
+          }}>
+
+            {/* Title row hosts inline action icons (like/dislike/lyrics/AI) so
+                they share the same line as the title, saving vertical space. */}
+            {currentTrack ? (
+              <div style={{ textAlign:'center', padding:'0 8px' }}>
+                <div style={{
+                  display:'flex', alignItems:'center', justifyContent:'center',
+                  gap:12, minWidth:0,
+                }}>
+                  <div style={{
+                    fontSize:'clamp(20px, 2.6vh, 32px)', fontWeight:'700', color:pText,
+                    letterSpacing:'-0.02em', lineHeight:'1.15',
+                    whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+                    minWidth:0,
+                  }}>
+                    {currentTrack.title}
+                  </div>
+                  <div style={{ display:'flex', gap:2, flexShrink:0 }}>
+                    <button
+                      type="button" className="player-icon-btn"
+                      data-active={liked === 'like' ? 'like' : ''}
+                      aria-pressed={liked === 'like'}
+                      onClick={() => setReaction('like')}
+                      title={lang === 'ru' ? 'Нравится' : 'Like'}
+                    >
+                      <svg width="18" height="18" viewBox="0 0 24 24"
+                        fill={liked === 'like' ? 'currentColor' : 'none'}
+                        stroke="currentColor" strokeWidth="2"
+                        strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+                      </svg>
+                      {burstFor === 'like' && <span className="player-icon-burst player-icon-burst--like" />}
+                    </button>
+                    <button
+                      type="button" className="player-icon-btn"
+                      data-active={liked === 'dislike' ? 'dislike' : ''}
+                      aria-pressed={liked === 'dislike'}
+                      onClick={() => setReaction('dislike')}
+                      title={lang === 'ru' ? 'Пропустить' : 'Skip'}
+                    >
+                      {/* Broken-heart: heart outline + jagged break overlay */}
+                      <svg width="18" height="18" viewBox="0 0 24 24"
+                        fill={liked === 'dislike' ? 'currentColor' : 'none'}
+                        stroke="currentColor" strokeWidth="2"
+                        strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+                        <polyline points="13 5 10.5 9.5 13.5 12 10 16"
+                          fill="none" stroke={isDark ? '#0B0E14' : '#f4f5fa'} strokeWidth="1.8"/>
+                      </svg>
+                      {burstFor === 'dislike' && <span className="player-icon-burst player-icon-burst--dislike" />}
+                    </button>
+                    <button
+                      type="button" className="player-icon-btn"
+                      data-active={lyricsMode ? 'lyrics' : ''}
+                      aria-pressed={lyricsMode}
+                      onClick={onToggleLyrics}
+                      title={lang === 'ru' ? 'Текст песни' : 'Lyrics'}
+                    >
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="4" y1="7"  x2="20" y2="7"/>
+                        <line x1="4" y1="12" x2="20" y2="12"/>
+                        <line x1="4" y1="17" x2="14" y2="17"/>
+                      </svg>
+                    </button>
+                    <button
+                      type="button" className="player-icon-btn"
+                      onClick={() => showToast?.(lang === 'ru'
+                        ? 'AI-чат появится в следующем плане (Plan 5)'
+                        : 'AI Chat coming in Plan 5')}
+                      title={lang === 'ru' ? 'Спросить AI' : 'Ask AI'}
+                    >
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 2.5l1.6 4.4L18 8.5l-4.4 1.6L12 14.5l-1.6-4.4L6 8.5l4.4-1.6L12 2.5zM18.5 13l.95 2.6L22 16.5l-2.55.9L18.5 20l-.95-2.6L15 16.5l2.55-.9L18.5 13zM5.5 13l.95 2.6L9 16.5l-2.55.9L5.5 20l-.95-2.6L2 16.5l2.55-.9L5.5 13z"/>
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+                <div style={{ fontSize:'clamp(14px, 1.75vh, 20px)', color:pTextMuted, marginTop:'6px', fontWeight:'400' }}>
+                  {currentTrack.artist}
+                </div>
+                {currentTrack.album && (
+                  <div style={{ fontSize:'clamp(12px, 1.4vh, 16px)', color:pTextSubtle, marginTop:'3px' }}>
+                    {currentTrack.album}{currentTrack.year ? ` · ${currentTrack.year}` : ''}
+                  </div>
+                )}
+                <VibeLine
+                  trackId={currentTrack?.track_id}
+                  collection={activeCollection}
+                  lang={lang}
+                  isDark={isDark}
+                />
+              </div>
+            ) : (
+              <div style={{ textAlign:'center', padding:'30px 0' }}>
+                <div style={{ fontSize:'14px', color:pTextSubtle, fontFamily:"'JetBrains Mono', monospace", letterSpacing:'0.15em' }}>
+                  {lang==='ru'?'ВЫБЕРИТЕ ТРЕК':'SELECT A TRACK'}
+                </div>
+              </div>
+            )}
+
+            {/* Progress bar */}
+            <div style={{ padding:'0 20px' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
+                <span style={{ color:pTextSubtle, fontFamily:"'JetBrains Mono', monospace", minWidth:'38px', textAlign:'right', fontSize:'11px' }}>
+                  {fmt(currentTime)}
+                </span>
+                <input
+                  type="range" min={0} max={duration || 0} step={0.5}
+                  value={currentTime}
+                  onChange={e => seek(Number(e.target.value))}
+                  className="player-progress"
+                  style={{
+                    flex:1, height:'6px', borderRadius:'3px',
+                    background: `linear-gradient(to right, ${pAccent} ${progressPct}%, ${pUnfilled} ${progressPct}%)`,
+                  }}
+                />
+                <span style={{ color:pTextSubtle, fontFamily:"'JetBrains Mono', monospace", minWidth:'38px', fontSize:'11px' }}>
+                  {fmt(duration)}
+                </span>
+              </div>
+            </div>
+
+            {/* Volume */}
+            <div style={{ display:'flex', alignItems:'center', gap:'10px', padding:'0 20px' }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={pTextSubtle} strokeWidth="2" strokeLinecap="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+              </svg>
               <input
-                type="range" min={0} max={duration || 0} step={0.5}
-                value={currentTime}
-                onChange={e => seek(Number(e.target.value))}
-                className="player-progress"
+                type="range" min={0} max={1} step={0.01}
+                value={volume}
+                onChange={e => setVolume(Number(e.target.value))}
+                className="player-volume"
                 style={{
-                  flex:1, height:'6px', borderRadius:'3px',
-                  background: `linear-gradient(to right, ${pAccent} ${progressPct}%, ${pUnfilled} ${progressPct}%)`,
+                  flex:1, height:'4px', borderRadius:'2px',
+                  background: `linear-gradient(to right, ${pAccent} ${volumePct}%, ${pUnfilled} ${volumePct}%)`,
                 }}
               />
-              <span style={{ fontSize:'12px', color:pTextSubtle, fontFamily:"'JetBrains Mono', monospace", minWidth:'38px', fontSize:'11px' }}>
-                {fmt(duration)}
-              </span>
             </div>
           </div>
-
-          {/* Controls */}
-          <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:'20px' }}>
-            {/* Prev */}
-            <button onClick={prevTrack} className="player-ctrl-btn"
-              style={{
-                width:'46px', height:'46px', borderRadius:'50%',
-                display:'flex', alignItems:'center', justifyContent:'center',
-                background:'transparent', border:`1px solid ${pBorder}`,
-                color:pTextMuted, fontSize:'18px',
-              }}
-              disabled={currentIndex <= 0}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polygon points="19 20 9 12 19 4 19 20"/>
-                <line x1="5" y1="19" x2="5" y2="5"/>
-              </svg>
-            </button>
-
-            {/* Play/Pause */}
-            <button onClick={togglePlay} className="player-play-btn"
-              style={{
-                width:'72px', height:'72px', borderRadius:'50%',
-                display:'flex', alignItems:'center', justifyContent:'center',
-                background: `linear-gradient(135deg, ${pAccent}, ${pAccentEnd})`,
-                boxShadow:`0 4px 20px rgba(124,91,255,0.4), inset 0 1px 0 rgba(255,255,255,0.15)`,
-                color:'#FFFFFF', fontSize:'26px',
-              }}>
-              {isPlaying
-                ? <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
-                : <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor"><polygon points="8 5 19 12 8 19 8 5"/></svg>
-              }
-            </button>
-
-            {/* Next */}
-            <button onClick={nextTrack} className="player-ctrl-btn"
-              style={{
-                width:'46px', height:'46px', borderRadius:'50%',
-                display:'flex', alignItems:'center', justifyContent:'center',
-                background:'transparent', border:`1px solid ${pBorder}`,
-                color:pTextMuted, fontSize:'18px',
-              }}
-              disabled={currentIndex >= playlist.length - 1}>
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <polygon points="5 4 15 12 5 20 5 4"/>
-                <line x1="19" y1="5" x2="19" y2="19"/>
-              </svg>
-            </button>
-          </div>
-
-          {/* Volume */}
-          <div style={{ display:'flex', alignItems:'center', gap:'10px', padding:'0 20px' }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={pTextSubtle} strokeWidth="2" strokeLinecap="round">
-              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-              <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
-            </svg>
-            <input
-              type="range" min={0} max={1} step={0.01}
-              value={volume}
-              onChange={e => setVolume(Number(e.target.value))}
-              className="player-volume"
-              style={{
-                flex:1, height:'4px', borderRadius:'2px',
-                background: `linear-gradient(to right, ${pAccent} ${volumePct}%, ${pUnfilled} ${volumePct}%)`,
-              }}
-            />
-          </div>
-        </div>
         </div>
 
         {/* ════════════════ RIGHT: Facts + Queue ════════════════
-            Capped at 40% of viewport width (was flex:1 = grew to fill).
-            Left column gets the remaining ~60%, putting the cover and its
-            controls visually centered in the larger half of the player. */}
+            Capped at 40% width. Top padding matches the left column's, so the
+            "О ПЕСНЕ" header aligns with the cover's vertical start. When the
+            queue is empty, the column centers its content vertically so the
+            facts+queue cards don't sit awkwardly at the top with empty space
+            beneath. When the queue has items, it grows + scrolls normally. */}
         <div style={{
           flex: '0 0 40%',
           maxWidth: '40%',
           display: 'flex',
           flexDirection: 'column',
+          justifyContent: playlist.length === 0 ? 'center' : 'flex-start',
           gap: 18,
           overflow: 'hidden',
           position: 'relative',
           zIndex: 1,
-          padding: '8px 4px',
+          padding: 'clamp(24px, 5vh, 56px) 4px 16px',
           minHeight: 0,
         }}>
 
@@ -6183,9 +6736,11 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
           {/* Separator between facts and queue */}
           <div style={{ borderTop: `1px solid ${isDark ? '#2a2a32' : 'rgba(22,22,32,0.08)'}` }} />
 
-          {/* QUEUE block — flex-grows to fill remaining height */}
+          {/* QUEUE block — flex:1 when there are items (scrolls to fill);
+              flex:'0 0 auto' when empty so the column's justifyContent:'center'
+              can actually center the small empty-state content. */}
           <div style={{
-            flex: 1,
+            flex: playlist.length === 0 ? '0 0 auto' : 1,
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
