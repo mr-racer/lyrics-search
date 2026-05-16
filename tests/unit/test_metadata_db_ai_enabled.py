@@ -30,3 +30,35 @@ def test_ai_enabled_defaults_to_1_when_row_created_without_explicit_value():
     ).fetchone()
     assert row is not None
     assert row[0] == 1
+
+
+def test_get_returns_true_when_row_missing():
+    """Pre-migration collections without a settings row should default to True.
+    Some collections were indexed without ever calling set_collection_text_model."""
+    assert MetadataDB.get_collection_ai_enabled("never_seen") is True
+
+
+def test_set_then_get_persists():
+    MetadataDB.set_collection_ai_enabled("colA", False)
+    assert MetadataDB.get_collection_ai_enabled("colA") is False
+    MetadataDB.set_collection_ai_enabled("colA", True)
+    assert MetadataDB.get_collection_ai_enabled("colA") is True
+
+
+def test_set_creates_row_when_missing():
+    """First call should INSERT, second should UPDATE (no UNIQUE conflict)."""
+    MetadataDB.set_collection_ai_enabled("colB", False)
+    conn = MetadataDB.get()
+    rows = conn.execute(
+        "SELECT collection_name, ai_enabled FROM collection_settings WHERE collection_name = ?",
+        ("colB",),
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0][1] == 0
+
+
+def test_set_isolated_per_collection():
+    MetadataDB.set_collection_ai_enabled("colA", False)
+    MetadataDB.set_collection_ai_enabled("colB", True)
+    assert MetadataDB.get_collection_ai_enabled("colA") is False
+    assert MetadataDB.get_collection_ai_enabled("colB") is True
