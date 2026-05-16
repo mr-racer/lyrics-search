@@ -629,22 +629,6 @@
       display: flex;
       justify-content: center;
       align-items: center;
-      cursor: pointer;
-    }
-    .player-art-inner {
-      position: relative;
-      width: 320px;
-      height: 320px;
-      max-width: 100%;
-      max-height: 100%;
-      flex-shrink: 0;
-      border-radius: 24px;
-      overflow: hidden;
-      transform-style: preserve-3d;
-      transition: transform 0.5s cubic-bezier(0.2, 0.7, 0.1, 1);
-      box-shadow:
-        0 30px 80px rgba(0,0,0,0.45),
-        0 0 0 1px rgba(255,255,255,0.08) inset;
     }
     .player-art-shine {
       position: absolute;
@@ -672,6 +656,14 @@
       -webkit-backface-visibility: hidden;
       border-radius: 20px;
       overflow: hidden;
+    }
+    /* Front face inherits the dramatic dark drop-shadow that the old
+       .player-art-inner provided — preserves the "heroic album object"
+       feel. Light theme overrides this below with a softer cast. */
+    .player-art-front {
+      box-shadow:
+        0 30px 80px rgba(0,0,0,0.45),
+        0 0 0 1px rgba(255,255,255,0.08) inset;
     }
     .player-art-back {
       transform: rotateY(180deg);
@@ -967,9 +959,9 @@
     body[data-theme="light"] .player-fact-icon {
       background: rgba(124,91,255,0.10);
     }
-    /* Lighter drop-shadow on the album-art container so it doesn't look like a
-       cut-out floating over a white sheet. */
-    body[data-theme="light"] .player-art-inner {
+    /* Lighter drop-shadow on the album-art front face so it doesn't look like
+       a cut-out floating over a white sheet. */
+    body[data-theme="light"] .player-art-front {
       box-shadow:
         0 30px 80px rgba(40,30,60,0.22),
         0 0 0 1px rgba(22,22,32,0.08) inset;
