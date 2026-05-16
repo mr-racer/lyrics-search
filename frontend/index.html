@@ -7208,6 +7208,10 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
   );
 }
 
+// Stub — replaced with the real component in Task 8 of Plan 5.
+const ArtistAtlasSection = ({ artistSlug }) =>
+  artistSlug ? <div>Loading artist…</div> : null;
+
 // ─── App ──────────────────────────────────────────────────────────────────────
 function App() {
   const [isDark, setDark] = useState(() => (localStorage.getItem('musix_theme') || 'dark') === 'dark');
@@ -7220,6 +7224,16 @@ function App() {
   }, [isDark]);
 
   const [section, setSection] = useState('home'); // home | search | recommend | library | player
+  // Artist Atlas: slug is stored alongside the section so the section type
+  // 'artist' can render the ArtistAtlasSection with the right artist. Setting
+  // a non-null slug + switching section in one call lets the section preserve
+  // its own internal state (fetched aggregate, active tab) across navigation.
+  const [activeArtistSlug, setActiveArtistSlug] = useState(null);
+  const navigateToArtist = useCallback((slug) => {
+    if (!slug) return;
+    setActiveArtistSlug(slug);
+    setSection('artist');
+  }, []);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [themeAnim, setThemeAnim] = useState(false);
   const [appState, setAppState] = useState('checking');
@@ -7425,6 +7439,7 @@ function App() {
     recommend: RecommendSection,
     library:   LibrarySection,
     player:    PlayerSection,
+    artist:    ArtistAtlasSection,
   };
   const ActiveSection = sectionMap[section];
 
@@ -7484,6 +7499,9 @@ function App() {
                 onToggleLyrics={id === 'player' ? () => setLyricsMode(m => !m) : undefined}
                 onCloseLyrics={id === 'player' ? () => setLyricsMode(false) : undefined}
                 showToast={id === 'player' ? showToast : undefined}
+                artistSlug={id === 'artist' ? activeArtistSlug : undefined}
+                navigateToArtist={navigateToArtist}
+                onNav={setSection}
               />
             </div>
           ))}
