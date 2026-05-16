@@ -5463,6 +5463,26 @@ function getSongFacts(track, lang) {
   ];
 }
 
+// ─── LYRICS BACK FACE (placeholder — real implementation in Task 6) ─────────
+function LyricsBackFace({ track, isVisible, activeCollection, isDark, lang }) {
+  // Real implementation in Task 6. For now: minimal surface so flip is testable.
+  return (
+    <div style={{
+      width: '100%',
+      height: '100%',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      color: isDark ? '#666' : '#8a8275',
+      fontSize: 11,
+      fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+      letterSpacing: '0.18em',
+    }}>
+      LYRICS · TASK 6 FILLS THIS
+    </div>
+  );
+}
+
 // ─── PLAYER SECTION ─────────────────────────────────────────────────────────
 function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, audio, visible }) {
   const [playlist, setPlaylist] = useState(initialPlaylist || []);
@@ -5483,6 +5503,9 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
   const [isHovering, setIsHovering] = useState(false);
   const artWrapRef = useRef(null);
 
+  // Cover ↔ Lyrics flip state (Plan 4)
+  const [lyricsMode, setLyricsMode] = useState(false);
+
   const handleArtMouseMove = useCallback((e) => {
     if (!artWrapRef.current) return;
     const r = artWrapRef.current.getBoundingClientRect();
@@ -5499,6 +5522,9 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
   }, []);
 
   const currentTrack = currentIndex >= 0 && currentIndex < playlist.length ? playlist[currentIndex].track : null;
+
+  // Reset to cover face when the track changes — new song should show cover, not prior song's lyrics.
+  useEffect(() => { setLyricsMode(false); }, [currentTrack?.track_id]);
 
   // Derive ambient hue from track
   const ambientHue = useMemo(() => {
@@ -5561,6 +5587,18 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
       // Don't pause — audio continues in background
     }
   }, [visible]);
+
+  // TEMPORARY Shift+L hotkey — toggles lyricsMode for testing the flip card.
+  // Will be replaced by useGlobalKeyboardShortcuts integration in Task 12.
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.key === 'l' || e.key === 'L') && e.shiftKey) {
+        setLyricsMode(m => !m);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const fetchReaction = async (trackId) => {
     if (!activeCollection || !trackId) return;
@@ -5682,39 +5720,52 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
           gap:'24px', paddingTop:'12px', position:'relative', zIndex:1,
         }}>
 
-          {/* Album art with 3D tilt (Spatial concept) */}
+          {/* Album art: flip card — front=cover, back=lyrics (Plan 4) */}
           <div
             ref={artWrapRef}
             className="player-art-wrap"
-            onMouseEnter={handleArtMouseEnter}
-            onMouseMove={handleArtMouseMove}
+            onMouseMove={lyricsMode ? undefined : handleArtMouseMove}
+            onMouseEnter={lyricsMode ? undefined : handleArtMouseEnter}
             onMouseLeave={handleArtMouseLeave}
           >
             <div
-              className="player-art-inner"
+              className="player-art-flipper"
               style={{
-                transform: isHovering
-                  ? `rotateY(${tilt.y * 12}deg) rotateX(${-tilt.x * 12}deg) scale(1.04)`
-                  : 'rotateY(0deg) rotateX(0deg) scale(1)',
+                transform: lyricsMode
+                  ? 'rotateY(180deg)'
+                  : `rotateY(${tilt.y * 10}deg) rotateX(${-tilt.x * 10}deg) scale(${isHovering ? 1.04 : 1})`,
               }}
             >
-              <AlbumCover
-                title={currentTrack?.title || ''}
-                artist={currentTrack?.artist || ''}
-                size={360}
-                isDark={isDark}
-                coverPath={currentTrack?.cover_art_path}
-                radius={20}
-                spinning={isPlaying}
-              />
-              <div
-                className="player-art-shine"
-                style={{
-                  background: isHovering
-                    ? `linear-gradient(${135 + tilt.y * 20}deg, rgba(255,255,255,0) 30%, rgba(255,255,255,0.22) ${48 + tilt.y * 8}%, rgba(255,255,255,0) 65%)`
-                    : 'linear-gradient(135deg, rgba(255,255,255,0) 35%, rgba(255,255,255,0) 65%)',
-                }}
-              />
+              <div className="player-art-front">
+                <AlbumCover
+                  title={currentTrack?.title || ''}
+                  artist={currentTrack?.artist || ''}
+                  size={360}
+                  isDark={isDark}
+                  coverPath={currentTrack?.cover_art_path}
+                  radius={20}
+                  spinning={isPlaying}
+                />
+                {/* Shine overlay — kept on front face so tilt highlight stays on cover side.
+                    Removed from back face intentionally: lyrics surface should be flat/readable. */}
+                <div
+                  className="player-art-shine"
+                  style={{
+                    background: isHovering
+                      ? `linear-gradient(${135 + tilt.y * 20}deg, rgba(255,255,255,0) 30%, rgba(255,255,255,0.22) ${48 + tilt.y * 8}%, rgba(255,255,255,0) 65%)`
+                      : 'linear-gradient(135deg, rgba(255,255,255,0) 35%, rgba(255,255,255,0) 65%)',
+                  }}
+                />
+              </div>
+              <div className="player-art-back">
+                <LyricsBackFace
+                  track={currentTrack}
+                  isVisible={lyricsMode}
+                  activeCollection={activeCollection}
+                  isDark={isDark}
+                  lang={lang}
+                />
+              </div>
             </div>
           </div>
 
