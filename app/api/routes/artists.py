@@ -16,6 +16,60 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/artists", tags=["Artists"])
 
 
+def _coerce_float(val) -> float:
+    """Best-effort numeric coercion for messy payload values.
+
+    Real Qdrant payloads sometimes carry hyphen-ranged strings like '154-179'
+    in the duration field (legacy data import artefact), which break a naive
+    float() with ValueError. We accept ints/floats verbatim, parse plain
+    numeric strings, average hyphen ranges, and fall back to 0.0 for empty
+    or unparseable inputs. Keeps the Atlas endpoint from 500-ing on dirty data.
+    """
+    if val is None:
+        return 0.0
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, str):
+        s = val.strip()
+        if not s:
+            return 0.0
+        try:
+            return float(s)
+        except ValueError:
+            if "-" in s:
+                try:
+                    nums = [float(p.strip()) for p in s.split("-") if p.strip()]
+                    if nums:
+                        return sum(nums) / len(nums)
+                except ValueError:
+                    pass
+    return 0.0
+
+
+def _coerce_year(val) -> Optional[int]:
+    """Payload year may be int, numeric string, or a 'YYYY-YYYY' range — pick
+    the first parseable year or return None. None is acceptable downstream."""
+    if isinstance(val, int) and val > 0:
+        return val
+    if isinstance(val, str):
+        s = val.strip()
+        if not s:
+            return None
+        try:
+            n = int(s)
+            return n if n > 0 else None
+        except ValueError:
+            if "-" in s:
+                for p in s.split("-"):
+                    try:
+                        n = int(p.strip())
+                        if n > 0:
+                            return n
+                    except ValueError:
+                        continue
+    return None
+
+
 def _track_from_payload(point_id: str, p: dict) -> TrackMetadata:
     """Map a Qdrant payload dict to TrackMetadata. Returns minimal-field model."""
     return TrackMetadata(
@@ -23,9 +77,9 @@ def _track_from_payload(point_id: str, p: dict) -> TrackMetadata:
         title=p.get("title") or "",
         artist=p.get("artist") or "",
         album=p.get("album"),
-        year=p.get("year") if isinstance(p.get("year"), int) else None,
+        year=_coerce_year(p.get("year")),
         genre=p.get("genre"),
-        duration_sec=float(p.get("duration") or 0.0),
+        duration_sec=_coerce_float(p.get("duration")),
         file_path=p.get("file_path") or "",
         lyrics=p.get("lyrics"),
         cover_art_path=p.get("cover_art_path"),

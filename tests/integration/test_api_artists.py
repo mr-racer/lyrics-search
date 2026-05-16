@@ -95,3 +95,29 @@ def test_get_artist_decade_range_from_year_span(client):
     body = r.json()
     # All tracks 2020 → single decade
     assert body["decade_range"] == "2020s"
+
+
+def test_track_coercion_handles_messy_payload_values():
+    """Real Qdrant payloads sometimes carry hyphen-range strings ('154-179')
+    in the duration field — must not 500 the endpoint."""
+    from app.api.routes.artists import _coerce_float, _coerce_year
+
+    # duration coercion
+    assert _coerce_float(195.0) == 195.0
+    assert _coerce_float(195) == 195.0
+    assert _coerce_float("195") == 195.0
+    assert _coerce_float("195.5") == 195.5
+    assert _coerce_float("154-179") == 166.5  # average of range
+    assert _coerce_float(None) == 0.0
+    assert _coerce_float("") == 0.0
+    assert _coerce_float("garbage") == 0.0
+    assert _coerce_float("154-") == 154.0  # trailing dash → use what we have
+
+    # year coercion
+    assert _coerce_year(2020) == 2020
+    assert _coerce_year("2020") == 2020
+    assert _coerce_year("2018-2020") == 2018  # first valid
+    assert _coerce_year(None) is None
+    assert _coerce_year("") is None
+    assert _coerce_year(0) is None  # zero treated as missing
+    assert _coerce_year("garbage") is None
