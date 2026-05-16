@@ -24,3 +24,32 @@ def test_artist_bios_pk():
     conn = MetadataDB.get()
     pk_cols = [r[1] for r in conn.execute("PRAGMA table_info(artist_bios)") if r[5] > 0]
     assert pk_cols == ["artist_slug", "collection_name", "lang"]
+
+
+def test_set_and_get_artist_bio():
+    MetadataDB.set_artist_bio("dua-lipa", "col_a", "en", "Born in London…")
+    assert MetadataDB.get_artist_bio("dua-lipa", "col_a", "en") == "Born in London…"
+    # other (slug, collection, lang) tuples isolated
+    assert MetadataDB.get_artist_bio("dua-lipa", "col_a", "ru") is None
+    assert MetadataDB.get_artist_bio("dua-lipa", "col_b", "en") is None
+
+
+def test_set_artist_bio_upsert():
+    """Same (slug, collection, lang) → overwrite, not duplicate row."""
+    MetadataDB.set_artist_bio("x", "c", "en", "old")
+    MetadataDB.set_artist_bio("x", "c", "en", "new")
+    assert MetadataDB.get_artist_bio("x", "c", "en") == "new"
+    conn = MetadataDB.get()
+    n = conn.execute("SELECT COUNT(*) FROM artist_bios").fetchone()[0]
+    assert n == 1
+
+
+def test_delete_artist_bios():
+    MetadataDB.set_artist_bio("a", "col_a", "en", "x")
+    MetadataDB.set_artist_bio("b", "col_a", "en", "y")
+    MetadataDB.set_artist_bio("c", "col_b", "en", "z")
+    n = MetadataDB.delete_artist_bios("col_a")
+    assert n == 2
+    assert MetadataDB.get_artist_bio("a", "col_a", "en") is None
+    # col_b row untouched
+    assert MetadataDB.get_artist_bio("c", "col_b", "en") == "z"
