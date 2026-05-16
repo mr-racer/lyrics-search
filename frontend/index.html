@@ -5428,6 +5428,7 @@ function AIIndexingCard({ isDark, lang, activeCollection }) {
 function CollectionAIToggle({ collectionName, isActive, aiStatus, lang, isDark }) {
   const [enabled, setEnabled] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -5440,8 +5441,13 @@ function CollectionAIToggle({ collectionName, isActive, aiStatus, lang, isDark }
   }, [collectionName]);
 
   const onToggle = async () => {
+    // Guard against double-clicks while a PATCH is in flight — without
+    // this, two concurrent toggles capture stale `enabled` and the second
+    // request can land with the pre-rollback value if the first errors.
+    if (saving) return;
     const next = !enabled;
     setEnabled(next);
+    setSaving(true);
     try {
       await apiFetch(`/library/collections/${encodeURIComponent(collectionName)}/ai-enabled`, {
         method: 'PATCH', body: JSON.stringify({ enabled: next }),
@@ -5452,17 +5458,20 @@ function CollectionAIToggle({ collectionName, isActive, aiStatus, lang, isDark }
     } catch (e) {
       setEnabled(!next);
       console.error('failed to toggle ai_enabled', e);
+    } finally {
+      setSaving(false);
     }
   };
 
+  const busy = loading || saving;
   return (
     <button
       type="button"
       onClick={onToggle}
-      disabled={loading}
+      disabled={busy}
       style={{
         padding: '3px 12px', borderRadius: 99, fontSize: 11, fontWeight: 600,
-        cursor: loading ? 'wait' : 'pointer',
+        cursor: busy ? 'wait' : 'pointer',
         background: enabled
           ? (isDark ? 'rgba(40,160,80,0.18)' : 'rgba(40,160,80,0.12)')
           : (isDark ? 'rgba(160,160,160,0.10)' : 'rgba(160,160,160,0.10)'),
@@ -5887,8 +5896,16 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
             <button
               type="button"
               onClick={async () => {
-                localStorage.setItem('llm_base_url', llmBaseUrl.trim());
-                localStorage.setItem('llm_model', llmModel.trim());
+                // Sync React state with the trimmed values we're about to
+                // probe — otherwise the input field keeps its un-trimmed
+                // copy and a later Save can overwrite localStorage with
+                // the untrimmed value, desyncing it from what was tested.
+                const trimmedUrl = llmBaseUrl.trim();
+                const trimmedModel = llmModel.trim();
+                setLlmBaseUrl(trimmedUrl);
+                setLlmModel(trimmedModel);
+                localStorage.setItem('llm_base_url', trimmedUrl);
+                localStorage.setItem('llm_model', trimmedModel);
                 await aiStatus?.refresh?.();
               }}
               style={{
