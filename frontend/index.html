@@ -627,6 +627,7 @@
        to free the vertical budget this 60vh target consumes. */
     .player-art-wrap {
       position: relative;  /* positioning context for outgoing snapshot + overlay */
+      z-index: 1;          /* sit above the .player-spectrum strips (z:0) */
       perspective: 1400px;
       width: clamp(220px, 60vh, 640px);
       aspect-ratio: 1;
@@ -795,6 +796,69 @@
       100% { opacity: 0; }
     }
 
+    /* Audio-reactive spectrum bars — blurred wave behind the cover row.
+       - Each strip is absolutely positioned, 50% of cover-row width, meeting
+         at the row's center (= behind the cover). They sit at z-index 0;
+         the cover (.player-art-wrap) and side buttons get z-index 1 so they
+         paint on top.
+       - `space-between` spreads bars across the strip; outer bars are clearly
+         visible past the side buttons, inner bars sit behind the cover and
+         their `blur(12px)` halos bleed onto the cover's edge for the
+         "wave entering the album" feel.
+       - Only `transform: scaleY(...)` mutates per frame — GPU composited,
+         no layout reflow. `pointer-events: none` so the bars never block
+         side-button clicks. */
+    .player-spectrum {
+      position: absolute;
+      top: 0;
+      height: 100%;
+      width: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 clamp(4px, 0.8vw, 12px);
+      gap: 2px;
+      pointer-events: none;
+      z-index: 0;
+      filter: blur(12px) saturate(1.35);
+      -webkit-filter: blur(12px) saturate(1.35);
+      overflow: visible;  /* let the blur halo bleed past strip edges */
+    }
+    /* Outer-edge mask gradient: bars fade from transparent at the column
+       edge to fully opaque ~35% across. Without this, the strip's bounding
+       box terminates abruptly at the row edge — bars at the outer position
+       just stop dead. With the gradient mask, the wave "dissolves" into
+       the column's empty space instead. Inner edge needs no fade because
+       the cover sits there and naturally hides the strip. */
+    .player-spectrum--left {
+      left: 0;
+      -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 35%, #000 100%);
+              mask-image: linear-gradient(to right, transparent 0%, #000 35%, #000 100%);
+    }
+    .player-spectrum--right {
+      right: 0;
+      -webkit-mask-image: linear-gradient(to left,  transparent 0%, #000 35%, #000 100%);
+              mask-image: linear-gradient(to left,  transparent 0%, #000 35%, #000 100%);
+    }
+    .player-spectrum-bar {
+      flex: 0 0 clamp(5px, 0.7vw, 9px);
+      height: 72%;          /* ~30% taller than the prior 55% */
+      border-radius: 999px; /* round caps top + bottom — wave feel */
+      transform: scaleY(0);
+      transform-origin: center;
+      will-change: transform;
+      background: linear-gradient(
+        to top,
+        transparent 0%,
+        var(--bar-color, oklch(62% 0.16 270)) 45%,
+        var(--bar-color, oklch(62% 0.16 270)) 55%,
+        transparent 100%
+      );
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .player-spectrum { display: none; }
+    }
+
     /* Segmented pill toggle for the player's facts rail — replaces the
        "О ПЕСНЕ" header. Buttons get .disabled = grey-out + not-allowed when
        the scope has no facts for the current track. */
@@ -860,6 +924,8 @@
 
     /* Side prev/next buttons flanking cover */
     .player-side-btn {
+      position: relative;
+      z-index: 1;  /* sit above the .player-spectrum strips (z:0) */
       width: 56px; height: 56px;
       border-radius: 50%;
       display: flex; align-items: center; justify-content: center;
@@ -6080,6 +6146,241 @@ function PlayerScoreBars({ breakdown, isDark }) {
   );
 }
 
+// ─── AUDIO ANALYSIS + COVER COLOR + SPECTRUM BARS ───────────────────────────
+
+// RGB → HSL (0-360 / 0-100 / 0-100). Used for theming the spectrum bars by
+// the cover's dominant color in a way that survives lightness/saturation
+// tweaks without going neon.
+function rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  let h = 0, s = 0;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if      (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+    else if (max === g) h = (b - r) / d + 2;
+    else                h = (r - g) / d + 4;
+    h /= 6;
+  }
+  return { h: h * 360, s: s * 100, l: l * 100 };
+}
+
+// Module-level singleton: AudioContext + AnalyserNode survive PlayerSection
+// unmount/remount (navigation away → back). The browser only allows ONE
+// MediaElementSource per <audio> element ever — recreating the analyser on
+// each mount would throw "already connected" and leave the spectrum dead.
+const _spectrumState = {
+  ctx: null,
+  analyser: null,
+  dataArray: null,
+  setupAttempted: false,
+};
+
+// Idempotent: wire <audio> into AnalyserNode. MUST be invoked **synchronously
+// inside a user gesture** (click/touch handler) so the AudioContext is born
+// in 'running' state. If we defer this to a useEffect, the ctx ends up
+// suspended and the spectrum stays dead on the first track — async setup
+// leaves the resume() call outside the gesture window in some browsers.
+function _setupSpectrumAnalyser(el) {
+  if (_spectrumState.setupAttempted || !el) return;
+  _spectrumState.setupAttempted = true;
+  let ctx = null;
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    ctx = new Ctx();
+    const source = ctx.createMediaElementSource(el);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;             // 128 frequency bins
+    analyser.smoothingTimeConstant = 0.62;
+    source.connect(analyser);
+    analyser.connect(ctx.destination);  // pass-through so audio still plays
+    _spectrumState.ctx = ctx;
+    _spectrumState.analyser = analyser;
+    _spectrumState.dataArray = new Uint8Array(analyser.frequencyBinCount);
+  } catch (e) {
+    if (ctx && typeof ctx.close === 'function') ctx.close().catch(() => {});
+  }
+}
+
+// Hook: exposes the singleton refs and ensures setup eventually happens even
+// when playback starts via paths that bypass togglePlay (track-click in the
+// queue → playTrackAt, auto-play from initialTrack effect, etc.). Setup is
+// idempotent — togglePlay still gets first crack at it from inside a user
+// gesture for the "born-running" ctx case.
+function useAudioAnalyser(audioRef, isPlaying) {
+  const analyserRef = useRef(null);
+  const dataArrayRef = useRef(null);
+
+  useEffect(() => {
+    const el = audioRef?.current;
+    if (el) _setupSpectrumAnalyser(el);  // no-op if already attempted
+    analyserRef.current = _spectrumState.analyser;
+    dataArrayRef.current = _spectrumState.dataArray;
+    const ctx = _spectrumState.ctx;
+    if (isPlaying && ctx && ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+  }, [audioRef, isPlaying]);
+
+  return { analyserRef, dataArrayRef };
+}
+
+// Pull a "best" representative color out of the cover image. Strategy:
+//   1) Downscale to 32×32 on an offscreen canvas
+//   2) For each opaque pixel in the mid-luminance band, score = saturation
+//      × proximity-to-ideal-luminance, pick the max
+//   3) If no pixel qualifies (very monochrome cover), average all opaque
+//      pixels as a fallback
+// Cached per URL in a ref so track-toggle doesn't re-decode.
+function useCoverColor(coverUrl) {
+  const [color, setColor] = useState(null);
+  const cacheRef = useRef({});
+  useEffect(() => {
+    if (!coverUrl) { setColor(null); return; }
+    if (cacheRef.current[coverUrl]) { setColor(cacheRef.current[coverUrl]); return; }
+    let cancelled = false;
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      if (cancelled) return;
+      try {
+        const W = 32, H = 32;
+        const canvas = document.createElement('canvas');
+        canvas.width = W; canvas.height = H;
+        const cx = canvas.getContext('2d');
+        cx.drawImage(img, 0, 0, W, H);
+        const data = cx.getImageData(0, 0, W, H).data;
+        let bestScore = -1;
+        let best = null;
+        let sr = 0, sg = 0, sb = 0, n = 0;
+        for (let i = 0; i < data.length; i += 4) {
+          const r = data[i], g = data[i+1], b = data[i+2], a = data[i+3];
+          if (a < 200) continue;
+          sr += r; sg += g; sb += b; n++;
+          const max = Math.max(r,g,b), min = Math.min(r,g,b);
+          const lum = (max + min) / 2;
+          const sat = max === 0 ? 0 : (max - min) / 255;
+          if (lum > 50 && lum < 220) {
+            // Centered around mid-luminance ~135 — penalize edges
+            const score = sat * (1 - Math.abs(lum - 135) / 135);
+            if (score > bestScore) {
+              bestScore = score;
+              best = { r, g, b };
+            }
+          }
+        }
+        if (!best) best = n ? { r: sr/n, g: sg/n, b: sb/n } : { r: 124, g: 91, b: 255 };
+        const hsl = rgbToHsl(best.r, best.g, best.b);
+        cacheRef.current[coverUrl] = hsl;
+        setColor(hsl);
+      } catch (e) {
+        // CORS-tainted canvas (server didn't send ACAO) or decode failure
+        setColor(null);
+      }
+    };
+    img.onerror = () => { if (!cancelled) setColor(null); };
+    img.src = coverUrl;
+    return () => { cancelled = true; };
+  }, [coverUrl]);
+  return color;
+}
+
+// Mirrored spectrum strip. Reads frequency bins from the shared analyser
+// once per rAF and animates child bar elements via scaleY transform. Side
+// determines bin-to-bar mapping: BOTH sides anchor low-freq near the cover
+// so a beat thunders inward from both directions, and high-freq decays
+// outward toward the column edge.
+function SpectrumBars({ side, analyserRef, dataArrayRef, color, isPlaying, barCount = 32 }) {
+  const barsRef = useRef([]);
+  const targetsRef = useRef(null);
+  const currentsRef = useRef(null);
+  const fadeRef = useRef(0);
+
+  if (!targetsRef.current || targetsRef.current.length !== barCount) {
+    targetsRef.current = new Float32Array(barCount);
+    currentsRef.current = new Float32Array(barCount);
+  }
+
+  useEffect(() => {
+    let frameId;
+    const render = () => {
+      const data = dataArrayRef?.current;
+      const analyser = analyserRef?.current;
+      if (analyser && data) {
+        analyser.getByteFrequencyData(data);
+        // Use the lower ~60% of bins — that's where vocal/melody/bass live.
+        // Top bins are mostly air noise on most material.
+        const usefulBins = Math.floor(data.length * 0.6);
+        for (let i = 0; i < barCount; i++) {
+          const start = Math.floor(i * usefulBins / barCount);
+          const end   = Math.floor((i + 1) * usefulBins / barCount);
+          let sum = 0;
+          for (let j = start; j < end; j++) sum += data[j];
+          targetsRef.current[i] = sum / Math.max(1, end - start) / 255;
+        }
+      } else {
+        for (let i = 0; i < barCount; i++) targetsRef.current[i] = 0;
+      }
+      // Global fade so the strip eases in/out when play state flips.
+      const targetFade = isPlaying ? 1 : 0;
+      fadeRef.current += (targetFade - fadeRef.current) * 0.06;
+
+      // DOM index `d` → data-bin lookup so left/right are mirrored.
+      for (let d = 0; d < barCount; d++) {
+        const dataBin = side === 'left' ? (barCount - 1 - d) : d;
+        const target = targetsRef.current[dataBin] || 0;
+        currentsRef.current[d] += (target - currentsRef.current[d]) * 0.22;
+        const el = barsRef.current[d];
+        if (el) {
+          const v = Math.max(0, Math.min(1, currentsRef.current[d]));
+          // No minimum scale — bars must fully collapse when fade=0 so they
+          // don't show as thin sliver lines while paused.
+          // Boost (×1.3) lifts quiet sections so the wave reads more clearly,
+          // clamped so peaks don't clip past the strip height.
+          const scale = Math.min(1, v * 1.3) * fadeRef.current;
+          el.style.transform = `scaleY(${scale})`;
+        }
+      }
+      frameId = requestAnimationFrame(render);
+    };
+    frameId = requestAnimationFrame(render);
+    return () => cancelAnimationFrame(frameId);
+  }, [analyserRef, dataArrayRef, isPlaying, barCount, side]);
+
+  // Cover-color → bar color (HSL). Clamp saturation/lightness so very dark
+  // or very pale covers still produce a readable bar tint.
+  const hue = color ? color.h : 270;
+  const sat = color ? Math.min(85, Math.max(45, color.s)) : 60;
+  const lit = color ? Math.min(72, Math.max(52, color.l)) : 62;
+  const barColor = `hsl(${hue.toFixed(0)}, ${sat.toFixed(0)}%, ${lit.toFixed(0)}%)`;
+
+  // Opacity ramps from edge (dim) to cover-side (bright) so the bars feel
+  // anchored on the cover and dissolve outward.
+  return (
+    <div className={`player-spectrum player-spectrum--${side}`}
+      style={{ '--bar-color': barColor }}
+      aria-hidden="true"
+    >
+      {Array.from({ length: barCount }, (_, i) => {
+        const proximity = side === 'left'
+          ? i / (barCount - 1)
+          : (barCount - 1 - i) / (barCount - 1);
+        const opacity = 0.22 + proximity * 0.58;
+        return (
+          <div key={i}
+            ref={el => { barsRef.current[i] = el; }}
+            className="player-spectrum-bar"
+            style={{ opacity }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── PLAYER SECTION ─────────────────────────────────────────────────────────
 function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, audio, visible, lyricsMode, onToggleLyrics, onCloseLyrics, showToast }) {
   const [playlist, setPlaylist] = useState(initialPlaylist || []);
@@ -6100,6 +6401,11 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
   const [tilt, setTilt] = useState({ x: 0, y: 0 });
   const [isHovering, setIsHovering] = useState(false);
   const artWrapRef = useRef(null);
+
+  // Audio-reactive spectrum: hook into the shared <audio> via AnalyserNode
+  // and extract a dominant color from the current cover. Both feed the
+  // mirrored SpectrumBars that flank the cover row during playback.
+  const { analyserRef, dataArrayRef } = useAudioAnalyser(audio?.audioRef, isPlaying);
 
   // Vinyl-stack transition: snapshot of outgoing track + direction, plus a
   // nonce that bumps on every track change to re-trigger the CSS entry
@@ -6185,6 +6491,15 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
 
   const currentTrack = currentIndex >= 0 && currentIndex < playlist.length ? playlist[currentIndex].track : null;
 
+  // Cover URL for color sampling — matches what AlbumCover renders internally.
+  // useCoverColor caches per URL so flipping back to a known track is free.
+  const coverUrl = currentTrack?.cover_art_path
+    ? (currentTrack.cover_art_path.startsWith('http')
+        ? currentTrack.cover_art_path
+        : `${API}${currentTrack.cover_art_path}`)
+    : null;
+  const coverColor = useCoverColor(coverUrl);
+
   // Derive ambient hue from track
   const ambientHue = useMemo(() => {
     if (!currentTrack) return 270;
@@ -6254,6 +6569,15 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
 
   const playTrackAt = (index) => {
     if (index < 0 || index >= playlist.length) return;
+    // Bootstrap spectrum analyser inside this (user-gesture) sync path so the
+    // AudioContext is born in 'running' state — see togglePlay for the why.
+    // Track-clicks in the queue go through here, not togglePlay.
+    const audioEl = audio?.audioRef?.current;
+    if (audioEl) _setupSpectrumAnalyser(audioEl);
+    if (_spectrumState.ctx && _spectrumState.ctx.state === 'suspended') {
+      _spectrumState.ctx.resume().catch(() => {});
+    }
+
     setCurrentIndex(index);
     const track = playlist[index].track;
     const url = `${API}/search/tracks/${track.track_id}/stream?collection_name=${encodeURIComponent(activeCollection || '')}`;
@@ -6316,6 +6640,17 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
 
   const togglePlay = () => {
     if (!audio) return;
+    // Bootstrap the spectrum analyser INSIDE the user gesture. Doing this
+    // synchronously here (instead of in a useEffect) ensures the AudioContext
+    // is created with state='running' rather than 'suspended'; otherwise the
+    // spectrum stays dark on the first track because resume() called from
+    // an async effect is treated as out-of-gesture by some browsers.
+    const audioEl = audio.audioRef?.current;
+    if (audioEl) _setupSpectrumAnalyser(audioEl);
+    if (_spectrumState.ctx && _spectrumState.ctx.state === 'suspended') {
+      _spectrumState.ctx.resume().catch(() => {});
+    }
+
     // Capture current isPlaying BEFORE toggling so we know which icon to
     // flash. Fired only from intentional user toggles (cover click, Space)
     // — auto-events on the audio element bypass this and don't flash.
@@ -6420,11 +6755,30 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
             </div>
           )}
 
-          {/* Cover row: [◄] [cover] [►] */}
+          {/* Cover row: [◄] [cover] [►] with two absolute spectrum strips
+              underneath. position:relative anchors the absolute strips.
+              The cover (.player-art-wrap, z:1) and side buttons (z:1) sit
+              on top of the strips (z:0); the strips' blur halo bleeds onto
+              the cover's edges for the "wave entering the album" feel. */}
           <div style={{
+            position:'relative',
             display:'flex', alignItems:'center', justifyContent:'center',
             gap:'clamp(12px, 2.5vw, 36px)', width:'100%', flexShrink:0,
           }}>
+            <SpectrumBars
+              side="left"
+              analyserRef={analyserRef}
+              dataArrayRef={dataArrayRef}
+              color={coverColor}
+              isPlaying={isPlaying}
+            />
+            <SpectrumBars
+              side="right"
+              analyserRef={analyserRef}
+              dataArrayRef={dataArrayRef}
+              color={coverColor}
+              isPlaying={isPlaying}
+            />
             <button
               type="button" className="player-side-btn"
               onClick={prevTrack} disabled={currentIndex <= 0}
