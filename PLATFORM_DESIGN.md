@@ -1101,6 +1101,9 @@ CREATE TABLE recommendation_snapshots (
 7b. **Global keyboard shortcuts** — Space / arrows / Shift+arrows / M / L / D / `/`. Verify: shortcuts работают на любом экране, не вызывают конфликта когда focus в input.
 
 ### Phase 3: Artist Atlas
+
+> **Status (2026-05-16)**: ✅ **Plan 5 ships v1 — `ArtistAtlasSection` (Hero + Bio/Discog/Facts tabs, Spin from here CTA), `GET /artists/{slug}` aggregate (slug-tolerant via `_slugify_artist`), new `artist_bio` AI-Indexing task (operator-fill `_SYSTEM_PROMPT`), hybrid click in Search (card → Atlas, ▶ → play), AIIndexingCard 3rd row for `artist_bio`.** Plan: `docs/superpowers/plans/2026-05-16-plan-5-artist-atlas.md`. Deferred to later plans: Related tab (needs CLAP artist centroids), Eras tab, click-to-artist routing in Library / RecentlyPlayed (those sections haven't been redesigned yet).
+
 8. **ArtistAtlasSection component** — новый view. Использует существующий `/library/browse` + новый `/artists/{slug}` aggregate. Hero, tabs, bio panel, discog rail.
 9. **Click-to-artist routing** — из SearchSection и других мест клик на трек/артиста → Artist Atlas, не Detail Panel.
 
