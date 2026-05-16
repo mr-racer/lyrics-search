@@ -1105,6 +1105,9 @@ CREATE TABLE recommendation_snapshots (
 9. **Click-to-artist routing** — из SearchSection и других мест клик на трек/артиста → Artist Atlas, не Detail Panel.
 
 ### Phase 4: Player v6 redesign
+
+> **Status (2026-05-16)**: ✅ **Plan 4 ships Player Redesign — cover↔lyrics 3D flip (Shift+L / Esc), action pills row (Like / Skip / Lyrics / Ask AI), Vibe Line (Sonic Vibe phrase), Facts Rail (player variant), queue with autoplay divider, score-bars hover tooltip on queue items, Ask AI toast stub (Plan 5 placeholder), theme-token parity sweep + custom purple scrollbar.** Plan: `docs/superpowers/plans/2026-05-16-plan-4-player-redesign`. Notable delta vs bullets below: Sonic Sibling card (item 12) remains deferred (backend returns 501); flip is cover↔lyrics rather than separate lyrics-btn.
+
 10. **PlayerSection restructure** — hero с 3 zones, breathing cover, EQ bars, Sonic Vibe quote, Ask AI inline.
 11. **Facts panel** — slot для song-facts (через `/metadata/tracks/{id}/facts`).
 12. **Sonic Sibling card** — янтарная hero-карточка с LLM "why similar" phrase.
