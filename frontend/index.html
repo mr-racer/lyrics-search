@@ -1611,11 +1611,16 @@ function LandingPlayer({ isDark, lang, tracks, currentTrack, onTrackSelect, onTr
 }
 
 // ─── FactsRail (right-side panel: per-track "Did you know" facts) ─────────────
-function FactsRail({ trackId, activeCollection, isDark, lang, accent }) {
+function FactsRail({ trackId, activeCollection, isDark, lang, accent, variant = "landing" }) {
   const c = useColors(isDark);
   const [state, setState] = useState({ status: 'loading', items: [] });
   const [idx, setIdx] = useState(0);
   const [paused, setPaused] = useState(false);
+
+  const intervalMs = variant === "player" ? 12000 : 6500;
+  const showTypeChips = variant !== "player";
+  const playerHeadingLabel = lang === "ru" ? "О ПЕСНЕ" : "ABOUT THIS SONG";
+  const factFontSize = variant === "player" ? 14 : 15;
 
   // Type → label/color
   const TYPE_META = {
@@ -1662,21 +1667,26 @@ function FactsRail({ trackId, activeCollection, isDark, lang, accent }) {
   // Auto-rotate (paused on hover)
   useEffect(() => {
     if (state.status !== 'loaded' || state.items.length < 2 || paused) return;
-    const t = setInterval(() => setIdx(i => (i + 1) % state.items.length), 6500);
+    const t = setInterval(() => setIdx(i => (i + 1) % state.items.length), intervalMs);
     return () => clearInterval(t);
   }, [state.status, state.items.length, paused]);
 
+  const isPlayer = variant === "player";
+
   const containerStyle = {
-    borderLeft: `1px solid ${c.border}`,
-    background: isDark ? 'rgba(0,0,0,0.28)' : 'rgba(255,255,255,0.58)',
-    backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)',
+    borderLeft: isPlayer ? 'none' : `1px solid ${c.border}`,
+    background: isPlayer ? 'transparent' : (isDark ? 'rgba(0,0,0,0.28)' : 'rgba(255,255,255,0.58)'),
+    backdropFilter: isPlayer ? 'none' : 'blur(12px)',
+    WebkitBackdropFilter: isPlayer ? 'none' : 'blur(12px)',
     display: 'flex', flexDirection: 'column', overflow: 'hidden',
     minHeight: 0,
+    padding: isPlayer ? 0 : undefined,
+    border: isPlayer ? 'none' : undefined,
   };
 
   const headerStyle = {
-    padding: '18px 22px 12px',
-    borderBottom: `1px solid ${c.border}`,
+    padding: isPlayer ? '0 0 8px' : '18px 22px 12px',
+    borderBottom: isPlayer ? 'none' : `1px solid ${c.border}`,
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
   };
 
@@ -1712,6 +1722,7 @@ function FactsRail({ trackId, activeCollection, isDark, lang, accent }) {
     body = (
       <div style={{ position:'relative', flex:1, display:'flex', flexDirection:'column', minHeight:0 }}>
         {/* Type chip */}
+        {showTypeChips && (
         <div style={{
           position:'absolute', top:14, right:18, zIndex:2,
           padding:'3px 9px', borderRadius:99,
@@ -1721,6 +1732,7 @@ function FactsRail({ trackId, activeCollection, isDark, lang, accent }) {
           fontFamily: "'JetBrains Mono', ui-monospace, monospace",
           background: isDark ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.6)',
         }}>{meta.label}</div>
+        )}
 
         {/* Fact body — keyed on idx so animation replays on change */}
         <div key={idx}
@@ -1736,13 +1748,13 @@ function FactsRail({ trackId, activeCollection, isDark, lang, accent }) {
         >
           <span style={{ width:24, height:1, background:c.border, marginTop:6 }} />
           <p className="serif" style={{
-            fontSize:15, lineHeight:1.55, color:c.text, letterSpacing:'-0.005em',
+            fontSize:factFontSize, lineHeight:1.55, color:c.text, letterSpacing:'-0.005em',
             fontWeight:400,
           }}>{cur.text}</p>
         </div>
 
-        {/* Dot indicator */}
-        {state.items.length > 1 && (
+        {/* Dot indicator — landing variant only (player dots are in header) */}
+        {variant !== "player" && state.items.length > 1 && (
           <div style={{
             display:'flex', justifyContent:'center', alignItems:'center', gap:7,
             padding:'10px 22px 16px',
@@ -1777,10 +1789,40 @@ function FactsRail({ trackId, activeCollection, isDark, lang, accent }) {
   return (
     <aside style={containerStyle}>
       <div style={headerStyle}>
-        <span className="mono" style={{ fontSize:11, letterSpacing:'0.22em', color:c.textSubtle }}>
-          {lang==='ru'?'※ ЗНАЕШЬ ЛИ ТЫ':'※ DID YOU KNOW'}
+        <span className="mono-label" style={{
+          fontSize: isPlayer ? 10 : 11,
+          letterSpacing: isPlayer ? '0.20em' : '0.22em',
+          color: isPlayer ? c.textMuted : c.textSubtle,
+        }}>
+          {isPlayer ? playerHeadingLabel : (lang==='ru'?'※ ЗНАЕШЬ ЛИ ТЫ':'※ DID YOU KNOW')}
         </span>
-        {state.status === 'loaded' && state.items.length > 1 && (
+        {/* Player variant: inline pagination dots */}
+        {isPlayer && state.status === 'loaded' && state.items.length > 1 && (
+          <div style={{ display: 'flex', gap: 4 }}>
+            {state.items.map((_, i) => (
+              <button
+                key={i}
+                onClick={() => {
+                  setIdx(i);
+                  setPaused(true);
+                  setTimeout(() => setPaused(false), 5000);
+                }}
+                aria-label={`Show fact ${i + 1} of ${state.items.length}`}
+                style={{
+                  width: 5,
+                  height: 5,
+                  borderRadius: '50%',
+                  padding: 0,
+                  border: 0,
+                  background: i === idx ? 'oklch(72% 0.13 75)' : (isDark ? '#444' : '#bbb'),
+                  cursor: 'pointer',
+                }}
+              />
+            ))}
+          </div>
+        )}
+        {/* Landing variant: numeric counter */}
+        {!isPlayer && state.status === 'loaded' && state.items.length > 1 && (
           <span className="mono" style={{ fontSize:10, color:c.textSubtle, letterSpacing:'0.1em' }}>
             {String(idx+1).padStart(2,'0')} / {String(state.items.length).padStart(2,'0')}
           </span>
