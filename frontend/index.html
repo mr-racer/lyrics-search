@@ -1634,9 +1634,13 @@ function useAIStatus(activeCollection) {
       .catch(() => setAiEnabledForCollection(true));  // graceful default
   }, [activeCollection]);
 
+  // `null` on either signal means we haven't heard back yet — distinct from
+  // a confirmed `false`. Consumers should treat `aiProbing` as "don't decide
+  // yet" (show skeleton/spinner) rather than as "AI off".
+  const aiProbing = aiAvailable === null || aiEnabledForCollection === null;
   const aiActive = !!(aiAvailable && aiEnabledForCollection);
   return {
-    aiAvailable, aiEnabledForCollection, aiActive,
+    aiAvailable, aiEnabledForCollection, aiActive, aiProbing,
     llmError, llmInfo, refresh: probe,
     setAiEnabledForCollection,   // exposed so Settings toggle can update locally w/o re-fetch
   };
