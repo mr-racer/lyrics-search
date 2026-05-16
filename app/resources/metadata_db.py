@@ -203,6 +203,13 @@ class MetadataDB:
         if "artists" in existing_tables:
             cls._ensure_columns(conn, "artists", {"mbid": "TEXT"})
 
+        # AI Mode infrastructure (Plan 6) — per-collection opt-in for live-LLM
+        # features. DEFAULT 1 means existing rows immediately report on,
+        # matching the pre-flag world where AI features were always available.
+        cls._ensure_columns(conn, "collection_settings", {
+            "ai_enabled": "INTEGER NOT NULL DEFAULT 1",
+        })
+
         # AI indexing — distinguish "processed" from "silently skipped" so the
         # UI can tell when a job completed with literally zero LLM work done
         # (e.g. tracks lacked sonic_tags + facts). Without this column the
@@ -665,6 +672,32 @@ class MetadataDB:
         if row is None:
             return None
         return {"text_model": row[0], "indexed_at": row[1]}
+
+    # ── AI mode (Plan 6) ──
+
+    @classmethod
+    def get_collection_ai_enabled(cls, collection_name: str) -> bool:
+        """Returns True when no row exists — pre-migration collections that
+        never had `collection_settings` written should remain AI-on. The
+        IndexingModal explicitly persists 0/1 for newly-created collections."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT ai_enabled FROM collection_settings WHERE collection_name = ?",
+            (collection_name,),
+        ).fetchone()
+        return bool(row[0]) if row else True
+
+    @classmethod
+    def set_collection_ai_enabled(cls, collection_name: str, enabled: bool) -> None:
+        conn = cls._connect()
+        conn.execute(
+            """INSERT INTO collection_settings (collection_name, ai_enabled)
+               VALUES (?, ?)
+               ON CONFLICT(collection_name) DO UPDATE SET
+                 ai_enabled = excluded.ai_enabled""",
+            (collection_name, 1 if enabled else 0),
+        )
+        conn.commit()
 
     # ── Playback history ──
 
