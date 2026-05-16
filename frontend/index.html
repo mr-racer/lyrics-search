@@ -5124,8 +5124,8 @@ function IndexingModal({ isDark, lang, collectionName, stepStatus, trackCount, e
 // ─── AI Indexing card (inside SettingsPanel) ──────────────────────────────────
 function AIIndexingCard({ isDark, lang, activeCollection }) {
   const c = useColors(isDark);
-  const [status, setStatus] = useState({ sonic_vibe: null, refined_facts: null });
-  const [busy, setBusy] = useState({ sonic_vibe: false, refined_facts: false });
+  const [status, setStatus] = useState({ sonic_vibe: null, refined_facts: null, artist_bio: null });
+  const [busy, setBusy] = useState({ sonic_vibe: false, refined_facts: false, artist_bio: false });
   const [error, setError] = useState(null);
   const pollRef = useRef(null);
 
@@ -5143,7 +5143,7 @@ function AIIndexingCard({ isDark, lang, activeCollection }) {
   }, [refresh]);
 
   const isRunning = (s) => s && s.status === 'running';
-  const someRunning = isRunning(status.sonic_vibe) || isRunning(status.refined_facts);
+  const someRunning = isRunning(status.sonic_vibe) || isRunning(status.refined_facts) || isRunning(status.artist_bio);
 
   useEffect(() => {
     if (someRunning && !pollRef.current) {
@@ -5219,6 +5219,11 @@ function AIIndexingCard({ isDark, lang, activeCollection }) {
       return lang === 'ru'
         ? 'Нет входных данных: ни sonic_tags, ни фактов. Сначала запусти SONIC PROMPT-PROBING и/или обогащение фактами в библиотеке.'
         : 'No inputs available: neither sonic_tags nor song facts. Run sonic prompt-probing and/or facts enrichment in the library first.';
+    }
+    if (taskType === 'artist_bio') {
+      return lang === 'ru'
+        ? 'Нет фактов об артистах для написания био. Сначала обогати библиотеку фактами.'
+        : 'No artist facts available — enrich the library with facts first.';
     }
     return lang === 'ru'
       ? 'Нет фактов о треках/артистах для уточнения. Сначала обогати библиотеку фактами.'
@@ -5301,6 +5306,7 @@ function AIIndexingCard({ isDark, lang, activeCollection }) {
       </div>
       <Row title="Sonic Vibe" taskType="sonic_vibe" />
       <Row title={lang === 'ru' ? 'Уточнённые факты' : 'Refined Facts'} taskType="refined_facts" />
+      <Row title={lang === 'ru' ? 'Биография артистов' : 'Artist Bio'} taskType="artist_bio" />
       <div style={{ fontSize: 11, color: c.textMuted, marginTop: 12, lineHeight: 1.5 }}>
         ⚠ {lang === 'ru'
           ? 'AI-индексация использует текущий язык фронта. Чтобы получить результат на другом языке, смени язык и запусти повторно.'
