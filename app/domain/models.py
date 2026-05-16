@@ -269,3 +269,24 @@ class AIJobStatus(BaseModel):
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
     error: Optional[str] = None
+
+
+class ArtistAlbum(BaseModel):
+    """One album in an artist's discography aggregate."""
+    title: str
+    year: Optional[int] = None
+    cover_art_path: Optional[str] = None  # representative track's cover
+    tracks: list[TrackMetadata] = Field(default_factory=list)
+
+
+class ArtistAggregate(BaseModel):
+    """Aggregate response for GET /artists/{slug} — drives the Atlas screen."""
+    slug: str
+    name: str
+    genre: Optional[str] = None
+    track_count: int
+    album_count: int
+    decade_range: Optional[str] = None  # e.g. "2010s-2020s"
+    bio: Optional[str] = None           # None when artist_bio not yet indexed
+    facts: list[str] = Field(default_factory=list)
+    albums: list[ArtistAlbum] = Field(default_factory=list)
