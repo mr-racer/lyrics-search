@@ -1373,6 +1373,13 @@ const API = window.location.protocol === 'file:'
   ? 'http://localhost:8000/api/v1'
   : '/api/v1';
 
+// Basic artist-name → slug. Backend (/artists/{slug}) re-slugifies through
+// the canonical _slugify_artist (strips smart quotes, +, &, ., normalizes
+// dashes), so this minimal client-side form is enough to resolve.
+function slugifyArtistName(name) {
+  return (name || '').toLowerCase().trim().split(/\s+/).join('-');
+}
+
 async function apiFetch(path, opts = {}) {
   const res = await fetch(API + path, {
     headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
@@ -1702,7 +1709,7 @@ function CtrlBtn({ icon, size=30, isDark, onClick, active, title }) {
 }
 
 // ─── LandingPlayer (AmbientStage adaptation) ─────────────────────────────────
-function LandingPlayer({ isDark, lang, tracks, currentTrack, onTrackSelect, onTrackChange, onOpenPlayer, onRoll, isPlaying: isPlayingProp, audio, activeCollection }) {
+function LandingPlayer({ isDark, lang, tracks, currentTrack, onTrackSelect, onTrackChange, onOpenPlayer, onRoll, isPlaying: isPlayingProp, audio, activeCollection, navigateToArtist }) {
   const c = useColors(isDark);
   const [shuffle, setShuffle] = useState(false);
   const [repeat, setRepeat] = useState(false);
@@ -1902,7 +1909,14 @@ function LandingPlayer({ isDark, lang, tracks, currentTrack, onTrackSelect, onTr
                 )}
               </h1>
               <div style={{ marginTop:5, display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
-                <span style={{ fontSize:15, color:c.textMuted }}>{track.artist||'—'}</span>
+                <span
+                  onClick={() => {
+                    const slug = slugifyArtistName(track.artist);
+                    if (slug && navigateToArtist) navigateToArtist(slug);
+                  }}
+                  style={{ fontSize:15, color:c.textMuted, cursor: navigateToArtist ? 'pointer' : 'default' }}
+                  title={navigateToArtist ? (lang==='ru'?'Открыть страницу артиста':'Open artist page') : undefined}
+                >{track.artist||'—'}</span>
                 <span style={{ width:3, height:3, borderRadius:'50%', background:c.textSubtle, flexShrink:0 }} />
                 <span className="mono" style={{ fontSize:12, color:c.textSubtle }}>{track.year||'—'}</span>
                 {track.genre && (
@@ -2679,7 +2693,7 @@ function TopRightControls({ isDark, lang, onLang, onTheme, onSettings, floating=
 }
 
 // ─── LandingScreen — Home view (restored after accidental Task 13 deletion) ──────
-function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, activeCollection, hasLibrary, stats, playerTrack, playerPlaylist, onTrackChange, audio }) {
+function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, activeCollection, hasLibrary, stats, playerTrack, playerPlaylist, onTrackChange, audio, navigateToArtist }) {
   const c = useColors(isDark);
   const [factIdx, setFactIdx] = useState(0);
   const [now, setNow] = useState(new Date());
@@ -2859,6 +2873,7 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, activ
               isPlaying={audio?.isPlaying ?? false}
               audio={audio}
               activeCollection={activeCollection}
+              navigateToArtist={navigateToArtist}
             />
           </div>
         )}
@@ -3552,18 +3567,21 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
               .map((hit, hi) => (
                 <div key={hi} className="chat-result-card"
                   style={{ background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)' }}
-                  onClick={() => {
-                    // Hybrid: card-area click navigates to Artist Atlas; the
-                    // ▶ button below stops propagation to keep playback distinct.
-                    const slug = (hit.track?.artist || '').toLowerCase().trim().split(/\s+/).join('-');
-                    if (slug && navigateToArtist) navigateToArtist(slug);
-                  }}
+                  onClick={() => { setResults(msg.hits); setDetailHit(hit); }}
                   onMouseEnter={e => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)'; }}
                   onMouseLeave={e => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)'; }}>
                   <AlbumCover title={hit.track?.title||''} artist={hit.track?.artist||''} size={42} isDark={isDark} coverPath={hit.track?.cover_art_path} />
                   <div style={{ flex:1, minWidth:0 }}>
                     <div style={{ fontSize:'14px', fontWeight:'600', color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{hit.track?.title||'—'}</div>
-                    <div style={{ fontSize:'13px', color:c.textMuted }}>{hit.track?.artist||'—'}</div>
+                    <div
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const slug = slugifyArtistName(hit.track?.artist);
+                        if (slug && navigateToArtist) navigateToArtist(slug);
+                      }}
+                      style={{ fontSize:'13px', color:c.textMuted, cursor: 'pointer', display: 'inline-block' }}
+                      title={lang==='ru'?'Открыть страницу артиста':'Open artist page'}
+                    >{hit.track?.artist||'—'}</div>
                   </div>
                   <div className="mono" style={{ padding:'3px 8px', borderRadius:'16px', fontSize:'12px',
                     background: c.accentBg, color: c.accent, flexShrink:0 }}>
@@ -3732,10 +3750,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
                   <div className="search-grid">
                     {results.map((hit, i) => (
                       <div key={i} className="grid-card"
-                        onClick={() => {
-                          const slug = (hit.track?.artist || '').toLowerCase().trim().split(/\s+/).join('-');
-                          if (slug && navigateToArtist) navigateToArtist(slug);
-                        }}
+                        onClick={() => setDetailHit(hit)}
                         style={{
                           background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
                           borderRadius:'16px', overflow:'hidden',
@@ -3771,7 +3786,15 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
                           </div>
                           <div style={{ fontSize:'13px', color:c.textMuted, marginTop:'3px',
                             whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-                            {hit.track?.artist||'—'}{hit.track?.year ? ` · ${hit.track?.year}` : ''}
+                            <span
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const slug = slugifyArtistName(hit.track?.artist);
+                                if (slug && navigateToArtist) navigateToArtist(slug);
+                              }}
+                              style={{ cursor: 'pointer' }}
+                              title={lang==='ru'?'Открыть страницу артиста':'Open artist page'}
+                            >{hit.track?.artist||'—'}</span>{hit.track?.year ? ` · ${hit.track?.year}` : ''}
                           </div>
                           {hit.track?.genre && (
                             <div className="mono" style={{ fontSize:'11px', color:c.textSubtle, marginTop:'6px', letterSpacing:'0.1em' }}>
@@ -7007,7 +7030,18 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
                     </button>
                   </div>
                 </div>
-                <div style={{ fontSize:'clamp(14px, 1.75vh, 20px)', color:pTextMuted, marginTop:'6px', fontWeight:'400' }}>
+                <div
+                  onClick={() => {
+                    const slug = slugifyArtistName(currentTrack.artist);
+                    if (slug && navigateToArtist) navigateToArtist(slug);
+                  }}
+                  style={{
+                    fontSize:'clamp(14px, 1.75vh, 20px)', color:pTextMuted, marginTop:'6px', fontWeight:'400',
+                    cursor: navigateToArtist ? 'pointer' : 'default',
+                    display: 'inline-block',
+                  }}
+                  title={navigateToArtist ? (lang==='ru'?'Открыть страницу артиста':'Open artist page') : undefined}
+                >
                   {currentTrack.artist}
                 </div>
                 {currentTrack.album && (
@@ -7708,6 +7742,7 @@ function App() {
           playerPlaylist={playerPlaylist}
           onTrackChange={handleTrackChange}
           audio={audio}
+          navigateToArtist={navigateToArtist}
         />
       ) : (
         <Fragment>
