@@ -110,3 +110,27 @@ def test_delete_cache_unknown_task_type(client):
         params={"collection": "music"},
     )
     assert resp.status_code == 404
+
+
+def test_artist_bio_task_type_accepted(client):
+    """POST /library/ai-index/artist_bio should be 200 (or 400 for already-running)."""
+    r = client.post(
+        "/api/v1/library/ai-index/artist_bio",
+        json={"collection_name": "test_collection", "lang": "en"},
+    )
+    assert r.status_code in (200, 400, 409, 503)  # not 404 — task_type is recognised
+
+
+def test_status_response_includes_artist_bio_field(client):
+    r = client.get("/api/v1/library/ai-index/status?collection=test_collection")
+    assert r.status_code == 200
+    body = r.json()
+    assert "artist_bio" in body
+
+
+def test_artist_bio_cache_reset_works(client):
+    r = client.delete(
+        "/api/v1/library/ai-index/artist_bio/cache?collection=test_collection"
+    )
+    assert r.status_code == 200
+    assert "deleted_rows" in r.json()

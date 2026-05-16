@@ -18,7 +18,7 @@ from app.services import ai_indexing_service
 
 router = APIRouter(prefix="/library/ai-index", tags=["AI Indexing"])
 
-_TASK_TYPES = {"sonic_vibe", "refined_facts"}
+_TASK_TYPES = {"sonic_vibe", "refined_facts", "artist_bio"}
 
 
 class StartJobRequest(BaseModel):
@@ -33,6 +33,7 @@ class StartJobResponse(BaseModel):
 class StatusResponse(BaseModel):
     sonic_vibe: Optional[AIJobStatus] = None
     refined_facts: Optional[AIJobStatus] = None
+    artist_bio: Optional[AIJobStatus] = None
 
 
 class CacheResetResponse(BaseModel):
@@ -110,6 +111,10 @@ def reset_cache(task_type: str, collection: str = Query(...)) -> CacheResetRespo
         if not hasattr(MetadataDB, "delete_refined_facts"):
             raise HTTPException(status_code=501, detail="cache reset not yet implemented")
         n = MetadataDB.delete_refined_facts(collection)
+    elif task_type == "artist_bio":
+        if not hasattr(MetadataDB, "delete_artist_bios"):
+            raise HTTPException(status_code=501, detail="cache reset not yet implemented")
+        n = MetadataDB.delete_artist_bios(collection)
     else:
         raise HTTPException(status_code=404, detail=f"unknown task_type: {task_type}")
     return CacheResetResponse(deleted_rows=int(n))
