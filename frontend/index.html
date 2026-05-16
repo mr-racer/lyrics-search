@@ -621,9 +621,11 @@
     .player-art-glow { animation: albumGlow 4s ease-in-out infinite; }
 
     /* ── 3D tilt effect on album art (from Spatial concept) ───────── */
+    /* Plan 4: perspective host also gives fixed 360×360 frame for the flip card. */
     .player-art-wrap {
       perspective: 1400px;
-      width: 100%;
+      width: 360px;
+      height: 360px;
       display: flex;
       justify-content: center;
       align-items: center;
@@ -652,6 +654,64 @@
       mix-blend-mode: overlay;
       z-index: 2;
       transition: background 0.15s ease;
+    }
+
+    /* ─── Plan 4: Cover ↔ Lyrics flip ────────────────────────────────── */
+    .player-art-flipper {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      transform-style: preserve-3d;
+      transition: transform 720ms cubic-bezier(0.34, 1.35, 0.64, 1);
+    }
+    .player-art-front,
+    .player-art-back {
+      position: absolute;
+      inset: 0;
+      backface-visibility: hidden;
+      -webkit-backface-visibility: hidden;
+      border-radius: 20px;
+      overflow: hidden;
+    }
+    .player-art-back {
+      transform: rotateY(180deg);
+      background: linear-gradient(135deg, #15151b, #1f1f29);
+      box-shadow: 0 16px 40px rgba(124,91,255,0.22),
+                  0 0 0 1px rgba(255,255,255,0.06) inset;
+    }
+    /* Light theme: cream/parchment palette for the reading face. */
+    body[data-theme="light"] .player-art-back {
+      background: linear-gradient(135deg, #f6f5ed, #ede9d8);
+      box-shadow: 0 16px 40px rgba(40,30,60,0.10),
+                  0 0 0 1px rgba(22,22,32,0.08) inset;
+    }
+    /* Respect motion-reduction preference: instant swap, no flip. */
+    @media (prefers-reduced-motion: reduce) {
+      .player-art-flipper { transition: none; }
+    }
+
+    /* ─── Plan 4: Custom scrollbar for player surfaces ────────────────── */
+    .player-scroll::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    .player-scroll::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    .player-scroll::-webkit-scrollbar-thumb {
+      background: oklch(60% 0.18 270 / 0.30);
+      border-radius: 3px;
+      transition: background 220ms ease;
+    }
+    .player-scroll::-webkit-scrollbar-thumb:hover {
+      background: oklch(62% 0.18 270 / 0.55);
+    }
+    .player-scroll::-webkit-scrollbar-thumb:active {
+      background: oklch(66% 0.20 270 / 0.75);
+    }
+    .player-scroll {
+      scrollbar-width: thin;
+      scrollbar-color: oklch(60% 0.18 270 / 0.30) transparent;
     }
 
     /* Play button pulse */
