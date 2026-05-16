@@ -1079,15 +1079,25 @@ CREATE TABLE recommendation_snapshots (
 > | **5**  AI Chat & lyrics-explain       | ⏳ Not started — Ask AI button shows toast stub | — |
 > | **6**  Spotify-like MVP               | ⏳ Not started                            | — |
 > | **6a** Home (Discovery Magazine)      | ⏳ Not started                            | — |
-> | **6b** Search redesign                | ⏳ Not started                            | — |
+> | **6b** Search redesign                | 🔜 **Next plan** — see "Plan B (SearchSectionV2)" below | — |
 > | **6c** Stats redesign (Sonic Map)     | ⏳ Not started — partly blocked on 1c    | — |
 > | **6d** Recommendations                | ⏳ Not started — partly blocked on 1b    | — |
 > | **7**  Polish                         | ⏳ Not started                            | — |
+>
+> **Next plan up — Plan B: SearchSectionV2 redesign** (Phase 6b, unblocked by Plan 6's `aiActive` infra):
+> - Split today's chat-only SearchSection into two modes gated on `aiStatus.aiActive`:
+>   - **AI on (`aiActive === true`)** — keep the existing natural-language chat experience.
+>   - **AI off / LLM offline** — render a non-chat results UI: query input → `SearchResultsGrid` of cards (cover + title + artist), no LLM dependency.
+> - **Filters** (MVP scope agreed during brainstorm): Artist, Album, genre, decade. Duration + liked-only filters explicitly cut from MVP.
+> - **Hover-actions on cards**: play + like + breakdown (the "full spec" option), not minimal.
+> - **Card click → Player auto-play** (replaces Plan 5's hybrid card→Atlas semantics in Search; clicking the artist name in the subtitle still routes to Atlas per current Player/Landing convention).
+> - **Autocomplete fix** — Artist/Album typeahead suggestions are currently broken in chat-search; bundle this fix into Plan B.
 >
 > **Deferred from shipped plans** (slots reserved, will return as smaller plans):
 > - **Sonic Sibling** (Phase 1 item 4 + Phase 4 item 12) — `/recommend/sonic-sibling` returns 501; depends on Phase 1c.1-1c.2 (sonic tags) + 1c.5-1c.6 (classifier for class-diff phrase).
 > - **Related artists tab** + **Eras tab** (Phase 3) — Related needs CLAP artist centroids (Phase 1c products); Eras is a small standalone follow-up.
 > - **Click-to-artist routing in Library / RecentlyPlayed** — those sections haven't been redesigned yet; routing will be added when each ships.
+> - **OnboardingScreen 3-phase wizard** (Plan 6 follow-up) — `OnboardingScreen.handleIndex` still ships its own pre-wizard copy; lift `startIndexing` into a shared helper so first-run users get the same ai-setup → indexing → ai-bootstrap flow as SettingsPanel.
 >
 > **Post-plan polish round shipped outside formal plans** (after Plan 4 merge, before Plan 5):
 > - Player: audio-reactive spectrum bars flanking the cover (FFT via Web Audio AnalyserNode singleton, dominant-color extraction from cover via canvas sampling, blurred-wave mirrored layout with edge-fade mask).
@@ -1195,13 +1205,24 @@ CREATE TABLE recommendation_snapshots (
 
 ### Phase 6b: Search redesign
 
-> **Status (2026-05-16)**: ⏳ **Not started.** Current SearchSection still in place. Plan 5 already changed its card-click semantics to hybrid (card → Atlas, ▶ → play), so a future redesign should preserve that.
+> **Status (2026-05-16)**: 🔜 **Next plan — Plan B (SearchSectionV2).** Plan 6 (AI Mode Infrastructure) shipped the `aiStatus.aiActive` signal that Plan B needs to gate chat-search; Plan B is now unblocked and is the immediate next plan to brainstorm → spec → write.
+>
+> **Plan B scope (decided during 2026-05-16 brainstorm, awaiting formal spec):**
+> - Two-mode UI gated on `aiStatus.aiActive`:
+>   - **AI on** → keep current chat-search.
+>   - **AI off** → non-chat results UI: query input + `SearchResultsGrid` of cards (cover + title + artist), no LLM dependency. Plan 5's hybrid card-click (card → Atlas, ▶ → play) is **replaced** in this mode — card click → Player auto-play. Artist-name link in the subtitle still routes to Atlas (per current Player/Landing convention added in the Plan 5 follow-up polish).
+> - **Filters (MVP)**: Artist, Album, genre, decade. Duration and liked-only filters cut from MVP per brainstorm.
+> - **Hover-actions on each card**: play + like + breakdown (full spec).
+> - **Autocomplete fix** — Artist/Album typeahead is currently broken in chat-search; bundle the fix into Plan B.
+>
+> Components from the §8 inventory still apply (`SearchSectionV2`, `SearchModeToggle`, `SearchFiltersAccordion`, `SearchResultsGrid`, `RecentSearchesChips`) but the mode-toggle semantics differ from the original §8 sketch (which assumed 4 modes Название / Текст / Звук / Hybrid) — Plan B's mode set is driven by `aiActive`, not by query-type pickers.
 
-6b.1. **SearchSectionV2** + **SearchModeToggle** — replace existing SearchSection. Сохранить backward-compat для existing search params (если есть deep-link).
-6b.2. **SearchFiltersAccordion** — collapsed by default, smooth expand.
+6b.1. **SearchSectionV2** with `aiActive`-driven mode split — replace existing SearchSection. Preserve backward-compat for existing search params (deep-links) if any.
+6b.2. **SearchFiltersAccordion** — Artist / Album / genre / decade only; collapsed by default, smooth expand.
 6b.3. **RecentSearchesChips** — localStorage persistent.
-6b.4. **SearchResultsGrid** + hover breakdown tooltip.
-6b.5. Verify: каждый mode возвращает результаты, breakdown показывается в semantic modes, hint меняется per mode.
+6b.4. **SearchResultsGrid** with hover-action overlay (play + like + breakdown) and card-click → Player auto-play.
+6b.5. Fix Artist/Album autocomplete typeahead (regression — currently doesn't fire).
+6b.6. Verify: AI-on mode keeps chat behavior; AI-off mode returns grid results, filters work, hover-actions fire, card-click plays in Player.
 
 ### Phase 6c: Stats redesign (Sonic Map)
 
