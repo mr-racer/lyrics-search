@@ -1064,11 +1064,41 @@ CREATE TABLE recommendation_snapshots (
 
 ## 9. Build Sequence
 
-Рекомендуемый порядок имплементации (каждый шаг можно проверить независимо):
+Рекомендуемый порядок имплементации (каждый шаг можно проверить независимо).
+
+> ### Status snapshot (updated 2026-05-16)
+>
+> | Phase | Status | Reference |
+> |---|---|---|
+> | **1**  Backend foundations            | ✅ Shipped (Plan 3)                       | `docs/superpowers/plans/2026-05-14-plan-3-backend-foundations.md` |
+> | **1b** Additional backend services    | ⏳ Not started                            | — |
+> | **1c** Sonic Descriptor Layer         | ⏳ Not started — **unblocks** Sonic Sibling, Sonic Map cluster overlay, For You rationale | — |
+> | **2**  Frontend foundation            | ✅ Shipped (out-of-band — landed alongside Plan 4 timeframe) | inline in `frontend/index.html` |
+> | **3**  Artist Atlas                   | ✅ Shipped (Plan 5)                       | `docs/superpowers/plans/2026-05-16-plan-5-artist-atlas.md` |
+> | **4**  Player v6 redesign             | ✅ Shipped (Plan 4) + post-plan polish round | `docs/superpowers/plans/2026-05-16-plan-4-player-redesign.md` |
+> | **5**  AI Chat & lyrics-explain       | ⏳ Not started — Ask AI button shows toast stub | — |
+> | **6**  Spotify-like MVP               | ⏳ Not started                            | — |
+> | **6a** Home (Discovery Magazine)      | ⏳ Not started                            | — |
+> | **6b** Search redesign                | ⏳ Not started                            | — |
+> | **6c** Stats redesign (Sonic Map)     | ⏳ Not started — partly blocked on 1c    | — |
+> | **6d** Recommendations                | ⏳ Not started — partly blocked on 1b    | — |
+> | **7**  Polish                         | ⏳ Not started                            | — |
+>
+> **Deferred from shipped plans** (slots reserved, will return as smaller plans):
+> - **Sonic Sibling** (Phase 1 item 4 + Phase 4 item 12) — `/recommend/sonic-sibling` returns 501; depends on Phase 1c.1-1c.2 (sonic tags) + 1c.5-1c.6 (classifier for class-diff phrase).
+> - **Related artists tab** + **Eras tab** (Phase 3) — Related needs CLAP artist centroids (Phase 1c products); Eras is a small standalone follow-up.
+> - **Click-to-artist routing in Library / RecentlyPlayed** — those sections haven't been redesigned yet; routing will be added when each ships.
+>
+> **Post-plan polish round shipped outside formal plans** (after Plan 4 merge, before Plan 5):
+> - Player: audio-reactive spectrum bars flanking the cover (FFT via Web Audio AnalyserNode singleton, dominant-color extraction from cover via canvas sampling, blurred-wave mirrored layout with edge-fade mask).
+> - Player: vinyl-stack door-swing track transition (sequential exit/enter via CSS animation-delay), glassy play/pause indicator (CSS mask + backdrop-filter so the icon shape itself is the glass surface), cover-tap → toggle play + first-3-clicks hint, scope toggle on FactsRail (SONG | ARTIST segmented pill with sticky user choice + auto-fallback).
+> - AI Indexing reliability: `n_skipped` accounting through the whole stack (DB column + JobState + AIJobStatus + frontend warning banner when job completed with zero real work), default `_SYSTEM_PROMPT` for refined_facts with fail-fast on empty, slug resolution from `payload[artist]+payload[title]` (Qdrant never wrote `song_slug`/`artist_slug` payload fields), smart-quote (U+2019 et al) stripping in `_slugify` so iTunes-encoded titles round-trip.
 
 ### Phase 1: Backend foundations (без UI-изменений)
 
-> **Status (2026-05-16)**: **Plan 3 ships ScoreBreakdown + MusicBrainz scaffold + AI Indexing (Sonic Vibe + Refined Facts) + Autoplay queue + Playback history**. Plan + spec: `docs/superpowers/{plans,specs}/2026-05-14-plan-3-backend-foundations*`. Single notable revision vs the bullets below: **Sonic Vibe is now an AI Indexing task** (user-triggered batch, gated by opt-in in Settings → AI Indexing card) — not a lazy on-demand endpoint. Cached output keyed by `(track_id, collection, lang)`. **Refined Facts** is a sibling AI-Indexing task that batch-filters and shortens song/artist facts; `/metadata/tracks/{id}/facts` transparently prefers refined over originals when present. **Sonic Sibling deferred** to a later plan — `/recommend/sonic-sibling` returns 501.
+> **Status (2026-05-16)**: ✅ **Plan 3 ships ScoreBreakdown + MusicBrainz scaffold + AI Indexing (Sonic Vibe + Refined Facts) + Autoplay queue + Playback history**. Plan + spec: `docs/superpowers/{plans,specs}/2026-05-14-plan-3-backend-foundations*`. Single notable revision vs the bullets below: **Sonic Vibe is now an AI Indexing task** (user-triggered batch, gated by opt-in in Settings → AI Indexing card) — not a lazy on-demand endpoint. Cached output keyed by `(track_id, collection, lang)`. **Refined Facts** is a sibling AI-Indexing task that batch-filters and shortens song/artist facts; `/metadata/tracks/{id}/facts` transparently prefers refined over originals when present. **Sonic Sibling deferred** to a later plan — `/recommend/sonic-sibling` returns 501.
+>
+> **Post-plan reliability fixes (2026-05-16)**: AI-Indexing tasks were silently completing with zero LLM calls because `_TASK_TYPES` whitelisted them but `register_task()` never fired (no production import path for the `ai_tasks` package) — fixed by side-effect-importing in `app/api/main.py`. Slug resolution patched to read `artist+title` from the Qdrant payload (which never carried `song_slug`/`artist_slug`) and run them through `_slugify_artist` / `get_song_facts_key` for deterministic match against the SQLite `*_facts` tables. `n_skipped` column added so the UI can honestly report "completed with 0 real work" (vs the previous "16/16 done" false success). `refined_facts._SYSTEM_PROMPT` got a sensible default + `RuntimeError` fail-fast on empty. `_slugify` in both `song_facts_service` and `artist_facts_service` now strips U+2019 (curly apostrophe) and other smart quotes — fixes silent 404s from songfacts.com URL builders for titles like "We're Good".
 
 1. **ScoreBreakdown в TrackHit** — модифицировать `_merge_hits()` в `search_service.py`, добавить breakdown в response. Verify: вызов `/search/` возвращает breakdown поля.
 2. **MusicBrainz scaffolding (data-only)** — добавить nullable columns в `songs`/`artists` tables (`producers`, `label`, `samples_json`, `mbid`) **без** активного парсинга. UI рендерит conditionally if non-null. Verify: schema migration работает, существующие данные не повреждены, columns пустые.
@@ -1078,6 +1108,9 @@ CREATE TABLE recommendation_snapshots (
 6. **Playback history** [lifted from Phase 6 because needed by future Rediscover / Personalization] — `playback_events` table with full session tracking (`session_id`, `played_sec`, `total_dur`, server-derived `skipped_early`). Frontend mints `session_id` in `sessionStorage` and POSTs on track end / track switch / `beforeunload` (via `sendBeacon`).
 
 ### Phase 1c: Sonic Descriptor Layer (prerequisite для Sonic Vibe / Sibling / Map cluster overlay / For You rationale)
+
+> **Status (2026-05-16)**: ⏳ **Not started.** Sonic Vibe currently runs facts-only (no `sonic_tags_json` in Qdrant payload), Sonic Sibling endpoint returns 501, Map cluster overlay is hidden. Unblocking 1c.1 + 1c.2 alone gives Vibe much richer input; the full chain through 1c.5-1c.6 enables the class-diff phrase for Sibling and the cluster-tinted Sonic Map.
+
 1c.1. **Prompt vocabulary scaffolding** — создать `cache/sonic_prompts.json` со стартовым набором ~30-50 prompts по группам (energy/valence/density/texture/instrumentation/vocal/rhythm/era). Pre-compute их CLAP text embeddings в `.npy`. Verify: vocab loadable, embeddings shape correct.
 1c.2. **Prompt-probing tagger** — `sonic_descriptor_service.compute_tags(track_id)`: cosine между track_emb и prompt_embeddings, top-K. Persist в `songs.sonic_tags_json`. Trigger automatically на indexing (incremental: new tracks get tagged immediately, existing — bulk script). Verify: 5 tracks возвращают sensible top-5 tags каждый.
 1c.3. **HDBSCAN clustering** — `sonic_descriptor_service.cluster_library(collection)`: clusterise все CLAP-vectors. Save assignments → `cache/sonic_clusters/<col>_assignments.json` + representatives (top-5 closest to centroid per cluster). Endpoint `POST /library/cluster-discovery`. Verify: returns sensible cluster count (5-30 для test library of 500 tracks), representatives визуально похожи.
@@ -1087,6 +1120,9 @@ CREATE TABLE recommendation_snapshots (
 1c.7. **Empty/incremental state guards** — if classifier not trained, all consumers (Sonic Vibe, Sibling, Map overlay) gracefully fall back (tags only, no class). Verify: features работают на свежей библиотеке без curator pass.
 
 ### Phase 1b: Additional backend foundations (Home / Stats / Recommendations)
+
+> **Status (2026-05-16)**: ⏳ **Not started.** Endpoints scaffolded by Plan 3 spec but no service implementations yet. Blocks 6a (Home Hero needs `/library/rediscover` + `/library/featured-artist`), 6c (`/library/sonic-map`), 6d (`/recommend/prompt-to-playlist` + `/recommend/for-you` + `/recommend/quick-rate/*`).
+
 1b.1. **Sonic Map service** — `sonic_map_service.py`, UMAP computation, cache file `cache/sonic_map/<col>.json`. Endpoint `/library/sonic-map`. Trigger compute on indexing completion. Verify: запрос возвращает ~N points для test collection.
 1b.2. **Home Hero endpoints** — `/library/rediscover` (least-recently-played; requires `playback_history` table populated), `/library/featured-artist` (date-deterministic rotation hash). Verify: rediscover varies per call, featured-artist stable per date.
 1b.3. **Personalization service** — `personalization_service.py`, user_vector compute, in-memory cache TTL 1h, invalidation hooks. Endpoint `/recommend/for-you` + `/recommend/for-you/rationale`. Verify: меняется при new like/dislike, queue order reflects user_vector.
@@ -1095,6 +1131,9 @@ CREATE TABLE recommendation_snapshots (
 1b.6. **Recommendation snapshots** — SQLite table + save endpoint (`POST /recommend/snapshots`) + list endpoint (`GET /recommend/snapshots`). Verify: save и retrieve работают, восстановление playlist по id.
 
 ### Phase 2: Frontend foundation
+
+> **Status (2026-05-16)**: ✅ **Shipped (out-of-band).** All four bullets landed in `frontend/index.html` over the Plan 4 timeframe without a dedicated plan doc — `FloatingIconNav` + `NowPlayingPebble` + `MiniPlaybackPopout` + `useGlobalKeyboardShortcuts` are all wired and visible, and v3 hybrid CSS classes (`.panel-v3`, `.pill-v3`, `.cta-v3`, `.ask-ai-btn`, `.vibe-quote`) ship in the `<style>` block. New screens (Atlas, etc.) consume them directly.
+
 6. **Floating icon sidebar** — заменить current sidebar на `FloatingIconNav`. Сохранить routing к существующим разделам + добавить новые pivot-ы (Home/Search/Lib/Stats/Recom/Player/Set). Verify: visual change без regression в navigation.
 7. **Style updates** — добавить v3 hybrid CSS (panels, pills, CTAs, animations) в `<style>`. Существующие компоненты постепенно мигрируют на новые классы.
 7a. **Now Playing Pebble + MiniPlaybackPopout** — sidebar bottom indicator с hover-popout. Verify: pebble виден везде, popout появляется при hover, controls работают.
@@ -1110,6 +1149,14 @@ CREATE TABLE recommendation_snapshots (
 ### Phase 4: Player v6 redesign
 
 > **Status (2026-05-16)**: ✅ **Plan 4 ships Player Redesign — cover↔lyrics 3D flip (Shift+L / Esc), action pills row (Like / Skip / Lyrics / Ask AI), Vibe Line (Sonic Vibe phrase), Facts Rail (player variant), queue with autoplay divider, score-bars hover tooltip on queue items, Ask AI toast stub (Plan 5 placeholder), theme-token parity sweep + custom purple scrollbar.** Plan: `docs/superpowers/plans/2026-05-16-plan-4-player-redesign`. Notable delta vs bullets below: Sonic Sibling card (item 12) remains deferred (backend returns 501); flip is cover↔lyrics rather than separate lyrics-btn.
+>
+> **Post-plan polish round (2026-05-16)** — landed on `main` outside a formal plan, all on top of Plan 4:
+> - **Vinyl-stack track transition** — door-swing rotateY around Y, sequential exit (~420ms ease-in) + entry (~600ms bounce, 320ms delay). Mirrored for prev. Disables tilt during transition. Auto-fires on `audio.ended` too.
+> - **Glassy play/pause indicator + cover-tap toggle** — old hover overlay removed; cover-click toggles play. On toggle: press-scale 0.96 + glassy play/pause icon (CSS `mask-image` + `backdrop-filter: blur(22px)` so the icon shape itself is the glass surface) + frosted blur over cover, all fading over 1200ms. First-3-clicks hint above cover (localStorage-backed).
+> - **Side-flanking prev/next buttons** + title row hosts like/dislike/lyrics/AI icons inline (replaces the previous bottom button row).
+> - **FactsRail scope toggle** — segmented pill SONG | ARTIST replaces the text header in player variant. Sticky user choice across tracks with auto-fallback when the chosen scope is empty for the current track. 5 random artist facts per track (Fisher-Yates, stable within track). No more random-collection fallback in the player variant.
+> - **Audio-reactive spectrum bars** — mirrored blurred-wave strips behind the cover row. Web Audio AnalyserNode (FFT, 128 bins) wired through a module-level singleton that survives PlayerSection unmount/remount. Dominant color extracted from cover via 32×32 off-screen canvas sampling. ~32 bars per side, `filter: blur(12px) saturate(1.35)` with `mask-image` linear-gradient fading outer 35% so the wave dissolves into the column edge. Bars collapse fully (scaleY=0) when audio is paused.
+> - **AI Indexing card** surfaces `n_skipped` alongside `n_done/n_failed` + amber warning banner when a job completed with zero real work, with scope-specific remediation hint.
 
 10. **PlayerSection restructure** — hero с 3 zones, breathing cover, EQ bars, Sonic Vibe quote, Ask AI inline.
 11. **Facts panel** — slot для song-facts (через `/metadata/tracks/{id}/facts`).
@@ -1118,16 +1165,24 @@ CREATE TABLE recommendation_snapshots (
 14. **Breakdown bars** в other similar list.
 
 ### Phase 5: AI Chat & lyrics-explain
+
+> **Status (2026-05-16)**: ⏳ **Not started.** The Player's "Ask AI" button currently shows a `showToast` stub ("AI-чат появится в следующем плане (Plan 5)" — note: this stub message is misleading since Plan 5 turned out to be Artist Atlas, not AI Chat; the stub copy will be updated when this phase ships).
+
 15. **AIChatDrawer component** — слайд из правой стороны. Pre-filled context current song. Suggested prompts. Reuse `useChatHistory` с per-song ключом.
 16. **Inline ✨ explain** на lyric line — popover с LLM-ответом. Reuse `/chat/` endpoint с `LYRIC_EXPLAIN_PROMPT`.
 
 ### Phase 6: Spotify-like MVP
+
+> **Status (2026-05-16)**: ⏳ **Not started.** Playback history backend exists (Plan 3 item 6 shipped `playback_events` table + SSE), but the frontend rails / Liked filter / Playlists CRUD / Manual Queue all remain to do.
+
 17. **Playback history backend** + `RecentlyPlayedRail` на Home/Library.
 18. **Liked Songs view** — фильтр + UI.
 19. **Playlists CRUD** — backend tables + endpoints + UI (создать, добавить, реордер, удалить, context-menu "Add to playlist").
 20. **Manual Queue panel** — frontend-only, drag-drop reorder, выезжает из ≡ кнопки.
 
 ### Phase 6a: Home (Discovery Magazine)
+
+> **Status (2026-05-16)**: ⏳ **Not started.** Blocks on Phase 1b.2 (`/library/rediscover` + `/library/featured-artist`).
 6a.1. **HomeSection layout** — Hero row (двойной блок) + 3 shelves + bottom CTA.
 6a.2. **HeroRediscoveryCard** — uses `/library/rediscover` + facts из existing `/metadata/tracks/{id}/facts`. `[▶ PLAY]` запускает Player.
 6a.3. **HeroFeaturedArtistCard** — uses `/library/featured-artist`. Cover stack, bio summary, CTA → Artist Atlas.
@@ -1136,6 +1191,9 @@ CREATE TABLE recommendation_snapshots (
 6a.6. Verify: Home рендерится на свежей библиотеке (empty state), на богатой библиотеке, при отсутствии playback_history.
 
 ### Phase 6b: Search redesign
+
+> **Status (2026-05-16)**: ⏳ **Not started.** Current SearchSection still in place. Plan 5 already changed its card-click semantics to hybrid (card → Atlas, ▶ → play), so a future redesign should preserve that.
+
 6b.1. **SearchSectionV2** + **SearchModeToggle** — replace existing SearchSection. Сохранить backward-compat для existing search params (если есть deep-link).
 6b.2. **SearchFiltersAccordion** — collapsed by default, smooth expand.
 6b.3. **RecentSearchesChips** — localStorage persistent.
@@ -1143,6 +1201,9 @@ CREATE TABLE recommendation_snapshots (
 6b.5. Verify: каждый mode возвращает результаты, breakdown показывается в semantic modes, hint меняется per mode.
 
 ### Phase 6c: Stats redesign (Sonic Map)
+
+> **Status (2026-05-16)**: ⏳ **Not started.** Blocks on Phase 1b.1 (`/library/sonic-map` UMAP service). Cluster overlay (6c.4) additionally blocks on Phase 1c.3-1c.4.
+
 6c.1. **SonicMapCanvas** — компонент с pan/zoom/hover/click. Performance test: 1500+ points smooth at 60fps.
 6c.2. **SonicMapControls** — color-mode dropdown (by genre / by decade / by reaction).
 6c.3. **KPITiles + DecadesTimeline + TopGenres/Artists** — auxiliary visualizations.
@@ -1150,6 +1211,9 @@ CREATE TABLE recommendation_snapshots (
 6c.5. Verify: map renders на 100/1000/3000 points, click-to-play работает, KPI tiles tally с `/library/stats`.
 
 ### Phase 6d: Recommendations
+
+> **Status (2026-05-16)**: ⏳ **Not started.** Blocks on Phase 1b.3-1b.6 (`/recommend/for-you`, `/recommend/prompt-to-playlist`, `/recommend/quick-rate/*`, snapshots).
+
 6d.1. **RecommendationsSection** + **RecommendModePicker** — 3-card mode picker.
 6d.2. **PromptToPlaylistPanel** — text input, length selector, generate, result list с breakdown + WhyThisSetQuote. Save-as-playlist action.
 6d.3. **ForYouPanel** — endless queue с per-track `i` icon → rationale popover. Recompute trigger.
@@ -1158,6 +1222,9 @@ CREATE TABLE recommendation_snapshots (
 6d.6. Verify: каждый mode end-to-end работает; ratings из Quick-Rate переходят в track_reactions; saved playlists появляются в Custom Playlists.
 
 ### Phase 7: Polish
+
+> **Status (2026-05-16)**: ⏳ **Not started.** Player has had targeted polish rounds (see Phase 4 status), but a cross-screen consistency pass + a11y / performance audit are still pending.
+
 21. Анимации (coverBreath, eq, askGlow, pebble pulse, hero fade-in) — финальная настройка.
 22. Empty states, loading states, error handling по всем screens (Home, Search, Stats, Recommend, Artist Atlas, Player).
 23. Visual consistency pass — проверить что все screens используют panel-v3 materials uniformly, без regression в существующей navigation/playback.
