@@ -5455,22 +5455,55 @@ function getSongFacts(track, lang) {
   ];
 }
 
-// ─── LYRICS BACK FACE (placeholder — real implementation in Task 6) ─────────
+// ─── LYRICS BACK FACE ───────────────────────────────────────────────────────
 function LyricsBackFace({ track, isVisible, activeCollection, isDark, lang }) {
-  // Real implementation in Task 6. For now: minimal surface so flip is testable.
+  const scrollRef = useRef(null);
+
+  // Reset scroll position when track changes — start every new lyric at the top.
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [track?.track_id]);
+
+  const lyrics = track?.lyrics || null;
+  const title = track?.title || '';
+
+  const headingColor = isDark ? '#666' : '#8a8275';
+  const bodyColor    = isDark ? '#d8d4c8' : '#2a2620';
+
   return (
-    <div style={{
-      width: '100%',
-      height: '100%',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      color: isDark ? '#666' : '#8a8275',
-      fontSize: 11,
-      fontFamily: "'JetBrains Mono', ui-monospace, monospace",
-      letterSpacing: '0.18em',
-    }}>
-      LYRICS · TASK 6 FILLS THIS
+    <div
+      ref={scrollRef}
+      className="player-scroll"
+      style={{
+        width: '100%',
+        height: '100%',
+        overflowY: 'auto',
+        padding: '22px 24px',
+        fontFamily: "Georgia, 'Noto Serif Display', serif",
+        fontSize: 14,
+        lineHeight: 1.7,
+        color: bodyColor,
+        whiteSpace: 'pre-wrap',
+      }}
+    >
+      <div style={{
+        fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+        fontSize: 9,
+        letterSpacing: '0.18em',
+        color: headingColor,
+        marginBottom: 14,
+        textTransform: 'uppercase',
+      }}>
+        {title} · {lang === 'ru' ? 'ТЕКСТ' : 'LYRICS'}
+      </div>
+
+      {lyrics ? (
+        <div>{lyrics}</div>
+      ) : (
+        <div style={{ color: headingColor, fontStyle: 'italic' }}>
+          {lang === 'ru' ? 'тексты не проиндексированы' : 'no lyrics indexed yet'}
+        </div>
+      )}
     </div>
   );
 }
