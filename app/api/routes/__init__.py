@@ -7,5 +7,7 @@ from .metadata import router as metadata_router
 from .playback import router as playback_router
 from .recommend import router as recommend_router
 from .ai_indexing import router as ai_indexing_router
+from .artists import router as artists_router
 
-__all__ = ["search_router", "library_router", "chat_router", "metadata_router", "playback_router", "recommend_router", "ai_indexing_router"]
+__all__ = ["search_router", "library_router", "chat_router", "metadata_router",
+           "playback_router", "recommend_router", "ai_indexing_router", "artists_router"]

@@ -34,7 +34,7 @@ from ..services.sonic_descriptor_service import SonicDescriptorService
 # because the routes find the type in _TASK_TYPES but the service registry
 # is empty.
 from ..services import ai_tasks  # noqa: F401
-from .routes import search_router, library_router, chat_router, metadata_router, playback_router, recommend_router, ai_indexing_router
+from .routes import search_router, library_router, chat_router, metadata_router, playback_router, recommend_router, ai_indexing_router, artists_router
 from .sse_utils import event_stream
 
 logger = logging.getLogger(__name__)
@@ -235,6 +235,7 @@ def create_app() -> FastAPI:
     app.include_router(playback_router,     prefix="/api/v1")
     app.include_router(recommend_router,    prefix="/api/v1")
     app.include_router(ai_indexing_router,  prefix="/api/v1")
+    app.include_router(artists_router,      prefix="/api/v1")
 
     # SPA catch-all — must be LAST so it doesn't shadow API routes
     @app.get("/{full_path:path}")
