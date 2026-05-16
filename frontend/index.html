@@ -3385,7 +3385,7 @@ function Segmented({ value, onChange, options, isDark, size='md', style } = {}) 
 }
 
 // ─── SEARCH SECTION (redesigned) ──────────────────────────────────────────────
-function SearchSection({ isDark, lang, activeCollection, onPlayTrack }) {
+function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateToArtist }) {
   const c = useColors(isDark);
   const { sessions, saveSession, deleteSession } = useChatHistory(activeCollection);
 
@@ -3552,7 +3552,12 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack }) {
               .map((hit, hi) => (
                 <div key={hi} className="chat-result-card"
                   style={{ background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)' }}
-                  onClick={() => { setResults(msg.hits); setDetailHit(hit); }}
+                  onClick={() => {
+                    // Hybrid: card-area click navigates to Artist Atlas; the
+                    // ▶ button below stops propagation to keep playback distinct.
+                    const slug = (hit.track?.artist || '').toLowerCase().trim().split(/\s+/).join('-');
+                    if (slug && navigateToArtist) navigateToArtist(slug);
+                  }}
                   onMouseEnter={e => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)'; }}
                   onMouseLeave={e => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)'; }}>
                   <AlbumCover title={hit.track?.title||''} artist={hit.track?.artist||''} size={42} isDark={isDark} coverPath={hit.track?.cover_art_path} />
@@ -3727,7 +3732,10 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack }) {
                   <div className="search-grid">
                     {results.map((hit, i) => (
                       <div key={i} className="grid-card"
-                        onClick={() => setDetailHit(hit)}
+                        onClick={() => {
+                          const slug = (hit.track?.artist || '').toLowerCase().trim().split(/\s+/).join('-');
+                          if (slug && navigateToArtist) navigateToArtist(slug);
+                        }}
                         style={{
                           background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
                           borderRadius:'16px', overflow:'hidden',
@@ -5124,8 +5132,8 @@ function IndexingModal({ isDark, lang, collectionName, stepStatus, trackCount, e
 // ─── AI Indexing card (inside SettingsPanel) ──────────────────────────────────
 function AIIndexingCard({ isDark, lang, activeCollection }) {
   const c = useColors(isDark);
-  const [status, setStatus] = useState({ sonic_vibe: null, refined_facts: null });
-  const [busy, setBusy] = useState({ sonic_vibe: false, refined_facts: false });
+  const [status, setStatus] = useState({ sonic_vibe: null, refined_facts: null, artist_bio: null });
+  const [busy, setBusy] = useState({ sonic_vibe: false, refined_facts: false, artist_bio: false });
   const [error, setError] = useState(null);
   const pollRef = useRef(null);
 
@@ -5143,7 +5151,7 @@ function AIIndexingCard({ isDark, lang, activeCollection }) {
   }, [refresh]);
 
   const isRunning = (s) => s && s.status === 'running';
-  const someRunning = isRunning(status.sonic_vibe) || isRunning(status.refined_facts);
+  const someRunning = isRunning(status.sonic_vibe) || isRunning(status.refined_facts) || isRunning(status.artist_bio);
 
   useEffect(() => {
     if (someRunning && !pollRef.current) {
@@ -5219,6 +5227,11 @@ function AIIndexingCard({ isDark, lang, activeCollection }) {
       return lang === 'ru'
         ? 'Нет входных данных: ни sonic_tags, ни фактов. Сначала запусти SONIC PROMPT-PROBING и/или обогащение фактами в библиотеке.'
         : 'No inputs available: neither sonic_tags nor song facts. Run sonic prompt-probing and/or facts enrichment in the library first.';
+    }
+    if (taskType === 'artist_bio') {
+      return lang === 'ru'
+        ? 'Нет фактов об артистах для написания био. Сначала обогати библиотеку фактами.'
+        : 'No artist facts available — enrich the library with facts first.';
     }
     return lang === 'ru'
       ? 'Нет фактов о треках/артистах для уточнения. Сначала обогати библиотеку фактами.'
@@ -5301,6 +5314,7 @@ function AIIndexingCard({ isDark, lang, activeCollection }) {
       </div>
       <Row title="Sonic Vibe" taskType="sonic_vibe" />
       <Row title={lang === 'ru' ? 'Уточнённые факты' : 'Refined Facts'} taskType="refined_facts" />
+      <Row title={lang === 'ru' ? 'Биография артистов' : 'Artist Bio'} taskType="artist_bio" />
       <div style={{ fontSize: 11, color: c.textMuted, marginTop: 12, lineHeight: 1.5 }}>
         ⚠ {lang === 'ru'
           ? 'AI-индексация использует текущий язык фронта. Чтобы получить результат на другом языке, смени язык и запусти повторно.'
@@ -7208,6 +7222,245 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
   );
 }
 
+// ─── ARTIST ATLAS SECTION ───────────────────────────────────────────────────
+function ArtistAtlasSection({
+  isDark, lang, activeCollection, artistSlug, visible, onNav,
+  onPlayTrack, navigateToArtist,
+}) {
+  const c = useColors(isDark);
+  const [data, setData] = useState(null);
+  const [status, setStatus] = useState('idle');  // 'idle'|'loading'|'loaded'|'empty'|'error'
+  const [tab, setTab] = useState('discog');      // 'bio'|'discog'|'facts'
+
+  useEffect(() => {
+    if (!visible || !artistSlug || !activeCollection) return;
+    let cancelled = false;
+    setStatus('loading');
+    apiFetch(`/artists/${encodeURIComponent(artistSlug)}?collection=${encodeURIComponent(activeCollection)}&lang=${encodeURIComponent(lang)}`)
+      .then(res => {
+        if (cancelled) return;
+        setData(res);
+        setStatus('loaded');
+        // Default tab: Bio if available, else Discog
+        setTab(res.bio ? 'bio' : 'discog');
+      })
+      .catch(() => { if (!cancelled) setStatus('error'); });
+    return () => { cancelled = true; };
+  }, [visible, artistSlug, activeCollection, lang]);
+
+  if (!artistSlug) {
+    return (
+      <div style={{ padding: 40, color: c.textMuted }}>
+        {lang === 'ru' ? 'Артист не выбран' : 'No artist selected'}
+      </div>
+    );
+  }
+  if (status === 'loading' || status === 'idle') {
+    return <div style={{ padding: 40, color: c.textMuted }}>{lang==='ru'?'Загрузка…':'Loading…'}</div>;
+  }
+  if (status === 'error' || !data) {
+    return <div style={{ padding: 40, color: c.textMuted }}>{lang==='ru'?'Не удалось загрузить артиста.':'Could not load artist.'}</div>;
+  }
+
+  const heroCover = data.albums[0]?.cover_art_path || null;
+  const contextBits = [
+    data.genre,
+    data.album_count ? `${data.album_count} ${lang==='ru'?'альбом(ов)':'album(s)'}` : null,
+    data.decade_range,
+  ].filter(Boolean);
+
+  // ▶ Spin from here — autoplay queue seeded by first track of first album
+  const onSpin = () => {
+    const seed = data.albums[0]?.tracks[0];
+    if (!seed || !onPlayTrack) return;
+    onPlayTrack(
+      { track: seed, score: 1, matched_on: 'lyrics' },
+      data.albums.flatMap(a => a.tracks.map(t => ({ track: t, score: 1, matched_on: 'lyrics' }))),
+    );
+    onNav?.('player');
+  };
+
+  const tabsCfg = [
+    data.bio && { id: 'bio',    label: lang==='ru'?'БИО':'BIO' },
+    { id: 'discog', label: lang==='ru'?'ДИСКОГРАФИЯ':'DISCOGRAPHY' },
+    { id: 'facts',  label: `${lang==='ru'?'ФАКТЫ':'FACTS'}·${data.facts.length}` },
+  ].filter(Boolean);
+
+  return (
+    <div style={{
+      flex:1, display:'flex', flexDirection:'column', overflow:'auto',
+      padding:'24px 36px 48px',
+    }}>
+      {/* Breadcrumb */}
+      <div className="mono" style={{
+        fontSize:10, letterSpacing:'0.22em',
+        color:c.textSubtle, opacity:0.55, marginBottom:18,
+        textTransform:'uppercase',
+      }}>
+        <span
+          style={{ cursor:'pointer' }}
+          onClick={() => onNav?.('library')}
+        >{lang==='ru'?'БИБЛИОТЕКА':'LIBRARY'}</span>
+        {' / '}
+        <span>{lang==='ru'?'АРТИСТЫ':'ARTISTS'}</span>
+        {' / '}
+        <span style={{ color:c.text, opacity:1 }}>{data.name.toUpperCase()}</span>
+      </div>
+
+      {/* Hero row */}
+      <div style={{ display:'flex', gap:24, alignItems:'flex-start', marginBottom:28 }}>
+        <div style={{ flexShrink:0 }}>
+          <AlbumCover
+            title={data.name} artist=""
+            size={138} isDark={isDark}
+            coverPath={heroCover} radius={14}
+          />
+        </div>
+        <div style={{ flex:1, minWidth:0 }}>
+          <h1 className="serif" style={{
+            fontSize:'clamp(32px, 3.4vw, 44px)', fontWeight:300, lineHeight:1.05,
+            color:c.text, letterSpacing:'-0.025em', margin:0,
+          }}>
+            {data.name}
+          </h1>
+          {contextBits.length > 0 && (
+            <div className="mono" style={{
+              marginTop:10, fontSize:11, letterSpacing:'0.18em',
+              color:c.textMuted, textTransform:'uppercase',
+            }}>
+              {contextBits.join(' · ')}
+            </div>
+          )}
+          <button
+            onClick={onSpin}
+            style={{
+              marginTop:18, padding:'10px 18px', borderRadius:99,
+              background:`linear-gradient(135deg, oklch(67% 0.18 270), oklch(52% 0.22 285))`,
+              color:'#fff', fontSize:13, fontWeight:600, letterSpacing:'0.04em',
+              border:'1px solid oklch(50% 0.2 275 / 0.4)',
+              cursor:'pointer',
+              boxShadow:'0 4px 16px rgba(124,91,255,0.35)',
+            }}
+          >
+            ▶ {lang==='ru'?'Запустить отсюда':'Spin from here'}
+          </button>
+        </div>
+      </div>
+
+      {/* Tab pills */}
+      <div style={{ display:'flex', gap:6, marginBottom:18, borderBottom:`1px solid ${c.border}`, paddingBottom:10 }}>
+        {tabsCfg.map(t => {
+          const active = tab === t.id;
+          return (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className="mono"
+              style={{
+                padding:'6px 14px', borderRadius:99,
+                border:`1px solid ${active ? 'oklch(60% 0.18 270 / 0.5)' : c.border}`,
+                background: active ? 'oklch(60% 0.18 270 / 0.12)' : 'transparent',
+                color: active ? c.text : c.textMuted,
+                fontSize:10, letterSpacing:'0.18em', cursor:'pointer',
+                transition:'all 180ms ease',
+              }}
+            >{t.label}</button>
+          );
+        })}
+      </div>
+
+      {/* Tab content */}
+      {tab === 'bio' && data.bio && (
+        <div className="panel-v3" style={{
+          padding:'24px 28px', borderRadius:14,
+          background: isDark ? 'rgba(255,255,255,0.025)' : 'rgba(255,255,255,0.65)',
+          border:`1px solid ${c.border}`,
+        }}>
+          <p className="serif" style={{
+            fontSize:16, lineHeight:1.65, color:c.text, margin:0,
+            letterSpacing:'-0.005em',
+          }}>{data.bio}</p>
+          <button
+            onClick={() => setTab('facts')}
+            style={{
+              marginTop:16, background:'transparent', border:'none',
+              color:'oklch(70% 0.13 75)', cursor:'pointer',
+              fontSize:12, fontFamily:'inherit',
+            }}
+          >→ {lang==='ru'?'все факты':'all facts'}</button>
+        </div>
+      )}
+
+      {tab === 'discog' && (
+        <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
+          {data.albums.map(album => (
+            <div key={album.title} style={{
+              display:'flex', gap:18, alignItems:'flex-start',
+              padding:'12px 0', borderBottom:`1px solid ${c.border}`,
+            }}>
+              <AlbumCover
+                title={album.title} artist={data.name}
+                size={138} isDark={isDark}
+                coverPath={album.cover_art_path} radius={10}
+              />
+              <div style={{ flex:1, minWidth:0 }}>
+                <div className="serif" style={{
+                  fontSize:20, fontWeight:500, color:c.text,
+                  letterSpacing:'-0.01em',
+                }}>{album.title}</div>
+                <div className="mono" style={{
+                  marginTop:4, fontSize:10, letterSpacing:'0.18em',
+                  color:c.textMuted, textTransform:'uppercase',
+                }}>
+                  {album.year || '—'} · {album.tracks.length} {lang==='ru'?'треков':'tracks'}
+                </div>
+                <div style={{ marginTop:10, display:'flex', flexDirection:'column', gap:4 }}>
+                  {album.tracks.map(t => (
+                    <div key={t.track_id}
+                      onClick={() => onPlayTrack?.({ track: t, score: 1, matched_on: 'lyrics' },
+                                                    album.tracks.map(x => ({ track: x, score:1, matched_on:'lyrics' })))}
+                      style={{
+                        display:'flex', alignItems:'center', gap:10,
+                        padding:'6px 10px', borderRadius:6,
+                        cursor:'pointer', fontSize:13, color:c.text,
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)'}
+                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                    >
+                      <span style={{ color:c.textSubtle, minWidth:18, fontFamily:"'JetBrains Mono', monospace", fontSize:11 }}>▶</span>
+                      <span style={{ flex:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t.title}</span>
+                      <span className="mono" style={{ fontSize:10, color:c.textSubtle }}>
+                        {Math.floor((t.duration_sec || 0) / 60)}:{String(Math.floor((t.duration_sec||0) % 60)).padStart(2,'0')}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {tab === 'facts' && (
+        <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
+          {data.facts.length === 0 ? (
+            <div style={{ color:c.textMuted, fontSize:13 }}>
+              {lang==='ru'?'Факты появятся после обогащения библиотеки.':'No facts yet.'}
+            </div>
+          ) : data.facts.map((f, i) => (
+            <div key={i} className="panel-v3" style={{
+              padding:'14px 18px', borderRadius:10,
+              background: isDark ? 'rgba(255,255,255,0.025)' : 'rgba(255,255,255,0.55)',
+              border:`1px solid ${c.border}`,
+              fontSize:14, lineHeight:1.5, color:c.text,
+            }}>{f}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── App ──────────────────────────────────────────────────────────────────────
 function App() {
   const [isDark, setDark] = useState(() => (localStorage.getItem('musix_theme') || 'dark') === 'dark');
@@ -7220,6 +7473,16 @@ function App() {
   }, [isDark]);
 
   const [section, setSection] = useState('home'); // home | search | recommend | library | player
+  // Artist Atlas: slug is stored alongside the section so the section type
+  // 'artist' can render the ArtistAtlasSection with the right artist. Setting
+  // a non-null slug + switching section in one call lets the section preserve
+  // its own internal state (fetched aggregate, active tab) across navigation.
+  const [activeArtistSlug, setActiveArtistSlug] = useState(null);
+  const navigateToArtist = useCallback((slug) => {
+    if (!slug) return;
+    setActiveArtistSlug(slug);
+    setSection('artist');
+  }, []);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [themeAnim, setThemeAnim] = useState(false);
   const [appState, setAppState] = useState('checking');
@@ -7425,6 +7688,7 @@ function App() {
     recommend: RecommendSection,
     library:   LibrarySection,
     player:    PlayerSection,
+    artist:    ArtistAtlasSection,
   };
   const ActiveSection = sectionMap[section];
 
@@ -7484,6 +7748,9 @@ function App() {
                 onToggleLyrics={id === 'player' ? () => setLyricsMode(m => !m) : undefined}
                 onCloseLyrics={id === 'player' ? () => setLyricsMode(false) : undefined}
                 showToast={id === 'player' ? showToast : undefined}
+                artistSlug={id === 'artist' ? activeArtistSlug : undefined}
+                navigateToArtist={navigateToArtist}
+                onNav={setSection}
               />
             </div>
           ))}

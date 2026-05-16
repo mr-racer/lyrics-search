@@ -132,6 +132,15 @@ _SCHEMA_SQL: Tuple[str, ...] = (
         generated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (scope, scope_key, collection_name, lang)
     )""",
+    # Artist Bio cache (Plan 5)
+    """CREATE TABLE IF NOT EXISTS artist_bios (
+        artist_slug     TEXT NOT NULL,
+        collection_name TEXT NOT NULL,
+        lang            TEXT NOT NULL,
+        bio_text        TEXT NOT NULL,
+        generated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (artist_slug, collection_name, lang)
+    )""",
 )
 
 
@@ -922,6 +931,44 @@ class MetadataDB:
         conn = cls._connect()
         cur = conn.execute(
             "DELETE FROM refined_facts WHERE collection_name = ?",
+            (collection_name,),
+        )
+        conn.commit()
+        return int(cur.rowcount)
+
+    # ── Artist Bio cache (Plan 5) ──
+
+    @classmethod
+    def get_artist_bio(
+        cls, artist_slug: str, collection_name: str, lang: str,
+    ) -> Optional[str]:
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT bio_text FROM artist_bios "
+            "WHERE artist_slug = ? AND collection_name = ? AND lang = ?",
+            (artist_slug, collection_name, lang),
+        ).fetchone()
+        return row[0] if row else None
+
+    @classmethod
+    def set_artist_bio(
+        cls, artist_slug: str, collection_name: str, lang: str, bio_text: str,
+    ) -> None:
+        conn = cls._connect()
+        conn.execute(
+            "INSERT INTO artist_bios (artist_slug, collection_name, lang, bio_text) "
+            "VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(artist_slug, collection_name, lang) DO UPDATE SET "
+            "bio_text = excluded.bio_text, generated_at = CURRENT_TIMESTAMP",
+            (artist_slug, collection_name, lang, bio_text),
+        )
+        conn.commit()
+
+    @classmethod
+    def delete_artist_bios(cls, collection_name: str) -> int:
+        conn = cls._connect()
+        cur = conn.execute(
+            "DELETE FROM artist_bios WHERE collection_name = ?",
             (collection_name,),
         )
         conn.commit()
