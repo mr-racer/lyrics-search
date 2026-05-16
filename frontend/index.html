@@ -996,6 +996,10 @@
       from { opacity: 0; transform: translateY(4px); }
       to   { opacity: 1; transform: translateY(0); }
     }
+    @keyframes scoreBarsFade {
+      from { opacity: 0; transform: translateY(-50%) translateX(-6px); }
+      to   { opacity: 1; transform: translateY(-50%) translateX(0); }
+    }
   </style>
 </head>
 <body>
@@ -5623,11 +5627,79 @@ function VibeLine({ trackId, collection, lang, isDark }) {
   );
 }
 
+// ─── PLAYER SCORE BARS ──────────────────────────────────────────────────────
+function PlayerScoreBars({ breakdown, isDark }) {
+  if (!breakdown) return null;
+
+  const trackBg = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(22,22,32,0.10)';
+  const fillBg = 'oklch(60% 0.18 270)';
+  const labelColor = isDark ? '#888' : '#5a5a66';
+
+  const row = (label, value) => {
+    const present = value !== null && value !== undefined;
+    return (
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        fontSize: 9,
+        fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+        opacity: present ? 1 : 0.35,
+        marginBottom: 4,
+      }}>
+        <span style={{ width: 36, color: labelColor, letterSpacing: '0.1em' }}>{label}</span>
+        <div style={{ flex: 1, height: 3, background: trackBg, borderRadius: 2, overflow: 'hidden' }}>
+          {present && (
+            <div style={{
+              height: '100%',
+              width: `${Math.max(0, Math.min(100, value * 100))}%`,
+              background: fillBg,
+              borderRadius: 2,
+            }} />
+          )}
+        </div>
+        <span style={{ width: 24, textAlign: 'right', color: labelColor }}>
+          {present ? Math.round(value * 100) : '—'}
+        </span>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{
+      position: 'absolute',
+      right: 12,
+      top: '50%',
+      transform: 'translateY(-50%)',
+      width: 168,
+      padding: '10px 12px',
+      background: isDark
+        ? 'linear-gradient(180deg, rgba(30,30,38,0.96), rgba(22,22,28,0.96))'
+        : 'linear-gradient(180deg, rgba(255,255,255,0.96), rgba(245,244,250,0.96))',
+      border: `1px solid ${isDark ? 'rgba(255,255,255,0.10)' : 'rgba(22,22,32,0.10)'}`,
+      borderRadius: 8,
+      backdropFilter: 'blur(12px) saturate(1.1)',
+      WebkitBackdropFilter: 'blur(12px) saturate(1.1)',
+      boxShadow: isDark
+        ? '0 8px 26px rgba(0,0,0,0.5)'
+        : '0 8px 22px rgba(40,30,60,0.18)',
+      zIndex: 5,
+      pointerEvents: 'none',
+      animation: 'scoreBarsFade 120ms ease-out',
+    }}>
+      {row('TEXT',  breakdown.text_dense_score)}
+      {row('BM25',  breakdown.text_bm25_score)}
+      {row('AUDIO', breakdown.audio_score)}
+    </div>
+  );
+}
+
 // ─── PLAYER SECTION ─────────────────────────────────────────────────────────
 function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, audio, visible }) {
   const [playlist, setPlaylist] = useState(initialPlaylist || []);
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [liked, setLiked] = useState(null);
+  const [hoveredQueueIdx, setHoveredQueueIdx] = useState(-1);
 
   // Derive playback state from shared audio hook
   const isPlaying = audio?.isPlaying ?? false;
@@ -6125,9 +6197,12 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
                       <div
                         className={`player-playlist-item${active ? ' player-active' : ''}`}
                         onClick={() => playTrackAt(i)}
+                        onMouseEnter={() => setHoveredQueueIdx(i)}
+                        onMouseLeave={() => setHoveredQueueIdx(-1)}
                         style={{
                           display:'flex', alignItems:'center', gap:'14px',
                           padding:'10px 14px', cursor:'pointer', marginBottom:'2px',
+                          position: 'relative',
                           opacity: hit._autoplay && !active ? 0.75 : 1,
                         }}>
                         {/* Index or equalizer */}
@@ -6165,6 +6240,9 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
                             background: pPillBg,
                             border: `1px solid ${pBorderSubtle}`,
                           }}>{t.genre}</span>
+                        )}
+                        {i === hoveredQueueIdx && hit.score_breakdown && (
+                          <PlayerScoreBars breakdown={hit.score_breakdown} isDark={isDark} />
                         )}
                       </div>
                     </Fragment>
