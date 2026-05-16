@@ -992,6 +992,10 @@
       0%, 100% { box-shadow: 0 0 0 2px rgba(212,165,90,0.4), 0 4px 14px rgba(0,0,0,0.4); }
       50%      { box-shadow: 0 0 0 2px rgba(212,165,90,0.7), 0 4px 18px rgba(212,165,90,0.35), 0 4px 14px rgba(0,0,0,0.4); }
     }
+    @keyframes vibeSlideIn {
+      from { opacity: 0; transform: translateY(4px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
   </style>
 </head>
 <body>
@@ -5580,6 +5584,45 @@ function PlayerActionPills({
   );
 }
 
+// ─── VIBE LINE ───────────────────────────────────────────────────────────────
+function VibeLine({ trackId, collection, lang, isDark }) {
+  const [phrase, setPhrase] = useState(null);
+
+  useEffect(() => {
+    if (!trackId || !collection) { setPhrase(null); return; }
+    let cancelled = false;
+    apiFetch(
+      `/metadata/tracks/${encodeURIComponent(trackId)}/sonic-vibe` +
+      `?collection=${encodeURIComponent(collection)}` +
+      `&lang=${encodeURIComponent(lang || 'en')}`
+    )
+      .then(res => { if (!cancelled) setPhrase(res?.phrase || null); })
+      .catch(() => { if (!cancelled) setPhrase(null); });
+    return () => { cancelled = true; };
+  }, [trackId, collection, lang]);
+
+  if (!phrase) return null;
+
+  return (
+    <div
+      key={phrase}
+      style={{
+        fontFamily: "Georgia, 'Noto Serif Display', serif",
+        fontStyle: 'italic',
+        fontSize: 14,
+        lineHeight: 1.45,
+        textAlign: 'center',
+        color: 'oklch(70% 0.10 75)',
+        maxWidth: 420,
+        margin: '8px auto 0',
+        animation: 'vibeSlideIn 240ms cubic-bezier(0.22, 0.9, 0.3, 1)',
+      }}
+    >
+      ❝ {phrase} ❞
+    </div>
+  );
+}
+
 // ─── PLAYER SECTION ─────────────────────────────────────────────────────────
 function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, audio, visible }) {
   const [playlist, setPlaylist] = useState(initialPlaylist || []);
@@ -5883,6 +5926,12 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
                   {currentTrack.album}{currentTrack.year ? ` · ${currentTrack.year}` : ''}
                 </div>
               )}
+              <VibeLine
+                trackId={currentTrack?.track_id}
+                collection={activeCollection}
+                lang={lang}
+                isDark={isDark}
+              />
 
               {/* Reaction / action pills */}
               <div style={{ marginTop:'16px' }}>
