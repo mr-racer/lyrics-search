@@ -1574,6 +1574,74 @@ function useAudioPlayer() {
   };
 }
 
+// ─── useAIStatus — global AI mode signal ────────────────────────────────────
+// Two-signal model:
+//   aiAvailable               — runtime LLM ping result (60s heartbeat)
+//   aiEnabledForCollection    — per-collection opt-in from collection_settings
+//   aiActive = both true      — gates live-LLM UI features only
+//                                (chat-search, Ask AI, future lyric-explain).
+// Cached AI artifacts (sonic_vibe / refined_facts / artist_bio in SQLite) are
+// NOT gated — they're already on disk.
+function useAIStatus(activeCollection) {
+  const [aiAvailable, setAiAvailable] = useState(null); // null = probing
+  const [aiEnabledForCollection, setAiEnabledForCollection] = useState(null);
+  const [llmError, setLlmError] = useState(null);
+  const [llmInfo, setLlmInfo] = useState(null);  // {base_url, model}
+  const probeTimer = useRef(null);
+
+  const probe = useCallback(async () => {
+    const baseUrl = (localStorage.getItem('llm_base_url') || '').trim();
+    const model = (localStorage.getItem('llm_model') || '').trim();
+    try {
+      const r = await apiFetch('/system/llm-status', {
+        method: 'POST',
+        body: JSON.stringify({
+          base_url: baseUrl || undefined,
+          model: model || undefined,
+        }),
+      });
+      setAiAvailable(!!r.available);
+      setLlmError(r.available ? null : (r.error || 'LLM not responding'));
+      setLlmInfo({ base_url: r.base_url, model: r.model });
+    } catch (e) {
+      setAiAvailable(false);
+      setLlmError(e?.message || 'probe failed');
+      setLlmInfo(null);
+    }
+  }, []);
+
+  // Initial probe + 60s heartbeat
+  useEffect(() => {
+    probe();
+    probeTimer.current = setInterval(probe, 60000);
+    return () => clearInterval(probeTimer.current);
+  }, [probe]);
+
+  // Re-probe on llm_base_url change in other tabs
+  useEffect(() => {
+    const onStorage = (e) => {
+      if (e.key === 'llm_base_url' || e.key === 'llm_model') probe();
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [probe]);
+
+  // Fetch per-collection ai_enabled
+  useEffect(() => {
+    if (!activeCollection) { setAiEnabledForCollection(null); return; }
+    apiFetch(`/library/collections/${encodeURIComponent(activeCollection)}/settings`)
+      .then(r => setAiEnabledForCollection(!!r.ai_enabled))
+      .catch(() => setAiEnabledForCollection(true));  // graceful default
+  }, [activeCollection]);
+
+  const aiActive = !!(aiAvailable && aiEnabledForCollection);
+  return {
+    aiAvailable, aiEnabledForCollection, aiActive,
+    llmError, llmInfo, refresh: probe,
+    setAiEnabledForCollection,   // exposed so Settings toggle can update locally w/o re-fetch
+  };
+}
+
 // ─── useGlobalKeyboardShortcuts — document-level playback + nav shortcuts ───
 function useGlobalKeyboardShortcuts({ audio, onNavToSection, onToggleLyrics, onCloseLyrics }) {
   useEffect(() => {
@@ -7523,6 +7591,7 @@ function App() {
 
   const [collections, setCollections] = useState([]);
   const [activeCollection, setActiveCollection] = useState(() => localStorage.getItem('active_collection') || '');
+  const aiStatus = useAIStatus(activeCollection);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [stats, setStats] = useState(null);
 
@@ -7743,6 +7812,7 @@ function App() {
           onTrackChange={handleTrackChange}
           audio={audio}
           navigateToArtist={navigateToArtist}
+          aiStatus={aiStatus}
         />
       ) : (
         <Fragment>
@@ -7785,6 +7855,7 @@ function App() {
                 showToast={id === 'player' ? showToast : undefined}
                 artistSlug={id === 'artist' ? activeArtistSlug : undefined}
                 navigateToArtist={navigateToArtist}
+                aiStatus={aiStatus}
                 onNav={setSection}
               />
             </div>
