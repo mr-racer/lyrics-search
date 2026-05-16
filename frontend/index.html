@@ -621,11 +621,13 @@
     .player-art-glow { animation: albumGlow 4s ease-in-out infinite; }
 
     /* ── 3D tilt effect on album art (from Spatial concept) ───────── */
-    /* Plan 4: perspective host also gives fixed 360×360 frame for the flip card. */
+    /* Plan 4: perspective host; size clamps with viewport so the cover
+       never collides with playback controls on short screens. */
     .player-art-wrap {
       perspective: 1400px;
-      width: 360px;
-      height: 360px;
+      width: clamp(220px, calc(100vh - 540px), 360px);
+      aspect-ratio: 1;
+      height: auto;
       display: flex;
       justify-content: center;
       align-items: center;
@@ -640,7 +642,19 @@
       transition: background 0.15s ease;
     }
 
-    /* ─── Plan 4: Cover ↔ Lyrics flip ────────────────────────────────── */
+    /* ─── Plan 4: tilt + flip split into two layers ──────────────────────
+       Tilt updates fire on every mousemove (~60Hz); the flip is a one-shot
+       toggle. They MUST live on separate elements — otherwise the flipper's
+       720ms cubic-bezier transition would re-fire on every tilt micro-change,
+       overlap dozens of in-flight GPU transitions, and tank to ~20fps.
+       Outer = tilt (instant, no transition). Inner = flip (smooth). */
+    .player-art-tilt {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      transform-style: preserve-3d;
+      /* No transition: tilt must be 1:1 with cursor for the "real glass" feel. */
+    }
     .player-art-flipper {
       position: relative;
       width: 100%;
@@ -5939,18 +5953,24 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
             onMouseLeave={handleArtMouseLeave}
           >
             <div
-              className="player-art-flipper"
+              className="player-art-tilt"
               style={{
                 transform: lyricsMode
-                  ? 'rotateY(180deg)'
+                  ? 'none'
                   : `rotateY(${tilt.y * 10}deg) rotateX(${-tilt.x * 10}deg) scale(${isHovering ? 1.04 : 1})`,
+              }}
+            >
+            <div
+              className="player-art-flipper"
+              style={{
+                transform: lyricsMode ? 'rotateY(180deg)' : 'none',
               }}
             >
               <div className="player-art-front">
                 <AlbumCover
                   title={currentTrack?.title || ''}
                   artist={currentTrack?.artist || ''}
-                  size={360}
+                  fluid
                   isDark={isDark}
                   coverPath={currentTrack?.cover_art_path}
                   radius={20}
@@ -5976,6 +5996,7 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
                   lang={lang}
                 />
               </div>
+            </div>
             </div>
           </div>
 
