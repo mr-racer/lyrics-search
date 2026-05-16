@@ -621,11 +621,13 @@
     .player-art-glow { animation: albumGlow 4s ease-in-out infinite; }
 
     /* ── 3D tilt effect on album art (from Spatial concept) ───────── */
-    /* Plan 4: perspective host; size clamps with viewport so the cover
-       never collides with playback controls on short screens. */
+    /* Plan 4: perspective host. Cover hits ~60vh on a normal viewport,
+       floors at 220px on tiny screens, ceilings at 640px so it doesn't
+       become absurd on 4K monitors. Section header was removed app-wide
+       to free the vertical budget this 60vh target consumes. */
     .player-art-wrap {
       perspective: 1400px;
-      width: clamp(220px, calc(100vh - 540px), 360px);
+      width: clamp(220px, 60vh, 640px);
       aspect-ratio: 1;
       height: auto;
       display: flex;
@@ -2887,18 +2889,19 @@ function ctrlBtn(primary = false, isDark = true) {
 // ─── Section Header (used inside all sub-sections) ────────────────────────────
 function SectionHeader({ isDark, lang, kicker, title, accent, right, children }) {
   const c = useColors(isDark);
+  // The kicker + big serif title were removed app-wide to free vertical
+  // space (sidebar nav already shows which section is active). The header
+  // remains only as a host for `right` (tab toggles, filters) and `children`.
+  // When nothing fills those slots, the component collapses entirely.
+  if (!right && !children) return null;
   return (
-    <div style={{ padding:'28px 36px 22px', borderBottom:`1px solid ${c.border}`,
+    <div style={{ padding:'14px 36px 10px', borderBottom:`1px solid ${c.border}`,
       background: isDark ? 'linear-gradient(180deg, rgba(255,255,255,0.018) 0%, transparent 100%)' : 'linear-gradient(180deg, rgba(255,255,255,0.6) 0%, transparent 100%)' }}>
-      <div style={{ display:'flex', alignItems:'flex-end', justifyContent:'space-between', gap:'24px', flexWrap:'wrap' }}>
-        <div>
-          <div className="mono" style={{ fontSize:'14px', letterSpacing:'0.28em', color:c.textSubtle, marginBottom:'10px' }}>{kicker}</div>
-          <h2 className="serif" style={{ fontSize:'46px', lineHeight:'0.98', letterSpacing:'-0.02em', color:c.text, fontWeight:'400' }}>
-            {title}{accent && <i style={{ color: 'oklch(62% 0.2 275)' }}> {accent}</i>}
-          </h2>
+      {right && (
+        <div style={{ display:'flex', justifyContent:'flex-end' }}>
+          {right}
         </div>
-        {right}
-      </div>
+      )}
       {children}
     </div>
   );
@@ -5938,10 +5941,22 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
           background: `radial-gradient(circle, hsl(${ambientHue}, 70%, 50%), transparent 70%)`,
         }} />
 
-        {/* ════════════════ LEFT: Player ════════════════ */}
+        {/* ════════════════ LEFT: Player ════════════════
+            Outer column flex-grows; inner content is constrained to the cover
+            width so the playback controls don't stretch across the whole 60%
+            column ("constrained reading width" — keeps the airy aesthetic). */}
         <div className="player-fade-in" style={{
-          width:'420px', minWidth:'380px', display:'flex', flexDirection:'column',
-          gap:'24px', paddingTop:'12px', position:'relative', zIndex:1,
+          flex:1, minWidth:0,
+          display:'flex', flexDirection:'column',
+          alignItems:'center',
+          gap:'20px', paddingTop:'12px', position:'relative', zIndex:1,
+          overflow:'hidden',
+        }}>
+        <div style={{
+          width:'100%',
+          maxWidth:'clamp(220px, 60vh, 640px)',
+          display:'flex', flexDirection:'column', gap:'20px',
+          minHeight:0,
         }}>
 
           {/* Album art: flip card — front=cover, back=lyrics (Plan 4) */}
@@ -6000,20 +6015,21 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
             </div>
           </div>
 
-          {/* Track info */}
+          {/* Track info — font sizes track viewport height so they pair with
+              the 60vh cover above instead of looking dwarfed on big screens. */}
           {currentTrack ? (
             <div style={{ textAlign:'center', paddingLeft:'20px', paddingRight:'20px' }}>
               <div style={{
-                fontSize:'26px', fontWeight:'700', color:pText, letterSpacing:'-0.02em',
+                fontSize:'clamp(20px, 2.6vh, 32px)', fontWeight:'700', color:pText, letterSpacing:'-0.02em',
                 lineHeight:'1.15', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
               }}>
                 {currentTrack.title}
               </div>
-              <div style={{ fontSize:'17px', color:pTextMuted, marginTop:'6px', fontWeight:'400' }}>
+              <div style={{ fontSize:'clamp(14px, 1.75vh, 20px)', color:pTextMuted, marginTop:'6px', fontWeight:'400' }}>
                 {currentTrack.artist}
               </div>
               {currentTrack.album && (
-                <div style={{ fontSize:'14px', color:pTextSubtle, marginTop:'3px' }}>
+                <div style={{ fontSize:'clamp(12px, 1.4vh, 16px)', color:pTextSubtle, marginTop:'3px' }}>
                   {currentTrack.album}{currentTrack.year ? ` · ${currentTrack.year}` : ''}
                 </div>
               )}
@@ -6136,10 +6152,15 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
             />
           </div>
         </div>
+        </div>
 
-        {/* ════════════════ RIGHT: Facts + Queue ════════════════ */}
+        {/* ════════════════ RIGHT: Facts + Queue ════════════════
+            Capped at 40% of viewport width (was flex:1 = grew to fill).
+            Left column gets the remaining ~60%, putting the cover and its
+            controls visually centered in the larger half of the player. */}
         <div style={{
-          flex: 1,
+          flex: '0 0 40%',
+          maxWidth: '40%',
           display: 'flex',
           flexDirection: 'column',
           gap: 18,
