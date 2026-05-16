@@ -5328,7 +5328,7 @@ function IndexingModal({
 }
 
 // ─── AI Indexing card (inside SettingsPanel) ──────────────────────────────────
-function AIIndexingCard({ isDark, lang, activeCollection }) {
+function AIIndexingCard({ isDark, lang, activeCollection, aiStatus }) {
   const c = useColors(isDark);
   const [status, setStatus] = useState({ sonic_vibe: null, refined_facts: null, artist_bio: null });
   const [busy, setBusy] = useState({ sonic_vibe: false, refined_facts: false, artist_bio: false });
@@ -5445,8 +5445,11 @@ function AIIndexingCard({ isDark, lang, activeCollection }) {
           <div style={{ fontWeight: 600, color: c.text, fontSize: 14 }}>{title}</div>
           <div style={{ display: 'flex', gap: 8 }}>
             <button
-              disabled={busy[taskType] || running || !activeCollection}
+              disabled={busy[taskType] || running || !activeCollection || !aiStatus?.aiAvailable}
               onClick={() => runJob(taskType)}
+              title={!aiStatus?.aiAvailable
+                ? (lang==='ru'?'LLM не подключён':'Connect LLM to enable')
+                : undefined}
               style={{
                 padding: '6px 12px', borderRadius: 8, cursor: (busy[taskType] || running || !activeCollection) ? 'not-allowed' : 'pointer',
                 fontSize: 12, fontWeight: 500,
@@ -5510,6 +5513,38 @@ function AIIndexingCard({ isDark, lang, activeCollection }) {
           {lang === 'ru' ? 'Текущий язык' : 'Current language'}: {lang.toUpperCase()}
         </div>
       </div>
+      {aiStatus?.aiEnabledForCollection === false && (
+        <div style={{
+          margin: '8px 0 14px', padding: '10px 14px', borderRadius: 8,
+          fontSize: 12, lineHeight: 1.5,
+          background: isDark ? 'rgba(255,160,40,0.10)' : 'rgba(255,160,40,0.08)',
+          border: '1px solid rgba(255,160,40,0.35)',
+          color: isDark ? '#f4c08a' : '#a06010',
+          display: 'flex', alignItems: 'center', gap: 10,
+        }}>
+          <span style={{ flex: 1 }}>
+            ⚠ {lang==='ru'
+              ? 'AI отключён для этой коллекции. Индексация недоступна.'
+              : 'AI is disabled for this collection. Indexing is unavailable.'}
+          </span>
+          <button
+            onClick={async () => {
+              if (!activeCollection) return;
+              try {
+                await apiFetch(`/library/collections/${encodeURIComponent(activeCollection)}/ai-enabled`, {
+                  method: 'PATCH', body: JSON.stringify({ enabled: true }),
+                });
+                aiStatus?.setAiEnabledForCollection?.(true);
+              } catch (e) { console.error(e); }
+            }}
+            style={{
+              padding: '5px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+              background: 'rgba(255,160,40,0.20)', color: 'inherit',
+              border: '1px solid rgba(255,160,40,0.50)', cursor: 'pointer',
+            }}
+          >{lang==='ru'?'Включить':'Enable'}</button>
+        </div>
+      )}
       <Row title="Sonic Vibe" taskType="sonic_vibe" />
       <Row title={lang === 'ru' ? 'Уточнённые факты' : 'Refined Facts'} taskType="refined_facts" />
       <Row title={lang === 'ru' ? 'Биография артистов' : 'Artist Bio'} taskType="artist_bio" />
@@ -6056,7 +6091,7 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
           </>)}
 
           {/* AI Indexing */}
-          <AIIndexingCard isDark={isDark} lang={lang} activeCollection={activeCollection} />
+          <AIIndexingCard isDark={isDark} lang={lang} activeCollection={activeCollection} aiStatus={aiStatus} />
 
           {/* About */}
           <div style={{ padding:'18px 22px', textAlign:'center' }}>
