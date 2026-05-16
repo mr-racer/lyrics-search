@@ -28,6 +28,12 @@ from ..services.search_service import SearchService
 from ..services.library_service import LibraryService
 from ..services.job_tracker import JobTracker
 from ..services.sonic_descriptor_service import SonicDescriptorService
+# Side-effect import: each ai_tasks module calls register_task() at import
+# time, populating the AI Indexing service registry. Without this, every
+# POST /library/ai-index/{task_type} bails with HTTP 400 "unknown task_type"
+# because the routes find the type in _TASK_TYPES but the service registry
+# is empty.
+from ..services import ai_tasks  # noqa: F401
 from .routes import search_router, library_router, chat_router, metadata_router, playback_router, recommend_router, ai_indexing_router
 from .sse_utils import event_stream
 
