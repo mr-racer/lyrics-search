@@ -1000,6 +1000,10 @@
       from { opacity: 0; transform: translateY(-50%) translateX(-6px); }
       to   { opacity: 1; transform: translateY(-50%) translateX(0); }
     }
+    @keyframes toastIn {
+      from { opacity: 0; transform: translateY(-8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
   </style>
 </head>
 <body>
@@ -5710,7 +5714,7 @@ function PlayerScoreBars({ breakdown, isDark }) {
 }
 
 // ─── PLAYER SECTION ─────────────────────────────────────────────────────────
-function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, audio, visible, lyricsMode, onToggleLyrics, onCloseLyrics }) {
+function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, audio, visible, lyricsMode, onToggleLyrics, onCloseLyrics, showToast }) {
   const [playlist, setPlaylist] = useState(initialPlaylist || []);
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [liked, setLiked] = useState(null);
@@ -6007,12 +6011,9 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
                   onDislike={() => setReaction('dislike')}
                   lyricsMode={lyricsMode}
                   onToggleLyrics={onToggleLyrics}
-                  onAskAI={() => {
-                    // Temporary stub — replaced by toast in Task 13.
-                    window.alert(lang === 'ru'
-                      ? 'AI Chat появится в Plan 5'
-                      : 'AI Chat coming in Plan 5');
-                  }}
+                  onAskAI={() => showToast?.(lang === 'ru'
+                    ? 'AI-чат появится в следующем плане (Plan 5)'
+                    : 'AI Chat coming in Plan 5')}
                   isDark={isDark}
                   lang={lang}
                 />
@@ -6283,6 +6284,17 @@ function App() {
   const [playerTrack, setPlayerTrack] = useState(null);
   const [lyricsMode, setLyricsMode] = useState(false);
 
+  // Toast state
+  const [toast, setToast] = useState(null); // { message: string, id: number } | null
+
+  const showToast = useCallback((message) => {
+    const id = Date.now() + Math.random();
+    setToast({ message, id });
+    setTimeout(() => {
+      setToast(prev => (prev && prev.id === id ? null : prev));
+    }, 2400);
+  }, []);
+
   // Reset cover face when the track changes — new song should start on cover.
   useEffect(() => { setLyricsMode(false); }, [playerTrack?.track_id]);
   // Played track ids live in a ref (not React state) because they only get
@@ -6521,6 +6533,7 @@ function App() {
                 lyricsMode={id === 'player' ? lyricsMode : false}
                 onToggleLyrics={id === 'player' ? () => setLyricsMode(m => !m) : undefined}
                 onCloseLyrics={id === 'player' ? () => setLyricsMode(false) : undefined}
+                showToast={id === 'player' ? showToast : undefined}
               />
             </div>
           ))}
@@ -6543,6 +6556,36 @@ function App() {
         <DeleteConfirm isDark={isDark} lang={lang} name={deleteConfirm}
           onCancel={() => setDeleteConfirm(null)}
           onConfirm={() => deleteCollection(deleteConfirm)} />
+      )}
+
+      {toast && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: 'fixed',
+            top: 20,
+            right: 20,
+            zIndex: 9999,
+            padding: '10px 16px',
+            borderRadius: 10,
+            background: isDark
+              ? 'linear-gradient(180deg, rgba(30,30,38,0.95), rgba(22,22,28,0.95))'
+              : 'linear-gradient(180deg, rgba(255,255,255,0.95), rgba(245,244,250,0.95))',
+            color: isDark ? '#fff' : '#161620',
+            border: `1px solid ${isDark ? 'rgba(255,255,255,0.10)' : 'rgba(22,22,32,0.10)'}`,
+            boxShadow: isDark
+              ? '0 12px 30px rgba(0,0,0,0.5)'
+              : '0 12px 30px rgba(40,30,60,0.18)',
+            fontSize: 13,
+            maxWidth: 320,
+            animation: 'toastIn 220ms cubic-bezier(0.22, 0.9, 0.3, 1)',
+            backdropFilter: 'blur(12px) saturate(1.1)',
+            WebkitBackdropFilter: 'blur(12px) saturate(1.1)',
+          }}
+        >
+          {toast.message}
+        </div>
       )}
 
       {/* Root-level audio — survives navigation since it's never unmounted or hidden */}
