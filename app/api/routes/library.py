@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 logger = logging.getLogger(__name__)
 
-from app.domain.models import IndexRequest, IndexProgress
+from app.domain.models import IndexRequest, IndexProgress, AIEnabledRequest
 from app.services.library_service import LibraryService
 from app.services.similarity_service import load_top_pairs
 
@@ -329,21 +329,36 @@ async def get_collections(request: Request) -> dict:
 
 @router.get("/collections/{collection_name}/settings")
 async def get_collection_settings(collection_name: str) -> dict:
-    """Return persisted per-collection settings (text_model, indexed_at).
+    """Return persisted per-collection settings.
 
-    Returns ``{"collection_name": str, "text_model": str | null, "indexed_at": ts | null}``.
-    Legacy collections indexed before settings persistence will have null fields.
+    Returns {"collection_name": str, "text_model": str|null, "indexed_at": ts|null, "ai_enabled": bool}.
+    ai_enabled defaults to True when no row exists (legacy collections stay AI-on).
     """
     from app.resources.metadata_db import MetadataDB
     try:
         MetadataDB.init()
         settings = MetadataDB.get_collection_settings(collection_name)
+        ai_enabled = MetadataDB.get_collection_ai_enabled(collection_name)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read settings: {e}")
 
-    if settings is None:
-        return {"collection_name": collection_name, "text_model": None, "indexed_at": None}
-    return {"collection_name": collection_name, **settings}
+    base = {"collection_name": collection_name, "text_model": None, "indexed_at": None}
+    if settings is not None:
+        base.update(settings)
+    base["ai_enabled"] = ai_enabled
+    return base
+
+
+@router.patch("/collections/{collection_name}/ai-enabled")
+async def set_collection_ai_enabled(collection_name: str, req: AIEnabledRequest) -> dict:
+    """Toggle the per-collection AI features opt-in. Used by Settings panel."""
+    from app.resources.metadata_db import MetadataDB
+    try:
+        MetadataDB.init()
+        MetadataDB.set_collection_ai_enabled(collection_name, req.enabled)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to set ai_enabled: {e}")
+    return {"collection_name": collection_name, "ai_enabled": req.enabled}
 
 
 # ── Library statistics ────────────────────────────────────────────────────────
