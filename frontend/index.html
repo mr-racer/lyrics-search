@@ -5744,9 +5744,6 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
     return ((currentTrack.title?.charCodeAt(0)||65)*37 + (currentTrack.artist?.charCodeAt(0)||65)*17) % 360;
   }, [currentTrack]);
 
-  // Song facts keyed by track for re-animation
-  const songFacts = useMemo(() => getSongFacts(currentTrack, lang), [currentTrack?.track_id, currentTrack?.title, lang]);
-
   // Premium color tokens — theme-aware so the player's deep "console" feel
   // adapts to light theme instead of staying jet-black everywhere.
   const pBg          = isDark ? '#0B0E14' : '#f4f5fa';
@@ -6121,55 +6118,58 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
           </div>
         </div>
 
-        {/* ════════════════ RIGHT: Floating panels ════════════════ */}
+        {/* ════════════════ RIGHT: Facts + Queue ════════════════ */}
         <div style={{
-          flex:1, display:'flex', flexDirection:'column', gap:'20px',
-          overflow:'hidden', position:'relative', zIndex:1,
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 18,
+          overflow: 'hidden',
+          position: 'relative',
+          zIndex: 1,
+          padding: '8px 4px',
+          minHeight: 0,
         }}>
 
-          {/* ── Song Facts Panel (glass) ── */}
-          {currentTrack && songFacts.length > 0 && (
-            <div className="player-glass-panel player-fade-in" style={{
-              padding:'20px 24px', flexShrink:0,
-            }}>
-              <div style={{
-                fontSize:'11px', color:pTextSubtle, fontFamily:"'JetBrains Mono', monospace",
-                letterSpacing:'0.2em', marginBottom:'14px',
-              }}>
-                {lang==='ru'?'О ТРЕКЕ':'ABOUT TRACK'}
-              </div>
-              <div style={{ display:'flex', flexDirection:'column' }}>
-                {songFacts.map((fact, i) => (
-                  <div key={fact.label + i} className="player-fact-row" style={{ animationDelay: `${i * 0.06}s` }}>
-                    <div className="player-fact-icon">{fact.icon}</div>
-                    <div className="player-fact-label">{fact.label}</div>
-                    <div className="player-fact-value">{fact.value}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          {/* FACTS rail — player variant from T4 */}
+          <FactsRail
+            trackId={currentTrack?.track_id}
+            activeCollection={activeCollection}
+            isDark={isDark}
+            lang={lang}
+            variant="player"
+          />
 
-          {/* ── Playlist Panel ── */}
-          <div className="player-glass-panel" style={{
-            flex:1, display:'flex', flexDirection:'column', overflow:'hidden',
-            padding:'20px 24px',
+          {/* Separator between facts and queue */}
+          <div style={{ borderTop: `1px solid ${isDark ? '#2a2a32' : 'rgba(22,22,32,0.08)'}` }} />
+
+          {/* QUEUE block — flex-grows to fill remaining height */}
+          <div style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+            minHeight: 0,
           }}>
             <div style={{
-              fontSize:'11px', color:pTextSubtle, fontFamily:"'JetBrains Mono', monospace",
-              letterSpacing:'0.2em', marginBottom:'14px', flexShrink:0,
+              fontSize: 10,
+              letterSpacing: '0.20em',
+              color: isDark ? '#888' : '#5a5a66',
+              fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+              marginBottom: 10,
+              flexShrink: 0,
             }}>
-              {lang==='ru'?'ПЛЕЙЛИСТ':'PLAYLIST'} · {playlist.length}
+              {lang === 'ru' ? 'ОЧЕРЕДЬ' : 'QUEUE'} · {playlist.length} {lang === 'ru' ? 'ТРЕКОВ' : 'TRACKS'}
             </div>
-            <div style={{ flex:1, overflowY:'auto' }}>
+            <div className="player-scroll" style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
               {playlist.length === 0 ? (
-                <div style={{ textAlign:'center', padding:'30px 20px' }}>
-                  <div style={{ fontSize:'13px', color:pTextSubtle, fontFamily:"'JetBrains Mono', monospace", letterSpacing:'0.15em' }}>
-                    {lang==='ru'?'Нет треков':'NO TRACKS'}
-                  </div>
-                  <div style={{ fontSize:'13px', color:pTextMuted, marginTop:'8px' }}>
-                    {lang==='ru'?'Поиските треки в Поиске':'Search for tracks in Search'}
-                  </div>
+                <div style={{
+                  textAlign: 'center',
+                  padding: '30px 20px',
+                  color: isDark ? '#888' : '#5a5a66',
+                  fontSize: 13,
+                }}>
+                  {lang === 'ru' ? 'Очередь пуста' : 'Queue empty'}
                 </div>
               ) : (() => {
                 const firstAutoplayIdx = playlist.findIndex(h => h && h._autoplay);
