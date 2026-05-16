@@ -5643,7 +5643,12 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
     setShowModal(true);
   };
 
-  const startIndexing = async () => {
+  // `aiEnabledArg` is passed explicitly by the caller because React state
+  // updates batched in the same tick won't have flushed yet — reading
+  // `enabledForNewCollection` from the closure here would see the *previous*
+  // render's value (stale), causing the post-indexing phase transition to
+  // misroute (e.g. "Skip AI" would still land on ai-bootstrap).
+  const startIndexing = async (aiEnabledArg = enabledForNewCollection) => {
     const colName = collName.trim() || 'my_collection';
     setIndexing(true); setModalError(null); setModalTrackCount(null); setStageProgress({});
     setStepStatus({ lyrics:'idle', facts:'idle', metadata:'idle', dense:'idle', audio:'idle', analysis:'idle' });
@@ -5660,7 +5665,7 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
         localStorage.setItem('active_collection', colName);
         onCollectionsUpdate && onCollectionsUpdate();
         // Phase transition (Plan 6): if AI is on for this collection and LLM probes ok, advance to ai-bootstrap
-        if (aiStatus?.aiAvailable && enabledForNewCollection) {
+        if (aiStatus?.aiAvailable && aiEnabledArg) {
           setIndexPhase('ai-bootstrap');
         } else {
           setIndexPhase('indexing');  // stay in 'indexing' phase showing Done UI
@@ -5713,7 +5718,7 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
             localStorage.setItem('active_collection', colName);
             onCollectionsUpdate && onCollectionsUpdate();
             // Phase transition (Plan 6): if AI is on for this collection and LLM probes ok, advance to ai-bootstrap
-            if (aiStatus?.aiAvailable && enabledForNewCollection) {
+            if (aiStatus?.aiAvailable && aiEnabledArg) {
               setIndexPhase('ai-bootstrap');
             } else {
               setIndexPhase('indexing');  // stay in 'indexing' phase showing Done UI
@@ -6085,19 +6090,22 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
                 await aiStatus?.refresh?.();
               }
               setIndexPhase('indexing');
-              await startIndexing();
+              await startIndexing(enabled);  // pass explicitly — state hasn't flushed
             }}
-            onAiSkip={() => { setEnabledForNewCollection(false); setIndexPhase('indexing'); startIndexing(); }}
+            onAiSkip={() => { setEnabledForNewCollection(false); setIndexPhase('indexing'); startIndexing(false); }}
             onAiBootstrapRun={async () => {
               const colName = collName.trim() || 'my_collection';
               const lang2 = lang || 'en';
-              try {
-                await Promise.all([
-                  apiFetch('/library/ai-index/sonic_vibe',    { method:'POST', body: JSON.stringify({ collection_name: colName, lang: lang2 }) }),
-                  apiFetch('/library/ai-index/refined_facts', { method:'POST', body: JSON.stringify({ collection_name: colName, lang: lang2 }) }),
-                  apiFetch('/library/ai-index/artist_bio',    { method:'POST', body: JSON.stringify({ collection_name: colName, lang: lang2 }) }),
-                ]);
-              } catch (e) { console.error('failed to start AI indexing', e); }
+              // allSettled, not all — partial failure shouldn't silently abort the
+              // other tasks. We still close the modal but log each failure so it
+              // appears in DevTools.
+              const tasks = ['sonic_vibe', 'refined_facts', 'artist_bio'];
+              const results = await Promise.allSettled(tasks.map(t =>
+                apiFetch(`/library/ai-index/${t}`, { method:'POST', body: JSON.stringify({ collection_name: colName, lang: lang2 }) })
+              ));
+              results.forEach((r, i) => {
+                if (r.status === 'rejected') console.error(`AI indexing task '${tasks[i]}' failed:`, r.reason);
+              });
               setShowModal(false);
             }}
             onAiBootstrapLater={() => setShowModal(false)}
