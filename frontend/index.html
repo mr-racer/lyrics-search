@@ -5508,6 +5508,78 @@ function LyricsBackFace({ track, isVisible, activeCollection, isDark, lang }) {
   );
 }
 
+// ─── PLAYER ACTION PILLS ────────────────────────────────────────────────────
+function PlayerActionPills({
+  liked, onLike, onDislike,
+  lyricsMode, onToggleLyrics,
+  onAskAI,
+  isDark, lang,
+}) {
+  const c = useColors(isDark);
+  const baseStyle = {
+    padding: '6px 14px',
+    borderRadius: 99,
+    fontSize: 12,
+    fontWeight: 500,
+    cursor: 'pointer',
+    border: `1px solid ${isDark ? 'rgba(255,255,255,0.10)' : 'rgba(22,22,32,0.14)'}`,
+    background: 'transparent',
+    color: c.textMuted,
+    transition: 'all 150ms ease',
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 5,
+    fontFamily: 'inherit',
+  };
+  const activePurple = {
+    background: isDark ? 'rgba(124,91,255,0.15)' : 'rgba(124,91,255,0.10)',
+    color: isDark ? '#cdb8ff' : '#5b3fd6',
+    borderColor: 'rgba(124,91,255,0.40)',
+  };
+  const activeRed = {
+    background: isDark ? 'rgba(239,68,68,0.12)' : 'rgba(239,68,68,0.10)',
+    color: '#fb6f6f',
+    borderColor: 'rgba(239,68,68,0.40)',
+  };
+  const aiTint = {
+    background: isDark ? 'rgba(124,91,255,0.10)' : 'rgba(124,91,255,0.06)',
+    color: isDark ? '#cdb8ff' : '#5b3fd6',
+    borderColor: 'rgba(124,91,255,0.30)',
+  };
+
+  return (
+    <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+      <button
+        type="button"
+        style={{ ...baseStyle, ...(liked === 'like' ? activePurple : {}) }}
+        aria-pressed={liked === 'like'}
+        onClick={onLike}
+      >♥ {lang === 'ru' ? 'Нравится' : 'Like'}</button>
+
+      <button
+        type="button"
+        style={{ ...baseStyle, ...(liked === 'dislike' ? activeRed : {}) }}
+        aria-pressed={liked === 'dislike'}
+        onClick={onDislike}
+      >✕ {lang === 'ru' ? 'Пропустить' : 'Skip'}</button>
+
+      <button
+        type="button"
+        style={{ ...baseStyle, ...(lyricsMode ? activePurple : {}) }}
+        aria-pressed={lyricsMode}
+        onClick={onToggleLyrics}
+      >📜 {lang === 'ru' ? 'Текст' : 'Lyrics'}</button>
+
+      <button
+        type="button"
+        style={{ ...baseStyle, ...aiTint }}
+        onClick={onAskAI}
+        title={lang === 'ru' ? 'Спросить AI (Plan 5)' : 'Ask AI (Plan 5)'}
+      >✨ {lang === 'ru' ? 'Спросить AI' : 'Ask AI'}</button>
+    </div>
+  );
+}
+
 // ─── PLAYER SECTION ─────────────────────────────────────────────────────────
 function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, audio, visible }) {
   const [playlist, setPlaylist] = useState(initialPlaylist || []);
@@ -5812,28 +5884,23 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
                 </div>
               )}
 
-              {/* Reaction pills */}
-              <div style={{ display:'flex', justifyContent:'center', gap:'8px', marginTop:'16px' }}>
-                <button onClick={() => setReaction('like')}
-                  className="player-reaction-pill"
-                  style={{
-                    padding:'7px 16px', borderRadius:'9999px', fontSize:'13px', fontWeight:'500',
-                    color: liked === 'like' ? '#7C5BFF' : pTextMuted,
-                    background: liked === 'like' ? 'rgba(124,91,255,0.15)' : pPillBg,
-                    border: `1px solid ${liked === 'like' ? 'rgba(124,91,255,0.4)' : pBorderSubtle}`,
-                  }}>
-                  ♥ {lang==='ru'?'Нравится':'Like'}
-                </button>
-                <button onClick={() => setReaction('dislike')}
-                  className="player-reaction-pill"
-                  style={{
-                    padding:'7px 16px', borderRadius:'9999px', fontSize:'13px', fontWeight:'500',
-                    color: liked === 'dislike' ? '#EF4444' : pTextMuted,
-                    background: liked === 'dislike' ? 'rgba(239,68,68,0.12)' : pPillBg,
-                    border: `1px solid ${liked === 'dislike' ? 'rgba(239,68,68,0.4)' : pBorderSubtle}`,
-                  }}>
-                  ✕ {lang==='ru'?'Нет':'Nope'}
-                </button>
+              {/* Reaction / action pills */}
+              <div style={{ marginTop:'16px' }}>
+                <PlayerActionPills
+                  liked={liked}
+                  onLike={() => setReaction('like')}
+                  onDislike={() => setReaction('dislike')}
+                  lyricsMode={lyricsMode}
+                  onToggleLyrics={() => setLyricsMode(m => !m)}
+                  onAskAI={() => {
+                    // Temporary stub — replaced by toast in Task 13.
+                    window.alert(lang === 'ru'
+                      ? 'AI Chat появится в Plan 5'
+                      : 'AI Chat coming in Plan 5');
+                  }}
+                  isDark={isDark}
+                  lang={lang}
+                />
               </div>
             </div>
           ) : (
