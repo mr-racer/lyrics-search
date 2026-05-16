@@ -1207,7 +1207,7 @@ function useAudioPlayer() {
 }
 
 // ─── useGlobalKeyboardShortcuts — document-level playback + nav shortcuts ───
-function useGlobalKeyboardShortcuts({ audio, onNavToSection }) {
+function useGlobalKeyboardShortcuts({ audio, onNavToSection, onToggleLyrics, onCloseLyrics }) {
   useEffect(() => {
     function onKey(e) {
       // Skip if focus is in an input/textarea/contentEditable
@@ -1254,9 +1254,24 @@ function useGlobalKeyboardShortcuts({ audio, onNavToSection }) {
         return;
       }
 
+      // Plan 4: Shift+L toggles lyrics view, Esc closes lyrics.
+      // Lyrics + Like both want 'L'; Shift+L is for lyrics so the bare-L like
+      // handler below is not triggered when the Shift modifier is held.
+      if ((e.key === 'l' || e.key === 'L') && e.shiftKey) {
+        e.preventDefault();
+        onToggleLyrics?.();
+        return;
+      }
+
       // L/D: like/dislike (stubbed until Plan 4 player redesign)
       if (e.key === 'l' || e.key === 'L') { /* TODO Plan 4: like */ return; }
       if (e.key === 'd' || e.key === 'D') { /* TODO Plan 4: dislike */ return; }
+
+      // Esc: close lyrics view (don't preventDefault — let Esc propagate for modals etc.)
+      if (e.key === 'Escape') {
+        onCloseLyrics?.();
+        return;
+      }
 
       // /: focus Search bar (navigate to Search if not there)
       if (e.key === '/') {
@@ -1267,7 +1282,7 @@ function useGlobalKeyboardShortcuts({ audio, onNavToSection }) {
     }
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [audio, onNavToSection]);
+  }, [audio, onNavToSection, onToggleLyrics, onCloseLyrics]);
 }
 
 function secsToMMSS(s) {
@@ -5695,7 +5710,7 @@ function PlayerScoreBars({ breakdown, isDark }) {
 }
 
 // ─── PLAYER SECTION ─────────────────────────────────────────────────────────
-function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, audio, visible }) {
+function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, audio, visible, lyricsMode, onToggleLyrics, onCloseLyrics }) {
   const [playlist, setPlaylist] = useState(initialPlaylist || []);
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [liked, setLiked] = useState(null);
@@ -5715,9 +5730,6 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
   const [isHovering, setIsHovering] = useState(false);
   const artWrapRef = useRef(null);
 
-  // Cover ↔ Lyrics flip state (Plan 4)
-  const [lyricsMode, setLyricsMode] = useState(false);
-
   const handleArtMouseMove = useCallback((e) => {
     if (!artWrapRef.current) return;
     const r = artWrapRef.current.getBoundingClientRect();
@@ -5734,9 +5746,6 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
   }, []);
 
   const currentTrack = currentIndex >= 0 && currentIndex < playlist.length ? playlist[currentIndex].track : null;
-
-  // Reset to cover face when the track changes — new song should show cover, not prior song's lyrics.
-  useEffect(() => { setLyricsMode(false); }, [currentTrack?.track_id]);
 
   // Derive ambient hue from track
   const ambientHue = useMemo(() => {
@@ -5796,18 +5805,6 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
       // Don't pause — audio continues in background
     }
   }, [visible]);
-
-  // TEMPORARY Shift+L hotkey — toggles lyricsMode for testing the flip card.
-  // Will be replaced by useGlobalKeyboardShortcuts integration in Task 12.
-  useEffect(() => {
-    const onKey = (e) => {
-      if ((e.key === 'l' || e.key === 'L') && e.shiftKey) {
-        setLyricsMode(m => !m);
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
 
   const fetchReaction = async (trackId) => {
     if (!activeCollection || !trackId) return;
@@ -6009,7 +6006,7 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
                   onLike={() => setReaction('like')}
                   onDislike={() => setReaction('dislike')}
                   lyricsMode={lyricsMode}
-                  onToggleLyrics={() => setLyricsMode(m => !m)}
+                  onToggleLyrics={onToggleLyrics}
                   onAskAI={() => {
                     // Temporary stub — replaced by toast in Task 13.
                     window.alert(lang === 'ru'
@@ -6284,6 +6281,10 @@ function App() {
   // Player state
   const [playerPlaylist, setPlayerPlaylist] = useState([]);
   const [playerTrack, setPlayerTrack] = useState(null);
+  const [lyricsMode, setLyricsMode] = useState(false);
+
+  // Reset cover face when the track changes — new song should start on cover.
+  useEffect(() => { setLyricsMode(false); }, [playerTrack?.track_id]);
   // Played track ids live in a ref (not React state) because they only get
   // read from the autoplay-queue exclude_ids param — never rendered. A ref
   // sidesteps the stale-closure trap that would force every consumer to
@@ -6293,8 +6294,13 @@ function App() {
   // Shared audio controller — lives at App level so audio survives navigation
   const audio = useAudioPlayer();
 
-  // Global keyboard shortcuts (Task 11)
-  useGlobalKeyboardShortcuts({ audio, onNavToSection: setSection });
+  // Global keyboard shortcuts (Task 11 + Task 12)
+  useGlobalKeyboardShortcuts({
+    audio,
+    onNavToSection: setSection,
+    onToggleLyrics: () => { if (section === 'player') setLyricsMode(m => !m); },
+    onCloseLyrics:  () => { if (section === 'player') setLyricsMode(false); },
+  });
 
   // Best-effort playback event on tab close / navigation away.
   useEffect(() => {
@@ -6512,6 +6518,9 @@ function App() {
                 initialPlaylist={id === 'player' ? playerPlaylist : undefined}
                 initialTrack={id === 'player' ? playerTrack : undefined}
                 visible={section === id}
+                lyricsMode={id === 'player' ? lyricsMode : false}
+                onToggleLyrics={id === 'player' ? () => setLyricsMode(m => !m) : undefined}
+                onCloseLyrics={id === 'player' ? () => setLyricsMode(false) : undefined}
               />
             </div>
           ))}
