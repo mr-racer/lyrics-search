@@ -290,3 +290,23 @@ class ArtistAggregate(BaseModel):
     bio: Optional[str] = None           # None when artist_bio not yet indexed
     facts: list[str] = Field(default_factory=list)
     albums: list[ArtistAlbum] = Field(default_factory=list)
+
+
+class LLMStatusRequest(BaseModel):
+    """Body for POST /system/llm-status. All fields optional —
+    server falls back to env LLM_BASE_URL / LLM_MODEL when omitted."""
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+
+
+class LLMStatusResponse(BaseModel):
+    """Result of an LLM availability probe."""
+    available: bool
+    base_url: Optional[str] = None
+    model: Optional[str] = None
+    error: Optional[str] = None
+
+
+class AIEnabledRequest(BaseModel):
+    """Body for PATCH /library/collections/{name}/ai-enabled."""
+    enabled: bool
