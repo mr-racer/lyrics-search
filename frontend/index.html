@@ -3385,7 +3385,7 @@ function Segmented({ value, onChange, options, isDark, size='md', style } = {}) 
 }
 
 // ─── SEARCH SECTION (redesigned) ──────────────────────────────────────────────
-function SearchSection({ isDark, lang, activeCollection, onPlayTrack }) {
+function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateToArtist }) {
   const c = useColors(isDark);
   const { sessions, saveSession, deleteSession } = useChatHistory(activeCollection);
 
@@ -3552,7 +3552,12 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack }) {
               .map((hit, hi) => (
                 <div key={hi} className="chat-result-card"
                   style={{ background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)' }}
-                  onClick={() => { setResults(msg.hits); setDetailHit(hit); }}
+                  onClick={() => {
+                    // Hybrid: card-area click navigates to Artist Atlas; the
+                    // ▶ button below stops propagation to keep playback distinct.
+                    const slug = (hit.track?.artist || '').toLowerCase().trim().split(/\s+/).join('-');
+                    if (slug && navigateToArtist) navigateToArtist(slug);
+                  }}
                   onMouseEnter={e => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)'; }}
                   onMouseLeave={e => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)'; }}>
                   <AlbumCover title={hit.track?.title||''} artist={hit.track?.artist||''} size={42} isDark={isDark} coverPath={hit.track?.cover_art_path} />
@@ -3727,7 +3732,10 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack }) {
                   <div className="search-grid">
                     {results.map((hit, i) => (
                       <div key={i} className="grid-card"
-                        onClick={() => setDetailHit(hit)}
+                        onClick={() => {
+                          const slug = (hit.track?.artist || '').toLowerCase().trim().split(/\s+/).join('-');
+                          if (slug && navigateToArtist) navigateToArtist(slug);
+                        }}
                         style={{
                           background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
                           borderRadius:'16px', overflow:'hidden',
