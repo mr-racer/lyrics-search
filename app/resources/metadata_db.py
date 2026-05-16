@@ -203,6 +203,13 @@ class MetadataDB:
         if "artists" in existing_tables:
             cls._ensure_columns(conn, "artists", {"mbid": "TEXT"})
 
+        # AI Mode infrastructure (Plan 6) — per-collection opt-in for live-LLM
+        # features. DEFAULT 1 means existing rows immediately report on,
+        # matching the pre-flag world where AI features were always available.
+        cls._ensure_columns(conn, "collection_settings", {
+            "ai_enabled": "INTEGER NOT NULL DEFAULT 1",
+        })
+
         # AI indexing — distinguish "processed" from "silently skipped" so the
         # UI can tell when a job completed with literally zero LLM work done
         # (e.g. tracks lacked sonic_tags + facts). Without this column the
