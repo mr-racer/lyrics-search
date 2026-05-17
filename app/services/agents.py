@@ -1,0 +1,364 @@
+"""PydanticAI agents for music search.
+
+Three agents, each with a single responsibility:
+
+- **PlannerAgent** — classifies the user's query, extracts filters
+  (artist/album/genre/era), and generates 2-3 search queries.
+
+- **ScorerAgent** — evaluates search results (context) against the
+  user's query and decides whether to answer or search again.
+
+- **AudioAgent** — fast-path for audio/vibe queries: CLAP rephrase
+  → 3× audio search → conversational answer.
+
+All agents are created via factory functions that accept a
+``SearchDeps`` instance for dependency injection.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from typing import Awaitable, Callable
+
+from openai import AsyncOpenAI
+from pydantic_ai import Agent
+from pydantic_ai.models.openai import OpenAIChatModel as OpenAIModel
+from pydantic_ai.providers.openai import OpenAIProvider
+
+from app.domain.models import AudioAnswer, ScoreResult, SearchPlan, TrackHit
+from app.services.agent_deps import SearchDeps
+from app.services.llm_client import _get_client
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Prompt templates (from _WIP_llm_agents.py, kept as-is)
+# ---------------------------------------------------------------------------
+
+PLANNER_PROMPT: str = """
+You are a music search planner. Your job is to analyze the user's query and prepare a search plan.
+
+AVAILABLE FILTER KEYS:
+- Artist: performer name
+- Album: album name
+- Genre: music genre
+- year_range: decade range (e.g. "1990-1999", "2000-2009")
+
+INPUTS:
+<user_query>{query}</user_query>
+<previous_queries>{previous_queries}</previous_queries>
+
+<resolved_filters>{resolved_filters}</resolved_filters>
+<search_filter_query>{search_filter_query}</search_filter_query>
+
+RULES:
+1. If the user explicitly mentions an artist, album, genre, or time period — extract it as a potential filter. Always use ENGLISH as a filter query.
+2. If <resolved_filters> is empty AND filters are needed → set action="request_filter" to look up valid DB values.
+3. If <resolved_filters> is NOT empty → select the best matching filter value from it (fuzzy match allowed, e.g. "канье уест" → "Kanye West"). If no match — set filters=null.
+4. You may only request filters ONCE per session. If <search_filter_query> already has content — skip request_filter.
+5. Generate 2–3 search queries in English (3–10 words each), ordered from most to least specific.
+
+OUTPUT FORMAT:
+{{
+  "action": "request_filter" | "search",
+  "query_type": "text" | "audio" | "hybrid",
+  "filters": {{
+    "Artist": "..." | null,
+    "Album": "..." | null,
+    "Genre": "..." | null,
+    "year_range": "YYYY-YYYY" | null
+  }} | null,
+  "filter_lookup": {{
+    "Artist": "raw user input to resolve" | null,
+    "Album": "..." | null,
+    "Genre": "..." | null,
+    "year_range": "YYYY-YYYY" | null
+  }} | null,
+  "queries": [{{"query": "...", "type": "text" | "audio" | "hybrid"}}],
+  "search_mode": "CONSERVATIVE" | "AGGRESSIVE"
+}}
+
+NOTES:
+- filter_lookup is only used when action="request_filter". It contains the raw unresolved user terms to look up in DB.
+- filters contains only resolved, confirmed values from <resolved_filters> or null.
+- search_mode: use CONSERVATIVE on first attempt, AGGRESSIVE if previous_queries is not empty.
+""".strip()
+
+SCORER_PROMPT: str = """
+You are a music search assistant. Evaluate search results and answer the user.
+
+INPUTS:
+<user_query>{query}</user_query>
+<context>{context}</context>
+<previous_queries>{previous_queries}</previous_queries>
+<active_filters>{active_filters}</active_filters>
+<attempt>{attempt_number}</attempt>
+
+TASK:
+- Evaluate <context> for a match to <user_query>.
+- If active_filters are set, ensure the result satisfies them.
+- If a confident match is found → action="answer".
+- If no match and attempt < 3 → action="search" with new queries (AGGRESSIVE mode).
+- If attempt >= 3 → action="final_answer" (best guess or admit failure).
+
+SEARCH MODES:
+- CONSERVATIVE (attempt 1): close to user's literal words
+- AGGRESSIVE (attempt 2+): use imagery, metaphors, synonyms, related themes
+
+OUTPUT FORMAT:
+{{
+  "action": "answer" | "search" | "final_answer",
+  "confidence": "high" | "medium" | "low",
+  "song": "Title" | null,
+  "artist": "Artist" | null,
+  "filters": {{active filters, pass-through unchanged}} | null,
+  "queries": [{{"query": "...", "type": "text" | "audio" | "hybrid"}}] | null,
+  "message": "Conversational reply to user"
+}}
+
+CONSTRAINTS:
+1. ONLY use <context> for answers. Never use internal knowledge.
+2. message is ALWAYS present and human-friendly.
+3. On final_answer: give best guess even if confidence is low; explain uncertainty in message.
+""".strip()
+
+# ---------------------------------------------------------------------------
+# Model factory
+# ---------------------------------------------------------------------------
+
+
+def _create_pydantic_model(
+    base_url: str | None = None,
+    model_name: str | None = None,
+) -> OpenAIModel:
+    """Create a pydantic_ai OpenAIModel from the project's client cache."""
+    resolved_model = (model_name or os.getenv("LLM_MODEL", "openai/gpt-oss-20b")).strip()
+    openai_client = _get_client(base_url)
+    provider = OpenAIProvider(openai_client=openai_client)
+    return OpenAIModel(resolved_model, provider=provider)
+
+
+# ---------------------------------------------------------------------------
+# PlannerAgent
+# ---------------------------------------------------------------------------
+
+
+def create_planner_agent(deps: SearchDeps) -> Agent:
+    """Create a PlannerAgent bound to the given dependencies.
+
+    The agent returns a ``SearchPlan`` with classified query type,
+    extracted filters, and 2-3 search queries.
+    """
+    model = _create_pydantic_model(deps.llm_base_url, deps.llm_model)
+    agent = Agent(
+        model,
+        output_type=SearchPlan,
+        system_prompt=PLANNER_PROMPT,
+    )
+    return agent
+
+
+# ---------------------------------------------------------------------------
+# ScorerAgent
+# ---------------------------------------------------------------------------
+
+
+def create_scorer_agent(deps: SearchDeps) -> Agent:
+    """Create a ScorerAgent bound to the given dependencies.
+
+    The agent evaluates search context and returns a ``ScoreResult``
+    indicating whether to answer or search again.
+    """
+    model = _create_pydantic_model(deps.llm_base_url, deps.llm_model)
+    agent = Agent(
+        model,
+        output_type=ScoreResult,
+        system_prompt=SCORER_PROMPT,
+    )
+    return agent
+
+
+# ---------------------------------------------------------------------------
+# AudioAgent helpers
+# ---------------------------------------------------------------------------
+
+# Re-exported from chat.py so the audio path can use them without circular imports.
+_AUDIO_ANSWER_PROMPT: str = """
+You are a music search assistant. The user described a song by mood or vibe,
+and the system found the best audio match in their local library.
+
+<user_query>{user_query}</user_query>
+
+<best_match>
+  Title: {title}
+  Artist: {artist}
+  Album: {album}
+  Year: {year}
+</best_match>
+
+Respond naturally in the user's language (match the language of <user_query>).
+Briefly paraphrase what the user was looking for, then name the best match.
+Example: "По вашему описанию — песня с приятным женским голосом и динамичным припевом — наиболее
+подходящий трек «{title}» от {artist}."
+
+Keep it under 50 words. Return ONLY a JSON object:
+{{"message": "your reply here"}}
+""".strip()
+
+_CLAP_REPHRASE_SYSTEM_PROMPT: str = """
+# ROLE & OBJECTIVE
+You are an expert audio retrieval prompt engineer specializing in the CLAP model. Transform Russian mood-based user queries into 3 optimized English prompts for text-to-audio retrieval.
+
+# CORE RULES
+1. TEMPLATE: Every prompt must start exactly with: "This song is a "
+2. SEMANTIC LOCK: Preserve the exact core intent of the original query. Do NOT change genre, primary instrument, or fundamental mood. Vary ONLY acoustic/production parameters.
+3. ACOUSTIC MAPPING: Replace abstract emotions with concrete proxies:
+   - Tempo: slow/medium/fast, steady/driving, relaxed/upbeat
+   - Timbre: bright/warm/clean/distorted/muffled/electronic/acoustic
+   - Dynamics: soft/medium/loud, intimate/voluminous
+   - Texture: sparse/dense, rhythmic/pad-heavy, atmospheric
+4. STRUCTURE: [Genre/Style] + [Instrument] + [Tempo] + [1-2 Acoustic Details]
+5. VARIATION STRATEGY: Output exactly 3 prompts that are semantically identical but differ in acoustic focus:
+   - Variant 1: Tempo & Dynamics focus
+   - Variant 2: Timbre & Texture focus
+   - Variant 3: Key & Production style focus
+6. EXCLUSIONS: Strip artist names, titles, lyrics, and subjective adjectives (epic, dreamy, cinematic, nostalgic, chill, sad). Replace strictly with acoustic equivalents.
+7. CONSTRAINTS: English only. 8–15 words per prompt. Strict JSON output only.
+8. QUERY COMPOSITION: Use only that sound information which was clearly provided by user. If it is unclear from user's query, it is possible to add 1-2 sound profile characteristics from artist name (if it is provided) based on your knowledge.
+
+# OUTPUT FORMAT
+Return ONLY a raw JSON array of 3 strings. No markdown, no code blocks, no explanations.
+Example:
+["This song is a slow acoustic guitar piece with soft dynamics", "This song is a warm timbre fingerpicking guitar track", "This song is a relaxed acoustic guitar song with sparse atmospheric texture"]
+
+# USER QUERY
+{user_query}
+""".strip()
+
+
+AUDIO_AGENT_SYSTEM_PROMPT: str = """
+You are a music search assistant specializing in audio-based queries.
+The user described a song by mood, vibe, or acoustic characteristics.
+Find the best match in their local music library using CLAP audio search.
+
+WORKFLOW:
+1. Call clap_rephrase to transform the user's query into 3 CLAP-friendly English prompts.
+2. Call search_db with each of the 3 rephrased prompts to find audio matches.
+3. Analyze the combined results and return the best match as AudioAnswer.
+
+RULES:
+- Always rephrase first, then search. Never search with the raw user query.
+- Search with all 3 rephrased prompts to maximize coverage.
+- Pick the single best match from all results (highest score, best semantic match).
+- The message in AudioAnswer should be conversational and in the user's language.
+- If no good matches found, return an empty hits list and a helpful message explaining what was searched.
+""".strip()
+
+
+def create_audio_agent(deps: SearchDeps) -> Agent:
+    """Create an AudioAgent for the audio fast-path.
+
+    The agent uses two tools:
+    - clap_rephrase: transforms mood queries into 3 CLAP-friendly prompts
+    - search_db: searches the music library using audio (CLAP) mode
+
+    After searching, the agent returns an AudioAnswer with the best match.
+    Raw hits from all searches are cached in deps._audio_hits for the endpoint.
+    """
+    model = _create_pydantic_model(deps.llm_base_url, deps.llm_model)
+    agent = Agent(
+        model,
+        output_type=AudioAnswer,
+        system_prompt=AUDIO_AGENT_SYSTEM_PROMPT,
+    )
+
+    # Cache for raw hits — populated by search_db, read by the endpoint
+    audio_hits_cache: list[TrackHit] = []
+
+    @agent.tool_plain
+    async def clap_rephrase(user_query: str) -> str:  # noqa: F841
+        """Rephrase a mood/vibe query into 3 CLAP-friendly English prompts for audio search.
+
+        Use this tool first to transform the user's natural language description
+        into optimized prompts for CLAP text-to-audio retrieval.
+
+        Args:
+            user_query: The user's original query describing mood, vibe, or acoustic characteristics.
+
+        Returns:
+            A newline-separated string of 3 CLAP-optimized English prompts.
+        """
+        try:
+            from app.services.llm_client import ask_llm
+
+            rephrase_prompt = _CLAP_REPHRASE_SYSTEM_PROMPT.format(user_query=user_query)
+            result = await ask_llm(
+                user_query,
+                system_prompt=rephrase_prompt,
+                parse_json=True,
+                base_url=deps.llm_base_url,
+                model=deps.llm_model,
+            )
+            if isinstance(result, list) and result:
+                return "\n".join(result)
+        except Exception as exc:
+            logger.warning("[audio_agent] CLAP rephrasing failed: %s", exc)
+        return user_query
+
+    @agent.tool_plain
+    async def search_db(query: str) -> str:  # noqa: F841
+        """Search the music database using audio (CLAP) mode.
+
+        Use this tool with each rephrased prompt from clap_rephrase.
+        Returns formatted search results with title, artist, album, year, and score.
+
+        Args:
+            query: A CLAP-optimized English prompt for audio search.
+
+        Returns:
+            Formatted string of search results (up to 10 tracks with metadata and scores).
+        """
+        try:
+            hits = await deps.search(query=query, mode="audio", limit=10)
+            if not hits:
+                return "No results found for this query."
+
+            # Cache raw hits for the endpoint to use
+            audio_hits_cache.extend(hits)
+
+            lines: list[str] = []
+            for hit in hits:
+                t = hit.track
+                line = f"- {t.title} by {t.artist}"
+                if t.album:
+                    line += f" [{t.album}]"
+                if t.year:
+                    line += f" ({t.year})"
+                line += f" [score: {hit.score:.3f}]"
+                lines.append(line)
+            return "\n".join(lines)
+        except Exception as exc:
+            logger.warning("[audio_agent] search_db failed for query=%r: %s", query, exc)
+            return f"Search error: {exc}"
+
+    # Attach cache to agent for retrieval after run()
+    agent._audio_hits_cache = audio_hits_cache  # type: ignore[attr-defined]
+
+    return agent
+
+
+# ---------------------------------------------------------------------------
+# Public exports
+# ---------------------------------------------------------------------------
+
+__all__ = [
+    "create_planner_agent",
+    "create_scorer_agent",
+    "create_audio_agent",
+    "PLANNER_PROMPT",
+    "SCORER_PROMPT",
+    "AUDIO_AGENT_SYSTEM_PROMPT",
+    "_AUDIO_ANSWER_PROMPT",
+    "_CLAP_REPHRASE_SYSTEM_PROMPT",
+]

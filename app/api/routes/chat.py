@@ -26,7 +26,13 @@ from typing import Any
 from fastapi import APIRouter, Request
 
 from app.domain.models import ChatRequest, TrackHit
-from app.services.agents import PLANNER_PROMPT, SCORER_PROMPT, create_scorer_agent
+from app.services.agents import (
+    PLANNER_PROMPT,
+    SCORER_PROMPT,
+    _AUDIO_ANSWER_PROMPT,
+    _CLAP_REPHRASE_SYSTEM_PROMPT,
+    create_scorer_agent,
+)
 from app.services.agent_deps import SearchDeps
 from app.services.llm_client import ask_llm
 import traceback
@@ -51,283 +57,6 @@ Return ONLY a JSON object with this shape:
 
 No prose before or after the JSON.
 """.strip()
-
-# CLAP rephrasing prompt — transforms mood-based queries into 3 optimized
-# English prompts for CLAP text-to-audio retrieval.
-CLAP_REPHRASE_SYSTEM_PROMPT: str = """
-# ROLE & OBJECTIVE
-You are an expert audio retrieval prompt engineer specializing in the CLAP model. Transform Russian mood-based user queries into 3 optimized English prompts for text-to-audio retrieval.
-
-# CORE RULES
-1. TEMPLATE: Every prompt must start exactly with: "This song is a "
-2. SEMANTIC LOCK: Preserve the exact core intent of the original query. Do NOT change genre, primary instrument, or fundamental mood. Vary ONLY acoustic/production parameters.
-3. ACOUSTIC MAPPING: Replace abstract emotions with concrete proxies:
-   - Tempo: slow/medium/fast, steady/driving, relaxed/upbeat
-   - Timbre: bright/warm/clean/distorted/muffled/electronic/acoustic
-   - Dynamics: soft/medium/loud, intimate/voluminous
-   - Texture: sparse/dense, rhythmic/pad-heavy, atmospheric
-4. STRUCTURE: [Genre/Style] + [Instrument] + [Tempo] + [1-2 Acoustic Details]
-5. VARIATION STRATEGY: Output exactly 3 prompts that are semantically identical but differ in acoustic focus:
-   - Variant 1: Tempo & Dynamics focus
-   - Variant 2: Timbre & Texture focus
-   - Variant 3: Key & Production style focus
-6. EXCLUSIONS: Strip artist names, titles, lyrics, and subjective adjectives (epic, dreamy, cinematic, nostalgic, chill, sad). Replace strictly with acoustic equivalents.
-7. CONSTRAINTS: English only. 8–15 words per prompt. Strict JSON output only.
-8. QUERY COMPOSITION: Use only that sound information which was clearly provided by user. If it is unclear from user's query, it is possible to add 1-2 sound profile characteristics from artist name (if it is provided) based on your knowledge.
-
-# OUTPUT FORMAT
-Return ONLY a raw JSON array of 3 strings. No markdown, no code blocks, no explanations.
-Example:
-["This song is a slow acoustic guitar piece with soft dynamics", "This song is a warm timbre fingerpicking guitar track", "This song is a relaxed acoustic guitar song with sparse atmospheric texture"]
-
-# USER QUERY
-{user_query}
-""".strip()
-
-# Audio answer prompt — generates a conversational reply about the best match.
-AUDIO_ANSWER_PROMPT: str = """
-You are a music search assistant. The user described a song by mood or vibe,
-and the system found the best audio match in their local library.
-
-<user_query>{user_query}</user_query>
-
-<best_match>
-  Title: {title}
-  Artist: {artist}
-  Album: {album}
-  Year: {year}
-</best_match>
-
-Respond naturally in the user's language (match the language of <user_query>).
-Briefly paraphrase what the user was looking for, then name the best match.
-Example: "По вашему описанию — песня с приятным женским голосом и динамичным припевом — наиболее
-подходящий трек «{title}» от {artist}."
-
-Keep it under 50 words. Return ONLY a JSON object:
-{{"message": "your reply here"}}
-""".strip()
-
-# DEVELOPER_PROMPT: str = """
-# You are a music search assistant. You find songs from descriptions, moods,
-# vague memories, or remembered lyric fragments. You have access to a lyrics
-# database via retrieval.
-
-# You run in a loop. On each turn you EITHER answer the user from retrieved
-# context, OR issue new search queries for another retrieval round.
-
-# ═══════════════════════════════════════════════════════════════
-# INPUTS
-# ═══════════════════════════════════════════════════════════════
-
-# <user_query>
-# {query}
-# </user_query>
-
-# <context>
-# {context}
-# </context>
-# Lyrics + metadata (title, artist, album, year) from previous retrieval rounds.
-# Empty on the first attempt.
-
-# <previous_queries>
-# {previous_queries}
-# </previous_queries>
-# Queries already tried. Never repeat them. Always rephrase or shift angle.
-
-# <attempt>
-# {attempt} of {max_attempts}
-# </attempt>
-
-# ═══════════════════════════════════════════════════════════════
-# STEP 1 — SCORE THE CONTEXT
-# ═══════════════════════════════════════════════════════════════
-
-# For each candidate song in <context>, check:
-#   1. Do the lyrics match specific details from the user query
-#      (imagery, story, fragments)?
-#   2. Do metadata signals (era, artist, genre, language) match?
-
-# Then assign ONE confidence label:
-#   HIGH    — lyrics clearly match specific details the user gave.
-#   MEDIUM  — plausible match, but a key detail is missing OR multiple
-#             candidates tie.
-#   LOW     — nothing in context fits, or context is empty.
-
-# ═══════════════════════════════════════════════════════════════
-# STEP 2 — PICK THE ACTION
-# ═══════════════════════════════════════════════════════════════
-
-# Apply these rules in order. Stop at the first match.
-
-#   IF confidence == HIGH                        → action = "answer"
-#   IF confidence == MEDIUM AND attempt <  max   → action = "search"
-#   IF confidence == MEDIUM AND attempt == max   → action = "answer" (best guess, state uncertainty)
-#   IF confidence == LOW    AND attempt <  max   → action = "search"
-#   IF confidence == LOW    AND attempt == max   → action = "answer" (admit no match, ask ONE clarifying question)
-
-# ═══════════════════════════════════════════════════════════════
-# STEP 3 — IF action == "search", BUILD QUERIES
-# ═══════════════════════════════════════════════════════════════
-
-# 3A. Classify the user query into ONE type:
-
-#   "text"   — User asks about a concrete detail that should literally appear
-#              in lyrics.
-#              Example: "Which songs mention luxury cars?"
-
-#   "audio"  — User describes feelings, vibe, vocals, production, atmosphere,
-#              not specific words. No concrete lyric fragment given.
-#              Example: "Epic Lana Del Rey style song with male vocals."
-
-#   "hybrid" — Mix of both, or unclear which one dominates.
-#              Example: "A sad 80s song about driving alone at night."
-
-# 3B. Generate queries based on type:
-
-#   IF type == "audio":
-#       Output exactly ONE query.
-#       Pack it with audio/feeling vocabulary from the user's message
-#       (vocal type, instruments, era, mood, production style).
-
-#   IF type == "text" OR type == "hybrid":
-#       Output 2-3 queries. Each query must:
-#         - Be 3-10 words.
-#         - Use words likely to appear in real lyrics
-#           (concrete nouns, imagery, emotional phrases).
-#         - Cover a DIFFERENT angle from the others
-#           (e.g. one imagery, one emotion, one storyline).
-#         - Differ from every entry in <previous_queries>.
-#         - Never be empty. If unsure, paraphrase the user's query.
-
-# 3C. Pick rephrasing mode based on attempt number:
-
-#   Let half = floor(max_attempts / 2).
-
-#   IF attempt <= half  → CONSERVATIVE mode:
-#       Stay close to the user's wording.
-#       Swap synonyms, reorder phrases. Goal: precision.
-
-#   IF attempt >  half  → AGGRESSIVE mode:
-#       Earlier searches failed. Close paraphrases will fail too.
-#       Drop literal wording. Each of the 2-3 queries explores a
-#       DIFFERENT direction from this list:
-#         - Replace abstract feelings with concrete lyrical imagery.
-#           "feeling lost" → "wandering empty streets", "no map no plan"
-#         - Flip the perspective. A breakup song may be written from
-#           either side. A "sad" song may have ironic upbeat lyrics.
-#         - Guess a likely hook or chorus phrase, not a description.
-#         - Try adjacent themes:
-#           loneliness ↔ nostalgia, anger ↔ heartbreak, love ↔ obsession.
-#         - Shift era/genre vocabulary if the user gave hints.
-#       Do NOT output three variants of the same idea.
-
-#   Note: when attempt == max_attempts, action is always "answer", so this
-#   step does not run on the final attempt.
-
-# ═══════════════════════════════════════════════════════════════
-# OUTPUT — RETURN ONE VALID JSON OBJECT. NO TEXT BEFORE OR AFTER.
-# ═══════════════════════════════════════════════════════════════
-
-# When action == "search":
-# {{
-#   "action": "search",
-#   "confidence": "low" | "medium",
-#   "reasoning": "one short sentence on why context is insufficient",
-#   "queries": [
-#     {{"query": "query text 1", "type": "text" | "audio" | "hybrid"}},
-#     {{"query": "query text 2", "type": "text" | "audio" | "hybrid"}},
-#     {{"query": "query text 3", "type": "text" | "audio" | "hybrid"}}
-#   ]
-# }}
-
-# When action == "answer":
-# {{
-#   "action": "answer",
-#   "confidence": "high" | "medium" | "low",
-#   "song": "Title" or null,
-#   "artist": "Artist" or null,
-#   "message": "conversational reply to the user"
-# }}
-
-# Rules for "message":
-#   - HIGH    → state title + artist naturally. Optionally say why it matches.
-#   - MEDIUM  → "This sounds like it might be X by Y — does that ring a bell?"
-#   - LOW (final attempt) → admit no match. Briefly say what you searched.
-#                           Ask ONE focused clarifying question (era,
-#                           language, a remembered lyric fragment, or
-#                           a specific emotion).
-
-# ═══════════════════════════════════════════════════════════════
-# HARD CONSTRAINTS — NEVER VIOLATE
-# ═══════════════════════════════════════════════════════════════
-
-#   - NEVER invent songs, artists, or lyrics that are not in <context>.
-#   - NEVER answer from your own training knowledge. Only from <context>.
-#   - NEVER return an empty queries list when action == "search".
-#   - NEVER write any text outside the single JSON object.
-#   - NEVER repeat a query from <previous_queries>.
-
-# ═══════════════════════════════════════════════════════════════
-# EXAMPLES
-# ═══════════════════════════════════════════════════════════════
-
-# Example 1 — empty context, first attempt, hybrid query:
-#   user_query: "sad song about driving alone at night, 80s vibe"
-#   context: (empty)
-#   attempt: 1 of 4
-#   →
-#   {{
-#     "action": "search",
-#     "confidence": "low",
-#     "reasoning": "Context is empty, nothing to match against.",
-#     "queries": [
-#       {{"query": "driving alone at night highway", "type": "text"}},
-#       {{"query": "lonely night drive synth 1980s", "type": "hybrid"}},
-#       {{"query": "headlights empty road sadness", "type": "text"}}
-#     ]
-#   }}
-
-# Example 2 — strong match in context:
-#   user_query: "song with the line about dancing with somebody who loves me"
-#   context: [Whitney Houston — "I Wanna Dance with Somebody (Who Loves Me)",
-#             1987, lyrics include "I wanna dance with somebody,
-#             with somebody who loves me"]
-#   →
-#   {{
-#     "action": "answer",
-#     "confidence": "high",
-#     "song": "I Wanna Dance with Somebody (Who Loves Me)",
-#     "artist": "Whitney Houston",
-#     "message": "That's I Wanna Dance with Somebody by Whitney Houston, from 1987."
-#   }}
-
-# Example 3 — audio-type query, first attempt:
-#   user_query: "epic Lana Del Rey style song with male vocals, cinematic"
-#   context: (empty)
-#   attempt: 1 of 4
-#   →
-#   {{
-#     "action": "search",
-#     "confidence": "low",
-#     "reasoning": "Context is empty, query is audio-based.",
-#     "queries": [
-#       {{"query": "cinematic male vocal Lana Del Rey style melancholic strings", "type": "audio"}}
-#     ]
-#   }}
-
-# Example 4 — final attempt, weak context:
-#   user_query: "something melancholic with rain and a phone call"
-#   context: [a few candidates, none clearly matching rain + phone call]
-#   attempt: 4 of 4
-#   →
-#   {{
-#     "action": "answer",
-#     "confidence": "low",
-#     "song": null,
-#     "artist": null,
-#     "message": "I couldn't find a confident match. I searched for melancholic songs involving rain and phone calls, but nothing in the database lined up with both. Do you remember any specific lyric fragment, or roughly the era and language of the song?"
-#   }}
-# """.strip()
 
 DEVELOPER_PROMPT: str = """
 SYSTEM:
@@ -413,9 +142,9 @@ async def _run_searches(
         search_query = query_text
 
         # Rephrase audio/hybrid queries through CLAP prompt for better audio retrieval
-        if query_type in ("audio", "hybrid") and CLAP_REPHRASE_SYSTEM_PROMPT.strip():
+        if query_type in ("audio", "hybrid") and _CLAP_REPHRASE_SYSTEM_PROMPT.strip():
             try:
-                rephrase_prompt = CLAP_REPHRASE_SYSTEM_PROMPT.format(user_query=query_text)
+                rephrase_prompt = _CLAP_REPHRASE_SYSTEM_PROMPT.format(user_query=query_text)
                 rephrased = await ask_llm(
                     query_text,
                     system_prompt=rephrase_prompt,
@@ -610,106 +339,156 @@ async def chat(req: ChatRequest, request: Request) -> dict:
         detected_type = None
     effective_mode = req.mode if not req.auto_mode and not req.planner_enabled else (detected_type or "hybrid")
 
-    # ── Audio fast path: rephrase → 3× CLAP search → answer ─────────────────
-    # When the query is classified as "audio" (or forced to "audio"), skip the
-    # agentic loop. Instead:
-    #   1. Ask LLM to rephrase user's mood/vibe into 3 CLAP-friendly prompts
-    #   2. Run each through CLAP audio search (10 results each)
-    #   3. Merge, pick top 5, send #1 to LLM for conversational answer
+    # ── Audio fast path: AudioAgent (Phase 4) ────────────────────────────────
+    # When the query is classified as "audio", use AudioAgent which:
+    #   1. Rephrases user's mood/vibe into 3 CLAP-friendly prompts
+    #   2. Runs each through CLAP audio search (10 results each)
+    #   3. Returns the best match with a conversational answer
+    # Falls back to old inline behavior on any error.
     if effective_mode == "audio" or (not req.auto_mode and req.mode == "audio"):
-        audio_rephrased_queries: list[str] = []
+        audio_used_agent = False
+        audio_response: dict | None = None
 
-        if CLAP_REPHRASE_SYSTEM_PROMPT.strip():
+        if req.planner_enabled:
+            # Try AudioAgent first
             try:
-                rephrase_prompt = CLAP_REPHRASE_SYSTEM_PROMPT.format(
-                    user_query=req.message,
-                )
-                rephrase_result = await ask_llm(
-                    req.message,
-                    system_prompt=rephrase_prompt,
-                    parse_json=True,
-                    **llm_kw,
-                )
-                if isinstance(rephrase_result, list) and rephrase_result:
-                    audio_rephrased_queries = rephrase_result
-            except Exception as exc:
-                print(f"[chat] CLAP rephrasing error (non-fatal): {exc}")
+                from app.services.agents import create_audio_agent
 
-        # Fallback: if rephrasing produced nothing, use the original query
-        if not audio_rephrased_queries:
-            audio_rephrased_queries = [req.message]
-
-        # Run each rephrased query through CLAP audio search (10 results each)
-        all_hits: list[TrackHit] = []
-        for rq in audio_rephrased_queries:
-            try:
-                round_hits = await service.search(
-                    query=rq, mode="audio", limit=10,
+                audio_deps = SearchDeps(
+                    service=service,
                     collection_name=req.collection_name,
+                    llm_base_url=llm_kw.get("base_url"),
+                    llm_model=llm_kw.get("model"),
                 )
-                all_hits = _merge_hits(all_hits, round_hits)
+                audio_agent = create_audio_agent(audio_deps)
+                agent_result = await audio_agent.run(req.message)
+                answer = agent_result.output
+
+                # Retrieve cached hits from the agent's search_db tool
+                cached_hits: list[TrackHit] = getattr(
+                    audio_agent, "_audio_hits_cache", []
+                )
+                cached_hits.sort(key=lambda h: h.score, reverse=True)
+                top5 = cached_hits[:5]
+
+                # Extract best_hit from answer or from cached hits
+                best_hit_dump = answer.best_hit
+                if not best_hit_dump and top5:
+                    best_hit_dump = top5[0].model_dump()
+
+                audio_response = {
+                    "message":    answer.message,
+                    "song":       best_hit_dump.get("title") if best_hit_dump else None,
+                    "artist":     best_hit_dump.get("artist") if best_hit_dump else None,
+                    "confidence": "medium",
+                    "best_hit":   best_hit_dump,
+                    "hits":       [h.model_dump() for h in top5],
+                    "attempts":   1,
+                    "classification": classification,
+                }
+                audio_used_agent = True
+
             except Exception as exc:
-                print(f"[chat] audio search error for '{rq}': {exc}")
+                print(f"[chat] AudioAgent error (falling back to inline): {exc}")
+                print(traceback.format_exc())
 
-        # Sort by score, pick top 5
-        all_hits.sort(key=lambda h: h.score, reverse=True)
-        top5 = all_hits[:5]
+        # Old inline behavior (fallback or when planner_enabled=False)
+        if not audio_used_agent:
+            audio_rephrased_queries: list[str] = []
 
-        if top5:
-            best = top5[0]
+            if _CLAP_REPHRASE_SYSTEM_PROMPT.strip():
+                try:
+                    rephrase_prompt = _CLAP_REPHRASE_SYSTEM_PROMPT.format(
+                        user_query=req.message,
+                    )
+                    rephrase_result = await ask_llm(
+                        req.message,
+                        system_prompt=rephrase_prompt,
+                        parse_json=True,
+                        **llm_kw,
+                    )
+                    if isinstance(rephrase_result, list) and rephrase_result:
+                        audio_rephrased_queries = rephrase_result
+                except Exception as exc:
+                    print(f"[chat] CLAP rephrasing error (non-fatal): {exc}")
 
-            # Generate conversational answer via LLM
-            try:
-                answer_prompt = AUDIO_ANSWER_PROMPT.format(
-                    user_query=req.message,
-                    title=best.track.title,
-                    artist=best.track.artist,
-                    album=best.track.album or "—",
-                    year=best.track.year or "—",
-                )
-                answer_result = await ask_llm(
-                    req.message,
-                    system_prompt=answer_prompt,
-                    parse_json=True,
-                    **llm_kw,
-                )
-                if isinstance(answer_result, dict):
-                    audio_message = answer_result.get("message", "")
-                else:
+            # Fallback: if rephrasing produced nothing, use the original query
+            if not audio_rephrased_queries:
+                audio_rephrased_queries = [req.message]
+
+            # Run each rephrased query through CLAP audio search (10 results each)
+            audio_all_hits: list[TrackHit] = []
+            for rq in audio_rephrased_queries:
+                try:
+                    round_hits = await service.search(
+                        query=rq, mode="audio", limit=10,
+                        collection_name=req.collection_name,
+                    )
+                    audio_all_hits = _merge_hits(audio_all_hits, round_hits)
+                except Exception as exc:
+                    print(f"[chat] audio search error for '{rq}': {exc}")
+
+            # Sort by score, pick top 5
+            audio_all_hits.sort(key=lambda h: h.score, reverse=True)
+            audio_top5 = audio_all_hits[:5]
+
+            if audio_top5:
+                audio_best = audio_top5[0]
+
+                # Generate conversational answer via LLM
+                try:
+                    answer_prompt = _AUDIO_ANSWER_PROMPT.format(
+                        user_query=req.message,
+                        title=audio_best.track.title,
+                        artist=audio_best.track.artist,
+                        album=audio_best.track.album or "—",
+                        year=audio_best.track.year or "—",
+                    )
+                    answer_result = await ask_llm(
+                        req.message,
+                        system_prompt=answer_prompt,
+                        parse_json=True,
+                        **llm_kw,
+                    )
+                    if isinstance(answer_result, dict):
+                        audio_message = answer_result.get("message", "")
+                    else:
+                        audio_message = ""
+                except Exception as exc:
+                    print(f"[chat] audio-answer LLM error (non-fatal): {exc}")
                     audio_message = ""
-            except Exception as exc:
-                print(f"[chat] audio-answer LLM error (non-fatal): {exc}")
-                audio_message = ""
 
-            # Fallback message if LLM didn't produce one
-            if not audio_message:
-                album_part = f" [{best.track.album}]" if best.track.album else ""
-                audio_message = (
-                    f"По звучанию ближе всего — «{best.track.title}» "
-                    f"({best.track.artist}{album_part})."
-                )
+                # Fallback message if LLM didn't produce one
+                if not audio_message:
+                    album_part = f" [{audio_best.track.album}]" if audio_best.track.album else ""
+                    audio_message = (
+                        f"По звучанию ближе всего — «{audio_best.track.title}» "
+                        f"({audio_best.track.artist}{album_part})."
+                    )
 
-            return {
-                "message":    audio_message,
-                "song":       best.track.title,
-                "artist":     best.track.artist,
-                "confidence": "medium",
-                "best_hit":   best.model_dump(),
-                "hits":       [h.model_dump() for h in top5],
-                "attempts":   1,
-                "classification": classification,
-            }
-        else:
-            return {
-                "message":    "Не удалось найти треков по описанию звука. Попробуй уточнить настроение, инструменты, или стиль вокала.",
-                "song":       None,
-                "artist":     None,
-                "confidence": "low",
-                "best_hit":   None,
-                "hits":       [],
-                "attempts":   1,
-                "classification": classification,
-            }
+                audio_response = {
+                    "message":    audio_message,
+                    "song":       audio_best.track.title,
+                    "artist":     audio_best.track.artist,
+                    "confidence": "medium",
+                    "best_hit":   audio_best.model_dump(),
+                    "hits":       [h.model_dump() for h in audio_top5],
+                    "attempts":   1,
+                    "classification": classification,
+                }
+            else:
+                audio_response = {
+                    "message":    "Не удалось найти треков по описанию звука. Попробуй уточнить настроение, инструменты, или стиль вокала.",
+                    "song":       None,
+                    "artist":     None,
+                    "confidence": "low",
+                    "best_hit":   None,
+                    "hits":       [],
+                    "attempts":   1,
+                    "classification": classification,
+                }
+
+        return audio_response
 
     # ── Calls 2…N: agentic search loop (text / hybrid) ──────────────────────
     # When planner_enabled, use ScorerAgent for context evaluation.
