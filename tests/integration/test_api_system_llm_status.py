@@ -15,7 +15,10 @@ def client():
 
 
 def test_status_returns_available_true_on_2xx_response(client):
-    fake_response = MagicMock(status_code=200)
+    fake_response = MagicMock(
+        status_code=200,
+        json=lambda: {"data": [{"id": "x"}]},  # endpoint checks model in /models response
+    )
     fake_response.raise_for_status = MagicMock()
     mock_get = AsyncMock(return_value=fake_response)
     with patch("app.api.routes.system.httpx.AsyncClient") as ctx:
@@ -49,7 +52,10 @@ def test_status_returns_available_false_on_connection_error(client):
 def test_status_uses_env_fallback_when_body_empty(client, monkeypatch):
     monkeypatch.setenv("LLM_BASE_URL", "http://envhost:5555/v1")
     monkeypatch.setenv("LLM_MODEL", "env-model")
-    fake_response = MagicMock(status_code=200)
+    fake_response = MagicMock(
+        status_code=200,
+        json=lambda: {"data": [{"id": "env-model"}]},
+    )
     fake_response.raise_for_status = MagicMock()
     mock_get = AsyncMock(return_value=fake_response)
     with patch("app.api.routes.system.httpx.AsyncClient") as ctx:

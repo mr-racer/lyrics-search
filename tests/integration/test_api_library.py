@@ -48,10 +48,19 @@ class TestLibraryBrowse:
             assert resp.status_code == 200
             assert resp.json() == []
 
-    def test_browse_requires_query_parameter(self):
+    def test_browse_omits_query_returns_empty_when_qdrant_down(self):
+        """When q is omitted and Qdrant is unavailable, return 200 with empty list."""
         app = create_app()
         with TestClient(app) as c:
             resp = c.get("/api/v1/library/browse")
+            assert resp.status_code == 200
+            assert resp.json() == []
+
+    def test_browse_rejects_short_query(self):
+        """q with less than 2 characters should be rejected (min_length=2)."""
+        app = create_app()
+        with TestClient(app) as c:
+            resp = c.get("/api/v1/library/browse", params={"q": "a"})
             assert resp.status_code == 422
 
 

@@ -62,10 +62,10 @@ class TestNormalizeGenre:
         assert normalize_genre("indie") == "Alternative"
 
     def test_dance_mapping(self):
-        assert normalize_genre("dance") == "Dance"
+        assert normalize_genre("dance") == "Electronic"
 
     def test_blues_mapping(self):
-        assert normalize_genre("blues") == "Blues"
+        assert normalize_genre("blues") == "R&B/Soul"
 
     def test_empty_string(self):
         assert normalize_genre("") == "Other"

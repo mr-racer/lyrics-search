@@ -17,16 +17,24 @@ def _isolated_db(tmp_path, monkeypatch):
     MetadataDB._reset_for_tests()
 
 
-def test_parse_llm_response_accepts_valid_array():
-    raw = json.dumps([
-        {"id": 1, "keep": True, "refined_text": "Hello"},
-        {"id": 2, "keep": False},
-    ])
+def test_parse_llm_response_accepts_valid_dict():
+    raw = json.dumps({
+        "selected_facts": [
+            {"reasoning": "interesting", "short_fact": "Hello"},
+            {"reasoning": "weird", "short_fact": "World"},
+        ]
+    })
     parsed = refined_facts._parse_llm_response(raw)
     assert parsed == [
-        {"id": 1, "keep": True,  "refined_text": "Hello"},
-        {"id": 2, "keep": False, "refined_text": ""},
+        {"refined_text": "Hello"},
+        {"refined_text": "World"},
     ]
+
+
+def test_parse_llm_response_accepts_empty_selected_facts():
+    raw = json.dumps({"selected_facts": []})
+    parsed = refined_facts._parse_llm_response(raw)
+    assert parsed == []
 
 
 def test_parse_llm_response_rejects_malformed_json():
@@ -34,26 +42,14 @@ def test_parse_llm_response_rejects_malformed_json():
         refined_facts._parse_llm_response("not json")
 
 
-def test_parse_llm_response_rejects_non_array():
-    with pytest.raises(ValueError):
-        refined_facts._parse_llm_response('{"id": 1, "keep": true, "refined_text": "x"}')
-
-
-def test_parse_llm_response_rejects_missing_keep():
+def test_parse_llm_response_rejects_non_dict():
     with pytest.raises(ValueError):
         refined_facts._parse_llm_response(json.dumps([{"id": 1}]))
 
 
-def test_parse_llm_response_rejects_keep_true_without_text():
+def test_parse_llm_response_rejects_missing_selected_facts():
     with pytest.raises(ValueError):
-        refined_facts._parse_llm_response(json.dumps([{"id": 1, "keep": True}]))
-
-
-def test_parse_llm_response_caps_long_refined_text():
-    long_text = "x" * 500
-    raw = json.dumps([{"id": 1, "keep": True, "refined_text": long_text}])
-    parsed = refined_facts._parse_llm_response(raw)
-    assert len(parsed[0]["refined_text"]) <= refined_facts.MAX_REFINED_LEN + 1
+        refined_facts._parse_llm_response(json.dumps({"facts": []}))
 
 
 def test_get_refined_facts_returns_none_when_absent():

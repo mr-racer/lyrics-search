@@ -41,7 +41,7 @@ genre_map = {
     'album rock': 'Rock', 'soft rock': 'Rock', 'pop-rock': 'Rock',
     'pop/rock': 'Rock', 'blues/pop rock': 'Rock', 'dance-punk': 'Rock',
     'acid punk': 'Rock', 'stoner rock': 'Rock', 'alternative metal': 'Rock',
-    'nu metal': 'Rock', 'goth rock': 'Rock',
+    'nu metal': 'Nu-Metal', 'goth rock': 'Rock',
 
     # Electronic
     'electronic': 'Electronic', 'synthpop': 'Electronic', 'synth-pop': 'Electronic',

@@ -52,8 +52,11 @@ def test_facts_returns_originals_without_refined(client):
 
 
 def test_facts_returns_refined_when_present(client):
+    # Refined facts are keyed by song_slug (get_song_facts_key(artist, title)),
+    # not by track_id. The mocked Qdrant payload has artist="Bar", title="Foo"
+    # → song_slug = "bar-foo".
     MetadataDB.set_refined_facts(
-        scope="song", scope_key="t1", collection_name="music", lang="en",
+        scope="song", scope_key="bar-foo", collection_name="music", lang="en",
         refined=["Refined and sharper"],
     )
     resp = client.get(
@@ -69,7 +72,7 @@ def test_facts_returns_refined_when_present(client):
 def test_facts_empty_refined_does_not_fall_back(client):
     """Explicit empty list from refined_facts must override originals."""
     MetadataDB.set_refined_facts(
-        scope="song", scope_key="t1", collection_name="music", lang="en",
+        scope="song", scope_key="bar-foo", collection_name="music", lang="en",
         refined=[],
     )
     resp = client.get(

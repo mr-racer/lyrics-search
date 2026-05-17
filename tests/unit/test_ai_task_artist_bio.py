@@ -63,21 +63,22 @@ def _make_job(collection: str = "c", lang: str = "en"):
 async def test_run_calls_llm_with_artist_facts_and_persists_bio():
     _seed_facts("dua-lipa", "c", ["Born in London 1995", "Released Future Nostalgia 2020"])
     points = [FakePoint("p1", {"artist": "Dua Lipa", "title": "Physical"})]
-    with patch.object(artist_bio, "_SYSTEM_PROMPT", "be brief"), \
-         patch.object(artist_bio, "ask_llm", side_effect=lambda *a, **kw: "From London, indie-pop.") as mock_llm:
+    with patch("app.services.ai_tasks.artist_bio.web_research_bio",
+               return_value="From London, indie-pop.") as mock_bio:
         await artist_bio.run(_make_job(), FakeDb(points), None)
-    mock_llm.assert_called_once()
+    mock_bio.assert_called_once()
     assert MetadataDB.get_artist_bio("dua-lipa", "c", "en") == "From London, indie-pop."
 
 
 @pytest.mark.asyncio
-async def test_run_skips_artists_with_no_facts():
+async def test_run_processes_all_artists():
+    """artist_bio processes every distinct artist regardless of facts."""
     points = [FakePoint("p1", {"artist": "Unknown", "title": "x"})]
-    with patch.object(artist_bio, "_SYSTEM_PROMPT", "be brief"), \
-         patch.object(artist_bio, "ask_llm") as mock_llm:
+    with patch("app.services.ai_tasks.artist_bio.web_research_bio",
+               return_value="Some bio.") as mock_bio:
         await artist_bio.run(_make_job(), FakeDb(points), None)
-    mock_llm.assert_not_called()
-    assert MetadataDB.get_artist_bio("unknown", "c", "en") is None
+    mock_bio.assert_called_once()
+    assert MetadataDB.get_artist_bio("unknown", "c", "en") == "Some bio."
 
 
 @pytest.mark.asyncio
@@ -88,14 +89,16 @@ async def test_run_dedupes_artists_across_tracks():
         FakePoint("p2", {"artist": "Dua Lipa", "title": "B"}),
         FakePoint("p3", {"artist": "Dua Lipa", "title": "C"}),
     ]
-    with patch.object(artist_bio, "_SYSTEM_PROMPT", "be brief"), \
-         patch.object(artist_bio, "ask_llm", side_effect=lambda *a, **kw: "bio") as mock_llm:
+    with patch("app.services.ai_tasks.artist_bio.web_research_bio",
+               return_value="bio") as mock_bio:
         await artist_bio.run(_make_job(), FakeDb(points), None)
-    assert mock_llm.call_count == 1  # one LLM call per artist, not per track
+    assert mock_bio.call_count == 1  # one LLM call per artist, not per track
 
 
 @pytest.mark.asyncio
-async def test_run_fails_fast_when_prompt_empty():
-    with patch.object(artist_bio, "_SYSTEM_PROMPT", ""):
-        with pytest.raises(RuntimeError, match="_SYSTEM_PROMPT is empty"):
-            await artist_bio.run(_make_job(), FakeDb([]), None)
+async def test_run_skips_empty_bio_result():
+    points = [FakePoint("p1", {"artist": "Empty Bio", "title": "x"})]
+    with patch("app.services.ai_tasks.artist_bio.web_research_bio",
+               return_value=""):
+        await artist_bio.run(_make_job(), FakeDb(points), None)
+    assert MetadataDB.get_artist_bio("empty-bio", "c", "en") is None
