@@ -220,7 +220,7 @@ def _create_agent(
         """Search the web.
 
         Args:
-            query: Search query (English preferred for better results).
+            query: Search query in English.
             fetch_content: True = full page text, False = snippets only.
         """
         logger.info("[agent→tool] web_search called: query=%r fetch_content=%s", query, fetch_content)

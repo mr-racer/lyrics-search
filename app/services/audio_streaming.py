@@ -96,6 +96,7 @@ def _transcode_alac_to_flac(src: Path, dst: Path) -> bool:
                 "-c:a", "flac",
                 "-compression_level", "5",
                 "-map_metadata", "0",
+                "-f", "flac",
                 str(tmp),
             ],
             check=True, capture_output=True, timeout=180,
@@ -111,7 +112,7 @@ def _transcode_alac_to_flac(src: Path, dst: Path) -> bool:
             tmp.unlink(missing_ok=True)
         return False
     except subprocess.CalledProcessError as e:
-        stderr = (e.stderr or b"").decode("utf-8", errors="replace")[:500]
+        stderr = (e.stderr or b"").decode("utf-8", errors="replace")
         logger.error("[audio_streaming] ffmpeg failed for %s: %s", src.name, stderr)
         if tmp.exists():
             tmp.unlink(missing_ok=True)
