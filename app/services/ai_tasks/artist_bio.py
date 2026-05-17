@@ -19,10 +19,10 @@ from app.services.llm_client import ask_llm
 
 logger = logging.getLogger(__name__)
 
-# OPERATOR-FILLED. Empty by design so the operator can shape tone/length
-# (e.g. "Write a 2-3 sentence biographical paragraph from the facts below.
-# Lead with origin + genre, keep it journalistic, no clichés.").
-_SYSTEM_PROMPT = ""
+_SYSTEM_PROMPT = """
+Write a 2-3 sentence biographical paragraph from the facts below.
+# Lead with origin + genre, keep it journalistic, no clichés.
+""".strip()
 
 
 def _build_user_prompt(*, artist_name: str, facts: list[str], lang: str) -> str:

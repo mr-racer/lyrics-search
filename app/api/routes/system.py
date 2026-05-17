@@ -49,6 +49,11 @@ async def llm_status(req: LLMStatusRequest) -> LLMStatusResponse:
         async with httpx.AsyncClient(timeout=PROBE_TIMEOUT_SEC) as client:
             resp = await client.get(probe_url)
             resp.raise_for_status()
+        data = resp.json()
+        if model in [m["id"] for m in data["data"]]:
+            return LLMStatusResponse(available=True, base_url=base_url, model=model, error=None)
+        else:
+            return LLMStatusResponse(available=False, base_url=base_url, model=model, error="model is not found in v1/models")
     except Exception as e:
         logger.debug("[llm-status] probe failed for %s: %s", probe_url, e)
         return LLMStatusResponse(
@@ -57,5 +62,3 @@ async def llm_status(req: LLMStatusRequest) -> LLMStatusResponse:
             model=model,
             error=str(e)[:200],
         )
-
-    return LLMStatusResponse(available=True, base_url=base_url, model=model, error=None)

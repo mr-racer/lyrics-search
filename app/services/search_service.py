@@ -7,6 +7,7 @@ from typing import List, Optional, Literal, Dict
 from ..domain.models import TrackMetadata, TrackHit, SearchFilters, ScoreBreakdown
 from ..existing.qdrant_db import LyricsDB
 from ..resources.model_registry import ModelRegistry
+from ..resources.metadata_db import MetadataDB
 from .artist_facts_service import load_all_facts_for_collection
 from .song_facts_service import load_all_song_facts_for_collection, get_song_facts_key
 
@@ -390,9 +391,24 @@ class SearchService:
         """Convert Qdrant ScoredPoint list to TrackHit list."""
         facts_cache: Dict[str, str] = {}
         song_facts_cache: Dict[str, str] = {}
+
         if collection_name:
-            facts_cache = load_all_facts_for_collection(collection_name)
-            song_facts_cache = load_all_song_facts_for_collection(collection_name)
+            # Determine whether AI features are enabled for this collection.
+            # When enabled, refined facts (from AI Indexing) take precedence
+            # over originals. When disabled, only original facts are shown.
+            ai_enabled = True  # default — pre-AI-flag world had facts always on
+            try:
+                MetadataDB.init()
+                ai_enabled = MetadataDB.get_collection_ai_enabled(collection_name)
+            except Exception:
+                pass  # graceful fallback to True
+
+            facts_cache = load_all_facts_for_collection(
+                collection_name, ai_enabled=ai_enabled,
+            )
+            song_facts_cache = load_all_song_facts_for_collection(
+                collection_name, ai_enabled=ai_enabled,
+            )
 
         hits = []
         for point in points:

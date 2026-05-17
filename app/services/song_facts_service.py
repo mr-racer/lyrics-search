@@ -169,25 +169,42 @@ async def fetch_facts_for_songs(
     return results
 
 
-def load_all_song_facts_for_collection(collection_name: str) -> Dict[str, str]:
+def load_all_song_facts_for_collection(
+    collection_name: str,
+    ai_enabled: bool = True,
+) -> Dict[str, str]:
     """Load all cached song facts for a collection.
+
+    When ``ai_enabled`` is True, refined facts (from AI Indexing) take
+    precedence over originals for any song that has a refined row.
+
+    When ``ai_enabled`` is False, only original facts are returned.
 
     Prefers SQLite; falls back to legacy ``.txt`` files if SQLite is empty.
     """
+    # Layer 1: originals from SQLite or legacy .txt
+    originals: Dict[str, str] = {}
     try:
-        facts = MetadataDB.get_all_song_facts_by_collection(collection_name)
-        if facts:
-            return facts
+        originals = MetadataDB.get_all_song_facts_by_collection(collection_name)
     except Exception as e:
         logger.debug("[SongFacts] SQLite collection read failed: %s", e)
 
-    # Fallback to legacy .txt
-    coll_dir = _SONG_FACTS_CACHE_DIR / collection_name
-    if not coll_dir.is_dir():
-        return {}
+    if not originals:
+        coll_dir = _SONG_FACTS_CACHE_DIR / collection_name
+        if coll_dir.is_dir():
+            for f in coll_dir.iterdir():
+                if f.suffix == ".txt":
+                    originals[f.stem] = f.read_text(encoding="utf-8").strip()
 
-    result: Dict[str, str] = {}
-    for f in coll_dir.iterdir():
-        if f.suffix == ".txt":
-            result[f.stem] = f.read_text(encoding="utf-8").strip()
-    return result
+    # Layer 2: if AI enabled, overlay refined facts on top
+    if ai_enabled:
+        try:
+            refined = MetadataDB.get_all_refined_song_facts(collection_name)
+            if refined:
+                merged = dict(originals)
+                merged.update(refined)
+                return merged
+        except Exception as e:
+            logger.debug("[SongFacts] refined facts read failed: %s", e)
+
+    return originals

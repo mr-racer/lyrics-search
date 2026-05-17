@@ -1006,3 +1006,69 @@ class MetadataDB:
         )
         conn.commit()
         return int(cur.rowcount)
+
+    # ── Bulk refined facts loaders (for search service caching) ──
+
+    @classmethod
+    def get_all_refined_artist_facts(cls, collection_name: str) -> Dict[str, str]:
+        """Return ``{artist_slug: joined_refined_text}`` for a collection.
+
+        Reads from the ``refined_facts`` table (scope='artist'). Each row's
+        ``refined_json`` is a JSON array of ``{"text": str}`` objects.
+        """
+        import json as _json
+
+        conn = cls._connect()
+        rows = conn.execute(
+            "SELECT scope_key, refined_json FROM refined_facts "
+            "WHERE scope = ? AND collection_name = ?",
+            ("artist", collection_name),
+        ).fetchall()
+
+        result: Dict[str, str] = {}
+        for slug, json_str in rows:
+            try:
+                arr = _json.loads(json_str)
+                texts = [
+                    item.get("text", "") for item in arr
+                    if isinstance(item, dict) and item.get("text")
+                ]
+                if texts:
+                    result[slug] = "\n\n".join(texts)
+            except Exception:
+                pass
+        return result
+
+    @classmethod
+    def get_all_refined_song_facts(cls, collection_name: str) -> Dict[str, str]:
+        """Return ``{song_slug: joined_refined_text}`` for a collection.
+
+        Reads from the ``refined_facts`` table (scope='song'). The ``scope_key``
+        is the song_slug (same format as song_facts table slugs).
+
+        Returns a dict keyed by song_slug so the search service can merge
+        refined facts into TrackHit.song_facts using the same key as
+        load_all_song_facts_for_collection().
+        """
+        import json as _json
+
+        conn = cls._connect()
+        rows = conn.execute(
+            "SELECT scope_key, refined_json FROM refined_facts "
+            "WHERE scope = ? AND collection_name = ?",
+            ("song", collection_name),
+        ).fetchall()
+
+        result: Dict[str, str] = {}
+        for track_id, json_str in rows:
+            try:
+                arr = _json.loads(json_str)
+                texts = [
+                    item.get("text", "") for item in arr
+                    if isinstance(item, dict) and item.get("text")
+                ]
+                if texts:
+                    result[track_id] = "\n\n".join(texts)
+            except Exception:
+                pass
+        return result

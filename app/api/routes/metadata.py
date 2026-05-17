@@ -156,8 +156,10 @@ def get_track_facts(
 
     # Prefer refined; fall back to originals if no refined row for that scope.
     # `is not None` is critical — an explicit [] from refined must short-circuit.
+    # Refined facts are keyed by song_slug (not track_id) for consistency
+    # with search_service caching.
     refined_song = MetadataDB.get_refined_facts(
-        scope="song", scope_key=track_id, collection_name=collection, lang=lang,
+        scope="song", scope_key=song_key, collection_name=collection, lang=lang,
     )
     refined_artist = MetadataDB.get_refined_facts(
         scope="artist", scope_key=artist_slug, collection_name=collection, lang=lang,

@@ -154,7 +154,6 @@ async def run(job, db_client, llm) -> None:
             break
 
         for pt in points:
-            tid = str(pt.id)
             p = pt.payload or {}
             # Compute slugs from artist+title — see sonic_vibe.run for the
             # rationale. Qdrant payload does not carry precomputed slugs.
@@ -165,7 +164,9 @@ async def run(job, db_client, llm) -> None:
 
             did_work = False
 
-            # Song facts.
+            # Song facts — keyed by song_slug so search_service can merge
+            # refined facts into TrackHit.song_facts using the same slug
+            # that load_all_song_facts_for_collection() uses as dict key.
             if song_slug:
                 try:
                     song_facts = MetadataDB.get_song_facts(song_slug, job.collection_name)
@@ -173,7 +174,7 @@ async def run(job, db_client, llm) -> None:
                     song_facts = []
                 if song_facts:
                     _, fail = await _process_one_scope(
-                        scope="song", scope_key=tid, facts=song_facts,
+                        scope="song", scope_key=song_slug, facts=song_facts,
                         collection_name=job.collection_name, lang=job.lang,
                         llm_base_url=job.llm_base_url, llm_model=job.llm_model,
                     )
