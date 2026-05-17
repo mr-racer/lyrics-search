@@ -25,7 +25,7 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 
-from app.domain.models import ChatRequest, TrackHit
+from app.domain.models import ChatRequest, SearchFilters, TrackHit
 from app.services.agents import (
     PLANNER_PROMPT,
     SCORER_PROMPT,
@@ -36,6 +36,9 @@ from app.services.agents import (
 from app.services.agent_deps import SearchDeps
 from app.services.llm_client import ask_llm
 import traceback
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
@@ -63,13 +66,9 @@ SYSTEM:
 You are a music search assistant. You find songs based on lyrics or descriptions using provided context.
 Output MUST be a single JSON object. No prose. No reasoning.
 
-TASK (Follow the one provided by the system):
-- SCORE_AND_RESPOND: Analyze <context>. If a match is found, action="answer". If not, action="search".
-- FINAL_ANSWER: No more attempts. Give the best guess from <context> or admit failure.
-
 SEARCH_MODE:
 - CONSERVATIVE: Stay close to the user's literal words.
-- AGGRESSIVE: Earlier searches failed. Use lyrical imagery, metaphors, or related themes. 
+- AGGRESSIVE: Earlier searches failed. Use lyrical imagery, metaphors, or related themes.
 
 INPUTS:
 <user_query>{query}</user_query>
@@ -78,8 +77,9 @@ INPUTS:
 
 CONSTRAINTS:
 1. ONLY use <context> for answers. Never use internal knowledge.
-2. If action="search": Provide 2-3 queries (3-10 words each) in english language. 
+2. If action="search": Provide 2-3 queries (3-10 words each) in english language.
 3. If action="answer": Use confidence "high", "medium", or "low".
+4. If <context> has a confident match → action="answer". Otherwise → action="search".
 
 OUTPUT FORMAT:
 {{
@@ -98,13 +98,6 @@ NUM_ATTEMPTS = 4
 SEARCH_LIMIT  = 6   # hits per individual query
 MAX_CTX_HITS  = 12  # max tracks in LLM context window
 
-# Map LLM query type → service search mode
-_TYPE_TO_MODE: dict[str, str] = {
-    "text":   "text",
-    "audio":  "audio",
-    "hybrid": "hybrid",
-}
-
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 
@@ -114,12 +107,16 @@ async def _run_searches(
     collection_name: str | None = None,
     forced_mode: str | None = None,  # когда auto_mode=False, используется этот mode для всех запросов
     llm_kw: dict | None = None,
+    skip_rephrase: bool = False,  # True когда запросы уже CLAP-оптимизированы (от Planner)
 ) -> tuple[str, str, list[TrackHit]]:
     """Execute the LLM's search queries against the library.
 
-    For queries typed as "audio" or "hybrid", the original query text is
-    rephrased through CLAP_REPHRASE_SYSTEM_PROMPT before being sent to
-    the CLAP audio search, producing better cross-modal results.
+    The search mode is determined entirely by forced_mode (= effective_mode from the
+    initial classifier). Queries themselves carry no type — mode is fixed once at
+    classification time and never re-decided here.
+
+    For "audio" or "hybrid" forced_mode, the query text is rephrased through
+    CLAP_REPHRASE_SYSTEM_PROMPT before CLAP search unless skip_rephrase=True.
 
     Returns
     -------
@@ -136,13 +133,13 @@ async def _run_searches(
         if not query_text:
             continue
 
-        query_type = q.get("type", "hybrid")
-        # mode = _TYPE_TO_MODE.get(q.get("type", "hybrid"), "hybrid")
-        mode = forced_mode if forced_mode else _TYPE_TO_MODE.get(query_type, "hybrid")
+        # Mode is fixed once by the classifier — forced_mode always carries effective_mode.
+        mode = forced_mode or "hybrid"
         search_query = query_text
 
-        # Rephrase audio/hybrid queries through CLAP prompt for better audio retrieval
-        if query_type in ("audio", "hybrid") and _CLAP_REPHRASE_SYSTEM_PROMPT.strip():
+        # Rephrase audio/hybrid queries through CLAP prompt for better audio retrieval.
+        # Skip when queries are already CLAP-optimised (e.g. from Planner on attempt 1).
+        if not skip_rephrase and mode in ("audio", "hybrid") and _CLAP_REPHRASE_SYSTEM_PROMPT.strip():
             try:
                 rephrase_prompt = _CLAP_REPHRASE_SYSTEM_PROMPT.format(user_query=query_text)
                 rephrased = await ask_llm(
@@ -207,6 +204,26 @@ def _merge_hits(
             seen.add(key)
             existing.append(h)
     return existing
+
+
+def _rrf_merge(ranked_lists: list[list[TrackHit]], k: int = 60) -> list[TrackHit]:
+    """Reciprocal Rank Fusion across multiple ranked result lists.
+
+    Tracks appearing in multiple lists and ranked highly in each get the
+    highest combined score: RRF(d) = Σ 1 / (k + rank_i).
+    """
+    rrf_scores: dict[tuple[str, str], float] = {}
+    best_hit: dict[tuple[str, str], TrackHit] = {}
+
+    for ranked_list in ranked_lists:
+        for rank, hit in enumerate(ranked_list, start=1):
+            key = (hit.track.title.lower(), hit.track.artist.lower())
+            rrf_scores[key] = rrf_scores.get(key, 0.0) + 1.0 / (k + rank)
+            if key not in best_hit or hit.score > best_hit[key].score:
+                best_hit[key] = hit
+
+    sorted_keys = sorted(rrf_scores, key=lambda dk: rrf_scores[dk], reverse=True)
+    return [best_hit[dk] for dk in sorted_keys]
 
 
 # ─── Endpoint ─────────────────────────────────────────────────────────────────
@@ -305,10 +322,18 @@ async def chat(req: ChatRequest, request: Request) -> dict:
                     plan_result = await planner.run(req.message, system_prompt=filled_prompt)
                     plan = plan_result.data
 
-            # Extract queries for the agentic loop
+            # Extract queries for the agentic loop — type comes from effective_mode, not per-query
             if plan.queries:
-                planner_queries = [{"query": q.query, "type": q.type} for q in plan.queries]
+                planner_queries = [{"query": q.query} for q in plan.queries]
                 planner_filters = plan.filters.model_dump() if plan.filters else None
+
+            resolved_filters_log = {k: v for k, v in (planner_filters or {}).items() if v}
+            logger.info(
+                "[chat/planner] type=%s  queries=%s  filters=%s",
+                plan.query_type,
+                [q["query"] for q in (planner_queries or [])],
+                resolved_filters_log or "(none)",
+            )
 
         except Exception as exc:
             print(f"[chat] Planner error (falling back to old behavior): {exc}")
@@ -316,9 +341,15 @@ async def chat(req: ChatRequest, request: Request) -> dict:
             planner_queries = None
             planner_filters = None
 
-    # ── Call 1: classification (skipped when prompt is empty OR auto_mode=False) ──
+    # ── Call 1: classification ────────────────────────────────────────────────
+    # Use planner classification when available; fall back to old classifier when:
+    # - planner is disabled, or
+    # - planner failed (planner_classification is empty) and auto_mode is on
     classification: dict = planner_classification if req.planner_enabled else {}
-    if not req.planner_enabled and req.auto_mode and CLASSIFICATION_SYSTEM_PROMPT.strip():
+    needs_old_classifier = (
+        not req.planner_enabled or not planner_classification
+    ) and req.auto_mode and CLASSIFICATION_SYSTEM_PROMPT.strip()
+    if needs_old_classifier:
         try:
             classification = await ask_llm(
                 req.message,
@@ -327,8 +358,7 @@ async def chat(req: ChatRequest, request: Request) -> dict:
                 **llm_kw,
             )
         except Exception as exc:
-            print(f"[chat] classification error (non-fatal): {exc}")
-            print(traceback.format_exc())
+            logger.error(f"[chat] classification error (non-fatal): {exc}", exc_info=True)
 
     # Determine effective search mode
     if req.planner_enabled and planner_classification:
@@ -339,168 +369,133 @@ async def chat(req: ChatRequest, request: Request) -> dict:
         detected_type = None
     effective_mode = req.mode if not req.auto_mode and not req.planner_enabled else (detected_type or "hybrid")
 
-    # ── Audio fast path: AudioAgent (Phase 4) ────────────────────────────────
-    # When the query is classified as "audio", use AudioAgent which:
-    #   1. Rephrases user's mood/vibe into 3 CLAP-friendly prompts
-    #   2. Runs each through CLAP audio search (10 results each)
-    #   3. Returns the best match with a conversational answer
-    # Falls back to old inline behavior on any error.
+    # ── Log classification outcome ────────────────────────────────────────────
+    active_filters = {k: v for k, v in (planner_filters or {}).items() if v}
+    logger.info(
+        "[chat] query=%r  mode=%s  filters=%s",
+        req.message[:80],
+        effective_mode,
+        active_filters or "(none)",
+    )
+
+    # ── Audio fast path: rephrase → 3× CLAP search → RRF → answer ──────────
+    # 1. LLM rephrases user's mood/vibe into 3 CLAP-optimised English prompts
+    # 2. Each prompt runs through CLAP audio search (10 results each)
+    # 3. Three ranked lists are merged with Reciprocal Rank Fusion — the track
+    #    that appears most often AND highest across all lists wins
+    # 4. Best hit is passed to LLM to produce a conversational reply
     if effective_mode == "audio" or (not req.auto_mode and req.mode == "audio"):
-        audio_used_agent = False
-        audio_response: dict | None = None
+        audio_rephrased_queries: list[str] = []
 
-        if req.planner_enabled:
-            # Try AudioAgent first
+        if _CLAP_REPHRASE_SYSTEM_PROMPT.strip():
             try:
-                from app.services.agents import create_audio_agent
-
-                audio_deps = SearchDeps(
-                    service=service,
-                    collection_name=req.collection_name,
-                    llm_base_url=llm_kw.get("base_url"),
-                    llm_model=llm_kw.get("model"),
+                rephrase_prompt = _CLAP_REPHRASE_SYSTEM_PROMPT.format(
+                    user_query=req.message,
                 )
-                audio_agent = create_audio_agent(audio_deps)
-                agent_result = await audio_agent.run(req.message)
-                answer = agent_result.output
-
-                # Retrieve cached hits from the agent's search_db tool
-                cached_hits: list[TrackHit] = getattr(
-                    audio_agent, "_audio_hits_cache", []
+                rephrase_result = await ask_llm(
+                    req.message,
+                    system_prompt=rephrase_prompt,
+                    parse_json=True,
+                    **llm_kw,
                 )
-                cached_hits.sort(key=lambda h: h.score, reverse=True)
-                top5 = cached_hits[:5]
-
-                # Extract best_hit from answer or from cached hits
-                best_hit_dump = answer.best_hit
-                if not best_hit_dump and top5:
-                    best_hit_dump = top5[0].model_dump()
-
-                audio_response = {
-                    "message":    answer.message,
-                    "song":       best_hit_dump.get("title") if best_hit_dump else None,
-                    "artist":     best_hit_dump.get("artist") if best_hit_dump else None,
-                    "confidence": "medium",
-                    "best_hit":   best_hit_dump,
-                    "hits":       [h.model_dump() for h in top5],
-                    "attempts":   1,
-                    "classification": classification,
-                }
-                audio_used_agent = True
-
+                if isinstance(rephrase_result, list) and rephrase_result:
+                    audio_rephrased_queries = rephrase_result
             except Exception as exc:
-                print(f"[chat] AudioAgent error (falling back to inline): {exc}")
-                print(traceback.format_exc())
+                logger.warning("[chat] CLAP rephrasing error (non-fatal): %s", exc)
 
-        # Old inline behavior (fallback or when planner_enabled=False)
-        if not audio_used_agent:
-            audio_rephrased_queries: list[str] = []
+        if not audio_rephrased_queries:
+            audio_rephrased_queries = [req.message]
 
-            if _CLAP_REPHRASE_SYSTEM_PROMPT.strip():
-                try:
-                    rephrase_prompt = _CLAP_REPHRASE_SYSTEM_PROMPT.format(
-                        user_query=req.message,
-                    )
-                    rephrase_result = await ask_llm(
-                        req.message,
-                        system_prompt=rephrase_prompt,
-                        parse_json=True,
-                        **llm_kw,
-                    )
-                    if isinstance(rephrase_result, list) and rephrase_result:
-                        audio_rephrased_queries = rephrase_result
-                except Exception as exc:
-                    print(f"[chat] CLAP rephrasing error (non-fatal): {exc}")
+        # Run each rephrased query through CLAP audio search
+        audio_filters = SearchFilters(**planner_filters) if planner_filters else None
+        per_query_hits: list[list[TrackHit]] = []
+        for rq in audio_rephrased_queries:
+            try:
+                round_hits = await service.search(
+                    query=rq, mode="audio", limit=10,
+                    collection_name=req.collection_name,
+                    filters=audio_filters,
+                )
+                per_query_hits.append(round_hits)
+            except Exception as exc:
+                logger.warning("[chat] audio search error for %r: %s", rq, exc)
 
-            # Fallback: if rephrasing produced nothing, use the original query
-            if not audio_rephrased_queries:
-                audio_rephrased_queries = [req.message]
+        # RRF merge: tracks appearing in multiple lists and ranked high win
+        merged = _rrf_merge(per_query_hits) if per_query_hits else []
+        top5 = merged[:5]
 
-            # Run each rephrased query through CLAP audio search (10 results each)
-            audio_all_hits: list[TrackHit] = []
-            for rq in audio_rephrased_queries:
-                try:
-                    round_hits = await service.search(
-                        query=rq, mode="audio", limit=10,
-                        collection_name=req.collection_name,
-                    )
-                    audio_all_hits = _merge_hits(audio_all_hits, round_hits)
-                except Exception as exc:
-                    print(f"[chat] audio search error for '{rq}': {exc}")
+        logger.info(
+            "[chat/audio] found %d hits → top: %s",
+            len(merged),
+            [(h.track.artist, h.track.title) for h in top5],
+        )
 
-            # Sort by score, pick top 5
-            audio_all_hits.sort(key=lambda h: h.score, reverse=True)
-            audio_top5 = audio_all_hits[:5]
+        if top5:
+            best = top5[0]
 
-            if audio_top5:
-                audio_best = audio_top5[0]
+            audio_message = ""
+            try:
+                answer_prompt = _AUDIO_ANSWER_PROMPT.format(
+                    user_query=req.message,
+                    title=best.track.title,
+                    artist=best.track.artist,
+                    album=best.track.album or "—",
+                    year=best.track.year or "—",
+                )
+                answer_result = await ask_llm(
+                    req.message,
+                    system_prompt=answer_prompt,
+                    parse_json=True,
+                    **llm_kw,
+                )
+                if isinstance(answer_result, dict):
+                    audio_message = answer_result.get("message", "")
+            except Exception as exc:
+                logger.warning("[chat] audio-answer LLM error (non-fatal): %s", exc)
 
-                # Generate conversational answer via LLM
-                try:
-                    answer_prompt = _AUDIO_ANSWER_PROMPT.format(
-                        user_query=req.message,
-                        title=audio_best.track.title,
-                        artist=audio_best.track.artist,
-                        album=audio_best.track.album or "—",
-                        year=audio_best.track.year or "—",
-                    )
-                    answer_result = await ask_llm(
-                        req.message,
-                        system_prompt=answer_prompt,
-                        parse_json=True,
-                        **llm_kw,
-                    )
-                    if isinstance(answer_result, dict):
-                        audio_message = answer_result.get("message", "")
-                    else:
-                        audio_message = ""
-                except Exception as exc:
-                    print(f"[chat] audio-answer LLM error (non-fatal): {exc}")
-                    audio_message = ""
+            if not audio_message:
+                album_part = f" [{best.track.album}]" if best.track.album else ""
+                audio_message = (
+                    f"По звучанию ближе всего — «{best.track.title}» "
+                    f"({best.track.artist}{album_part})."
+                )
 
-                # Fallback message if LLM didn't produce one
-                if not audio_message:
-                    album_part = f" [{audio_best.track.album}]" if audio_best.track.album else ""
-                    audio_message = (
-                        f"По звучанию ближе всего — «{audio_best.track.title}» "
-                        f"({audio_best.track.artist}{album_part})."
-                    )
+            return {
+                "message":        audio_message,
+                "song":           best.track.title,
+                "artist":         best.track.artist,
+                "confidence":     "medium",
+                "hits":           [h.model_dump() for h in top5],
+                "attempts":       1,
+                "classification": classification,
+            }
+        else:
+            return {
+                "message":        "Не удалось найти треков по описанию звука. Попробуй уточнить настроение, инструменты, или стиль вокала.",
+                "song":           None,
+                "artist":         None,
+                "confidence":     "low",
+                "hits":           [],
+                "attempts":       1,
+                "classification": classification,
+            }
 
-                audio_response = {
-                    "message":    audio_message,
-                    "song":       audio_best.track.title,
-                    "artist":     audio_best.track.artist,
-                    "confidence": "medium",
-                    "best_hit":   audio_best.model_dump(),
-                    "hits":       [h.model_dump() for h in audio_top5],
-                    "attempts":   1,
-                    "classification": classification,
-                }
-            else:
-                audio_response = {
-                    "message":    "Не удалось найти треков по описанию звука. Попробуй уточнить настроение, инструменты, или стиль вокала.",
-                    "song":       None,
-                    "artist":     None,
-                    "confidence": "low",
-                    "best_hit":   None,
-                    "hits":       [],
-                    "attempts":   1,
-                    "classification": classification,
-                }
-
-        return audio_response
-
-    # ── Calls 2…N: agentic search loop (text / hybrid) ──────────────────────
-    # When planner_enabled, use ScorerAgent for context evaluation.
-    # Otherwise, fall back to the old DEVELOPER_PROMPT + ask_llm pattern.
+    # ── Agentic search loop ────────────────────────────────────────────────
+    # Flow per attempt:
+    #   1. Decide action (scorer/LLM evaluates context → search or answer)
+    #   2. If search → execute, update context, repeat
+    #   3. If answer → break and return
     previous_queries = ""
     context          = ""
     all_hits: list[TrackHit] = []
     final_result: dict       = {}
     attempts_done            = 0
 
-    # Build SearchDeps for ScorerAgent (only when planner_enabled)
-    scorer_deps: SearchDeps | None = None
+    # Build ScorerAgent callable once (only when planner_enabled).
+    # create_scorer_agent() returns an async callable, not an Agent — it creates
+    # a fresh Agent per invocation so the formatted system_prompt is injected
+    # correctly (PydanticAI doesn't support per-call system_prompt overrides).
+    scorer_fn = None
     if req.planner_enabled:
         scorer_deps = SearchDeps(
             service=service,
@@ -508,22 +503,24 @@ async def chat(req: ChatRequest, request: Request) -> dict:
             llm_base_url=llm_kw.get("base_url"),
             llm_model=llm_kw.get("model"),
         )
+        scorer_fn = create_scorer_agent(scorer_deps)
 
     for attempt in range(1, NUM_ATTEMPTS + 1):
         attempts_done = attempt
         action = None
         queries: list[dict] | None = None
 
-        # ── First attempt: use Planner's queries (skip LLM call) ──
+        # ── Step 1: Decide action ──────────────────────────────────────
+
+        # First attempt with planner queries: skip LLM, use planner output
         if attempt == 1 and planner_queries:
             queries = planner_queries
             action = "search"
+            logger.info("[chat] Attempt %d: using planner queries", attempt)
 
-        # ── Subsequent attempts: ScorerAgent or old LLM ──
-        if action is None and scorer_deps is not None:
-            # ScorerAgent evaluates context and decides search/answer
+        # ScorerAgent evaluates accumulated context
+        elif scorer_fn is not None:
             try:
-                scorer = create_scorer_agent(scorer_deps)
                 filled = SCORER_PROMPT.format(
                     query=req.message,
                     context=context or "(empty — no results yet)",
@@ -531,12 +528,15 @@ async def chat(req: ChatRequest, request: Request) -> dict:
                     active_filters=str(planner_filters) if planner_filters else "(none)",
                     attempt_number=attempt,
                 )
-                score_result = await scorer.run(req.message, system_prompt=filled)
-                score = score_result.data
+                logger.debug("[chat] Scorer prompt (attempt %d): context has %d chars",
+                             attempt, len(context))
+                score = await scorer_fn(req.message, filled)
 
                 action = score.action
                 if action == "search" and score.queries:
-                    queries = [{"query": q.query, "type": q.type} for q in score.queries]
+                    queries = [{"query": q.query} for q in score.queries]
+                    logger.info("[chat] Scorer (attempt %d): action=search, queries=%s",
+                                attempt, [q["query"] for q in queries])
                 elif action in ("answer", "final_answer"):
                     final_result = {
                         "action":     action,
@@ -545,13 +545,14 @@ async def chat(req: ChatRequest, request: Request) -> dict:
                         "artist":     score.artist,
                         "message":    score.message,
                     }
+                    logger.info("[chat] Scorer (attempt %d): action=%s", attempt, action)
             except Exception as exc:
-                print(f"[chat] ScorerAgent error on attempt {attempt}: {exc}")
-                # Fallback to old behavior
-                scorer_deps = None  # prevent retry
+                logger.error(f"[chat] ScorerAgent error on attempt {attempt}: {exc}",
+                             exc_info=True)
+                scorer_fn = None  # disable scorer for subsequent attempts, fall back to old LLM
 
+        # Old behavior: DEVELOPER_PROMPT + ask_llm
         if action is None:
-            # Old behavior: DEVELOPER_PROMPT + ask_llm
             filled = DEVELOPER_PROMPT.format(
                 query=req.message,
                 context=context or "(empty — no results yet)",
@@ -564,8 +565,15 @@ async def chat(req: ChatRequest, request: Request) -> dict:
                     parse_json=True,
                     **llm_kw,
                 )
+                action = result.get("action", "answer")
+                logger.info("[chat] LLM (attempt %d): action=%s", attempt, action)
+
+                # Extract queries if action is search
+                if action == "search" and result.get("queries"):
+                    queries = result["queries"]
+
             except Exception as exc:
-                print(f"[chat] LLM error on attempt {attempt}: {exc}")
+                logger.error(f"[chat] LLM error on attempt {attempt}: {exc}", exc_info=True)
                 final_result = {
                     "action":     "answer",
                     "confidence": "low",
@@ -573,25 +581,42 @@ async def chat(req: ChatRequest, request: Request) -> dict:
                     "artist":     None,
                     "message":    f"LLM error on attempt {attempt}: {exc}",
                 }
-                break
-            action = result.get("action", "answer")
+                break  # LLM is broken, no point continuing
 
-        # ── Execute search ──
+        # ── Step 2: Execute decision ───────────────────────────────────
+
         if action == "search" and queries:
-            forced_mode = req.mode if not req.auto_mode else None
+            # In auto_mode the initial classifier already fixed the search type —
+            # propagate effective_mode so ScorerAgent's per-query types cannot
+            # override the top-level classification.
+            forced_mode = req.mode if not req.auto_mode else effective_mode
+            # Planner queries on attempt 1 are already CLAP-optimised — skip re-rephrase
+            use_skip_rephrase = (attempt == 1 and bool(planner_queries))
             new_pq, new_ctx, new_hits = await _run_searches(
                 queries, service,
                 collection_name=req.collection_name,
                 forced_mode=forced_mode,
                 llm_kw=llm_kw,
+                skip_rephrase=use_skip_rephrase,
             )
+
+            logger.info(
+                "[chat/loop] attempt=%d  mode=%s  queries=%s  hits=%d  tracks=%s",
+                attempt,
+                forced_mode,
+                [q["query"] for q in queries],
+                len(new_hits),
+                [(h.track.artist, h.track.title) for h in new_hits],
+            )
+
             if new_pq:
                 previous_queries = (previous_queries + "\n" + new_pq).strip()
             if new_ctx:
                 context = (context + "\n\n" + new_ctx).strip()
-            all_hits = _merge_hits(all_hits, new_hits)
+            if new_hits:
+                all_hits = _merge_hits(all_hits, new_hits)
 
-            # Last attempt and still "search" — force exit
+            # Last attempt and still "search" — force exit with fallback message
             if attempt == NUM_ATTEMPTS:
                 final_result = {
                     "action":     "answer",
@@ -603,10 +628,16 @@ async def chat(req: ChatRequest, request: Request) -> dict:
                         "Попробуй уточнить: язык, примерная эпоха или фрагмент текста."
                     ),
                 }
+                break
 
         elif action in ("answer", "final_answer"):
+            # scorer path → final_result already populated (lines above)
+            # old LLM path → result dict is in scope, copy it explicitly
             if not final_result:
-                final_result = result if 'result' in locals() else {}
+                try:
+                    final_result = result  # defined in old LLM branch above  # noqa: F821
+                except NameError:
+                    final_result = {}
             break
 
     # Sort retrieved hits by score descending

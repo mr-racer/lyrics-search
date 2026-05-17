@@ -143,7 +143,6 @@ class TrackReactionResponse(BaseModel):
 
 class BaseQueryItem(BaseModel):
     query: str
-    type: Literal["text", "audio", "hybrid"] = "hybrid"
 
 class RephrasedQuery(BaseModel):
     new_queries: list[str]

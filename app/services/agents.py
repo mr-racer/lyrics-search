@@ -40,9 +40,9 @@ PLANNER_PROMPT: str = """
 You are a music search planner. Your job is to analyze the user's query and prepare a search plan.
 
 AVAILABLE FILTER KEYS:
-- Artist: performer name
-- Album: album name
-- Genre: music genre
+- artist: performer name
+- album: album name
+- genre: music genre
 - year_range: decade range (e.g. "1990-1999", "2000-2009")
 
 INPUTS:
@@ -64,20 +64,22 @@ OUTPUT FORMAT:
   "action": "request_filter" | "search",
   "query_type": "text" | "audio" | "hybrid",
   "filters": {{
-    "Artist": "..." | null,
-    "Album": "..." | null,
-    "Genre": "..." | null,
+    "artist": "..." | null,
+    "album": "..." | null,
+    "genre": "..." | null,
     "year_range": "YYYY-YYYY" | null
   }} | null,
   "filter_lookup": {{
-    "Artist": "raw user input to resolve" | null,
-    "Album": "..." | null,
-    "Genre": "..." | null,
+    "artist": "raw user input to resolve" | null,
+    "album": "..." | null,
+    "genre": "..." | null,
     "year_range": "YYYY-YYYY" | null
   }} | null,
-  "queries": [{{"query": "...", "type": "text" | "audio" | "hybrid"}}],
+  "queries": [{{"query": "..."}}],
   "search_mode": "CONSERVATIVE" | "AGGRESSIVE"
 }}
+
+NOTE: query_type is the single classification for all queries. Do NOT add a per-query "type" field — it is determined once here and used throughout the session.
 
 NOTES:
 - filter_lookup is only used when action="request_filter". It contains the raw unresolved user terms to look up in DB.
@@ -113,9 +115,11 @@ OUTPUT FORMAT:
   "song": "Title" | null,
   "artist": "Artist" | null,
   "filters": {{active filters, pass-through unchanged}} | null,
-  "queries": [{{"query": "...", "type": "text" | "audio" | "hybrid"}}] | null,
+  "queries": [{{"query": "..."}}] | null,
   "message": "Conversational reply to user"
 }}
+
+NOTE: Do NOT include a "type" field in queries — the search mode is already fixed from the initial classification and must not change during the session.
 
 CONSTRAINTS:
 1. ONLY use <context> for answers. Never use internal knowledge.
@@ -164,19 +168,26 @@ def create_planner_agent(deps: SearchDeps) -> Agent:
 # ---------------------------------------------------------------------------
 
 
-def create_scorer_agent(deps: SearchDeps) -> Agent:
-    """Create a ScorerAgent bound to the given dependencies.
+def create_scorer_agent(deps: SearchDeps):
+    """Return an async callable that runs the ScorerAgent with a formatted prompt.
 
-    The agent evaluates search context and returns a ``ScoreResult``
-    indicating whether to answer or search again.
+    PydanticAI bakes the system_prompt into the Agent at construction time and
+    Agent.run() does not accept a per-call system_prompt override. We therefore
+    create a fresh Agent for each invocation so the formatted context is injected
+    correctly.
+
+    Usage::
+        scorer = create_scorer_agent(deps)
+        score: ScoreResult = await scorer(query, filled_prompt)
     """
     model = _create_pydantic_model(deps.llm_base_url, deps.llm_model)
-    agent = Agent(
-        model,
-        output_type=ScoreResult,
-        system_prompt=SCORER_PROMPT,
-    )
-    return agent
+
+    async def run_scorer(query: str, filled_prompt: str) -> ScoreResult:
+        agent = Agent(model, output_type=ScoreResult, system_prompt=filled_prompt)
+        result = await agent.run(query)
+        return result.data
+
+    return run_scorer
 
 
 # ---------------------------------------------------------------------------

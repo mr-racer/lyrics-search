@@ -12,7 +12,8 @@ from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel
 
 from ...resources.metadata_db import MetadataDB
-from ...services.song_facts_service import _slugify, get_song_facts_key
+from ...services.artist_facts_service import _slugify as _slugify_artist
+from ...services.song_facts_service import get_song_facts_key
 
 router = APIRouter(tags=["Metadata"])
 
@@ -151,7 +152,7 @@ def get_track_facts(
     if not artist or not title:
         return TrackFacts(artist_name=artist, title=title, song_facts=[], artist_facts=[])
 
-    artist_slug = _slugify(artist)
+    artist_slug = _slugify_artist(artist)
     song_key = get_song_facts_key(artist, title)
 
     # Prefer refined; fall back to originals if no refined row for that scope.

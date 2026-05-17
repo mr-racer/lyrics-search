@@ -114,10 +114,6 @@ async def _process_one_scope(
         for fact in batch:
             facts_to_prompt += f"- {fact}\n"
         user = _FACTS_REFINE_PROMPT.format(facts=facts_to_prompt, lang=lang)
-        
-        # debug
-        print(user)
-        
         try:
             raw = await ask_llm(
                 user,

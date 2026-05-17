@@ -55,7 +55,8 @@ class SearchDeps:
         subsequent lookups for the same filter_key are O(1).
         Returns an empty list if the collection is inaccessible.
         """
-        cache_key = filter_key.lower()
+        filter_key = filter_key.lower()  # Qdrant payload fields are lowercase
+        cache_key = filter_key
         if cache_key in self._filter_cache:
             return self._filter_cache[cache_key]
 

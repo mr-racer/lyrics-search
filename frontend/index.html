@@ -2169,7 +2169,7 @@ function FactsRail({ trackId, activeCollection, isDark, lang, accent, variant = 
     setStatus('loading');
     setIdx(0);
 
-    apiFetch(`/metadata/tracks/${encodeURIComponent(trackId)}/facts?collection=${encodeURIComponent(activeCollection)}`)
+    apiFetch(`/metadata/tracks/${encodeURIComponent(trackId)}/facts?collection=${encodeURIComponent(activeCollection)}&lang=${encodeURIComponent(lang)}`)
       .then(res => {
         if (cancelled) return;
         const songs = res.song_facts || [];

@@ -8,7 +8,7 @@ from ..domain.models import TrackMetadata, TrackHit, SearchFilters, ScoreBreakdo
 from ..existing.qdrant_db import LyricsDB
 from ..resources.model_registry import ModelRegistry
 from ..resources.metadata_db import MetadataDB
-from .artist_facts_service import load_all_facts_for_collection
+from .artist_facts_service import load_all_facts_for_collection, _slugify as _slugify_artist
 from .song_facts_service import load_all_song_facts_for_collection, get_song_facts_key
 
 logger = logging.getLogger(__name__)
@@ -438,7 +438,7 @@ class SearchService:
 
             # Facts from cache
             artist = payload.get("artist", "Unknown")
-            artist_slug = "-".join(artist.lower().split())
+            artist_slug = _slugify_artist(artist)
             artist_facts = facts_cache.get(artist_slug)
 
             song_title = payload.get("title", "Unknown")
