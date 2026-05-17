@@ -26,6 +26,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 
 from app.domain.models import ChatRequest, TrackHit
+from app.services.agents import PLANNER_PROMPT
 from app.services.llm_client import ask_llm
 import traceback
 
@@ -517,9 +518,77 @@ async def chat(req: ChatRequest, request: Request) -> dict:
         "temperature": 0.3,
     }
 
+    # ── Planner path (Phase 2: PydanticAI-based) ──────────────────────────
+    # When planner_enabled=True, skip old classification and use the
+    # PydanticAI PlannerAgent to classify, extract filters, and generate
+    # initial search queries. Falls back to old behavior on any error.
+    planner_queries: list[dict] | None = None
+    planner_filters: dict | None = None
+    planner_classification: dict = {}
+
+    if req.planner_enabled:
+        try:
+            from app.services.agent_deps import SearchDeps
+            from app.services.agents import create_planner_agent
+
+            deps = SearchDeps(
+                service=service,
+                collection_name=req.collection_name,
+                llm_base_url=llm_kw.get("base_url"),
+                llm_model=llm_kw.get("model"),
+            )
+            planner = create_planner_agent(deps)
+
+            # Format resolved_filters for the prompt
+            resolved_filters_str = "{}"
+            search_filter_query_str = ""
+            previous_queries_str = "(none)"
+
+            # First call to Planner
+            filled_prompt = PLANNER_PROMPT.format(
+                query=req.message,
+                previous_queries=previous_queries_str,
+                resolved_filters=resolved_filters_str,
+                search_filter_query=search_filter_query_str,
+            )
+            plan_result = await planner.run(req.message, system_prompt=filled_prompt)
+            plan = plan_result.data
+
+            planner_classification = {
+                "type": plan.query_type,
+                "reasoning": "planner",
+            }
+
+            # Resolve filters if action == "request_filter"
+            if plan.action == "request_filter" and plan.filter_lookup:
+                resolved = await deps.resolve_filters(plan.filter_lookup)
+                if resolved:
+                    # Re-run Planner with resolved filters
+                    resolved_filters_str = str(resolved)
+                    search_filter_query_str = str(plan.filter_lookup)
+                    filled_prompt = PLANNER_PROMPT.format(
+                        query=req.message,
+                        previous_queries=previous_queries_str,
+                        resolved_filters=resolved_filters_str,
+                        search_filter_query=search_filter_query_str,
+                    )
+                    plan_result = await planner.run(req.message, system_prompt=filled_prompt)
+                    plan = plan_result.data
+
+            # Extract queries for the agentic loop
+            if plan.queries:
+                planner_queries = [{"query": q.query, "type": q.type} for q in plan.queries]
+                planner_filters = plan.filters.model_dump() if plan.filters else None
+
+        except Exception as exc:
+            print(f"[chat] Planner error (falling back to old behavior): {exc}")
+            print(traceback.format_exc())
+            planner_queries = None
+            planner_filters = None
+
     # ── Call 1: classification (skipped when prompt is empty OR auto_mode=False) ──
-    classification: dict = {}
-    if req.auto_mode and CLASSIFICATION_SYSTEM_PROMPT.strip():
+    classification: dict = planner_classification if req.planner_enabled else {}
+    if not req.planner_enabled and req.auto_mode and CLASSIFICATION_SYSTEM_PROMPT.strip():
         try:
             classification = await ask_llm(
                 req.message,
@@ -532,8 +601,13 @@ async def chat(req: ChatRequest, request: Request) -> dict:
             print(traceback.format_exc())
 
     # Determine effective search mode
-    detected_type = classification.get("type", "hybrid") if req.auto_mode else None
-    effective_mode = req.mode if not req.auto_mode else (detected_type or "hybrid")
+    if req.planner_enabled and planner_classification:
+        detected_type = planner_classification.get("type", "hybrid")
+    elif req.auto_mode:
+        detected_type = classification.get("type", "hybrid")
+    else:
+        detected_type = None
+    effective_mode = req.mode if not req.auto_mode and not req.planner_enabled else (detected_type or "hybrid")
 
     # ── Audio fast path: rephrase → 3× CLAP search → answer ─────────────────
     # When the query is classified as "audio" (or forced to "audio"), skip the
@@ -644,38 +718,49 @@ async def chat(req: ChatRequest, request: Request) -> dict:
     attempts_done            = 0
 
     for attempt in range(1, NUM_ATTEMPTS + 1):
+        # Use Planner's queries on the first attempt (skip LLM call)
+        if attempt == 1 and planner_queries:
+            queries = planner_queries
+            action = "search"
+        else:
+            action = None
+
         attempts_done = attempt
 
-        filled = DEVELOPER_PROMPT.format(
-            query=req.message,
-            context=context          or "(empty — no results yet)",
-            previous_queries=previous_queries or "(none)",
-            # attempt=attempt,
-            # max_attempts=NUM_ATTEMPTS,
-        )
-
-        try:
-            result: dict = await ask_llm(
-                req.message,
-                system_prompt=filled,
-                parse_json=True,
-                **llm_kw,
+        # Only call LLM if Planner didn't provide queries
+        if action is None:
+            filled = DEVELOPER_PROMPT.format(
+                query=req.message,
+                context=context          or "(empty — no results yet)",
+                previous_queries=previous_queries or "(none)",
+                # attempt=attempt,
+                # max_attempts=NUM_ATTEMPTS,
             )
-        except Exception as exc:
-            print(f"[chat] LLM error on attempt {attempt}: {exc}")
-            final_result = {
-                "action":     "answer",
-                "confidence": "low",
-                "song":       None,
-                "artist":     None,
-                "message":    f"LLM error on attempt {attempt}: {exc}",
-            }
-            break
 
-        action = result.get("action", "answer")
+            try:
+                result: dict = await ask_llm(
+                    req.message,
+                    system_prompt=filled,
+                    parse_json=True,
+                    **llm_kw,
+                )
+            except Exception as exc:
+                print(f"[chat] LLM error on attempt {attempt}: {exc}")
+                final_result = {
+                    "action":     "answer",
+                    "confidence": "low",
+                    "song":       None,
+                    "artist":     None,
+                    "message":    f"LLM error on attempt {attempt}: {exc}",
+                }
+                break
+
+            action = result.get("action", "answer")
 
         if action == "search":
-            queries = result.get("queries") or []
+            # If LLM generated the action, extract queries from result
+            if 'result' in locals() and isinstance(result, dict):
+                queries = result.get("queries") or []
             forced_mode = req.mode if not req.auto_mode else None
             new_pq, new_ctx, new_hits = await _run_searches(queries, service, collection_name=req.collection_name, forced_mode=forced_mode, llm_kw=llm_kw)
 

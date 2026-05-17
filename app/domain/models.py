@@ -111,6 +111,7 @@ class ChatRequest(BaseModel):
     history: List[ChatMessage] = []
     mode: Literal["text", "audio", "hybrid"] = "hybrid"
     auto_mode: bool = True  # если True — LLM классифицирует запрос, если False — используется mode напрямую
+    planner_enabled: bool = False  # если True — используется PydanticAI Planner вместо старой классификации
     # LLM connection — overrides env vars LLM_BASE_URL / LLM_MODEL if set
     llm_base_url: Optional[str] = Field(None, description="e.g. http://localhost:8000/v1")
     llm_model: Optional[str] = Field(None, description="e.g. openai/gpt-oss-20b")
@@ -158,6 +159,42 @@ class AnswerAction(BaseModel):
     song: str | None
     artist: str | None
     message: str
+
+
+# ── PydanticAI Agent Models ────────────────────────────────────────────────────
+
+class QueryType(BaseModel):
+    """Тип запроса после классификации."""
+    type: Literal["text", "audio", "hybrid"]
+    reasoning: str = Field(description="Краткое объяснение, почему этот тип")
+
+
+class SearchPlan(BaseModel):
+    """План поиска, сгенерированный PlannerAgent."""
+    action: Literal["request_filter", "search"]
+    query_type: Literal["text", "audio", "hybrid"]
+    filters: SearchFilters | None = None
+    filter_lookup: Dict[str, str] | None = None  # сырые значения для разрешения
+    queries: List[BaseQueryItem] = Field(default_factory=list)
+    search_mode: Literal["CONSERVATIVE", "AGGRESSIVE"] = "CONSERVATIVE"
+
+
+class ScoreResult(BaseModel):
+    """Результат оценки контекста от ScorerAgent."""
+    action: Literal["search", "answer", "final_answer"]
+    confidence: Literal["high", "medium", "low"]
+    song: str | None = None
+    artist: str | None = None
+    filters: SearchFilters | None = None  # pass-through
+    queries: List[BaseQueryItem] | None = None  # новые запросы, если action="search"
+    message: str
+
+
+class AudioAnswer(BaseModel):
+    """Ответ от AudioAgent."""
+    message: str
+    best_hit: dict | None = None
+    hits: List[dict] = Field(default_factory=list)
 
 
 class PlannerOutput(BaseModel):
