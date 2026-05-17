@@ -38,6 +38,8 @@ class JobState:
     collection_name: str
     lang: str
     n_total: int
+    llm_base_url: str | None = None
+    llm_model: str | None = None
     n_done: int = 0       # actually processed (LLM called OR served from cache)
     n_failed: int = 0     # LLM call / validation / persistence error
     n_skipped: int = 0    # eligible track but task had nothing to feed the LLM
@@ -59,6 +61,8 @@ def start_job(
     db_client,
     llm_client,
     n_total: int,
+    llm_base_url: str | None = None,
+    llm_model: str | None = None,
 ) -> str:
     """Start a new AI indexing job.
 
@@ -80,6 +84,7 @@ def start_job(
     job = JobState(
         job_id=job_id, task_type=task_type,
         collection_name=collection_name, lang=lang, n_total=n_total,
+        llm_base_url=llm_base_url, llm_model=llm_model,
     )
     _active[key] = job
     MetadataDB.record_ai_job(job_id, task_type, collection_name, lang, n_total)

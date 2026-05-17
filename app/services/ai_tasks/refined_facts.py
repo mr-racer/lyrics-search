@@ -78,6 +78,7 @@ def _parse_llm_response(raw: str) -> list[dict[str, Any]]:
 async def _process_one_scope(
     *, scope: str, scope_key: str, facts: list[str],
     collection_name: str, lang: str,
+    llm_base_url: str | None = None, llm_model: str | None = None,
 ) -> tuple[int, int]:
     """Process one scope (song or artist) — batched LLM calls + persist.
 
@@ -104,6 +105,8 @@ async def _process_one_scope(
                 user,
                 system_prompt=_SYSTEM_PROMPT,
                 temperature=0.3,
+                base_url=llm_base_url,
+                model=llm_model,
             )
             parsed = _parse_llm_response(raw or "")
             kept.extend(item["refined_text"] for item in parsed if item["keep"])
@@ -172,6 +175,7 @@ async def run(job, db_client, llm) -> None:
                     _, fail = await _process_one_scope(
                         scope="song", scope_key=tid, facts=song_facts,
                         collection_name=job.collection_name, lang=job.lang,
+                        llm_base_url=job.llm_base_url, llm_model=job.llm_model,
                     )
                     n_failed += fail
                     did_work = True
@@ -187,6 +191,7 @@ async def run(job, db_client, llm) -> None:
                     _, fail = await _process_one_scope(
                         scope="artist", scope_key=artist_slug, facts=art_facts,
                         collection_name=job.collection_name, lang=job.lang,
+                        llm_base_url=job.llm_base_url, llm_model=job.llm_model,
                     )
                     n_failed += fail
                     did_work = True

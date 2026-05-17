@@ -87,6 +87,8 @@ async def run(job, db_client, llm) -> None:
                     user_prompt,
                     system_prompt=_SYSTEM_PROMPT,
                     temperature=0.4,
+                    base_url=job.llm_base_url,
+                    model=job.llm_model,
                 )
             except Exception as e:
                 logger.warning("[artist_bio] LLM error for %s: %s", artist_slug, e)

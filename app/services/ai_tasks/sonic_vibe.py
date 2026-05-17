@@ -138,6 +138,8 @@ async def run(job, db_client, llm) -> None:
                     user,
                     system_prompt=system,
                     temperature=0.7,
+                    base_url=job.llm_base_url,
+                    model=job.llm_model,
                 )
             except Exception as e:
                 logger.warning("[sonic_vibe] LLM error on %s: %s", tid, e)

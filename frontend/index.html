@@ -5369,7 +5369,12 @@ function AIIndexingCard({ isDark, lang, activeCollection, aiStatus }) {
     try {
       await apiFetch(`/library/ai-index/${taskType}`, {
         method: 'POST',
-        body: JSON.stringify({ collection_name: activeCollection, lang }),
+        body: JSON.stringify({
+          collection_name: activeCollection,
+          lang,
+          llm_base_url: localStorage.getItem('llm_base_url') || undefined,
+          llm_model:    localStorage.getItem('llm_model')    || undefined,
+        }),
       });
       refresh();
     } catch (e) {
@@ -6135,8 +6140,10 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
               // other tasks. We still close the modal but log each failure so it
               // appears in DevTools.
               const tasks = ['sonic_vibe', 'refined_facts', 'artist_bio'];
+              const llmBaseUrl = localStorage.getItem('llm_base_url') || undefined;
+              const llmModel   = localStorage.getItem('llm_model')    || undefined;
               const results = await Promise.allSettled(tasks.map(t =>
-                apiFetch(`/library/ai-index/${t}`, { method:'POST', body: JSON.stringify({ collection_name: colName, lang: lang2 }) })
+                apiFetch(`/library/ai-index/${t}`, { method:'POST', body: JSON.stringify({ collection_name: colName, lang: lang2, llm_base_url: llmBaseUrl, llm_model: llmModel }) })
               ));
               results.forEach((r, i) => {
                 if (r.status === 'rejected') console.error(`AI indexing task '${tasks[i]}' failed:`, r.reason);

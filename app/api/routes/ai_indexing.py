@@ -24,6 +24,8 @@ _TASK_TYPES = {"sonic_vibe", "refined_facts", "artist_bio"}
 class StartJobRequest(BaseModel):
     collection_name: str
     lang: str  # "ru" | "en" (free-form for forward-compat)
+    llm_base_url: Optional[str] = None
+    llm_model: Optional[str] = None
 
 
 class StartJobResponse(BaseModel):
@@ -69,8 +71,10 @@ async def start_job(task_type: str, req: StartJobRequest, request: Request) -> S
             collection_name=req.collection_name,
             lang=req.lang,
             db_client=db_client,
-            llm_client=None,  # tasks resolve the llm client themselves at run time
+            llm_client=None,
             n_total=n_total,
+            llm_base_url=(req.llm_base_url or "").strip() or None,
+            llm_model=(req.llm_model or "").strip() or None,
         )
     except ValueError as e:
         # Distinguish "unknown task_type" (404 above) from concurrency conflict.
