@@ -26,7 +26,8 @@ from typing import Any
 from fastapi import APIRouter, Request
 
 from app.domain.models import ChatRequest, TrackHit
-from app.services.agents import PLANNER_PROMPT
+from app.services.agents import PLANNER_PROMPT, SCORER_PROMPT, create_scorer_agent
+from app.services.agent_deps import SearchDeps
 from app.services.llm_client import ask_llm
 import traceback
 
@@ -711,32 +712,72 @@ async def chat(req: ChatRequest, request: Request) -> dict:
             }
 
     # ── Calls 2…N: agentic search loop (text / hybrid) ──────────────────────
+    # When planner_enabled, use ScorerAgent for context evaluation.
+    # Otherwise, fall back to the old DEVELOPER_PROMPT + ask_llm pattern.
     previous_queries = ""
     context          = ""
     all_hits: list[TrackHit] = []
     final_result: dict       = {}
     attempts_done            = 0
 
+    # Build SearchDeps for ScorerAgent (only when planner_enabled)
+    scorer_deps: SearchDeps | None = None
+    if req.planner_enabled:
+        scorer_deps = SearchDeps(
+            service=service,
+            collection_name=req.collection_name,
+            llm_base_url=llm_kw.get("base_url"),
+            llm_model=llm_kw.get("model"),
+        )
+
     for attempt in range(1, NUM_ATTEMPTS + 1):
-        # Use Planner's queries on the first attempt (skip LLM call)
+        attempts_done = attempt
+        action = None
+        queries: list[dict] | None = None
+
+        # ── First attempt: use Planner's queries (skip LLM call) ──
         if attempt == 1 and planner_queries:
             queries = planner_queries
             action = "search"
-        else:
-            action = None
 
-        attempts_done = attempt
+        # ── Subsequent attempts: ScorerAgent or old LLM ──
+        if action is None and scorer_deps is not None:
+            # ScorerAgent evaluates context and decides search/answer
+            try:
+                scorer = create_scorer_agent(scorer_deps)
+                filled = SCORER_PROMPT.format(
+                    query=req.message,
+                    context=context or "(empty — no results yet)",
+                    previous_queries=previous_queries or "(none)",
+                    active_filters=str(planner_filters) if planner_filters else "(none)",
+                    attempt_number=attempt,
+                )
+                score_result = await scorer.run(req.message, system_prompt=filled)
+                score = score_result.data
 
-        # Only call LLM if Planner didn't provide queries
+                action = score.action
+                if action == "search" and score.queries:
+                    queries = [{"query": q.query, "type": q.type} for q in score.queries]
+                elif action in ("answer", "final_answer"):
+                    final_result = {
+                        "action":     action,
+                        "confidence": score.confidence,
+                        "song":       score.song,
+                        "artist":     score.artist,
+                        "message":    score.message,
+                    }
+            except Exception as exc:
+                print(f"[chat] ScorerAgent error on attempt {attempt}: {exc}")
+                # Fallback to old behavior
+                scorer_deps = None  # prevent retry
+
         if action is None:
+            # Old behavior: DEVELOPER_PROMPT + ask_llm
             filled = DEVELOPER_PROMPT.format(
                 query=req.message,
-                context=context          or "(empty — no results yet)",
+                context=context or "(empty — no results yet)",
                 previous_queries=previous_queries or "(none)",
-                # attempt=attempt,
-                # max_attempts=NUM_ATTEMPTS,
             )
-
             try:
                 result: dict = await ask_llm(
                     req.message,
@@ -754,23 +795,21 @@ async def chat(req: ChatRequest, request: Request) -> dict:
                     "message":    f"LLM error on attempt {attempt}: {exc}",
                 }
                 break
-
             action = result.get("action", "answer")
 
-        if action == "search":
-            # If LLM generated the action, extract queries from result
-            if 'result' in locals() and isinstance(result, dict):
-                queries = result.get("queries") or []
+        # ── Execute search ──
+        if action == "search" and queries:
             forced_mode = req.mode if not req.auto_mode else None
-            new_pq, new_ctx, new_hits = await _run_searches(queries, service, collection_name=req.collection_name, forced_mode=forced_mode, llm_kw=llm_kw)
-
+            new_pq, new_ctx, new_hits = await _run_searches(
+                queries, service,
+                collection_name=req.collection_name,
+                forced_mode=forced_mode,
+                llm_kw=llm_kw,
+            )
             if new_pq:
-                previous_queries = (
-                    (previous_queries + "\n" + new_pq).strip()
-                )
+                previous_queries = (previous_queries + "\n" + new_pq).strip()
             if new_ctx:
                 context = (context + "\n\n" + new_ctx).strip()
-
             all_hits = _merge_hits(all_hits, new_hits)
 
             # Last attempt and still "search" — force exit
@@ -786,8 +825,9 @@ async def chat(req: ChatRequest, request: Request) -> dict:
                     ),
                 }
 
-        elif action == "answer":
-            final_result = result
+        elif action in ("answer", "final_answer"):
+            if not final_result:
+                final_result = result if 'result' in locals() else {}
             break
 
     # Sort retrieved hits by score descending
