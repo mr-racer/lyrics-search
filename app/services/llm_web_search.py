@@ -1,22 +1,44 @@
-# docker-compose.yml
-# services:
-#   searxng:
-#     image: searxng/searxng:latest
-#     ports:
-#       - "8080:8080"
-#     volumes:
-#       - ./searxng:/etc/searxng
-#     environment:
-#       - SEARXNG_SECRET_KEY=your-secret-key
-# playwright install chromium
+"""Web search utilities + pydantic_ai research agent.
+
+Public API:
+  smart_web_search(query, fetch_content, max_results) -> str
+      Raw search results as a formatted string (no LLM).
+
+  web_research_bio(artist_name, lang, base_url, model) -> str
+      Agentic loop: search → evaluate → search again → return bio text.
+      Uses pydantic_ai Agent with the project's OpenAI-compatible client.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
 
 import httpx
-import json
-from bs4 import BeautifulSoup
-from readability import Document  # pip install readability-lsml
-from duckduckgo_search import DDGS
 from pydantic_ai import Agent
-from pydantic_ai.models.ollama import OllamaModel
+from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.providers.openai import OpenAIProvider
+
+from app.services.llm_client import _get_client
+
+logger = logging.getLogger(__name__)
+logging.getLogger("readability.readability").setLevel(logging.ERROR)
+
+try:
+    from bs4 import BeautifulSoup
+    from readability import Document
+    try:
+        from ddgs import DDGS  # новое имя пакета
+    except ImportError:
+        from duckduckgo_search import DDGS  # старое имя — fallback
+    _WEB_SEARCH_AVAILABLE = True
+except ImportError:
+    _WEB_SEARCH_AVAILABLE = False
+    logger.warning(
+        "[llm_web_search] Optional deps missing (bs4, duckduckgo-search, readability-lxml). "
+        "Install them to enable web-based bio generation: "
+        "pip install beautifulsoup4 duckduckgo-search readability-lxml"
+    )
 
 # ─────────────────────────────────────────
 # 1. ПОИСК
@@ -24,41 +46,77 @@ from pydantic_ai.models.ollama import OllamaModel
 
 def search_searxng(query: str, max_results: int = 5) -> list[dict]:
     """Поиск через локальный SearXNG."""
+    if not _WEB_SEARCH_AVAILABLE:
+        return []
     try:
         resp = httpx.get(
-            "http://localhost:8080/search",
+            "http://localhost:8088/search",
             params={
                 "q": query,
                 "format": "json",
-                "engines": "google,bing,duckduckgo",
-                "language": "ru-RU",
+                "engines": "bing,duckduckgo",
+                "language": "en-US",
             },
-            timeout=10
+            headers={
+                "Accept": "application/json, text/javascript, */*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": "http://localhost:8088/",
+                "X-Forwarded-For": "127.0.0.1",
+                "X-Real-IP": "127.0.0.1",
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+                ),
+            },
+            timeout=10,
         )
+        resp.raise_for_status()
         data = resp.json()
-        return data.get("results", [])[:max_results]
-    except Exception:
-        # fallback на DuckDuckGo
+        results = data.get("results", [])[:max_results]
+        logger.debug("[searxng] query=%r → %d results", query, len(results))
+        if not results:
+            logger.warning("[searxng] 0 results for query=%r, falling back to DDG", query)
+            return search_ddg(query, max_results)
+        return results
+    except httpx.ConnectError:
+        logger.warning("[searxng] connection refused (localhost:8080 not running), falling back to DDG")
         return search_ddg(query, max_results)
+    except httpx.TimeoutException:
+        logger.warning("[searxng] timeout for query=%r, falling back to DDG", query)
+        return search_ddg(query, max_results)
+    except httpx.HTTPStatusError as e:
+        logger.warning("[searxng] HTTP %s for query=%r, falling back to DDG", e.response.status_code, query)
+        return search_ddg(query, max_results)
+    except Exception as e:
+        logger.warning("[searxng] unexpected error for query=%r: %s, falling back to DDG", query, e)
+        return search_ddg(query, max_results)
+
 
 def search_ddg(query: str, max_results: int = 5) -> list[dict]:
     """Fallback: DuckDuckGo."""
-    with DDGS() as ddgs:
-        results = list(ddgs.text(query, max_results=max_results))
-    return [
-        {"title": r["title"], "url": r["href"], "content": r["body"]}
-        for r in results
-    ]
+    if not _WEB_SEARCH_AVAILABLE:
+        return []
+    try:
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=max_results))
+        logger.debug("[ddg] query=%r → %d results", query, len(results))
+        if not results:
+            logger.warning("[ddg] 0 results for query=%r", query)
+        return [
+            {"title": r["title"], "url": r["href"], "content": r["body"]}
+            for r in results
+        ]
+    except Exception as e:
+        logger.error("[ddg] failed for query=%r: %s", query, e)
+        return []
+
 
 # ─────────────────────────────────────────
 # 2. FETCH FULL CONTENT
 # ─────────────────────────────────────────
 
 def fetch_full_content(url: str, max_chars: int = 4000) -> str:
-    """
-    Получаем полный текст страницы.
-    readability вырезает навигацию, рекламу, футеры.
-    """
+    """Извлекает основной текст страницы через readability (как «Режим чтения»)."""
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -69,19 +127,14 @@ def fetch_full_content(url: str, max_chars: int = 4000) -> str:
         resp = httpx.get(url, headers=headers, timeout=8, follow_redirects=True)
         resp.raise_for_status()
 
-        # readability — как "режим чтения" в браузере
         doc = Document(resp.text)
         clean_html = doc.summary()
 
-        # HTML → plain text
         soup = BeautifulSoup(clean_html, "html.parser")
         text = soup.get_text(separator="\n", strip=True)
 
-        # Убираем пустые строки
-        lines = [l for l in text.splitlines() if l.strip()]
-        result = "\n".join(lines)
-
-        return result[:max_chars]
+        lines = [ln for ln in text.splitlines() if ln.strip()]
+        return "\n".join(lines)[:max_chars]
 
     except httpx.TimeoutException:
         return "Error: timeout"
@@ -90,6 +143,7 @@ def fetch_full_content(url: str, max_chars: int = 4000) -> str:
     except Exception as e:
         return f"Error: {e}"
 
+
 # ─────────────────────────────────────────
 # 3. УМНЫЙ TOOL — сам решает нужен ли fetch
 # ─────────────────────────────────────────
@@ -97,15 +151,17 @@ def fetch_full_content(url: str, max_chars: int = 4000) -> str:
 def smart_web_search(
     query: str,
     fetch_content: bool = False,
-    max_results: int = 3
+    max_results: int = 3,
 ) -> str:
     """
     fetch_content=False → быстро, только сниппеты
     fetch_content=True  → медленнее, но полный текст страниц
     """
+    logger.info("[web_search] query=%r fetch_content=%s", query, fetch_content)
     results = search_searxng(query, max_results)
 
     if not results:
+        logger.warning("[web_search] no results for query=%r", query)
         return "No results found"
 
     output = []
@@ -116,49 +172,89 @@ def smart_web_search(
 
         if fetch_content and url:
             content = fetch_full_content(url)
-            output.append(
-                f"### {title}\nURL: {url}\n\n{content}"
-            )
+            output.append(f"### {title}\nURL: {url}\n\n{content}")
         else:
-            output.append(
-                f"### {title}\nURL: {url}\nSnippet: {snippet}"
-            )
+            output.append(f"### {title}\nURL: {url}\nSnippet: {snippet}")
 
     return "\n\n---\n\n".join(output)
 
+
 # ─────────────────────────────────────────
-# 4. АГЕНТ
+# 4. АГЕНТ — ФАБРИКА
 # ─────────────────────────────────────────
 
-agent = Agent(
-    OllamaModel("qwen2.5:14b"),
-    system_prompt="""You are a research assistant with web search.
+_AGENT_SYSTEM_PROMPT_TEMPLATE = """CRITICAL RULE: The artist name must appear in your response EXACTLY as given in the user message — character for character. Do not translate, transliterate, or alter it in any way.
+
+You are a music research assistant. Your task is to write a 2-3 sentence biographical paragraph about a given artist.
 
 Strategy:
-- For simple/factual questions: use web_search with fetch_content=False
-- For deep research questions: use web_search with fetch_content=True
-- Always cite URLs in your answer
-- If first search is insufficient, search again with refined query
-"""
-)
+- Search for the artist's biography, origin, and genre.
+- Use fetch_content=True only when snippets are not enough.
+- If the first search is insufficient, search again with a refined query.
+- Always cite the source URL in your final answer.
+- Lead with origin + genre. Keep it journalistic, no clichés.
+{artist_name_rule}"""
 
-@agent.tool_plain
-def web_search(query: str, fetch_content: bool = False) -> str:
-    """
-    Search the web.
-    
-    Args:
-        query: Search query in English for better results
-        fetch_content: True = full page text, False = snippets only
-    """
-    return smart_web_search(query, fetch_content)
+
+def _create_agent(
+    base_url: str | None = None,
+    model_name: str | None = None,
+    artist_name: str | None = None,
+) -> Agent:
+    """Создаёт pydantic_ai Agent, подключённый к OpenAI-совместимому серверу."""
+    resolved_model = (model_name or os.getenv("LLM_MODEL", "openai/gpt-oss-20b")).strip()
+    openai_client = _get_client(base_url)
+    provider = OpenAIProvider(openai_client=openai_client)
+    pydantic_model = OpenAIModel(resolved_model, provider=provider)
+
+    if artist_name:
+        artist_name_rule = f'- The artist name is "{artist_name}". Write it EXACTLY as "{artist_name}" — copy it character for character.'
+    else:
+        artist_name_rule = "- Write the artist name exactly as provided in the user message."
+    system_prompt = _AGENT_SYSTEM_PROMPT_TEMPLATE.format(artist_name_rule=artist_name_rule)
+
+    agent: Agent = Agent(pydantic_model, system_prompt=system_prompt)
+
+    @agent.tool_plain
+    def web_search(query: str, fetch_content: bool = False) -> str:  # noqa: F841
+        """Search the web.
+
+        Args:
+            query: Search query (English preferred for better results).
+            fetch_content: True = full page text, False = snippets only.
+        """
+        logger.info("[agent→tool] web_search called: query=%r fetch_content=%s", query, fetch_content)
+        result = smart_web_search(query, fetch_content)
+        logger.info("[agent→tool] web_search result length: %d chars", len(result))
+        return result
+
+    return agent
+
 
 # ─────────────────────────────────────────
-# 5. ЗАПУСК
+# 5. ПУБЛИЧНАЯ ФУНКЦИЯ ДЛЯ ARTIST_BIO
 # ─────────────────────────────────────────
 
-if __name__ == "__main__":
-    result = agent.run_sync(
-        "Какие новые возможности появились в Python 3.13?"
+async def web_research_bio(
+    artist_name: str,
+    lang: str,
+    base_url: str | None = None,
+    model_name: str | None = None,
+) -> str:
+    """Агентный web-поиск: возвращает биографический абзац об артисте.
+
+    Использует pydantic_ai Agent loop (search → evaluate → search again).
+    Возвращает пустую строку при любой ошибке.
+    """
+    agent = _create_agent(base_url, model_name, artist_name=artist_name)
+    prompt = (
+        f'Write a 2-3 sentence biographical paragraph about the music artist: "{artist_name}".\n'
+        f"Write the biography in {lang}.\n"
+        f'IMPORTANT: The artist name must appear EXACTLY as "{artist_name}" — do not translate or modify it.'
     )
-    print(result.data)
+    try:
+        result = await agent.run(prompt)
+        return (result.output or "").strip()
+    except Exception as e:
+        logger.warning("[web_research_bio] agent error for %s: %s", artist_name, e)
+        return ""

@@ -947,7 +947,7 @@ class MetadataDB:
         """Upsert a refined-facts row. Empty `refined=[]` is explicit and
         signals 'AI judged nothing interesting' — not 'no AI run yet'."""
         import json as _json
-        payload = _json.dumps([{"text": t} for t in refined])
+        payload = _json.dumps([{"text": t} for t in refined], ensure_ascii=False)
         conn = cls._connect()
         conn.execute(
             "INSERT INTO refined_facts (scope, scope_key, collection_name, lang, refined_json) "

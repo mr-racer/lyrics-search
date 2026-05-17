@@ -10,26 +10,9 @@ from app.domain.models import (
     TrackReactionRequest, TrackReactionResponse,
 )
 from app.resources.model_registry import ModelRegistry
+from app.services.audio_streaming import get_streamable_path
 
 router = APIRouter(prefix="/search", tags=["Search"])
-
-
-# ── MIME types for common audio formats ──────────────────────────────────────
-
-_AUDIO_CONTENT_TYPES: dict[str, str] = {
-    ".mp3":  "audio/mpeg",
-    ".flac": "audio/flac",
-    ".m4a":  "audio/mp4",
-    ".aac":  "audio/aac",
-    ".ogg":  "audio/ogg",
-    ".wav":  "audio/wav",
-    ".opus": "audio/opus",
-}
-
-
-def _content_type(file_path: str) -> str:
-    ext = Path(file_path).suffix.lower()
-    return _AUDIO_CONTENT_TYPES.get(ext, "application/octet-stream")
 
 
 # ── Dependencies ───────────────────────────────────────────────────────────────
@@ -158,13 +141,14 @@ async def stream_track(
             detail=f"File not found on disk: {file_path}",
         )
 
-    # 2. Serve via FileResponse (handles Range internally, returns 200/206 as needed)
-    content_type = _content_type(file_path)
+    # ALAC m4a is transcoded to FLAC on the fly (lossless→lossless, bit-exact);
+    # other formats served as-is. FileResponse handles Range internally.
+    serve_path, content_type = await get_streamable_path(track_id, audio_path)
 
     return FileResponse(
-        audio_path,
+        serve_path,
         media_type=content_type,
-        filename=audio_path.name,
+        filename=serve_path.name,
     )
 
 

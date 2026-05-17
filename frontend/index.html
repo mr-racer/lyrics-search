@@ -1462,12 +1462,42 @@ function useColors(isDark) {
 const ske = (kind, isDark) => `ske-${kind}-${isDark ? 'd' : 'l'}`;
 const brushed = (isDark) => `brushed-${isDark ? 'd' : 'l'}`;
 
+// ─── timeStore — module-level external store for audio currentTime ──────────
+// Audio elements fire 'timeupdate' ~4×/sec. If we stored currentTime in React
+// state, every tick would re-render the whole App tree (statistics jumping,
+// text selection clearing, etc.). Instead we keep currentTime OUTSIDE React
+// and let only components that actually display time subscribe via the
+// useCurrentTime() hook — those components re-render independently and the
+// rest of the app sleeps.
+const timeStore = (() => {
+  let time = 0;
+  const listeners = new Set();
+  return {
+    setTime(t) {
+      if (t === time) return;
+      time = t;
+      listeners.forEach(fn => fn());
+    },
+    subscribe(fn) {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+    getSnapshot() { return time; },
+  };
+})();
+
+// useCurrentTime — subscribes to timeStore via useSyncExternalStore.
+// Components that call this hook re-render on every audio timeupdate;
+// components that don't never even see the update.
+function useCurrentTime() {
+  return React.useSyncExternalStore(timeStore.subscribe, timeStore.getSnapshot, timeStore.getSnapshot);
+}
+
 // ─── useAudioPlayer — shared audio controller (lives at App level) ──────────
 function useAudioPlayer() {
   const audioRef = useRef(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentSrc, setCurrentSrc] = useState(null);
-  const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
 
   // When src changes mid-playback, fire a playback event for the *previous*
@@ -1526,7 +1556,7 @@ function useAudioPlayer() {
   const seek = useCallback((time) => {
     if (!audioRef.current) return;
     audioRef.current.currentTime = time;
-    setCurrentTime(time);
+    timeStore.setTime(time);
   }, []);
 
   const setVolume = useCallback((vol) => {
@@ -1545,7 +1575,7 @@ function useAudioPlayer() {
     audioRef.current = el;
     if (!el) { listenersAttached.current = false; return; }
     if (listenersAttached.current) return;
-    el.addEventListener('timeupdate',     () => setCurrentTime(el.currentTime || 0));
+    el.addEventListener('timeupdate',     () => timeStore.setTime(el.currentTime || 0));
     el.addEventListener('loadedmetadata', () => setDuration(el.duration || 0));
     el.addEventListener('durationchange', () => setDuration(el.duration || 0));
     el.addEventListener('ended', () => {
@@ -1569,8 +1599,10 @@ function useAudioPlayer() {
 
   return {
     audioRef, initAudio,
-    isPlaying, currentSrc, currentTime, duration,
+    isPlaying, currentSrc, duration,
     play, pause, togglePlay, seek, setSrc, setVolume,
+    // NOTE: currentTime is intentionally NOT here. Use useCurrentTime() for
+    // display, or read audioRef.current?.currentTime in event handlers.
   };
 }
 
@@ -1668,7 +1700,7 @@ function useGlobalKeyboardShortcuts({ audio, onNavToSection, onToggleLyrics, onC
         if (e.shiftKey) {
           // TODO Plan 4: prev track in queue
         } else {
-          const t = (audio?.currentTime || 0) - 10;
+          const t = (audio?.audioRef?.current?.currentTime || 0) - 10;
           audio?.seek?.(Math.max(0, t));
         }
         return;
@@ -1678,7 +1710,7 @@ function useGlobalKeyboardShortcuts({ audio, onNavToSection, onToggleLyrics, onC
         if (e.shiftKey) {
           // TODO Plan 4: next track in queue
         } else {
-          const t = (audio?.currentTime || 0) + 10;
+          const t = (audio?.audioRef?.current?.currentTime || 0) + 10;
           audio?.seek?.(Math.min(audio?.duration || t, t));
         }
         return;
@@ -1795,9 +1827,12 @@ function LandingPlayer({ isDark, lang, tracks, currentTrack, onTrackSelect, onTr
   // Use real audio state when available, fallback to prop
   const playing = audio?.isPlaying ?? isPlayingProp ?? false;
 
+  // Subscribe to the external time store; only LandingPlayer re-renders on tick.
+  const currentTime = useCurrentTime();
+
   // Real progress from audio element
   const progress = audio?.duration
-    ? (audio?.currentTime || 0) / audio.duration
+    ? currentTime / audio.duration
     : 0;
 
   const track = currentTrack;
@@ -2010,7 +2045,7 @@ function LandingPlayer({ isDark, lang, tracks, currentTrack, onTrackSelect, onTr
               }}
               style={{ ...progressTrackStyle }} />
             <div style={{ display:'flex', justifyContent:'space-between' }}>
-              <span className="mono" style={{ fontSize:11, color:c.textSubtle }}>{fmtTime(audio?.currentTime ?? 0)}</span>
+              <span className="mono" style={{ fontSize:11, color:c.textSubtle }}>{fmtTime(currentTime)}</span>
               <span className="mono" style={{ fontSize:11, color:c.textSubtle }}>{fmtTime(audio?.duration ?? (track.duration || 0))}</span>
             </div>
           </div>
@@ -3298,7 +3333,9 @@ function MiniPlaybackPopout({ track, audio, isDark = true, onOpenPlayer, onClose
   const rawCover = safe.cover_art_path || safe.coverArt || null;
   const cover = rawCover ? (rawCover.startsWith('http') ? rawCover : `${API}${rawCover}`) : null;
   const duration = audio?.duration || 0;
-  const currentTime = audio?.currentTime || 0;
+  // Subscribe to time store so this popout updates smoothly without re-rendering
+  // the rest of the app on every tick.
+  const currentTime = useCurrentTime();
   const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0;
 
   // Skip wiring: playlist is HIT[] (from search/recommend) so unwrap to FLAT
@@ -5374,6 +5411,7 @@ function AIIndexingCard({ isDark, lang, activeCollection, aiStatus }) {
           lang,
           llm_base_url: localStorage.getItem('llm_base_url') || undefined,
           llm_model:    localStorage.getItem('llm_model')    || undefined,
+          ...(taskType === 'artist_bio' && { bio_source: 'web' }),
         }),
       });
       refresh();
@@ -5433,8 +5471,8 @@ function AIIndexingCard({ isDark, lang, activeCollection, aiStatus }) {
     }
     if (taskType === 'artist_bio') {
       return lang === 'ru'
-        ? 'Нет фактов об артистах для написания био. Сначала обогати библиотеку фактами.'
-        : 'No artist facts available — enrich the library with facts first.';
+        ? 'Веб-поиск не вернул результатов. Проверь подключение к интернету и настройки LLM.'
+        : 'Web search returned no results. Check your internet connection and LLM settings.';
     }
     return lang === 'ru'
       ? 'Нет фактов о треках/артистах для уточнения. Сначала обогати библиотеку фактами.'
@@ -6143,7 +6181,10 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
               const llmBaseUrl = localStorage.getItem('llm_base_url') || undefined;
               const llmModel   = localStorage.getItem('llm_model')    || undefined;
               const results = await Promise.allSettled(tasks.map(t =>
-                apiFetch(`/library/ai-index/${t}`, { method:'POST', body: JSON.stringify({ collection_name: colName, lang: lang2, llm_base_url: llmBaseUrl, llm_model: llmModel }) })
+                apiFetch(`/library/ai-index/${t}`, { method:'POST', body: JSON.stringify({
+                  collection_name: colName, lang: lang2, llm_base_url: llmBaseUrl, llm_model: llmModel,
+                  ...(t === 'artist_bio' && { bio_source: 'web' }),
+                }) })
               ));
               results.forEach((r, i) => {
                 if (r.status === 'rejected') console.error(`AI indexing task '${tasks[i]}' failed:`, r.reason);
@@ -6846,7 +6887,9 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
 
   // Derive playback state from shared audio hook
   const isPlaying = audio?.isPlaying ?? false;
-  const currentTime = audio?.currentTime ?? 0;
+  // Subscribe to external time store — PlayerSection's progress UI rebuilds
+  // ~4×/sec, but the rest of the app no longer re-renders on each tick.
+  const currentTime = useCurrentTime();
   const duration = audio?.duration ?? 0;
   const [volume, setVolume] = useState(0.85);
 
@@ -7143,15 +7186,19 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
   useEffect(() => {
     const handler = (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      // Read time live from the audio element to avoid stale closures.
+      // (Listing currentTime in deps would re-attach this listener ~4×/sec
+      // and was the original cause of the playback re-render storm.)
+      const now = audio?.audioRef?.current?.currentTime || 0;
       if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
-      if (e.code === 'ArrowLeft') seek(Math.max(0, currentTime - 10));
-      if (e.code === 'ArrowRight') seek(Math.min(duration, currentTime + 10));
+      if (e.code === 'ArrowLeft') seek(Math.max(0, now - 10));
+      if (e.code === 'ArrowRight') seek(Math.min(duration, now + 10));
       if (e.code === 'ArrowUp') { e.preventDefault(); setVolume(v => Math.min(1, v + 0.05)); }
       if (e.code === 'ArrowDown') { e.preventDefault(); setVolume(v => Math.max(0, v - 0.05)); }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [currentTime, duration, audio]);
+  }, [duration, audio]);
 
   const fmt = (s) => {
     if (!s || isNaN(s)) return '0:00';

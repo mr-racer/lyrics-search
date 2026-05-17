@@ -703,8 +703,28 @@ async def delete_collection(collection_name: str, request: Request):
     if db_client is None:
         raise HTTPException(status_code=503, detail="Qdrant unavailable")
 
+    # Collect track ids BEFORE dropping the collection so we can purge their
+    # transcoded audio cache after the Qdrant delete succeeds.
+    track_ids: list[str] = []
     try:
         qdrant = db_client.qdrant
+        offset = None
+        while True:
+            points, offset = qdrant.scroll(
+                collection_name=collection_name,
+                limit=512,
+                offset=offset,
+                with_payload=False,
+                with_vectors=False,
+            )
+            track_ids.extend(str(p.id) for p in points)
+            if offset is None:
+                break
+    except Exception:
+        # Collection might be missing or unreadable — non-fatal, just skip cache purge.
+        track_ids = []
+
+    try:
         qdrant.delete_collection(collection_name)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete collection: {e}")
@@ -716,6 +736,14 @@ async def delete_collection(collection_name: str, request: Request):
             cache_file.unlink()
     except Exception:
         pass
+
+    # Drop transcoded ALAC→FLAC cache for the deleted tracks.
+    if track_ids:
+        try:
+            from app.services.audio_streaming import drop_transcoded_for_tracks
+            drop_transcoded_for_tracks(track_ids)
+        except Exception:
+            pass
 
     return {"deleted": True, "collection_name": collection_name}
 

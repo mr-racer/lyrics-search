@@ -29,25 +29,43 @@ MAX_REFINED_LEN = 200
 
 # Default prompt — tune to taste. Was previously left literally empty, which
 # caused jobs to silently report "done" with zero work performed.
-_SYSTEM_PROMPT = (
-    "You filter and shorten music facts. Drop generic or uninteresting items "
-    "(birthdays, generic chart positions, common label info, well-known "
-    "trivia). Keep the unusual, specific, or unexpectedly revealing facts. "
-    "Shorten kept facts to one sharp sentence, preserving the concrete detail. "
-    "Output strictly the JSON array described in the user message — no "
-    "preamble, no explanation, no markdown fences."
-)
+_FACTS_REFINE_PROMPT = """
+You are a music editor and an expert in curating rare trivia. You will receive an array of 5 facts about a musician or a song.
 
+YOUR TASK:
+1. Evaluate each fact. Ignore the trivial ones (standard chart positions, release dates, ordinary awards, boring biographical info).
+2. Select only the most obscure, paradoxical, or unusual facts (weird studio habits, strange incidents, hidden technical or lyrical details).
+3. Condense the selected facts as much as possible without losing the core meaning. Make them punchy and concise.
+4. Return the result STRICTLY as a valid JSON.
 
-def _build_user_prompt(*, facts: list[str], lang: str) -> str:
-    facts_payload = [{"id": i + 1, "text": t} for i, t in enumerate(facts)]
-    return (
-        "Facts batch (JSON array, each item has id and text):\n"
-        + json.dumps(facts_payload, ensure_ascii=False)
-        + f"\n\nRespond in {lang} as a JSON array. Each item must include "
-          "\"id\" (int) and \"keep\" (bool). For items with keep=true include "
-          "\"refined_text\" (str, single sharp sentence)."
-    )
+JSON FORMAT:
+{{
+  "selected_facts": [
+    {{
+      "reasoning": "Brief explanation (1-2 words) of why the fact is interesting",
+      "short_fact": "Condensed, punchy, and interesting fact"
+    }}
+  ]
+}}
+
+RULES:
+- If none of the 5 facts seem interesting, return an empty array: {{"selected_facts": []}}
+- Do not add any explanations or text before or after the JSON.
+- Output the "short_fact" values in {lang}.
+
+PROCEED WITH THIS FACTS:
+{facts}
+""".strip()
+
+# def _build_user_prompt(*, facts: list[str], lang: str) -> str:
+#     facts_payload = [{"id": i + 1, "text": t} for i, t in enumerate(facts)]
+#     return (
+#         "Facts batch (JSON array, each item has id and text):\n"
+#         + json.dumps(facts_payload, ensure_ascii=False)
+#         + f"\n\nRespond in {lang} as a JSON array. Each item must include "
+#           "\"id\" (int) and \"keep\" (bool). For items with keep=true include "
+#           "\"refined_text\" (str, single sharp sentence)."
+#     )
 
 
 def _parse_llm_response(raw: str) -> list[dict[str, Any]]:
@@ -56,22 +74,22 @@ def _parse_llm_response(raw: str) -> list[dict[str, Any]]:
         arr = json.loads(raw)
     except Exception as e:
         raise ValueError(f"LLM response is not JSON: {e}")
-    if not isinstance(arr, list):
-        raise ValueError("LLM response is not a JSON array")
+    if not isinstance(arr, dict):
+        raise ValueError("LLM response is not a JSON dict")
     out: list[dict[str, Any]] = []
-    for item in arr:
-        if not isinstance(item, dict) or "id" not in item or "keep" not in item:
-            raise ValueError("each item must include id and keep")
-        refined = item.get("refined_text", "")
-        if item["keep"] and not refined:
-            raise ValueError("keep=true requires refined_text")
-        if refined and len(refined) > MAX_REFINED_LEN:
-            refined = refined[:MAX_REFINED_LEN].rstrip() + "…"
-        out.append({
-            "id": int(item["id"]),
-            "keep": bool(item["keep"]),
-            "refined_text": refined,
-        })
+    facts = arr.get('selected_facts', None)
+    if facts is None:
+        raise ValueError("corrupted facts structure (no 'selected_facts' in dict)")
+    for item in facts:
+        if not isinstance(item, dict):
+            raise ValueError("fact is not a valid dict")
+        refined = item.get("short_fact")
+        # if refined and len(refined) > MAX_REFINED_LEN:
+        #     refined = refined[:MAX_REFINED_LEN].rstrip() + "…"
+        if refined:
+            out.append({
+                "refined_text": refined,
+            })
     return out
 
 
@@ -84,32 +102,31 @@ async def _process_one_scope(
 
     Returns (n_kept, n_batch_failures).
     """
-    if len(facts) < 2:
-        return (0, 0)
-
-    if not _SYSTEM_PROMPT.strip():
-        logger.warning(
-            "[refined_facts] system prompt is empty — operator must set it. "
-            "Skipping %s %s.", scope, scope_key,
-        )
-        return (0, 1)
+    # if len(facts) < 2:
+    #     return (0, 0)
 
     kept: list[str] = []
     n_failures = 0
 
     for start in range(0, len(facts), REFINED_FACTS_BATCH_SIZE):
         batch = facts[start : start + REFINED_FACTS_BATCH_SIZE]
-        user = _build_user_prompt(facts=batch, lang=lang)
+        facts_to_prompt = str()
+        for fact in batch:
+            facts_to_prompt += f"- {fact}\n"
+        user = _FACTS_REFINE_PROMPT.format(facts=facts_to_prompt, lang=lang)
+        
+        # debug
+        print(user)
+        
         try:
             raw = await ask_llm(
                 user,
-                system_prompt=_SYSTEM_PROMPT,
                 temperature=0.3,
                 base_url=llm_base_url,
                 model=llm_model,
             )
             parsed = _parse_llm_response(raw or "")
-            kept.extend(item["refined_text"] for item in parsed if item["keep"])
+            kept.extend(item["refined_text"] for item in parsed)
         except Exception as e:
             logger.warning(
                 "[refined_facts] batch failed for %s %s: %s",
@@ -128,12 +145,6 @@ async def _process_one_scope(
 async def run(job, db_client, llm) -> None:
     """Iterate songs in the collection; for each, refine its song facts and
     (one pass per artist) its artist facts."""
-    if not _SYSTEM_PROMPT.strip():
-        # Fail fast and visibly instead of silently iterating with no work.
-        raise RuntimeError(
-            "refined_facts: _SYSTEM_PROMPT is empty — set it in "
-            "app/services/ai_tasks/refined_facts.py before running this task."
-        )
 
     qdrant = db_client.qdrant
     n_done = 0

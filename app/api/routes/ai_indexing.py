@@ -26,6 +26,7 @@ class StartJobRequest(BaseModel):
     lang: str  # "ru" | "en" (free-form for forward-compat)
     llm_base_url: Optional[str] = None
     llm_model: Optional[str] = None
+    bio_source: Optional[str] = "facts"  # "facts" | "web" — only used by artist_bio
 
 
 class StartJobResponse(BaseModel):
@@ -75,6 +76,7 @@ async def start_job(task_type: str, req: StartJobRequest, request: Request) -> S
             n_total=n_total,
             llm_base_url=(req.llm_base_url or "").strip() or None,
             llm_model=(req.llm_model or "").strip() or None,
+            bio_source=(req.bio_source or "facts").strip(),
         )
     except ValueError as e:
         # Distinguish "unknown task_type" (404 above) from concurrency conflict.

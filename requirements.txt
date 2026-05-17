@@ -15,6 +15,9 @@ joblib
 transformers
 openai
 pydantic-ai
+ddgs
+readability-lxml
+beautifulsoup4
 torchvision
 fastapi
 uvicorn[standard]

@@ -60,23 +60,23 @@ RULES:
 5. Generate 2–3 search queries in English (3–10 words each), ordered from most to least specific.
 
 OUTPUT FORMAT:
-{
+{{
   "action": "request_filter" | "search",
-  "filters": {
+  "filters": {{
     "Artist": "..." | null,
     "Album": "..." | null,
     "Genre": "..." | null,
     "year_range": "YYYY-YYYY" | null
-  } | null,
-  "filter_lookup": {
+  }} | null,
+  "filter_lookup": {{
     "Artist": "raw user input to resolve" | null,
     "Album": "..." | null,
     "Genre": "..." | null,
     "year_range": "YYYY-YYYY" | null
-  } | null,
-  "queries": [{"query": "..."}],
+  }} | null,
+  "queries": [{{"query": "..."}}],
   "search_mode": "CONSERVATIVE" | "AGGRESSIVE"
-}
+}}
 
 NOTES:
 - filter_lookup is only used when action="request_filter". It contains the raw unresolved user terms to look up in DB.
@@ -106,15 +106,15 @@ SEARCH MODES:
 - AGGRESSIVE (attempt 2+): use imagery, metaphors, synonyms, related themes
 
 OUTPUT FORMAT:
-{
+{{
   "action": "answer" | "search" | "final_answer",
   "confidence": "high" | "medium" | "low",
   "song": "Title" | null,
   "artist": "Artist" | null,
-  "filters": {active filters, pass-through unchanged} | null,
-  "queries": [{"query": "..."}] | null,
+  "filters": {{active filters, pass-through unchanged}} | null,
+  "queries": [{{"query": "..."}}] | null,
   "message": "Conversational reply to user"
-}
+}}
 
 CONSTRAINTS:
 1. ONLY use <context> for answers. Never use internal knowledge.
