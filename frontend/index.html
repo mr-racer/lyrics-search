@@ -3732,8 +3732,9 @@ function DecadeFiltersChips({ activeCollection, selectedRanges, onToggleRange, i
 }
 
 // ─── SEARCH SECTION (redesigned) ──────────────────────────────────────────────
-function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateToArtist }) {
+function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateToArtist, aiStatus }) {
   const c = useColors(isDark);
+  const aiActive = !!(aiStatus && aiStatus.aiActive);
   const recent = useRecentSearches(activeCollection);
   const { sessions, saveSession, deleteSession } = useChatHistory(activeCollection);
 
@@ -3784,6 +3785,11 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
   useEffect(() => {
     if (chatEndRef.current) chatEndRef.current.scrollTop = chatEndRef.current.scrollHeight;
   }, [messages, tab]);
+
+  // ── Snap back to search if AI becomes unavailable ──
+  useEffect(() => {
+    if (!aiActive && tab === 'chat') setTab('search');
+  }, [aiActive, tab]);
 
   // ── Chat handler ──
   const handleChat = async () => {
@@ -3980,19 +3986,21 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
               style={{ fontFamily:"'JetBrains Mono', monospace", fontSize:'11px', letterSpacing:'0.06em', fontWeight:'600' }}>
               {lang==='ru'?'🔍 Поиск':'🔍 Search'}
             </button>
-            <button
-              className={`pill-v3${tab==='chat' ? ' pill-v3-active' : ''}`}
-              onClick={() => setTab('chat')}
-              style={{ fontFamily:"'JetBrains Mono', monospace", fontSize:'11px', letterSpacing:'0.06em', fontWeight:'600' }}>
-              {lang==='ru'?'💬 Чат':'💬 Chat'}
-            </button>
+            {aiActive && (
+              <button
+                className={`pill-v3${tab==='chat' ? ' pill-v3-active' : ''}`}
+                onClick={() => setTab('chat')}
+                style={{ fontFamily:"'JetBrains Mono', monospace", fontSize:'11px', letterSpacing:'0.06em', fontWeight:'600' }}>
+                {lang==='ru'?'💬 Чат':'💬 Chat'}
+              </button>
+            )}
           </div>
         }
       />
 
       {/* ── Tab content ── */}
       <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
-        {tab === 'search' ? (
+        {(tab === 'search' || !aiActive) ? (
           /* ═══════════════════════════════════════════════════════
              SEARCH MODE — Hero bar + grid
              ═══════════════════════════════════════════════════════ */
