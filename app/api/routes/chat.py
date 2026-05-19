@@ -24,9 +24,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
-from app.domain.models import ChatRequest, SearchFilters, TrackHit
+from app.domain.models import ChatRequest, SearchFilters, TrackChatRequest, TrackChatResponse, TrackHit
 from app.services.agents import (
     PLANNER_PROMPT,
     SCORER_PROMPT,
@@ -773,3 +773,28 @@ async def chat(req: ChatRequest, request: Request) -> dict:
         "attempts":       attempts_done,
         "classification": classification,
     }
+
+
+# ─── Track Chat ───────────────────────────────────────────────────────────────
+# Single-track conversational chat with optional web-search fallback.
+# Powers the AIChatDrawer + InlineLyricExplain UIs in PlayerSection.
+# Separate from the agentic search loop above — no Planner/Scorer/Validator.
+
+
+@router.post("/track-chat", response_model=TrackChatResponse)
+async def track_chat(req: TrackChatRequest) -> TrackChatResponse:
+    """Single-track conversational chat (drawer or per-line explain)."""
+    if req.mode == "lyric_explain" and not req.selected_line:
+        raise HTTPException(
+            status_code=400,
+            detail="selected_line is required for mode='lyric_explain'",
+        )
+    try:
+        from app.services.track_chat_service import answer_track_chat
+        return await answer_track_chat(req)
+    except ValueError as exc:
+        # answer_track_chat re-raises with same message — defensive
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.error("[track_chat] error: %s", exc, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"AI error: {str(exc)[:200]}")
