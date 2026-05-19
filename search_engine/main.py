@@ -21,6 +21,48 @@ from qdrant_client import QdrantClient, models
 logger = logging.getLogger(__name__)
 
 
+def _build_payload_for_upsert(song_info: dict, slug: str | None = None) -> dict:
+    """Build the Qdrant payload for a single track.
+
+    When ``slug`` is provided and a matching row exists in MetadataDB,
+    the payload is enriched with ``sonic_tags`` (list[str]) so that
+    SearchFilters can later match on them.
+    """
+    from app.resources.metadata_db import MetadataDB
+    sonic_tags: list[str] = []
+    if slug:
+        try:
+            desc = MetadataDB.get_sonic_descriptor(slug)
+            if desc:
+                tags_obj = desc.get("tags") or []
+                # tags_obj is a list of {"tag": str, "score": float} or list[str].
+                sonic_tags = [
+                    (t["tag"] if isinstance(t, dict) else t)
+                    for t in tags_obj
+                ]
+        except Exception:
+            # Sonic-Descriptor data is optional — don't block indexing.
+            pass
+    return {
+        "lyrics":         song_info["lyrics"],
+        "title":          song_info["title"],
+        "artist":         song_info["artist"],
+        "album":          song_info["album"],
+        "year":           song_info.get("year"),
+        "year_range":     song_info.get("year_range"),
+        "genre":          song_info.get("genre"),
+        "duration":       song_info.get("duration"),
+        "file_path":      song_info.get("file_path"),
+        "cover_art_path": song_info.get("cover_art_path"),
+        "producer":       song_info.get("producer"),
+        "label":          song_info.get("label"),
+        "samples":        song_info.get("samples"),
+        "sampled_by":     song_info.get("sampled_by"),
+        "bitrate_kbps":   song_info.get("bitrate_kbps"),
+        "sonic_tags":     sonic_tags,
+    }
+
+
 class LyricsDB:
     """Manage a Qdrant collection with hybrid dense and sparse (BM25) lyric embeddings.
 
@@ -241,26 +283,26 @@ class LyricsDB:
                         vector["clap"] = clap_vec
                         matched += 1
 
+                # Derive slug matching metadata_db.ensure_song convention:
+                # _slugify(artist) + "-" + _slugify(title)  where
+                # _slugify(t) = "-".join(t.lower().split())
+                slug = None
+                try:
+                    _artist = (song_info.get("artist") or "").strip()
+                    _title  = (song_info.get("title")  or "").strip()
+                    if _artist and _title:
+                        slug = (
+                            "-".join(_artist.lower().split())
+                            + "-"
+                            + "-".join(_title.lower().split())
+                        )
+                except Exception:
+                    pass
+
                 points.append(models.PointStruct(
                     id=uuid.uuid4().hex,
                     vector=vector,
-                    payload={
-                        "lyrics":        song_info["lyrics"],
-                        "title":         song_info["title"],
-                        "artist":        song_info["artist"],
-                        "album":         song_info["album"],
-                        "year":          song_info.get("year"),
-                        "year_range":    song_info.get("year_range"),
-                        "genre":         song_info.get("genre"),
-                        "duration":      song_info.get("duration"),
-                        "file_path":     song_info.get("file_path"),
-                        "cover_art_path": song_info.get("cover_art_path"),
-                        "producer":      song_info.get("producer"),
-                        "label":         song_info.get("label"),
-                        "samples":       song_info.get("samples"),
-                        "sampled_by":    song_info.get("sampled_by"),
-                        "bitrate_kbps":  song_info.get("bitrate_kbps"),
-                    },
+                    payload=_build_payload_for_upsert(song_info, slug=slug),
                 ))
 
             self.qdrant_client.upsert(collection_name=self.collection_name, points=points)
