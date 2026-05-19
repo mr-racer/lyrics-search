@@ -75,6 +75,52 @@ def test_resolve_song_facts_returns_raw_notes_when_present(db):
     assert "Raw fact" in out
 
 
+def test_resolve_song_facts_never_pulls_refined_facts(db):
+    """REGRESSION GUARD: even if refined_facts has translated content for this
+    track (in EITHER language), resolve_song_facts must return ONLY the raw
+    song_facts.fact rows — never refined_facts.refined_json content.
+
+    Refined facts live in a separate table (refined_facts) by design.
+    The chat agent must always see the original raw facts, regardless of
+    which language the user picked or whether they ran AI-Indexing refining.
+    """
+    import json
+    from app.services.track_chat_service import resolve_song_facts
+    from app.resources.metadata_db import MetadataDB
+    from app.services.song_facts_service import get_song_facts_key
+
+    song_slug = get_song_facts_key("Beach House", "Levitation")
+    artist_slug = "beach-house"
+    MetadataDB.upsert_artist(artist_slug, "Beach House", "test_col")
+    MetadataDB.upsert_song(song_slug, "Levitation", artist_slug, "test_col")
+
+    conn = MetadataDB._connect()
+    # Raw fact (what we WANT in chat context)
+    conn.execute(
+        "INSERT INTO song_facts (song_slug, lang, fact, source) VALUES (?, 'en', ?, ?)",
+        (song_slug, "RAW_MARKER: original English fact.", "songfacts.com"),
+    )
+    # Refined facts in BOTH languages — these must NEVER appear in chat context
+    conn.execute(
+        "INSERT INTO refined_facts (scope, scope_key, collection_name, lang, refined_json) "
+        "VALUES ('song', ?, 'test_col', 'en', ?)",
+        (song_slug, json.dumps([{"text": "REFINED_EN_MARKER: refined English."}])),
+    )
+    conn.execute(
+        "INSERT INTO refined_facts (scope, scope_key, collection_name, lang, refined_json) "
+        "VALUES ('song', ?, 'test_col', 'ru', ?)",
+        (song_slug, json.dumps([{"text": "REFINED_RU_MARKER: переведённый факт."}])),
+    )
+    conn.commit()
+
+    out = resolve_song_facts(title="Levitation", artist="Beach House")
+    # Raw fact must be present
+    assert "RAW_MARKER" in out
+    # Refined markers (in ANY language) must NOT leak
+    assert "REFINED_EN_MARKER" not in out
+    assert "REFINED_RU_MARKER" not in out
+
+
 def test_build_track_context_block_includes_meta_and_lyrics(db):
     from app.services.track_chat_service import build_track_context_block
     ctx = TrackChatContext(
