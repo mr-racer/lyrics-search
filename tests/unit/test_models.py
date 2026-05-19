@@ -115,9 +115,10 @@ class TestSearchFilters:
         assert f.artist is None
 
     def test_partial(self):
-        f = SearchFilters(artist="A", year_from=2000)
+        # year_from dropped in B2.2; replaced by year_ranges list
+        f = SearchFilters(artist="A", year_ranges=["2000-2009"])
         assert f.artist == "A"
-        assert f.year_from == 2000
+        assert f.year_ranges == ["2000-2009"]
 
 
 class TestIndexRequest:

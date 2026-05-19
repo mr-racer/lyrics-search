@@ -97,7 +97,7 @@ class TestSearchAPI:
                 json={
                     "query": "pop",
                     "mode": "text",
-                    "filters": {"genre": "Pop", "year_from": 2000},
+                    "filters": {"genre": "Pop", "year_ranges": ["2000-2009"]},
                 },
             )
             assert resp.status_code == 200

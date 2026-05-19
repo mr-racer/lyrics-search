@@ -17,7 +17,7 @@ class TestExtractFilterKwargs:
             "artist": None,
             "album": None,
             "genre": None,
-            "year_range": None,
+            "year_ranges": None,
             "sonic_tags": None,
         }
 
@@ -29,7 +29,7 @@ class TestExtractFilterKwargs:
             "artist": "A",
             "album": "B",
             "genre": "C",
-            "year_range": None,
+            "year_ranges": None,
             "sonic_tags": None,
         }
 
@@ -72,9 +72,24 @@ def test_search_filters_sonic_tags_default_empty_not_none():
     assert f.sonic_tags == []
 
 
-def test_search_filters_legacy_fields_unchanged():
-    """B1 only adds sonic_tags — does not remove year_from/duration_* (B2's job)."""
-    f = SearchFilters(artist="A", year_from=1990, duration_min_sec=120.0)
-    assert f.artist == "A"
-    assert f.year_from == 1990
-    assert f.duration_min_sec == 120.0
+def test_search_filters_accepts_year_ranges_list():
+    from app.domain.models import SearchFilters
+    f = SearchFilters(year_ranges=["1990-1999", "2000-2009"])
+    assert f.year_ranges == ["1990-1999", "2000-2009"]
+
+
+def test_search_filters_year_ranges_default_empty_not_none():
+    from app.domain.models import SearchFilters
+    f = SearchFilters()
+    assert f.year_ranges == []
+
+
+def test_search_filters_dead_fields_removed():
+    """Plan B2.2 drops year_from/year_to/duration_*. They should not exist on the model."""
+    from app.domain.models import SearchFilters
+    fields = SearchFilters.model_fields
+    assert "year_from" not in fields
+    assert "year_to" not in fields
+    assert "duration_min_sec" not in fields
+    assert "duration_max_sec" not in fields
+    assert "year_range" not in fields  # singular form replaced by year_ranges

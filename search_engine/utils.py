@@ -243,7 +243,7 @@ def build_filter(
     title: str | None = None,
     genre: str | list[str] | None = None,
     year: int | None = None,
-    year_range: str | None = None,
+    year_ranges: list[str] | None = None,
     sonic_tags: list[str] | None = None,
 ) -> models.Filter | None:
 
@@ -267,8 +267,10 @@ def build_filter(
     if year:
         conditions.append(models.FieldCondition(key="year", match=models.MatchValue(value=year)))
 
-    if year_range:
-        conditions.append(models.FieldCondition(key="year_range", match=models.MatchValue(value=year_range)))
+    if year_ranges:
+        conditions.append(models.FieldCondition(
+            key="year_range", match=models.MatchAny(any=list(year_ranges)),
+        ))
 
     if sonic_tags:
         for tag in sonic_tags:

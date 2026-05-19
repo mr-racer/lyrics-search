@@ -1,7 +1,7 @@
 """Domain models for Music Explorer."""
 
 from typing import Literal, List, Optional, Annotated, Dict
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class Fact(BaseModel):
@@ -54,19 +54,19 @@ class TrackHit(BaseModel):
 
 class SearchFilters(BaseModel):
     """Фильтры для поиска."""
+    # extra="ignore" — planner LLM may still emit legacy year_range (singular);
+    # silently drop unknown fields instead of raising ValidationError.
+    model_config = ConfigDict(extra="ignore")
+
     artist: str | None = None
     album: str | None = None
     genre: str | None = None
-    year_range: str | None = None
+
+    # Decade / year-range chips. OR semantics across selected ranges.
+    year_ranges: list[str] = []
 
     # Phase 1c — sonic descriptors. AND semantics across tags (track must carry every selected tag).
     sonic_tags: list[str] = []
-
-    # TODO - проверить что пункты ниже нигде не применяются и удалить их
-    year_from: int | None = None
-    year_to: int | None = None
-    duration_min_sec: float | None = None
-    duration_max_sec: float | None = None
 
 
 class SearchRequest(BaseModel):

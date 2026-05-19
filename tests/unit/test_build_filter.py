@@ -41,9 +41,11 @@ class TestBuildFilter:
         assert f.must[0].key == "year"
 
     def test_year_range(self):
-        f = build_filter(year_range="2020-2029")
+        f = build_filter(year_ranges=["2020-2029"])
         assert len(f.must) == 1
         assert f.must[0].key == "year_range"
+        assert isinstance(f.must[0].match, models.MatchAny)
+        assert list(f.must[0].match.any) == ["2020-2029"]
 
     def test_multiple_filters(self):
         f = build_filter(artist="The Weeknd", album="After Hours", genre="Pop")

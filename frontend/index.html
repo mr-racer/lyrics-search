@@ -2851,7 +2851,7 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, activ
   // Fetch tracks for landing player queue
   useEffect(() => {
     if (!activeCollection) { setLpTracks([]); setLpCurrent(null); return; }
-    apiFetch(`/browse?collection_name=${encodeURIComponent(activeCollection)}&limit=8`)
+    apiFetch(`/library/browse?collection_name=${encodeURIComponent(activeCollection)}&limit=8`)
       .then(r => {
         const tracks = Array.isArray(r) ? r : (r.tracks || []);
         if (tracks.length > 0) {
@@ -3539,29 +3539,48 @@ function Segmented({ value, onChange, options, isDark, size='md', style } = {}) 
 }
 
 // ─── SCORE BREAKDOWN TOOLTIP ──────────────────────────────────────────────────
-function ScoreBreakdownTooltip({ breakdown, isDark }) {
+function ScoreBreakdownTooltip({ hit, breakdown, isDark, onPlay, onToggleLike, isLiked, likeLoading }) {
   const c = useColors(isDark);
-  if (!breakdown) return null;
-  const rows = [
+  if (!breakdown && !hit) return null;
+  const rows = breakdown ? [
     { label: 'Text',  v: breakdown.text_dense_score },
     { label: 'BM25',  v: breakdown.text_bm25_score },
     { label: 'Audio', v: breakdown.audio_score },
-  ].filter(r => r.v != null);
-  if (rows.length === 0) return null;
+  ].filter(r => r.v != null) : [];
   return (
-    <div className="panel-v3 score-breakdown-tooltip" style={{
+    <div className="panel-v3" style={{
       position:'absolute', top:'100%', left:'50%', transform:'translateX(-50%)',
-      marginTop:'8px', padding:'10px 14px', minWidth:'180px',
+      marginTop:'8px', padding:'10px 12px', minWidth:'200px',
       zIndex:50, fontSize:'12px', color:c.text,
-      pointerEvents:'none',
       boxShadow:'0 8px 24px rgba(0,0,0,0.32)',
     }}>
-      {rows.map(r => (
-        <div key={r.label} style={{ display:'flex', justifyContent:'space-between', gap:'12px', padding:'2px 0' }}>
-          <span style={{ color:c.textSubtle }}>{r.label}</span>
-          <span style={{ fontFamily:'ui-monospace, monospace' }}>{(r.v * 100).toFixed(1)}%</span>
+      {rows.length > 0 && (
+        <div style={{ marginBottom:'8px' }}>
+          {rows.map(r => (
+            <div key={r.label} style={{ display:'flex', justifyContent:'space-between', gap:'12px', padding:'2px 0' }}>
+              <span style={{ color:c.textSubtle }}>{r.label}</span>
+              <span style={{ fontFamily:'ui-monospace, monospace' }}>{(r.v * 100).toFixed(1)}%</span>
+            </div>
+          ))}
         </div>
-      ))}
+      )}
+      <div style={{
+        display:'flex', gap:'6px', justifyContent:'center',
+        borderTop: rows.length ? `1px solid ${c.border}` : 'none',
+        paddingTop: rows.length ? '8px' : 0,
+      }}>
+        <button
+          className="pill-v3"
+          onClick={e => { e.stopPropagation(); onPlay && onPlay(hit); }}
+          style={{ padding:'4px 10px', fontSize:'11px', cursor:'pointer' }}
+        >▶ Play</button>
+        <button
+          className={`pill-v3${isLiked ? ' pill-v3-active' : ''}`}
+          onClick={e => { e.stopPropagation(); onToggleLike && onToggleLike(hit); }}
+          disabled={likeLoading}
+          style={{ padding:'4px 10px', fontSize:'11px', cursor: likeLoading ? 'wait' : 'pointer' }}
+        >{isLiked ? '♥ Liked' : '♡ Like'}</button>
+      </div>
     </div>
   );
 }
@@ -3692,9 +3711,49 @@ function SonicFiltersChips({ activeCollection, selectedTags, onToggleTag, isDark
   );
 }
 
-// ─── SEARCH SECTION (redesigned) ──────────────────────────────────────────────
-function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateToArtist }) {
+// ─── DECADE FILTERS CHIPS ─────────────────────────────────────────────────────
+function DecadeFiltersChips({ activeCollection, selectedRanges, onToggleRange, isDark }) {
   const c = useColors(isDark);
+  const [facets, setFacets] = useState({ year_ranges: [] });
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    setError(false);
+    const col = activeCollection ? `&collection_name=${encodeURIComponent(activeCollection)}` : '';
+    apiFetch(`/library/year-facets?top_k=30${col}`)
+      .then(data => { if (alive) setFacets(data || { year_ranges: [] }); })
+      .catch(() => { if (alive) setError(true); });
+    return () => { alive = false; };
+  }, [activeCollection]);
+
+  if (error) return null;  // silent — decade filter is optional
+  if (!facets.year_ranges || !facets.year_ranges.length) return null;
+
+  return (
+    <div style={{ display:'flex', alignItems:'center', gap:'8px', flexWrap:'wrap', padding:'8px 0' }}>
+      <span style={{ fontSize:'12px', color:c.textSubtle, minWidth:'48px' }}>Years:</span>
+      {facets.year_ranges.map(({ value, count }) => {
+        const active = selectedRanges.includes(value);
+        return (
+          <button
+            key={value}
+            onClick={() => onToggleRange(value)}
+            className={`pill-v3${active ? ' pill-v3-active' : ''}`}
+            style={{ padding:'4px 10px', fontSize:'12px', cursor:'pointer' }}
+          >
+            {value} <span style={{ opacity:0.5, fontSize:'10px', marginLeft:'4px' }}>{count}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── SEARCH SECTION (redesigned) ──────────────────────────────────────────────
+function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateToArtist, aiStatus }) {
+  const c = useColors(isDark);
+  const aiActive = !!(aiStatus && aiStatus.aiActive);
   const recent = useRecentSearches(activeCollection);
   const { sessions, saveSession, deleteSession } = useChatHistory(activeCollection);
 
@@ -3725,15 +3784,16 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
   const [searchError, setSearchError] = useState('');
   const [searchExecuted, setSearchExecuted] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
-  const [filters, setFilters] = useState({ artist:'', album:'', genre:'', sonic_tags:[] });
+  const [filters, setFilters] = useState({ artist:'', album:'', genre:'', sonic_tags:[], year_ranges:[] });
   const [filterSuggestions, setFilterSuggestions] = useState({ artist:[], album:[], genre:[] });
   const [activeFilterField, setActiveFilterField] = useState(null);
   const filterTimer = useRef(null);
 
   // Shared results
   const [results, setResults] = useState([]);
-  const [detailHit, setDetailHit] = useState(null);
   const [hoveredHit, setHoveredHit] = useState(null);
+  const [likedMap, setLikedMap] = useState({});      // { [trackId]: true | false }
+  const [likeLoading, setLikeLoading] = useState({}); // { [trackId]: true } while in-flight
 
   const getLLMSettings = () => ({
     llm_base_url: localStorage.getItem('llm_base_url') || undefined,
@@ -3742,9 +3802,50 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
     planner_enabled: true,
   });
 
+  // ── Reaction helpers ──
+  const ensureLikeStatus = async (trackId) => {
+    if (!trackId || trackId in likedMap || !activeCollection) return;
+    try {
+      const r = await apiFetch(`/search/tracks/${encodeURIComponent(trackId)}/reaction?collection_name=${encodeURIComponent(activeCollection)}`);
+      setLikedMap(prev => ({ ...prev, [trackId]: r?.reaction === 'like' }));
+    } catch {
+      setLikedMap(prev => ({ ...prev, [trackId]: false }));
+    }
+  };
+
+  const handleToggleLike = async (hit) => {
+    const trackId = hit?.track?.track_id;
+    if (!trackId || !activeCollection) return;
+    const isLiked = !!likedMap[trackId];
+    setLikeLoading(prev => ({ ...prev, [trackId]: true }));
+    try {
+      await apiFetch(`/search/tracks/${encodeURIComponent(trackId)}/reaction`, {
+        method: 'POST',
+        body: JSON.stringify({
+          collection_name: activeCollection,
+          reaction: isLiked ? null : 'like',
+        }),
+      });
+      setLikedMap(prev => ({ ...prev, [trackId]: !isLiked }));
+    } catch (e) {
+      // ignore — keep UI tied to actual server state
+    } finally {
+      setLikeLoading(prev => {
+        const next = { ...prev };
+        delete next[trackId];
+        return next;
+      });
+    }
+  };
+
   useEffect(() => {
     if (chatEndRef.current) chatEndRef.current.scrollTop = chatEndRef.current.scrollHeight;
   }, [messages, tab]);
+
+  // ── Snap back to search if AI becomes unavailable ──
+  useEffect(() => {
+    if (!aiActive && tab === 'chat') setTab('search');
+  }, [aiActive, tab]);
 
   // ── Chat handler ──
   const handleChat = async () => {
@@ -3761,7 +3862,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
         message:userText, history, mode: effectiveMode, auto_mode: autoMode, ...getLLMSettings()
       }) });
       const hits = res.hits || [];
-      setResults(hits); setDetailHit(null);
+      setResults(hits);
       const finalMsgs = [...newMsgs, {
         role:'assistant', text:res.message||'…', hits, best_hit:res.best_hit,
         confidence:res.confidence, song:res.song, artist:res.artist,
@@ -3780,11 +3881,12 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
   // ── Search handler ──
   const handleSearch = async () => {
     if (!searchQuery.trim() || searchLoading) return;
-    setSearchLoading(true); setSearchError(''); setDetailHit(null);
+    setSearchLoading(true); setSearchError('');
     try {
       const f = {};
       ['artist','album','genre'].forEach(k => { if (filters[k]) f[k] = filters[k]; });
       if (filters.sonic_tags.length) f.sonic_tags = filters.sonic_tags;
+      if (filters.year_ranges.length) f.year_ranges = filters.year_ranges;
       const res = await apiFetch('/search/', { method:'POST', body: JSON.stringify({
         query:searchQuery, mode:searchMode, filters:Object.keys(f).length?f:null,
         limit:20, collection_name:activeCollection||undefined
@@ -3804,7 +3906,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
     }
     try {
       const col = activeCollection ? `&collection_name=${encodeURIComponent(activeCollection)}` : '';
-      const data = await apiFetch(`/browse?q=${encodeURIComponent(query)}&limit=3${col}`);
+      const data = await apiFetch(`/library/browse?q=${encodeURIComponent(query)}&limit=3${col}`);
       // /browse returns: { track_id, title, artist, album, cover_art_path, score }
       const seen = new Set();
       const unique = [];
@@ -3843,6 +3945,15 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
     }));
   };
 
+  const toggleYearRange = (value) => {
+    setFilters(p => ({
+      ...p,
+      year_ranges: p.year_ranges.includes(value)
+        ? p.year_ranges.filter(x => x !== value)
+        : [...p.year_ranges, value],
+    }));
+  };
+
   // ── Render chat message ──
   const renderMessage = (msg, i) => {
     const isUser = msg.role==='user';
@@ -3874,7 +3985,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
               .map((hit, hi) => (
                 <div key={hi} className="chat-result-card"
                   style={{ background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)' }}
-                  onClick={() => { setResults(msg.hits); setDetailHit(hit); }}
+                  onClick={() => { setResults(msg.hits); onPlayTrack && onPlayTrack(hit, msg.hits); }}
                   onMouseEnter={e => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)'; }}
                   onMouseLeave={e => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)'; }}>
                   <AlbumCover title={hit.track?.title||''} artist={hit.track?.artist||''} size={42} isDark={isDark} coverPath={hit.track?.cover_art_path} />
@@ -3913,7 +4024,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
     );
   };
 
-  const isEmpty = !detailHit && results.length === 0;
+  const isEmpty = results.length === 0;
 
   return (
     <div className="panel-v3" style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', borderRadius:0, border:'none', boxShadow:'none' }}>
@@ -3931,19 +4042,21 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
               style={{ fontFamily:"'JetBrains Mono', monospace", fontSize:'11px', letterSpacing:'0.06em', fontWeight:'600' }}>
               {lang==='ru'?'🔍 Поиск':'🔍 Search'}
             </button>
-            <button
-              className={`pill-v3${tab==='chat' ? ' pill-v3-active' : ''}`}
-              onClick={() => setTab('chat')}
-              style={{ fontFamily:"'JetBrains Mono', monospace", fontSize:'11px', letterSpacing:'0.06em', fontWeight:'600' }}>
-              {lang==='ru'?'💬 Чат':'💬 Chat'}
-            </button>
+            {aiActive && (
+              <button
+                className={`pill-v3${tab==='chat' ? ' pill-v3-active' : ''}`}
+                onClick={() => setTab('chat')}
+                style={{ fontFamily:"'JetBrains Mono', monospace", fontSize:'11px', letterSpacing:'0.06em', fontWeight:'600' }}>
+                {lang==='ru'?'💬 Чат':'💬 Chat'}
+              </button>
+            )}
           </div>
         }
       />
 
       {/* ── Tab content ── */}
       <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
-        {tab === 'search' ? (
+        {(tab === 'search' || !aiActive) ? (
           /* ═══════════════════════════════════════════════════════
              SEARCH MODE — Hero bar + grid
              ═══════════════════════════════════════════════════════ */
@@ -4045,6 +4158,12 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
                 onToggleTag={toggleSonicTag}
                 isDark={isDark}
               />
+              <DecadeFiltersChips
+                activeCollection={activeCollection}
+                selectedRanges={filters.year_ranges}
+                onToggleRange={toggleYearRange}
+                isDark={isDark}
+              />
             </div>
 
             {/* Results area */}
@@ -4086,8 +4205,8 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
                   <div className="search-grid">
                     {results.map((hit, i) => (
                       <div key={i} className="grid-card panel-v3"
-                        onClick={() => setDetailHit(hit)}
-                        onMouseEnter={() => setHoveredHit(hit.track?.track_id)}
+                        onClick={() => onPlayTrack && onPlayTrack(hit, results)}
+                        onMouseEnter={() => { setHoveredHit(hit.track?.track_id); ensureLikeStatus(hit.track?.track_id); }}
                         onMouseLeave={() => setHoveredHit(null)}
                         style={{
                           borderRadius:'16px', overflow:'hidden', position:'relative',
@@ -4137,7 +4256,15 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
                           )}
                         </div>
                         {hoveredHit === hit.track?.track_id && (
-                          <ScoreBreakdownTooltip breakdown={hit.score_breakdown} isDark={isDark} />
+                          <ScoreBreakdownTooltip
+                            hit={hit}
+                            breakdown={hit.score_breakdown}
+                            isDark={isDark}
+                            onPlay={(h) => onPlayTrack && onPlayTrack(h, results)}
+                            onToggleLike={handleToggleLike}
+                            isLiked={!!likedMap[hit.track?.track_id]}
+                            likeLoading={!!likeLoading[hit.track?.track_id]}
+                          />
                         )}
                       </div>
                     ))}
@@ -4311,109 +4438,6 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
         </div>
       )}
 
-      {/* ── Song Detail Modal ── */}
-      {detailHit && (
-        <div className="modal-overlay" onClick={() => setDetailHit(null)}>
-          <div className={`modal-content ${ske('panel', isDark)}`} onClick={e => e.stopPropagation()}
-            style={{ padding:'0', overflowY:'auto' }}>
-            {/* Close button */}
-            <div style={{ position:'sticky', top:'0', zIndex:10, display:'flex', justifyContent:'space-between', alignItems:'center',
-              padding:'16px 24px', borderBottom:`1px solid ${c.border}`,
-              background: isDark ? 'rgba(13,13,16,0.85)' : 'rgba(242,241,246,0.85)',
-              backdropFilter:'blur(12px)' }}>
-              <button onClick={() => setDetailHit(null)} className="mono"
-                style={{ fontSize:'14px', color:c.textMuted, letterSpacing:'0.12em' }}>
-                ← {lang==='ru'?'НАЗАД К РЕЗУЛЬТАТАМ':'BACK TO RESULTS'}
-              </button>
-              {detailHit.track?.file_path && (
-                <button onClick={() => onPlayTrack && onPlayTrack(detailHit, results)}
-                  className="ske-accent"
-                  style={{ padding:'8px 16px', borderRadius:'10px', fontSize:'14px', fontWeight:'600',
-                    display:'flex', alignItems:'center', gap:'6px' }}>
-                  ▶ {lang==='ru'?'СЛУШАТЬ':'PLAY'}
-                </button>
-              )}
-            </div>
-
-            <div style={{ padding:'32px 36px 48px', maxWidth:'800px', margin:'0 auto' }}>
-              {/* Album art + title */}
-              <div style={{ display:'flex', justifyContent:'center', marginBottom:'28px', animation:'scaleIn 0.4s ease' }}>
-                <AlbumCover title={detailHit.track?.title||''} artist={detailHit.track?.artist||''}
-                  size={240} isDark={isDark} coverPath={detailHit.track?.cover_art_path} radius={20} />
-              </div>
-              <div style={{ textAlign:'center', marginBottom:'18px' }}>
-                <h3 className="serif" style={{ fontSize:'42px', lineHeight:'1', letterSpacing:'-0.02em', color:c.text, fontWeight:'400' }}>
-                  {detailHit.track?.title}
-                </h3>
-                <div className="serif" style={{ fontSize:'20px', color:c.textMuted, marginTop:'10px', fontStyle:'italic' }}>
-                  {detailHit.track?.artist}
-                </div>
-                <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, marginTop:'10px', letterSpacing:'0.18em' }}>
-                  {[detailHit.track?.album, detailHit.track?.year].filter(Boolean).join(' · ').toUpperCase()}
-                </div>
-              </div>
-              <div style={{ display:'flex', gap:'8px', flexWrap:'wrap', justifyContent:'center', marginBottom:'28px' }}>
-                {[detailHit.track?.genre, `${Math.round((detailHit.score||0)*100)}% match`, detailHit.matched_on].filter(Boolean).map((tag,i)=>(
-                  <span key={i} className="mono" style={{
-                    padding:'5px 14px', borderRadius:'20px', fontSize:'13px', letterSpacing:'0.15em',
-                    background:c.accentBg, color:c.accent, border:`1px solid ${c.accent.replace(')', ' / 0.25)')}`,
-                  }}>{String(tag).toUpperCase()}</span>
-                ))}
-              </div>
-
-              {/* Lyrics */}
-              {detailHit.track?.lyrics && (
-                <div className={ske('panel', isDark)} style={{ borderRadius:'16px', marginBottom:'16px' }}>
-                  <div className="mono" style={{ padding:'14px 20px', borderBottom:`1px solid ${c.border}`,
-                    fontSize:'13px', color:c.textSubtle, letterSpacing:'0.22em' }}>
-                    {lang==='ru'?'ТЕКСТ ПЕСНИ':'LYRICS'}
-                  </div>
-                  <div style={{ padding:'20px 22px', fontSize:'14px', color:c.textMuted, lineHeight:'1.85',
-                    whiteSpace:'pre-wrap', wordBreak:'break-word' }}>
-                    {detailHit.track.lyrics}
-                  </div>
-                </div>
-              )}
-
-              {/* Artist facts */}
-              {detailHit.artist_facts && (
-                <div className={ske('panel', isDark)} style={{ borderRadius:'16px', marginBottom:'16px' }}>
-                  <div className="mono" style={{ padding:'14px 20px', borderBottom:`1px solid ${c.border}`,
-                    fontSize:'13px', color:c.textSubtle, letterSpacing:'0.22em' }}>
-                    {lang==='ru'?'ФАКТЫ ОБ АРТИСТЕ':'ABOUT THE ARTIST'}
-                  </div>
-                  <div style={{ padding:'20px 22px', fontSize:'14px', color:c.textMuted, lineHeight:'1.85',
-                    whiteSpace:'pre-wrap', wordBreak:'break-word' }}>
-                    {detailHit.artist_facts.split('\n\n').map((fact, i) => (
-                      <p key={i} style={{ margin:'0 0 12px', lineHeight:'1.7' }}>{fact}</p>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Song facts */}
-              {detailHit.song_facts && (
-                <div className={ske('panel', isDark)} style={{ borderRadius:'16px' }}>
-                  <div className="mono" style={{ padding:'14px 20px', borderBottom:`1px solid ${c.border}`,
-                    fontSize:'13px', color:c.textSubtle, letterSpacing:'0.22em' }}>
-                    {lang==='ru'?'ФАКТЫ О ПЕСНЕ':'ABOUT THE SONG'}
-                  </div>
-                  <div style={{ padding:'18px 20px' }}>
-                    {detailHit.song_facts.split('\n\n').map((f, i) => (
-                      <div key={i} style={{
-                        padding: '10px 12px', marginBottom: '8px', borderRadius: '8px',
-                        background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
-                        borderLeft: `3px solid ${c.accent}`,
-                        fontSize: '14px', color: c.textMuted, lineHeight: '1.7',
-                      }}>{f}</div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
