@@ -218,6 +218,11 @@ class MetadataDB:
             "n_skipped": "INTEGER NOT NULL DEFAULT 0",
         })
 
+        # Year range facets (Plan B2) — human-readable decade bucket, e.g. "1990-1994"
+        cls._ensure_columns(conn, "songs", {
+            "year_range": "TEXT",
+        })
+
         conn.commit()
         logger.info("[MetadataDB] Schema initialised")
 
@@ -906,6 +911,35 @@ class MetadataDB:
             "tags": [
                 {"value": v, "count": n}
                 for v, n in tag_counter.most_common(top_k)
+            ],
+        }
+
+    @classmethod
+    def get_year_facets(cls, top_k: int = 30) -> dict:
+        """Return aggregate counts of year_range values across the songs table.
+
+        Returns
+        -------
+        {
+          "year_ranges": [{"value": str, "count": int}, ...]  # sorted desc by count, capped at top_k
+        }
+        """
+        from collections import Counter
+
+        conn = cls._connect()
+        rows = conn.execute(
+            "SELECT year_range FROM songs "
+            "WHERE year_range IS NOT NULL AND year_range != ''"
+        ).fetchall()
+
+        counter: Counter[str] = Counter()
+        for (val,) in rows:
+            counter[val] += 1
+
+        return {
+            "year_ranges": [
+                {"value": v, "count": n}
+                for v, n in counter.most_common(top_k)
             ],
         }
 

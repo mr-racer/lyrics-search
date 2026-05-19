@@ -772,6 +772,16 @@ async def get_sonic_facets(top_k: int = 50) -> dict:
     return MetadataDB.get_sonic_facets(top_k=top_k)
 
 
+@router.get("/year-facets")
+async def get_year_facets(top_k: int = 30) -> dict:
+    """Return aggregate counts of year_range values across the library.
+
+    Powers the DecadeFiltersChips UI in SearchSection."""
+    from app.resources.metadata_db import MetadataDB
+    MetadataDB.init()
+    return MetadataDB.get_year_facets(top_k=top_k)
+
+
 @router.get("/sonic-prompts")
 async def get_sonic_prompts(request: Request) -> dict:
     """Return the current prompt vocabulary JSON."""
