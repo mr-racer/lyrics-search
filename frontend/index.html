@@ -7431,6 +7431,11 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
   const [entryNonce, setEntryNonce] = useState(0);
   const transitionTimerRef = useRef(null);
 
+  // AI Chat drawer open/close
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  // Close the drawer whenever the playing track changes
+  useEffect(() => { setDrawerOpen(false); }, [currentTrack?.track_id]);
+
   // Burst feedback for like/dislike icon clicks (single active burst at a time)
   const [burstFor, setBurstFor] = useState(null);
   const burstTimerRef = useRef(null);
@@ -8053,9 +8058,7 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
               {aiStatus?.aiActive && (
                 <button
                   type="button" className="player-icon-btn"
-                  onClick={() => showToast?.(lang === 'ru'
-                    ? 'AI-чат появится в следующем плане'
-                    : 'AI Chat coming in a later plan')}
+                  onClick={() => setDrawerOpen(true)}
                   title={lang === 'ru' ? 'Спросить AI' : 'Ask AI'}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
@@ -8264,6 +8267,15 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
       </div>
 
       {/* Audio is managed at App level via useAudioPlayer hook */}
+
+      <AIChatDrawer
+        isOpen={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        track={currentTrack}
+        lang={lang}
+        isDark={isDark}
+        activeCollection={activeCollection}
+      />
     </div>
   );
 }
