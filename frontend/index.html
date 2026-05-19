@@ -2851,7 +2851,7 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, activ
   // Fetch tracks for landing player queue
   useEffect(() => {
     if (!activeCollection) { setLpTracks([]); setLpCurrent(null); return; }
-    apiFetch(`/browse?collection_name=${encodeURIComponent(activeCollection)}&limit=8`)
+    apiFetch(`/library/browse?collection_name=${encodeURIComponent(activeCollection)}&limit=8`)
       .then(r => {
         const tracks = Array.isArray(r) ? r : (r.tracks || []);
         if (tracks.length > 0) {
@@ -3804,7 +3804,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
     }
     try {
       const col = activeCollection ? `&collection_name=${encodeURIComponent(activeCollection)}` : '';
-      const data = await apiFetch(`/browse?q=${encodeURIComponent(query)}&limit=3${col}`);
+      const data = await apiFetch(`/library/browse?q=${encodeURIComponent(query)}&limit=3${col}`);
       // /browse returns: { track_id, title, artist, album, cover_art_path, score }
       const seen = new Set();
       const unique = [];
