@@ -3692,6 +3692,45 @@ function SonicFiltersChips({ activeCollection, selectedTags, onToggleTag, isDark
   );
 }
 
+// ─── DECADE FILTERS CHIPS ─────────────────────────────────────────────────────
+function DecadeFiltersChips({ activeCollection, selectedRanges, onToggleRange, isDark }) {
+  const c = useColors(isDark);
+  const [facets, setFacets] = useState({ year_ranges: [] });
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    setError(false);
+    const col = activeCollection ? `&collection_name=${encodeURIComponent(activeCollection)}` : '';
+    apiFetch(`/library/year-facets?top_k=30${col}`)
+      .then(data => { if (alive) setFacets(data || { year_ranges: [] }); })
+      .catch(() => { if (alive) setError(true); });
+    return () => { alive = false; };
+  }, [activeCollection]);
+
+  if (error) return null;  // silent — decade filter is optional
+  if (!facets.year_ranges || !facets.year_ranges.length) return null;
+
+  return (
+    <div style={{ display:'flex', alignItems:'center', gap:'8px', flexWrap:'wrap', padding:'8px 0' }}>
+      <span style={{ fontSize:'12px', color:c.textSubtle, minWidth:'48px' }}>Years:</span>
+      {facets.year_ranges.map(({ value, count }) => {
+        const active = selectedRanges.includes(value);
+        return (
+          <button
+            key={value}
+            onClick={() => onToggleRange(value)}
+            className={`pill-v3${active ? ' pill-v3-active' : ''}`}
+            style={{ padding:'4px 10px', fontSize:'12px', cursor:'pointer' }}
+          >
+            {value} <span style={{ opacity:0.5, fontSize:'10px', marginLeft:'4px' }}>{count}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // ─── SEARCH SECTION (redesigned) ──────────────────────────────────────────────
 function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateToArtist }) {
   const c = useColors(isDark);
@@ -3725,7 +3764,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
   const [searchError, setSearchError] = useState('');
   const [searchExecuted, setSearchExecuted] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
-  const [filters, setFilters] = useState({ artist:'', album:'', genre:'', sonic_tags:[] });
+  const [filters, setFilters] = useState({ artist:'', album:'', genre:'', sonic_tags:[], year_ranges:[] });
   const [filterSuggestions, setFilterSuggestions] = useState({ artist:[], album:[], genre:[] });
   const [activeFilterField, setActiveFilterField] = useState(null);
   const filterTimer = useRef(null);
@@ -3785,6 +3824,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
       const f = {};
       ['artist','album','genre'].forEach(k => { if (filters[k]) f[k] = filters[k]; });
       if (filters.sonic_tags.length) f.sonic_tags = filters.sonic_tags;
+      if (filters.year_ranges.length) f.year_ranges = filters.year_ranges;
       const res = await apiFetch('/search/', { method:'POST', body: JSON.stringify({
         query:searchQuery, mode:searchMode, filters:Object.keys(f).length?f:null,
         limit:20, collection_name:activeCollection||undefined
@@ -3840,6 +3880,15 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
       sonic_tags: p.sonic_tags.includes(value)
         ? p.sonic_tags.filter(x => x !== value)
         : [...p.sonic_tags, value],
+    }));
+  };
+
+  const toggleYearRange = (value) => {
+    setFilters(p => ({
+      ...p,
+      year_ranges: p.year_ranges.includes(value)
+        ? p.year_ranges.filter(x => x !== value)
+        : [...p.year_ranges, value],
     }));
   };
 
@@ -4043,6 +4092,12 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
                 activeCollection={activeCollection}
                 selectedTags={filters.sonic_tags}
                 onToggleTag={toggleSonicTag}
+                isDark={isDark}
+              />
+              <DecadeFiltersChips
+                activeCollection={activeCollection}
+                selectedRanges={filters.year_ranges}
+                onToggleRange={toggleYearRange}
                 isDark={isDark}
               />
             </div>
