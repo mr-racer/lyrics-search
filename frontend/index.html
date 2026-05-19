@@ -3566,9 +3566,89 @@ function ScoreBreakdownTooltip({ breakdown, isDark }) {
   );
 }
 
+// ─── RECENT SEARCHES HOOK ─────────────────────────────────────────────────────
+function useRecentSearches(activeCollection) {
+  const storageKey = `recentSearches:${activeCollection || '_default'}`;
+  const [items, setItems] = useState(() => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.slice(0, 8) : [];
+    } catch { return []; }
+  });
+
+  const push = useCallback((query) => {
+    const q = (query || '').trim();
+    if (!q) return;
+    setItems(prev => {
+      const next = [q, ...prev.filter(x => x.toLowerCase() !== q.toLowerCase())].slice(0, 8);
+      try { localStorage.setItem(storageKey, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, [storageKey]);
+
+  const remove = useCallback((query) => {
+    setItems(prev => {
+      const next = prev.filter(x => x !== query);
+      try { localStorage.setItem(storageKey, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, [storageKey]);
+
+  const clearAll = useCallback(() => {
+    setItems([]);
+    try { localStorage.removeItem(storageKey); } catch {}
+  }, [storageKey]);
+
+  // Re-read when activeCollection changes (different storageKey).
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      const parsed = raw ? JSON.parse(raw) : [];
+      setItems(Array.isArray(parsed) ? parsed.slice(0, 8) : []);
+    } catch { setItems([]); }
+  }, [storageKey]);
+
+  return { items, push, remove, clearAll };
+}
+
+// ─── RECENT SEARCHES CHIPS ────────────────────────────────────────────────────
+function RecentSearchesChips({ items, onPick, onRemove, onClearAll, isDark }) {
+  const c = useColors(isDark);
+  if (!items || items.length === 0) return null;
+  return (
+    <div style={{ display:'flex', alignItems:'center', gap:'8px', flexWrap:'wrap', padding:'8px 0' }}>
+      <span style={{ fontSize:'12px', color:c.textSubtle }}>Recent:</span>
+      {items.map(q => (
+        <button
+          key={q}
+          className="pill-v3"
+          onClick={() => onPick(q)}
+          style={{ padding:'4px 10px', fontSize:'13px', cursor:'pointer',
+                   display:'inline-flex', alignItems:'center', gap:'6px' }}
+        >
+          <span>{q}</span>
+          <span
+            role="button"
+            aria-label="remove"
+            onClick={e => { e.stopPropagation(); onRemove(q); }}
+            style={{ opacity:0.6, fontSize:'11px', cursor:'pointer' }}
+          >×</span>
+        </button>
+      ))}
+      <button
+        onClick={onClearAll}
+        style={{ background:'transparent', border:'none', color:c.textSubtle,
+                 fontSize:'11px', cursor:'pointer', textDecoration:'underline' }}
+      >Clear all</button>
+    </div>
+  );
+}
+
 // ─── SEARCH SECTION (redesigned) ──────────────────────────────────────────────
 function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateToArtist }) {
   const c = useColors(isDark);
+  const recent = useRecentSearches(activeCollection);
   const { sessions, saveSession, deleteSession } = useChatHistory(activeCollection);
 
   // Mode: 'search' (grid) or 'chat' (dialog)
@@ -3663,6 +3743,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
       }) });
       setResults(res.hits||[]);
       setSearchExecuted(true);
+      recent.push(searchQuery);
     } catch(e) { setSearchError(e.message); }
     finally { setSearchLoading(false); }
   };
@@ -3837,6 +3918,17 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
                   )}
                 </button>
+              </div>
+
+              {/* Recent searches */}
+              <div style={{ padding:'0 32px' }}>
+                <RecentSearchesChips
+                  items={recent.items}
+                  onPick={(q) => { setSearchQuery(q); }}
+                  onRemove={recent.remove}
+                  onClearAll={recent.clearAll}
+                  isDark={isDark}
+                />
               </div>
 
               {/* Sub-row: mode + filters */}
