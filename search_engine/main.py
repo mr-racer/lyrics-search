@@ -284,18 +284,14 @@ class LyricsDB:
                         matched += 1
 
                 # Derive slug matching metadata_db.ensure_song convention:
-                # _slugify(artist) + "-" + _slugify(title)  where
-                # _slugify(t) = "-".join(t.lower().split())
+                # _slugify(artist) + "-" + _slugify(title)
                 slug = None
                 try:
+                    from app.resources.metadata_db import _slugify
                     _artist = (song_info.get("artist") or "").strip()
                     _title  = (song_info.get("title")  or "").strip()
                     if _artist and _title:
-                        slug = (
-                            "-".join(_artist.lower().split())
-                            + "-"
-                            + "-".join(_title.lower().split())
-                        )
+                        slug = _slugify(_artist) + "-" + _slugify(_title)
                 except Exception:
                     pass
 
