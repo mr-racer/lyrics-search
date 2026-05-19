@@ -2766,6 +2766,74 @@ function useChatHistory(collectionName) {
   return { sessions, saveSession, deleteSession };
 }
 
+// ─── useTrackChat — per-track localStorage chat history ──────────────────────
+function useTrackChat(trackId) {
+  const storageKey = `chatHistory:track:${trackId || '_none'}`;
+
+  const readMsgs = useCallback(() => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch { return []; }
+  }, [storageKey]);
+
+  const [messages, setMessages] = useState(readMsgs);
+
+  useEffect(() => { setMessages(readMsgs()); }, [storageKey, readMsgs]);
+
+  const persist = useCallback((msgs) => {
+    try { localStorage.setItem(storageKey, JSON.stringify(msgs)); } catch {}
+  }, [storageKey]);
+
+  const sendMessage = useCallback(async (text, trackContext, llmKw) => {
+    const userMsg = { role: 'user', text, time: new Date().toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' }) };
+    const loadingMsg = { role: 'assistant', loading: true, time: userMsg.time };
+    const after = [...messages, userMsg, loadingMsg];
+    setMessages(after);
+    persist(after);
+    try {
+      const res = await apiFetch('/chat/track-chat', {
+        method: 'POST',
+        body: JSON.stringify({
+          track_context: trackContext,
+          mode: 'song',
+          message: text,
+          history: messages.filter(m => !m.loading).map(m => ({
+            role: m.role, content: m.text || '',
+          })),
+          ...(llmKw || {}),
+        }),
+      });
+      const aiMsg = {
+        role: 'assistant',
+        text: res.message || '…',
+        web_search_used: res.web_search_used,
+        time: new Date().toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' }),
+      };
+      const finalMsgs = [...messages, userMsg, aiMsg];
+      setMessages(finalMsgs);
+      persist(finalMsgs);
+    } catch (e) {
+      const errMsg = {
+        role: 'assistant',
+        text: `Ошибка: ${e.message}`,
+        time: new Date().toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' }),
+      };
+      const finalMsgs = [...messages, userMsg, errMsg];
+      setMessages(finalMsgs);
+      persist(finalMsgs);
+    }
+  }, [messages, persist]);
+
+  const clearChat = useCallback(() => {
+    setMessages([]);
+    persist([]);
+  }, [persist]);
+
+  return { messages, sendMessage, clearChat };
+}
+
 // ─── Brand mark ───────────────────────────────────────────────────────────────
 function BrandMark({ size=34, isDark }) {
   return (
