@@ -773,13 +773,59 @@ async def get_sonic_facets(top_k: int = 50) -> dict:
 
 
 @router.get("/year-facets")
-async def get_year_facets(top_k: int = 30) -> dict:
-    """Return aggregate counts of year_range values across the library.
+async def get_year_facets(
+    top_k: int = 30,
+    collection_name: Optional[str] = Query(None, description="Collection to aggregate (omit for all)"),
+    request: Request = None,
+) -> dict:
+    """Aggregate year_range values from Qdrant payload.
 
-    Powers the DecadeFiltersChips UI in SearchSection."""
-    from app.resources.metadata_db import MetadataDB
-    MetadataDB.init()
-    return MetadataDB.get_year_facets(top_k=top_k)
+    If collection_name is provided, aggregates only that collection.
+    Otherwise aggregates all available collections.
+    Powers the DecadeFiltersChips UI in SearchSection.
+    """
+    if request is None or request.app.state.db_client is None:
+        return {"year_ranges": []}
+
+    qdrant = request.app.state.db_client.qdrant
+    counter: Counter = Counter()
+
+    try:
+        cols = qdrant.get_collections().collections
+    except Exception:
+        return {"year_ranges": []}
+
+    # If a specific collection is requested, filter to just that one.
+    if collection_name:
+        existing_names = {c.name for c in cols}
+        cols = [c for c in cols if c.name == collection_name] if collection_name in existing_names else []
+
+    for col in cols:
+        offset = None
+        while True:
+            try:
+                points, next_offset = qdrant.scroll(
+                    collection_name=col.name,
+                    limit=512,
+                    with_payload=["year_range"],
+                    with_vectors=False,
+                    offset=offset,
+                )
+            except Exception:
+                break
+            for p in points:
+                yr = (p.payload or {}).get("year_range")
+                if yr:
+                    counter[yr] += 1
+            if next_offset is None or not points:
+                break
+            offset = next_offset
+
+    return {
+        "year_ranges": [
+            {"value": v, "count": n} for v, n in counter.most_common(top_k)
+        ],
+    }
 
 
 @router.get("/sonic-prompts")
