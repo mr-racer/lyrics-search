@@ -1275,6 +1275,24 @@
       color: #161620;
       box-shadow: inset 0 1px 0 rgba(255,255,255,1), 0 0 0 1px oklch(60% 0.18 270 / 0.3), 0 0 12px oklch(60% 0.18 270 / 0.18);
     }
+    /* Segmented pill row — a flex row wrapper that holds pill-v3 buttons as a group */
+    .pill-segmented {
+      display: inline-flex;
+      gap: 4px;
+      padding: 3px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.07);
+    }
+    .pill-segmented .pill-v3 {
+      border-radius: 999px;
+      border: none;
+    }
+    body[data-theme="light"] .pill-segmented {
+      background: rgba(0,0,0,0.04);
+      border: 1px solid rgba(0,0,0,0.08);
+    }
+
     body[data-theme="light"] .mono-label {
       color: rgba(22,22,32,0.55);
     }
@@ -3731,7 +3749,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
   const isEmpty = !detailHit && results.length === 0;
 
   return (
-    <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:c.bg }}>
+    <div className="panel-v3" style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', borderRadius:0, border:'none', boxShadow:'none' }}>
       {/* ── Section Header with mode toggle ── */}
       <SectionHeader
         isDark={isDark} lang={lang}
@@ -3739,11 +3757,20 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
         title={lang==='ru'?'Поиск':'Search'}
         accent={lang==='ru'?'по смыслу':'by meaning'}
         right={
-          <Segmented isDark={isDark} value={tab} onChange={setTab}
-            options={[
-              { value:'search', label: `${lang==='ru'?'🔍':'🔍'} ${lang==='ru'?'Поиск':'Search'}` },
-              { value:'chat',   label: `${lang==='ru'?'💬':'💬'} ${lang==='ru'?'Чат':'Chat'}` },
-            ]} />
+          <div className="pill-v3 pill-segmented">
+            <button
+              className={`pill-v3${tab==='search' ? ' pill-v3-active' : ''}`}
+              onClick={() => setTab('search')}
+              style={{ fontFamily:"'JetBrains Mono', monospace", fontSize:'11px', letterSpacing:'0.06em', fontWeight:'600' }}>
+              {lang==='ru'?'🔍 Поиск':'🔍 Search'}
+            </button>
+            <button
+              className={`pill-v3${tab==='chat' ? ' pill-v3-active' : ''}`}
+              onClick={() => setTab('chat')}
+              style={{ fontFamily:"'JetBrains Mono', monospace", fontSize:'11px', letterSpacing:'0.06em', fontWeight:'600' }}>
+              {lang==='ru'?'💬 Чат':'💬 Chat'}
+            </button>
+          </div>
         }
       />
 
@@ -3756,7 +3783,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
           <div className="tab-enter" style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
             {/* Hero search bar */}
             <div style={{ padding:'20px 32px 16px' }}>
-              <div className={`hero-bar ${ske('inset', isDark)}`} style={{
+              <div className="hero-bar panel-v3" style={{
                 borderRadius:'16px', padding:'6px', display:'flex', gap:'8px', alignItems:'center',
               }}>
                 <div style={{ padding:'8px 12px', color:c.textSubtle, display:'flex' }}>
@@ -3769,9 +3796,9 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
                   style={{ flex:1, padding:'12px 0', border:'none', background:'transparent',
                     color:c.text, fontSize:'17px', outline:'none', fontFamily:"'Geist', sans-serif" }} />
                 <button onClick={handleSearch} disabled={searchLoading||!searchQuery.trim()}
-                  className={searchLoading||!searchQuery.trim() ? '' : 'ske-accent'}
+                  className={searchLoading||!searchQuery.trim() ? '' : 'cta-v3'}
                   style={{
-                    width:'44px', height:'44px', borderRadius:'12px', flexShrink:0,
+                    width:'44px', height:'44px', borderRadius:'12px', flexShrink:0, padding:0,
                     background: searchLoading||!searchQuery.trim() ? (isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.05)') : undefined,
                     color: searchLoading||!searchQuery.trim() ? c.textSubtle : 'white',
                     cursor: searchLoading||!searchQuery.trim()?'not-allowed':'pointer',
@@ -3792,8 +3819,9 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
                     { value:'hybrid', label:lang==='ru'?'ГИБРИД':'HYBRID' },
                   ]} />
                 <div style={{ flex:1 }} />
-                <button onClick={() => setShowFilters(s=>!s)} className="mono"
-                  style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.15em' }}>
+                <button onClick={() => setShowFilters(s=>!s)}
+                  className={`pill-v3 mono${showFilters ? ' pill-v3-active' : ''}`}
+                  style={{ fontSize:'11px', letterSpacing:'0.15em', fontWeight:'600' }}>
                   {showFilters ? '−' : '+'} {lang==='ru'?'ФИЛЬТРЫ':'FILTERS'}
                 </button>
               </div>
@@ -3809,9 +3837,11 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
                         onFocus={() => setActiveFilterField(f.k)}
                         onBlur={() => { setTimeout(() => setActiveFilterField(null), 200); }}
                         placeholder={f.l}
-                        className={ske('inset', isDark)}
-                        style={{ width:'100%', padding:'8px 12px', borderRadius:'9px', border:'none',
-                          color:c.text, fontSize:'13px', outline:'none', fontFamily:"'JetBrains Mono', monospace", boxSizing:'border-box' }} />
+                        className="panel-v3"
+                        style={{ width:'100%', padding:'8px 12px', borderRadius:'9px',
+                          color:c.text, fontSize:'13px', outline:'none', fontFamily:"'JetBrains Mono', monospace", boxSizing:'border-box',
+                          background: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.7)',
+                          border: `1px solid ${c.border}` }} />
                       {filterSuggestions[f.k]?.length > 0 && activeFilterField === f.k && (
                         <div className={`filter-autocomplete-dropdown ${ske('panel', isDark)}`}
                           style={{ borderRadius:'9px', border:`1px solid ${c.border}` }}>
@@ -3871,14 +3901,10 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
                   {/* Grid of album cards */}
                   <div className="search-grid">
                     {results.map((hit, i) => (
-                      <div key={i} className="grid-card"
+                      <div key={i} className="grid-card panel-v3"
                         onClick={() => setDetailHit(hit)}
                         style={{
-                          background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
                           borderRadius:'16px', overflow:'hidden',
-                          boxShadow: isDark
-                            ? 'inset 0 1px 0 rgba(255,255,255,0.05), 0 4px 12px rgba(0,0,0,0.3)'
-                            : 'inset 0 1px 0 rgba(255,255,255,0.8), 0 4px 12px rgba(40,30,60,0.08)',
                         }}>
                         {/* Album cover */}
                         <div style={{
@@ -3986,7 +4012,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
             {/* Input bar */}
             <div style={{ padding:'12px 24px 20px',
               background: isDark?'rgba(0,0,0,0.3)':'rgba(255,255,255,0.55)', backdropFilter:'blur(10px)' }}>
-              <div className={`hero-bar ${ske('inset', isDark)}`} style={{ display:'flex', gap:'8px', alignItems:'flex-end', padding:'8px', borderRadius:'16px' }}>
+              <div className="hero-bar panel-v3" style={{ display:'flex', gap:'8px', alignItems:'flex-end', padding:'8px', borderRadius:'16px' }}>
                 <textarea
                   value={input} onChange={e=>setInput(e.target.value)}
                   onKeyDown={e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();handleChat();} }}
@@ -3999,9 +4025,9 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
                     fontFamily:"'Geist', sans-serif",
                   }} />
                 <button onClick={handleChat} disabled={loading||!input.trim()}
-                  className={loading||!input.trim() ? '' : 'ske-accent'}
+                  className={loading||!input.trim() ? '' : 'cta-v3'}
                   style={{
-                    width:'44px', height:'44px', borderRadius:'12px', flexShrink:0,
+                    width:'44px', height:'44px', borderRadius:'12px', flexShrink:0, padding:0,
                     background: loading||!input.trim() ? (isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.05)') : undefined,
                     color: loading||!input.trim() ? c.textSubtle : 'white',
                     cursor: loading||!input.trim()?'not-allowed':'pointer',
