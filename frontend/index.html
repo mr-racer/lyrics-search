@@ -11,6 +11,9 @@
   <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
   <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
   <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+  <!-- Markdown rendering for LLM outputs (chat answers, bio, refined facts, lyric explain) -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@13.0.0/marked.min.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js" crossorigin="anonymous"></script>
 
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -1293,6 +1296,52 @@
       border: 1px solid rgba(0,0,0,0.08);
     }
 
+    /* ── Markdown rendering for LLM outputs ─────────────────────
+       Applied to artist bios, refined facts, chat answers, lyric
+       explanations. Tight margins keep the typography appropriate
+       for chat bubbles + inline panels. */
+    .md-content { line-height: 1.55; }
+    .md-content > *:first-child { margin-top: 0; }
+    .md-content > *:last-child  { margin-bottom: 0; }
+    .md-content p              { margin: 0 0 8px; }
+    .md-content h1, .md-content h2, .md-content h3 {
+      margin: 10px 0 6px; font-weight: 600; line-height: 1.25;
+    }
+    .md-content h1 { font-size: 1.18em; }
+    .md-content h2 { font-size: 1.10em; }
+    .md-content h3 { font-size: 1.04em; }
+    .md-content ul, .md-content ol { padding-left: 18px; margin: 4px 0 8px; }
+    .md-content li { margin: 2px 0; }
+    .md-content strong { font-weight: 600; }
+    .md-content em     { font-style: italic; }
+    .md-content code {
+      background: rgba(255,255,255,0.08);
+      padding: 1px 5px; border-radius: 4px;
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 0.9em;
+    }
+    .md-content pre {
+      background: rgba(0,0,0,0.30);
+      padding: 8px 10px; border-radius: 6px;
+      overflow-x: auto; margin: 6px 0;
+    }
+    .md-content pre code { background: transparent; padding: 0; }
+    .md-content blockquote {
+      border-left: 2px solid rgba(255,255,255,0.30);
+      padding-left: 10px; margin: 6px 0; color: inherit; opacity: 0.85;
+    }
+    .md-content a { color: oklch(70% 0.15 270); text-decoration: underline; }
+    .md-content a:hover { opacity: 0.85; }
+    body[data-theme="light"] .md-content code {
+      background: rgba(0,0,0,0.06);
+    }
+    body[data-theme="light"] .md-content pre {
+      background: rgba(0,0,0,0.06);
+    }
+    body[data-theme="light"] .md-content blockquote {
+      border-left-color: rgba(0,0,0,0.30);
+    }
+
     body[data-theme="light"] .mono-label {
       color: rgba(22,22,32,0.55);
     }
@@ -1408,6 +1457,24 @@ async function apiFetch(path, opts = {}) {
     throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`);
   }
   return res.json();
+}
+
+// ─── MarkdownText — safe renderer for LLM outputs ────────────────────────────
+// Used by chat answers (search + drawer), lyric explanations, refined facts,
+// artist bios — any place where the backend returns LLM-generated text that
+// may include markdown (**bold**, *italic*, lists, code, links).
+//
+// Safety: marked → DOMPurify pipeline so LLM-emitted HTML/script can't run.
+// Renders an empty fragment if the text is falsy. Falls back to plain-text
+// rendering if `marked` or `DOMPurify` haven't loaded yet (defensive — both
+// come from CDN <script> tags in <head>).
+function MarkdownText({ text, className }) {
+  if (!text) return null;
+  if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined') {
+    return <span className={className}>{text}</span>;
+  }
+  const html = DOMPurify.sanitize(marked.parse(String(text), { breaks: true, gfm: true }));
+  return <div className={`md-content${className ? ' ' + className : ''}`} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 // ─── Playback event helpers ───────────────────────────────────────────────────
@@ -2363,10 +2430,10 @@ function FactsRail({ trackId, activeCollection, isDark, lang, accent, variant = 
           }}
         >
           <span style={{ width:24, height:1, background:c.border, marginTop:6 }} />
-          <p className="serif" style={{
+          <div className="serif" style={{
             fontSize:factFontSize, lineHeight:1.55, color:c.text, letterSpacing:'-0.005em',
             fontWeight:400,
-          }}>{cur.text}</p>
+          }}><MarkdownText text={cur.text} /></div>
         </div>
 
         {/* Dot indicator — landing variant only (player dots are in header) */}
@@ -4042,7 +4109,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
             ? <div style={{ display:'flex', gap:'5px', padding:'2px 0' }}>
                 {[0,1,2].map(j => <div key={j} style={{ width:'6px', height:'6px', borderRadius:'50%', background:c.textMuted, animation:`pulse 1.2s ease-in-out ${j*0.2}s infinite` }} />)}
               </div>
-            : msg.text}
+            : (isUser ? msg.text : <MarkdownText text={msg.text} />)}
         </div>
         {msg.hits && msg.hits.length > 0 && (
           <div style={{
@@ -7354,7 +7421,9 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, activeCollection }
                       }} />
                     ))}
                   </div>
-                : m.text}
+                : m.role === 'assistant'
+                  ? <MarkdownText text={m.text} />
+                  : m.text}
               {m.web_search_used && (
                 <div style={{ marginTop: '4px', fontSize: '10px', color: c.textSubtle, fontStyle: 'italic' }}>
                   🌐 web search
@@ -7455,7 +7524,7 @@ function InlineLyricExplain({
             : state.error
               ? <span style={{ color: c.red }}>{lang === 'ru' ? 'Ошибка' : 'Error'}: {state.error}</span>
               : <>
-                  {state.message}
+                  <MarkdownText text={state.message} />
                   {state.web_search_used && (
                     <div style={{ marginTop: '4px', fontSize: '10px', color: c.textSubtle, fontStyle: 'italic' }}>
                       🌐 web search
@@ -8596,10 +8665,10 @@ function ArtistAtlasSection({
           background: isDark ? 'rgba(255,255,255,0.025)' : 'rgba(255,255,255,0.65)',
           border:`1px solid ${c.border}`,
         }}>
-          <p className="serif" style={{
+          <div className="serif" style={{
             fontSize:16, lineHeight:1.65, color:c.text, margin:0,
             letterSpacing:'-0.005em',
-          }}>{data.bio}</p>
+          }}><MarkdownText text={data.bio} /></div>
           <button
             onClick={() => setTab('facts')}
             style={{
