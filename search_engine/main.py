@@ -410,7 +410,7 @@ class LyricsDB:
         title: str | None = None,
         genre: str | list[str] | None = None,
         year: int | None = None,
-        year_range: str | None = None,
+        year_ranges: list[str] | None = None,
         sonic_tags: list[str] | None = None,
         collection_name_override: str | None = None,
     ) -> list[models.ScoredPoint]:
@@ -422,7 +422,7 @@ class LyricsDB:
             title=title,
             genre=genre,
             year=year,
-            year_range=year_range,
+            year_ranges=year_ranges,
             sonic_tags=sonic_tags,
         )
 

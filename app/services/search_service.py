@@ -362,7 +362,7 @@ class SearchService:
             "artist": filters.artist,
             "album": filters.album,
             "genre": filters.genre,
-            "year_range": filters.year_range,
+            "year_ranges": list(filters.year_ranges) if filters.year_ranges else None,
             "sonic_tags": list(filters.sonic_tags) if filters.sonic_tags else None,
         }
 
@@ -386,6 +386,15 @@ class SearchService:
             conditions.append(models.FieldCondition(
                 key="genre", match=models.MatchValue(value=filters.genre)
             ))
+        # OR across decade-style year_range buckets — track matches if its
+        # year_range payload value is anywhere in the selected set.
+        # MatchAny is the right primitive for a single-condition multi-value OR.
+        if filters.year_ranges:
+            conditions.append(models.FieldCondition(
+                key="year_range",
+                match=models.MatchAny(any=list(filters.year_ranges)),
+            ))
+
         # AND across tags — track must carry every selected tag.
         # Qdrant matches scalar against array-valued payload natively.
         if filters.sonic_tags:

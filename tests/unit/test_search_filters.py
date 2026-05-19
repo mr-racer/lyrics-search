@@ -17,7 +17,7 @@ class TestExtractFilterKwargs:
             "artist": None,
             "album": None,
             "genre": None,
-            "year_range": None,
+            "year_ranges": None,
             "sonic_tags": None,
         }
 
@@ -29,7 +29,7 @@ class TestExtractFilterKwargs:
             "artist": "A",
             "album": "B",
             "genre": "C",
-            "year_range": None,
+            "year_ranges": None,
             "sonic_tags": None,
         }
 
