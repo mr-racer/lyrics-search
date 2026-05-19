@@ -3539,29 +3539,48 @@ function Segmented({ value, onChange, options, isDark, size='md', style } = {}) 
 }
 
 // ─── SCORE BREAKDOWN TOOLTIP ──────────────────────────────────────────────────
-function ScoreBreakdownTooltip({ breakdown, isDark }) {
+function ScoreBreakdownTooltip({ hit, breakdown, isDark, onPlay, onToggleLike, isLiked, likeLoading }) {
   const c = useColors(isDark);
-  if (!breakdown) return null;
-  const rows = [
+  if (!breakdown && !hit) return null;
+  const rows = breakdown ? [
     { label: 'Text',  v: breakdown.text_dense_score },
     { label: 'BM25',  v: breakdown.text_bm25_score },
     { label: 'Audio', v: breakdown.audio_score },
-  ].filter(r => r.v != null);
-  if (rows.length === 0) return null;
+  ].filter(r => r.v != null) : [];
   return (
-    <div className="panel-v3 score-breakdown-tooltip" style={{
+    <div className="panel-v3" style={{
       position:'absolute', top:'100%', left:'50%', transform:'translateX(-50%)',
-      marginTop:'8px', padding:'10px 14px', minWidth:'180px',
+      marginTop:'8px', padding:'10px 12px', minWidth:'200px',
       zIndex:50, fontSize:'12px', color:c.text,
-      pointerEvents:'none',
       boxShadow:'0 8px 24px rgba(0,0,0,0.32)',
     }}>
-      {rows.map(r => (
-        <div key={r.label} style={{ display:'flex', justifyContent:'space-between', gap:'12px', padding:'2px 0' }}>
-          <span style={{ color:c.textSubtle }}>{r.label}</span>
-          <span style={{ fontFamily:'ui-monospace, monospace' }}>{(r.v * 100).toFixed(1)}%</span>
+      {rows.length > 0 && (
+        <div style={{ marginBottom:'8px' }}>
+          {rows.map(r => (
+            <div key={r.label} style={{ display:'flex', justifyContent:'space-between', gap:'12px', padding:'2px 0' }}>
+              <span style={{ color:c.textSubtle }}>{r.label}</span>
+              <span style={{ fontFamily:'ui-monospace, monospace' }}>{(r.v * 100).toFixed(1)}%</span>
+            </div>
+          ))}
         </div>
-      ))}
+      )}
+      <div style={{
+        display:'flex', gap:'6px', justifyContent:'center',
+        borderTop: rows.length ? `1px solid ${c.border}` : 'none',
+        paddingTop: rows.length ? '8px' : 0,
+      }}>
+        <button
+          className="pill-v3"
+          onClick={e => { e.stopPropagation(); onPlay && onPlay(hit); }}
+          style={{ padding:'4px 10px', fontSize:'11px', cursor:'pointer' }}
+        >▶ Play</button>
+        <button
+          className={`pill-v3${isLiked ? ' pill-v3-active' : ''}`}
+          onClick={e => { e.stopPropagation(); onToggleLike && onToggleLike(hit); }}
+          disabled={likeLoading}
+          style={{ padding:'4px 10px', fontSize:'11px', cursor: likeLoading ? 'wait' : 'pointer' }}
+        >{isLiked ? '♥ Liked' : '♡ Like'}</button>
+      </div>
     </div>
   );
 }
@@ -3773,6 +3792,8 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
   // Shared results
   const [results, setResults] = useState([]);
   const [hoveredHit, setHoveredHit] = useState(null);
+  const [likedMap, setLikedMap] = useState({});      // { [trackId]: true | false }
+  const [likeLoading, setLikeLoading] = useState({}); // { [trackId]: true } while in-flight
 
   const getLLMSettings = () => ({
     llm_base_url: localStorage.getItem('llm_base_url') || undefined,
@@ -3780,6 +3801,42 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
     collection_name: activeCollection || undefined,
     planner_enabled: true,
   });
+
+  // ── Reaction helpers ──
+  const ensureLikeStatus = async (trackId) => {
+    if (!trackId || trackId in likedMap || !activeCollection) return;
+    try {
+      const r = await apiFetch(`/search/tracks/${encodeURIComponent(trackId)}/reaction?collection_name=${encodeURIComponent(activeCollection)}`);
+      setLikedMap(prev => ({ ...prev, [trackId]: r?.reaction === 'like' }));
+    } catch {
+      setLikedMap(prev => ({ ...prev, [trackId]: false }));
+    }
+  };
+
+  const handleToggleLike = async (hit) => {
+    const trackId = hit?.track?.track_id;
+    if (!trackId || !activeCollection) return;
+    const isLiked = !!likedMap[trackId];
+    setLikeLoading(prev => ({ ...prev, [trackId]: true }));
+    try {
+      await apiFetch(`/search/tracks/${encodeURIComponent(trackId)}/reaction`, {
+        method: 'POST',
+        body: JSON.stringify({
+          collection_name: activeCollection,
+          reaction: isLiked ? null : 'like',
+        }),
+      });
+      setLikedMap(prev => ({ ...prev, [trackId]: !isLiked }));
+    } catch (e) {
+      // ignore — keep UI tied to actual server state
+    } finally {
+      setLikeLoading(prev => {
+        const next = { ...prev };
+        delete next[trackId];
+        return next;
+      });
+    }
+  };
 
   useEffect(() => {
     if (chatEndRef.current) chatEndRef.current.scrollTop = chatEndRef.current.scrollHeight;
@@ -4149,7 +4206,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
                     {results.map((hit, i) => (
                       <div key={i} className="grid-card panel-v3"
                         onClick={() => onPlayTrack && onPlayTrack(hit, results)}
-                        onMouseEnter={() => setHoveredHit(hit.track?.track_id)}
+                        onMouseEnter={() => { setHoveredHit(hit.track?.track_id); ensureLikeStatus(hit.track?.track_id); }}
                         onMouseLeave={() => setHoveredHit(null)}
                         style={{
                           borderRadius:'16px', overflow:'hidden', position:'relative',
@@ -4199,7 +4256,15 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
                           )}
                         </div>
                         {hoveredHit === hit.track?.track_id && (
-                          <ScoreBreakdownTooltip breakdown={hit.score_breakdown} isDark={isDark} />
+                          <ScoreBreakdownTooltip
+                            hit={hit}
+                            breakdown={hit.score_breakdown}
+                            isDark={isDark}
+                            onPlay={(h) => onPlayTrack && onPlayTrack(h, results)}
+                            onToggleLike={handleToggleLike}
+                            isLiked={!!likedMap[hit.track?.track_id]}
+                            likeLoading={!!likeLoading[hit.track?.track_id]}
+                          />
                         )}
                       </div>
                     ))}
