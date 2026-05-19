@@ -3645,6 +3645,53 @@ function RecentSearchesChips({ items, onPick, onRemove, onClearAll, isDark }) {
   );
 }
 
+// ─── SONIC FILTERS CHIPS ──────────────────────────────────────────────────────
+function SonicFiltersChips({ activeCollection, selectedTags, onToggleTag, isDark }) {
+  const c = useColors(isDark);
+  const [facets, setFacets] = useState({ tags: [] });
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    setError(false);
+    apiFetch('/library/sonic-facets?top_k=30')
+      .then(data => { if (alive) setFacets(data || { tags: [] }); })
+      .catch(() => { if (alive) setError(true); });
+    return () => { alive = false; };
+  }, [activeCollection]);
+
+  if (error) return (
+    <div style={{ fontSize:'12px', color:c.textSubtle, padding:'6px 0' }}>
+      Sonic filters unavailable.
+    </div>
+  );
+  if (!facets.tags || !facets.tags.length) return null;
+
+  const renderChip = (label, count, active, onClick) => (
+    <button
+      key={label}
+      onClick={onClick}
+      className={`pill-v3${active ? ' pill-v3-active' : ''}`}
+      style={{
+        padding:'4px 10px', fontSize:'12px', cursor:'pointer',
+        opacity: active ? 1 : 0.7,
+        border: active ? `1px solid ${c.accent}` : '1px solid transparent',
+      }}
+    >
+      {label} <span style={{ opacity:0.5, fontSize:'10px', marginLeft:'4px' }}>{count}</span>
+    </button>
+  );
+
+  return (
+    <div style={{ display:'flex', alignItems:'center', gap:'8px', flexWrap:'wrap', padding:'8px 0' }}>
+      <span style={{ fontSize:'12px', color:c.textSubtle, minWidth:'48px' }}>Tags:</span>
+      {facets.tags.map(({ value, count }) =>
+        renderChip(value, count, selectedTags.includes(value), () => onToggleTag(value))
+      )}
+    </div>
+  );
+}
+
 // ─── SEARCH SECTION (redesigned) ──────────────────────────────────────────────
 function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateToArtist }) {
   const c = useColors(isDark);
@@ -3678,7 +3725,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
   const [searchError, setSearchError] = useState('');
   const [searchExecuted, setSearchExecuted] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
-  const [filters, setFilters] = useState({ artist:'', album:'', genre:'' });
+  const [filters, setFilters] = useState({ artist:'', album:'', genre:'', sonic_tags:[] });
   const [filterSuggestions, setFilterSuggestions] = useState({ artist:[], album:[], genre:[] });
   const [activeFilterField, setActiveFilterField] = useState(null);
   const filterTimer = useRef(null);
@@ -3737,6 +3784,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
     try {
       const f = {};
       ['artist','album','genre'].forEach(k => { if (filters[k]) f[k] = filters[k]; });
+      if (filters.sonic_tags.length) f.sonic_tags = filters.sonic_tags;
       const res = await apiFetch('/search/', { method:'POST', body: JSON.stringify({
         query:searchQuery, mode:searchMode, filters:Object.keys(f).length?f:null,
         limit:20, collection_name:activeCollection||undefined
@@ -3784,6 +3832,15 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
     setFilters(p => ({ ...p, [field]: value }));
     setFilterSuggestions(p => ({ ...p, [field]: [] }));
     setActiveFilterField(null);
+  };
+
+  const toggleSonicTag = (value) => {
+    setFilters(p => ({
+      ...p,
+      sonic_tags: p.sonic_tags.includes(value)
+        ? p.sonic_tags.filter(x => x !== value)
+        : [...p.sonic_tags, value],
+    }));
   };
 
   // ── Render chat message ──
@@ -3982,6 +4039,16 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
                   ))}
                 </div>
               )}
+
+              {/* Sonic tag filter chips */}
+              <div style={{ padding:'0 32px' }}>
+                <SonicFiltersChips
+                  activeCollection={activeCollection}
+                  selectedTags={filters.sonic_tags}
+                  onToggleTag={toggleSonicTag}
+                  isDark={isDark}
+                />
+              </div>
             </div>
 
             {/* Results area */}
