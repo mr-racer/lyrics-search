@@ -1076,7 +1076,7 @@ CREATE TABLE recommendation_snapshots (
 > | **2**  Frontend foundation            | ✅ Shipped (out-of-band — landed alongside Plan 4 timeframe) | inline in `frontend/index.html` |
 > | **3**  Artist Atlas                   | ✅ Shipped (Plan 5)                       | `docs/superpowers/plans/2026-05-16-plan-5-artist-atlas.md` |
 > | **4**  Player v6 redesign             | ✅ Shipped (Plan 4) + post-plan polish round | `docs/superpowers/plans/2026-05-16-plan-4-player-redesign.md` |
-> | **5**  AI Chat & lyrics-explain       | ⏳ Not started — Ask AI button shows toast stub | — |
+> | **5**  AI Chat & lyrics-explain       | ✅ **Shipped** — AIChatDrawer (right-side glass slide) + Inline ✨ explain (draw-under panel). Single endpoint POST /chat/track-chat with web_search tool fallback (pydantic-ai). Plan: `docs/superpowers/plans/2026-05-19-plan-5-ai-chat-lyrics-explain.md` |
 > | **6**  Spotify-like MVP               | ⏳ Not started                            | — |
 > | **6a** Home (Discovery Magazine)      | ⏳ Not started                            | — |
 > | **6b-B1** Search visual redesign      | ✅ **Shipped** — backend (SearchFilters + Qdrant payload + /sonic-facets) + frontend (Hybrid v3 visuals + RecentSearchesChips + hover breakdown + SonicFiltersChips). Plan: `docs/superpowers/plans/2026-05-19-plan-b1-search-section-redesign.md` |
@@ -1182,6 +1182,19 @@ CREATE TABLE recommendation_snapshots (
 ### Phase 5: AI Chat & lyrics-explain
 
 > **Status (2026-05-16)**: ⏳ **Not started.** The Player's "Ask AI" button currently shows a `showToast` stub ("AI-чат появится в следующем плане (Plan 5)" — note: this stub message is misleading since Plan 5 turned out to be Artist Atlas, not AI Chat; the stub copy will be updated when this phase ships).
+>
+> **Status (2026-05-19)**: ✅ **Shipped** on `feature/plan-5-ai-chat-lyrics-explain`. Ships:
+>   - `POST /chat/track-chat` endpoint with `mode: 'song' | 'lyric_explain'` discriminator (single endpoint, two prompts)
+>   - `TrackChatAgent` (pydantic-ai 1.61.0) with `web_search` tool wrapping `smart_web_search` from `llm_web_search.py`
+>   - Backend resolves raw `song_facts` server-side (NOT refined) — agent always sees original facts regardless of AI-Indexing state
+>   - `AIChatDrawer` (420px right-side glass slide, backdrop blur, Hybrid v3 panel-v3) with 3 static suggested prompts (the third "Какие песни семплирует?" probes `web_search` since we have no local sample data — natural acceptance test)
+>   - `InlineLyricExplain` (per-line draw-under panel inside `LyricsBackFace`, multiple concurrent expansions OK, state resets on track change)
+>   - Both surfaces gated on `aiStatus.aiActive` (the Plan 6 signal)
+>   - Per-track `localStorage` chat history via `useTrackChat(trackId)` hook
+>
+> **Schema discovery during implementation**: `song_facts` table is `(id PK, song_slug FK, lang, fact TEXT)` not `(slug, notes)` as the plan assumed — `resolve_song_facts` adapted to `SELECT fact FROM song_facts WHERE song_slug = ?` with `\n\n` concatenation of multiple fact rows.
+>
+> **Deferred follow-ups**: global drawer (Atlas/Search), LLM-generated suggested prompts, SSE streaming, per-line explanation cache, multi-turn agent history support (current `answer_track_chat` ignores `req.history` — first-pass simplification, will revisit if engagement shows it matters).
 
 15. **AIChatDrawer component** — слайд из правой стороны. Pre-filled context current song. Suggested prompts. Reuse `useChatHistory` с per-song ключом.
 16. **Inline ✨ explain** на lyric line — popover с LLM-ответом. Reuse `/chat/` endpoint с `LYRIC_EXPLAIN_PROMPT`.
