@@ -52,11 +52,15 @@ class SearchService:
         collection_name: Optional[str] = None,
     ) -> List[TrackHit]:
         """Text-based search using dense + BM25 fusion."""
-        # Auto-detect collection's text model from Qdrant vector config
         col = collection_name or self.lyrics_db.collection_name
         await self._ensure_model_for_collection(col)
 
         filter_kwargs = self._extract_filter_kwargs(filters)
+        active = {k: v for k, v in filter_kwargs.items() if v is not None}
+        logger.info(
+            "[SearchService] _search_text: query=%r  collection=%s  filters=%s",
+            query, col, active or "(none)",
+        )
 
         results = self.lyrics_db.search(
             query=query,
@@ -67,6 +71,7 @@ class SearchService:
             **filter_kwargs,
         )
 
+        logger.info("[SearchService] _search_text: Qdrant returned %d points", len(results))
         return self._points_to_hits(results[:limit], matched_on="lyrics", collection_name=collection_name)
 
     async def _ensure_model_for_collection(self, collection_name: str) -> None:
@@ -357,6 +362,7 @@ class SearchService:
             "artist": filters.artist,
             "album": filters.album,
             "genre": filters.genre,
+            "year_range": filters.year_range,
         }
 
     def _build_qdrant_filter_models(self, filters: Optional[SearchFilters]):
@@ -460,6 +466,7 @@ class SearchService:
                 label=payload.get("label"),
                 samples=payload.get("samples"),
                 sampled_by=payload.get("sampled_by"),
+                bitrate_kbps=payload.get("bitrate_kbps"),
             )
             hits.append(TrackHit(
                 track=track,

@@ -66,7 +66,7 @@ class SearchDeps:
         seen: set[str] = set()
         try:
             offset = None
-            for _ in range(20):  # safety cap: max 20 pages × 128 = 2560 entries
+            for _ in range(100):  # safety cap: max 100 pages × 128 = 12800 entries
                 points, offset = lyrics_db.qdrant_client.scroll(
                     collection_name=collection,
                     limit=128,
@@ -89,7 +89,7 @@ class SearchDeps:
 
     async def resolve_filters(
         self,
-        filter_lookup: dict[str, str] | None,
+        filter_lookup: dict[str, str | None] | None,
         resolved_filters: dict[str, str] | None = None,
     ) -> dict[str, str]:
         """Resolve raw filter terms to actual values present in the DB.

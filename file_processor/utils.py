@@ -181,14 +181,21 @@ def get_flac_metadata(filepath: str) -> dict:
     audio = FLAC(filepath)
     duration = audio.info.length
 
+    # Compute actual FLAC bitrate from stream parameters (variable, lossless)
+    info = audio.info
+    bitrate_kbps: int | None = None
+    if duration and getattr(info, "total_samples", None) and getattr(info, "bits_per_sample", None):
+        bitrate_kbps = round(info.total_samples * info.bits_per_sample * info.channels / duration / 1000)
+
     raw_year = (audio.get("date") or audio.get("year") or [""])[0]
     return {
-        "title":    (audio.get("title")  or [""])[0].strip(),
-        "artist":   (audio.get("artist") or [""])[0].strip(),
-        "album":    (audio.get("album")  or [""])[0].strip(),
-        "year":     validate_year(raw_year),
-        "genre":    (audio.get("genre")  or [""])[0].strip() or None,
-        "duration": round(duration),
+        "title":        (audio.get("title")  or [""])[0].strip(),
+        "artist":       (audio.get("artist") or [""])[0].strip(),
+        "album":        (audio.get("album")  or [""])[0].strip(),
+        "year":         validate_year(raw_year),
+        "genre":        (audio.get("genre")  or [""])[0].strip() or None,
+        "duration":     round(duration),
+        "bitrate_kbps": bitrate_kbps,
     }
 
 
@@ -196,18 +203,23 @@ def get_alac_metadata(filepath: str) -> dict:
     audio = MP4(filepath)
     duration = audio.info.length
 
+    # mutagen reports M4A bitrate in bps; ALAC is typically 600–1400 kbps, AAC 128–320 kbps
+    raw_bitrate = getattr(audio.info, "bitrate", None)
+    bitrate_kbps = round(raw_bitrate / 1000) if raw_bitrate else None
+
     def _tag(key: str) -> str:
         val = audio.tags.get(key) or [""]
         return val[0].strip() if isinstance(val[0], str) else str(val[0]).strip()
 
     raw_year = _tag("©day")
     return {
-        "title":    _tag("©nam"),
-        "artist":   _tag("©ART"),
-        "album":    _tag("©alb"),
-        "year":     validate_year(raw_year),
-        "genre":    _tag("©gen") or None,
-        "duration": round(duration),
+        "title":        _tag("©nam"),
+        "artist":       _tag("©ART"),
+        "album":        _tag("©alb"),
+        "year":         validate_year(raw_year),
+        "genre":        _tag("©gen") or None,
+        "duration":     round(duration),
+        "bitrate_kbps": bitrate_kbps,
     }
 
 

@@ -1,7 +1,7 @@
 """Domain models for Music Explorer."""
 
 from typing import Literal, List, Optional, Annotated, Dict
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class Fact(BaseModel):
@@ -29,6 +29,7 @@ class TrackMetadata(BaseModel):
     samples: list[str] | None = None
     sampled_by: list[str] | None = None
     reaction: Literal["like", "dislike"] | None = None
+    bitrate_kbps: int | None = None
 
 
 class ScoreBreakdown(BaseModel):
@@ -173,7 +174,7 @@ class SearchPlan(BaseModel):
     action: Literal["request_filter", "search"]
     query_type: Literal["text", "audio", "hybrid"]
     filters: SearchFilters | None = None
-    filter_lookup: Dict[str, str] | None = None  # сырые значения для разрешения
+    filter_lookup: Dict[str, str | None] | None = None  # сырые значения для разрешения
     queries: List[BaseQueryItem] = Field(default_factory=list)
     search_mode: Literal["CONSERVATIVE", "AGGRESSIVE"] = "CONSERVATIVE"
 
@@ -188,12 +189,34 @@ class ScoreResult(BaseModel):
     queries: List[BaseQueryItem] | None = None  # новые запросы, если action="search"
     message: str
 
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_llm_booleans(cls, data: object) -> object:
+        """Local LLMs sometimes return False/None for Literal string fields via tool calling.
+        Coerce to safe defaults so PydanticAI doesn't retry and raise UnexpectedModelBehavior."""
+        if not isinstance(data, dict):
+            return data
+        if not isinstance(data.get("action"), str):
+            data["action"] = "search"
+        if not isinstance(data.get("confidence"), str):
+            data["confidence"] = "medium"
+        if not isinstance(data.get("message"), str):
+            data["message"] = ""
+        return data
+
 
 class AudioAnswer(BaseModel):
     """Ответ от AudioAgent."""
     message: str
     best_hit: dict | None = None
     hits: List[dict] = Field(default_factory=list)
+
+
+class ValidatorResult(BaseModel):
+    """Решение ValidatorAgent: принять ответ или продолжить поиск."""
+    valid: bool
+    reason: str
+    queries: List[BaseQueryItem] | None = None  # новые запросы если valid=False
 
 
 class PlannerOutput(BaseModel):

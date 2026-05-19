@@ -51,6 +51,7 @@ JSON FORMAT:
 RULES:
 - If none of the 5 facts seem interesting, return an empty array: {{"selected_facts": []}}
 - Do not add any explanations or text before or after the JSON.
+- Do NOT wrap the JSON in markdown code blocks (no ```json or ``` markers).
 - Output the "short_fact" values in {lang}.
 
 PROCEED WITH THIS FACTS:

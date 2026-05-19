@@ -26,7 +26,7 @@ from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel as OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from app.domain.models import AudioAnswer, ScoreResult, SearchPlan, TrackHit
+from app.domain.models import AudioAnswer, BaseQueryItem, ScoreResult, SearchPlan, TrackHit, ValidatorResult
 from app.services.agent_deps import SearchDeps
 from app.services.llm_client import _get_client
 
@@ -148,19 +148,26 @@ def _create_pydantic_model(
 # ---------------------------------------------------------------------------
 
 
-def create_planner_agent(deps: SearchDeps) -> Agent:
-    """Create a PlannerAgent bound to the given dependencies.
+def create_planner_agent(deps: SearchDeps):
+    """Return async callable: (query, filled_prompt) -> SearchPlan.
 
-    The agent returns a ``SearchPlan`` with classified query type,
-    extracted filters, and 2-3 search queries.
+    Creates a fresh Agent per call so the formatted system_prompt is injected
+    correctly — same pattern as create_scorer_agent and create_validator_agent.
+    Agent.run() no longer accepts system_prompt (renamed to instructions in
+    PydanticAI 1.x), so we pass it through the Agent constructor instead.
+
+    Usage::
+        planner = create_planner_agent(deps)
+        plan: SearchPlan = await planner(query, filled_prompt)
     """
     model = _create_pydantic_model(deps.llm_base_url, deps.llm_model)
-    agent = Agent(
-        model,
-        output_type=SearchPlan,
-        system_prompt=PLANNER_PROMPT,
-    )
-    return agent
+
+    async def run_planner(query: str, filled_prompt: str) -> SearchPlan:
+        agent = Agent(model, output_type=SearchPlan, system_prompt=filled_prompt)
+        result = await agent.run(query)
+        return result.output
+
+    return run_planner
 
 
 # ---------------------------------------------------------------------------
@@ -171,21 +178,46 @@ def create_planner_agent(deps: SearchDeps) -> Agent:
 def create_scorer_agent(deps: SearchDeps):
     """Return an async callable that runs the ScorerAgent with a formatted prompt.
 
-    PydanticAI bakes the system_prompt into the Agent at construction time and
-    Agent.run() does not accept a per-call system_prompt override. We therefore
-    create a fresh Agent for each invocation so the formatted context is injected
-    correctly.
+    Uses ask_llm + parse_json instead of PydanticAI Agent to avoid tool-calling
+    overhead — local LLMs (Gemma, Qwen, etc.) often produce malformed tool-call
+    syntax that PydanticAI cannot parse. Plain JSON generation is far more reliable.
 
     Usage::
         scorer = create_scorer_agent(deps)
         score: ScoreResult = await scorer(query, filled_prompt)
     """
-    model = _create_pydantic_model(deps.llm_base_url, deps.llm_model)
-
     async def run_scorer(query: str, filled_prompt: str) -> ScoreResult:
-        agent = Agent(model, output_type=ScoreResult, system_prompt=filled_prompt)
-        result = await agent.run(query)
-        return result.data
+        from app.services.llm_client import ask_llm
+
+        raw = await ask_llm(
+            query,
+            system_prompt=filled_prompt,
+            parse_json=True,
+            base_url=deps.llm_base_url,
+            model=deps.llm_model,
+            extra_body={"enable_thinking": False},
+            temperature=0.3,
+        )
+        if not isinstance(raw, dict):
+            return ScoreResult(action="search", confidence="medium", message="")
+
+        raw_queries = raw.get("queries") or []
+        queries: list[BaseQueryItem] | None = None
+        if isinstance(raw_queries, list) and raw_queries:
+            queries = [
+                BaseQueryItem(query=q["query"])
+                for q in raw_queries
+                if isinstance(q, dict) and q.get("query")
+            ]
+        return ScoreResult(
+            action=raw.get("action") or "search",
+            confidence=raw.get("confidence") or "medium",
+            song=raw.get("song"),
+            artist=raw.get("artist"),
+            filters=raw.get("filters"),
+            queries=queries,
+            message=raw.get("message") or "",
+        )
 
     return run_scorer
 
@@ -360,6 +392,63 @@ def create_audio_agent(deps: SearchDeps) -> Agent:
 
 
 # ---------------------------------------------------------------------------
+# ValidatorAgent
+# ---------------------------------------------------------------------------
+
+VALIDATOR_PROMPT: str = """
+Does "{song}" by {artist} match the user's query? Reply with JSON only.
+
+User: {query}
+Lyrics: {lyrics_excerpt}
+Previous searches: {previous_queries}
+Filters: {active_filters}
+
+valid=true if lyrics contain the requested words/themes or match the described mood.
+valid=false if excerpt is empty, unrelated, or clearly wrong song.
+If previous_queries are already exhaustive — set valid=true to avoid endless loop.
+
+{{"valid": true|false, "reason": "one sentence", "queries": [{{"query": "..."}}]|null}}
+queries only when valid=false: 1-2 new English queries not in previous searches.
+""".strip()
+
+
+def create_validator_agent(deps: SearchDeps):
+    """Return async callable: (query, filled_prompt) -> ValidatorResult.
+
+    Uses ask_llm + parse_json instead of PydanticAI Agent to avoid tool-calling
+    overhead — local LLMs handle plain JSON much faster than the tool-call schema.
+    """
+    async def run_validator(query: str, filled_prompt: str) -> ValidatorResult:
+        from app.services.llm_client import ask_llm
+
+        raw = await ask_llm(
+            query,
+            system_prompt=filled_prompt,
+            parse_json=True,
+            base_url=deps.llm_base_url,
+            model=deps.llm_model,
+            extra_body={"enable_thinking": False},
+            temperature=0.3,
+        )
+        if not isinstance(raw, dict):
+            return ValidatorResult(valid=True, reason="parse error — accepting answer")
+
+        valid = bool(raw.get("valid", True))
+        reason = str(raw.get("reason", ""))
+        raw_queries = raw.get("queries") or []
+        queries: list[BaseQueryItem] | None = None
+        if isinstance(raw_queries, list) and raw_queries:
+            queries = [
+                BaseQueryItem(query=q["query"])
+                for q in raw_queries
+                if isinstance(q, dict) and q.get("query")
+            ]
+        return ValidatorResult(valid=valid, reason=reason, queries=queries or None)
+
+    return run_validator
+
+
+# ---------------------------------------------------------------------------
 # Public exports
 # ---------------------------------------------------------------------------
 
@@ -367,8 +456,10 @@ __all__ = [
     "create_planner_agent",
     "create_scorer_agent",
     "create_audio_agent",
+    "create_validator_agent",
     "PLANNER_PROMPT",
     "SCORER_PROMPT",
+    "VALIDATOR_PROMPT",
     "AUDIO_AGENT_SYSTEM_PROMPT",
     "_AUDIO_ANSWER_PROMPT",
     "_CLAP_REPHRASE_SYSTEM_PROMPT",

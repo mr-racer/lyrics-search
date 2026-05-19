@@ -21,6 +21,7 @@ Call 2…N  (agentic search loop, up to NUM_ATTEMPTS)
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -29,9 +30,11 @@ from app.domain.models import ChatRequest, SearchFilters, TrackHit
 from app.services.agents import (
     PLANNER_PROMPT,
     SCORER_PROMPT,
+    VALIDATOR_PROMPT,
     _AUDIO_ANSWER_PROMPT,
     _CLAP_REPHRASE_SYSTEM_PROMPT,
     create_scorer_agent,
+    create_validator_agent,
 )
 from app.services.agent_deps import SearchDeps
 from app.services.llm_client import ask_llm
@@ -101,13 +104,40 @@ MAX_CTX_HITS  = 12  # max tracks in LLM context window
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 
+def _extract_lyrics_for_song(context: str, song: str, artist: str) -> str:
+    """Extract the lyrics excerpt for a specific song from the accumulated context string.
+
+    Context blocks are formatted as:
+        • Title — Artist [Album] (Year)
+          Genre: ...
+          Lyrics: ...
+
+    Returns up to 300 chars of the Lyrics line for the matched song, or "".
+    """
+    song_l = song.lower()
+    artist_l = artist.lower()
+    lines = context.splitlines()
+    in_block = False
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("•"):
+            header = stripped[1:].strip().lower()
+            in_block = song_l in header and artist_l in header
+        if in_block and stripped.startswith("Lyrics:"):
+            excerpt = stripped[len("Lyrics:"):].strip()
+            return excerpt[:300]
+    return ""
+
+
 async def _run_searches(
     llm_queries: list[dict],
     service,
     collection_name: str | None = None,
-    forced_mode: str | None = None,  # когда auto_mode=False, используется этот mode для всех запросов
+    forced_mode: str | None = None,
+    filters: SearchFilters | None = None,
+    text_model: str | None = None,
     llm_kw: dict | None = None,
-    skip_rephrase: bool = False,  # True когда запросы уже CLAP-оптимизированы (от Planner)
+    skip_rephrase: bool = False,
 ) -> tuple[str, str, list[TrackHit]]:
     """Execute the LLM's search queries against the library.
 
@@ -127,6 +157,7 @@ async def _run_searches(
     hits: list[TrackHit] = []
     query_strs: list[str] = []
     seen: set[tuple[str, str]] = set()
+    active_filters_log = {k: v for k, v in (filters.model_dump() if filters else {}).items() if v}
 
     for q in llm_queries:
         query_text = (q.get("query") or "").strip()
@@ -154,11 +185,17 @@ async def _run_searches(
                 print(f"[chat] CLAP rephrasing in agentic loop (non-fatal): {exc}")
 
         query_strs.append(query_text)
+        logger.info(
+            "[chat/search] query=%r  mode=%s  filters=%s",
+            query_text, mode, active_filters_log or "(none)",
+        )
 
         try:
             round_hits = await service.search(
                 query=search_query, mode=mode, limit=SEARCH_LIMIT,
                 collection_name=collection_name,
+                filters=filters,
+                text_model=text_model,
             )
             for hit in round_hits:
                 key = (hit.track.title.lower(), hit.track.artist.lower())
@@ -257,6 +294,29 @@ async def chat(req: ChatRequest, request: Request) -> dict:
             "classification": {},
         }
 
+    # Resolve and load the text model for this collection (mirrors search.py).
+    # Without this, chat always uses the default jina model even if the collection
+    # was indexed with qwen — the Qdrant vector name wouldn't match.
+    resolved_text_model: str | None = None
+    if req.collection_name:
+        from app.resources.metadata_db import MetadataDB
+        from app.resources.model_registry import ModelRegistry
+        try:
+            MetadataDB.init()
+            persisted = MetadataDB.get_collection_text_model(req.collection_name)
+            if persisted:
+                resolved_text_model = persisted
+                model, vector_name, vector_dim = ModelRegistry.load_text_model(persisted)
+                db = request.app.state.db_client
+                if db:
+                    db.lyrics_db.model_name = persisted
+                    db.lyrics_db._model = model
+                    db.lyrics_db._vector_name = vector_name
+                    db.lyrics_db._vector_dim = vector_dim
+                logger.info("[chat] text model resolved: %s", persisted)
+        except Exception as exc:
+            logger.warning("[chat] text model lookup failed (non-fatal): %s", exc)
+
     # Common kwargs forwarded to every ask_llm call
     llm_kw: dict[str, Any] = {
         "base_url":   (req.llm_base_url or "").strip() or None,
@@ -298,29 +358,48 @@ async def chat(req: ChatRequest, request: Request) -> dict:
                 resolved_filters=resolved_filters_str,
                 search_filter_query=search_filter_query_str,
             )
-            plan_result = await planner.run(req.message, system_prompt=filled_prompt)
-            plan = plan_result.data
+            plan = await planner(req.message, filled_prompt)
 
             planner_classification = {
                 "type": plan.query_type,
                 "reasoning": "planner",
             }
 
+            logger.info(
+                "[chat/planner/1] action=%s  type=%s  filter_lookup=%s  queries=%s",
+                plan.action,
+                plan.query_type,
+                plan.filter_lookup or "(none)",
+                [q.query for q in plan.queries],
+            )
+
             # Resolve filters if action == "request_filter"
             if plan.action == "request_filter" and plan.filter_lookup:
+                logger.info("[chat/planner/resolve] resolving filter_lookup=%s", plan.filter_lookup)
                 resolved = await deps.resolve_filters(plan.filter_lookup)
-                if resolved:
-                    # Re-run Planner with resolved filters
-                    resolved_filters_str = str(resolved)
-                    search_filter_query_str = str(plan.filter_lookup)
-                    filled_prompt = PLANNER_PROMPT.format(
-                        query=req.message,
-                        previous_queries=previous_queries_str,
-                        resolved_filters=resolved_filters_str,
-                        search_filter_query=search_filter_query_str,
-                    )
-                    plan_result = await planner.run(req.message, system_prompt=filled_prompt)
-                    plan = plan_result.data
+                logger.info("[chat/planner/resolve] result=%s", resolved or "(no matches in DB)")
+
+                # Always re-run so planner knows the resolution outcome
+                # (even when resolved is empty — planner can then omit filters gracefully)
+                resolved_filters_str = json.dumps(resolved, ensure_ascii=False) if resolved else "{}"
+                search_filter_query_str = json.dumps(
+                    {k: v for k, v in plan.filter_lookup.items() if v},
+                    ensure_ascii=False,
+                )
+                filled_prompt2 = PLANNER_PROMPT.format(
+                    query=req.message,
+                    previous_queries=previous_queries_str,
+                    resolved_filters=resolved_filters_str,
+                    search_filter_query=search_filter_query_str,
+                )
+                plan = await planner(req.message, filled_prompt2)
+
+                logger.info(
+                    "[chat/planner/2] action=%s  filters=%s  queries=%s",
+                    plan.action,
+                    plan.filters.model_dump(exclude_none=True) if plan.filters else "(none)",
+                    [q.query for q in plan.queries],
+                )
 
             # Extract queries for the agentic loop — type comes from effective_mode, not per-query
             if plan.queries:
@@ -336,8 +415,7 @@ async def chat(req: ChatRequest, request: Request) -> dict:
             )
 
         except Exception as exc:
-            print(f"[chat] Planner error (falling back to old behavior): {exc}")
-            print(traceback.format_exc())
+            logger.error("[chat] Planner error (falling back to old behavior): %s", exc, exc_info=True)
             planner_queries = None
             planner_filters = None
 
@@ -415,6 +493,7 @@ async def chat(req: ChatRequest, request: Request) -> dict:
                     query=rq, mode="audio", limit=10,
                     collection_name=req.collection_name,
                     filters=audio_filters,
+                    text_model=resolved_text_model,
                 )
                 per_query_hits.append(round_hits)
             except Exception as exc:
@@ -491,11 +570,11 @@ async def chat(req: ChatRequest, request: Request) -> dict:
     final_result: dict       = {}
     attempts_done            = 0
 
-    # Build ScorerAgent callable once (only when planner_enabled).
-    # create_scorer_agent() returns an async callable, not an Agent — it creates
-    # a fresh Agent per invocation so the formatted system_prompt is injected
-    # correctly (PydanticAI doesn't support per-call system_prompt overrides).
+    # Build ScorerAgent and ValidatorAgent callables once (only when planner_enabled).
+    # Both use create_*_agent() which returns an async callable that creates a fresh
+    # Agent per invocation so formatted system_prompt is injected correctly.
     scorer_fn = None
+    validator_fn = None
     if req.planner_enabled:
         scorer_deps = SearchDeps(
             service=service,
@@ -504,6 +583,8 @@ async def chat(req: ChatRequest, request: Request) -> dict:
             llm_model=llm_kw.get("model"),
         )
         scorer_fn = create_scorer_agent(scorer_deps)
+        validator_fn = create_validator_agent(scorer_deps)
+        logger.info("[chat] planner+scorer+validator enabled")
 
     for attempt in range(1, NUM_ATTEMPTS + 1):
         attempts_done = attempt
@@ -592,10 +673,13 @@ async def chat(req: ChatRequest, request: Request) -> dict:
             forced_mode = req.mode if not req.auto_mode else effective_mode
             # Planner queries on attempt 1 are already CLAP-optimised — skip re-rephrase
             use_skip_rephrase = (attempt == 1 and bool(planner_queries))
+            filters_obj = SearchFilters(**planner_filters) if planner_filters else None
             new_pq, new_ctx, new_hits = await _run_searches(
                 queries, service,
                 collection_name=req.collection_name,
                 forced_mode=forced_mode,
+                filters=filters_obj,
+                text_model=resolved_text_model,
                 llm_kw=llm_kw,
                 skip_rephrase=use_skip_rephrase,
             )
@@ -638,6 +722,43 @@ async def chat(req: ChatRequest, request: Request) -> dict:
                     final_result = result  # defined in old LLM branch above  # noqa: F821
                 except NameError:
                     final_result = {}
+
+            # ── Validator (only with Planner, only when a song is proposed) ──
+            if validator_fn and final_result.get("song"):
+                proposed_song = final_result.get("song", "")
+                proposed_artist = final_result.get("artist", "")
+                lyrics_excerpt = _extract_lyrics_for_song(context, proposed_song, proposed_artist)
+                filled_val = VALIDATOR_PROMPT.format(
+                    query=req.message,
+                    song=proposed_song,
+                    artist=proposed_artist,
+                    lyrics_excerpt=lyrics_excerpt or "(no lyrics available)",
+                    previous_queries=previous_queries or "(none)",
+                    active_filters=str(planner_filters) if planner_filters else "(none)",
+                )
+                try:
+                    val = await validator_fn(req.message, filled_val)
+                    logger.info(
+                        "[chat/validator] valid=%s  reason=%r  new_queries=%s",
+                        val.valid, val.reason,
+                        [q.query for q in (val.queries or [])],
+                    )
+
+                    if not val.valid and val.queries and attempt < NUM_ATTEMPTS:
+                        # Rejected — inject new queries and continue the loop
+                        queries = [{"query": q.query} for q in val.queries]
+                        action = "search"
+                        final_result = {}
+                        continue
+
+                    if not val.valid and attempt >= NUM_ATTEMPTS:
+                        # Last attempt — accept the rejected answer with low confidence
+                        final_result["confidence"] = "low"
+                        logger.info("[chat/validator] last attempt — accepting rejected answer with low confidence")
+
+                except Exception as exc:
+                    logger.warning("[chat/validator] error (non-fatal, accepting answer): %s", exc)
+
             break
 
     # Sort retrieved hits by score descending
