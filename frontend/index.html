@@ -7395,6 +7395,72 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, activeCollection }
   );
 }
 
+// ─── InlineLyricExplain — per-line draw-under explanation panel ──────────────
+function InlineLyricExplain({
+  line, lineIdx, expandedLines, explainStates,
+  onToggle, isDark, aiActive, lang,
+}) {
+  const c = useColors(isDark);
+  const [hovered, setHovered] = useState(false);
+  const isExpanded = expandedLines.has(lineIdx);
+  const state = explainStates.get(lineIdx);
+
+  const handleClick = (e) => {
+    e.stopPropagation();
+    onToggle(lineIdx, line);
+  };
+
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{ position: 'relative', padding: '2px 0' }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <span style={{ flex: 1 }}>{line}</span>
+        {aiActive && (hovered || isExpanded) && (
+          <button
+            onClick={handleClick}
+            title={isExpanded ? (lang === 'ru' ? 'Свернуть' : 'Collapse') : (lang === 'ru' ? 'Объяснить эту строку' : 'Explain this line')}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              color: isExpanded ? c.accent : c.textSubtle,
+              fontSize: '14px', padding: '2px 6px',
+              opacity: isExpanded ? 1 : 0.7,
+              transition: 'opacity 120ms',
+            }}
+          >✨</button>
+        )}
+      </div>
+      {isExpanded && state && (
+        <div
+          className="panel-v3"
+          style={{
+            margin: '6px 0 10px',
+            padding: '10px 14px',
+            fontSize: '13px',
+            color: c.text,
+            borderLeft: `2px solid ${c.accent}`,
+          }}
+        >
+          {state.loading
+            ? <span style={{ color: c.textSubtle }}>✨ {lang === 'ru' ? 'Думаю…' : 'Thinking…'}</span>
+            : state.error
+              ? <span style={{ color: c.red }}>{lang === 'ru' ? 'Ошибка' : 'Error'}: {state.error}</span>
+              : <>
+                  {state.message}
+                  {state.web_search_used && (
+                    <div style={{ marginTop: '4px', fontSize: '10px', color: c.textSubtle, fontStyle: 'italic' }}>
+                      🌐 web search
+                    </div>
+                  )}
+                </>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── PLAYER SECTION ─────────────────────────────────────────────────────────
 function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, audio, visible, lyricsMode, onToggleLyrics, onCloseLyrics, showToast, navigateToArtist, aiStatus }) {
   const [playlist, setPlaylist] = useState(initialPlaylist || []);
