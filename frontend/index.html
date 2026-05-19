@@ -6805,7 +6805,10 @@ function getSongFacts(track, lang) {
 }
 
 // ─── LYRICS BACK FACE ───────────────────────────────────────────────────────
-function LyricsBackFace({ track, isVisible, activeCollection, isDark, lang }) {
+function LyricsBackFace({
+  track, isVisible, activeCollection, isDark, lang,
+  expandedLines, explainStates, onToggleLyricExplain, aiActive,
+}) {
   const scrollRef = useRef(null);
 
   // Reset scroll position when track changes — start every new lyric at the top.
@@ -6847,7 +6850,21 @@ function LyricsBackFace({ track, isVisible, activeCollection, isDark, lang }) {
       </div>
 
       {lyrics ? (
-        <div>{lyrics}</div>
+        <div style={{ whiteSpace: 'pre-wrap' }}>
+          {lyrics.split('\n').map((line, i) => (
+            <InlineLyricExplain
+              key={i}
+              line={line}
+              lineIdx={i}
+              expandedLines={expandedLines}
+              explainStates={explainStates}
+              onToggle={onToggleLyricExplain}
+              isDark={isDark}
+              aiActive={aiActive}
+              lang={lang}
+            />
+          ))}
+        </div>
       ) : (
         <div style={{ color: headingColor, fontStyle: 'italic' }}>
           {lang === 'ru' ? 'тексты не проиндексированы' : 'no lyrics indexed yet'}
@@ -7502,6 +7519,84 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
   // Close the drawer whenever the playing track changes
   useEffect(() => { setDrawerOpen(false); }, [currentTrack?.track_id]);
 
+  // Inline lyric explain state — per-line expansion + fetched explanations
+  const [expandedLines, setExpandedLines] = useState(new Set());
+  const [explainStates, setExplainStates] = useState(new Map());
+
+  // Reset when track changes — different lyrics, different state
+  useEffect(() => {
+    setExpandedLines(new Set());
+    setExplainStates(new Map());
+  }, [currentTrack?.track_id]);
+
+  const handleToggleLyricExplain = useCallback(async (lineIdx, line) => {
+    // Capture whether we're collapsing or expanding BEFORE the state update
+    const wasExpanded = expandedLines.has(lineIdx);
+    const hasResult = explainStates.has(lineIdx) && !explainStates.get(lineIdx)?.error;
+
+    // Toggle expansion
+    setExpandedLines(prev => {
+      const next = new Set(prev);
+      if (next.has(lineIdx)) {
+        next.delete(lineIdx);
+      } else {
+        next.add(lineIdx);
+      }
+      return next;
+    });
+
+    // If we were collapsing, no fetch needed
+    if (wasExpanded) return;
+
+    // If we already have a cached result, no fetch needed
+    if (hasResult) return;
+
+    // Mark loading
+    setExplainStates(prev => {
+      const next = new Map(prev);
+      next.set(lineIdx, { loading: true });
+      return next;
+    });
+
+    // Fetch
+    try {
+      const res = await apiFetch('/chat/track-chat', {
+        method: 'POST',
+        body: JSON.stringify({
+          track_context: {
+            title: currentTrack?.title || '',
+            artist: currentTrack?.artist || '',
+            album: currentTrack?.album || null,
+            year: currentTrack?.year || null,
+            genre: currentTrack?.genre || null,
+            full_lyrics: currentTrack?.lyrics || '',
+          },
+          mode: 'lyric_explain',
+          selected_line: line,
+          message: 'Explain this line',
+          llm_base_url: localStorage.getItem('llm_base_url') || undefined,
+          llm_model: localStorage.getItem('llm_model') || undefined,
+          collection_name: activeCollection || undefined,
+        }),
+      });
+      setExplainStates(prev => {
+        const next = new Map(prev);
+        next.set(lineIdx, {
+          loading: false,
+          message: res.message,
+          web_search_used: res.web_search_used,
+        });
+        return next;
+      });
+    } catch (e) {
+      setExplainStates(prev => {
+        const next = new Map(prev);
+        next.set(lineIdx, { loading: false, error: e.message });
+        return next;
+      });
+    }
+  }, [currentTrack, activeCollection, expandedLines, explainStates]);
+
   // Burst feedback for like/dislike icon clicks (single active burst at a time)
   const [burstFor, setBurstFor] = useState(null);
   const burstTimerRef = useRef(null);
@@ -7968,6 +8063,10 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
                           activeCollection={activeCollection}
                           isDark={isDark}
                           lang={lang}
+                          expandedLines={expandedLines}
+                          explainStates={explainStates}
+                          onToggleLyricExplain={handleToggleLyricExplain}
+                          aiActive={!!(aiStatus && aiStatus.aiActive)}
                         />
                       </div>
                     </div>
