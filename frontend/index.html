@@ -5539,7 +5539,7 @@ function IndexingModal({
   if (phase === 'ai-setup') {
     return (
       <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose?.(); }}>
-        <div className="modal-content" style={{ maxWidth: 540, padding: 28 }}>
+        <div className={ske('panel', isDark)} style={{ maxWidth: 540, padding: 28, borderRadius: 20, animation: 'scaleIn 0.3s cubic-bezier(.22,.9,.3,1)' }}>
           <h2 className="serif" style={{ fontSize: 24, marginTop: 0, marginBottom: 8 }}>
             {lang==='ru'?'AI-фичи для этой коллекции?':'AI features for this collection?'}
           </h2>
@@ -5593,7 +5593,7 @@ function IndexingModal({
   if (phase === 'ai-bootstrap') {
     return (
       <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onAiBootstrapLater?.(); }}>
-        <div className="modal-content" style={{ maxWidth: 540, padding: 28 }}>
+        <div className={ske('panel', isDark)} style={{ maxWidth: 540, padding: 28, borderRadius: 20, animation: 'scaleIn 0.3s cubic-bezier(.22,.9,.3,1)' }}>
           <h2 className="serif" style={{ fontSize: 24, marginTop: 0, marginBottom: 8 }}>
             ✅ {lang==='ru'?'Индексация готова':'Indexing complete'}
           </h2>
@@ -7276,30 +7276,20 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, activeCollection }
 
   return (
     <>
-      {/* Backdrop */}
-      <div
-        onClick={onClose}
-        style={{
-          position: 'absolute', inset: 0,
-          background: 'rgba(0,0,0,0.3)',
-          backdropFilter: 'blur(4px)',
-          opacity: isOpen ? 1 : 0,
-          pointerEvents: isOpen ? 'auto' : 'none',
-          transition: 'opacity 280ms cubic-bezier(0.16, 1, 0.3, 1)',
-          zIndex: 90,
-        }}
-      />
-      {/* Drawer panel */}
+      {/* Drawer panel — anchored absolute inside the Player's right column.
+          Slides in from the right edge of that column, fully covering the
+          facts+queue area while open. No backdrop — the column itself IS
+          the surface being replaced. */}
       <div
         className="panel-v3"
         style={{
-          position: 'absolute', top: 0, right: 0, height: '100%',
-          width: '420px', maxWidth: '92vw',
+          position: 'absolute', inset: 0,
           display: 'flex', flexDirection: 'column',
           transform: isOpen ? 'translateX(0)' : 'translateX(110%)',
           transition: 'transform 320ms cubic-bezier(0.16, 1, 0.3, 1)',
-          zIndex: 100,
-          borderRadius: 0,
+          zIndex: 50,
+          borderRadius: 14,
+          pointerEvents: isOpen ? 'auto' : 'none',
         }}
       >
         {/* Header */}
@@ -7308,7 +7298,7 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, activeCollection }
           padding: '16px 18px', borderBottom: `1px solid ${c.border}`,
         }}>
           {track.cover_art_path && (
-            <img src={track.cover_art_path} alt=""
+            <img src={track.cover_art_path.startsWith('http') ? track.cover_art_path : `${API}${track.cover_art_path}`} alt=""
               style={{ width: '40px', height: '40px', borderRadius: '8px', objectFit: 'cover' }} />
           )}
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -7573,7 +7563,9 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
           },
           mode: 'lyric_explain',
           selected_line: line,
-          message: 'Explain this line',
+          // The agent prompt instructs LLM to reply in the language of the user's
+          // message — send it in the interface language so RU users get RU replies.
+          message: lang === 'ru' ? 'Объясни эту строчку' : 'Explain this line',
           llm_base_url: localStorage.getItem('llm_base_url') || undefined,
           llm_model: localStorage.getItem('llm_model') || undefined,
           collection_name: activeCollection || undefined,
@@ -7731,13 +7723,16 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
     if (visible && isPlaying) setTimeout(() => audio.play(), 50);
   }, [currentTrack?.track_id]);
 
-  // Pause when navigating away, resume when coming back
+  // Audio continues in background across nav. On nav-back, resume ONLY if
+  // the audio element itself isn't paused. Read the LIVE el.paused state
+  // (not React isPlaying) — closure over isPlaying was racey: a stale
+  // isPlaying=true from a previous render would call audio.play() even after
+  // the user explicitly paused, restarting playback on the next nav.
   useEffect(() => {
     if (!audio || !currentTrack) return;
-    if (visible && isPlaying) {
+    const el = audio.audioRef?.current;
+    if (visible && el && !el.paused) {
       setTimeout(() => audio.play(), 50);
-    } else if (!visible && isPlaying) {
-      // Don't pause — audio continues in background
     }
   }, [visible]);
 
@@ -8428,19 +8423,21 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
               })()}
             </div>
           </div>
+
+          {/* AI Chat drawer — slides in over the right column (facts + queue),
+              replacing them visually until closed. */}
+          <AIChatDrawer
+            isOpen={drawerOpen}
+            onClose={() => setDrawerOpen(false)}
+            track={currentTrack}
+            lang={lang}
+            isDark={isDark}
+            activeCollection={activeCollection}
+          />
         </div>
       </div>
 
       {/* Audio is managed at App level via useAudioPlayer hook */}
-
-      <AIChatDrawer
-        isOpen={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        track={currentTrack}
-        lang={lang}
-        isDark={isDark}
-        activeCollection={activeCollection}
-      />
     </div>
   );
 }
