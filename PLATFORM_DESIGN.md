@@ -1080,7 +1080,7 @@ CREATE TABLE recommendation_snapshots (
 > | **6**  Spotify-like MVP               | ⏳ Not started                            | — |
 > | **6a** Home (Discovery Magazine)      | ⏳ Not started                            | — |
 > | **6b-B1** Search visual redesign      | ✅ **Shipped** — backend (SearchFilters + Qdrant payload + /sonic-facets) + frontend (Hybrid v3 visuals + RecentSearchesChips + hover breakdown + SonicFiltersChips). Plan: `docs/superpowers/plans/2026-05-19-plan-b1-search-section-redesign.md` |
-> | **6b-B2** Search AI gating + functional | 📝 **Spec + Plan drafted** — execute after B1 | `docs/superpowers/specs/2026-05-16-plan-b2-search-section-ai-gating-design.md`, `docs/superpowers/plans/2026-05-16-plan-b2-search-section-ai-gating.md` |
+> | **6b-B2** Search AI gating + functional | ✅ **Shipped** — chat tab gated on aiStatus.aiActive, DecadeFiltersChips (OR) backed by /library/year-facets, card-click → Player auto-play (detail panel removed), hover play+like overlay extends B1's ScoreBreakdownTooltip, autocomplete typeahead fix, SearchFilters dead-field cleanup (year_from/year_to/duration_* dropped; year_range singular → year_ranges plural). Plan: `docs/superpowers/plans/2026-05-19-plan-b2-search-section-ai-gating.md` |
 > | **6c** Stats redesign (Sonic Map)     | ⏳ Not started — partly blocked on 1c    | — |
 > | **6d** Recommendations                | ⏳ Not started — partly blocked on 1b    | — |
 > | **7**  Polish                         | ⏳ Not started                            | — |
@@ -1210,6 +1210,18 @@ CREATE TABLE recommendation_snapshots (
 > **Status (2026-05-16)**: 🔜 **Next plan — Plan B (SearchSectionV2).** Plan 6 (AI Mode Infrastructure) shipped the `aiStatus.aiActive` signal that Plan B needs to gate chat-search; Plan B is now unblocked and is the immediate next plan to brainstorm → spec → write.
 >
 > **Status (2026-05-19)**: ✅ **B1 shipped** on `feature/plan-b1-search-section-redesign`. Ships: `SearchFilters.sonic_tags` + Qdrant payload write + `/library/sonic-facets` endpoint + `MetadataDB.get_sonic_facets` aggregate + `scripts/backfill_sonic_payload.py` migration + SearchSection rewritten to Hybrid v3 materials with `RecentSearchesChips`, `ScoreBreakdownTooltip` (hover), `SonicFiltersChips` (AND-semantics tag filter). **sonic_class deferred** — operator-trained classifier required first; will return as a separate small follow-up plan (add `sonic_class: list[str]` OR-chip group). B2 (`aiActive` gating + decade + card-click → Player + hover play/like + autocomplete fix + dead-field cleanup) is next.
+>
+> **Operator action after merge**: re-index a representative collection to verify `sonic_tags` populates the Qdrant payload (B1.2) and that `year_range` is also present (already shipped pre-B2). For collections already indexed before B1.2, run `python -m scripts.backfill_sonic_payload --collection <name>` per collection. `year-facets` aggregates Qdrant payload directly so no separate backfill is needed for decade chips.
+>
+> **Status (2026-05-19, later)**: ✅ **B2 shipped** on `feature/plan-b2-search-section-ai-gating`. Ships:
+>   - chat-tab gated on `aiStatus.aiActive` (snaps to search tab when LLM offline);
+>   - `year_ranges: list[str]` OR-semantics filter + `GET /library/year-facets` aggregate endpoint (reads Qdrant payload directly) + `DecadeFiltersChips` component;
+>   - card body click → Player auto-play (artist-name link still routes to Atlas via `stopPropagation`); inline detail panel removed (–109 lines);
+>   - hover play + like action overlay extends B1's `ScoreBreakdownTooltip` (reaction state lazy-fetched per-card on hover);
+>   - autocomplete typeahead fix (`/browse` → `/library/browse` path correction);
+>   - `SearchFilters` dead-field cleanup (`year_from`, `year_to`, `duration_min_sec`, `duration_max_sec` dropped; singular `year_range` replaced by plural `year_ranges`; `extra="ignore"` added to silently absorb legacy planner-LLM emissions).
+>
+> **Phase 6b complete.** Next candidate: 6c (Stats / Sonic Map — blocked on Phase 1b.1) or the deferred `sonic_class` follow-up once operator-trained classifier ships.
 >
 > **Plan B scope (decided during 2026-05-16 brainstorm, awaiting formal spec):**
 > - Two-mode UI gated on `aiStatus.aiActive`:
