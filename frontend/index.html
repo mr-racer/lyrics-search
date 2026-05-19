@@ -3772,7 +3772,6 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
 
   // Shared results
   const [results, setResults] = useState([]);
-  const [detailHit, setDetailHit] = useState(null);
   const [hoveredHit, setHoveredHit] = useState(null);
 
   const getLLMSettings = () => ({
@@ -3806,7 +3805,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
         message:userText, history, mode: effectiveMode, auto_mode: autoMode, ...getLLMSettings()
       }) });
       const hits = res.hits || [];
-      setResults(hits); setDetailHit(null);
+      setResults(hits);
       const finalMsgs = [...newMsgs, {
         role:'assistant', text:res.message||'…', hits, best_hit:res.best_hit,
         confidence:res.confidence, song:res.song, artist:res.artist,
@@ -3825,7 +3824,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
   // ── Search handler ──
   const handleSearch = async () => {
     if (!searchQuery.trim() || searchLoading) return;
-    setSearchLoading(true); setSearchError(''); setDetailHit(null);
+    setSearchLoading(true); setSearchError('');
     try {
       const f = {};
       ['artist','album','genre'].forEach(k => { if (filters[k]) f[k] = filters[k]; });
@@ -3929,7 +3928,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
               .map((hit, hi) => (
                 <div key={hi} className="chat-result-card"
                   style={{ background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)' }}
-                  onClick={() => { setResults(msg.hits); setDetailHit(hit); }}
+                  onClick={() => { setResults(msg.hits); onPlayTrack && onPlayTrack(hit, msg.hits); }}
                   onMouseEnter={e => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)'; }}
                   onMouseLeave={e => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)'; }}>
                   <AlbumCover title={hit.track?.title||''} artist={hit.track?.artist||''} size={42} isDark={isDark} coverPath={hit.track?.cover_art_path} />
@@ -3968,7 +3967,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
     );
   };
 
-  const isEmpty = !detailHit && results.length === 0;
+  const isEmpty = results.length === 0;
 
   return (
     <div className="panel-v3" style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', borderRadius:0, border:'none', boxShadow:'none' }}>
@@ -4149,7 +4148,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
                   <div className="search-grid">
                     {results.map((hit, i) => (
                       <div key={i} className="grid-card panel-v3"
-                        onClick={() => setDetailHit(hit)}
+                        onClick={() => onPlayTrack && onPlayTrack(hit, results)}
                         onMouseEnter={() => setHoveredHit(hit.track?.track_id)}
                         onMouseLeave={() => setHoveredHit(null)}
                         style={{
@@ -4374,109 +4373,6 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
         </div>
       )}
 
-      {/* ── Song Detail Modal ── */}
-      {detailHit && (
-        <div className="modal-overlay" onClick={() => setDetailHit(null)}>
-          <div className={`modal-content ${ske('panel', isDark)}`} onClick={e => e.stopPropagation()}
-            style={{ padding:'0', overflowY:'auto' }}>
-            {/* Close button */}
-            <div style={{ position:'sticky', top:'0', zIndex:10, display:'flex', justifyContent:'space-between', alignItems:'center',
-              padding:'16px 24px', borderBottom:`1px solid ${c.border}`,
-              background: isDark ? 'rgba(13,13,16,0.85)' : 'rgba(242,241,246,0.85)',
-              backdropFilter:'blur(12px)' }}>
-              <button onClick={() => setDetailHit(null)} className="mono"
-                style={{ fontSize:'14px', color:c.textMuted, letterSpacing:'0.12em' }}>
-                ← {lang==='ru'?'НАЗАД К РЕЗУЛЬТАТАМ':'BACK TO RESULTS'}
-              </button>
-              {detailHit.track?.file_path && (
-                <button onClick={() => onPlayTrack && onPlayTrack(detailHit, results)}
-                  className="ske-accent"
-                  style={{ padding:'8px 16px', borderRadius:'10px', fontSize:'14px', fontWeight:'600',
-                    display:'flex', alignItems:'center', gap:'6px' }}>
-                  ▶ {lang==='ru'?'СЛУШАТЬ':'PLAY'}
-                </button>
-              )}
-            </div>
-
-            <div style={{ padding:'32px 36px 48px', maxWidth:'800px', margin:'0 auto' }}>
-              {/* Album art + title */}
-              <div style={{ display:'flex', justifyContent:'center', marginBottom:'28px', animation:'scaleIn 0.4s ease' }}>
-                <AlbumCover title={detailHit.track?.title||''} artist={detailHit.track?.artist||''}
-                  size={240} isDark={isDark} coverPath={detailHit.track?.cover_art_path} radius={20} />
-              </div>
-              <div style={{ textAlign:'center', marginBottom:'18px' }}>
-                <h3 className="serif" style={{ fontSize:'42px', lineHeight:'1', letterSpacing:'-0.02em', color:c.text, fontWeight:'400' }}>
-                  {detailHit.track?.title}
-                </h3>
-                <div className="serif" style={{ fontSize:'20px', color:c.textMuted, marginTop:'10px', fontStyle:'italic' }}>
-                  {detailHit.track?.artist}
-                </div>
-                <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, marginTop:'10px', letterSpacing:'0.18em' }}>
-                  {[detailHit.track?.album, detailHit.track?.year].filter(Boolean).join(' · ').toUpperCase()}
-                </div>
-              </div>
-              <div style={{ display:'flex', gap:'8px', flexWrap:'wrap', justifyContent:'center', marginBottom:'28px' }}>
-                {[detailHit.track?.genre, `${Math.round((detailHit.score||0)*100)}% match`, detailHit.matched_on].filter(Boolean).map((tag,i)=>(
-                  <span key={i} className="mono" style={{
-                    padding:'5px 14px', borderRadius:'20px', fontSize:'13px', letterSpacing:'0.15em',
-                    background:c.accentBg, color:c.accent, border:`1px solid ${c.accent.replace(')', ' / 0.25)')}`,
-                  }}>{String(tag).toUpperCase()}</span>
-                ))}
-              </div>
-
-              {/* Lyrics */}
-              {detailHit.track?.lyrics && (
-                <div className={ske('panel', isDark)} style={{ borderRadius:'16px', marginBottom:'16px' }}>
-                  <div className="mono" style={{ padding:'14px 20px', borderBottom:`1px solid ${c.border}`,
-                    fontSize:'13px', color:c.textSubtle, letterSpacing:'0.22em' }}>
-                    {lang==='ru'?'ТЕКСТ ПЕСНИ':'LYRICS'}
-                  </div>
-                  <div style={{ padding:'20px 22px', fontSize:'14px', color:c.textMuted, lineHeight:'1.85',
-                    whiteSpace:'pre-wrap', wordBreak:'break-word' }}>
-                    {detailHit.track.lyrics}
-                  </div>
-                </div>
-              )}
-
-              {/* Artist facts */}
-              {detailHit.artist_facts && (
-                <div className={ske('panel', isDark)} style={{ borderRadius:'16px', marginBottom:'16px' }}>
-                  <div className="mono" style={{ padding:'14px 20px', borderBottom:`1px solid ${c.border}`,
-                    fontSize:'13px', color:c.textSubtle, letterSpacing:'0.22em' }}>
-                    {lang==='ru'?'ФАКТЫ ОБ АРТИСТЕ':'ABOUT THE ARTIST'}
-                  </div>
-                  <div style={{ padding:'20px 22px', fontSize:'14px', color:c.textMuted, lineHeight:'1.85',
-                    whiteSpace:'pre-wrap', wordBreak:'break-word' }}>
-                    {detailHit.artist_facts.split('\n\n').map((fact, i) => (
-                      <p key={i} style={{ margin:'0 0 12px', lineHeight:'1.7' }}>{fact}</p>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* Song facts */}
-              {detailHit.song_facts && (
-                <div className={ske('panel', isDark)} style={{ borderRadius:'16px' }}>
-                  <div className="mono" style={{ padding:'14px 20px', borderBottom:`1px solid ${c.border}`,
-                    fontSize:'13px', color:c.textSubtle, letterSpacing:'0.22em' }}>
-                    {lang==='ru'?'ФАКТЫ О ПЕСНЕ':'ABOUT THE SONG'}
-                  </div>
-                  <div style={{ padding:'18px 20px' }}>
-                    {detailHit.song_facts.split('\n\n').map((f, i) => (
-                      <div key={i} style={{
-                        padding: '10px 12px', marginBottom: '8px', borderRadius: '8px',
-                        background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
-                        borderLeft: `3px solid ${c.accent}`,
-                        fontSize: '14px', color: c.textMuted, lineHeight: '1.7',
-                      }}>{f}</div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
