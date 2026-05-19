@@ -142,6 +142,35 @@ class TrackReactionResponse(BaseModel):
     collection_name: str
     reaction: Literal["like", "dislike"] | None
 
+
+class TrackChatContext(BaseModel):
+    """Context about the track the user is chatting about. Backend resolves
+    song_facts server-side (raw, not refined) — DO NOT include facts here."""
+    title: str
+    artist: str
+    album: str | None = None
+    year: int | None = None
+    genre: str | None = None
+    full_lyrics: str = ""
+
+
+class TrackChatRequest(BaseModel):
+    """Request body for POST /chat/track-chat."""
+    track_context: TrackChatContext
+    mode: Literal["song", "lyric_explain"]
+    selected_line: str | None = None  # required when mode='lyric_explain'
+    history: List[ChatMessage] = []
+    message: str
+    llm_base_url: Optional[str] = None
+    llm_model: Optional[str] = None
+    collection_name: Optional[str] = None
+
+
+class TrackChatResponse(BaseModel):
+    """Response body for POST /chat/track-chat."""
+    message: str
+    web_search_used: bool = False
+
 # LLM MODELS
 # TODO поменял QueryItem на BaseQueryItem, проверь что в нужных местах поменялось.
 

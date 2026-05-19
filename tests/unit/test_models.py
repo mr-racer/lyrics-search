@@ -213,3 +213,48 @@ def test_cluster_representative_shape():
     )
     assert r.size == 12
     assert r.representative_tracks[0]["track_id"] == "t1"
+
+
+class TestTrackChatModels:
+    def test_track_chat_context_required_fields(self):
+        from app.domain.models import TrackChatContext
+        ctx = TrackChatContext(
+            title="T", artist="A", album=None, year=None, genre=None,
+            full_lyrics="line 1\nline 2",
+        )
+        assert ctx.title == "T"
+        assert ctx.full_lyrics == "line 1\nline 2"
+
+    def test_track_chat_request_song_mode_no_selected_line_ok(self):
+        from app.domain.models import TrackChatContext, TrackChatRequest
+        req = TrackChatRequest(
+            track_context=TrackChatContext(
+                title="T", artist="A", album=None, year=None, genre=None,
+                full_lyrics="",
+            ),
+            mode="song",
+            message="hi",
+        )
+        assert req.mode == "song"
+        assert req.selected_line is None
+        assert req.history == []
+
+    def test_track_chat_request_lyric_explain_with_selected_line(self):
+        from app.domain.models import TrackChatContext, TrackChatRequest
+        req = TrackChatRequest(
+            track_context=TrackChatContext(
+                title="T", artist="A", album=None, year=None, genre=None,
+                full_lyrics="",
+            ),
+            mode="lyric_explain",
+            selected_line="Bring me water for my eyes",
+            message="Explain this line",
+        )
+        assert req.mode == "lyric_explain"
+        assert req.selected_line == "Bring me water for my eyes"
+
+    def test_track_chat_response_shape(self):
+        from app.domain.models import TrackChatResponse
+        r = TrackChatResponse(message="hello", web_search_used=False)
+        assert r.message == "hello"
+        assert r.web_search_used is False
