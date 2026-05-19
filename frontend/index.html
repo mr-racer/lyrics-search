@@ -7435,7 +7435,7 @@ function InlineLyricExplain({
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
         <span style={{ flex: 1 }}>{line}</span>
-        {aiActive && (hovered || isExpanded) && (
+        {aiActive && line.trim() && (hovered || isExpanded) && (
           <button
             onClick={handleClick}
             title={isExpanded ? (lang === 'ru' ? 'Свернуть' : 'Collapse') : (lang === 'ru' ? 'Объяснить эту строку' : 'Explain this line')}
