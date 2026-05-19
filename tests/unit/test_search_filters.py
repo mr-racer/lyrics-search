@@ -13,13 +13,25 @@ class TestExtractFilterKwargs:
     def test_empty_filters(self):
         svc = SearchService.__new__(SearchService)
         result = svc._extract_filter_kwargs(SearchFilters())
-        assert result == {"artist": None, "album": None, "genre": None}
+        assert result == {
+            "artist": None,
+            "album": None,
+            "genre": None,
+            "year_range": None,
+            "sonic_tags": None,
+        }
 
     def test_populated_filters(self):
         svc = SearchService.__new__(SearchService)
         f = SearchFilters(artist="A", album="B", genre="C")
         result = svc._extract_filter_kwargs(f)
-        assert result == {"artist": "A", "album": "B", "genre": "C"}
+        assert result == {
+            "artist": "A",
+            "album": "B",
+            "genre": "C",
+            "year_range": None,
+            "sonic_tags": None,
+        }
 
 
 class TestBuildQdrantFilterModels:
@@ -47,3 +59,22 @@ class TestBuildQdrantFilterModels:
 
         assert isinstance(f, models.Filter)
         assert len(f.must) == 3
+
+
+def test_search_filters_accepts_sonic_tags_list():
+    f = SearchFilters(sonic_tags=["melancholic", "lo-fi"])
+    assert f.sonic_tags == ["melancholic", "lo-fi"]
+
+
+def test_search_filters_sonic_tags_default_empty_not_none():
+    """Empty list (not None) is the right default so iteration is safe."""
+    f = SearchFilters()
+    assert f.sonic_tags == []
+
+
+def test_search_filters_legacy_fields_unchanged():
+    """B1 only adds sonic_tags — does not remove year_from/duration_* (B2's job)."""
+    f = SearchFilters(artist="A", year_from=1990, duration_min_sec=120.0)
+    assert f.artist == "A"
+    assert f.year_from == 1990
+    assert f.duration_min_sec == 120.0

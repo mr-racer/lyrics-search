@@ -1079,7 +1079,7 @@ CREATE TABLE recommendation_snapshots (
 > | **5**  AI Chat & lyrics-explain       | ⏳ Not started — Ask AI button shows toast stub | — |
 > | **6**  Spotify-like MVP               | ⏳ Not started                            | — |
 > | **6a** Home (Discovery Magazine)      | ⏳ Not started                            | — |
-> | **6b-B1** Search visual redesign      | 📝 **Spec + Plan drafted** — execute first | `docs/superpowers/specs/2026-05-16-plan-b1-search-section-redesign-design.md`, `docs/superpowers/plans/2026-05-16-plan-b1-search-section-redesign.md` |
+> | **6b-B1** Search visual redesign      | ✅ **Shipped** — backend (SearchFilters + Qdrant payload + /sonic-facets) + frontend (Hybrid v3 visuals + RecentSearchesChips + hover breakdown + SonicFiltersChips). Plan: `docs/superpowers/plans/2026-05-19-plan-b1-search-section-redesign.md` |
 > | **6b-B2** Search AI gating + functional | 📝 **Spec + Plan drafted** — execute after B1 | `docs/superpowers/specs/2026-05-16-plan-b2-search-section-ai-gating-design.md`, `docs/superpowers/plans/2026-05-16-plan-b2-search-section-ai-gating.md` |
 > | **6c** Stats redesign (Sonic Map)     | ⏳ Not started — partly blocked on 1c    | — |
 > | **6d** Recommendations                | ⏳ Not started — partly blocked on 1b    | — |
@@ -1096,6 +1096,7 @@ CREATE TABLE recommendation_snapshots (
 >
 > **Deferred from shipped plans** (slots reserved, will return as smaller plans):
 > - **Sonic Sibling** (Phase 1 item 4 + Phase 4 item 12) — `/recommend/sonic-sibling` returns 501. Dependencies on Phase 1c.1-1c.2 (sonic tags) and 1c.5-1c.6 (classifier for class-diff phrase) are **now satisfied** (Phase 1c shipped 2026-05-16); endpoint awaits its own plan to wire the Qdrant payload-filter query + LLM `common_tags ∩ class_diff` phrasing.
+> - **Sonic class filter follow-up** — `sonic_class: list[str]` field + OR-chip group in SearchSection. Waiting on operator-trained classifier (separate dataset; no user-curator pass needed in this project's workflow).
 > - **Related artists tab** + **Eras tab** (Phase 3) — Related needs CLAP artist centroids (Phase 1c products); Eras is a small standalone follow-up.
 > - **Click-to-artist routing in Library / RecentlyPlayed** — those sections haven't been redesigned yet; routing will be added when each ships.
 > - **OnboardingScreen 3-phase wizard** (Plan 6 follow-up) — `OnboardingScreen.handleIndex` still ships its own pre-wizard copy; lift `startIndexing` into a shared helper so first-run users get the same ai-setup → indexing → ai-bootstrap flow as SettingsPanel.
@@ -1207,6 +1208,8 @@ CREATE TABLE recommendation_snapshots (
 ### Phase 6b: Search redesign
 
 > **Status (2026-05-16)**: 🔜 **Next plan — Plan B (SearchSectionV2).** Plan 6 (AI Mode Infrastructure) shipped the `aiStatus.aiActive` signal that Plan B needs to gate chat-search; Plan B is now unblocked and is the immediate next plan to brainstorm → spec → write.
+>
+> **Status (2026-05-19)**: ✅ **B1 shipped** on `feature/plan-b1-search-section-redesign`. Ships: `SearchFilters.sonic_tags` + Qdrant payload write + `/library/sonic-facets` endpoint + `MetadataDB.get_sonic_facets` aggregate + `scripts/backfill_sonic_payload.py` migration + SearchSection rewritten to Hybrid v3 materials with `RecentSearchesChips`, `ScoreBreakdownTooltip` (hover), `SonicFiltersChips` (AND-semantics tag filter). **sonic_class deferred** — operator-trained classifier required first; will return as a separate small follow-up plan (add `sonic_class: list[str]` OR-chip group). B2 (`aiActive` gating + decade + card-click → Player + hover play/like + autocomplete fix + dead-field cleanup) is next.
 >
 > **Plan B scope (decided during 2026-05-16 brainstorm, awaiting formal spec):**
 > - Two-mode UI gated on `aiStatus.aiActive`:

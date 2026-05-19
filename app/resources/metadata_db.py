@@ -869,6 +869,46 @@ class MetadataDB:
             "audio_signature": sig,
         }
 
+    @classmethod
+    def get_sonic_facets(cls, top_k: int = 50) -> dict:
+        """Return aggregate counts of sonic_tags across the songs table.
+
+        Returns
+        -------
+        {
+          "tags": [{"value": str, "count": int}, ...]  # sorted desc by count, capped at top_k
+        }
+        """
+        import json as _json
+        from collections import Counter
+
+        conn = cls._connect()
+        tag_rows = conn.execute(
+            "SELECT sonic_tags_json FROM songs "
+            "WHERE sonic_tags_json IS NOT NULL AND sonic_tags_json != ''"
+        ).fetchall()
+
+        tag_counter: Counter[str] = Counter()
+        for (raw,) in tag_rows:
+            try:
+                tags = _json.loads(raw)
+            except (TypeError, ValueError, _json.JSONDecodeError):
+                continue
+            if not isinstance(tags, list):
+                continue
+            for t in tags:
+                if isinstance(t, dict) and "tag" in t:
+                    tag_counter[t["tag"]] += 1
+                elif isinstance(t, str):
+                    tag_counter[t] += 1
+
+        return {
+            "tags": [
+                {"value": v, "count": n}
+                for v, n in tag_counter.most_common(top_k)
+            ],
+        }
+
     # ── Sonic Vibe cache (Plan 3 Task 14) ──
 
     @classmethod

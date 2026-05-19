@@ -1275,6 +1275,24 @@
       color: #161620;
       box-shadow: inset 0 1px 0 rgba(255,255,255,1), 0 0 0 1px oklch(60% 0.18 270 / 0.3), 0 0 12px oklch(60% 0.18 270 / 0.18);
     }
+    /* Segmented pill row — a flex row wrapper that holds pill-v3 buttons as a group */
+    .pill-segmented {
+      display: inline-flex;
+      gap: 4px;
+      padding: 3px;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.07);
+    }
+    .pill-segmented .pill-v3 {
+      border-radius: 999px;
+      border: none;
+    }
+    body[data-theme="light"] .pill-segmented {
+      background: rgba(0,0,0,0.04);
+      border: 1px solid rgba(0,0,0,0.08);
+    }
+
     body[data-theme="light"] .mono-label {
       color: rgba(22,22,32,0.55);
     }
@@ -3520,9 +3538,164 @@ function Segmented({ value, onChange, options, isDark, size='md', style } = {}) 
   );
 }
 
+// ─── SCORE BREAKDOWN TOOLTIP ──────────────────────────────────────────────────
+function ScoreBreakdownTooltip({ breakdown, isDark }) {
+  const c = useColors(isDark);
+  if (!breakdown) return null;
+  const rows = [
+    { label: 'Text',  v: breakdown.text_dense_score },
+    { label: 'BM25',  v: breakdown.text_bm25_score },
+    { label: 'Audio', v: breakdown.audio_score },
+  ].filter(r => r.v != null);
+  if (rows.length === 0) return null;
+  return (
+    <div className="panel-v3 score-breakdown-tooltip" style={{
+      position:'absolute', top:'100%', left:'50%', transform:'translateX(-50%)',
+      marginTop:'8px', padding:'10px 14px', minWidth:'180px',
+      zIndex:50, fontSize:'12px', color:c.text,
+      pointerEvents:'none',
+      boxShadow:'0 8px 24px rgba(0,0,0,0.32)',
+    }}>
+      {rows.map(r => (
+        <div key={r.label} style={{ display:'flex', justifyContent:'space-between', gap:'12px', padding:'2px 0' }}>
+          <span style={{ color:c.textSubtle }}>{r.label}</span>
+          <span style={{ fontFamily:'ui-monospace, monospace' }}>{(r.v * 100).toFixed(1)}%</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── RECENT SEARCHES HOOK ─────────────────────────────────────────────────────
+function useRecentSearches(activeCollection) {
+  const storageKey = `recentSearches:${activeCollection || '_default'}`;
+  const [items, setItems] = useState(() => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.slice(0, 8) : [];
+    } catch { return []; }
+  });
+
+  const push = useCallback((query) => {
+    const q = (query || '').trim();
+    if (!q) return;
+    setItems(prev => {
+      const next = [q, ...prev.filter(x => x.toLowerCase() !== q.toLowerCase())].slice(0, 8);
+      try { localStorage.setItem(storageKey, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, [storageKey]);
+
+  const remove = useCallback((query) => {
+    setItems(prev => {
+      const next = prev.filter(x => x !== query);
+      try { localStorage.setItem(storageKey, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, [storageKey]);
+
+  const clearAll = useCallback(() => {
+    setItems([]);
+    try { localStorage.removeItem(storageKey); } catch {}
+  }, [storageKey]);
+
+  // Re-read when activeCollection changes (different storageKey).
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      const parsed = raw ? JSON.parse(raw) : [];
+      setItems(Array.isArray(parsed) ? parsed.slice(0, 8) : []);
+    } catch { setItems([]); }
+  }, [storageKey]);
+
+  return { items, push, remove, clearAll };
+}
+
+// ─── RECENT SEARCHES CHIPS ────────────────────────────────────────────────────
+function RecentSearchesChips({ items, onPick, onRemove, onClearAll, isDark }) {
+  const c = useColors(isDark);
+  if (!items || items.length === 0) return null;
+  return (
+    <div style={{ display:'flex', alignItems:'center', gap:'8px', flexWrap:'wrap', padding:'8px 0' }}>
+      <span style={{ fontSize:'12px', color:c.textSubtle }}>Recent:</span>
+      {items.map(q => (
+        <button
+          key={q}
+          className="pill-v3"
+          onClick={() => onPick(q)}
+          style={{ padding:'4px 10px', fontSize:'13px', cursor:'pointer',
+                   display:'inline-flex', alignItems:'center', gap:'6px' }}
+        >
+          <span>{q}</span>
+          <span
+            role="button"
+            aria-label="remove"
+            onClick={e => { e.stopPropagation(); onRemove(q); }}
+            style={{ opacity:0.6, fontSize:'11px', cursor:'pointer' }}
+          >×</span>
+        </button>
+      ))}
+      <button
+        onClick={onClearAll}
+        style={{ background:'transparent', border:'none', color:c.textSubtle,
+                 fontSize:'11px', cursor:'pointer', textDecoration:'underline' }}
+      >Clear all</button>
+    </div>
+  );
+}
+
+// ─── SONIC FILTERS CHIPS ──────────────────────────────────────────────────────
+function SonicFiltersChips({ activeCollection, selectedTags, onToggleTag, isDark }) {
+  const c = useColors(isDark);
+  const [facets, setFacets] = useState({ tags: [] });
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    setError(false);
+    apiFetch('/library/sonic-facets?top_k=30')
+      .then(data => { if (alive) setFacets(data || { tags: [] }); })
+      .catch(() => { if (alive) setError(true); });
+    return () => { alive = false; };
+  }, [activeCollection]);
+
+  if (error) return (
+    <div style={{ fontSize:'12px', color:c.textSubtle, padding:'6px 0' }}>
+      Sonic filters unavailable.
+    </div>
+  );
+  if (!facets.tags || !facets.tags.length) return null;
+
+  const renderChip = (label, count, active, onClick) => (
+    <button
+      key={label}
+      onClick={onClick}
+      className={`pill-v3${active ? ' pill-v3-active' : ''}`}
+      style={{
+        padding:'4px 10px', fontSize:'12px', cursor:'pointer',
+        opacity: active ? 1 : 0.7,
+        border: active ? `1px solid ${c.accent}` : '1px solid transparent',
+      }}
+    >
+      {label} <span style={{ opacity:0.5, fontSize:'10px', marginLeft:'4px' }}>{count}</span>
+    </button>
+  );
+
+  return (
+    <div style={{ display:'flex', alignItems:'center', gap:'8px', flexWrap:'wrap', padding:'8px 0' }}>
+      <span style={{ fontSize:'12px', color:c.textSubtle, minWidth:'48px' }}>Tags:</span>
+      {facets.tags.map(({ value, count }) =>
+        renderChip(value, count, selectedTags.includes(value), () => onToggleTag(value))
+      )}
+    </div>
+  );
+}
+
 // ─── SEARCH SECTION (redesigned) ──────────────────────────────────────────────
 function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateToArtist }) {
   const c = useColors(isDark);
+  const recent = useRecentSearches(activeCollection);
   const { sessions, saveSession, deleteSession } = useChatHistory(activeCollection);
 
   // Mode: 'search' (grid) or 'chat' (dialog)
@@ -3552,7 +3725,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
   const [searchError, setSearchError] = useState('');
   const [searchExecuted, setSearchExecuted] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
-  const [filters, setFilters] = useState({ artist:'', album:'', genre:'' });
+  const [filters, setFilters] = useState({ artist:'', album:'', genre:'', sonic_tags:[] });
   const [filterSuggestions, setFilterSuggestions] = useState({ artist:[], album:[], genre:[] });
   const [activeFilterField, setActiveFilterField] = useState(null);
   const filterTimer = useRef(null);
@@ -3560,6 +3733,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
   // Shared results
   const [results, setResults] = useState([]);
   const [detailHit, setDetailHit] = useState(null);
+  const [hoveredHit, setHoveredHit] = useState(null);
 
   const getLLMSettings = () => ({
     llm_base_url: localStorage.getItem('llm_base_url') || undefined,
@@ -3610,12 +3784,14 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
     try {
       const f = {};
       ['artist','album','genre'].forEach(k => { if (filters[k]) f[k] = filters[k]; });
+      if (filters.sonic_tags.length) f.sonic_tags = filters.sonic_tags;
       const res = await apiFetch('/search/', { method:'POST', body: JSON.stringify({
         query:searchQuery, mode:searchMode, filters:Object.keys(f).length?f:null,
         limit:20, collection_name:activeCollection||undefined
       }) });
       setResults(res.hits||[]);
       setSearchExecuted(true);
+      recent.push(searchQuery);
     } catch(e) { setSearchError(e.message); }
     finally { setSearchLoading(false); }
   };
@@ -3656,6 +3832,15 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
     setFilters(p => ({ ...p, [field]: value }));
     setFilterSuggestions(p => ({ ...p, [field]: [] }));
     setActiveFilterField(null);
+  };
+
+  const toggleSonicTag = (value) => {
+    setFilters(p => ({
+      ...p,
+      sonic_tags: p.sonic_tags.includes(value)
+        ? p.sonic_tags.filter(x => x !== value)
+        : [...p.sonic_tags, value],
+    }));
   };
 
   // ── Render chat message ──
@@ -3731,7 +3916,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
   const isEmpty = !detailHit && results.length === 0;
 
   return (
-    <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:c.bg }}>
+    <div className="panel-v3" style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', borderRadius:0, border:'none', boxShadow:'none' }}>
       {/* ── Section Header with mode toggle ── */}
       <SectionHeader
         isDark={isDark} lang={lang}
@@ -3739,11 +3924,20 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
         title={lang==='ru'?'Поиск':'Search'}
         accent={lang==='ru'?'по смыслу':'by meaning'}
         right={
-          <Segmented isDark={isDark} value={tab} onChange={setTab}
-            options={[
-              { value:'search', label: `${lang==='ru'?'🔍':'🔍'} ${lang==='ru'?'Поиск':'Search'}` },
-              { value:'chat',   label: `${lang==='ru'?'💬':'💬'} ${lang==='ru'?'Чат':'Chat'}` },
-            ]} />
+          <div className="pill-v3 pill-segmented">
+            <button
+              className={`pill-v3${tab==='search' ? ' pill-v3-active' : ''}`}
+              onClick={() => setTab('search')}
+              style={{ fontFamily:"'JetBrains Mono', monospace", fontSize:'11px', letterSpacing:'0.06em', fontWeight:'600' }}>
+              {lang==='ru'?'🔍 Поиск':'🔍 Search'}
+            </button>
+            <button
+              className={`pill-v3${tab==='chat' ? ' pill-v3-active' : ''}`}
+              onClick={() => setTab('chat')}
+              style={{ fontFamily:"'JetBrains Mono', monospace", fontSize:'11px', letterSpacing:'0.06em', fontWeight:'600' }}>
+              {lang==='ru'?'💬 Чат':'💬 Chat'}
+            </button>
+          </div>
         }
       />
 
@@ -3756,7 +3950,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
           <div className="tab-enter" style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
             {/* Hero search bar */}
             <div style={{ padding:'20px 32px 16px' }}>
-              <div className={`hero-bar ${ske('inset', isDark)}`} style={{
+              <div className="hero-bar panel-v3" style={{
                 borderRadius:'16px', padding:'6px', display:'flex', gap:'8px', alignItems:'center',
               }}>
                 <div style={{ padding:'8px 12px', color:c.textSubtle, display:'flex' }}>
@@ -3769,9 +3963,9 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
                   style={{ flex:1, padding:'12px 0', border:'none', background:'transparent',
                     color:c.text, fontSize:'17px', outline:'none', fontFamily:"'Geist', sans-serif" }} />
                 <button onClick={handleSearch} disabled={searchLoading||!searchQuery.trim()}
-                  className={searchLoading||!searchQuery.trim() ? '' : 'ske-accent'}
+                  className={searchLoading||!searchQuery.trim() ? '' : 'cta-v3'}
                   style={{
-                    width:'44px', height:'44px', borderRadius:'12px', flexShrink:0,
+                    width:'44px', height:'44px', borderRadius:'12px', flexShrink:0, padding:0,
                     background: searchLoading||!searchQuery.trim() ? (isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.05)') : undefined,
                     color: searchLoading||!searchQuery.trim() ? c.textSubtle : 'white',
                     cursor: searchLoading||!searchQuery.trim()?'not-allowed':'pointer',
@@ -3783,6 +3977,15 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
                 </button>
               </div>
 
+              {/* Recent searches */}
+              <RecentSearchesChips
+                items={recent.items}
+                onPick={(q) => { setSearchQuery(q); }}
+                onRemove={recent.remove}
+                onClearAll={recent.clearAll}
+                isDark={isDark}
+              />
+
               {/* Sub-row: mode + filters */}
               <div style={{ display:'flex', alignItems:'center', gap:'12px', marginTop:'10px', paddingLeft:'4px', flexWrap:'wrap' }}>
                 <Segmented isDark={isDark} value={searchMode} onChange={setSearchMode} size="sm"
@@ -3792,8 +3995,9 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
                     { value:'hybrid', label:lang==='ru'?'ГИБРИД':'HYBRID' },
                   ]} />
                 <div style={{ flex:1 }} />
-                <button onClick={() => setShowFilters(s=>!s)} className="mono"
-                  style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.15em' }}>
+                <button onClick={() => setShowFilters(s=>!s)}
+                  className={`pill-v3 mono${showFilters ? ' pill-v3-active' : ''}`}
+                  style={{ fontSize:'11px', letterSpacing:'0.15em', fontWeight:'600' }}>
                   {showFilters ? '−' : '+'} {lang==='ru'?'ФИЛЬТРЫ':'FILTERS'}
                 </button>
               </div>
@@ -3809,9 +4013,11 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
                         onFocus={() => setActiveFilterField(f.k)}
                         onBlur={() => { setTimeout(() => setActiveFilterField(null), 200); }}
                         placeholder={f.l}
-                        className={ske('inset', isDark)}
-                        style={{ width:'100%', padding:'8px 12px', borderRadius:'9px', border:'none',
-                          color:c.text, fontSize:'13px', outline:'none', fontFamily:"'JetBrains Mono', monospace", boxSizing:'border-box' }} />
+                        className="panel-v3"
+                        style={{ width:'100%', padding:'8px 12px', borderRadius:'9px',
+                          color:c.text, fontSize:'13px', outline:'none', fontFamily:"'JetBrains Mono', monospace", boxSizing:'border-box',
+                          background: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.7)',
+                          border: `1px solid ${c.border}` }} />
                       {filterSuggestions[f.k]?.length > 0 && activeFilterField === f.k && (
                         <div className={`filter-autocomplete-dropdown ${ske('panel', isDark)}`}
                           style={{ borderRadius:'9px', border:`1px solid ${c.border}` }}>
@@ -3831,6 +4037,14 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
                   ))}
                 </div>
               )}
+
+              {/* Sonic tag filter chips */}
+              <SonicFiltersChips
+                activeCollection={activeCollection}
+                selectedTags={filters.sonic_tags}
+                onToggleTag={toggleSonicTag}
+                isDark={isDark}
+              />
             </div>
 
             {/* Results area */}
@@ -3871,14 +4085,12 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
                   {/* Grid of album cards */}
                   <div className="search-grid">
                     {results.map((hit, i) => (
-                      <div key={i} className="grid-card"
+                      <div key={i} className="grid-card panel-v3"
                         onClick={() => setDetailHit(hit)}
+                        onMouseEnter={() => setHoveredHit(hit.track?.track_id)}
+                        onMouseLeave={() => setHoveredHit(null)}
                         style={{
-                          background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
-                          borderRadius:'16px', overflow:'hidden',
-                          boxShadow: isDark
-                            ? 'inset 0 1px 0 rgba(255,255,255,0.05), 0 4px 12px rgba(0,0,0,0.3)'
-                            : 'inset 0 1px 0 rgba(255,255,255,0.8), 0 4px 12px rgba(40,30,60,0.08)',
+                          borderRadius:'16px', overflow:'hidden', position:'relative',
                         }}>
                         {/* Album cover */}
                         <div style={{
@@ -3924,6 +4136,9 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
                             </div>
                           )}
                         </div>
+                        {hoveredHit === hit.track?.track_id && (
+                          <ScoreBreakdownTooltip breakdown={hit.score_breakdown} isDark={isDark} />
+                        )}
                       </div>
                     ))}
                   </div>
@@ -3986,7 +4201,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
             {/* Input bar */}
             <div style={{ padding:'12px 24px 20px',
               background: isDark?'rgba(0,0,0,0.3)':'rgba(255,255,255,0.55)', backdropFilter:'blur(10px)' }}>
-              <div className={`hero-bar ${ske('inset', isDark)}`} style={{ display:'flex', gap:'8px', alignItems:'flex-end', padding:'8px', borderRadius:'16px' }}>
+              <div className="hero-bar panel-v3" style={{ display:'flex', gap:'8px', alignItems:'flex-end', padding:'8px', borderRadius:'16px' }}>
                 <textarea
                   value={input} onChange={e=>setInput(e.target.value)}
                   onKeyDown={e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();handleChat();} }}
@@ -3999,9 +4214,9 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
                     fontFamily:"'Geist', sans-serif",
                   }} />
                 <button onClick={handleChat} disabled={loading||!input.trim()}
-                  className={loading||!input.trim() ? '' : 'ske-accent'}
+                  className={loading||!input.trim() ? '' : 'cta-v3'}
                   style={{
-                    width:'44px', height:'44px', borderRadius:'12px', flexShrink:0,
+                    width:'44px', height:'44px', borderRadius:'12px', flexShrink:0, padding:0,
                     background: loading||!input.trim() ? (isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.05)') : undefined,
                     color: loading||!input.trim() ? c.textSubtle : 'white',
                     cursor: loading||!input.trim()?'not-allowed':'pointer',

@@ -58,7 +58,10 @@ class SearchFilters(BaseModel):
     album: str | None = None
     genre: str | None = None
     year_range: str | None = None
-    
+
+    # Phase 1c — sonic descriptors. AND semantics across tags (track must carry every selected tag).
+    sonic_tags: list[str] = []
+
     # TODO - проверить что пункты ниже нигде не применяются и удалить их
     year_from: int | None = None
     year_to: int | None = None

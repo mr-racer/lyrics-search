@@ -363,13 +363,14 @@ class SearchService:
             "album": filters.album,
             "genre": filters.genre,
             "year_range": filters.year_range,
+            "sonic_tags": list(filters.sonic_tags) if filters.sonic_tags else None,
         }
 
     def _build_qdrant_filter_models(self, filters: Optional[SearchFilters]):
         """Build proper qdrant_client.models.Filter object for query_points()."""
         from qdrant_client import models
-        
-        if not filters or all(v is None for v in [filters.artist, filters.album, filters.genre]):
+
+        if not filters:
             return None
 
         conditions = []
@@ -385,6 +386,14 @@ class SearchService:
             conditions.append(models.FieldCondition(
                 key="genre", match=models.MatchValue(value=filters.genre)
             ))
+        # AND across tags — track must carry every selected tag.
+        # Qdrant matches scalar against array-valued payload natively.
+        if filters.sonic_tags:
+            for tag in filters.sonic_tags:
+                conditions.append(models.FieldCondition(
+                    key="sonic_tags",
+                    match=models.MatchValue(value=tag),
+                ))
 
         return models.Filter(must=conditions) if conditions else None
 

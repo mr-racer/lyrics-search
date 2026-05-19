@@ -761,6 +761,17 @@ async def get_sonic_descriptor(track_slug: str) -> dict:
     return {"track_id": track_slug, **desc}
 
 
+@router.get("/sonic-facets")
+async def get_sonic_facets(top_k: int = 50) -> dict:
+    """Return aggregate counts of top-K sonic_tags across the library.
+
+    Powers the SonicFiltersChips UI in SearchSectionV2 — the chip set is
+    derived from real library data, not a hardcoded vocabulary."""
+    from app.resources.metadata_db import MetadataDB
+    MetadataDB.init()
+    return MetadataDB.get_sonic_facets(top_k=top_k)
+
+
 @router.get("/sonic-prompts")
 async def get_sonic_prompts(request: Request) -> dict:
     """Return the current prompt vocabulary JSON."""
