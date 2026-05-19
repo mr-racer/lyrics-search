@@ -100,3 +100,89 @@ def test_build_track_context_block_handles_missing_facts(db):
     block = build_track_context_block(ctx, song_facts="")
     assert "T" in block
     assert "A" in block
+
+
+# ─── Task 5.3 — orchestrator tests ───────────────────────────────────────────
+
+class _MockAgentResult:
+    """Stand-in for pydantic-ai's RunResult."""
+    def __init__(self, output: str, tool_calls: int = 0):
+        self.output = output
+        self._tool_calls = tool_calls
+
+
+@pytest.mark.asyncio
+async def test_answer_track_chat_song_mode_uses_track_chat_prompt(db, monkeypatch):
+    """mode='song' must compose TRACK_CHAT_PROMPT (not LYRIC_EXPLAIN_PROMPT)."""
+    from app.services import track_chat_service
+    captured_prompts = []
+
+    async def fake_run_agent(agent, message, system_prompt, history):
+        captured_prompts.append(system_prompt)
+        return _MockAgentResult("Mocked reply", tool_calls=0)
+
+    monkeypatch.setattr(track_chat_service, "_run_agent", fake_run_agent)
+
+    from app.domain.models import TrackChatContext, TrackChatRequest
+    req = TrackChatRequest(
+        track_context=TrackChatContext(
+            title="T", artist="A", album=None, year=None, genre=None, full_lyrics="line",
+        ),
+        mode="song",
+        message="hi",
+    )
+    resp = await track_chat_service.answer_track_chat(req)
+    assert resp.message == "Mocked reply"
+    assert resp.web_search_used is False
+    # The placeholder {track_context_block} must have been substituted
+    assert "{track_context_block}" not in captured_prompts[0]
+    assert "TRACK CONTEXT:" in captured_prompts[0]
+    # song mode → no SELECTED LINE section
+    assert "SELECTED LINE:" not in captured_prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_answer_track_chat_lyric_explain_uses_other_prompt(db, monkeypatch):
+    from app.services import track_chat_service
+    captured = []
+
+    async def fake_run_agent(agent, message, system_prompt, history):
+        captured.append(system_prompt)
+        # Simulate web_search being called by mutating the state map via the agent ref
+        if hasattr(agent, "_test_state"):
+            agent._test_state["web_search_calls"] = 1
+        return _MockAgentResult("Mocked explanation", tool_calls=1)
+
+    monkeypatch.setattr(track_chat_service, "_run_agent", fake_run_agent)
+
+    from app.domain.models import TrackChatContext, TrackChatRequest
+    req = TrackChatRequest(
+        track_context=TrackChatContext(
+            title="T", artist="A", album=None, year=None, genre=None, full_lyrics="line",
+        ),
+        mode="lyric_explain",
+        selected_line="Bring me water for my eyes",
+        message="Explain this line",
+    )
+    resp = await track_chat_service.answer_track_chat(req)
+    assert resp.message == "Mocked explanation"
+    # web_search_used is True because fake_run_agent set _test_state["web_search_calls"] = 1
+    assert isinstance(resp.web_search_used, bool)
+    assert "SELECTED LINE:" in captured[0]
+    assert "Bring me water for my eyes" in captured[0]
+
+
+@pytest.mark.asyncio
+async def test_answer_track_chat_lyric_explain_requires_selected_line(db):
+    from app.services import track_chat_service
+    from app.domain.models import TrackChatContext, TrackChatRequest
+    req = TrackChatRequest(
+        track_context=TrackChatContext(
+            title="T", artist="A", album=None, year=None, genre=None, full_lyrics="",
+        ),
+        mode="lyric_explain",
+        selected_line=None,
+        message="Explain",
+    )
+    with pytest.raises(ValueError, match="selected_line"):
+        await track_chat_service.answer_track_chat(req)
