@@ -3978,15 +3978,13 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
               </div>
 
               {/* Recent searches */}
-              <div style={{ padding:'0 32px' }}>
-                <RecentSearchesChips
-                  items={recent.items}
-                  onPick={(q) => { setSearchQuery(q); }}
-                  onRemove={recent.remove}
-                  onClearAll={recent.clearAll}
-                  isDark={isDark}
-                />
-              </div>
+              <RecentSearchesChips
+                items={recent.items}
+                onPick={(q) => { setSearchQuery(q); }}
+                onRemove={recent.remove}
+                onClearAll={recent.clearAll}
+                isDark={isDark}
+              />
 
               {/* Sub-row: mode + filters */}
               <div style={{ display:'flex', alignItems:'center', gap:'12px', marginTop:'10px', paddingLeft:'4px', flexWrap:'wrap' }}>
@@ -4041,14 +4039,12 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
               )}
 
               {/* Sonic tag filter chips */}
-              <div style={{ padding:'0 32px' }}>
-                <SonicFiltersChips
-                  activeCollection={activeCollection}
-                  selectedTags={filters.sonic_tags}
-                  onToggleTag={toggleSonicTag}
-                  isDark={isDark}
-                />
-              </div>
+              <SonicFiltersChips
+                activeCollection={activeCollection}
+                selectedTags={filters.sonic_tags}
+                onToggleTag={toggleSonicTag}
+                isDark={isDark}
+              />
             </div>
 
             {/* Results area */}
