@@ -411,6 +411,7 @@ class LyricsDB:
         genre: str | list[str] | None = None,
         year: int | None = None,
         year_range: str | None = None,
+        sonic_tags: list[str] | None = None,
         collection_name_override: str | None = None,
     ) -> list[models.ScoredPoint]:
         col = collection_name_override or self.collection_name
@@ -421,7 +422,8 @@ class LyricsDB:
             title=title,
             genre=genre,
             year=year,
-            year_range=year_range
+            year_range=year_range,
+            sonic_tags=sonic_tags,
         )
 
         if not include_clap:

@@ -13,13 +13,25 @@ class TestExtractFilterKwargs:
     def test_empty_filters(self):
         svc = SearchService.__new__(SearchService)
         result = svc._extract_filter_kwargs(SearchFilters())
-        assert result == {"artist": None, "album": None, "genre": None}
+        assert result == {
+            "artist": None,
+            "album": None,
+            "genre": None,
+            "year_range": None,
+            "sonic_tags": None,
+        }
 
     def test_populated_filters(self):
         svc = SearchService.__new__(SearchService)
         f = SearchFilters(artist="A", album="B", genre="C")
         result = svc._extract_filter_kwargs(f)
-        assert result == {"artist": "A", "album": "B", "genre": "C"}
+        assert result == {
+            "artist": "A",
+            "album": "B",
+            "genre": "C",
+            "year_range": None,
+            "sonic_tags": None,
+        }
 
 
 class TestBuildQdrantFilterModels:
