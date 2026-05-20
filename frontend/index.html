@@ -1606,8 +1606,10 @@ function useAudioPlayer() {
       const prevId = el.dataset.playbackTrackId;
       const prevCol = el.dataset.playbackCollection;
       const playedSec = el.currentTime || 0;
+      const lastFlush = parseFloat(el.dataset.playbackFlushedAt || '0');
       const totalDur = el.duration || null;
-      if (playedSec > 0) {
+      // Only emit if we haven't already flushed at this point (e.g. via pause).
+      if (playedSec > 0 && playedSec > lastFlush + 1) {
         postPlaybackEvent({
           trackId: prevId, collectionName: prevCol,
           playedSec, totalDur,
@@ -1617,6 +1619,7 @@ function useAudioPlayer() {
     if (el && meta) {
       el.dataset.playbackTrackId = meta.trackId || '';
       el.dataset.playbackCollection = meta.collectionName || '';
+      el.dataset.playbackFlushedAt = '';
     }
     setCurrentSrc(src);
   }, []);
@@ -1687,10 +1690,51 @@ function useAudioPlayer() {
           playedSec: el.duration || el.currentTime || 0,
           totalDur: el.duration || null,
         });
+        // Mark as flushed so subsequent pagehide/pause doesn't double-count.
+        el.dataset.playbackFlushedAt = String(el.currentTime || 0);
       }
     });
-    el.addEventListener('play',           () => setIsPlaying(true));
-    el.addEventListener('pause',          () => setIsPlaying(false));
+    el.addEventListener('play', () => {
+      setIsPlaying(true);
+      // New listening session — reset the flush mark.
+      el.dataset.playbackFlushedAt = '';
+    });
+    el.addEventListener('pause', () => {
+      setIsPlaying(false);
+      // Flush a partial-play event when the user pauses mid-track and stays
+      // paused — without this, single-play sessions never produce stats.
+      // Only counts when the user actually heard a meaningful chunk (>= 5s)
+      // and we haven't already flushed at this same currentTime.
+      const trackId = el.dataset.playbackTrackId;
+      const collectionName = el.dataset.playbackCollection;
+      const playedSec = el.currentTime || 0;
+      const lastFlush = parseFloat(el.dataset.playbackFlushedAt || '0');
+      if (trackId && collectionName && playedSec >= 5 && playedSec > lastFlush + 1) {
+        postPlaybackEvent({
+          trackId, collectionName,
+          playedSec, totalDur: el.duration || null,
+        });
+        el.dataset.playbackFlushedAt = String(playedSec);
+      }
+    });
+    // Browser-close / tab-hide safety net — sendBeacon survives unload.
+    const flushOnHide = () => {
+      const trackId = el.dataset.playbackTrackId;
+      const collectionName = el.dataset.playbackCollection;
+      const playedSec = el.currentTime || 0;
+      const lastFlush = parseFloat(el.dataset.playbackFlushedAt || '0');
+      if (trackId && collectionName && playedSec >= 5 && playedSec > lastFlush + 1) {
+        postPlaybackEvent({
+          trackId, collectionName,
+          playedSec, totalDur: el.duration || null,
+        });
+        el.dataset.playbackFlushedAt = String(playedSec);
+      }
+    };
+    window.addEventListener('pagehide', flushOnHide);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') flushOnHide();
+    });
     listenersAttached.current = true;
   }, []);
 
@@ -4950,16 +4994,16 @@ function AlbumCard({ album, isDark, onClick, navigateToArtist, lang }) {
       onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,.04)'; e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'none'; }}
     >
       <div style={{ position:'relative', aspectRatio:'1' }}>
-        <AlbumCover title={album.album_title} artist={album.primary_artist} size={220} isDark={isDark} coverPath={album.cover_art_path} radius={0} fluid />
+        <AlbumCover title={album.album_title} artist={album.primary_artist} size={264} isDark={isDark} coverPath={album.cover_art_path} radius={0} fluid />
         <div style={{
-          position:'absolute', top:'6px', right:'6px',
-          padding:'2px 7px', borderRadius:'10px', fontSize:'10px', fontFamily:"'JetBrains Mono', monospace",
+          position:'absolute', top:'7px', right:'7px',
+          padding:'3px 9px', borderRadius:'12px', fontSize:'12px', fontFamily:"'JetBrains Mono', monospace",
           background:'rgba(0,0,0,.7)', color:'#bba8ff', backdropFilter:'blur(6px)',
         }}>{album.track_count} {lang==='ru'?'тр':'tr'}</div>
       </div>
-      <div style={{ padding:'8px 10px' }}>
-        <div style={{ fontSize:'13px', fontWeight:600, color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{album.album_title}</div>
-        <div style={{ fontSize:'12px', marginTop:'2px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+      <div style={{ padding:'10px 12px' }}>
+        <div style={{ fontSize:'15px', fontWeight:600, color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{album.album_title}</div>
+        <div style={{ fontSize:'14px', marginTop:'3px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
           <span style={{ color:'#bba8ff', cursor:'pointer' }} onClick={onArtistClick(album.primary_artist_slug)} title={lang==='ru'?'Открыть страницу артиста':'Open artist'}>{album.primary_artist}</span>
           {album.feat_artists?.slice(0, 2).map(f => (
             <React.Fragment key={f.slug}>
@@ -4971,7 +5015,7 @@ function AlbumCard({ album, isDark, onClick, navigateToArtist, lang }) {
           {yearStr && <span style={{ color:c.textMuted }}> · {yearStr}</span>}
         </div>
         {topGenre && (
-          <div className="mono" style={{ fontSize:'10px', color:c.textSubtle, marginTop:'4px', letterSpacing:'0.1em', textTransform:'uppercase' }}>
+          <div className="mono" style={{ fontSize:'12px', color:c.textSubtle, marginTop:'5px', letterSpacing:'0.1em', textTransform:'uppercase' }}>
             {topGenre}
           </div>
         )}
@@ -4994,14 +5038,14 @@ function AlbumsGridTab({ albums, sort, onSortChange, onAlbumOpen, isDark, lang, 
   }
   return (
     <>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'4px 0 10px', fontSize:'11px' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'4px 0 12px', fontSize:'13px' }}>
         <span className="mono" style={{ color:c.textSubtle, letterSpacing:'0.06em' }}>{albums.length} {lang==='ru'?'альбомов':'albums'}</span>
-        <div style={{ display:'flex', gap:'5px' }}>
+        <div style={{ display:'flex', gap:'6px' }}>
           {sortOpts.map(o => (
             <button key={o.id} onClick={() => onSortChange(o.id)}
               className="mono"
               style={{
-                padding:'3px 9px', borderRadius:'12px', fontSize:'10px', cursor:'pointer',
+                padding:'4px 11px', borderRadius:'14px', fontSize:'12px', cursor:'pointer',
                 background: sort===o.id ? 'rgba(120,80,200,.18)' : 'rgba(255,255,255,.04)',
                 color: sort===o.id ? '#bba8ff' : c.textMuted,
                 border:'none',
@@ -5011,8 +5055,8 @@ function AlbumsGridTab({ albums, sort, onSortChange, onAlbumOpen, isDark, lang, 
       </div>
       <div style={{
         display:'grid',
-        gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-        gap:'12px',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(216px, 1fr))',
+        gap:'14px',
       }}>
         {albums.map(a => (
           <AlbumCard
@@ -5041,10 +5085,10 @@ function LibraryGlassyRow({ track, when, playCount, isDark, lang, onClick, onArt
       onClick={onClick}
       style={{
         display:'grid',
-        gridTemplateColumns:'44px 1fr auto 60px auto',
-        gap:'14px', alignItems:'center',
-        padding:'9px 14px 9px 9px',
-        borderRadius:'12px',
+        gridTemplateColumns:'52px 1fr auto 72px auto',
+        gap:'16px', alignItems:'center',
+        padding:'11px 17px 11px 11px',
+        borderRadius:'14px',
         background: isCurrent ? 'rgba(120,80,200,.13)' : 'rgba(255,255,255,.04)',
         backdropFilter:'blur(22px) saturate(1.1)',
         WebkitBackdropFilter:'blur(22px) saturate(1.1)',
@@ -5056,39 +5100,39 @@ function LibraryGlassyRow({ track, when, playCount, isDark, lang, onClick, onArt
       onMouseEnter={e => { e.currentTarget.style.background = isCurrent ? 'rgba(120,80,200,.18)' : 'rgba(255,255,255,.07)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
       onMouseLeave={e => { e.currentTarget.style.background = isCurrent ? 'rgba(120,80,200,.13)' : 'rgba(255,255,255,.04)'; e.currentTarget.style.transform = 'translateY(0)'; }}
     >
-      <div style={{ position:'relative', width:'44px', height:'44px', borderRadius:'8px', overflow:'hidden' }}>
-        <AlbumCover title={track.title} artist={track.artist} size={44} isDark={isDark} coverPath={track.cover_art_path} radius={8} fluid />
+      <div style={{ position:'relative', width:'52px', height:'52px', borderRadius:'10px', overflow:'hidden' }}>
+        <AlbumCover title={track.title} artist={track.artist} size={52} isDark={isDark} coverPath={track.cover_art_path} radius={10} fluid />
       </div>
       <div style={{ minWidth:0 }}>
-        <div style={{ color:c.text, fontSize:'14px', fontWeight:500, letterSpacing:'-0.01em', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title}</div>
-        <div style={{ color:c.textMuted, fontSize:'12px', marginTop:'1px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+        <div style={{ color:c.text, fontSize:'17px', fontWeight:500, letterSpacing:'-0.01em', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title}</div>
+        <div style={{ color:c.textMuted, fontSize:'14px', marginTop:'2px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
           <span onClick={(e) => { e.stopPropagation(); onArtistClick && onArtistClick(track.artist); }} style={{ color:'#bba8ff', cursor:'pointer' }}>{track.artist}</span>
           {track.album && (<>
-            <span style={{ color:c.textSubtle, margin:'0 6px' }}>·</span>
+            <span style={{ color:c.textSubtle, margin:'0 7px' }}>·</span>
             <span onClick={(e) => { e.stopPropagation(); onAlbumClick && onAlbumClick(track.album); }} style={{ color:'#a8b8c8', cursor:'pointer' }}>{track.album}</span>
           </>)}
           {when && (<>
-            <span style={{ color:c.textSubtle, margin:'0 6px' }}>·</span>
-            <span className="mono" style={{ color:c.textSubtle, fontSize:'11px', letterSpacing:'0.06em' }}>{when}</span>
+            <span style={{ color:c.textSubtle, margin:'0 7px' }}>·</span>
+            <span className="mono" style={{ color:c.textSubtle, fontSize:'13px', letterSpacing:'0.06em' }}>{when}</span>
           </>)}
           {playCount != null && playCount > 0 && (<>
-            <span style={{ color:c.textSubtle, margin:'0 6px' }}>·</span>
-            <span className="mono" style={{ color:c.textSubtle, fontSize:'11px' }}>{playCount}×</span>
+            <span style={{ color:c.textSubtle, margin:'0 7px' }}>·</span>
+            <span className="mono" style={{ color:c.textSubtle, fontSize:'13px' }}>{playCount}×</span>
           </>)}
         </div>
       </div>
       <div />
-      <div className="mono" style={{ color:c.textMuted, fontSize:'11px', textAlign:'right' }}>{fmtDur(track.duration)}</div>
-      <div style={{ display:'flex', gap:'4px' }}>
+      <div className="mono" style={{ color:c.textMuted, fontSize:'13px', textAlign:'right' }}>{fmtDur(track.duration)}</div>
+      <div style={{ display:'flex', gap:'5px' }}>
         <button
           onClick={(e) => { e.stopPropagation(); onToggleLike && onToggleLike(track.track_id); }}
           title={isLiked ? (lang==='ru'?'Убрать лайк':'Unlike') : (lang==='ru'?'Лайкнуть':'Like')}
           style={{
-            width:'30px', height:'30px', borderRadius:'50%',
+            width:'36px', height:'36px', borderRadius:'50%',
             display:'grid', placeItems:'center',
             background: isLiked ? 'rgba(255,122,168,.12)' : 'rgba(255,255,255,.03)',
             color: isLiked ? '#ff7aa8' : c.textMuted,
-            border:'none', cursor:'pointer', fontSize:'14px',
+            border:'none', cursor:'pointer', fontSize:'17px',
             transition:'all .18s',
           }}
         >{isLiked ? '♥' : '♡'}</button>
@@ -5096,11 +5140,11 @@ function LibraryGlassyRow({ track, when, playCount, isDark, lang, onClick, onArt
           title={lang==='ru'?'Доступно после Plan 19':'Available after Plan 19'}
           disabled
           style={{
-            width:'30px', height:'30px', borderRadius:'50%',
+            width:'36px', height:'36px', borderRadius:'50%',
             display:'grid', placeItems:'center',
             background:'rgba(255,255,255,.02)',
             color:'#444',
-            border:'none', cursor:'not-allowed', fontSize:'14px',
+            border:'none', cursor:'not-allowed', fontSize:'17px',
           }}
         >＋</button>
       </div>
@@ -5557,11 +5601,14 @@ function ListeningWidgetsRow({ data, isDark, lang }) {
   );
 }
 function LibraryTabsStrip({ active, onChange, counts, lang }) {
+  const tabs = lang === 'ru'
+    ? [['albums','▦ Альбомы', counts.albums], ['liked','♥ Любимые', counts.liked], ['recent','⟲ Недавние', counts.recent]]
+    : [['albums','▦ Albums', counts.albums], ['liked','♥ Liked', counts.liked], ['recent','⟲ Recently', counts.recent]];
   return (
-    <div style={{display:'flex', gap:6}}>
-      {[['albums','▦ Albums', counts.albums], ['liked','♥ Liked', counts.liked], ['recent','⟲ Recently', counts.recent]].map(([id, label, n]) => (
+    <div style={{display:'flex', gap:8}}>
+      {tabs.map(([id, label, n]) => (
         <button key={id} onClick={() => onChange(id)}
-          style={{padding:'6px 12px', borderRadius:8, fontSize:11, background: active===id ? 'oklch(60% 0.18 270)' : 'rgba(255,255,255,.04)', color: active===id ? '#fff' : '#aaa'}}>
+          style={{padding:'8px 15px', borderRadius:10, fontSize:13, background: active===id ? 'oklch(60% 0.18 270)' : 'rgba(255,255,255,.04)', color: active===id ? '#fff' : '#aaa'}}>
           {label} ({n})
         </button>
       ))}
