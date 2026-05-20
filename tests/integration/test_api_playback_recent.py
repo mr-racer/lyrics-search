@@ -18,3 +18,10 @@ def test_recent_validates_limit_bounds():
     with TestClient(app) as c:
         resp = c.get("/api/v1/playback/recent", params={"collection_name": "x", "limit": 999})
         assert resp.status_code == 422
+
+
+def test_recent_missing_collection_name_returns_422():
+    app = create_app()
+    with TestClient(app) as c:
+        resp = c.get("/api/v1/playback/recent")
+        assert resp.status_code == 422
