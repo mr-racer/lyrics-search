@@ -7541,7 +7541,27 @@ function InlineLyricExplain({
           }}
         >
           {state.loading
-            ? <span style={{ color: c.textSubtle }}>✨ {lang === 'ru' ? 'Думаю…' : 'Thinking…'}</span>
+            ? (() => {
+                const barBase = isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)';
+                const barShine = isDark ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.60)';
+                const barStyle = {
+                  height: 9, borderRadius: 5,
+                  backgroundColor: barBase,
+                  backgroundImage: `linear-gradient(90deg, transparent 0%, ${barShine} 50%, transparent 100%)`,
+                  backgroundSize: '200% 100%',
+                  backgroundRepeat: 'no-repeat',
+                };
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: c.textSubtle, fontSize: 12 }}>
+                      <span style={{ display: 'inline-block', animation: 'pulse 1.4s ease-in-out infinite' }}>✨</span>
+                      <span>{lang === 'ru' ? 'Думаю…' : 'Thinking…'}</span>
+                    </div>
+                    <div style={{ ...barStyle, animation: 'shimmer 1.6s ease-in-out infinite' }} />
+                    <div style={{ ...barStyle, width: '62%', animation: 'shimmer 1.6s ease-in-out 0.3s infinite' }} />
+                  </div>
+                );
+              })()
             : state.error
               ? <span style={{ color: c.red }}>{lang === 'ru' ? 'Ошибка' : 'Error'}: {state.error}</span>
               : <>
