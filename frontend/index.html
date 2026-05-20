@@ -5381,7 +5381,7 @@ function RecentlyPlayedTab({ tracks, sort, onSortChange, isDark, lang, onPlayTra
 }
 
 // ─── LIBRARY SECTION ──────────────────────────────────────────────────────────
-function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateToArtist }) {
+function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateToArtist, playerTrack }) {
   const c = useColors(isDark);
 
   // ── Data fetching ─────────────────────────────────────────────────────
@@ -5485,7 +5485,7 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
               }}
               onToggleLike={toggleLike}
               likedMap={likedMap}
-              currentTrackId={null}
+              currentTrackId={playerTrack?.track_id || null}
             />
           )}
           {activeTab === 'recent' && (
@@ -5502,7 +5502,7 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
               }}
               onToggleLike={toggleLike}
               likedMap={likedMap}
-              currentTrackId={null}
+              currentTrackId={playerTrack?.track_id || null}
             />
           )}
 
@@ -9564,6 +9564,7 @@ function App() {
               <Comp
                 isDark={isDark} lang={lang} activeCollection={activeCollection}
                 onPlayTrack={handlePlayTrack}
+                playerTrack={playerTrack}
                 onTrackChange={id === 'player' ? handleTrackChange : undefined}
                 onRequestAutoplay={id === 'player' ? ensureAutoplayQueue : undefined}
                 audio={id === 'player' ? audio : undefined}
