@@ -237,3 +237,91 @@ def test_fetch_audiodb_for_artist_handles_total_network_failure(isolated_db, tmp
 
     # No row written; next index will retry.
     assert MetadataDB.get_artist_audiodb("unreachable-artist", "test_col") is None
+
+from app.services.audiodb_service import fetch_audiodb_for_artists
+
+
+def test_fetch_audiodb_for_artists_dedups_by_canonical_name(isolated_db, tmp_path, monkeypatch):
+    monkeypatch.setattr("app.services.audiodb_service.ARTIST_COVERS_DIR", tmp_path)
+
+    json_response = MagicMock()
+    json_response.json.return_value = _audiodb_response()
+    json_response.raise_for_status.return_value = None
+    img_response = MagicMock()
+    img_response.content = b"\x89PNG\r\n\x1a\nfake"
+    img_response.raise_for_status.return_value = None
+
+    captured = []
+    def fake_get(url, timeout=None):
+        captured.append(url)
+        return img_response if ("cutout" in url or "thumb" in url) else json_response
+
+    with patch("app.services.audiodb_service.requests.get", side_effect=fake_get):
+        with patch("app.services.audiodb_service.asyncio.sleep", return_value=None):
+            await_result = _run(fetch_audiodb_for_artists(
+                ["Dua Lipa", "Dua Lipa feat. Angele", "Dua Lipa ft. Other"],
+                "test_col",
+            ))
+
+    # Exactly one JSON-fetch URL (the others are image downloads)
+    json_urls = [u for u in captured if "search.php" in u]
+    assert len(json_urls) == 1, json_urls
+    # Result keyed by canonical name
+    assert list(await_result.keys()) == ["Dua Lipa"]
+
+
+def test_fetch_audiodb_for_artists_calls_progress_callback(isolated_db, tmp_path, monkeypatch):
+    monkeypatch.setattr("app.services.audiodb_service.ARTIST_COVERS_DIR", tmp_path)
+
+    json_response = MagicMock()
+    json_response.json.return_value = _audiodb_response()
+    json_response.raise_for_status.return_value = None
+    img_response = MagicMock()
+    img_response.content = b"\x89PNG\r\n\x1a\nfake"
+    img_response.raise_for_status.return_value = None
+    with patch(
+        "app.services.audiodb_service.requests.get",
+        side_effect=lambda u, timeout=None: img_response if ("cutout" in u or "thumb" in u) else json_response,
+    ):
+        with patch("app.services.audiodb_service.asyncio.sleep", return_value=None):
+            calls = []
+            _run(fetch_audiodb_for_artists(
+                ["Kanye West", "Dua Lipa"],
+                "test_col",
+                progress_callback=lambda idx, total, label, found: calls.append((idx, total, label, found)),
+            ))
+    assert len(calls) == 2
+    assert calls[0][:3] == (1, 2, "Kanye West")
+    assert calls[1][:3] == (2, 2, "Dua Lipa")
+    assert all(c[3] is True for c in calls)
+
+
+def test_fetch_audiodb_for_artists_per_artist_failure_does_not_break_batch(
+    isolated_db, tmp_path, monkeypatch,
+):
+    monkeypatch.setattr("app.services.audiodb_service.ARTIST_COVERS_DIR", tmp_path)
+
+    img_response = MagicMock()
+    img_response.content = b"\x89PNG\r\n\x1a\nfake"
+    img_response.raise_for_status.return_value = None
+    good_json = MagicMock()
+    good_json.json.return_value = _audiodb_response()
+    good_json.raise_for_status.return_value = None
+
+    def fake_get(url, timeout=None):
+        if "good+artist" in url:
+            return good_json
+        if "cutout" in url or "thumb" in url:
+            return img_response
+        raise requests.ConnectionError("artist 2 unreachable")
+
+    with patch("app.services.audiodb_service.requests.get", side_effect=fake_get):
+        with patch("app.services.audiodb_service.asyncio.sleep", return_value=None):
+            _run(fetch_audiodb_for_artists(
+                ["Good Artist", "Bad Artist"],
+                "test_col",
+            ))
+
+    assert MetadataDB.get_artist_audiodb("good-artist", "test_col") is not None
+    # Bad artist: total network failure → no row written
+    assert MetadataDB.get_artist_audiodb("bad-artist", "test_col") is None

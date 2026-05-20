@@ -13,6 +13,7 @@ import hashlib
 import logging
 import re
 from pathlib import Path
+from typing import Callable
 
 import requests
 
@@ -165,3 +166,47 @@ async def fetch_audiodb_for_artist(artist: str, collection_name: str) -> None:
         thumb_path=thumb_path,
         audiodb_mbid=a.get("strMusicBrainzID"),
     )
+
+
+async def fetch_audiodb_for_artists(
+    artists: list[str],
+    collection_name: str,
+    delay: float = 0.3,
+    progress_callback: Callable[[int, int, str, bool], None] | None = None,
+) -> dict[str, bool]:
+    """Sequential fetch matching the fetch_facts_for_artists pattern.
+
+    Dedups by canonical name so 'Dua Lipa' and 'Dua Lipa feat. Angele' hit
+    AudioDB once. Returns {canonical_artist: enriched_with_data_bool}.
+    Progress callback receives (idx, total, label, found_bool); label is the
+    first-seen original artist name (e.g. 'Dua Lipa feat. Angele' rather than
+    the canonical 'Dua Lipa') so the UI shows what the user has."""
+    canonical_to_first_seen: dict[str, str] = {}
+    for a in artists:
+        canon = _canonical_artist_name(a)
+        canonical_to_first_seen.setdefault(canon, a)
+    unique_canonicals = list(canonical_to_first_seen.keys())
+
+    results: dict[str, bool] = {}
+    total = len(unique_canonicals)
+    for idx, canonical in enumerate(unique_canonicals, 1):
+        progress_label = canonical_to_first_seen[canonical]
+        try:
+            await fetch_audiodb_for_artist(canonical, collection_name)
+            slug = _slugify_artist(canonical)
+            row = MetadataDB.get_artist_audiodb(slug, collection_name) or {}
+            found = bool(
+                row.get("audiodb_bio")
+                or row.get("mood")
+                or row.get("country_code"),
+            )
+            results[canonical] = found
+            if progress_callback:
+                progress_callback(idx, total, progress_label, found)
+        except Exception as e:
+            logger.warning("[AudioDB] unhandled error for %s: %s", canonical, e)
+            results[canonical] = False
+            if progress_callback:
+                progress_callback(idx, total, progress_label, False)
+        await asyncio.sleep(delay)
+    return results
