@@ -381,6 +381,14 @@ class ArtistAggregate(BaseModel):
     bio: Optional[str] = None           # None when artist_bio not yet indexed
     facts: list[str] = Field(default_factory=list)
     albums: list[ArtistAlbum] = Field(default_factory=list)
+    # AudioDB-derived (out-of-band shipment 2026-05-20)
+    mood: Optional[str] = None
+    country_code: Optional[str] = None
+    country: Optional[str] = None
+    label: Optional[str] = None
+    cutout_path: Optional[str] = None
+    thumb_path: Optional[str] = None
+    audiodb_mbid: Optional[str] = None
 
 
 class LLMStatusRequest(BaseModel):

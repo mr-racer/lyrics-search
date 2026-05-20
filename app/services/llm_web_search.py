@@ -195,11 +195,24 @@ Strategy:
 - Lead with origin + genre. Keep it journalistic, no clichés.
 {artist_name_rule}"""
 
+_AGENT_SYSTEM_PROMPT_WITH_SEED_TEMPLATE = """CRITICAL RULE: The artist name must appear in your response EXACTLY as given in the user message — character for character. Do not translate, transliterate, or alter it in any way.
+
+You are a music research assistant editing an existing artist bio. An INITIAL BIO (from AudioDB) is provided in the user message. Your task is to rewrite it in the requested language, keeping the factual content but improving clarity and flow.
+
+Strategy:
+- Prefer fidelity to the initial bio — preserve its facts.
+- Use web_search ONLY if you spot a factual gap or contradiction in the initial bio.
+- If you do search, use fetch_content=True only when snippets are not enough.
+- Lead with origin + genre. Keep it journalistic, no clichés.
+- Output a single paragraph (3-5 sentences).
+{artist_name_rule}"""
+
 
 def _create_agent(
     base_url: str | None = None,
     model_name: str | None = None,
     artist_name: str | None = None,
+    seed_bio: str | None = None,
 ) -> Agent:
     """Создаёт pydantic_ai Agent, подключённый к OpenAI-совместимому серверу."""
     resolved_model = (model_name or os.getenv("LLM_MODEL", "openai/gpt-oss-20b")).strip()
@@ -211,7 +224,11 @@ def _create_agent(
         artist_name_rule = f'- The artist name is "{artist_name}". Write it EXACTLY as "{artist_name}" — copy it character for character.'
     else:
         artist_name_rule = "- Write the artist name exactly as provided in the user message."
-    system_prompt = _AGENT_SYSTEM_PROMPT_TEMPLATE.format(artist_name_rule=artist_name_rule)
+
+    if seed_bio:
+        system_prompt = _AGENT_SYSTEM_PROMPT_WITH_SEED_TEMPLATE.format(artist_name_rule=artist_name_rule)
+    else:
+        system_prompt = _AGENT_SYSTEM_PROMPT_TEMPLATE.format(artist_name_rule=artist_name_rule)
 
     agent: Agent = Agent(pydantic_model, system_prompt=system_prompt)
 
@@ -240,18 +257,33 @@ async def web_research_bio(
     lang: str,
     base_url: str | None = None,
     model_name: str | None = None,
+    seed_bio: str | None = None,
 ) -> str:
     """Агентный web-поиск: возвращает биографический абзац об артисте.
 
     Использует pydantic_ai Agent loop (search → evaluate → search again).
+    Если передан seed_bio (например, из AudioDB) — агент работает в режиме
+    редактирования: переписывает существующую биографию, обращаясь к web_search
+    только при обнаружении фактических пробелов.
     Возвращает пустую строку при любой ошибке.
     """
-    agent = _create_agent(base_url, model_name, artist_name=artist_name)
-    prompt = (
-        f'Write a 2-3 sentence biographical paragraph about the music artist: "{artist_name}".\n'
-        f"Write the biography in {lang}.\n"
-        f'IMPORTANT: The artist name must appear EXACTLY as "{artist_name}" — do not translate or modify it.'
-    )
+    agent = _create_agent(base_url, model_name, artist_name=artist_name, seed_bio=seed_bio)
+    if seed_bio:
+        prompt = (
+            f'You are refining the biography of the music artist: "{artist_name}".\n\n'
+            f"INITIAL BIO (from AudioDB):\n{seed_bio}\n\n"
+            f"Rewrite this bio in {lang}, keeping the factual content but improving "
+            f"clarity and flow. Use web_search ONLY if you spot a factual gap or "
+            f"contradiction — otherwise prefer fidelity to the initial bio.\n"
+            f"Output: a single paragraph (3-5 sentences) in {lang}.\n"
+            f'IMPORTANT: The artist name must appear EXACTLY as "{artist_name}" — do not translate or modify it.'
+        )
+    else:
+        prompt = (
+            f'Write a 2-3 sentence biographical paragraph about the music artist: "{artist_name}".\n'
+            f"Write the biography in {lang}.\n"
+            f'IMPORTANT: The artist name must appear EXACTLY as "{artist_name}" — do not translate or modify it.'
+        )
     try:
         result = await agent.run(prompt)
         return (result.output or "").strip()

@@ -50,13 +50,21 @@ async def run(job, db_client, llm) -> None:
                 continue
             seen_artist_slugs.add(artist_slug)
 
-            logger.info("[artist_bio] searching web for: %s", artist_name)
+            audiodb_data = MetadataDB.get_artist_audiodb(artist_slug, job.collection_name)
+            seed_bio = (audiodb_data or {}).get("audiodb_bio")
+
+            logger.info(
+                "[artist_bio] searching web for: %s (seed_bio=%s)",
+                artist_name,
+                "yes" if seed_bio else "no",
+            )
             try:
                 bio = await web_research_bio(
                     artist_name=artist_name,
                     lang=job.lang,
                     base_url=job.llm_base_url,
                     model_name=job.llm_model,
+                    seed_bio=seed_bio,
                 )
             except Exception as e:
                 logger.warning("[artist_bio] web search failed for %s: %s", artist_name, e)

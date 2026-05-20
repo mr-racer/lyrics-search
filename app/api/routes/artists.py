@@ -185,6 +185,8 @@ def get_artist(
     bio = MetadataDB.get_artist_bio(canonical_slug, collection, lang)
     primary_genre = next((t.genre for t in artist_tracks if t.genre), None)
 
+    audiodb = MetadataDB.get_artist_audiodb(canonical_slug, collection) or {}
+
     return ArtistAggregate(
         slug=canonical_slug,
         name=name,
@@ -195,4 +197,11 @@ def get_artist(
         bio=bio,
         facts=facts,
         albums=albums,
+        mood=audiodb.get("mood"),
+        country_code=audiodb.get("country_code"),
+        country=audiodb.get("country"),
+        label=audiodb.get("label"),
+        cutout_path=audiodb.get("cutout_path"),
+        thumb_path=audiodb.get("thumb_path"),
+        audiodb_mbid=audiodb.get("audiodb_mbid"),
     )
