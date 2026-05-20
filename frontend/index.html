@@ -7289,7 +7289,7 @@ const TRACK_CHAT_SUGGESTED_PROMPTS = [
   { ru: 'Какие песни семплирует?', en: 'What songs does it sample?' },
 ];
 
-function AIChatDrawer({ isOpen, onClose, track, lang, isDark, activeCollection }) {
+function AIChatDrawer({ isOpen, onClose, track, lang, isDark, activeCollection, showToast }) {
   const c = useColors(isDark);
   const trackId = track?.track_id || null;
   const { messages, sendMessage, clearChat } = useTrackChat(trackId);
@@ -7341,6 +7341,13 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, activeCollection }
     setInput(lang === 'ru' ? prompt.ru : prompt.en);
   };
 
+  const handleClearChat = () => {
+    clearChat();
+    if (showToast) {
+      showToast(lang === 'ru' ? 'Чат очищен' : 'Chat cleared');
+    }
+  };
+
   return (
     <>
       {/* Drawer panel — anchored absolute inside the Player's right column.
@@ -7371,6 +7378,13 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, activeCollection }
           <span style={{ flex: 1, fontSize: '13px', fontWeight: 600, color: c.text, letterSpacing: '-0.01em' }}>
             {lang === 'ru' ? 'Чат по треку' : 'Track chat'}
           </span>
+          {messages.length > 0 && (
+            <button onClick={handleClearChat}
+              className="pill-v3"
+              aria-label={lang === 'ru' ? 'Новый чат' : 'New chat'}
+              title={lang === 'ru' ? 'Новый чат' : 'New chat'}
+              style={{ padding: '3px 9px', fontSize: '13px', cursor: 'pointer' }}>↺</button>
+          )}
           <button onClick={onClose}
             className="pill-v3"
             aria-label={lang === 'ru' ? 'Закрыть' : 'Close'}
@@ -8512,6 +8526,7 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
             lang={lang}
             isDark={isDark}
             activeCollection={activeCollection}
+            showToast={showToast}
           />
           </div>
         </div>
