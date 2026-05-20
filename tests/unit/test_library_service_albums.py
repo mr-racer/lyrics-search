@@ -5,8 +5,8 @@ from unittest.mock import MagicMock
 from app.services.library_service import LibraryService
 
 
-def _mk_point(payload):
-    return SimpleNamespace(payload=payload)
+def _mk_point(payload, point_id="tid-abc"):
+    return SimpleNamespace(payload=payload, id=point_id)
 
 
 def _stub_qdrant(points):
@@ -24,13 +24,13 @@ def test_get_albums_groups_by_title_majority_vote_primary():
     points = [
         _mk_point({"album": "In Rainbows", "artist": "Radiohead",
                    "title": "Bodysnatchers", "year": 2007, "duration": 240,
-                   "genre": "art rock", "cover_art_path": "/c/r1.jpg"}),
+                   "genre": "art rock", "cover_art_path": "/c/r1.jpg"}, point_id="r1"),
         _mk_point({"album": "In Rainbows", "artist": "Radiohead",
                    "title": "Nude", "year": 2007, "duration": 255,
-                   "genre": "art rock", "cover_art_path": "/c/r1.jpg"}),
+                   "genre": "art rock", "cover_art_path": "/c/r1.jpg"}, point_id="r2"),
         _mk_point({"album": "In Rainbows", "artist": "Frank Ocean",
                    "title": "Wisemen feat", "year": 2007, "duration": 200,
-                   "genre": "rnb", "cover_art_path": "/c/r1.jpg"}),
+                   "genre": "rnb", "cover_art_path": "/c/r1.jpg"}, point_id="r3"),
     ]
     qdrant = _stub_qdrant(points)
     res = LibraryService.get_albums(qdrant_client=qdrant, collection_name="test_col")
@@ -45,6 +45,7 @@ def test_get_albums_groups_by_title_majority_vote_primary():
     assert a.year == 2007
     assert a.year_range is None
     assert "art rock" in a.top_genres
+    assert {t.track_id for t in a.tracks} == {"r1", "r2", "r3"}
 
 
 def test_get_albums_emits_year_range_when_tracks_span_years():
@@ -89,3 +90,16 @@ def test_get_albums_sort_alphabetical_default():
     qdrant = _stub_qdrant(points)
     res = LibraryService.get_albums(qdrant_client=qdrant, collection_name="test_col")
     assert [a.album_title for a in res.albums] == ["Apple", "Banana", "Cherry"]
+
+
+def test_get_albums_year_sort_uses_year_range_when_year_none():
+    """Albums with year_range only (multi-year) should still sort by their min year."""
+    points = [
+        _mk_point({"album": "Modern Album", "artist": "X", "title": "t", "year": 2020, "duration": 200}, point_id="m1"),
+        _mk_point({"album": "Live 2003", "artist": "Y", "title": "t1", "year": 2002, "duration": 200}, point_id="l1"),
+        _mk_point({"album": "Live 2003", "artist": "Y", "title": "t2", "year": 2003, "duration": 200}, point_id="l2"),
+    ]
+    qdrant = _stub_qdrant(points)
+    res = LibraryService.get_albums(qdrant_client=qdrant, collection_name="test_col", sort="year_asc")
+    # "Live 2003" has year=None, year_range="2002—2003" — should sort BEFORE "Modern Album" (2020)
+    assert [a.album_title for a in res.albums] == ["Live 2003", "Modern Album"]

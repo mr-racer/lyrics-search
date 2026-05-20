@@ -859,10 +859,20 @@ class LibraryService:
             ))
 
         # Sort
+        def _year_for_sort(a):
+            if a.year:
+                return a.year
+            if a.year_range:
+                try:
+                    return int(a.year_range.split("—")[0])
+                except (ValueError, IndexError):
+                    return 0
+            return 0
+
         if sort == "year_desc":
-            albums.sort(key=lambda a: -(a.year or 0))
+            albums.sort(key=lambda a: -_year_for_sort(a))
         elif sort == "year_asc":
-            albums.sort(key=lambda a: (a.year or 9999))
+            albums.sort(key=lambda a: _year_for_sort(a) or 9999)
         elif sort == "track_count_desc":
             albums.sort(key=lambda a: -a.track_count)
         else:
