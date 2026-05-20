@@ -221,7 +221,8 @@ class LibraryService:
                 for info in processed_files.values()
                 if info.get("artist", "").strip() and info.get("title", "").strip()
             })
-            facts_total = len(unique_artists) + len(unique_songs)
+            # Each unique artist contributes TWO units of work: songfacts + audiodb.
+            facts_total = len(unique_artists) * 2 + len(unique_songs)
 
             stage_facts = job.stages[IndexStage.FACTS]
             stage_facts.status = IndexStatus.RUNNING
@@ -276,17 +277,17 @@ class LibraryService:
                 })
             else:
                 # Launch facts fetches with progress callbacks
-                facts_progress = {"artists": 0, "songs": 0}
-                facts_found = {"artists": 0, "songs": 0}
+                facts_progress = {"artists": 0, "songs": 0, "audiodb": 0}
+                facts_found = {"artists": 0, "songs": 0, "audiodb": 0}
                 facts_state = {"error": None}
 
                 def on_artist_facts_progress(current: int, total: int, label: str, found: bool):
                     facts_progress["artists"] = current
                     if found:
                         facts_found["artists"] += 1
-                    combined = facts_progress["artists"] + facts_progress["songs"]
+                    combined = sum(facts_progress.values())
                     stage_facts.current = combined
-                    stage_facts.found = facts_found["artists"] + facts_found["songs"]
+                    stage_facts.found = sum(facts_found.values())
                     stage_facts.not_found = facts_total - stage_facts.found
                     stage_facts.message = f"Факты: {label}"
                     eta = job.calculate_eta_seconds(IndexStage.FACTS)
@@ -304,11 +305,31 @@ class LibraryService:
                     facts_progress["songs"] = current
                     if found:
                         facts_found["songs"] += 1
-                    combined = facts_progress["artists"] + facts_progress["songs"]
+                    combined = sum(facts_progress.values())
                     stage_facts.current = combined
-                    stage_facts.found = facts_found["artists"] + facts_found["songs"]
+                    stage_facts.found = sum(facts_found.values())
                     stage_facts.not_found = facts_total - stage_facts.found
                     stage_facts.message = f"Факты: {label}"
+                    eta = job.calculate_eta_seconds(IndexStage.FACTS)
+                    asyncio.create_task(self._notify_progress(job, {
+                        "stage": IndexStage.FACTS.value,
+                        "current": combined,
+                        "total": facts_total,
+                        "message": stage_facts.message,
+                        "found": stage_facts.found,
+                        "not_found": stage_facts.not_found,
+                        "eta_seconds": eta,
+                    }))
+
+                def on_audiodb_progress(current: int, total: int, label: str, found: bool):
+                    facts_progress["audiodb"] = current
+                    if found:
+                        facts_found["audiodb"] += 1
+                    combined = sum(facts_progress.values())
+                    stage_facts.current = combined
+                    stage_facts.found = sum(facts_found.values())
+                    stage_facts.not_found = facts_total - stage_facts.found
+                    stage_facts.message = f"AudioDB: {label}"
                     eta = job.calculate_eta_seconds(IndexStage.FACTS)
                     asyncio.create_task(self._notify_progress(job, {
                         "stage": IndexStage.FACTS.value,
@@ -338,6 +359,14 @@ class LibraryService:
                         ),
                         name="song-facts",
                     )
+                    from app.services.audiodb_service import fetch_audiodb_for_artists
+                    audiodb_task = asyncio.create_task(
+                        fetch_audiodb_for_artists(
+                            unique_artists, collection_name,
+                            progress_callback=on_audiodb_progress,
+                        ),
+                        name="audiodb-enrich",
+                    )
                     logger.info("[LibraryService] Launched facts fetch for %d artists, %d songs",
                                 len(unique_artists), len(unique_songs))
 
@@ -357,6 +386,15 @@ class LibraryService:
                     except (asyncio.TimeoutError, Exception) as e:
                         logger.warning("[LibraryService] Song facts fetch timed out or failed: %s", e)
                         song_facts_task.cancel()
+                        if not facts_state["error"]:
+                            facts_state["error"] = str(e)
+
+                    try:
+                        await asyncio.wait_for(audiodb_task, timeout=300)
+                        logger.info("[LibraryService] AudioDB enrichment fetched")
+                    except (asyncio.TimeoutError, Exception) as e:
+                        logger.warning("[LibraryService] AudioDB enrichment timed out or failed: %s", e)
+                        audiodb_task.cancel()
                         if not facts_state["error"]:
                             facts_state["error"] = str(e)
                 except Exception as e:
