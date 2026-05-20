@@ -5098,6 +5098,107 @@ function InsightBlock({ stats, isDark, lang, c }) {
   );
 }
 
+// ─── ALBUM CARD ───────────────────────────────────────────────────────────────
+function AlbumCard({ album, isDark, onClick, navigateToArtist, lang }) {
+  const c = useColors(isDark);
+  const yearStr = album.year_range || (album.year ? String(album.year) : '');
+  const topGenre = album.top_genres?.[0];
+  const onArtistClick = (slug) => (e) => {
+    e.stopPropagation();
+    if (slug && navigateToArtist) navigateToArtist(slug);
+  };
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        borderRadius:'10px', overflow:'hidden',
+        background:'rgba(255,255,255,.04)',
+        border:`1px solid ${c.border}`,
+        cursor:'pointer',
+        transition:'all .18s cubic-bezier(.22,.9,.3,1)',
+      }}
+      onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,.07)'; e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = '0 6px 16px rgba(0,0,0,.18)'; }}
+      onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,.04)'; e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'none'; }}
+    >
+      <div style={{ position:'relative', aspectRatio:'1' }}>
+        <AlbumCover title={album.album_title} artist={album.primary_artist} size={220} isDark={isDark} coverPath={album.cover_art_path} radius={0} fluid />
+        <div style={{
+          position:'absolute', top:'6px', right:'6px',
+          padding:'2px 7px', borderRadius:'10px', fontSize:'10px', fontFamily:"'JetBrains Mono', monospace",
+          background:'rgba(0,0,0,.7)', color:'#bba8ff', backdropFilter:'blur(6px)',
+        }}>{album.track_count} {lang==='ru'?'тр':'tr'}</div>
+      </div>
+      <div style={{ padding:'8px 10px' }}>
+        <div style={{ fontSize:'13px', fontWeight:600, color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{album.album_title}</div>
+        <div style={{ fontSize:'12px', marginTop:'2px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+          <span style={{ color:'#bba8ff', cursor:'pointer' }} onClick={onArtistClick(album.primary_artist_slug)} title={lang==='ru'?'Открыть страницу артиста':'Open artist'}>{album.primary_artist}</span>
+          {album.feat_artists?.slice(0, 2).map(f => (
+            <React.Fragment key={f.slug}>
+              <span style={{ color:c.textSubtle }}> · </span>
+              <span style={{ color:'#bba8ff', cursor:'pointer' }} onClick={onArtistClick(f.slug)}>{f.name}</span>
+            </React.Fragment>
+          ))}
+          {(album.feat_artists?.length || 0) > 2 && <span style={{ color:c.textSubtle }}> +{album.feat_artists.length - 2}</span>}
+          {yearStr && <span style={{ color:c.textMuted }}> · {yearStr}</span>}
+        </div>
+        {topGenre && (
+          <div className="mono" style={{ fontSize:'10px', color:c.textSubtle, marginTop:'4px', letterSpacing:'0.1em', textTransform:'uppercase' }}>
+            {topGenre}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── ALBUMS GRID TAB ──────────────────────────────────────────────────────────
+function AlbumsGridTab({ albums, sort, onSortChange, onAlbumOpen, isDark, lang, navigateToArtist }) {
+  const c = useColors(isDark);
+  const sortOpts = [
+    {id:'alphabetical', label: lang==='ru' ? 'А-Я' : 'A-Z'},
+    {id:'year_desc',    label: lang==='ru' ? 'год ↓' : 'year ↓'},
+    {id:'year_asc',     label: lang==='ru' ? 'год ↑' : 'year ↑'},
+    {id:'track_count_desc', label: lang==='ru' ? 'больше треков' : 'most tracks'},
+  ];
+  if (!albums || albums.length === 0) {
+    return <div style={{ padding:'40px 20px', textAlign:'center', color:c.textSubtle, fontSize:'13px' }}>{lang==='ru' ? 'Нет треков с album-тегом в этой коллекции' : 'No tracks with album tag in this collection'}</div>;
+  }
+  return (
+    <>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'4px 0 10px', fontSize:'11px' }}>
+        <span className="mono" style={{ color:c.textSubtle, letterSpacing:'0.06em' }}>{albums.length} {lang==='ru'?'альбомов':'albums'}</span>
+        <div style={{ display:'flex', gap:'5px' }}>
+          {sortOpts.map(o => (
+            <button key={o.id} onClick={() => onSortChange(o.id)}
+              className="mono"
+              style={{
+                padding:'3px 9px', borderRadius:'12px', fontSize:'10px', cursor:'pointer',
+                background: sort===o.id ? 'rgba(120,80,200,.18)' : 'rgba(255,255,255,.04)',
+                color: sort===o.id ? '#bba8ff' : c.textMuted,
+                border:'none',
+              }}>{o.label}</button>
+          ))}
+        </div>
+      </div>
+      <div style={{
+        display:'grid',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+        gap:'12px',
+      }}>
+        {albums.map(a => (
+          <AlbumCard
+            key={`${a.primary_artist_slug}-${a.album_title}`}
+            album={a}
+            isDark={isDark} lang={lang}
+            navigateToArtist={navigateToArtist}
+            onClick={() => onAlbumOpen(a)}
+          />
+        ))}
+      </div>
+    </>
+  );
+}
+
 // ─── LIBRARY SECTION ──────────────────────────────────────────────────────────
 function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateToArtist }) {
   const c = useColors(isDark);
@@ -5161,10 +5262,22 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
             lang={lang}
           />
 
-          {/* Tab content — placeholder rendered until later tasks fill in */}
-          <div style={{ minHeight:'200px', display:'grid', placeItems:'center', color:c.textSubtle, fontFamily:"'JetBrains Mono', monospace", fontSize:'11px', letterSpacing:'.12em' }}>
-            [ {activeTab.toUpperCase()} TAB — coming in Task 10-13 ]
-          </div>
+          {/* Tab content */}
+          {activeTab === 'albums' && (
+            <AlbumsGridTab
+              albums={albumsData?.albums || []}
+              sort={albumSort}
+              onSortChange={setAlbumSort}
+              onAlbumOpen={(a) => setAlbumModal(a)}
+              isDark={isDark} lang={lang}
+              navigateToArtist={navigateToArtist}
+            />
+          )}
+          {activeTab !== 'albums' && (
+            <div style={{ minHeight:'200px', display:'grid', placeItems:'center', color:c.textSubtle, fontFamily:"'JetBrains Mono', monospace", fontSize:'11px', letterSpacing:'.12em' }}>
+              [ {activeTab.toUpperCase()} TAB — coming in Task 12-13 ]
+            </div>
+          )}
 
         </div>
       </div>
