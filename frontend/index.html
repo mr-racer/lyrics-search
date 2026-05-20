@@ -7378,19 +7378,6 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, activeCollection }
             style={{ padding: '3px 9px', fontSize: '13px', cursor: 'pointer' }}>✕</button>
         </div>
 
-        {/* Suggested prompts (only when empty chat) */}
-        {messages.length === 0 && (
-          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', padding: '10px 18px' }}>
-            {TRACK_CHAT_SUGGESTED_PROMPTS.map((p, i) => (
-              <button key={i} onClick={() => handlePromptClick(p)}
-                className="pill-v3"
-                style={{ padding: '5px 11px', fontSize: '12px', cursor: 'pointer' }}>
-                {lang === 'ru' ? p.ru : p.en}
-              </button>
-            ))}
-          </div>
-        )}
-
         {/* Messages */}
         <div ref={endRef} style={{
           flex: 1, overflowY: 'auto', padding: '10px 18px',
@@ -7428,10 +7415,28 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, activeCollection }
           ))}
         </div>
 
+        {/* Suggested prompts — always visible, just above input. Persistent
+            "quick actions" pattern (Perplexity / ChatGPT quick-actions). */}
+        <div style={{
+          display: 'flex', gap: '6px', flexWrap: 'wrap',
+          padding: '8px 18px',
+          borderTop: `1px solid ${c.border}`,
+          flexShrink: 0,
+        }}>
+          {TRACK_CHAT_SUGGESTED_PROMPTS.map((p, i) => (
+            <button key={i} onClick={() => handlePromptClick(p)}
+              className="pill-v3"
+              style={{ padding: '4px 10px', fontSize: '12px', cursor: 'pointer' }}>
+              {lang === 'ru' ? p.ru : p.en}
+            </button>
+          ))}
+        </div>
+
         {/* Input */}
         <div style={{
           display: 'flex', gap: '8px', alignItems: 'center',
           padding: '12px 18px', borderTop: `1px solid ${c.border}`,
+          flexShrink: 0,
         }}>
           <input
             value={input}
