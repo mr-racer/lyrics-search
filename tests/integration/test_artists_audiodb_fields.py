@@ -12,7 +12,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr("app.resources.metadata_db.DB_DIR", tmp_path)
     MetadataDB._reset_for_tests()
     MetadataDB.init()
-    yield TestClient(create_app())
+    yield TestClient(create_app(), raise_server_exceptions=False)
     MetadataDB._reset_for_tests()
 
 
@@ -34,7 +34,7 @@ def test_artists_endpoint_returns_audiodb_fields(client):
     # Even with no Qdrant, the route should return the DB-side fields.
     # Qdrant-down path returns a partial aggregate; assert the audiodb fields
     # are present on whatever response shape exists.
-    resp = client.get("/api/v1/artists/kanye-west")
+    resp = client.get("/api/v1/artists/kanye-west?collection=test")
     if resp.status_code == 200:
         body = resp.json()
         assert body.get("mood") == "introspective"

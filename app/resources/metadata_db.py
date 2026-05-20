@@ -353,7 +353,17 @@ class MetadataDB:
                    (slug, name, collection_name, audiodb_bio, mood, country_code,
                     country, label, cutout_path, thumb_path, audiodb_mbid,
                     audiodb_fetched_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(slug) DO UPDATE SET
+                       audiodb_bio = excluded.audiodb_bio,
+                       mood = excluded.mood,
+                       country_code = excluded.country_code,
+                       country = excluded.country,
+                       label = excluded.label,
+                       cutout_path = excluded.cutout_path,
+                       thumb_path = excluded.thumb_path,
+                       audiodb_mbid = excluded.audiodb_mbid,
+                       audiodb_fetched_at = CURRENT_TIMESTAMP""",
                 (slug, slug, collection_name, audiodb_bio, mood, country_code,
                  country, label, cutout_path, thumb_path, audiodb_mbid),
             )

@@ -97,3 +97,23 @@ def test_get_audiodb_returns_none_when_artist_has_no_audiodb_data():
     assert row is not None
     assert row["audiodb_bio"] is None
     assert row["audiodb_fetched_at"] is None
+
+
+def test_upsert_audiodb_handles_cross_collection_slug_collision():
+    """Same slug in two collections: the audiodb data overwrites in place rather than
+    raising UNIQUE constraint failed: artists.slug."""
+    # Collection A — slug exists with name set
+    MetadataDB.upsert_artist(slug="multi-coll", name="Multi Coll", collection_name="A")
+    # Collection B — same slug, audiodb enrichment should not raise
+    MetadataDB.upsert_artist_audiodb(
+        slug="multi-coll", collection_name="B",
+        audiodb_bio="Bio from B", mood="reflective",
+        country_code="US", country=None, label=None,
+        cutout_path=None, thumb_path=None, audiodb_mbid=None,
+    )
+    # Row exists (the schema is single-PK, so it's the same row regardless of collection)
+    row = MetadataDB.get_artist_audiodb("multi-coll", "A")
+    # Note: the ON CONFLICT updates the row regardless of which collection it was queried
+    # under, so the bio is "Bio from B" even when fetched with collection=A.
+    assert row is not None
+    assert row["audiodb_bio"] == "Bio from B"
