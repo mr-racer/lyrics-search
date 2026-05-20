@@ -8382,11 +8382,21 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
           {/* Separator between facts and queue */}
           <div style={{ borderTop: `1px solid ${isDark ? '#2a2a32' : 'rgba(22,22,32,0.08)'}` }} />
 
-          {/* QUEUE block — flex:1 when there are items (scrolls to fill);
-              flex:'0 0 auto' when empty so the column's justifyContent:'center'
-              can actually center the small empty-state content. */}
-          <div style={{
+          {/* Queue + Chat overlay area — anchors AIChatDrawer's absolute
+              positioning so the drawer overlays ONLY this region, leaving
+              FactsRail above untouched. overflow:hidden clips the drawer
+              during its slide-up animation. */}
+          <div className="queue-chat-area" style={{
             flex: playlist.length === 0 ? '0 0 auto' : 1,
+            position: 'relative',
+            overflow: 'hidden',
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+          }}>
+          {/* QUEUE block (inner) — fills the wrapper. */}
+          <div style={{
+            flex: 1,
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
@@ -8493,8 +8503,8 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
             </div>
           </div>
 
-          {/* AI Chat drawer — slides in over the right column (facts + queue),
-              replacing them visually until closed. */}
+          {/* AI Chat drawer — overlays ONLY the queue-chat-area wrapper
+              above. Slides up from bottom; FactsRail stays visible. */}
           <AIChatDrawer
             isOpen={drawerOpen}
             onClose={() => setDrawerOpen(false)}
@@ -8503,6 +8513,7 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
             isDark={isDark}
             activeCollection={activeCollection}
           />
+          </div>
         </div>
       </div>
 
