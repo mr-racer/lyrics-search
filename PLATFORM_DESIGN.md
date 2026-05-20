@@ -1076,7 +1076,7 @@ CREATE TABLE recommendation_snapshots (
 > | **2**  Frontend foundation            | ✅ Shipped (out-of-band — landed alongside Plan 4 timeframe) | inline in `frontend/index.html` |
 > | **3**  Artist Atlas                   | ✅ Shipped (Plan 5)                       | `docs/superpowers/plans/2026-05-16-plan-5-artist-atlas.md` |
 > | **4**  Player v6 redesign             | ✅ Shipped (Plan 4) + post-plan polish round | `docs/superpowers/plans/2026-05-16-plan-4-player-redesign.md` |
-> | **5**  AI Chat & lyrics-explain       | ✅ **Shipped** — AIChatDrawer (right-side glass slide) + Inline ✨ explain (draw-under panel). Single endpoint POST /chat/track-chat with web_search tool fallback (pydantic-ai). Plan: `docs/superpowers/plans/2026-05-19-plan-5-ai-chat-lyrics-explain.md` |
+> | **5**  AI Chat & lyrics-explain       | ✅ **Shipped** — AIChatDrawer (slide-up panel replacing queue, FactsRail stays visible; slim 32px header; persistent suggested prompts above input; ↺ session-clear) + Inline ✨ explain (draw-under panel). Single endpoint POST /chat/track-chat with web_search tool fallback (pydantic-ai). Plan: `docs/superpowers/plans/2026-05-19-plan-5-ai-chat-lyrics-explain.md`, polish: `docs/superpowers/plans/2026-05-20-chat-drawer-replaces-queue.md` |
 > | **6**  Spotify-like MVP               | ⏳ Not started                            | — |
 > | **6a** Home (Discovery Magazine)      | ⏳ Not started                            | — |
 > | **6b-B1** Search visual redesign      | ✅ **Shipped** — backend (SearchFilters + Qdrant payload + /sonic-facets) + frontend (Hybrid v3 visuals + RecentSearchesChips + hover breakdown + SonicFiltersChips). Plan: `docs/superpowers/plans/2026-05-19-plan-b1-search-section-redesign.md` |
@@ -1195,6 +1195,8 @@ CREATE TABLE recommendation_snapshots (
 > **Schema discovery during implementation**: `song_facts` table is `(id PK, song_slug FK, lang, fact TEXT)` not `(slug, notes)` as the plan assumed — `resolve_song_facts` adapted to `SELECT fact FROM song_facts WHERE song_slug = ?` with `\n\n` concatenation of multiple fact rows.
 >
 > **Deferred follow-ups**: global drawer (Atlas/Search), LLM-generated suggested prompts, SSE streaming, per-line explanation cache, multi-turn agent history support (current `answer_track_chat` ignores `req.history` — first-pass simplification, will revisit if engagement shows it matters).
+>
+> **Polish (2026-05-20)**: ✅ **Shipped** — drawer placement rewired. Was anchored to the entire right column (covered both FactsRail and queue); now anchored to a new `.queue-chat-area` wrapper that contains only the queue, so FactsRail stays visible while chat is open. Header slimmed from 70px (cover+title+artist+year) to 32px ("✨ Чат по треку" label + ↺ new-chat + ✕). Suggested prompts moved from "show once when chat empty" to "always visible above input" (Perplexity/ChatGPT quick-actions pattern). New `clearChat` UI (↺ button, conditional on `messages.length > 0`, with "Чат очищен" toast). Animation switched from `translateX(110% → 0)` to `translateY(100% → 0) + opacity` (~280ms) with `backdrop-filter: blur(14px) saturate(140%)` for glassy effect during transition. Spec: `docs/superpowers/specs/2026-05-20-chat-drawer-replaces-queue-design.md`.
 
 15. **AIChatDrawer component** — слайд из правой стороны. Pre-filled context current song. Suggested prompts. Reuse `useChatHistory` с per-song ключом.
 16. **Inline ✨ explain** на lyric line — popover с LLM-ответом. Reuse `/chat/` endpoint с `LYRIC_EXPLAIN_PROMPT`.
