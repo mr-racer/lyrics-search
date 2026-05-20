@@ -157,6 +157,32 @@ class MetadataDB:
 
     _instance: Optional[sqlite3.Connection] = None
 
+    # AudioDB enrichment columns (Plan: audiodb-enrichment Task 2).
+    # Idempotent ALTER TABLE migration adds these to ``artists`` if missing.
+    _AUDIODB_COLUMNS = (
+        ("audiodb_bio", "TEXT"),
+        ("mood", "TEXT"),
+        ("country_code", "TEXT"),
+        ("country", "TEXT"),
+        ("label", "TEXT"),
+        ("cutout_path", "TEXT"),
+        ("thumb_path", "TEXT"),
+        ("audiodb_mbid", "TEXT"),
+        ("audiodb_fetched_at", "TIMESTAMP"),
+    )
+
+    @classmethod
+    def _migrate_audiodb_columns(cls, conn: sqlite3.Connection) -> None:
+        """Add AudioDB enrichment columns to artists table if missing.
+
+        Idempotent: checks PRAGMA table_info first so re-runs don't raise.
+        """
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(artists)").fetchall()}
+        for col_name, col_type in cls._AUDIODB_COLUMNS:
+            if col_name not in existing:
+                conn.execute(f"ALTER TABLE artists ADD COLUMN {col_name} {col_type}")
+        conn.commit()
+
     @classmethod
     def _connect(cls) -> sqlite3.Connection:
         if cls._instance is None:
@@ -202,6 +228,8 @@ class MetadataDB:
         }
         if "artists" in existing_tables:
             cls._ensure_columns(conn, "artists", {"mbid": "TEXT"})
+            # AudioDB enrichment columns (idempotent — see _AUDIODB_COLUMNS).
+            cls._migrate_audiodb_columns(conn)
 
         # AI Mode infrastructure (Plan 6) — per-collection opt-in for live-LLM
         # features. DEFAULT 1 means existing rows immediately report on,
