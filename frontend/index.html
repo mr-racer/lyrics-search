@@ -7565,6 +7565,14 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
   const [liked, setLiked] = useState(null);
   const [hoveredQueueIdx, setHoveredQueueIdx] = useState(-1);
 
+  // Derived: current track from playlist + index. Declared HERE (not later)
+  // so useEffects below see the real value, not the hoisted-var undefined.
+  // @babel/standalone uses es2015 preset which transpiles `const` to `var`;
+  // accessing currentTrack before declaration yields `undefined`, which made
+  // effect deps `[currentTrack?.track_id]` always evaluate to `[undefined]`
+  // and silently skip — i.e. lyric-explain state never reset on track change.
+  const currentTrack = currentIndex >= 0 && currentIndex < playlist.length ? playlist[currentIndex].track : null;
+
   // Derive playback state from shared audio hook
   const isPlaying = audio?.isPlaying ?? false;
   // Subscribe to external time store — PlayerSection's progress UI rebuilds
@@ -7752,8 +7760,6 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
   const handleArtMouseEnter = useCallback(() => {
     setIsHovering(true);
   }, []);
-
-  const currentTrack = currentIndex >= 0 && currentIndex < playlist.length ? playlist[currentIndex].track : null;
 
   // Cover URL for color sampling — matches what AlbumCover renders internally.
   // useCoverColor caches per URL so flipping back to a known track is free.
