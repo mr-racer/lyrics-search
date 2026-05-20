@@ -6,6 +6,7 @@ session_summary, etc.) can live here without bloating MetadataDB.
 
 from __future__ import annotations
 
+from app.domain.models import RecentTrack, RecentTracksResponse
 from app.resources.metadata_db import MetadataDB
 
 
@@ -25,3 +26,41 @@ def record_event(
         played_sec=played_sec,
         total_dur=total_dur,
     )
+
+
+def get_recent(*, qdrant_client, collection_name: str, limit: int = 50) -> RecentTracksResponse:
+    triples = MetadataDB.get_recent_tracks(collection_name, limit)
+    if not triples:
+        return RecentTracksResponse(tracks=[], collection_name=collection_name)
+
+    ids = [tid for tid, _, _ in triples]
+    meta_by_id = {tid: (lp, pc) for tid, lp, pc in triples}
+
+    try:
+        points = qdrant_client.retrieve(
+            collection_name=collection_name,
+            ids=ids,
+            with_payload=True,
+            with_vectors=False,
+        )
+    except Exception:
+        points = []
+
+    tracks = []
+    for p in points:
+        pl = p.payload or {}
+        lp, pc = meta_by_id.get(str(p.id), ("", 0))
+        tracks.append(RecentTrack(
+            track_id=str(p.id),
+            title=pl.get("title") or "—",
+            artist=pl.get("artist") or "—",
+            album=pl.get("album"),
+            year=int(pl["year"]) if pl.get("year") and str(pl["year"]).isdigit() else None,
+            duration=pl.get("duration"),
+            cover_art_path=pl.get("cover_art_path"),
+            genre=pl.get("genre"),
+            last_played=lp,
+            play_count=pc,
+        ))
+    tracks.sort(key=lambda t: t.last_played, reverse=True)
+    return RecentTracksResponse(tracks=tracks, collection_name=collection_name)

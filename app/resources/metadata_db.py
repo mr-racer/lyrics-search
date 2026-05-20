@@ -760,6 +760,33 @@ class MetadataDB:
         conn.commit()
         return int(cur.lastrowid)
 
+    @classmethod
+    def get_recent_tracks(
+        cls, collection_name: str, limit: int = 50,
+    ) -> list[tuple[str, str, int]]:
+        """Returns list of (track_id, last_played_iso, play_count_non_skipped),
+        deduped by track_id, ordered by last_played DESC."""
+        conn = cls._connect()
+        rows = conn.execute(
+            """SELECT track_id,
+                      MAX(played_at) AS last_played,
+                      SUM(CASE WHEN skipped_early=0 THEN 1 ELSE 0 END) AS plays
+               FROM playback_events
+               WHERE collection_name = ?
+               GROUP BY track_id
+               ORDER BY last_played DESC
+               LIMIT ?""",
+            (collection_name, limit),
+        ).fetchall()
+        # `played_at` is TIMESTAMP-typed; under PARSE_DECLTYPES it comes back as datetime.
+        # Coerce to ISO format string (T-separated) for JSON clients (mirror Task 4 fix).
+        return [
+            (r[0],
+             r[1].isoformat() if hasattr(r[1], "isoformat") else str(r[1]),
+             int(r[2] or 0))
+            for r in rows
+        ]
+
     # ── AI Indexing jobs (Plan 3 Task 11) ──
 
     @classmethod

@@ -1,8 +1,12 @@
 """Tests for playback_service and the underlying MetadataDB accessor."""
 
+from types import SimpleNamespace
+from unittest.mock import MagicMock
+
 import pytest
 
 from app.resources.metadata_db import MetadataDB
+from app.services.playback_service import get_recent
 
 
 @pytest.fixture(autouse=True)
@@ -93,3 +97,43 @@ def test_skipped_early_false_for_short_track_fully_played():
         "SELECT skipped_early FROM playback_events ORDER BY id DESC LIMIT 1"
     ).fetchone()
     assert row[0] == 0
+
+
+def _stub_qdrant_retrieve(by_id):
+    qdrant = MagicMock()
+    def retrieve(*, collection_name, ids, with_payload, with_vectors):
+        return [
+            SimpleNamespace(id=tid, payload=by_id[tid])
+            for tid in ids if tid in by_id
+        ]
+    qdrant.retrieve.side_effect = retrieve
+    return qdrant
+
+
+def test_get_recent_dedups_by_track_id_keeping_latest():
+    MetadataDB.record_playback_event(session_id="s1", collection_name="c",
+                                     track_id="t1", played_sec=200, total_dur=240)
+    MetadataDB.record_playback_event(session_id="s1", collection_name="c",
+                                     track_id="t2", played_sec=200, total_dur=240)
+    MetadataDB.record_playback_event(session_id="s1", collection_name="c",
+                                     track_id="t1", played_sec=200, total_dur=240)
+    qdrant = _stub_qdrant_retrieve({
+        "t1": {"title": "T1", "artist": "A", "duration": 240},
+        "t2": {"title": "T2", "artist": "B", "duration": 240},
+    })
+    res = get_recent(qdrant_client=qdrant, collection_name="c", limit=10)
+    assert len(res.tracks) == 2
+    # t1 most recent (had 2 plays), t2 has 1; ordering by last_played DESC means t1 first
+    assert res.tracks[0].track_id == "t1"
+    assert res.tracks[0].play_count == 2
+    assert res.tracks[1].play_count == 1
+
+
+def test_get_recent_excludes_skipped_from_play_count():
+    MetadataDB.record_playback_event(session_id="s1", collection_name="c",
+                                     track_id="t1", played_sec=200, total_dur=240)   # not skipped
+    MetadataDB.record_playback_event(session_id="s1", collection_name="c",
+                                     track_id="t1", played_sec=5, total_dur=240)     # skipped_early
+    qdrant = _stub_qdrant_retrieve({"t1": {"title":"T1","artist":"A","duration":240}})
+    res = get_recent(qdrant_client=qdrant, collection_name="c", limit=10)
+    assert res.tracks[0].play_count == 1   # skipped excluded
