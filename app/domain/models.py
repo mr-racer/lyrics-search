@@ -401,3 +401,101 @@ class LLMStatusResponse(BaseModel):
 class AIEnabledRequest(BaseModel):
     """Body for PATCH /library/collections/{name}/ai-enabled."""
     enabled: bool
+
+
+# ── Library Overhaul (Phase 6 sub-plan #1) ──
+
+class ArtistRef(BaseModel):
+    name: str
+    slug: str
+
+
+class AlbumTrack(BaseModel):
+    """Lightweight track inside an AlbumSummary — covers what AlbumModal renders."""
+    track_id: str
+    title: str
+    artist: str
+    duration: Optional[float] = None
+    year: Optional[int] = None
+    cover_art_path: Optional[str] = None
+
+
+class AlbumSummary(BaseModel):
+    album_title: str
+    primary_artist: str
+    primary_artist_slug: str
+    feat_artists: list[ArtistRef] = Field(default_factory=list)
+    year: Optional[int] = None
+    year_range: Optional[str] = None
+    cover_art_path: Optional[str] = None
+    track_count: int
+    duration_seconds: int
+    top_genres: list[str] = Field(default_factory=list)
+    tracks: list[AlbumTrack] = Field(default_factory=list)
+
+
+class LibraryAlbumsResponse(BaseModel):
+    albums: list[AlbumSummary]
+    collection_name: Optional[str] = None
+    qdrant_available: bool = True
+
+
+class LikedSongTrack(BaseModel):
+    track_id: str
+    title: str
+    artist: str
+    album: Optional[str] = None
+    year: Optional[int] = None
+    duration: Optional[float] = None
+    cover_art_path: Optional[str] = None
+    genre: Optional[str] = None
+    liked_at: str   # ISO datetime
+
+
+class LikedSongsResponse(BaseModel):
+    tracks: list[LikedSongTrack]
+    collection_name: Optional[str] = None
+
+
+class RecentTrack(BaseModel):
+    track_id: str
+    title: str
+    artist: str
+    album: Optional[str] = None
+    year: Optional[int] = None
+    duration: Optional[float] = None
+    cover_art_path: Optional[str] = None
+    genre: Optional[str] = None
+    last_played: str   # ISO datetime
+    play_count: int
+
+
+class RecentTracksResponse(BaseModel):
+    tracks: list[RecentTrack]
+    collection_name: Optional[str] = None
+
+
+class TopTrackBrief(BaseModel):
+    track_id: str
+    title: str
+    artist: str
+    play_count: int
+
+
+class TopArtistBrief(BaseModel):
+    name: str
+    slug: str
+    play_count: int
+
+
+class PeakHour(BaseModel):
+    hour: int   # 0-23
+    label: str  # localised "вечера буднего" / "weekday evenings"
+
+
+class ListeningStatsResponse(BaseModel):
+    total_seconds_listened: int = 0
+    since: Optional[str] = None
+    top_track: Optional[TopTrackBrief] = None
+    top_artist: Optional[TopArtistBrief] = None
+    peak_hour: Optional[PeakHour] = None

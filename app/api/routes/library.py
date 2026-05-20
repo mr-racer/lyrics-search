@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 logger = logging.getLogger(__name__)
 
-from app.domain.models import IndexRequest, IndexProgress, AIEnabledRequest
+from app.domain.models import IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse
 from app.services.library_service import LibraryService
 from app.services.similarity_service import load_top_pairs
 
@@ -359,6 +359,60 @@ async def set_collection_ai_enabled(collection_name: str, req: AIEnabledRequest)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to set ai_enabled: {e}")
     return {"collection_name": collection_name, "ai_enabled": req.enabled}
+
+
+# ── Albums overview ───────────────────────────────────────────────────────────
+
+@router.get("/albums", response_model=LibraryAlbumsResponse)
+async def get_library_albums(
+    request: Request,
+    collection_name: str = Query(..., description="Collection name (required)"),
+    sort: str = Query("alphabetical", description="alphabetical | year_desc | year_asc | track_count_desc"),
+) -> LibraryAlbumsResponse:
+    db_client = request.app.state.db_client
+    if db_client is None or db_client.qdrant is None:
+        return LibraryAlbumsResponse(
+            albums=[], collection_name=collection_name, qdrant_available=False,
+        )
+    return LibraryService.get_albums(
+        qdrant_client=db_client.qdrant,
+        collection_name=collection_name,
+        sort=sort,
+    )
+
+
+# ── Liked songs ───────────────────────────────────────────────────────────────
+
+@router.get("/liked-songs", response_model=LikedSongsResponse)
+async def get_library_liked_songs(
+    request: Request,
+    collection_name: str = Query(..., description="Collection name (required)"),
+) -> LikedSongsResponse:
+    db_client = request.app.state.db_client
+    if db_client is None or db_client.qdrant is None:
+        return LikedSongsResponse(tracks=[], collection_name=collection_name)
+    return LibraryService.get_liked_songs(
+        qdrant_client=db_client.qdrant,
+        collection_name=collection_name,
+    )
+
+
+# ── Listening stats ───────────────────────────────────────────────────────────
+
+@router.get("/listening-stats", response_model=ListeningStatsResponse)
+async def get_library_listening_stats(
+    request: Request,
+    collection_name: str = Query(..., description="Collection name"),
+    lang: str = Query("en", pattern="^(en|ru)$"),
+) -> ListeningStatsResponse:
+    db_client = request.app.state.db_client
+    if db_client is None or db_client.qdrant is None:
+        return ListeningStatsResponse()
+    return LibraryService.get_listening_stats(
+        qdrant_client=db_client.qdrant,
+        collection_name=collection_name,
+        lang=lang,
+    )
 
 
 # ── Library statistics ────────────────────────────────────────────────────────

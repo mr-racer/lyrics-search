@@ -606,6 +606,30 @@ class MetadataDB:
         return row[0] if row else None
 
     @classmethod
+    def get_liked_track_ids_with_updated_at(
+        cls, collection_name: str
+    ) -> list[tuple[str, str]]:
+        """Return list of (track_id, updated_at ISO string) for tracks with
+        reaction='like' in the given collection, ordered newest-first."""
+        conn = cls._connect()
+        rows = conn.execute(
+            "SELECT track_id, updated_at FROM track_reactions "
+            "WHERE collection_name = ? AND reaction = 'like' "
+            "ORDER BY updated_at DESC",
+            (collection_name,),
+        ).fetchall()
+        # updated_at is declared TIMESTAMP — with PARSE_DECLTYPES the sqlite3
+        # adapter returns it as a datetime.datetime. Coerce to ISO string so
+        # the API response model (Pydantic str field) accepts it directly.
+        # Use .isoformat() (T-separator) so `new Date(liked_at)` in the
+        # browser parses reliably across engines; str(datetime) yields a
+        # space-separated form that Safari/older browsers reject.
+        return [
+            (r[0], r[1].isoformat() if hasattr(r[1], "isoformat") else str(r[1]))
+            for r in rows
+        ]
+
+    @classmethod
     def get_reactions_for_tracks(
         cls, collection_name: str, track_ids: list[str]
     ) -> dict[str, str]:
@@ -735,6 +759,93 @@ class MetadataDB:
         )
         conn.commit()
         return int(cur.lastrowid)
+
+    @classmethod
+    def get_recent_tracks(
+        cls, collection_name: str, limit: int = 50,
+    ) -> list[tuple[str, str, int]]:
+        """Returns list of (track_id, last_played_iso, play_count_non_skipped),
+        deduped by track_id, ordered by last_played DESC."""
+        conn = cls._connect()
+        rows = conn.execute(
+            """SELECT track_id,
+                      MAX(played_at) AS last_played,
+                      SUM(CASE WHEN skipped_early=0 THEN 1 ELSE 0 END) AS plays
+               FROM playback_events
+               WHERE collection_name = ?
+               GROUP BY track_id
+               ORDER BY last_played DESC
+               LIMIT ?""",
+            (collection_name, limit),
+        ).fetchall()
+        # `played_at` is TIMESTAMP-typed; under PARSE_DECLTYPES it comes back as datetime.
+        # Coerce to ISO format string (T-separated) for JSON clients (mirror Task 4 fix).
+        return [
+            (r[0],
+             r[1].isoformat() if hasattr(r[1], "isoformat") else str(r[1]),
+             int(r[2] or 0))
+            for r in rows
+        ]
+
+    @classmethod
+    def get_listening_total(cls, collection_name: str) -> tuple[float, str | None]:
+        """Return (total_played_sec, first_played_iso_or_None)."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT COALESCE(SUM(played_sec), 0), MIN(played_at) "
+            "FROM playback_events WHERE collection_name = ?",
+            (collection_name,),
+        ).fetchone()
+        first_played = row[1]
+        first_played_iso = (
+            first_played.isoformat() if hasattr(first_played, "isoformat") else
+            (str(first_played) if first_played is not None else None)
+        )
+        return float(row[0] or 0), first_played_iso
+
+    @classmethod
+    def get_top_played_track(cls, collection_name: str) -> tuple[str, int] | None:
+        """Return (track_id, play_count_non_skipped) for the most-played track, or None."""
+        conn = cls._connect()
+        row = conn.execute(
+            """SELECT track_id, COUNT(*) AS plays
+               FROM playback_events
+               WHERE collection_name = ? AND skipped_early = 0
+               GROUP BY track_id
+               ORDER BY plays DESC
+               LIMIT 1""",
+            (collection_name,),
+        ).fetchone()
+        return (row[0], int(row[1])) if row else None
+
+    @classmethod
+    def get_peak_hour(cls, collection_name: str) -> int | None:
+        """Return the most-frequent hour-of-day (0-23) across all non-skipped events, or None."""
+        conn = cls._connect()
+        row = conn.execute(
+            """SELECT CAST(strftime('%H', played_at) AS INT) AS h, COUNT(*) AS n
+               FROM playback_events
+               WHERE collection_name = ? AND skipped_early = 0
+               GROUP BY h
+               ORDER BY n DESC
+               LIMIT 1""",
+            (collection_name,),
+        ).fetchone()
+        return int(row[0]) if row else None
+
+    @classmethod
+    def get_play_counts_by_track(
+        cls, collection_name: str
+    ) -> dict[str, int]:
+        """Non-skipped play counts grouped by track_id."""
+        conn = cls._connect()
+        rows = conn.execute(
+            "SELECT track_id, COUNT(*) FROM playback_events "
+            "WHERE collection_name = ? AND skipped_early = 0 "
+            "GROUP BY track_id",
+            (collection_name,),
+        ).fetchall()
+        return {r[0]: int(r[1]) for r in rows}
 
     # ── AI Indexing jobs (Plan 3 Task 11) ──
 

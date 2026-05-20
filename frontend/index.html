@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ru">
 <head>
   <meta charset="UTF-8" />
@@ -4927,496 +4927,805 @@ function VUMeter({ value, max=100, label, sub, isDark, hue=265, size=180 }) {
   );
 }
 
-// ─── LLM bridge: generate insights from stats ────────────────────────────────
-// [Planned feature] Replace with real LLM endpoint (POST /api/v1/insights) that
-// accepts stats + lang and returns personalized narrative insights via LLM.
-// Current implementation uses template-based insights from /library/stats data.
-function generateInsights(stats, lang) {
-  if (!stats || !stats.total_tracks) return [];
-  const t = lang === 'ru';
-  const out = [];
-
-  // 1. Dominant genre
-  if (stats.genres?.length) {
-    const g = stats.genres[0];
-    out.push({
-      icon: '🎸',
-      iconBg: 'oklch(60% 0.18 270 / 0.15)',
-      title: t ? 'Доминирующий жанр' : 'Dominant genre',
-      desc: t
-        ? `${g.genre || '—'} — ${g.pct}% всей коллекции (${g.count} треков). Ядро вашего музыкального вкуса.`
-        : `${g.genre || '—'} makes up ${g.pct}% of your library (${g.count} tracks). The core of your musical taste.`,
-    });
-  }
-
-  // 2. Top artist
-  if (stats.top_artists?.length) {
-    const a = stats.top_artists[0];
-    out.push({
-      icon: '🎤',
-      iconBg: 'oklch(60% 0.18 310 / 0.15)',
-      title: t ? 'Ваш топ-артист' : 'Your top artist',
-      desc: t
-        ? `${a.artist || '—'} — ${a.count} треков. Самый коллекционируемый исполнитель в вашей библиотеке.`
-        : `${a.artist || '—'} — ${a.count} tracks. Your most-collected artist across the entire library.`,
-    });
-  }
-
-  // 3. Chronology (year range)
-  if (stats.year_range) {
-    const yr = stats.year_range;
-    const minY = yr.min ?? yr[0];
-    const maxY = yr.max ?? yr[1];
-    if (minY && maxY) {
-      const span = maxY - minY;
-      out.push({
-        icon: '📅',
-        iconBg: 'oklch(72% 0.13 75 / 0.15)',
-        title: t ? 'Хронология коллекции' : 'Library timeline',
-        desc: t
-          ? `От ${minY} до ${maxY} — ${span} лет музыки. Ваша коллекция охватывает ${span > 30 ? 'несколько поколений музыки' : 'значительный период музыкальной истории'}.`
-          : `From ${minY} to ${maxY} — ${span} years of music. Your library spans ${span > 30 ? 'several generations of music' : 'a significant period of music history'}.`,
-      });
-    }
-  }
-
-  // 4. Total listening time
-  if (stats.total_tracks && stats.duration_buckets?.length) {
-    const avgSec = stats.duration_buckets.reduce((s, d) => {
-      const parts = (d.range || '').split('-').map(Number);
-      if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) {
-        return s + ((parts[0] + parts[1]) / 2) * d.count;
-      }
-      return s;
-    }, 0) / Math.max(1, stats.total_tracks);
-    const totalSec = avgSec * stats.total_tracks;
-    const totalHrs = Math.round(totalSec / 3600);
-    const days = Math.floor(totalHrs / 24);
-    const hrs = totalHrs % 24;
-    out.push({
-      icon: '⏱',
-      iconBg: 'oklch(70% 0.15 142 / 0.25)',
-      title: t ? 'Общее время музыки' : 'Total listening time',
-      desc: t
-        ? `${totalHrs.toLocaleString('ru')} часов (${days}д ${hrs}ч) непрерывного прослушивания. Средний трек: ${secsToMMSS(avgSec)}.`
-        : `${totalHrs.toLocaleString('en')} hours (${days}d ${hrs}h) of continuous playback. Average track: ${secsToMMSS(avgSec)}.`,
-    });
-  }
-
-  // 5. Favorite decade
-  if (stats.decades?.length) {
-    const peak = stats.decades.reduce((p, d) => d.count > (p?.count || 0) ? d : p, null);
-    if (peak) {
-      out.push({
-        icon: '🎯',
-        iconBg: 'oklch(60% 0.18 25 / 0.15)',
-        title: t ? 'Любимое десятилетие' : 'Favorite decade',
-        desc: t
-          ? `${peak.decade}-е — ваше пиковое десятилетие (${peak.count} треков, ${peak.pct}% коллекции).`
-          : `${peak.decade}s is your peak decade (${peak.count} tracks, ${peak.pct}% of your library).`,
-      });
-    }
-  }
-
-  return out;
-}
-
-// ─── InsightBlock component ───────────────────────────────────────────────────
-function InsightBlock({ stats, isDark, lang, c }) {
-  const insights = useMemo(() => generateInsights(stats, lang), [stats, lang]);
-
-  if (!insights.length) return null;
-
-  // Gradient background colors
-  const gradD = isDark
-    ? {
-        bg: 'linear-gradient(135deg, rgba(106,130,251,0.06) 0%, rgba(167,139,250,0.04) 40%, rgba(240,194,127,0.03) 100%)',
-        border: 'rgba(106,130,251,0.1)',
-        cardBg: 'linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.01) 100%)',
-        cardBorder: 'rgba(255,255,255,0.06)',
-        cardShadow: 'inset 0 1px 0 rgba(255,255,255,0.06), 0 2px 8px rgba(0,0,0,0.2)',
-        cardHoverShadow: 'inset 0 1px 0 rgba(255,255,255,0.1), 0 6px 16px rgba(0,0,0,0.35)',
-      }
-    : {
-        bg: 'linear-gradient(135deg, rgba(106,130,251,0.05) 0%, rgba(167,139,250,0.03) 40%, rgba(240,194,127,0.02) 100%)',
-        border: 'rgba(106,130,251,0.12)',
-        cardBg: 'linear-gradient(180deg, rgba(255,255,255,0.7) 0%, rgba(255,255,255,0.3) 100%)',
-        cardBorder: 'rgba(0,0,0,0.06)',
-        cardShadow: 'inset 0 1px 0 rgba(255,255,255,0.8), 0 2px 6px rgba(40,30,60,0.06)',
-        cardHoverShadow: 'inset 0 1px 0 rgba(255,255,255,1), 0 6px 14px rgba(40,30,60,0.12)',
-      };
-
+// ─── ALBUM CARD ───────────────────────────────────────────────────────────────
+function AlbumCard({ album, isDark, onClick, navigateToArtist, lang }) {
+  const c = useColors(isDark);
+  const yearStr = album.year_range || (album.year ? String(album.year) : '');
+  const topGenre = album.top_genres?.[0];
+  const onArtistClick = (slug) => (e) => {
+    e.stopPropagation();
+    if (slug && navigateToArtist) navigateToArtist(slug);
+  };
   return (
-    <div className="insight-block" style={{ background: gradD.bg, border: `1px solid ${gradD.border}` }}>
-      {/* Ambient glow orbs */}
-      <div className="insight-block-bg" style={{
-        background: isDark
-          ? 'radial-gradient(ellipse at 20% 20%, rgba(106,130,251,0.08) 0%, transparent 50%), radial-gradient(ellipse at 80% 80%, rgba(240,194,127,0.05) 0%, transparent 50%)'
-          : 'radial-gradient(ellipse at 20% 20%, rgba(106,130,251,0.06) 0%, transparent 50%), radial-gradient(ellipse at 80% 80%, rgba(240,194,127,0.04) 0%, transparent 50%)',
-      }} />
-
-      <div className="insight-block-content">
-        <div className="mono" style={{
-          fontSize: '14px', color: c.textSubtle, letterSpacing: '0.22em', marginBottom: '14px',
-          display: 'flex', alignItems: 'center', gap: '8px',
-        }}>
-          <span>{lang === 'ru' ? 'Узнайте свою коллекцию' : 'Discover your library'}</span>
-          <span style={{
-            display: 'inline-block', width: '4px', height: '4px', borderRadius: '50%',
-            background: c.accent, animation: 'insightGlow 2s ease-in-out infinite',
-          }} />
+    <div
+      onClick={onClick}
+      style={{
+        borderRadius:'10px', overflow:'hidden',
+        background:'rgba(255,255,255,.04)',
+        border:`1px solid ${c.border}`,
+        cursor:'pointer',
+        transition:'all .18s cubic-bezier(.22,.9,.3,1)',
+      }}
+      onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,.07)'; e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = '0 6px 16px rgba(0,0,0,.18)'; }}
+      onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,.04)'; e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'none'; }}
+    >
+      <div style={{ position:'relative', aspectRatio:'1' }}>
+        <AlbumCover title={album.album_title} artist={album.primary_artist} size={220} isDark={isDark} coverPath={album.cover_art_path} radius={0} fluid />
+        <div style={{
+          position:'absolute', top:'6px', right:'6px',
+          padding:'2px 7px', borderRadius:'10px', fontSize:'10px', fontFamily:"'JetBrains Mono', monospace",
+          background:'rgba(0,0,0,.7)', color:'#bba8ff', backdropFilter:'blur(6px)',
+        }}>{album.track_count} {lang==='ru'?'тр':'tr'}</div>
+      </div>
+      <div style={{ padding:'8px 10px' }}>
+        <div style={{ fontSize:'13px', fontWeight:600, color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{album.album_title}</div>
+        <div style={{ fontSize:'12px', marginTop:'2px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+          <span style={{ color:'#bba8ff', cursor:'pointer' }} onClick={onArtistClick(album.primary_artist_slug)} title={lang==='ru'?'Открыть страницу артиста':'Open artist'}>{album.primary_artist}</span>
+          {album.feat_artists?.slice(0, 2).map(f => (
+            <React.Fragment key={f.slug}>
+              <span style={{ color:c.textSubtle }}> · </span>
+              <span style={{ color:'#bba8ff', cursor:'pointer' }} onClick={onArtistClick(f.slug)}>{f.name}</span>
+            </React.Fragment>
+          ))}
+          {(album.feat_artists?.length || 0) > 2 && <span style={{ color:c.textSubtle }}> +{album.feat_artists.length - 2}</span>}
+          {yearStr && <span style={{ color:c.textMuted }}> · {yearStr}</span>}
         </div>
-
-        {insights.map((insight, i) => (
-          <div
-            key={i}
-            className="insight-card"
-            style={{
-              background: gradD.cardBg,
-              border: `1px solid ${gradD.cardBorder}`,
-              boxShadow: gradD.cardShadow,
-              animationDelay: `${0.05 + i * 0.07}s`,
-            }}
-            onMouseEnter={e => { e.currentTarget.style.boxShadow = gradD.cardHoverShadow; }}
-            onMouseLeave={e => { e.currentTarget.style.boxShadow = gradD.cardShadow; }}
-          >
-            <div className="insight-icon" style={{ background: insight.iconBg }}>
-              {insight.icon}
-            </div>
-            <div className="insight-card-text">
-              <div className="insight-card-title" style={{ color: c.text }}>
-                {insight.title}
-              </div>
-              <div className="insight-card-desc" style={{ color: c.textMuted }}>
-                {insight.desc}
-              </div>
-            </div>
+        {topGenre && (
+          <div className="mono" style={{ fontSize:'10px', color:c.textSubtle, marginTop:'4px', letterSpacing:'0.1em', textTransform:'uppercase' }}>
+            {topGenre}
           </div>
-        ))}
+        )}
       </div>
     </div>
+  );
+}
+
+// ─── ALBUMS GRID TAB ──────────────────────────────────────────────────────────
+function AlbumsGridTab({ albums, sort, onSortChange, onAlbumOpen, isDark, lang, navigateToArtist }) {
+  const c = useColors(isDark);
+  const sortOpts = [
+    {id:'alphabetical', label: lang==='ru' ? 'А-Я' : 'A-Z'},
+    {id:'year_desc',    label: lang==='ru' ? 'год ↓' : 'year ↓'},
+    {id:'year_asc',     label: lang==='ru' ? 'год ↑' : 'year ↑'},
+    {id:'track_count_desc', label: lang==='ru' ? 'больше треков' : 'most tracks'},
+  ];
+  if (!albums || albums.length === 0) {
+    return <div style={{ padding:'40px 20px', textAlign:'center', color:c.textSubtle, fontSize:'13px' }}>{lang==='ru' ? 'Нет треков с album-тегом в этой коллекции' : 'No tracks with album tag in this collection'}</div>;
+  }
+  return (
+    <>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'4px 0 10px', fontSize:'11px' }}>
+        <span className="mono" style={{ color:c.textSubtle, letterSpacing:'0.06em' }}>{albums.length} {lang==='ru'?'альбомов':'albums'}</span>
+        <div style={{ display:'flex', gap:'5px' }}>
+          {sortOpts.map(o => (
+            <button key={o.id} onClick={() => onSortChange(o.id)}
+              className="mono"
+              style={{
+                padding:'3px 9px', borderRadius:'12px', fontSize:'10px', cursor:'pointer',
+                background: sort===o.id ? 'rgba(120,80,200,.18)' : 'rgba(255,255,255,.04)',
+                color: sort===o.id ? '#bba8ff' : c.textMuted,
+                border:'none',
+              }}>{o.label}</button>
+          ))}
+        </div>
+      </div>
+      <div style={{
+        display:'grid',
+        gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+        gap:'12px',
+      }}>
+        {albums.map(a => (
+          <AlbumCard
+            key={`${a.primary_artist_slug}-${a.album_title}`}
+            album={a}
+            isDark={isDark} lang={lang}
+            navigateToArtist={navigateToArtist}
+            onClick={() => onAlbumOpen(a)}
+          />
+        ))}
+      </div>
+    </>
+  );
+}
+
+// ─── LIBRARY GLASSY ROW (shared by Liked + Recently) ──────────────────────────
+function LibraryGlassyRow({ track, when, playCount, isDark, lang, onClick, onArtistClick, onAlbumClick, onToggleLike, isLiked, isCurrent }) {
+  const c = useColors(isDark);
+  const fmtDur = (s) => {
+    if (!s) return '—';
+    const m = Math.floor(s / 60), r = Math.floor(s % 60);
+    return `${m}:${String(r).padStart(2, '0')}`;
+  };
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        display:'grid',
+        gridTemplateColumns:'44px 1fr auto 60px auto',
+        gap:'14px', alignItems:'center',
+        padding:'9px 14px 9px 9px',
+        borderRadius:'12px',
+        background: isCurrent ? 'rgba(120,80,200,.13)' : 'rgba(255,255,255,.04)',
+        backdropFilter:'blur(22px) saturate(1.1)',
+        WebkitBackdropFilter:'blur(22px) saturate(1.1)',
+        border:`1px solid ${isCurrent ? 'rgba(120,80,200,.32)' : c.border}`,
+        boxShadow:'inset 0 1px 0 rgba(255,255,255,.04)',
+        cursor:'pointer',
+        transition:'all .18s cubic-bezier(.22,.9,.3,1)',
+      }}
+      onMouseEnter={e => { e.currentTarget.style.background = isCurrent ? 'rgba(120,80,200,.18)' : 'rgba(255,255,255,.07)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
+      onMouseLeave={e => { e.currentTarget.style.background = isCurrent ? 'rgba(120,80,200,.13)' : 'rgba(255,255,255,.04)'; e.currentTarget.style.transform = 'translateY(0)'; }}
+    >
+      <div style={{ position:'relative', width:'44px', height:'44px', borderRadius:'8px', overflow:'hidden' }}>
+        <AlbumCover title={track.title} artist={track.artist} size={44} isDark={isDark} coverPath={track.cover_art_path} radius={8} fluid />
+      </div>
+      <div style={{ minWidth:0 }}>
+        <div style={{ color:c.text, fontSize:'14px', fontWeight:500, letterSpacing:'-0.01em', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title}</div>
+        <div style={{ color:c.textMuted, fontSize:'12px', marginTop:'1px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+          <span onClick={(e) => { e.stopPropagation(); onArtistClick && onArtistClick(track.artist); }} style={{ color:'#bba8ff', cursor:'pointer' }}>{track.artist}</span>
+          {track.album && (<>
+            <span style={{ color:c.textSubtle, margin:'0 6px' }}>·</span>
+            <span onClick={(e) => { e.stopPropagation(); onAlbumClick && onAlbumClick(track.album); }} style={{ color:'#a8b8c8', cursor:'pointer' }}>{track.album}</span>
+          </>)}
+          {when && (<>
+            <span style={{ color:c.textSubtle, margin:'0 6px' }}>·</span>
+            <span className="mono" style={{ color:c.textSubtle, fontSize:'11px', letterSpacing:'0.06em' }}>{when}</span>
+          </>)}
+          {playCount != null && playCount > 0 && (<>
+            <span style={{ color:c.textSubtle, margin:'0 6px' }}>·</span>
+            <span className="mono" style={{ color:c.textSubtle, fontSize:'11px' }}>{playCount}×</span>
+          </>)}
+        </div>
+      </div>
+      <div />
+      <div className="mono" style={{ color:c.textMuted, fontSize:'11px', textAlign:'right' }}>{fmtDur(track.duration)}</div>
+      <div style={{ display:'flex', gap:'4px' }}>
+        <button
+          onClick={(e) => { e.stopPropagation(); onToggleLike && onToggleLike(track.track_id); }}
+          title={isLiked ? (lang==='ru'?'Убрать лайк':'Unlike') : (lang==='ru'?'Лайкнуть':'Like')}
+          style={{
+            width:'30px', height:'30px', borderRadius:'50%',
+            display:'grid', placeItems:'center',
+            background: isLiked ? 'rgba(255,122,168,.12)' : 'rgba(255,255,255,.03)',
+            color: isLiked ? '#ff7aa8' : c.textMuted,
+            border:'none', cursor:'pointer', fontSize:'14px',
+            transition:'all .18s',
+          }}
+        >{isLiked ? '♥' : '♡'}</button>
+        <button
+          title={lang==='ru'?'Доступно после Plan 19':'Available after Plan 19'}
+          disabled
+          style={{
+            width:'30px', height:'30px', borderRadius:'50%',
+            display:'grid', placeItems:'center',
+            background:'rgba(255,255,255,.02)',
+            color:'#444',
+            border:'none', cursor:'not-allowed', fontSize:'14px',
+          }}
+        >＋</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── LIKED SONGS TAB ──────────────────────────────────────────────────────────
+function LikedSongsTab({ tracks, isDark, lang, onPlayTrack, navigateToArtist, onAlbumClick, onToggleLike, likedMap, currentTrackId }) {
+  const c = useColors(isDark);
+  if (!tracks || tracks.length === 0) {
+    return <div style={{ padding:'40px 20px', textAlign:'center', color:c.textSubtle, fontSize:'13px' }}>{lang==='ru' ? 'Нет лайкнутых треков — лайкни что-нибудь из Player или Search' : 'No liked songs yet — like a track from Player or Search'}</div>;
+  }
+  return (
+    <>
+      <div style={{ padding:'4px 0 10px', fontSize:'11px', color:c.textSubtle, fontFamily:"'JetBrains Mono', monospace", letterSpacing:'0.06em' }}>
+        {tracks.length} {lang==='ru'?'треков':'tracks'}
+      </div>
+      <div style={{ display:'flex', flexDirection:'column', gap:'6px' }}>
+        {tracks.map((t) => (
+          <LibraryGlassyRow
+            key={t.track_id}
+            track={t}
+            isDark={isDark} lang={lang}
+            isLiked={likedMap[t.track_id] !== false}
+            isCurrent={t.track_id === currentTrackId}
+            onClick={() => onPlayTrack && onPlayTrack({ track: t }, tracks.map(tt => ({ track: tt })))}
+            onArtistClick={(name) => { const slug = slugifyArtistName(name); if (slug && navigateToArtist) navigateToArtist(slug); }}
+            onAlbumClick={(name) => onAlbumClick && onAlbumClick(name)}
+            onToggleLike={onToggleLike}
+          />
+        ))}
+      </div>
+    </>
+  );
+}
+
+// ─── formatRelativeTime helper ────────────────────────────────────────────────
+function formatRelativeTime(iso, lang) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const now = new Date();
+  const diffMin = Math.floor((now - d) / 60000);
+  if (diffMin < 1)  return lang==='ru' ? 'только что' : 'just now';
+  if (diffMin < 60) return lang==='ru' ? `${diffMin} мин назад` : `${diffMin}m ago`;
+  const sameDay = d.toDateString() === now.toDateString();
+  if (sameDay) {
+    const hh = String(d.getHours()).padStart(2,'0');
+    const mm = String(d.getMinutes()).padStart(2,'0');
+    return lang==='ru' ? `сегодня ${hh}:${mm}` : `today ${hh}:${mm}`;
+  }
+  const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return lang==='ru' ? 'вчера' : 'yesterday';
+  return d.toLocaleDateString(lang==='ru'?'ru-RU':'en-US', { month:'short', day:'numeric' });
+}
+
+// ─── RECENTLY PLAYED TAB ──────────────────────────────────────────────────────
+function RecentlyPlayedTab({ tracks, sort, onSortChange, isDark, lang, onPlayTrack, navigateToArtist, onAlbumClick, onToggleLike, likedMap, currentTrackId }) {
+  const c = useColors(isDark);
+  if (!tracks || tracks.length === 0) {
+    return <div style={{ padding:'40px 20px', textAlign:'center', color:c.textSubtle, fontSize:'13px' }}>{lang==='ru' ? 'История пуста — выбери что-нибудь и сыграй' : 'No playback history yet — pick something and play'}</div>;
+  }
+  const sortOpts = [
+    {id:'last_played', label: lang==='ru' ? 'недавно' : 'recent'},
+    {id:'play_count',  label: lang==='ru' ? 'плеи ↓' : 'plays ↓'},
+  ];
+  const sorted = [...tracks].sort((a, b) => {
+    if (sort === 'play_count') return (b.play_count||0) - (a.play_count||0);
+    return new Date(b.last_played) - new Date(a.last_played);
+  });
+  return (
+    <>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'4px 0 10px', fontSize:'11px' }}>
+        <span className="mono" style={{ color:c.textSubtle, letterSpacing:'0.06em' }}>{tracks.length} {lang==='ru'?'треков · dedup':'tracks · dedup'}</span>
+        <div style={{ display:'flex', gap:'5px' }}>
+          {sortOpts.map(o => (
+            <button key={o.id} onClick={() => onSortChange(o.id)}
+              className="mono"
+              style={{
+                padding:'3px 9px', borderRadius:'12px', fontSize:'10px', cursor:'pointer',
+                background: sort===o.id ? 'rgba(120,80,200,.18)' : 'rgba(255,255,255,.04)',
+                color: sort===o.id ? '#bba8ff' : c.textMuted,
+                border:'none',
+              }}>{o.label}</button>
+          ))}
+        </div>
+      </div>
+      <div style={{ display:'flex', flexDirection:'column', gap:'6px' }}>
+        {sorted.map(t => (
+          <LibraryGlassyRow
+            key={t.track_id}
+            track={t}
+            when={formatRelativeTime(t.last_played, lang)}
+            playCount={t.play_count}
+            isDark={isDark} lang={lang}
+            isLiked={!!likedMap[t.track_id]}
+            isCurrent={t.track_id === currentTrackId}
+            onClick={() => onPlayTrack && onPlayTrack({ track: t }, tracks.map(tt => ({ track: tt })))}
+            onArtistClick={(name) => { const slug = slugifyArtistName(name); if (slug && navigateToArtist) navigateToArtist(slug); }}
+            onAlbumClick={(name) => onAlbumClick && onAlbumClick(name)}
+            onToggleLike={onToggleLike}
+          />
+        ))}
+      </div>
+    </>
   );
 }
 
 // ─── LIBRARY SECTION ──────────────────────────────────────────────────────────
-function LibrarySection({ isDark, lang, activeCollection }) {
+function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateToArtist, playerTrack }) {
   const c = useColors(isDark);
-  const [stats, setStats] = useState(null);
-  const [topPairs, setTopPairs] = useState(null);
-  const [statsLoading, setStatsLoading] = useState(true);
-  const [topPairsLoading, setTopPairsLoading] = useState(true);
-  const [activePairsTab, setActivePairsTab] = useState('similar');
 
+  // ── Data fetching ─────────────────────────────────────────────────────
+  const [stats, setStats] = useState(null);                  // /library/stats
+  const [albumsData, setAlbumsData] = useState(null);        // /library/albums
+  const [likedData, setLikedData] = useState(null);          // /library/liked-songs
+  const [recentData, setRecentData] = useState(null);        // /playback/recent
+  const [listenData, setListenData] = useState(null);        // /library/listening-stats
+  const [albumSort, setAlbumSort] = useState('alphabetical');
+  const [recentSort, setRecentSort] = useState('last_played');
+
+  // ── UI state ──────────────────────────────────────────────────────────
+  const [activeTab, setActiveTab] = useState(() => localStorage.getItem('library_active_tab') || 'albums');
+  const [distOpen, setDistOpen] = useState(() => localStorage.getItem('library_distributions_open') === '1');
+  const [albumModal, setAlbumModal] = useState(null);  // currently-open AlbumSummary
+  const [likedMap, setLikedMap] = useState({});
+
+  const toggleLike = async (track_id) => {
+    const next = !(likedMap[track_id] !== false);   // default-true for items already in liked list
+    setLikedMap(p => ({ ...p, [track_id]: next }));
+    try {
+      await apiFetch(`/search/tracks/${track_id}/reaction`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ reaction: next ? 'like' : null }),
+      });
+      apiFetch(`/library/liked-songs?collection_name=${encodeURIComponent(activeCollection)}`).then(setLikedData).catch(() => {});
+    } catch {
+      setLikedMap(p => ({ ...p, [track_id]: !next }));   // rollback
+    }
+  };
+
+  useEffect(() => { localStorage.setItem('library_active_tab', activeTab); }, [activeTab]);
+  useEffect(() => { localStorage.setItem('library_distributions_open', distOpen ? '1' : '0'); }, [distOpen]);
+
+  // ── Effect 1: 4 endpoints unrelated to albumSort ─────────────────────
   useEffect(() => {
-    const col = activeCollection ? `?collection_name=${encodeURIComponent(activeCollection)}` : '';
-    setStatsLoading(true);
-    apiFetch(`/library/stats${col}`).then(s => { setStats(s); setStatsLoading(false); }).catch(()=>setStatsLoading(false));
-    setTopPairsLoading(true);
-    apiFetch(`/library/top-pairs${col}`).then(d => { setTopPairs(d); setTopPairsLoading(false); }).catch(()=>setTopPairsLoading(false));
-  }, [activeCollection]);
+    if (!activeCollection) return;
+    const col = encodeURIComponent(activeCollection);
+    apiFetch(`/library/stats?collection_name=${col}`).then(setStats).catch(() => setStats(null));
+    apiFetch(`/library/liked-songs?collection_name=${col}`).then(d => {
+      setLikedData(d);
+      setLikedMap(p => { const next = {...p}; (d?.tracks || []).forEach(t => { next[t.track_id] = true; }); return next; });
+    }).catch(() => setLikedData({tracks:[]}));
+    apiFetch(`/playback/recent?collection_name=${col}&limit=50`).then(setRecentData).catch(() => setRecentData({tracks:[]}));
+    apiFetch(`/library/listening-stats?collection_name=${col}&lang=${lang}`).then(setListenData).catch(() => setListenData(null));
+  }, [activeCollection, lang]);
 
-  const card = (children, extra={}) => (
-    <div className={ske('panel', isDark)} style={{ padding:'24px 26px', borderRadius:'18px', ...extra }}>
-      {children}
-    </div>
-  );
+  // ── Effect 2: only albums (refires on sort change) ───────────────────
+  useEffect(() => {
+    if (!activeCollection) return;
+    const col = encodeURIComponent(activeCollection);
+    apiFetch(`/library/albums?collection_name=${col}&sort=${albumSort}`)
+      .then(setAlbumsData).catch(() => setAlbumsData({albums:[]}));
+  }, [activeCollection, albumSort]);
 
-  const blockTitle = (kicker, title, accent) => (
-    <div style={{ marginBottom:'18px' }}>
-      <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'6px' }}>{kicker}</div>
-      <div className="serif" style={{ fontSize:'26px', lineHeight:'1', letterSpacing:'-0.02em', color:c.text }}>
-        {title}{accent && <i style={{ color: 'oklch(62% 0.2 275)' }}> {accent}</i>}
-      </div>
-    </div>
-  );
-
-  // StatBar
-  const StatBar = ({ items, hues, showPct=true }) => {
-    if (!items || items.length === 0) return <div className="serif" style={{ fontSize:'14px', color:c.textSubtle, fontStyle:'italic' }}>{lang==='ru'?'Нет данных':'No data'}</div>;
-    const maxCount = items[0]?.count || 1;
-    return (
-      <div style={{ display:'flex', flexDirection:'column', gap:'12px' }}>
-        {items.slice(0,5).map((item, i) => {
-          const barW = `${Math.round((item.count||0) / maxCount * 100)}%`;
-          const hue = hues ? (hues[i] ?? 200) : (270 + i * 30) % 360;
-          const label = item.genre || item.artist || item.label || '—';
-          return (
-            <div key={label}>
-              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:'5px' }}>
-                <span className="serif" style={{ fontSize:'15px', color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', maxWidth:'70%', letterSpacing:'-0.01em' }}>{label}</span>
-                <span className="mono" style={{ fontSize:'14px', color:c.textMuted, flexShrink:0, letterSpacing:'0.08em' }}>
-                  {item.count}{showPct && item.pct ? ` · ${item.pct}%` : ''}
-                </span>
-              </div>
-              <div className={ske('inset', isDark)} style={{ height:'7px', borderRadius:'4px', overflow:'hidden' }}>
-                <div style={{
-                  width:barW, height:'100%', borderRadius:'4px',
-                  background:`linear-gradient(90deg, oklch(60% 0.18 ${hue}), oklch(70% 0.16 ${(hue+25)%360}))`,
-                  boxShadow:`0 0 8px oklch(60% 0.18 ${hue} / 0.4)`,
-                  transform:'scaleX(0)', transformOrigin:'left',
-                  animation:`meterTick 0.9s cubic-bezier(.22,.9,.3,1) ${i*0.08}s forwards`,
-                }} />
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    );
-  };
-
-  // Year range
-  const YearRangeCard = () => {
-    const yr = stats?.year_range;
-    const decades = stats?.decades || [];
-    if (!yr && decades.length === 0) return <div className="serif" style={{ fontSize:'14px', color:c.textSubtle, fontStyle:'italic' }}>{lang==='ru'?'Нет данных':'No data'}</div>;
-    const minY = yr?.min ?? yr?.[0] ?? '—';
-    const maxY = yr?.max ?? yr?.[1] ?? '—';
-    const peak = decades.reduce((p,d) => d.count>(p?.count||0)?d:p, null);
-    const maxCount = decades.reduce((m,d) => Math.max(m, d.count||0), 0) || 1;
-    return (
-      <div style={{ display:'flex', flexDirection:'column', gap:'14px' }}>
-        <div style={{ display:'flex', gap:'12px' }}>
-          {[
-            {label:lang==='ru'?'Самая старая':'Earliest', val:minY, hue:60},
-            {label:lang==='ru'?'Самая новая':'Latest', val:maxY, hue:270},
-          ].map(item => (
-            <div key={item.label} className={ske('display', isDark)} style={{ flex:1, padding:'14px 16px', borderRadius:'12px', textAlign:'center' }}>
-              <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'4px' }}>{item.label.toUpperCase()}</div>
-              <div className="mono" style={{ fontSize:'28px', color:c.amber, letterSpacing:'0.05em', textShadow:`0 0 10px ${c.amberGlow}` }}>{item.val}</div>
-            </div>
-          ))}
-        </div>
-        {decades.length > 0 && (
-          <div>
-            <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'10px' }}>
-              {lang==='ru'?'ПО ДЕСЯТИЛЕТИЯМ':'BY DECADE'}
-            </div>
-            <div style={{ display:'flex', alignItems:'flex-end', gap:'4px', height:'70px' }}>
-              {decades.map((d,i) => {
-                const h = `${(d.count / maxCount) * 100}%`;
-                const hue = 40 + (i / Math.max(1, decades.length-1)) * 240;
-                const isPeak = peak && d.decade === peak.decade;
-                return (
-                  <div key={d.decade} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:'4px' }}>
-                    <div className={ske('inset', isDark)} style={{
-                      width:'100%', height:'52px', borderRadius:'6px', display:'flex', alignItems:'flex-end', overflow:'hidden',
-                    }}>
-                      <div style={{
-                        width:'100%', height: h, minHeight:'2px',
-                        background: `linear-gradient(180deg, oklch(72% 0.16 ${hue}), oklch(56% 0.18 ${hue}))`,
-                        boxShadow: isPeak ? `0 0 8px oklch(60% 0.18 ${hue} / 0.5)` : 'none',
-                        borderRadius:'4px',
-                        animation: `meterTick 0.7s cubic-bezier(.22,.9,.3,1) ${i*0.05}s both`,
-                      }} />
-                    </div>
-                    <div className="mono" style={{ fontSize:'14px', color: isPeak ? c.amber : c.textSubtle, letterSpacing:'0.06em' }}>{d.decade}</div>
-                    <div className="mono" style={{ fontSize:'12px', color: c.textSubtle, letterSpacing:'0.06em' }}>{d.count}</div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  };
+  const albumsCount = albumsData?.albums?.length ?? 0;
+  const likedCount  = likedData?.tracks?.length ?? 0;
+  const recentCount = recentData?.tracks?.length ?? 0;
 
   return (
     <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:c.bg }}>
       <SectionHeader
         isDark={isDark} lang={lang}
-        kicker={lang==='ru'?'РАЗДЕЛ 03 · БИБЛИОТЕКА':'SECTION 03 · LIBRARY'}
-        title={lang==='ru'?'Твоя коллекция':'Your library'}
-        accent={lang==='ru'?'в цифрах':'in numbers'}
+        kicker={lang==='ru' ? 'РАЗДЕЛ 03 · БИБЛИОТЕКА' : 'SECTION 03 · LIBRARY'}
+        title={lang==='ru' ? 'Твоя коллекция' : 'Your library'}
+        accent={lang==='ru' ? 'в звуках' : 'in sounds'}
       />
 
-      <div style={{ flex:1, overflowY:'auto', padding:'30px 36px 60px' }}>
-        <div style={{ maxWidth:'1180px', margin:'0 auto', display:'flex', flexDirection:'column', gap:'22px' }}>
+      <div style={{ flex:1, overflowY:'auto', padding:'18px 24px 60px' }}>
+        <div style={{ maxWidth:'1180px', margin:'0 auto', display:'flex', flexDirection:'column', gap:'10px' }}>
 
-          {/* Hero readout */}
-          <div className={`${brushed(isDark)}`} style={{ padding:'28px 32px', borderRadius:'20px', position:'relative', overflow:'hidden' }}>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr auto', gap:'20px', alignItems:'center' }}>
-              <div>
-                <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'10px' }}>
-                  {activeCollection || (lang==='ru'?'НЕТ КОЛЛЕКЦИИ':'NO COLLECTION')}
-                </div>
-                <div className="serif" style={{ fontSize:'72px', lineHeight:'0.9', letterSpacing:'-0.03em', color:c.text }}>
-                  {statsLoading ? '…' : (stats?.total_tracks?.toLocaleString(lang==='ru'?'ru':'en') ?? '—')}
-                </div>
-                <div className="serif" style={{ fontSize:'18px', color:c.textMuted, marginTop:'6px', fontStyle:'italic' }}>
-                  {lang==='ru'?'треков индексировано':'tracks indexed'}
-                </div>
+          <LibraryHeroLine stats={stats} albumCount={albumsCount} isDark={isDark} lang={lang} collection={activeCollection} />
+
+          <DistributionsToggle open={distOpen} onToggle={() => setDistOpen(o => !o)} isDark={isDark} lang={lang} />
+          {distOpen && <DistributionsPanel stats={stats} isDark={isDark} lang={lang} />}
+
+          <ListeningWidgetsRow data={listenData} isDark={isDark} lang={lang} />
+
+          <LibraryTabsStrip
+            active={activeTab}
+            onChange={setActiveTab}
+            counts={{ albums: albumsCount, liked: likedCount, recent: recentCount }}
+            isDark={isDark}
+            lang={lang}
+          />
+
+          {/* Tab content */}
+          {activeTab === 'albums' && (
+            <AlbumsGridTab
+              albums={albumsData?.albums || []}
+              sort={albumSort}
+              onSortChange={setAlbumSort}
+              onAlbumOpen={(a) => setAlbumModal(a)}
+              isDark={isDark} lang={lang}
+              navigateToArtist={navigateToArtist}
+            />
+          )}
+          {activeTab === 'liked' && (
+            <LikedSongsTab
+              tracks={likedData?.tracks || []}
+              isDark={isDark} lang={lang}
+              onPlayTrack={onPlayTrack}
+              navigateToArtist={navigateToArtist}
+              onAlbumClick={(albumTitle) => {
+                const found = (albumsData?.albums || []).find(a => a.album_title === albumTitle);
+                if (found) setAlbumModal(found);
+              }}
+              onToggleLike={toggleLike}
+              likedMap={likedMap}
+              currentTrackId={playerTrack?.track_id || null}
+            />
+          )}
+          {activeTab === 'recent' && (
+            <RecentlyPlayedTab
+              tracks={recentData?.tracks || []}
+              sort={recentSort}
+              onSortChange={setRecentSort}
+              isDark={isDark} lang={lang}
+              onPlayTrack={onPlayTrack}
+              navigateToArtist={navigateToArtist}
+              onAlbumClick={(albumTitle) => {
+                const found = (albumsData?.albums || []).find(a => a.album_title === albumTitle);
+                if (found) setAlbumModal(found);
+              }}
+              onToggleLike={toggleLike}
+              likedMap={likedMap}
+              currentTrackId={playerTrack?.track_id || null}
+            />
+          )}
+
+        </div>
+      </div>
+
+      {albumModal && (
+        <AlbumModal
+          album={albumModal}
+          onClose={() => setAlbumModal(null)}
+          onPlayTrack={onPlayTrack}
+          navigateToArtist={navigateToArtist}
+          isDark={isDark}
+          lang={lang}
+        />
+      )}
+    </div>
+  );
+}
+
+function LibraryHeroLine({ stats, albumCount, isDark, lang, collection }) {
+  const c = useColors(isDark);
+  const total = stats?.total_tracks ?? '—';
+  const artists = stats?.unique_artists ?? '—';
+  const genres = stats?.unique_genres ?? '—';
+  const yr = stats?.year_range;
+  const yearText = yr ? `${yr.min}—${yr.max}` : '—';
+  const dot = <span style={{ color: 'rgba(255,255,255,.18)', margin:'0 7px' }}>·</span>;
+  return (
+    <div style={{
+      background: 'linear-gradient(90deg, rgba(120,80,200,.15) 0%, rgba(120,80,200,.04) 60%, transparent 100%)',
+      border: `1px solid ${c.border}`,
+      borderRadius: '14px',
+      padding: '12px 18px',
+      backdropFilter: 'blur(20px)',
+      WebkitBackdropFilter: 'blur(20px)',
+    }}>
+      <div className="mono" style={{ fontSize:'10px', color:c.textSubtle, letterSpacing:'0.22em', textTransform:'uppercase' }}>
+        {lang==='ru' ? 'РАЗДЕЛ 03 · БИБЛИОТЕКА' : 'SECTION 03 · LIBRARY'} · {collection || '—'}
+      </div>
+      <div className="mono" style={{ fontSize:'13px', color:c.textMuted, letterSpacing:'0.04em', marginTop:'2px' }}>
+        <b style={{ color:c.text, fontWeight:600 }}>{total.toLocaleString ? total.toLocaleString() : total}</b> {lang==='ru' ? 'треков' : 'tracks'}
+        {dot}<b style={{ color:c.text, fontWeight:600 }}>{albumCount}</b> {lang==='ru' ? 'альбомов' : 'albums'}
+        {dot}<b style={{ color:c.text, fontWeight:600 }}>{artists}</b> {lang==='ru' ? 'артистов' : 'artists'}
+        {dot}<b style={{ color:c.text, fontWeight:600 }}>{genres}</b> {lang==='ru' ? 'жанров' : 'genres'}
+        {dot}<b style={{ color:c.text, fontWeight:600 }}>{yearText}</b>
+      </div>
+    </div>
+  );
+}
+function DistributionsToggle({ open, onToggle, isDark, lang }) {
+  const c = useColors(isDark);
+  return (
+    <button
+      onClick={onToggle}
+      className="mono"
+      style={{
+        margin: '0 auto',
+        display: 'flex', alignItems:'center', gap:'6px',
+        padding: '4px 14px',
+        fontSize: '10px', color: c.textMuted, letterSpacing:'0.12em',
+        background: 'rgba(255,255,255,.04)',
+        border: `1px solid ${c.border}`,
+        borderTop: 'none',
+        borderRadius: '0 0 10px 10px',
+        cursor: 'pointer',
+        transition: 'all 0.18s',
+      }}
+      onMouseEnter={e => e.currentTarget.style.color = c.text}
+      onMouseLeave={e => e.currentTarget.style.color = c.textMuted}
+    >
+      {lang==='ru' ? 'РАСПРЕДЕЛЕНИЯ' : 'DISTRIBUTIONS'} <span style={{ display:'inline-block', transform: open ? 'rotate(180deg)' : 'rotate(0)', transition:'transform 0.25s' }}>▾</span>
+    </button>
+  );
+}
+function DistributionsPanel({ stats, isDark, lang }) {
+  const c = useColors(isDark);
+  const decades = stats?.decades || [];
+  const maxDec = decades.reduce((m, d) => Math.max(m, d.count || 0), 0) || 1;
+  const peakDec = decades.reduce((p, d) => (d.count > (p?.count || 0) ? d : p), null);
+  const genres = (stats?.genres || []).slice(0, 5);
+  const maxGenre = genres.reduce((m, g) => Math.max(m, g.count || 0), 0) || 1;
+  const artists = (stats?.top_artists || []).slice(0, 5);
+  const maxArtist = artists.reduce((m, a) => Math.max(m, a.count || 0), 0) || 1;
+  const colLbl = { fontFamily:"'JetBrains Mono', monospace", fontSize:'9px', color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase', marginBottom:'10px' };
+
+  return (
+    <div style={{
+      background: isDark ? 'rgba(15,12,25,.5)' : 'rgba(255,255,255,.5)',
+      border: `1px solid ${c.border}`, borderRadius:'12px',
+      backdropFilter:'blur(20px)', WebkitBackdropFilter:'blur(20px)',
+      padding:'14px 18px',
+      display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'22px',
+      animation: 'fadeIn 0.28s cubic-bezier(.22,.9,.3,1)',
+    }}>
+      {/* Decades */}
+      <div>
+        <div style={colLbl}>{lang==='ru' ? 'ПО ЭПОХАМ' : 'BY DECADE'}</div>
+        <div style={{ display:'flex', alignItems:'flex-end', gap:'5px', height:'90px' }}>
+          {decades.map((d, i) => {
+            const h = Math.round((d.count / maxDec) * 70);
+            const isPeak = peakDec && d.decade === peakDec.decade;
+            const hue = 40 + (i / Math.max(1, decades.length-1)) * 240;
+            return (
+              <div key={d.decade} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:'3px' }}>
+                <div style={{
+                  width:'100%', height: `${h}px`, minHeight:'2px',
+                  borderRadius:'3px 3px 0 0',
+                  background: `linear-gradient(180deg, oklch(72% 0.16 ${hue}), oklch(56% 0.18 ${hue}))`,
+                  boxShadow: isPeak ? '0 0 8px oklch(70% 0.18 60 / 0.5)' : 'none',
+                }} />
+                <div className="mono" style={{ fontSize:'9px', color: isPeak ? c.amber : c.textSubtle, letterSpacing:'0.06em' }}>{d.decade}</div>
+                <div className="mono" style={{ fontSize:'9px', color: c.textSubtle }}>{d.count}</div>
               </div>
-              {/* Mini gauges */}
-              <div style={{ display:'flex', gap:'14px' }}>
-                <VUMeter value={stats?.unique_artists || 0} max={Math.max(50, stats?.unique_artists || 0)}
-                  label={lang==='ru'?'АРТИСТЫ':'ARTISTS'} isDark={isDark} hue={265} size={140} />
-                <VUMeter value={stats?.unique_genres || 0} max={Math.max(20, stats?.unique_genres || 0)}
-                  label={lang==='ru'?'ЖАНРЫ':'GENRES'} isDark={isDark} hue={30} size={140} />
+            );
+          })}
+          {decades.length === 0 && <div style={{ color:c.textSubtle, fontSize:11, fontStyle:'italic' }}>{lang==='ru'?'Нет данных':'No data'}</div>}
+        </div>
+      </div>
+
+      {/* Top genres */}
+      <div>
+        <div style={colLbl}>{lang==='ru' ? 'ПО ЖАНРАМ · TOP 5' : 'BY GENRE · TOP 5'}</div>
+        {genres.map((g, i) => {
+          const hue = 270 + i * 12;
+          return (
+            <div key={g.genre} style={{ marginBottom:'8px' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', fontSize:'12px' }}>
+                <span style={{ color:c.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'65%' }}>{g.genre}</span>
+                <span className="mono" style={{ color:c.textMuted, fontSize:'11px' }}>{g.count} · {g.pct}%</span>
+              </div>
+              <div style={{ height:'5px', borderRadius:'3px', background:'rgba(255,255,255,.05)', overflow:'hidden', marginTop:'4px' }}>
+                <div style={{ height:'100%', width:`${Math.round((g.count/maxGenre)*100)}%`, background:`linear-gradient(90deg, oklch(60% 0.18 ${hue}), oklch(70% 0.16 ${hue+25}))`, borderRadius:'3px' }} />
               </div>
             </div>
-          </div>
+          );
+        })}
+        {genres.length === 0 && <div style={{ color:c.textSubtle, fontSize:11, fontStyle:'italic' }}>{lang==='ru'?'Нет данных':'No data'}</div>}
+      </div>
 
-          {/* Discovery insights */}
-          <InsightBlock stats={stats} isDark={isDark} lang={lang} c={c} />
-
-          {/* Genres + Durations */}
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'18px' }}>
-            {card(<>
-              {blockTitle(lang==='ru'?'ЖАНРЫ':'GENRES', lang==='ru'?'Топ-5':'Top 5')}
-              {statsLoading ? <Spinner /> : <StatBar items={stats?.genres} hues={[270, 310, 145, 200, 60, 25]} />}
-            </>)}
-            {card(<>
-              {blockTitle(lang==='ru'?'ДЛИТЕЛЬНОСТЬ':'DURATION', lang==='ru'?'Распределение':'Histogram')}
-              {statsLoading ? <Spinner /> : (stats?.duration_buckets?.length > 0 ? (
-                <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
-                  {stats.duration_buckets.map((d,i) => {
-                    const maxPct = stats.duration_buckets[0]?.pct || 1;
-                    const w = `${Math.round((d.pct||0) / maxPct * 100)}%`;
-                    const hue = 160 + i*22;
-                    return (
-                      <div key={d.range}>
-                        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:'5px' }}>
-                          <span className="mono" style={{ fontSize:'15px', color:c.text, letterSpacing:'0.06em' }}>{formatDurationRange(d.range)}</span>
-                          <span className="mono" style={{ fontSize:'14px', color:c.textMuted }}>{d.count} · {d.pct}%</span>
-                        </div>
-                        <div className={ske('inset', isDark)} style={{ height:'6px', borderRadius:'4px', overflow:'hidden' }}>
-                          <div style={{ width:w, height:'100%', background:`linear-gradient(90deg, oklch(60% 0.18 ${hue}), oklch(70% 0.16 ${(hue+30)%360}))`,
-                            boxShadow:`0 0 6px oklch(60% 0.18 ${hue} / 0.4)`,
-                            transform:'scaleX(0)', transformOrigin:'left',
-                            animation:`meterTick 0.8s cubic-bezier(.22,.9,.3,1) ${i*0.07}s forwards` }} />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : <div className="serif" style={{ fontSize:'14px', color:c.textSubtle, fontStyle:'italic' }}>{lang==='ru'?'Нет данных':'No data'}</div>)}
-            </>)}
-          </div>
-
-          {/* Artists + YearRange */}
-          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'18px' }}>
-            {card(<>
-              {blockTitle(lang==='ru'?'АРТИСТЫ':'ARTISTS', lang==='ru'?'Топ-5':'Top 5')}
-              {statsLoading ? <Spinner /> : <StatBar items={stats?.top_artists} hues={null} showPct={false} />}
-            </>)}
-            {card(<>
-              {blockTitle(lang==='ru'?'ЭПОХИ':'EPOCHS', lang==='ru'?'Хронология':'Timeline')}
-              {statsLoading ? <Spinner /> : <YearRangeCard />}
-            </>)}
-          </div>
-
-          {/* Top pairs — tabbed */}
-          <div className={ske('panel', isDark)} style={{ padding:'24px 26px', borderRadius:'18px', position:'relative', overflow:'hidden' }}>
-            {/* Subtle corner glow orbs — anchored to top-right corner */}
-            <div style={{ position:'absolute', top:'-60px', right:'-40px', width:'180px', height:'180px', borderRadius:'50%', pointerEvents:'none',
-              background: `radial-gradient(circle, oklch(60% 0.18 ${activePairsTab === 'similar' ? 270 : 25} / 0.09) 0%, transparent 70%)` }} />
-            <div style={{ position:'absolute', top:'-20px', right:'-10px', width:'120px', height:'120px', borderRadius:'50%', pointerEvents:'none',
-              background: `radial-gradient(circle, oklch(60% 0.18 ${activePairsTab === 'similar' ? 310 : 55} / 0.07) 0%, transparent 70%)` }} />
-            <div style={{ display:'flex', alignItems:'flex-end', justifyContent:'space-between', marginBottom:'18px', gap:'12px', flexWrap:'wrap' }}>
-              <div>
-                <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'6px' }}>
-                  {lang==='ru'?'CLAP-ПАРЫ':'CLAP PAIRS'}
-                </div>
-                <div className="serif" style={{ fontSize:'26px', lineHeight:'1', letterSpacing:'-0.02em', color:c.text }}>
-                  {lang==='ru'?'Звуковое':'Sonic'}<i style={{ color:'oklch(62% 0.2 275)' }}> {lang==='ru'?'родство':'kinship'}</i>
-                </div>
+      {/* Top artists */}
+      <div>
+        <div style={colLbl}>{lang==='ru' ? 'ПО АРТИСТАМ · TOP 5' : 'BY ARTIST · TOP 5'}</div>
+        {artists.map((a, i) => {
+          const hue = 200 + i * 25;
+          return (
+            <div key={a.artist} style={{ marginBottom:'8px' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', fontSize:'12px' }}>
+                <span style={{ color:c.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'65%' }}>{a.artist}</span>
+                <span className="mono" style={{ color:c.textMuted, fontSize:'11px' }}>{a.count} tracks</span>
               </div>
-              <Segmented isDark={isDark} value={activePairsTab} onChange={setActivePairsTab}
-                options={[
-                  { value:'similar', label:lang==='ru'?'ПОХОЖИЕ ≈':'SIMILAR ≈' },
-                  { value:'dissimilar', label:lang==='ru'?'РАЗНЫЕ ≠':'DIFFERENT ≠' },
-                ]} />
+              <div style={{ height:'5px', borderRadius:'3px', background:'rgba(255,255,255,.05)', overflow:'hidden', marginTop:'4px' }}>
+                <div style={{ height:'100%', width:`${Math.round((a.count/maxArtist)*100)}%`, background:`linear-gradient(90deg, oklch(60% 0.18 ${hue}), oklch(70% 0.16 ${hue+25}))`, borderRadius:'3px' }} />
+              </div>
             </div>
+          );
+        })}
+        {artists.length === 0 && <div style={{ color:c.textSubtle, fontSize:11, fontStyle:'italic' }}>{lang==='ru'?'Нет данных':'No data'}</div>}
+      </div>
+    </div>
+  );
+}
+function ListeningWidgetsRow({ data, isDark, lang }) {
+  const c = useColors(isDark);
+  const fmtDur = (sec) => {
+    if (!sec) return '—';
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+  };
+  const since = data?.since ? new Date(data.since).toLocaleDateString(lang==='ru'?'ru-RU':'en-US', {month:'short', day:'numeric'}) : null;
+  const top_track = data?.top_track;
+  const top_artist = data?.top_artist;
+  const peak = data?.peak_hour;
+  const widget = (lbl, val, sub, tint) => (
+    <div style={{
+      background: 'rgba(255,255,255,.04)',
+      border: `1px solid ${c.border}`,
+      borderRadius: '10px',
+      padding: '10px 12px',
+      backdropFilter:'blur(20px)',
+      display:'flex', flexDirection:'column', gap:'2px',
+    }}>
+      <div className="mono" style={{ fontSize:'9px', color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase' }}>{lbl}</div>
+      <div style={{ fontSize: typeof val === 'string' && val.length > 12 ? '13px' : '18px', color: tint || c.text, fontWeight: 500, lineHeight: 1.2 }}>{val}</div>
+      <div style={{ fontSize:'11px', color:c.textMuted }}>{sub || ' '}</div>
+    </div>
+  );
+  return (
+    <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:'8px' }}>
+      {widget(
+        lang==='ru' ? '∑ ПРОСЛУШАНО' : '∑ LISTENED',
+        fmtDur(data?.total_seconds_listened),
+        since ? (lang==='ru' ? `с ${since}` : `since ${since}`) : null,
+        'oklch(72% 0.18 145)'
+      )}
+      {widget(
+        lang==='ru' ? '★ ТОП-ТРЕК' : '★ TOP TRACK',
+        top_track?.title || '—',
+        top_track ? `${top_track.artist} · ${top_track.play_count} ${lang==='ru'?'плеев':'plays'}` : (lang==='ru'?'нет данных':'no data'),
+        'oklch(70% 0.18 275)'
+      )}
+      {widget(
+        lang==='ru' ? '★ ТОП-АРТИСТ' : '★ TOP ARTIST',
+        top_artist?.name || '—',
+        top_artist ? `${top_artist.play_count} ${lang==='ru'?'плеев':'plays'}` : null,
+        'oklch(75% 0.14 80)'
+      )}
+      {widget(
+        lang==='ru' ? '⌚ ПИК' : '⌚ PEAK HOUR',
+        peak ? `${String(peak.hour).padStart(2,'0')}:00` : '—',
+        peak?.label || null,
+        c.text
+      )}
+    </div>
+  );
+}
+function LibraryTabsStrip({ active, onChange, counts, lang }) {
+  return (
+    <div style={{display:'flex', gap:6}}>
+      {[['albums','▦ Albums', counts.albums], ['liked','♥ Liked', counts.liked], ['recent','⟲ Recently', counts.recent]].map(([id, label, n]) => (
+        <button key={id} onClick={() => onChange(id)}
+          style={{padding:'6px 12px', borderRadius:8, fontSize:11, background: active===id ? 'oklch(60% 0.18 270)' : 'rgba(255,255,255,.04)', color: active===id ? '#fff' : '#aaa'}}>
+          {label} ({n})
+        </button>
+      ))}
+    </div>
+  );
+}
+function AlbumModal({ album, onClose, onPlayTrack, navigateToArtist, isDark, lang }) {
+  const c = useColors(isDark);
+  const [hoverRow, setHoverRow] = useState(-1);
+  const [likedMap, setLikedMap] = useState({});
+  const [likeLoading, setLikeLoading] = useState({});
 
-            {(() => {
-              if (topPairsLoading) {
-                return <div style={{ display:'flex', flexDirection:'column', gap:'10px' }}>
-                  {[1,2,3,4,5].map(i => (
-                    <div key={i} style={{ height:'70px', borderRadius:'14px',
-                      background: isDark?'rgba(255,255,255,0.03)':'rgba(0,0,0,0.025)',
-                      animation:`pulse 1.4s ${i*0.1}s ease-in-out infinite` }} />
-                  ))}
-                </div>;
-              }
-              const pairs = topPairs?.[activePairsTab] || [];
-              const top = pairs
-                .map(p => ({ main:p, best: p[`top_${activePairsTab}`]?.[0] }))
-                .filter(x => x.best)
-                .sort((a,b) => activePairsTab === 'similar' ? b.best.score - a.best.score : a.best.score - b.best.score);
-              const seen = new Set();
-              const top5 = [];
-              for (const item of top) {
-                const a = item.main.track_id || item.main.song;
-                const b = item.best.track_id || item.best.name;
-                const k = a < b ? `${a}|${b}` : `${b}|${a}`;
-                if (seen.has(k)) continue;
-                seen.add(k); top5.push(item);
-                if (top5.length === 5) break;
-              }
+  // Lock body scroll while open
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, []);
 
-              if (top5.length === 0) {
-                return <div className="serif" style={{ fontSize:'15px', color:c.textSubtle, fontStyle:'italic', textAlign:'center', padding:'40px' }}>
-                  {lang==='ru'?'Данные ещё не рассчитаны':'Data not computed yet'}
-                </div>;
-              }
+  // Esc to close
+  useEffect(() => {
+    const h = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', h);
+    return () => document.removeEventListener('keydown', h);
+  }, [onClose]);
 
-              return (
-                <div style={{ display:'flex', flexDirection:'column' }}>
-                  {top5.map((pair, idx) => {
-                    const score = pair.best.score || 0;
-                    const display = activePairsTab === 'similar' ? score : Math.max(0, 100 - score);
-                    const meterPct = Math.max(3, Math.min(100, display));
-                    const hue = activePairsTab === 'similar' ? 270 : 25;
-                    const accent = `oklch(62% 0.18 ${hue})`;
-                    const [aA, aT] = (pair.main.song || '').split(' - ').length===2 ? pair.main.song.split(' - ') : ['—', pair.main.song];
-                    const [bA, bT] = (pair.best.name || '').split(' - ').length===2 ? pair.best.name.split(' - ') : ['—', pair.best.name];
-                    return (
-                      <div key={idx} style={{
-                        display:'grid', gridTemplateColumns:'24px 60px 1fr 100px',
-                        alignItems:'center', gap:'14px',
-                        padding:'14px 0',
-                        borderTop: idx > 0 ? `1px solid ${c.border}` : 'none',
-                        animation:`fadeIn 0.4s ease ${idx*0.05}s both`,
-                      }}>
-                        <span className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.06em' }}>{String(idx+1).padStart(2,'0')}</span>
-                        <div style={{ display:'flex', position:'relative' }}>
-                          <AlbumCover title={aT} artist={aA} size={36} isDark={isDark} coverPath={pair.main.cover_art_path} />
-                          <div style={{ marginLeft:'-12px' }}>
-                            <AlbumCover title={bT} artist={bA} size={36} isDark={isDark} coverPath={pair.best.cover_art_path} />
-                          </div>
-                        </div>
-                        <div style={{ minWidth:0 }}>
-                          <div style={{ fontSize:'15px', color:c.text, fontWeight:'500', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-                            {aT} <span style={{ color: accent }}>↔</span> {bT}
-                          </div>
-                          <div className="serif" style={{ fontSize:'14px', color:c.textMuted, fontStyle:'italic', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', marginTop:'2px' }}>
-                            {aA} · {bA}
-                          </div>
-                        </div>
-                        <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:'5px' }}>
-                          <span className="mono" style={{ fontSize:'14px', color: accent, letterSpacing:'0.04em' }}>{display.toFixed(1)}%</span>
-                          <div className={ske('inset', isDark)} style={{ width:'80px', height:'4px', borderRadius:'3px', overflow:'hidden' }}>
-                            <div style={{ width:`${meterPct}%`, height:'100%',
-                              background:`linear-gradient(90deg, ${accent}, ${accent.replace(')', ' / 0.5)')})`,
-                              boxShadow:`0 0 6px ${accent.replace(')', ' / 0.4)')}`,
-                              transform:'scaleX(0)', transformOrigin:'left',
-                              animation:`meterTick 0.8s cubic-bezier(.22,.9,.3,1) ${idx*0.07}s forwards` }} />
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              );
-            })()}
+  // Lazy-load per-track reactions on mount
+  useEffect(() => {
+    if (!album?.tracks?.length) return;
+    Promise.all(album.tracks.map(t =>
+      apiFetch(`/search/tracks/${t.track_id}/reaction`).then(r => [t.track_id, r?.reaction === 'like']).catch(() => [t.track_id, false])
+    )).then(pairs => setLikedMap(Object.fromEntries(pairs)));
+  }, [album?.album_title]);
+
+  const toggleLike = async (track_id) => {
+    if (likeLoading[track_id]) return;
+    const next = !likedMap[track_id];
+    setLikeLoading(p => ({ ...p, [track_id]: true }));
+    setLikedMap(p => ({ ...p, [track_id]: next }));   // optimistic
+    try {
+      await apiFetch(`/search/tracks/${track_id}/reaction`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reaction: next ? 'like' : null }),
+      });
+    } catch {
+      setLikedMap(p => ({ ...p, [track_id]: !next })); // rollback
+    } finally {
+      setLikeLoading(p => ({ ...p, [track_id]: false }));
+    }
+  };
+
+  const playFromIdx = (idx) => {
+    const t = album.tracks[idx];
+    if (!t || !onPlayTrack) return;
+    onPlayTrack({ track: t }, album.tracks.map(tt => ({ track: tt })));
+    onClose();
+  };
+
+  const fmtDur = (s) => {
+    if (!s) return '—';
+    const m = Math.floor(s / 60), r = Math.floor(s % 60);
+    return `${m}:${String(r).padStart(2, '0')}`;
+  };
+  const totalDur = album.duration_seconds || 0;
+  const totalDurFmt = `${Math.floor(totalDur/60)}:${String(Math.floor(totalDur%60)).padStart(2,'0')}`;
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position:'fixed', inset:0, zIndex:100,
+        background:'rgba(0,0,0,.6)', backdropFilter:'blur(6px)', WebkitBackdropFilter:'blur(6px)',
+        display:'grid', placeItems:'center', padding:'20px',
+        animation:'fadeIn 0.18s ease',
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: isDark ? 'rgba(15,12,25,.96)' : 'rgba(255,255,255,.96)',
+          border: `1px solid ${c.border}`,
+          borderRadius:'14px',
+          backdropFilter:'blur(20px)', WebkitBackdropFilter:'blur(20px)',
+          padding:'18px',
+          maxWidth:'720px', width:'100%', maxHeight:'80vh',
+          display:'flex', flexDirection:'column', gap:'12px',
+          boxShadow:'0 20px 60px rgba(0,0,0,.5)',
+        }}
+      >
+        {/* Hero */}
+        <div style={{ display:'flex', gap:'14px' }}>
+          <div style={{ width:'140px', flexShrink:0 }}>
+            <AlbumCover title={album.album_title} artist={album.primary_artist} size={140} isDark={isDark} coverPath={album.cover_art_path} radius={10} fluid />
           </div>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div className="mono" style={{ fontSize:'10px', color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase' }}>{lang==='ru'?'АЛЬБОМ':'ALBUM'}</div>
+            <div style={{ fontSize:'24px', lineHeight:1.1, color:c.text, margin:'4px 0', letterSpacing:'-0.01em' }}>{album.album_title}</div>
+            <div
+              onClick={() => { if (album.primary_artist_slug && navigateToArtist) { navigateToArtist(album.primary_artist_slug); onClose(); } }}
+              style={{ fontSize:'13px', color:'#bba8ff', cursor:'pointer', display:'inline-block' }}
+            >{album.primary_artist} →</div>
+            {album.feat_artists?.length > 0 && (
+              <div style={{ marginTop:'4px', display:'flex', gap:'5px', flexWrap:'wrap' }}>
+                {album.feat_artists.map(f => (
+                  <span key={f.slug}
+                    onClick={() => { if (navigateToArtist) { navigateToArtist(f.slug); onClose(); } }}
+                    style={{ padding:'2px 8px', borderRadius:'10px', background:'rgba(120,80,200,.18)', border:'1px solid rgba(120,80,200,.3)', color:'#bba8ff', fontSize:'10px', cursor:'pointer' }}>
+                    {f.name}
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="mono" style={{ display:'flex', gap:'14px', fontSize:'11px', color:c.textMuted, marginTop:'8px', letterSpacing:'0.06em' }}>
+              <span>{album.year_range || album.year || '—'}</span>
+              <span>·</span>
+              <span>{album.track_count} {lang==='ru'?'треков':'tracks'}</span>
+              <span>·</span>
+              <span>{totalDurFmt}</span>
+            </div>
+          </div>
+          <button onClick={onClose} style={{ alignSelf:'flex-start', background:'transparent', color:c.textMuted, fontSize:'18px', cursor:'pointer', padding:'4px 8px', border:'none' }}>✕</button>
+        </div>
 
+        {/* Actions */}
+        <div style={{ display:'flex', gap:'8px' }}>
+          <button onClick={() => playFromIdx(0)} style={{ padding:'7px 14px', borderRadius:'8px', fontSize:'12px', fontFamily:"'JetBrains Mono', monospace", background:'linear-gradient(180deg, oklch(60% 0.21 270), oklch(48% 0.22 285))', color:'#fff', border:'none', cursor:'pointer' }}>▶ {lang==='ru'?'Играть всё':'Play All'}</button>
+        </div>
+
+        {/* Tracklist */}
+        <div style={{ background:'rgba(0,0,0,.25)', borderRadius:'8px', overflow:'auto', flex:1 }}>
+          {album.tracks.map((t, i) => {
+            const liked = !!likedMap[t.track_id];
+            return (
+              <div
+                key={t.track_id}
+                onClick={() => playFromIdx(i)}
+                onMouseEnter={() => setHoverRow(i)}
+                onMouseLeave={() => setHoverRow(-1)}
+                style={{
+                  display:'grid', gridTemplateColumns:'24px 1fr 60px 30px',
+                  gap:'10px', padding:'8px 12px', alignItems:'center',
+                  borderBottom:`1px solid ${c.border}`,
+                  fontSize:'12px', cursor:'pointer',
+                  background: hoverRow === i ? 'rgba(255,255,255,.04)' : 'transparent',
+                }}
+              >
+                <span className="mono" style={{ color: hoverRow === i ? '#bba8ff' : c.textSubtle, fontSize:'11px', textAlign:'center' }}>{hoverRow === i ? '▶' : i+1}</span>
+                <span style={{ color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t.title}</span>
+                <span className="mono" style={{ color:c.textSubtle, fontSize:'11px', textAlign:'right' }}>{fmtDur(t.duration)}</span>
+                <button
+                  onClick={(e) => { e.stopPropagation(); toggleLike(t.track_id); }}
+                  style={{ background:'transparent', border:'none', cursor:'pointer', fontSize:'13px', color: liked ? '#ff7aa8' : c.textSubtle, padding:0 }}
+                  title={liked ? (lang==='ru'?'Убрать лайк':'Unlike') : (lang==='ru'?'Лайкнуть':'Like')}
+                >{liked ? '♥' : '♡'}</button>
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
   );
 }
+
 
 // ─── Indexing progress (compact, 2 sections) ─────────────────────────────────
 function IndexingProgress({ stepStatus, stageProgress, lang, c, isDark }) {
@@ -9089,6 +9398,7 @@ function App() {
               <Comp
                 isDark={isDark} lang={lang} activeCollection={activeCollection}
                 onPlayTrack={handlePlayTrack}
+                playerTrack={playerTrack}
                 onTrackChange={id === 'player' ? handleTrackChange : undefined}
                 onRequestAutoplay={id === 'player' ? ensureAutoplayQueue : undefined}
                 audio={id === 'player' ? audio : undefined}

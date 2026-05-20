@@ -775,8 +775,10 @@ top_K = top-K by sims  # e.g. K=5
 | `/metadata/tracks/{id}/sonic-vibe` | GET | `app/api/routes/metadata.py` | Sonic Vibe (lazy LLM) |
 | `/search/` (modified) | POST | `app/api/routes/search.py` | Add `score_breakdown` to response |
 | `/playback/record` | POST | `app/api/routes/playback.py` (new) | Recently Played |
-| `/playback/recent` | GET | `app/api/routes/playback.py` | Recently Played list |
-| `/library/liked-songs` | GET | `app/api/routes/library.py` | Liked songs filter |
+| `/playback/recent` | GET | `app/api/routes/playback.py` | Deduped playback events by track_id (latest first), with play_count (non-skipped). limit=1..200. |
+| `/library/albums` | GET | `app/api/routes/library.py` | Albums grouped from Qdrant payload (majority-vote primary artist + feat list + year/year_range + top genres + embedded tracks). Sort: alphabetical/year_desc/year_asc/track_count_desc. |
+| `/library/liked-songs` | GET | `app/api/routes/library.py` | Tracks with reaction='like' in collection, ordered by liked_at DESC, enriched via Qdrant payload. |
+| `/library/listening-stats` | GET | `app/api/routes/library.py` | Total seconds listened, since (first play), top track + top artist + peak hour (excludes skipped_early plays). lang=en\|ru. |
 | `/playlists/*` | various | `app/api/routes/playlists.py` (new) | Playlists CRUD |
 | `/chat/` (modified) | POST | `app/api/routes/chat.py` | Add `LYRIC_EXPLAIN` and `SONG_DISCUSS` modes |
 | `/library/sonic-map` | GET | `app/api/routes/library.py` | Sonic Map (Stats) |
@@ -1077,7 +1079,7 @@ CREATE TABLE recommendation_snapshots (
 > | **3**  Artist Atlas                   | ✅ Shipped (Plan 5)                       | `docs/superpowers/plans/2026-05-16-plan-5-artist-atlas.md` |
 > | **4**  Player v6 redesign             | ✅ Shipped (Plan 4) + post-plan polish round | `docs/superpowers/plans/2026-05-16-plan-4-player-redesign.md` |
 > | **5**  AI Chat & lyrics-explain       | ✅ **Shipped** — AIChatDrawer (slide-up panel replacing queue, FactsRail stays visible; slim 32px header; persistent suggested prompts above input; ↺ session-clear) + Inline ✨ explain (draw-under panel). Single endpoint POST /chat/track-chat with web_search tool fallback (pydantic-ai). Plan: `docs/superpowers/plans/2026-05-19-plan-5-ai-chat-lyrics-explain.md`, polish: `docs/superpowers/plans/2026-05-20-chat-drawer-replaces-queue.md` |
-> | **6**  Spotify-like MVP               | ⏳ Not started                            | — |
+> | **6**  Spotify-like MVP               | 🛠 **Library Overhaul shipped (sub-plan #1 of 3)** | feature/library-overhaul |
 > | **6a** Home (Discovery Magazine)      | ⏳ Not started                            | — |
 > | **6b-B1** Search visual redesign      | ✅ **Shipped** — backend (SearchFilters + Qdrant payload + /sonic-facets) + frontend (Hybrid v3 visuals + RecentSearchesChips + hover breakdown + SonicFiltersChips). Plan: `docs/superpowers/plans/2026-05-19-plan-b1-search-section-redesign.md` |
 > | **6b-B2** Search AI gating + functional | ✅ **Shipped** — chat tab gated on aiStatus.aiActive, DecadeFiltersChips (OR) backed by /library/year-facets, card-click → Player auto-play (detail panel removed), hover play+like overlay extends B1's ScoreBreakdownTooltip, autocomplete typeahead fix, SearchFilters dead-field cleanup (year_from/year_to/duration_* dropped; year_range singular → year_ranges plural). Plan: `docs/superpowers/plans/2026-05-19-plan-b2-search-section-ai-gating.md` |
@@ -1203,12 +1205,12 @@ CREATE TABLE recommendation_snapshots (
 
 ### Phase 6: Spotify-like MVP
 
-> **Status (2026-05-16)**: ⏳ **Not started.** Playback history backend exists (Plan 3 item 6 shipped `playback_events` table + SSE), but the frontend rails / Liked filter / Playlists CRUD / Manual Queue all remain to do.
+> **Status (2026-05-20)**: 🛠 **In progress.** Sub-plan #1 (Library Overhaul) shipped via `feature/library-overhaul`: full LibrarySection rewrite as track-picker hub with Albums browser (grouped by album_title, majority-vote primary artist, feat-artist pills, drill-into-modal with tracklist + Play All + per-track like-toggle) + Liked Songs glassy-row view + Recently Played glassy-row view (relative time + N× play count + sort by last_played/play_count) + compressed hero (5 values: tracks/albums/artists/genres/year-range) + expandable Distributions panel (decades / top-5 genres / top-5 artists) + 4 listening-stats widgets (∑ Listened / Top Track / Top Artist / Peak Hour). Backend adds 4 endpoints — `/library/albums`, `/library/liked-songs`, `/playback/recent`, `/library/listening-stats` — all with TDD coverage. No DB schema changes. Plan: `docs/superpowers/plans/2026-05-20-library-overhaul.md`. Spec: `docs/superpowers/specs/2026-05-20-library-overhaul-design.md`. Remaining sub-plans: (19) Playlists CRUD, (20) Manual Queue.
 
-17. **Playback history backend** + `RecentlyPlayedRail` на Home/Library.
-18. **Liked Songs view** — фильтр + UI.
-19. **Playlists CRUD** — backend tables + endpoints + UI (создать, добавить, реордер, удалить, context-menu "Add to playlist").
-20. **Manual Queue panel** — frontend-only, drag-drop reorder, выезжает из ≡ кнопки.
+17. ✅ **Playback history backend** + `RecentlyPlayedRail` на Home/Library — shipped as part of Library Overhaul (recently-played tab in Library; rail-on-Home deferred to Phase 6a).
+18. ✅ **Liked Songs view** — фильтр + UI — shipped as part of Library Overhaul.
+19. ⏳ **Playlists CRUD** — backend tables + endpoints + UI. Plan 19 (next).
+20. ⏳ **Manual Queue panel** — frontend-only, drag-drop reorder, выезжает из ≡ кнопки.
 
 ### Phase 6a: Home (Discovery Magazine)
 
