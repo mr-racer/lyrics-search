@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 logger = logging.getLogger(__name__)
 
-from app.domain.models import IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse
+from app.domain.models import IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse
 from app.services.library_service import LibraryService
 from app.services.similarity_service import load_top_pairs
 
@@ -378,6 +378,22 @@ async def get_library_albums(
         qdrant_client=db_client.qdrant,
         collection_name=collection_name,
         sort=sort,
+    )
+
+
+# ── Liked songs ───────────────────────────────────────────────────────────────
+
+@router.get("/liked-songs", response_model=LikedSongsResponse)
+async def get_library_liked_songs(
+    request: Request,
+    collection_name: str = Query(..., description="Collection name (required)"),
+) -> LikedSongsResponse:
+    db_client = request.app.state.db_client
+    if db_client is None or db_client.qdrant is None:
+        return LikedSongsResponse(tracks=[], collection_name=collection_name)
+    return LibraryService.get_liked_songs(
+        qdrant_client=db_client.qdrant,
+        collection_name=collection_name,
     )
 
 

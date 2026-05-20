@@ -606,6 +606,24 @@ class MetadataDB:
         return row[0] if row else None
 
     @classmethod
+    def get_liked_track_ids_with_updated_at(
+        cls, collection_name: str
+    ) -> list[tuple[str, str]]:
+        """Return list of (track_id, updated_at ISO string) for tracks with
+        reaction='like' in the given collection, ordered newest-first."""
+        conn = cls._connect()
+        rows = conn.execute(
+            "SELECT track_id, updated_at FROM track_reactions "
+            "WHERE collection_name = ? AND reaction = 'like' "
+            "ORDER BY updated_at DESC",
+            (collection_name,),
+        ).fetchall()
+        # updated_at is declared TIMESTAMP — with PARSE_DECLTYPES the sqlite3
+        # adapter returns it as a datetime.datetime. Coerce to ISO string so
+        # the API response model (Pydantic str field) accepts it directly.
+        return [(r[0], str(r[1])) for r in rows]
+
+    @classmethod
     def get_reactions_for_tracks(
         cls, collection_name: str, track_ids: list[str]
     ) -> dict[str, str]:

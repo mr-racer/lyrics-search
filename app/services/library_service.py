@@ -16,6 +16,7 @@ from ..domain.models import (
     LibraryAlbumsResponse,
     TrackMetadata,
 )
+from ..resources.metadata_db import MetadataDB
 from ..resources.model_registry import ModelRegistry
 from ..resources.db_client import DbClient
 from ..existing.folder_processor import FileProcessor
@@ -881,6 +882,50 @@ class LibraryService:
         return LibraryAlbumsResponse(
             albums=albums, collection_name=collection_name, qdrant_available=True,
         )
+
+    @classmethod
+    def get_liked_songs(
+        cls, *, qdrant_client, collection_name: str,
+    ):
+        """Return all tracks the user has marked 'like' in this collection,
+        ordered newest-liked first. Tracks whose Qdrant payload has been
+        evicted (e.g. re-index churn) are silently skipped."""
+        from app.domain.models import LikedSongTrack, LikedSongsResponse
+        pairs = MetadataDB.get_liked_track_ids_with_updated_at(collection_name)
+        if not pairs:
+            return LikedSongsResponse(tracks=[], collection_name=collection_name)
+
+        ids = [tid for tid, _ in pairs]
+        liked_at_by_id = {tid: ts for tid, ts in pairs}
+
+        try:
+            points = qdrant_client.retrieve(
+                collection_name=collection_name,
+                ids=ids,
+                with_payload=True,
+                with_vectors=False,
+            )
+        except Exception:
+            points = []
+
+        tracks = []
+        for p in points:
+            pl = p.payload or {}
+            tracks.append(LikedSongTrack(
+                track_id=str(p.id),
+                title=pl.get("title") or "—",
+                artist=pl.get("artist") or "—",
+                album=pl.get("album"),
+                year=int(pl["year"]) if pl.get("year") and str(pl["year"]).isdigit() else None,
+                duration=pl.get("duration"),
+                cover_art_path=pl.get("cover_art_path"),
+                genre=pl.get("genre"),
+                liked_at=liked_at_by_id.get(str(p.id), ""),
+            ))
+
+        # Preserve like-order: re-sort by liked_at DESC (Qdrant.retrieve may not preserve)
+        tracks.sort(key=lambda t: t.liked_at, reverse=True)
+        return LikedSongsResponse(tracks=tracks, collection_name=collection_name)
 
     # ── Helpers ──
 
