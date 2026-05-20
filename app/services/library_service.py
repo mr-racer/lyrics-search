@@ -866,18 +866,20 @@ class LibraryService:
                     genre = (pl.get("genre") or "").strip()
                     if genre:
                         g["genre_counter"][genre] += 1
-                    dur = pl.get("duration") or 0
+                    dur_raw = pl.get("duration") or 0
                     try:
-                        g["total_duration"] += float(dur)
+                        dur_float = float(dur_raw)
                     except (TypeError, ValueError):
-                        pass
+                        dur_float = None
+                    if dur_float is not None:
+                        g["total_duration"] += dur_float
                     if g["first_cover"] is None:
                         g["first_cover"] = pl.get("cover_art_path")
                     g["tracks"].append(AlbumTrack(
                         track_id=str(pt.id) if hasattr(pt, "id") else "",
                         title=pl.get("title") or "—",
                         artist=artist or "—",
-                        duration=dur or None,
+                        duration=dur_float,
                         year=yi,
                         cover_art_path=pl.get("cover_art_path"),
                     ))
@@ -885,7 +887,7 @@ class LibraryService:
                     break
                 offset = next_offset
         except Exception:
-            pass  # partial result is acceptable
+            logger.exception("get_albums: scroll loop aborted on collection=%s", collection_name)
 
         albums = []
         for key, g in groups.items():
