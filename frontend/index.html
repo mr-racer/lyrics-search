@@ -5507,7 +5507,163 @@ function LibraryTabsStrip({ active, onChange, counts, lang }) {
     </div>
   );
 }
-function AlbumModal() { return null; }
+function AlbumModal({ album, onClose, onPlayTrack, navigateToArtist, isDark, lang }) {
+  const c = useColors(isDark);
+  const [hoverRow, setHoverRow] = useState(-1);
+  const [likedMap, setLikedMap] = useState({});
+  const [likeLoading, setLikeLoading] = useState({});
+
+  // Lock body scroll while open
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, []);
+
+  // Esc to close
+  useEffect(() => {
+    const h = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', h);
+    return () => document.removeEventListener('keydown', h);
+  }, [onClose]);
+
+  // Lazy-load per-track reactions on mount
+  useEffect(() => {
+    if (!album?.tracks?.length) return;
+    Promise.all(album.tracks.map(t =>
+      apiFetch(`/search/tracks/${t.track_id}/reaction`).then(r => [t.track_id, r?.reaction === 'like']).catch(() => [t.track_id, false])
+    )).then(pairs => setLikedMap(Object.fromEntries(pairs)));
+  }, [album?.album_title]);
+
+  const toggleLike = async (track_id) => {
+    if (likeLoading[track_id]) return;
+    const next = !likedMap[track_id];
+    setLikeLoading(p => ({ ...p, [track_id]: true }));
+    setLikedMap(p => ({ ...p, [track_id]: next }));   // optimistic
+    try {
+      await apiFetch(`/search/tracks/${track_id}/reaction`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reaction: next ? 'like' : null }),
+      });
+    } catch {
+      setLikedMap(p => ({ ...p, [track_id]: !next })); // rollback
+    } finally {
+      setLikeLoading(p => ({ ...p, [track_id]: false }));
+    }
+  };
+
+  const playFromIdx = (idx) => {
+    const t = album.tracks[idx];
+    if (!t || !onPlayTrack) return;
+    onPlayTrack({ track: t }, album.tracks.map(tt => ({ track: tt })));
+    onClose();
+  };
+
+  const fmtDur = (s) => {
+    if (!s) return '—';
+    const m = Math.floor(s / 60), r = Math.floor(s % 60);
+    return `${m}:${String(r).padStart(2, '0')}`;
+  };
+  const totalDur = album.duration_seconds || 0;
+  const totalDurFmt = `${Math.floor(totalDur/60)}:${String(Math.floor(totalDur%60)).padStart(2,'0')}`;
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position:'fixed', inset:0, zIndex:100,
+        background:'rgba(0,0,0,.6)', backdropFilter:'blur(6px)', WebkitBackdropFilter:'blur(6px)',
+        display:'grid', placeItems:'center', padding:'20px',
+        animation:'fadeIn 0.18s ease',
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          background: isDark ? 'rgba(15,12,25,.96)' : 'rgba(255,255,255,.96)',
+          border: `1px solid ${c.border}`,
+          borderRadius:'14px',
+          backdropFilter:'blur(20px)', WebkitBackdropFilter:'blur(20px)',
+          padding:'18px',
+          maxWidth:'720px', width:'100%', maxHeight:'80vh',
+          display:'flex', flexDirection:'column', gap:'12px',
+          boxShadow:'0 20px 60px rgba(0,0,0,.5)',
+        }}
+      >
+        {/* Hero */}
+        <div style={{ display:'flex', gap:'14px' }}>
+          <div style={{ width:'140px', flexShrink:0 }}>
+            <AlbumCover title={album.album_title} artist={album.primary_artist} size={140} isDark={isDark} coverPath={album.cover_art_path} radius={10} fluid />
+          </div>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div className="mono" style={{ fontSize:'10px', color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase' }}>{lang==='ru'?'АЛЬБОМ':'ALBUM'}</div>
+            <div style={{ fontSize:'24px', lineHeight:1.1, color:c.text, margin:'4px 0', letterSpacing:'-0.01em' }}>{album.album_title}</div>
+            <div
+              onClick={() => { if (album.primary_artist_slug && navigateToArtist) { navigateToArtist(album.primary_artist_slug); onClose(); } }}
+              style={{ fontSize:'13px', color:'#bba8ff', cursor:'pointer', display:'inline-block' }}
+            >{album.primary_artist} →</div>
+            {album.feat_artists?.length > 0 && (
+              <div style={{ marginTop:'4px', display:'flex', gap:'5px', flexWrap:'wrap' }}>
+                {album.feat_artists.map(f => (
+                  <span key={f.slug}
+                    onClick={() => { if (navigateToArtist) { navigateToArtist(f.slug); onClose(); } }}
+                    style={{ padding:'2px 8px', borderRadius:'10px', background:'rgba(120,80,200,.18)', border:'1px solid rgba(120,80,200,.3)', color:'#bba8ff', fontSize:'10px', cursor:'pointer' }}>
+                    {f.name}
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="mono" style={{ display:'flex', gap:'14px', fontSize:'11px', color:c.textMuted, marginTop:'8px', letterSpacing:'0.06em' }}>
+              <span>{album.year_range || album.year || '—'}</span>
+              <span>·</span>
+              <span>{album.track_count} {lang==='ru'?'треков':'tracks'}</span>
+              <span>·</span>
+              <span>{totalDurFmt}</span>
+            </div>
+          </div>
+          <button onClick={onClose} style={{ alignSelf:'flex-start', background:'transparent', color:c.textMuted, fontSize:'18px', cursor:'pointer', padding:'4px 8px', border:'none' }}>✕</button>
+        </div>
+
+        {/* Actions */}
+        <div style={{ display:'flex', gap:'8px' }}>
+          <button onClick={() => playFromIdx(0)} style={{ padding:'7px 14px', borderRadius:'8px', fontSize:'12px', fontFamily:"'JetBrains Mono', monospace", background:'linear-gradient(180deg, oklch(60% 0.21 270), oklch(48% 0.22 285))', color:'#fff', border:'none', cursor:'pointer' }}>▶ {lang==='ru'?'Играть всё':'Play All'}</button>
+        </div>
+
+        {/* Tracklist */}
+        <div style={{ background:'rgba(0,0,0,.25)', borderRadius:'8px', overflow:'auto', flex:1 }}>
+          {album.tracks.map((t, i) => {
+            const liked = !!likedMap[t.track_id];
+            return (
+              <div
+                key={t.track_id}
+                onClick={() => playFromIdx(i)}
+                onMouseEnter={() => setHoverRow(i)}
+                onMouseLeave={() => setHoverRow(-1)}
+                style={{
+                  display:'grid', gridTemplateColumns:'24px 1fr 60px 30px',
+                  gap:'10px', padding:'8px 12px', alignItems:'center',
+                  borderBottom:`1px solid ${c.border}`,
+                  fontSize:'12px', cursor:'pointer',
+                  background: hoverRow === i ? 'rgba(255,255,255,.04)' : 'transparent',
+                }}
+              >
+                <span className="mono" style={{ color: hoverRow === i ? '#bba8ff' : c.textSubtle, fontSize:'11px', textAlign:'center' }}>{hoverRow === i ? '▶' : i+1}</span>
+                <span style={{ color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t.title}</span>
+                <span className="mono" style={{ color:c.textSubtle, fontSize:'11px', textAlign:'right' }}>{fmtDur(t.duration)}</span>
+                <button
+                  onClick={(e) => { e.stopPropagation(); toggleLike(t.track_id); }}
+                  style={{ background:'transparent', border:'none', cursor:'pointer', fontSize:'13px', color: liked ? '#ff7aa8' : c.textSubtle, padding:0 }}
+                  title={liked ? (lang==='ru'?'Убрать лайк':'Unlike') : (lang==='ru'?'Лайкнуть':'Like')}
+                >{liked ? '♥' : '♡'}</button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 
 // ─── Indexing progress (compact, 2 sections) ─────────────────────────────────
