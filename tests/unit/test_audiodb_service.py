@@ -8,7 +8,13 @@ from app.services.audiodb_service import _http_get_json
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    # Python 3.12+ no longer auto-creates an event loop in MainThread.
+    # Use a fresh loop per call so we don't reuse a closed one across tests.
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 def test_http_get_json_happy_path():
