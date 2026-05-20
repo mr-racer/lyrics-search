@@ -5199,6 +5199,116 @@ function AlbumsGridTab({ albums, sort, onSortChange, onAlbumOpen, isDark, lang, 
   );
 }
 
+// ─── LIBRARY GLASSY ROW (shared by Liked + Recently) ──────────────────────────
+function LibraryGlassyRow({ track, when, playCount, isDark, lang, onClick, onArtistClick, onAlbumClick, onToggleLike, isLiked, isCurrent }) {
+  const c = useColors(isDark);
+  const fmtDur = (s) => {
+    if (!s) return '—';
+    const m = Math.floor(s / 60), r = Math.floor(s % 60);
+    return `${m}:${String(r).padStart(2, '0')}`;
+  };
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        display:'grid',
+        gridTemplateColumns:'44px 1fr auto 60px auto',
+        gap:'14px', alignItems:'center',
+        padding:'9px 14px 9px 9px',
+        borderRadius:'12px',
+        background: isCurrent ? 'rgba(120,80,200,.13)' : 'rgba(255,255,255,.04)',
+        backdropFilter:'blur(22px) saturate(1.1)',
+        WebkitBackdropFilter:'blur(22px) saturate(1.1)',
+        border:`1px solid ${isCurrent ? 'rgba(120,80,200,.32)' : c.border}`,
+        boxShadow:'inset 0 1px 0 rgba(255,255,255,.04)',
+        cursor:'pointer',
+        transition:'all .18s cubic-bezier(.22,.9,.3,1)',
+      }}
+      onMouseEnter={e => { e.currentTarget.style.background = isCurrent ? 'rgba(120,80,200,.18)' : 'rgba(255,255,255,.07)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
+      onMouseLeave={e => { e.currentTarget.style.background = isCurrent ? 'rgba(120,80,200,.13)' : 'rgba(255,255,255,.04)'; e.currentTarget.style.transform = 'translateY(0)'; }}
+    >
+      <div style={{ position:'relative', width:'44px', height:'44px', borderRadius:'8px', overflow:'hidden' }}>
+        <AlbumCover title={track.title} artist={track.artist} size={44} isDark={isDark} coverPath={track.cover_art_path} radius={8} fluid />
+      </div>
+      <div style={{ minWidth:0 }}>
+        <div style={{ color:c.text, fontSize:'14px', fontWeight:500, letterSpacing:'-0.01em', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title}</div>
+        <div style={{ color:c.textMuted, fontSize:'12px', marginTop:'1px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+          <span onClick={(e) => { e.stopPropagation(); onArtistClick && onArtistClick(track.artist); }} style={{ color:'#bba8ff', cursor:'pointer' }}>{track.artist}</span>
+          {track.album && (<>
+            <span style={{ color:c.textSubtle, margin:'0 6px' }}>·</span>
+            <span onClick={(e) => { e.stopPropagation(); onAlbumClick && onAlbumClick(track.album); }} style={{ color:'#a8b8c8', cursor:'pointer' }}>{track.album}</span>
+          </>)}
+          {when && (<>
+            <span style={{ color:c.textSubtle, margin:'0 6px' }}>·</span>
+            <span className="mono" style={{ color:c.textSubtle, fontSize:'11px', letterSpacing:'0.06em' }}>{when}</span>
+          </>)}
+          {playCount != null && playCount > 0 && (<>
+            <span style={{ color:c.textSubtle, margin:'0 6px' }}>·</span>
+            <span className="mono" style={{ color:c.textSubtle, fontSize:'11px' }}>{playCount}×</span>
+          </>)}
+        </div>
+      </div>
+      <div />
+      <div className="mono" style={{ color:c.textMuted, fontSize:'11px', textAlign:'right' }}>{fmtDur(track.duration)}</div>
+      <div style={{ display:'flex', gap:'4px' }}>
+        <button
+          onClick={(e) => { e.stopPropagation(); onToggleLike && onToggleLike(track.track_id); }}
+          title={isLiked ? (lang==='ru'?'Убрать лайк':'Unlike') : (lang==='ru'?'Лайкнуть':'Like')}
+          style={{
+            width:'30px', height:'30px', borderRadius:'50%',
+            display:'grid', placeItems:'center',
+            background: isLiked ? 'rgba(255,122,168,.12)' : 'rgba(255,255,255,.03)',
+            color: isLiked ? '#ff7aa8' : c.textMuted,
+            border:'none', cursor:'pointer', fontSize:'14px',
+            transition:'all .18s',
+          }}
+        >{isLiked ? '♥' : '♡'}</button>
+        <button
+          title={lang==='ru'?'Доступно после Plan 19':'Available after Plan 19'}
+          disabled
+          style={{
+            width:'30px', height:'30px', borderRadius:'50%',
+            display:'grid', placeItems:'center',
+            background:'rgba(255,255,255,.02)',
+            color:'#444',
+            border:'none', cursor:'not-allowed', fontSize:'14px',
+          }}
+        >＋</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── LIKED SONGS TAB ──────────────────────────────────────────────────────────
+function LikedSongsTab({ tracks, isDark, lang, onPlayTrack, navigateToArtist, onAlbumClick, onToggleLike, likedMap, currentTrackId }) {
+  const c = useColors(isDark);
+  if (!tracks || tracks.length === 0) {
+    return <div style={{ padding:'40px 20px', textAlign:'center', color:c.textSubtle, fontSize:'13px' }}>{lang==='ru' ? 'Нет лайкнутых треков — лайкни что-нибудь из Player или Search' : 'No liked songs yet — like a track from Player or Search'}</div>;
+  }
+  return (
+    <>
+      <div style={{ padding:'4px 0 10px', fontSize:'11px', color:c.textSubtle, fontFamily:"'JetBrains Mono', monospace", letterSpacing:'0.06em' }}>
+        {tracks.length} {lang==='ru'?'треков':'tracks'}
+      </div>
+      <div style={{ display:'flex', flexDirection:'column', gap:'6px' }}>
+        {tracks.map((t) => (
+          <LibraryGlassyRow
+            key={t.track_id}
+            track={t}
+            isDark={isDark} lang={lang}
+            isLiked={likedMap[t.track_id] !== false}
+            isCurrent={t.track_id === currentTrackId}
+            onClick={() => onPlayTrack && onPlayTrack({ track: t }, tracks.map(tt => ({ track: tt })))}
+            onArtistClick={(name) => { const slug = slugifyArtistName(name); if (slug && navigateToArtist) navigateToArtist(slug); }}
+            onAlbumClick={(name) => onAlbumClick && onAlbumClick(name)}
+            onToggleLike={onToggleLike}
+          />
+        ))}
+      </div>
+    </>
+  );
+}
+
 // ─── LIBRARY SECTION ──────────────────────────────────────────────────────────
 function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateToArtist }) {
   const c = useColors(isDark);
@@ -5216,6 +5326,22 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
   const [activeTab, setActiveTab] = useState(() => localStorage.getItem('library_active_tab') || 'albums');
   const [distOpen, setDistOpen] = useState(() => localStorage.getItem('library_distributions_open') === '1');
   const [albumModal, setAlbumModal] = useState(null);  // currently-open AlbumSummary
+  const [likedMap, setLikedMap] = useState({});
+
+  const toggleLike = async (track_id) => {
+    const next = !(likedMap[track_id] !== false);   // default-true for items already in liked list
+    setLikedMap(p => ({ ...p, [track_id]: next }));
+    try {
+      await apiFetch(`/search/tracks/${track_id}/reaction`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ reaction: next ? 'like' : null }),
+      });
+      apiFetch(`/library/liked-songs?collection_name=${encodeURIComponent(activeCollection)}`).then(setLikedData).catch(() => {});
+    } catch {
+      setLikedMap(p => ({ ...p, [track_id]: !next }));   // rollback
+    }
+  };
 
   useEffect(() => { localStorage.setItem('library_active_tab', activeTab); }, [activeTab]);
   useEffect(() => { localStorage.setItem('library_distributions_open', distOpen ? '1' : '0'); }, [distOpen]);
@@ -5226,7 +5352,10 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
     const col = encodeURIComponent(activeCollection);
     apiFetch(`/library/stats?collection_name=${col}`).then(setStats).catch(() => setStats(null));
     apiFetch(`/library/albums?collection_name=${col}&sort=${albumSort}`).then(setAlbumsData).catch(() => setAlbumsData({albums:[]}));
-    apiFetch(`/library/liked-songs?collection_name=${col}`).then(setLikedData).catch(() => setLikedData({tracks:[]}));
+    apiFetch(`/library/liked-songs?collection_name=${col}`).then(d => {
+      setLikedData(d);
+      setLikedMap(p => { const next = {...p}; (d?.tracks || []).forEach(t => { next[t.track_id] = true; }); return next; });
+    }).catch(() => setLikedData({tracks:[]}));
     apiFetch(`/playback/recent?collection_name=${col}&limit=50`).then(setRecentData).catch(() => setRecentData({tracks:[]}));
     apiFetch(`/library/listening-stats?collection_name=${col}&lang=${lang}`).then(setListenData).catch(() => setListenData(null));
   }, [activeCollection, lang, albumSort]);
@@ -5273,9 +5402,24 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
               navigateToArtist={navigateToArtist}
             />
           )}
-          {activeTab !== 'albums' && (
+          {activeTab === 'liked' && (
+            <LikedSongsTab
+              tracks={likedData?.tracks || []}
+              isDark={isDark} lang={lang}
+              onPlayTrack={onPlayTrack}
+              navigateToArtist={navigateToArtist}
+              onAlbumClick={(albumTitle) => {
+                const found = (albumsData?.albums || []).find(a => a.album_title === albumTitle);
+                if (found) setAlbumModal(found);
+              }}
+              onToggleLike={toggleLike}
+              likedMap={likedMap}
+              currentTrackId={null}
+            />
+          )}
+          {activeTab === 'recent' && (
             <div style={{ minHeight:'200px', display:'grid', placeItems:'center', color:c.textSubtle, fontFamily:"'JetBrains Mono', monospace", fontSize:'11px', letterSpacing:'.12em' }}>
-              [ {activeTab.toUpperCase()} TAB — coming in Task 12-13 ]
+              [ RECENT TAB — coming in Task 13 ]
             </div>
           )}
 
