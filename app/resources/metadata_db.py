@@ -833,6 +833,20 @@ class MetadataDB:
         ).fetchone()
         return int(row[0]) if row else None
 
+    @classmethod
+    def get_play_counts_by_track(
+        cls, collection_name: str
+    ) -> dict[str, int]:
+        """Non-skipped play counts grouped by track_id."""
+        conn = cls._connect()
+        rows = conn.execute(
+            "SELECT track_id, COUNT(*) FROM playback_events "
+            "WHERE collection_name = ? AND skipped_early = 0 "
+            "GROUP BY track_id",
+            (collection_name,),
+        ).fetchall()
+        return {r[0]: int(r[1]) for r in rows}
+
     # ── AI Indexing jobs (Plan 3 Task 11) ──
 
     @classmethod

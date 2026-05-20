@@ -977,15 +977,8 @@ class LibraryService:
                 )
 
         # Top artist — aggregate non-skipped plays per artist by joining DB + payload
-        conn = MetadataDB._connect()
-        rows = conn.execute(
-            "SELECT track_id, COUNT(*) FROM playback_events "
-            "WHERE collection_name = ? AND skipped_early = 0 "
-            "GROUP BY track_id",
-            (collection_name,),
-        ).fetchall()
-        if rows:
-            counts_by_id = {r[0]: int(r[1]) for r in rows}
+        counts_by_id = MetadataDB.get_play_counts_by_track(collection_name)
+        if counts_by_id:
             try:
                 points = qdrant_client.retrieve(
                     collection_name=collection_name,
