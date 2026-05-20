@@ -3,11 +3,19 @@
 import asyncio
 import hashlib
 import logging
+import re
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from ..domain.models import TrackMetadata
+from ..domain.models import (
+    AlbumSummary,
+    AlbumTrack,
+    ArtistRef,
+    LibraryAlbumsResponse,
+    TrackMetadata,
+)
 from ..resources.model_registry import ModelRegistry
 from ..resources.db_client import DbClient
 from ..existing.folder_processor import FileProcessor
@@ -19,6 +27,11 @@ from .sonic_descriptor_service import SonicDescriptorService
 from ._WIP_musicbraniz_search import MusicBrainzLookup
 
 logger = logging.getLogger(__name__)
+
+
+def _slugify_artist_for_album(name: str) -> str:
+    """Same slug logic frontend uses (lowercase, non-alnum → '-', strip)."""
+    return re.sub(r'[^a-z0-9]+', '-', (name or '').lower()).strip('-')
 
 
 class LibraryService:
@@ -727,6 +740,137 @@ class LibraryService:
             }
         
         return self._job_tracker.get_progress_summary(job)
+
+    @classmethod
+    def get_albums(
+        cls, *, qdrant_client, collection_name: str,
+        sort: str = "alphabetical",
+    ) -> LibraryAlbumsResponse:
+        """Group all tracks in the collection by album_title, derive primary
+        artist via majority vote, return AlbumSummary list."""
+        try:
+            cols = qdrant_client.get_collections().collections
+        except Exception:
+            return LibraryAlbumsResponse(
+                albums=[], collection_name=collection_name, qdrant_available=False,
+            )
+        if not any(c.name == collection_name for c in cols):
+            return LibraryAlbumsResponse(
+                albums=[], collection_name=collection_name, qdrant_available=True,
+            )
+
+        # Group tracks by album_title (case-insensitive key, preserves first-seen casing)
+        groups: dict[str, dict] = {}
+        offset = None
+        try:
+            while True:
+                results, next_offset = qdrant_client.scroll(
+                    collection_name=collection_name,
+                    offset=offset,
+                    limit=250,
+                    with_payload=[
+                        "album", "artist", "title", "year", "duration",
+                        "genre", "cover_art_path",
+                    ],
+                    with_vectors=False,
+                )
+                for pt in results:
+                    pl = pt.payload or {}
+                    album = (pl.get("album") or "").strip()
+                    if not album:
+                        continue
+                    key = album.lower()
+                    g = groups.setdefault(key, {
+                        "display_title": album,
+                        "artist_counter": Counter(),
+                        "year_counter": Counter(),
+                        "genre_counter": Counter(),
+                        "tracks": [],
+                        "total_duration": 0.0,
+                        "first_cover": None,
+                    })
+                    artist = (pl.get("artist") or "").strip()
+                    g["artist_counter"][artist] += 1
+                    yr = pl.get("year")
+                    try:
+                        yi = int(yr) if yr is not None else None
+                    except (TypeError, ValueError):
+                        yi = None
+                    if yi:
+                        g["year_counter"][yi] += 1
+                    genre = (pl.get("genre") or "").strip()
+                    if genre:
+                        g["genre_counter"][genre] += 1
+                    dur = pl.get("duration") or 0
+                    try:
+                        g["total_duration"] += float(dur)
+                    except (TypeError, ValueError):
+                        pass
+                    if g["first_cover"] is None:
+                        g["first_cover"] = pl.get("cover_art_path")
+                    g["tracks"].append(AlbumTrack(
+                        track_id=str(pt.id) if hasattr(pt, "id") else "",
+                        title=pl.get("title") or "—",
+                        artist=artist or "—",
+                        duration=dur or None,
+                        year=yi,
+                        cover_art_path=pl.get("cover_art_path"),
+                    ))
+                if next_offset is None or not results:
+                    break
+                offset = next_offset
+        except Exception:
+            pass  # partial result is acceptable
+
+        albums = []
+        for key, g in groups.items():
+            artists = g["artist_counter"]
+            primary_artist = sorted(
+                artists.items(), key=lambda kv: (-kv[1], kv[0])
+            )[0][0] if artists else "—"
+            feat = sorted(
+                [(a, c) for a, c in artists.items() if a != primary_artist],
+                key=lambda kv: (-kv[1], kv[0])
+            )
+            year_range = None
+            year = None
+            if g["year_counter"]:
+                ys = list(g["year_counter"].elements())
+                ymin, ymax = min(ys), max(ys)
+                if ymin == ymax:
+                    year = ymin
+                else:
+                    year_range = f"{ymin}—{ymax}"
+            albums.append(AlbumSummary(
+                album_title=g["display_title"],
+                primary_artist=primary_artist,
+                primary_artist_slug=_slugify_artist_for_album(primary_artist),
+                feat_artists=[
+                    ArtistRef(name=a, slug=_slugify_artist_for_album(a))
+                    for a, _ in feat
+                ],
+                year=year,
+                year_range=year_range,
+                cover_art_path=g["first_cover"],
+                track_count=len(g["tracks"]),
+                duration_seconds=int(g["total_duration"]),
+                top_genres=[gn for gn, _ in g["genre_counter"].most_common(3)],
+                tracks=g["tracks"],
+            ))
+
+        # Sort
+        if sort == "year_desc":
+            albums.sort(key=lambda a: -(a.year or 0))
+        elif sort == "year_asc":
+            albums.sort(key=lambda a: (a.year or 9999))
+        elif sort == "track_count_desc":
+            albums.sort(key=lambda a: -a.track_count)
+        else:
+            albums.sort(key=lambda a: a.album_title.lower())
+
+        return LibraryAlbumsResponse(
+            albums=albums, collection_name=collection_name, qdrant_available=True,
+        )
 
     # ── Helpers ──
 
