@@ -769,7 +769,7 @@ top_K = top-K by sims  # e.g. K=5
 
 | Endpoint | Method | File | Покрывает |
 |----------|--------|------|-----------|
-| `/artists/{slug}` | GET | new route file `app/api/routes/artists.py` | Artist universe aggregate (bio, discog, facts, related) |
+| `/artists/{slug}` | GET | new route file `app/api/routes/artists.py` | Artist universe aggregate (bio, discog, facts, related). AudioDB-enriched fields (optional): `mood`, `country_code`, `country`, `label`, `cutout_path`, `thumb_path`, `audiodb_mbid`. |
 | `/recommend/autoplay-queue` | POST | `app/api/routes/recommend.py` (new) | Spin from here |
 | `/recommend/sonic-sibling` | GET | `app/api/routes/recommend.py` | Sonic Sibling |
 | `/metadata/tracks/{id}/sonic-vibe` | GET | `app/api/routes/metadata.py` | Sonic Vibe (lazy LLM) |
@@ -855,6 +855,16 @@ class TrackMetadata(BaseModel):
 
    -- artists: scaffolded
    ALTER TABLE artists ADD COLUMN mbid TEXT;          -- MusicBrainz ID for future re-lookup
+
+   -- artists: AudioDB enrichment (out-of-band ship 2026-05-20 — see Phase 6 status block)
+   ALTER TABLE artists ADD COLUMN bio TEXT;            -- AudioDB biography (seeds artist_bio AI task)
+   ALTER TABLE artists ADD COLUMN mood TEXT;           -- AudioDB mood tag
+   ALTER TABLE artists ADD COLUMN country_code TEXT;   -- ISO country code
+   ALTER TABLE artists ADD COLUMN country TEXT;        -- Human-readable country
+   ALTER TABLE artists ADD COLUMN label TEXT;          -- AudioDB record label
+   ALTER TABLE artists ADD COLUMN cutout_path TEXT;    -- Local cached cutout image path under /covers/artists/
+   ALTER TABLE artists ADD COLUMN thumb_path TEXT;     -- Local cached thumbnail path under /covers/artists/
+   ALTER TABLE artists ADD COLUMN audiodb_mbid TEXT;   -- MBID reported by AudioDB
    ```
 3. В Artist Atlas UI и Player Facts panel: рендеринг producers/samples блоков **только if non-null** (graceful empty state — секция просто отсутствует).
 4. Все backend endpoints возвращают эти поля как nullable — frontend не делает на них hard dependency.
@@ -1108,6 +1118,8 @@ CREATE TABLE recommendation_snapshots (
 > - Player: vinyl-stack door-swing track transition (sequential exit/enter via CSS animation-delay), glassy play/pause indicator (CSS mask + backdrop-filter so the icon shape itself is the glass surface), cover-tap → toggle play + first-3-clicks hint, scope toggle on FactsRail (SONG | ARTIST segmented pill with sticky user choice + auto-fallback).
 > - AI Indexing reliability: `n_skipped` accounting through the whole stack (DB column + JobState + AIJobStatus + frontend warning banner when job completed with zero real work), default `_SYSTEM_PROMPT` for refined_facts with fail-fast on empty, slug resolution from `payload[artist]+payload[title]` (Qdrant never wrote `song_slug`/`artist_slug` payload fields), smart-quote (U+2019 et al) stripping in `_slugify` so iTunes-encoded titles round-trip.
 > - AI Mode Infrastructure (Plan 6 — `docs/superpowers/plans/2026-05-16-plan-6-ai-mode-infrastructure.md`): `useAIStatus(activeCollection)` hook in App (LLM probe every 60s + per-collection ai_enabled), threaded as `aiStatus` prop. IndexingModal refactored into 3-phase wizard (ai-setup → indexing → ai-bootstrap). PlayerSection Ask AI button + AIIndexingCard Run buttons + chat-search (planned Plan B) all gate on `aiStatus.aiActive`. Cached AI artifacts (sonic_vibe / refined_facts / artist_bio rows) stay accessible regardless of LLM status.
+
+> **Out-of-plan shipment (2026-05-20)**: AudioDB enrichment in indexing FACTS stage. New columns on `artists` table (bio/mood/country/label/cutout/thumb/MBID), local image cache under `/covers/artists/`, integrated with `artist_bio` AI task via new `seed_bio` parameter. Frontend Atlas integration deferred to a follow-up plan. Spec: `docs/superpowers/specs/2026-05-20-audiodb-enrichment-design.md`. Plan: `docs/superpowers/plans/2026-05-20-audiodb-enrichment.md`.
 
 ### Phase 1: Backend foundations (без UI-изменений)
 
