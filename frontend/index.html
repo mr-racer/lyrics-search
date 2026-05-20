@@ -7359,28 +7359,23 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, activeCollection }
           pointerEvents: isOpen ? 'auto' : 'none',
         }}
       >
-        {/* Header */}
+        {/* Slim header — 32px row with title label + close. ↺ clear-chat
+            added in Task 4. Cover/title/artist/year intentionally dropped —
+            they're visible in the left column already. */}
         <div style={{
-          display: 'flex', alignItems: 'center', gap: '12px',
-          padding: '16px 18px', borderBottom: `1px solid ${c.border}`,
+          display: 'flex', alignItems: 'center', gap: '8px',
+          padding: '8px 14px', borderBottom: `1px solid ${c.border}`,
+          flexShrink: 0,
         }}>
-          {track.cover_art_path && (
-            <img src={track.cover_art_path.startsWith('http') ? track.cover_art_path : `${API}${track.cover_art_path}`} alt=""
-              style={{ width: '40px', height: '40px', borderRadius: '8px', objectFit: 'cover' }} />
-          )}
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 600, fontSize: '14px', color: c.text,
-                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {track.title || '—'}
-            </div>
-            <div style={{ fontSize: '12px', color: c.textSubtle,
-                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {track.artist || '—'}{track.year ? ` · ${track.year}` : ''}
-            </div>
-          </div>
+          <span style={{ fontSize: '14px' }} aria-hidden>✨</span>
+          <span style={{ flex: 1, fontSize: '13px', fontWeight: 600, color: c.text, letterSpacing: '-0.01em' }}>
+            {lang === 'ru' ? 'Чат по треку' : 'Track chat'}
+          </span>
           <button onClick={onClose}
             className="pill-v3"
-            style={{ padding: '4px 10px', fontSize: '14px', cursor: 'pointer' }}>✕</button>
+            aria-label={lang === 'ru' ? 'Закрыть' : 'Close'}
+            title={lang === 'ru' ? 'Закрыть' : 'Close'}
+            style={{ padding: '3px 9px', fontSize: '13px', cursor: 'pointer' }}>✕</button>
         </div>
 
         {/* Suggested prompts (only when empty chat) */}
