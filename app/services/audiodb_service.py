@@ -16,6 +16,9 @@ from pathlib import Path
 
 import requests
 
+from app.resources.metadata_db import MetadataDB
+from app.services.artist_facts_service import _slugify as _slugify_artist
+
 logger = logging.getLogger(__name__)
 
 
@@ -110,3 +113,55 @@ async def _download_image(url: str | None) -> str | None:
     except Exception as e:
         logger.warning("[AudioDB] image download failed for %s: %s", url, e)
         return None
+
+
+AUDIODB_BASE_URL = "https://www.theaudiodb.com/api/v1/json/123/search.php"
+
+
+async def fetch_audiodb_for_artist(artist: str, collection_name: str) -> None:
+    """Fetch + persist AudioDB data for one artist. Idempotent.
+
+    Skip-if-already-fetched: examines audiodb_fetched_at, which is set on every
+    persisted write (including empty 'artist not found' rows). Total-network-failure
+    does NOT set the timestamp, so the next indexing run retries.
+    """
+    canonical = _canonical_artist_name(artist)
+    slug = _slugify_artist(canonical)
+    existing = MetadataDB.get_artist_audiodb(slug, collection_name)
+    if existing and existing.get("audiodb_fetched_at"):
+        return
+
+    url = f"{AUDIODB_BASE_URL}?s={_audiodb_slug(canonical)}"
+    data = await _http_get_json(url)
+
+    # Total fetch failure → don't write a row at all so we retry next time.
+    if data is None:
+        return
+
+    artists_list = data.get("artists")
+    if not artists_list:
+        # AudioDB knows this is a miss — mark fetched-but-empty so we don't re-fetch.
+        MetadataDB.upsert_artist_audiodb(
+            slug=slug, collection_name=collection_name,
+            audiodb_bio=None, mood=None,
+            country_code=None, country=None, label=None,
+            cutout_path=None, thumb_path=None, audiodb_mbid=None,
+        )
+        return
+
+    a = artists_list[0]
+    cutout_path = await _download_image(a.get("strArtistCutout"))
+    thumb_path = await _download_image(a.get("strArtistThumb"))
+
+    MetadataDB.upsert_artist_audiodb(
+        slug=slug,
+        collection_name=collection_name,
+        audiodb_bio=a.get("strBiographyEN") or a.get("strBiography"),
+        mood=a.get("strMood"),
+        country_code=a.get("strCountryCode"),
+        country=a.get("strCountry"),
+        label=a.get("strLabel"),
+        cutout_path=cutout_path,
+        thumb_path=thumb_path,
+        audiodb_mbid=a.get("strMusicBrainzID"),
+    )
