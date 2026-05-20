@@ -621,7 +621,13 @@ class MetadataDB:
         # updated_at is declared TIMESTAMP — with PARSE_DECLTYPES the sqlite3
         # adapter returns it as a datetime.datetime. Coerce to ISO string so
         # the API response model (Pydantic str field) accepts it directly.
-        return [(r[0], str(r[1])) for r in rows]
+        # Use .isoformat() (T-separator) so `new Date(liked_at)` in the
+        # browser parses reliably across engines; str(datetime) yields a
+        # space-separated form that Safari/older browsers reject.
+        return [
+            (r[0], r[1].isoformat() if hasattr(r[1], "isoformat") else str(r[1]))
+            for r in rows
+        ]
 
     @classmethod
     def get_reactions_for_tracks(

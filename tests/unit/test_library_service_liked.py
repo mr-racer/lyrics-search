@@ -35,12 +35,24 @@ def _stub_qdrant_retrieve(by_id):
 def test_get_liked_songs_returns_metadata_in_liked_order():
     MetadataDB.set_reaction(track_id="t1", collection_name="test_col", reaction="like")
     MetadataDB.set_reaction(track_id="t2", collection_name="test_col", reaction="like")
+    # SQLite's CURRENT_TIMESTAMP has 1s resolution, which makes back-to-back
+    # set_reaction calls indistinguishable. Force explicit, distinct
+    # timestamps so the ordering assertion is deterministic and fast.
+    conn = MetadataDB._connect()
+    conn.execute(
+        "UPDATE track_reactions SET updated_at='2026-01-01 00:00:00' WHERE track_id='t1'"
+    )
+    conn.execute(
+        "UPDATE track_reactions SET updated_at='2026-06-01 00:00:00' WHERE track_id='t2'"
+    )
+    conn.commit()
     qdrant = _stub_qdrant_retrieve({
         "t1": {"title": "T1", "artist": "A", "album": "Al", "duration": 200},
         "t2": {"title": "T2", "artist": "B", "album": "Bl", "duration": 220},
     })
     res = LibraryService.get_liked_songs(qdrant_client=qdrant, collection_name="test_col")
-    assert {t.track_id for t in res.tracks} == {"t1", "t2"}
+    # t2 liked after t1 → should be first (newest-first)
+    assert [t.track_id for t in res.tracks] == ["t2", "t1"]
     assert all(t.liked_at for t in res.tracks)
 
 
