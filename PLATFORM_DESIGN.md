@@ -775,8 +775,10 @@ top_K = top-K by sims  # e.g. K=5
 | `/metadata/tracks/{id}/sonic-vibe` | GET | `app/api/routes/metadata.py` | Sonic Vibe (lazy LLM) |
 | `/search/` (modified) | POST | `app/api/routes/search.py` | Add `score_breakdown` to response |
 | `/playback/record` | POST | `app/api/routes/playback.py` (new) | Recently Played |
-| `/playback/recent` | GET | `app/api/routes/playback.py` | Recently Played list |
-| `/library/liked-songs` | GET | `app/api/routes/library.py` | Liked songs filter |
+| `/playback/recent` | GET | `app/api/routes/playback.py` | Deduped playback events by track_id (latest first), with play_count (non-skipped). limit=1..200. |
+| `/library/albums` | GET | `app/api/routes/library.py` | Albums grouped from Qdrant payload (majority-vote primary artist + feat list + year/year_range + top genres + embedded tracks). Sort: alphabetical/year_desc/year_asc/track_count_desc. |
+| `/library/liked-songs` | GET | `app/api/routes/library.py` | Tracks with reaction='like' in collection, ordered by liked_at DESC, enriched via Qdrant payload. |
+| `/library/listening-stats` | GET | `app/api/routes/library.py` | Total seconds listened, since (first play), top track + top artist + peak hour (excludes skipped_early plays). lang=en\|ru. |
 | `/playlists/*` | various | `app/api/routes/playlists.py` (new) | Playlists CRUD |
 | `/chat/` (modified) | POST | `app/api/routes/chat.py` | Add `LYRIC_EXPLAIN` and `SONG_DISCUSS` modes |
 | `/library/sonic-map` | GET | `app/api/routes/library.py` | Sonic Map (Stats) |

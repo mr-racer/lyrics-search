@@ -5246,19 +5246,26 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
   useEffect(() => { localStorage.setItem('library_active_tab', activeTab); }, [activeTab]);
   useEffect(() => { localStorage.setItem('library_distributions_open', distOpen ? '1' : '0'); }, [distOpen]);
 
-  // ── Fetch all five resources in parallel on collection change ─────────
+  // ── Effect 1: 4 endpoints unrelated to albumSort ─────────────────────
   useEffect(() => {
     if (!activeCollection) return;
     const col = encodeURIComponent(activeCollection);
     apiFetch(`/library/stats?collection_name=${col}`).then(setStats).catch(() => setStats(null));
-    apiFetch(`/library/albums?collection_name=${col}&sort=${albumSort}`).then(setAlbumsData).catch(() => setAlbumsData({albums:[]}));
     apiFetch(`/library/liked-songs?collection_name=${col}`).then(d => {
       setLikedData(d);
       setLikedMap(p => { const next = {...p}; (d?.tracks || []).forEach(t => { next[t.track_id] = true; }); return next; });
     }).catch(() => setLikedData({tracks:[]}));
     apiFetch(`/playback/recent?collection_name=${col}&limit=50`).then(setRecentData).catch(() => setRecentData({tracks:[]}));
     apiFetch(`/library/listening-stats?collection_name=${col}&lang=${lang}`).then(setListenData).catch(() => setListenData(null));
-  }, [activeCollection, lang, albumSort]);
+  }, [activeCollection, lang]);
+
+  // ── Effect 2: only albums (refires on sort change) ───────────────────
+  useEffect(() => {
+    if (!activeCollection) return;
+    const col = encodeURIComponent(activeCollection);
+    apiFetch(`/library/albums?collection_name=${col}&sort=${albumSort}`)
+      .then(setAlbumsData).catch(() => setAlbumsData({albums:[]}));
+  }, [activeCollection, albumSort]);
 
   const albumsCount = albumsData?.albums?.length ?? 0;
   const likedCount  = likedData?.tracks?.length ?? 0;
@@ -5352,8 +5359,6 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
   );
 }
 
-// Stub components — will be properly implemented in Tasks 8-12. Stubs exist so
-// LibrarySection parses and renders without crashing during incremental work.
 function LibraryHeroLine({ stats, albumCount, isDark, lang, collection }) {
   const c = useColors(isDark);
   const total = stats?.total_tracks ?? '—';
