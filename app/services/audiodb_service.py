@@ -9,8 +9,10 @@ Sibling of artist_facts_service.py — same sequential-fetch-with-progress patte
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import re
+from pathlib import Path
 
 import requests
 
@@ -21,6 +23,10 @@ _FEAT_RE = re.compile(
     r"\s+(?:feat\.?|ft\.?|featuring|with)\s+.*$",
     re.IGNORECASE,
 )
+
+
+ARTIST_COVERS_DIR = Path(__file__).resolve().parent.parent.parent / "frontend" / "covers" / "artists"
+IMAGE_TIMEOUT_SEC = 3.0
 
 
 def _canonical_artist_name(artist: str) -> str:
@@ -71,4 +77,36 @@ async def _http_get_json(url: str) -> dict | None:
             return None
     except Exception as e:
         logger.warning("[AudioDB] error %s: %s", url, e)
+        return None
+
+
+async def _download_image(url: str | None) -> str | None:
+    """Download an image to /covers/artists/<sha256:16>.<ext>; return relative URL or None.
+
+    No retry — best-effort. PNG / JPEG detected by magic bytes; default to .png.
+    Content-addressed: identical bytes share a single file regardless of source URL."""
+    if not url:
+        return None
+    try:
+        r = await asyncio.to_thread(
+            lambda: requests.get(url, timeout=IMAGE_TIMEOUT_SEC),
+        )
+        r.raise_for_status()
+        data = r.content
+        if not data:
+            return None
+        if data[:8].startswith(b"\x89PNG\r\n\x1a\n"):
+            ext = "png"
+        elif data[:3] == b"\xff\xd8\xff":
+            ext = "jpg"
+        else:
+            ext = "png"
+        ARTIST_COVERS_DIR.mkdir(parents=True, exist_ok=True)
+        content_hash = hashlib.sha256(data).hexdigest()[:16]
+        dest = ARTIST_COVERS_DIR / f"{content_hash}.{ext}"
+        if not dest.exists():
+            dest.write_bytes(data)
+        return f"/covers/artists/{content_hash}.{ext}"
+    except Exception as e:
+        logger.warning("[AudioDB] image download failed for %s: %s", url, e)
         return None
