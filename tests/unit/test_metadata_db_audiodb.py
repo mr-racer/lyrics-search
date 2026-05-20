@@ -45,3 +45,55 @@ def test_migration_preserves_existing_rows():
         ("kanye-west",),
     ).fetchone()
     assert row == (None, None, None)
+
+
+def test_upsert_audiodb_inserts_new_row():
+    # No prior artist row; upsert should INSERT one with name=slug fallback.
+    MetadataDB.upsert_artist_audiodb(
+        slug="dua-lipa", collection_name="test",
+        audiodb_bio="Dua Lipa is a singer.", mood="energetic",
+        country_code="GB", country="London, UK", label="Warner",
+        cutout_path="/covers/artists/abc.png",
+        thumb_path="/covers/artists/def.png",
+        audiodb_mbid="12345",
+    )
+    row = MetadataDB.get_artist_audiodb("dua-lipa", "test")
+    assert row["audiodb_bio"] == "Dua Lipa is a singer."
+    assert row["mood"] == "energetic"
+    assert row["country_code"] == "GB"
+    assert row["audiodb_mbid"] == "12345"
+    assert row["audiodb_fetched_at"]  # ISO string, truthy
+
+
+def test_upsert_audiodb_updates_existing_row():
+    MetadataDB.upsert_artist(slug="kanye-west", name="Kanye West", collection_name="test")
+    MetadataDB.upsert_artist_audiodb(
+        slug="kanye-west", collection_name="test",
+        audiodb_bio="bio v1", mood="introspective",
+        country_code="US", country="Chicago, USA", label=None,
+        cutout_path=None, thumb_path=None, audiodb_mbid=None,
+    )
+    # Update with new bio
+    MetadataDB.upsert_artist_audiodb(
+        slug="kanye-west", collection_name="test",
+        audiodb_bio="bio v2", mood="introspective",
+        country_code="US", country="Chicago, USA", label=None,
+        cutout_path=None, thumb_path=None, audiodb_mbid=None,
+    )
+    row = MetadataDB.get_artist_audiodb("kanye-west", "test")
+    assert row["audiodb_bio"] == "bio v2"
+
+
+def test_get_audiodb_returns_none_when_no_row():
+    assert MetadataDB.get_artist_audiodb("ghost-artist", "test") is None
+
+
+def test_get_audiodb_returns_none_when_artist_has_no_audiodb_data():
+    # Row exists from upsert_artist but audiodb_fetched_at is NULL — get returns dict
+    # with all None values, NOT None itself, so the caller can distinguish missing-row
+    # from never-fetched-row.
+    MetadataDB.upsert_artist(slug="nobody", name="Nobody", collection_name="test")
+    row = MetadataDB.get_artist_audiodb("nobody", "test")
+    assert row is not None
+    assert row["audiodb_bio"] is None
+    assert row["audiodb_fetched_at"] is None

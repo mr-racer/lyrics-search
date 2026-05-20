@@ -288,6 +288,78 @@ class MetadataDB:
         conn.commit()
 
     @classmethod
+    def get_artist_audiodb(cls, slug: str, collection_name: str) -> dict | None:
+        """Return dict of audiodb fields for the artist (or None if no row exists).
+
+        A row that exists but has audiodb_fetched_at IS NULL returns the dict with
+        all-None values, so the caller can distinguish 'never fetched' from
+        'no such artist'."""
+        conn = cls._connect()
+        row = conn.execute(
+            """SELECT audiodb_bio, mood, country_code, country, label,
+                      cutout_path, thumb_path, audiodb_mbid, audiodb_fetched_at
+               FROM artists WHERE slug = ? AND collection_name = ?""",
+            (slug, collection_name),
+        ).fetchone()
+        if not row:
+            return None
+        fetched_at = row[8]
+        return {
+            "audiodb_bio": row[0],
+            "mood": row[1],
+            "country_code": row[2],
+            "country": row[3],
+            "label": row[4],
+            "cutout_path": row[5],
+            "thumb_path": row[6],
+            "audiodb_mbid": row[7],
+            "audiodb_fetched_at": (
+                fetched_at.isoformat() if hasattr(fetched_at, "isoformat")
+                else (str(fetched_at) if fetched_at else None)
+            ),
+        }
+
+    @classmethod
+    def upsert_artist_audiodb(
+        cls, *, slug: str, collection_name: str,
+        audiodb_bio: str | None, mood: str | None,
+        country_code: str | None, country: str | None, label: str | None,
+        cutout_path: str | None, thumb_path: str | None,
+        audiodb_mbid: str | None,
+    ) -> None:
+        """INSERT new row if (slug, collection_name) missing, else UPDATE in place.
+
+        Always sets audiodb_fetched_at = CURRENT_TIMESTAMP. If the row doesn't
+        exist yet, inserts with name=slug as fallback (real name will be set later
+        by upsert_artist when artist_facts processes the same artist)."""
+        conn = cls._connect()
+        existing = conn.execute(
+            "SELECT 1 FROM artists WHERE slug = ? AND collection_name = ?",
+            (slug, collection_name),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """UPDATE artists SET
+                     audiodb_bio = ?, mood = ?, country_code = ?, country = ?,
+                     label = ?, cutout_path = ?, thumb_path = ?,
+                     audiodb_mbid = ?, audiodb_fetched_at = CURRENT_TIMESTAMP
+                   WHERE slug = ? AND collection_name = ?""",
+                (audiodb_bio, mood, country_code, country, label,
+                 cutout_path, thumb_path, audiodb_mbid, slug, collection_name),
+            )
+        else:
+            conn.execute(
+                """INSERT INTO artists
+                   (slug, name, collection_name, audiodb_bio, mood, country_code,
+                    country, label, cutout_path, thumb_path, audiodb_mbid,
+                    audiodb_fetched_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)""",
+                (slug, slug, collection_name, audiodb_bio, mood, country_code,
+                 country, label, cutout_path, thumb_path, audiodb_mbid),
+            )
+        conn.commit()
+
+    @classmethod
     def get_artist_slug(cls, name: str, collection_name: str) -> Optional[str]:
         """Return the stored slug for an artist in a collection, or None."""
         conn = cls._connect()
