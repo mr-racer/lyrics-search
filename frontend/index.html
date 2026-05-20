@@ -5327,7 +5327,61 @@ function DistributionsPanel({ stats, isDark, lang }) {
     </div>
   );
 }
-function ListeningWidgetsRow() { return <div style={{padding:'10px 14px', color:'#888'}}>[widgets]</div>; }
+function ListeningWidgetsRow({ data, isDark, lang }) {
+  const c = useColors(isDark);
+  const fmtDur = (sec) => {
+    if (!sec) return '—';
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+  };
+  const since = data?.since ? new Date(data.since).toLocaleDateString(lang==='ru'?'ru-RU':'en-US', {month:'short', day:'numeric'}) : null;
+  const top_track = data?.top_track;
+  const top_artist = data?.top_artist;
+  const peak = data?.peak_hour;
+  const widget = (lbl, val, sub, tint) => (
+    <div style={{
+      background: 'rgba(255,255,255,.04)',
+      border: `1px solid ${c.border}`,
+      borderRadius: '10px',
+      padding: '10px 12px',
+      backdropFilter:'blur(20px)',
+      display:'flex', flexDirection:'column', gap:'2px',
+    }}>
+      <div className="mono" style={{ fontSize:'9px', color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase' }}>{lbl}</div>
+      <div style={{ fontSize: typeof val === 'string' && val.length > 12 ? '13px' : '18px', color: tint || c.text, fontWeight: 500, lineHeight: 1.2 }}>{val}</div>
+      <div style={{ fontSize:'11px', color:c.textMuted }}>{sub || ' '}</div>
+    </div>
+  );
+  return (
+    <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:'8px' }}>
+      {widget(
+        lang==='ru' ? '∑ ПРОСЛУШАНО' : '∑ LISTENED',
+        fmtDur(data?.total_seconds_listened),
+        since ? (lang==='ru' ? `с ${since}` : `since ${since}`) : null,
+        'oklch(72% 0.18 145)'
+      )}
+      {widget(
+        lang==='ru' ? '★ ТОП-ТРЕК' : '★ TOP TRACK',
+        top_track?.title || '—',
+        top_track ? `${top_track.artist} · ${top_track.play_count} ${lang==='ru'?'плеев':'plays'}` : (lang==='ru'?'нет данных':'no data'),
+        'oklch(70% 0.18 275)'
+      )}
+      {widget(
+        lang==='ru' ? '★ ТОП-АРТИСТ' : '★ TOP ARTIST',
+        top_artist?.name || '—',
+        top_artist ? `${top_artist.play_count} ${lang==='ru'?'плеев':'plays'}` : null,
+        'oklch(75% 0.14 80)'
+      )}
+      {widget(
+        lang==='ru' ? '⌚ ПИК' : '⌚ PEAK HOUR',
+        peak ? `${String(peak.hour).padStart(2,'0')}:00` : '—',
+        peak?.label || null,
+        c.text
+      )}
+    </div>
+  );
+}
 function LibraryTabsStrip({ active, onChange, counts, lang }) {
   return (
     <div style={{display:'flex', gap:6}}>
