@@ -7,7 +7,7 @@ import re
 import time
 from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from ..domain.models import (
     AlbumSummary,
@@ -252,21 +252,48 @@ class LibraryService:
                         facts_all_cached = False
                         break
 
-            if facts_all_cached and facts_total > 0:
-                logger.info("[LibraryService] All facts cached, skipping FACTS stage")
-                stage_facts.status = IndexStatus.COMPLETED
-                stage_facts.current = facts_total
-                stage_facts.completed_at = time.time()
-                stage_facts.message = "Факты из кеша"
+            # Shared state across facts branches + the unconditional audiodb step.
+            # Declared here so the audiodb block (which runs regardless of the
+            # facts cache short-circuit) can update progress + record errors.
+            facts_progress = {"artists": 0, "songs": 0, "audiodb": 0}
+            facts_found = {"artists": 0, "songs": 0, "audiodb": 0}
+            facts_state = {"error": None}
+            artist_facts_result: Dict[str, str] = {}
+            song_facts_result: Dict[str, str] = {}
+            audiodb_result: Dict[str, Any] = {}
 
+            def on_audiodb_progress(current: int, total: int, label: str, found: bool):
+                facts_progress["audiodb"] = current
+                if found:
+                    facts_found["audiodb"] += 1
+                combined = sum(facts_progress.values())
+                stage_facts.current = combined
+                stage_facts.found = sum(facts_found.values())
+                stage_facts.not_found = max(0, facts_total - stage_facts.found)
+                stage_facts.message = f"AudioDB: {label}"
+                eta = job.calculate_eta_seconds(IndexStage.FACTS)
+                asyncio.create_task(self._notify_progress(job, {
+                    "stage": IndexStage.FACTS.value,
+                    "current": combined,
+                    "total": facts_total,
+                    "message": stage_facts.message,
+                    "found": stage_facts.found,
+                    "not_found": stage_facts.not_found,
+                    "eta_seconds": eta,
+                }))
+
+            if facts_all_cached and facts_total > 0:
+                logger.info("[LibraryService] All facts cached, skipping FACTS fetches")
+                # Stage stays RUNNING; audiodb still runs unconditionally below.
+                stage_facts.message = "Факты из кеша"
                 await self._notify_progress(job, {
                     "stage": IndexStage.FACTS.value,
-                    "stage_status": IndexStatus.COMPLETED.value,
-                    "current": facts_total,
+                    "current": 0,
                     "total": facts_total,
                     "message": stage_facts.message,
                 })
             elif facts_total == 0:
+                # No artists/songs at all — nothing for audiodb either.
                 stage_facts.status = IndexStatus.COMPLETED
                 stage_facts.message = "Нет данных"
 
@@ -277,10 +304,6 @@ class LibraryService:
                 })
             else:
                 # Launch facts fetches with progress callbacks
-                facts_progress = {"artists": 0, "songs": 0, "audiodb": 0}
-                facts_found = {"artists": 0, "songs": 0, "audiodb": 0}
-                facts_state = {"error": None}
-
                 def on_artist_facts_progress(current: int, total: int, label: str, found: bool):
                     facts_progress["artists"] = current
                     if found:
@@ -288,7 +311,7 @@ class LibraryService:
                     combined = sum(facts_progress.values())
                     stage_facts.current = combined
                     stage_facts.found = sum(facts_found.values())
-                    stage_facts.not_found = facts_total - stage_facts.found
+                    stage_facts.not_found = max(0, facts_total - stage_facts.found)
                     stage_facts.message = f"Факты: {label}"
                     eta = job.calculate_eta_seconds(IndexStage.FACTS)
                     asyncio.create_task(self._notify_progress(job, {
@@ -308,7 +331,7 @@ class LibraryService:
                     combined = sum(facts_progress.values())
                     stage_facts.current = combined
                     stage_facts.found = sum(facts_found.values())
-                    stage_facts.not_found = facts_total - stage_facts.found
+                    stage_facts.not_found = max(0, facts_total - stage_facts.found)
                     stage_facts.message = f"Факты: {label}"
                     eta = job.calculate_eta_seconds(IndexStage.FACTS)
                     asyncio.create_task(self._notify_progress(job, {
@@ -320,29 +343,6 @@ class LibraryService:
                         "not_found": stage_facts.not_found,
                         "eta_seconds": eta,
                     }))
-
-                def on_audiodb_progress(current: int, total: int, label: str, found: bool):
-                    facts_progress["audiodb"] = current
-                    if found:
-                        facts_found["audiodb"] += 1
-                    combined = sum(facts_progress.values())
-                    stage_facts.current = combined
-                    stage_facts.found = sum(facts_found.values())
-                    stage_facts.not_found = facts_total - stage_facts.found
-                    stage_facts.message = f"AudioDB: {label}"
-                    eta = job.calculate_eta_seconds(IndexStage.FACTS)
-                    asyncio.create_task(self._notify_progress(job, {
-                        "stage": IndexStage.FACTS.value,
-                        "current": combined,
-                        "total": facts_total,
-                        "message": stage_facts.message,
-                        "found": stage_facts.found,
-                        "not_found": stage_facts.not_found,
-                        "eta_seconds": eta,
-                    }))
-
-                artist_facts_result: Dict[str, str] = {}
-                song_facts_result: Dict[str, str] = {}
 
                 try:
                     facts_task = asyncio.create_task(
@@ -358,14 +358,6 @@ class LibraryService:
                             progress_callback=on_song_facts_progress,
                         ),
                         name="song-facts",
-                    )
-                    from app.services.audiodb_service import fetch_audiodb_for_artists
-                    audiodb_task = asyncio.create_task(
-                        fetch_audiodb_for_artists(
-                            unique_artists, collection_name,
-                            progress_callback=on_audiodb_progress,
-                        ),
-                        name="audiodb-enrich",
                     )
                     logger.info("[LibraryService] Launched facts fetch for %d artists, %d songs",
                                 len(unique_artists), len(unique_songs))
@@ -388,31 +380,55 @@ class LibraryService:
                         song_facts_task.cancel()
                         if not facts_state["error"]:
                             facts_state["error"] = str(e)
-
-                    try:
-                        await asyncio.wait_for(audiodb_task, timeout=300)
-                        logger.info("[LibraryService] AudioDB enrichment fetched")
-                    except (asyncio.TimeoutError, Exception) as e:
-                        logger.warning("[LibraryService] AudioDB enrichment timed out or failed: %s", e)
-                        audiodb_task.cancel()
-                        if not facts_state["error"]:
-                            facts_state["error"] = str(e)
                 except Exception as e:
                     logger.warning("[LibraryService] Facts stage failed (non-critical): %s", e)
                     facts_state["error"] = str(e)
 
-                facts_found = len(artist_facts_result) + len(song_facts_result)
-                facts_not_found = facts_total - facts_found
+            # AudioDB enrichment runs independently of the facts cache check —
+            # idempotent per-artist via audiodb_fetched_at, so re-running on a
+            # fully-cached collection just confirms no new work is needed.
+            if unique_artists:
+                from app.services.audiodb_service import fetch_audiodb_for_artists
+                audiodb_task = asyncio.create_task(
+                    fetch_audiodb_for_artists(
+                        unique_artists, collection_name,
+                        progress_callback=on_audiodb_progress,
+                    ),
+                    name="audiodb-enrich",
+                )
+                try:
+                    audiodb_result = await asyncio.wait_for(audiodb_task, timeout=300)
+                    logger.info("[LibraryService] AudioDB enrichment fetched: %d artists",
+                                sum(1 for v in (audiodb_result or {}).values() if v))
+                except (asyncio.TimeoutError, Exception) as e:
+                    logger.warning("[LibraryService] AudioDB enrichment timed out or failed: %s", e)
+                    audiodb_task.cancel()
+                    audiodb_result = {}
+                    if not facts_state["error"]:
+                        facts_state["error"] = str(e)
+
+            # Emit a single COMPLETED notify covering facts + audiodb (unless
+            # facts_total == 0, which already marked the stage complete above).
+            if facts_total > 0:
+                audiodb_found_count = sum(1 for v in (audiodb_result or {}).values() if v)
+                facts_found_total = (
+                    len(artist_facts_result) + len(song_facts_result) + audiodb_found_count
+                )
+                facts_not_found = max(0, facts_total - facts_found_total)
 
                 stage_facts.status = IndexStatus.COMPLETED
                 stage_facts.current = facts_total
                 stage_facts.completed_at = time.time()
-                stage_facts.found = facts_found
+                stage_facts.found = facts_found_total
                 stage_facts.not_found = facts_not_found
                 if facts_state["error"]:
                     stage_facts.message = f"Частично: {facts_state['error']}"
+                elif facts_all_cached and audiodb_found_count == 0:
+                    stage_facts.message = "Факты из кеша"
                 else:
-                    stage_facts.message = f"Факты: {facts_found} найдено из {facts_total}"
+                    stage_facts.message = (
+                        f"Факты: {facts_found_total} найдено из {facts_total}"
+                    )
 
                 await self._notify_progress(job, {
                     "stage": IndexStage.FACTS.value,
@@ -420,7 +436,7 @@ class LibraryService:
                     "current": stage_facts.current,
                     "total": facts_total,
                     "message": stage_facts.message,
-                    "found": facts_found,
+                    "found": facts_found_total,
                     "not_found": facts_not_found,
                     "stage_error": facts_state["error"],
                 })
