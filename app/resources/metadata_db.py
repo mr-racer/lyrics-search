@@ -787,6 +787,52 @@ class MetadataDB:
             for r in rows
         ]
 
+    @classmethod
+    def get_listening_total(cls, collection_name: str) -> tuple[float, str | None]:
+        """Return (total_played_sec, first_played_iso_or_None)."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT COALESCE(SUM(played_sec), 0), MIN(played_at) "
+            "FROM playback_events WHERE collection_name = ?",
+            (collection_name,),
+        ).fetchone()
+        first_played = row[1]
+        first_played_iso = (
+            first_played.isoformat() if hasattr(first_played, "isoformat") else
+            (str(first_played) if first_played is not None else None)
+        )
+        return float(row[0] or 0), first_played_iso
+
+    @classmethod
+    def get_top_played_track(cls, collection_name: str) -> tuple[str, int] | None:
+        """Return (track_id, play_count_non_skipped) for the most-played track, or None."""
+        conn = cls._connect()
+        row = conn.execute(
+            """SELECT track_id, COUNT(*) AS plays
+               FROM playback_events
+               WHERE collection_name = ? AND skipped_early = 0
+               GROUP BY track_id
+               ORDER BY plays DESC
+               LIMIT 1""",
+            (collection_name,),
+        ).fetchone()
+        return (row[0], int(row[1])) if row else None
+
+    @classmethod
+    def get_peak_hour(cls, collection_name: str) -> int | None:
+        """Return the most-frequent hour-of-day (0-23) across all non-skipped events, or None."""
+        conn = cls._connect()
+        row = conn.execute(
+            """SELECT CAST(strftime('%H', played_at) AS INT) AS h, COUNT(*) AS n
+               FROM playback_events
+               WHERE collection_name = ? AND skipped_early = 0
+               GROUP BY h
+               ORDER BY n DESC
+               LIMIT 1""",
+            (collection_name,),
+        ).fetchone()
+        return int(row[0]) if row else None
+
     # ── AI Indexing jobs (Plan 3 Task 11) ──
 
     @classmethod

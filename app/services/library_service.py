@@ -35,6 +35,16 @@ def _slugify_artist_for_album(name: str) -> str:
     return re.sub(r'[^a-z0-9]+', '-', (name or '').lower()).strip('-')
 
 
+def _label_peak_hour(hour: int, lang: str) -> str:
+    if 5 <= hour <= 11:
+        return "утра" if lang == "ru" else "mornings"
+    if 12 <= hour <= 17:
+        return "дня" if lang == "ru" else "afternoons"
+    if 18 <= hour <= 22:
+        return "вечера" if lang == "ru" else "evenings"
+    return "ночи" if lang == "ru" else "late nights"
+
+
 class LibraryService:
     """Index music files, extract metadata + lyrics, and upsert to Qdrant."""
 
@@ -926,6 +936,90 @@ class LibraryService:
         # Preserve like-order: re-sort by liked_at DESC (Qdrant.retrieve may not preserve)
         tracks.sort(key=lambda t: t.liked_at, reverse=True)
         return LikedSongsResponse(tracks=tracks, collection_name=collection_name)
+
+    @classmethod
+    def get_listening_stats(
+        cls, *, qdrant_client, collection_name: str, lang: str = "en",
+    ):
+        """Aggregate listening summary for the Library overhaul UI.
+
+        Combines:
+          - Total seconds listened (sum of played_sec, all events).
+          - Top track: most non-skipped plays; payload joined from Qdrant.
+          - Top artist: per-artist sum of non-skipped plays via DB+payload join.
+          - Peak hour: hour-of-day with most non-skipped plays, localised label.
+        """
+        from app.domain.models import (
+            ListeningStatsResponse, TopTrackBrief, TopArtistBrief, PeakHour,
+        )
+        total_sec, since = MetadataDB.get_listening_total(collection_name)
+        top_track_row = MetadataDB.get_top_played_track(collection_name)
+        peak_hour_int = MetadataDB.get_peak_hour(collection_name)
+
+        top_track = None
+        top_artist = None
+        if top_track_row:
+            tid, plays = top_track_row
+            try:
+                points = qdrant_client.retrieve(
+                    collection_name=collection_name, ids=[tid],
+                    with_payload=True, with_vectors=False,
+                )
+            except Exception:
+                points = []
+            if points:
+                pl = points[0].payload or {}
+                top_track = TopTrackBrief(
+                    track_id=tid,
+                    title=pl.get("title") or "—",
+                    artist=pl.get("artist") or "—",
+                    play_count=plays,
+                )
+
+        # Top artist — aggregate non-skipped plays per artist by joining DB + payload
+        conn = MetadataDB._connect()
+        rows = conn.execute(
+            "SELECT track_id, COUNT(*) FROM playback_events "
+            "WHERE collection_name = ? AND skipped_early = 0 "
+            "GROUP BY track_id",
+            (collection_name,),
+        ).fetchall()
+        if rows:
+            counts_by_id = {r[0]: int(r[1]) for r in rows}
+            try:
+                points = qdrant_client.retrieve(
+                    collection_name=collection_name,
+                    ids=list(counts_by_id.keys()),
+                    with_payload=["artist"],
+                    with_vectors=False,
+                )
+            except Exception:
+                points = []
+            artist_counts: dict[str, int] = {}
+            for p in points:
+                a = (p.payload or {}).get("artist") or ""
+                if a:
+                    artist_counts[a] = artist_counts.get(a, 0) + counts_by_id.get(str(p.id), 0)
+            if artist_counts:
+                top_artist_name = max(artist_counts.items(), key=lambda kv: kv[1])[0]
+                top_artist = TopArtistBrief(
+                    name=top_artist_name,
+                    slug=_slugify_artist_for_album(top_artist_name),
+                    play_count=artist_counts[top_artist_name],
+                )
+
+        peak_hour = None
+        if peak_hour_int is not None:
+            label = _label_peak_hour(peak_hour_int, lang)
+            peak_hour = PeakHour(hour=peak_hour_int, label=label)
+
+        return ListeningStatsResponse(
+            total_seconds_listened=int(total_sec),
+            since=since,
+            top_track=top_track,
+            top_artist=top_artist,
+            peak_hour=peak_hour,
+        )
 
     # ── Helpers ──
 
