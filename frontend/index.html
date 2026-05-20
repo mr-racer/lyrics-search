@@ -5309,6 +5309,77 @@ function LikedSongsTab({ tracks, isDark, lang, onPlayTrack, navigateToArtist, on
   );
 }
 
+// ─── formatRelativeTime helper ────────────────────────────────────────────────
+function formatRelativeTime(iso, lang) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const now = new Date();
+  const diffMin = Math.floor((now - d) / 60000);
+  if (diffMin < 1)  return lang==='ru' ? 'только что' : 'just now';
+  if (diffMin < 60) return lang==='ru' ? `${diffMin} мин назад` : `${diffMin}m ago`;
+  const sameDay = d.toDateString() === now.toDateString();
+  if (sameDay) {
+    const hh = String(d.getHours()).padStart(2,'0');
+    const mm = String(d.getMinutes()).padStart(2,'0');
+    return lang==='ru' ? `сегодня ${hh}:${mm}` : `today ${hh}:${mm}`;
+  }
+  const yesterday = new Date(now); yesterday.setDate(now.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return lang==='ru' ? 'вчера' : 'yesterday';
+  return d.toLocaleDateString(lang==='ru'?'ru-RU':'en-US', { month:'short', day:'numeric' });
+}
+
+// ─── RECENTLY PLAYED TAB ──────────────────────────────────────────────────────
+function RecentlyPlayedTab({ tracks, sort, onSortChange, isDark, lang, onPlayTrack, navigateToArtist, onAlbumClick, onToggleLike, likedMap, currentTrackId }) {
+  const c = useColors(isDark);
+  if (!tracks || tracks.length === 0) {
+    return <div style={{ padding:'40px 20px', textAlign:'center', color:c.textSubtle, fontSize:'13px' }}>{lang==='ru' ? 'История пуста — выбери что-нибудь и сыграй' : 'No playback history yet — pick something and play'}</div>;
+  }
+  const sortOpts = [
+    {id:'last_played', label: lang==='ru' ? 'недавно' : 'recent'},
+    {id:'play_count',  label: lang==='ru' ? 'плеи ↓' : 'plays ↓'},
+  ];
+  const sorted = [...tracks].sort((a, b) => {
+    if (sort === 'play_count') return (b.play_count||0) - (a.play_count||0);
+    return new Date(b.last_played) - new Date(a.last_played);
+  });
+  return (
+    <>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'4px 0 10px', fontSize:'11px' }}>
+        <span className="mono" style={{ color:c.textSubtle, letterSpacing:'0.06em' }}>{tracks.length} {lang==='ru'?'треков · dedup':'tracks · dedup'}</span>
+        <div style={{ display:'flex', gap:'5px' }}>
+          {sortOpts.map(o => (
+            <button key={o.id} onClick={() => onSortChange(o.id)}
+              className="mono"
+              style={{
+                padding:'3px 9px', borderRadius:'12px', fontSize:'10px', cursor:'pointer',
+                background: sort===o.id ? 'rgba(120,80,200,.18)' : 'rgba(255,255,255,.04)',
+                color: sort===o.id ? '#bba8ff' : c.textMuted,
+                border:'none',
+              }}>{o.label}</button>
+          ))}
+        </div>
+      </div>
+      <div style={{ display:'flex', flexDirection:'column', gap:'6px' }}>
+        {sorted.map(t => (
+          <LibraryGlassyRow
+            key={t.track_id}
+            track={t}
+            when={formatRelativeTime(t.last_played, lang)}
+            playCount={t.play_count}
+            isDark={isDark} lang={lang}
+            isLiked={!!likedMap[t.track_id]}
+            isCurrent={t.track_id === currentTrackId}
+            onClick={() => onPlayTrack && onPlayTrack({ track: t }, tracks.map(tt => ({ track: tt })))}
+            onArtistClick={(name) => { const slug = slugifyArtistName(name); if (slug && navigateToArtist) navigateToArtist(slug); }}
+            onAlbumClick={(name) => onAlbumClick && onAlbumClick(name)}
+            onToggleLike={onToggleLike}
+          />
+        ))}
+      </div>
+    </>
+  );
+}
+
 // ─── LIBRARY SECTION ──────────────────────────────────────────────────────────
 function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateToArtist }) {
   const c = useColors(isDark);
@@ -5418,9 +5489,21 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
             />
           )}
           {activeTab === 'recent' && (
-            <div style={{ minHeight:'200px', display:'grid', placeItems:'center', color:c.textSubtle, fontFamily:"'JetBrains Mono', monospace", fontSize:'11px', letterSpacing:'.12em' }}>
-              [ RECENT TAB — coming in Task 13 ]
-            </div>
+            <RecentlyPlayedTab
+              tracks={recentData?.tracks || []}
+              sort={recentSort}
+              onSortChange={setRecentSort}
+              isDark={isDark} lang={lang}
+              onPlayTrack={onPlayTrack}
+              navigateToArtist={navigateToArtist}
+              onAlbumClick={(albumTitle) => {
+                const found = (albumsData?.albums || []).find(a => a.album_title === albumTitle);
+                if (found) setAlbumModal(found);
+              }}
+              onToggleLike={toggleLike}
+              likedMap={likedMap}
+              currentTrackId={null}
+            />
           )}
 
         </div>
