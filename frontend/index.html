@@ -7289,7 +7289,7 @@ const TRACK_CHAT_SUGGESTED_PROMPTS = [
   { ru: 'Какие песни семплирует?', en: 'What songs does it sample?' },
 ];
 
-function AIChatDrawer({ isOpen, onClose, track, lang, isDark, activeCollection }) {
+function AIChatDrawer({ isOpen, onClose, track, lang, isDark, activeCollection, showToast }) {
   const c = useColors(isDark);
   const trackId = track?.track_id || null;
   const { messages, sendMessage, clearChat } = useTrackChat(trackId);
@@ -7341,60 +7341,63 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, activeCollection }
     setInput(lang === 'ru' ? prompt.ru : prompt.en);
   };
 
+  const handleClearChat = () => {
+    clearChat();
+    if (showToast) {
+      showToast(lang === 'ru' ? 'Чат очищен' : 'Chat cleared');
+    }
+  };
+
   return (
     <>
-      {/* Drawer panel — anchored absolute inside the Player's right column.
-          Slides in from the right edge of that column, fully covering the
-          facts+queue area while open. No backdrop — the column itself IS
-          the surface being replaced. */}
+      {/* Drawer panel — anchored absolute inside .queue-chat-area.
+          Slides UP from beneath the queue (translateY 100%↔0), so FactsRail
+          stays visible above. Backdrop-filter blur gives the glassy feel
+          during the ~280ms transition. */}
       <div
-        className="panel-v3"
         style={{
           position: 'absolute', inset: 0,
           display: 'flex', flexDirection: 'column',
-          transform: isOpen ? 'translateX(0)' : 'translateX(110%)',
-          transition: 'transform 320ms cubic-bezier(0.16, 1, 0.3, 1)',
+          transform: isOpen ? 'translateY(0)' : 'translateY(100%)',
+          opacity: isOpen ? 1 : 0,
+          transition: 'transform 280ms cubic-bezier(0.16, 1, 0.3, 1), opacity 280ms cubic-bezier(0.16, 1, 0.3, 1)',
           zIndex: 50,
           borderRadius: 14,
           pointerEvents: isOpen ? 'auto' : 'none',
+          background: isDark ? 'rgba(20, 20, 26, 0.85)' : 'rgba(248, 248, 250, 0.85)',
+          backdropFilter: 'blur(14px) saturate(140%)',
+          WebkitBackdropFilter: 'blur(14px) saturate(140%)',
+          border: `1px solid ${c.border}`,
+          boxShadow: isDark
+            ? '0 8px 32px rgba(0,0,0,0.35)'
+            : '0 8px 32px rgba(20,20,32,0.10)',
         }}
       >
-        {/* Header */}
+        {/* Slim header — 32px row with title label + close. ↺ clear-chat
+            added in Task 4. Cover/title/artist/year intentionally dropped —
+            they're visible in the left column already. */}
         <div style={{
-          display: 'flex', alignItems: 'center', gap: '12px',
-          padding: '16px 18px', borderBottom: `1px solid ${c.border}`,
+          display: 'flex', alignItems: 'center', gap: '8px',
+          padding: '8px 14px', borderBottom: `1px solid ${c.border}`,
+          flexShrink: 0,
         }}>
-          {track.cover_art_path && (
-            <img src={track.cover_art_path.startsWith('http') ? track.cover_art_path : `${API}${track.cover_art_path}`} alt=""
-              style={{ width: '40px', height: '40px', borderRadius: '8px', objectFit: 'cover' }} />
+          <span style={{ fontSize: '14px' }} aria-hidden>✨</span>
+          <span style={{ flex: 1, fontSize: '13px', fontWeight: 600, color: c.text, letterSpacing: '-0.01em' }}>
+            {lang === 'ru' ? 'Чат по треку' : 'Track chat'}
+          </span>
+          {messages.length > 0 && (
+            <button onClick={handleClearChat}
+              className="pill-v3"
+              aria-label={lang === 'ru' ? 'Новый чат' : 'New chat'}
+              title={lang === 'ru' ? 'Новый чат' : 'New chat'}
+              style={{ padding: '3px 9px', fontSize: '13px', cursor: 'pointer' }}>↺</button>
           )}
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 600, fontSize: '14px', color: c.text,
-                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {track.title || '—'}
-            </div>
-            <div style={{ fontSize: '12px', color: c.textSubtle,
-                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {track.artist || '—'}{track.year ? ` · ${track.year}` : ''}
-            </div>
-          </div>
           <button onClick={onClose}
             className="pill-v3"
-            style={{ padding: '4px 10px', fontSize: '14px', cursor: 'pointer' }}>✕</button>
+            aria-label={lang === 'ru' ? 'Закрыть' : 'Close'}
+            title={lang === 'ru' ? 'Закрыть' : 'Close'}
+            style={{ padding: '3px 9px', fontSize: '13px', cursor: 'pointer' }}>✕</button>
         </div>
-
-        {/* Suggested prompts (only when empty chat) */}
-        {messages.length === 0 && (
-          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', padding: '10px 18px' }}>
-            {TRACK_CHAT_SUGGESTED_PROMPTS.map((p, i) => (
-              <button key={i} onClick={() => handlePromptClick(p)}
-                className="pill-v3"
-                style={{ padding: '5px 11px', fontSize: '12px', cursor: 'pointer' }}>
-                {lang === 'ru' ? p.ru : p.en}
-              </button>
-            ))}
-          </div>
-        )}
 
         {/* Messages */}
         <div ref={endRef} style={{
@@ -7433,10 +7436,28 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, activeCollection }
           ))}
         </div>
 
+        {/* Suggested prompts — always visible, just above input. Persistent
+            "quick actions" pattern (Perplexity / ChatGPT quick-actions). */}
+        <div style={{
+          display: 'flex', gap: '6px', flexWrap: 'wrap',
+          padding: '8px 18px',
+          borderTop: `1px solid ${c.border}`,
+          flexShrink: 0,
+        }}>
+          {TRACK_CHAT_SUGGESTED_PROMPTS.map((p, i) => (
+            <button key={i} onClick={() => handlePromptClick(p)}
+              className="pill-v3"
+              style={{ padding: '4px 10px', fontSize: '12px', cursor: 'pointer' }}>
+              {lang === 'ru' ? p.ru : p.en}
+            </button>
+          ))}
+        </div>
+
         {/* Input */}
         <div style={{
           display: 'flex', gap: '8px', alignItems: 'center',
           padding: '12px 18px', borderTop: `1px solid ${c.border}`,
+          flexShrink: 0,
         }}>
           <input
             value={input}
@@ -8382,11 +8403,21 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
           {/* Separator between facts and queue */}
           <div style={{ borderTop: `1px solid ${isDark ? '#2a2a32' : 'rgba(22,22,32,0.08)'}` }} />
 
-          {/* QUEUE block — flex:1 when there are items (scrolls to fill);
-              flex:'0 0 auto' when empty so the column's justifyContent:'center'
-              can actually center the small empty-state content. */}
-          <div style={{
+          {/* Queue + Chat overlay area — anchors AIChatDrawer's absolute
+              positioning so the drawer overlays ONLY this region, leaving
+              FactsRail above untouched. overflow:hidden clips the drawer
+              during its slide-up animation. */}
+          <div className="queue-chat-area" style={{
             flex: playlist.length === 0 ? '0 0 auto' : 1,
+            position: 'relative',
+            overflow: 'hidden',
+            minHeight: 0,
+            display: 'flex',
+            flexDirection: 'column',
+          }}>
+          {/* QUEUE block (inner) — fills the wrapper. */}
+          <div style={{
+            flex: 1,
             display: 'flex',
             flexDirection: 'column',
             overflow: 'hidden',
@@ -8493,8 +8524,8 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
             </div>
           </div>
 
-          {/* AI Chat drawer — slides in over the right column (facts + queue),
-              replacing them visually until closed. */}
+          {/* AI Chat drawer — overlays ONLY the queue-chat-area wrapper
+              above. Slides up from bottom; FactsRail stays visible. */}
           <AIChatDrawer
             isOpen={drawerOpen}
             onClose={() => setDrawerOpen(false)}
@@ -8502,7 +8533,9 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
             lang={lang}
             isDark={isDark}
             activeCollection={activeCollection}
+            showToast={showToast}
           />
+          </div>
         </div>
       </div>
 
