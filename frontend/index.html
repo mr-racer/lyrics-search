@@ -5185,11 +5185,148 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
 
 // Stub components — will be properly implemented in Tasks 8-12. Stubs exist so
 // LibrarySection parses and renders without crashing during incremental work.
-function LibraryHeroLine() { return <div style={{padding:'10px 14px', color:'#aaa'}}>[hero line]</div>; }
-function DistributionsToggle({ open, onToggle, lang }) {
-  return <button onClick={onToggle} style={{padding:'4px 14px', alignSelf:'center', fontSize:'11px'}}>{lang==='ru' ? 'Распределения' : 'Distributions'} {open ? '▴' : '▾'}</button>;
+function LibraryHeroLine({ stats, albumCount, isDark, lang, collection }) {
+  const c = useColors(isDark);
+  const total = stats?.total_tracks ?? '—';
+  const artists = stats?.unique_artists ?? '—';
+  const genres = stats?.unique_genres ?? '—';
+  const yr = stats?.year_range;
+  const yearText = yr ? `${yr.min}—${yr.max}` : '—';
+  const dot = <span style={{ color: 'rgba(255,255,255,.18)', margin:'0 7px' }}>·</span>;
+  return (
+    <div style={{
+      background: 'linear-gradient(90deg, rgba(120,80,200,.15) 0%, rgba(120,80,200,.04) 60%, transparent 100%)',
+      border: `1px solid ${c.border}`,
+      borderRadius: '14px',
+      padding: '12px 18px',
+      backdropFilter: 'blur(20px)',
+      WebkitBackdropFilter: 'blur(20px)',
+    }}>
+      <div className="mono" style={{ fontSize:'10px', color:c.textSubtle, letterSpacing:'0.22em', textTransform:'uppercase' }}>
+        {lang==='ru' ? 'РАЗДЕЛ 03 · БИБЛИОТЕКА' : 'SECTION 03 · LIBRARY'} · {collection || '—'}
+      </div>
+      <div className="mono" style={{ fontSize:'13px', color:c.textMuted, letterSpacing:'0.04em', marginTop:'2px' }}>
+        <b style={{ color:c.text, fontWeight:600 }}>{total.toLocaleString ? total.toLocaleString() : total}</b> {lang==='ru' ? 'треков' : 'tracks'}
+        {dot}<b style={{ color:c.text, fontWeight:600 }}>{albumCount}</b> {lang==='ru' ? 'альбомов' : 'albums'}
+        {dot}<b style={{ color:c.text, fontWeight:600 }}>{artists}</b> {lang==='ru' ? 'артистов' : 'artists'}
+        {dot}<b style={{ color:c.text, fontWeight:600 }}>{genres}</b> {lang==='ru' ? 'жанров' : 'genres'}
+        {dot}<b style={{ color:c.text, fontWeight:600 }}>{yearText}</b>
+      </div>
+    </div>
+  );
 }
-function DistributionsPanel() { return <div style={{padding:'10px 14px', color:'#888'}}>[distributions]</div>; }
+function DistributionsToggle({ open, onToggle, isDark, lang }) {
+  const c = useColors(isDark);
+  return (
+    <button
+      onClick={onToggle}
+      className="mono"
+      style={{
+        margin: '0 auto',
+        display: 'flex', alignItems:'center', gap:'6px',
+        padding: '4px 14px',
+        fontSize: '10px', color: c.textMuted, letterSpacing:'0.12em',
+        background: 'rgba(255,255,255,.04)',
+        border: `1px solid ${c.border}`,
+        borderTop: 'none',
+        borderRadius: '0 0 10px 10px',
+        cursor: 'pointer',
+        transition: 'all 0.18s',
+      }}
+      onMouseEnter={e => e.currentTarget.style.color = c.text}
+      onMouseLeave={e => e.currentTarget.style.color = c.textMuted}
+    >
+      {lang==='ru' ? 'РАСПРЕДЕЛЕНИЯ' : 'DISTRIBUTIONS'} <span style={{ display:'inline-block', transform: open ? 'rotate(180deg)' : 'rotate(0)', transition:'transform 0.25s' }}>▾</span>
+    </button>
+  );
+}
+function DistributionsPanel({ stats, isDark, lang }) {
+  const c = useColors(isDark);
+  const decades = stats?.decades || [];
+  const maxDec = decades.reduce((m, d) => Math.max(m, d.count || 0), 0) || 1;
+  const peakDec = decades.reduce((p, d) => (d.count > (p?.count || 0) ? d : p), null);
+  const genres = (stats?.genres || []).slice(0, 5);
+  const maxGenre = genres.reduce((m, g) => Math.max(m, g.count || 0), 0) || 1;
+  const artists = (stats?.top_artists || []).slice(0, 5);
+  const maxArtist = artists.reduce((m, a) => Math.max(m, a.count || 0), 0) || 1;
+  const colLbl = { fontFamily:"'JetBrains Mono', monospace", fontSize:'9px', color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase', marginBottom:'10px' };
+
+  return (
+    <div style={{
+      background: isDark ? 'rgba(15,12,25,.5)' : 'rgba(255,255,255,.5)',
+      border: `1px solid ${c.border}`, borderRadius:'12px',
+      backdropFilter:'blur(20px)', WebkitBackdropFilter:'blur(20px)',
+      padding:'14px 18px',
+      display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'22px',
+      animation: 'fadeIn 0.28s cubic-bezier(.22,.9,.3,1)',
+    }}>
+      {/* Decades */}
+      <div>
+        <div style={colLbl}>{lang==='ru' ? 'ПО ЭПОХАМ' : 'BY DECADE'}</div>
+        <div style={{ display:'flex', alignItems:'flex-end', gap:'5px', height:'90px' }}>
+          {decades.map((d, i) => {
+            const h = Math.round((d.count / maxDec) * 70);
+            const isPeak = peakDec && d.decade === peakDec.decade;
+            const hue = 40 + (i / Math.max(1, decades.length-1)) * 240;
+            return (
+              <div key={d.decade} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:'3px' }}>
+                <div style={{
+                  width:'100%', height: `${h}px`, minHeight:'2px',
+                  borderRadius:'3px 3px 0 0',
+                  background: `linear-gradient(180deg, oklch(72% 0.16 ${hue}), oklch(56% 0.18 ${hue}))`,
+                  boxShadow: isPeak ? '0 0 8px oklch(70% 0.18 60 / 0.5)' : 'none',
+                }} />
+                <div className="mono" style={{ fontSize:'9px', color: isPeak ? c.amber : c.textSubtle, letterSpacing:'0.06em' }}>{d.decade}</div>
+                <div className="mono" style={{ fontSize:'9px', color: c.textSubtle }}>{d.count}</div>
+              </div>
+            );
+          })}
+          {decades.length === 0 && <div style={{ color:c.textSubtle, fontSize:11, fontStyle:'italic' }}>{lang==='ru'?'Нет данных':'No data'}</div>}
+        </div>
+      </div>
+
+      {/* Top genres */}
+      <div>
+        <div style={colLbl}>{lang==='ru' ? 'ПО ЖАНРАМ · TOP 5' : 'BY GENRE · TOP 5'}</div>
+        {genres.map((g, i) => {
+          const hue = 270 + i * 12;
+          return (
+            <div key={g.genre} style={{ marginBottom:'8px' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', fontSize:'12px' }}>
+                <span style={{ color:c.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'65%' }}>{g.genre}</span>
+                <span className="mono" style={{ color:c.textMuted, fontSize:'11px' }}>{g.count} · {g.pct}%</span>
+              </div>
+              <div style={{ height:'5px', borderRadius:'3px', background:'rgba(255,255,255,.05)', overflow:'hidden', marginTop:'4px' }}>
+                <div style={{ height:'100%', width:`${Math.round((g.count/maxGenre)*100)}%`, background:`linear-gradient(90deg, oklch(60% 0.18 ${hue}), oklch(70% 0.16 ${hue+25}))`, borderRadius:'3px' }} />
+              </div>
+            </div>
+          );
+        })}
+        {genres.length === 0 && <div style={{ color:c.textSubtle, fontSize:11, fontStyle:'italic' }}>{lang==='ru'?'Нет данных':'No data'}</div>}
+      </div>
+
+      {/* Top artists */}
+      <div>
+        <div style={colLbl}>{lang==='ru' ? 'ПО АРТИСТАМ · TOP 5' : 'BY ARTIST · TOP 5'}</div>
+        {artists.map((a, i) => {
+          const hue = 200 + i * 25;
+          return (
+            <div key={a.artist} style={{ marginBottom:'8px' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', fontSize:'12px' }}>
+                <span style={{ color:c.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'65%' }}>{a.artist}</span>
+                <span className="mono" style={{ color:c.textMuted, fontSize:'11px' }}>{a.count} tracks</span>
+              </div>
+              <div style={{ height:'5px', borderRadius:'3px', background:'rgba(255,255,255,.05)', overflow:'hidden', marginTop:'4px' }}>
+                <div style={{ height:'100%', width:`${Math.round((a.count/maxArtist)*100)}%`, background:`linear-gradient(90deg, oklch(60% 0.18 ${hue}), oklch(70% 0.16 ${hue+25}))`, borderRadius:'3px' }} />
+              </div>
+            </div>
+          );
+        })}
+        {artists.length === 0 && <div style={{ color:c.textSubtle, fontSize:11, fontStyle:'italic' }}>{lang==='ru'?'Нет данных':'No data'}</div>}
+      </div>
+    </div>
+  );
+}
 function ListeningWidgetsRow() { return <div style={{padding:'10px 14px', color:'#888'}}>[widgets]</div>; }
 function LibraryTabsStrip({ active, onChange, counts, lang }) {
   return (
