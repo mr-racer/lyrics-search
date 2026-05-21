@@ -107,3 +107,84 @@ def test_delete_playlist_cascades_to_tracks():
         "SELECT COUNT(*) FROM playlist_tracks WHERE playlist_id = ?", (pid,)
     ).fetchone()[0]
     assert remaining == 0
+
+
+def test_add_track_to_playlist_assigns_position():
+    pid = MetadataDB.create_playlist("col_a", "M", None)
+    p1 = MetadataDB.add_track_to_playlist(pid, "t1")
+    p2 = MetadataDB.add_track_to_playlist(pid, "t2")
+    p3 = MetadataDB.add_track_to_playlist(pid, "t3")
+    assert (p1, p2, p3) == (1, 2, 3)
+
+
+def test_add_duplicate_track_raises():
+    pid = MetadataDB.create_playlist("col_a", "M", None)
+    MetadataDB.add_track_to_playlist(pid, "t1")
+    with pytest.raises(Exception):
+        MetadataDB.add_track_to_playlist(pid, "t1")
+
+
+def test_list_playlist_tracks_returns_in_position_order():
+    pid = MetadataDB.create_playlist("col_a", "M", None)
+    MetadataDB.add_track_to_playlist(pid, "t1")
+    MetadataDB.add_track_to_playlist(pid, "t2")
+    MetadataDB.add_track_to_playlist(pid, "t3")
+    rows = MetadataDB.list_playlist_tracks(pid)
+    assert [r["track_id"] for r in rows] == ["t1", "t2", "t3"]
+    assert [r["position"] for r in rows] == [1, 2, 3]
+
+
+def test_remove_track_from_playlist_does_not_renumber():
+    pid = MetadataDB.create_playlist("col_a", "M", None)
+    MetadataDB.add_track_to_playlist(pid, "t1")
+    MetadataDB.add_track_to_playlist(pid, "t2")
+    MetadataDB.add_track_to_playlist(pid, "t3")
+    removed = MetadataDB.remove_track_from_playlist(pid, "t2")
+    assert removed is True
+    rows = MetadataDB.list_playlist_tracks(pid)
+    assert [r["track_id"] for r in rows] == ["t1", "t3"]
+    assert [r["position"] for r in rows] == [1, 3]
+
+
+def test_remove_missing_track_returns_false():
+    pid = MetadataDB.create_playlist("col_a", "M", None)
+    assert MetadataDB.remove_track_from_playlist(pid, "nope") is False
+
+
+def test_reorder_playlist_renumbers_dense():
+    pid = MetadataDB.create_playlist("col_a", "M", None)
+    MetadataDB.add_track_to_playlist(pid, "t1")
+    MetadataDB.add_track_to_playlist(pid, "t2")
+    MetadataDB.add_track_to_playlist(pid, "t3")
+    MetadataDB.reorder_playlist(pid, ["t3", "t1", "t2"])
+    rows = MetadataDB.list_playlist_tracks(pid)
+    assert [r["track_id"] for r in rows] == ["t3", "t1", "t2"]
+    assert [r["position"] for r in rows] == [1, 2, 3]
+
+
+def test_reorder_with_set_mismatch_raises_value_error():
+    pid = MetadataDB.create_playlist("col_a", "M", None)
+    MetadataDB.add_track_to_playlist(pid, "t1")
+    MetadataDB.add_track_to_playlist(pid, "t2")
+    with pytest.raises(ValueError) as exc:
+        MetadataDB.reorder_playlist(pid, ["t1", "t999"])
+    msg = str(exc.value)
+    assert "missing" in msg or "unexpected" in msg
+
+
+def test_track_exists_in_playlist():
+    pid = MetadataDB.create_playlist("col_a", "M", None)
+    MetadataDB.add_track_to_playlist(pid, "t1")
+    assert MetadataDB.track_in_playlist(pid, "t1") is True
+    assert MetadataDB.track_in_playlist(pid, "t999") is False
+
+
+def test_playlists_containing_track_for_collection():
+    p1 = MetadataDB.create_playlist("col_a", "A", None)
+    p2 = MetadataDB.create_playlist("col_a", "B", None)
+    p3 = MetadataDB.create_playlist("col_a", "C", None)
+    MetadataDB.create_playlist("col_b", "D", None)
+    MetadataDB.add_track_to_playlist(p1, "t1")
+    MetadataDB.add_track_to_playlist(p3, "t1")
+    ids = set(MetadataDB.playlists_containing_track("col_a", "t1"))
+    assert ids == {p1, p3}

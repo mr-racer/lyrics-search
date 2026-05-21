@@ -1444,3 +1444,110 @@ class MetadataDB:
         conn = cls._connect()
         conn.execute("DELETE FROM playlists WHERE id = ?", (playlist_id,))
         conn.commit()
+
+    @classmethod
+    def add_track_to_playlist(cls, playlist_id: int, track_id: str) -> int:
+        """Append track with position = max(position) + 1. Returns the new position.
+        Raises sqlite3.IntegrityError if already present (UNIQUE)."""
+        conn = cls._connect()
+        cur = conn.execute(
+            "SELECT COALESCE(MAX(position), 0) FROM playlist_tracks WHERE playlist_id = ?",
+            (playlist_id,),
+        )
+        next_pos = int(cur.fetchone()[0]) + 1
+        conn.execute(
+            "INSERT INTO playlist_tracks (playlist_id, track_id, position) VALUES (?, ?, ?)",
+            (playlist_id, track_id, next_pos),
+        )
+        conn.execute(
+            "UPDATE playlists SET updated_at = datetime('now') WHERE id = ?",
+            (playlist_id,),
+        )
+        conn.commit()
+        return next_pos
+
+    @classmethod
+    def remove_track_from_playlist(cls, playlist_id: int, track_id: str) -> bool:
+        """Returns True if a row was removed, False if no match."""
+        conn = cls._connect()
+        cur = conn.execute(
+            "DELETE FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?",
+            (playlist_id, track_id),
+        )
+        if cur.rowcount == 0:
+            conn.commit()
+            return False
+        conn.execute(
+            "UPDATE playlists SET updated_at = datetime('now') WHERE id = ?",
+            (playlist_id,),
+        )
+        conn.commit()
+        return True
+
+    @classmethod
+    def list_playlist_tracks(cls, playlist_id: int) -> list[dict]:
+        """Return playlist_tracks rows in position-ascending order."""
+        conn = cls._connect()
+        conn.row_factory = __import__("sqlite3").Row
+        try:
+            rows = conn.execute(
+                "SELECT playlist_id, track_id, position, added_at "
+                "FROM playlist_tracks WHERE playlist_id = ? ORDER BY position ASC",
+                (playlist_id,),
+            ).fetchall()
+            return [cls._row_to_dict(r) for r in rows]
+        finally:
+            conn.row_factory = None
+
+    @classmethod
+    def reorder_playlist(cls, playlist_id: int, track_ids: list[str]) -> None:
+        """Replace positions for the given playlist according to `track_ids` order.
+        Validates that `track_ids` is exactly the current member set. Raises ValueError on mismatch.
+        Renumbers densely 1..N inside a single transaction."""
+        conn = cls._connect()
+        current = {r["track_id"] for r in cls.list_playlist_tracks(playlist_id)}
+        requested = set(track_ids)
+        if len(track_ids) != len(requested):
+            raise ValueError("duplicate track_ids in reorder payload")
+        missing = current - requested
+        unexpected = requested - current
+        if missing or unexpected:
+            raise ValueError(
+                f"track_ids set mismatch (missing={sorted(missing)}, unexpected={sorted(unexpected)})"
+            )
+        try:
+            conn.execute("BEGIN")
+            for i, tid in enumerate(track_ids, start=1):
+                conn.execute(
+                    "UPDATE playlist_tracks SET position = ? WHERE playlist_id = ? AND track_id = ?",
+                    (i, playlist_id, tid),
+                )
+            conn.execute(
+                "UPDATE playlists SET updated_at = datetime('now') WHERE id = ?",
+                (playlist_id,),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    @classmethod
+    def track_in_playlist(cls, playlist_id: int, track_id: str) -> bool:
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT 1 FROM playlist_tracks WHERE playlist_id = ? AND track_id = ?",
+            (playlist_id, track_id),
+        ).fetchone()
+        return row is not None
+
+    @classmethod
+    def playlists_containing_track(cls, collection_name: str, track_id: str) -> list[int]:
+        """Return playlist ids in this collection that contain the given track."""
+        conn = cls._connect()
+        rows = conn.execute(
+            "SELECT p.id FROM playlists p "
+            "JOIN playlist_tracks pt ON pt.playlist_id = p.id "
+            "WHERE p.collection_name = ? AND pt.track_id = ?",
+            (collection_name, track_id),
+        ).fetchall()
+        return [int(r[0]) for r in rows]
