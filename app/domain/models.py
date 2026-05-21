@@ -1,7 +1,7 @@
 """Domain models for Music Explorer."""
 
 from typing import Literal, List, Optional, Annotated, Dict
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 
 
 class Fact(BaseModel):
@@ -507,3 +507,101 @@ class ListeningStatsResponse(BaseModel):
     top_track: Optional[TopTrackBrief] = None
     top_artist: Optional[TopArtistBrief] = None
     peak_hour: Optional[PeakHour] = None
+
+
+# ─── Plan 19: Custom Playlists ───────────────────────────────────────────
+
+
+class PlaylistTrack(BaseModel):
+    """One track inside a playlist, with resolved Qdrant metadata."""
+    track_id: str
+    position: int
+    added_at: str
+    title: str
+    artist: str
+    album: Optional[str] = None
+    year: Optional[int] = None
+    duration: Optional[float] = None
+    cover_art_path: Optional[str] = None
+
+
+class PlaylistSummary(BaseModel):
+    """List-view shape. cover_track_ids/cover_art_paths parallel-arrays for the mosaic."""
+    id: int
+    name: str
+    description: Optional[str] = None
+    track_count: int
+    cover_track_ids: list[str]
+    cover_art_paths: list[Optional[str]]
+    created_at: str
+    updated_at: str
+    # Populated only when GET /playlists?include_track_id=... is used (otherwise None)
+    contains_track: Optional[bool] = None
+
+
+class PlaylistDetail(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    collection_name: str
+    tracks: list[PlaylistTrack]
+    missing_track_ids: list[str]
+    created_at: str
+    updated_at: str
+
+
+class PlaylistCreate(BaseModel):
+    collection_name: str
+    name: str
+    description: Optional[str] = None
+
+    @field_validator("name")
+    @classmethod
+    def _strip_and_check_name(cls, v: str) -> str:
+        stripped = (v or "").strip()
+        if not stripped:
+            raise ValueError("name must not be empty")
+        if len(stripped) > 120:
+            raise ValueError("name too long (max 120 chars)")
+        return stripped
+
+    @field_validator("description")
+    @classmethod
+    def _check_desc(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        if len(v) > 1000:
+            raise ValueError("description too long (max 1000 chars)")
+        return v
+
+
+class PlaylistUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    # If True, description is set to NULL (because Pydantic can't tell "field absent" from "field=null" in dict).
+    clear_description: bool = False
+
+    @field_validator("name")
+    @classmethod
+    def _check(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("name must not be empty when provided")
+        if len(stripped) > 120:
+            raise ValueError("name too long (max 120 chars)")
+        return stripped
+
+
+class PlaylistTrackAdd(BaseModel):
+    track_id: str
+
+
+class PlaylistReorderRequest(BaseModel):
+    track_ids: list[str]
+
+
+class PlaylistsResponse(BaseModel):
+    playlists: list[PlaylistSummary]
+    collection_name: str
