@@ -3768,7 +3768,7 @@ function Segmented({ value, onChange, options, isDark, size='md', style } = {}) 
 }
 
 // ─── SCORE BREAKDOWN TOOLTIP ──────────────────────────────────────────────────
-function ScoreBreakdownTooltip({ hit, breakdown, isDark, onPlay, onToggleLike, isLiked, likeLoading }) {
+function ScoreBreakdownTooltip({ hit, breakdown, isDark, onPlay, onToggleLike, isLiked, likeLoading, onAddToPlaylist, lang }) {
   const c = useColors(isDark);
   if (!breakdown && !hit) return null;
   const rows = breakdown ? [
@@ -3809,6 +3809,12 @@ function ScoreBreakdownTooltip({ hit, breakdown, isDark, onPlay, onToggleLike, i
           disabled={likeLoading}
           style={{ padding:'4px 10px', fontSize:'11px', cursor: likeLoading ? 'wait' : 'pointer' }}
         >{isLiked ? '♥ Liked' : '♡ Like'}</button>
+        <button
+          className="pill-v3"
+          onClick={e => { e.stopPropagation(); onAddToPlaylist && onAddToPlaylist(hit.track?.track_id || hit.track_id, e.currentTarget); }}
+          style={{ padding:'4px 10px', fontSize:'11px', cursor:'pointer' }}
+          title={lang === 'ru' ? 'Добавить в плейлист' : 'Add to playlist'}
+        >＋ {lang === 'ru' ? 'В плейлист' : 'Add'}</button>
       </div>
     </div>
   );
@@ -4069,7 +4075,7 @@ function DecadeFiltersChips({ activeCollection, selectedRanges, onToggleRange, i
 }
 
 // ─── SEARCH SECTION (redesigned) ──────────────────────────────────────────────
-function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateToArtist, aiStatus }) {
+function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateToArtist, aiStatus, onAddToPlaylist }) {
   const c = useColors(isDark);
   const aiActive = !!(aiStatus && aiStatus.aiActive);
   const recent = useRecentSearches(activeCollection);
@@ -4582,6 +4588,8 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
                             onToggleLike={handleToggleLike}
                             isLiked={!!likedMap[hit.track?.track_id]}
                             likeLoading={!!likeLoading[hit.track?.track_id]}
+                            onAddToPlaylist={onAddToPlaylist}
+                            lang={lang}
                           />
                         )}
                       </div>
@@ -5920,7 +5928,7 @@ function PlaylistsTab({ listing, activePlaylistId, onOpenPlaylist, onCloseDetail
 }
 
 // ─── LIBRARY SECTION ──────────────────────────────────────────────────────────
-function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateToArtist, playerTrack }) {
+function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateToArtist, playerTrack, onAddToPlaylist, playlistsListing }) {
   const c = useColors(isDark);
 
   // ── Data fetching ─────────────────────────────────────────────────────
@@ -5937,10 +5945,9 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
   const [distOpen, setDistOpen] = useState(() => localStorage.getItem('library_distributions_open') === '1');
   const [albumModal, setAlbumModal] = useState(null);  // currently-open AlbumSummary
   const [likedMap, setLikedMap] = useState({});
-  const playlists = usePlaylists(activeCollection);
+  // playlistsListing is now provided by App-level usePlaylists (lifted in Plan 19 follow-up)
   const [activePlaylistId, setActivePlaylistId] = React.useState(null);
   const [showNewPlaylistModal, setShowNewPlaylistModal] = React.useState(false);
-  const [addToPopover, setAddToPopover] = React.useState(null);
 
   const toggleLike = async (track_id) => {
     const next = !(likedMap[track_id] !== false);   // default-true for items already in liked list
@@ -6007,7 +6014,7 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
           <LibraryTabsStrip
             active={activeTab}
             onChange={setActiveTab}
-            counts={{ albums: albumsCount, liked: likedCount, recent: recentCount, playlists: playlists.playlists.length }}
+            counts={{ albums: albumsCount, liked: likedCount, recent: recentCount, playlists: playlistsListing.playlists.length }}
             isDark={isDark}
             lang={lang}
           />
@@ -6036,7 +6043,7 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
               onToggleLike={toggleLike}
               likedMap={likedMap}
               currentTrackId={playerTrack?.track_id || null}
-              onAddToPlaylist={(tid, anchor) => setAddToPopover({ trackId: tid, anchor })}
+              onAddToPlaylist={onAddToPlaylist}
             />
           )}
           {activeTab === 'recent' && (
@@ -6054,12 +6061,12 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
               onToggleLike={toggleLike}
               likedMap={likedMap}
               currentTrackId={playerTrack?.track_id || null}
-              onAddToPlaylist={(tid, anchor) => setAddToPopover({ trackId: tid, anchor })}
+              onAddToPlaylist={onAddToPlaylist}
             />
           )}
           {activeTab === 'playlists' && (
             <PlaylistsTab
-              listing={playlists}
+              listing={playlistsListing}
               activePlaylistId={activePlaylistId}
               onOpenPlaylist={setActivePlaylistId}
               onCloseDetail={() => setActivePlaylistId(null)}
@@ -6090,21 +6097,13 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
           lang={lang}
           onCancel={() => setShowNewPlaylistModal(false)}
           onSubmit={async (name, desc) => {
-            const created = await playlists.createPlaylist(name, desc);
+            const created = await playlistsListing.createPlaylist(name, desc);
             setShowNewPlaylistModal(false);
             setActivePlaylistId(created.id);
           }}
         />
       )}
-      {addToPopover && (
-        <AddToPlaylistPopover
-          trackId={addToPopover.trackId}
-          anchor={addToPopover.anchor}
-          onClose={() => setAddToPopover(null)}
-          listing={playlists}
-          lang={lang}
-        />
-      )}
+      {/* AddToPlaylistPopover is now rendered at App level (Plan 19 follow-up) */}
     </div>
   );
 }
@@ -8749,7 +8748,7 @@ function InlineLyricExplain({
 }
 
 // ─── PLAYER SECTION ─────────────────────────────────────────────────────────
-function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, audio, visible, lyricsMode, onToggleLyrics, onCloseLyrics, showToast, navigateToArtist, aiStatus }) {
+function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, audio, visible, lyricsMode, onToggleLyrics, onCloseLyrics, showToast, navigateToArtist, aiStatus, onAddToPlaylist }) {
   const [playlist, setPlaylist] = useState(initialPlaylist || []);
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [liked, setLiked] = useState(null);
@@ -9490,6 +9489,17 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
               </button>
               <button
                 type="button" className="player-icon-btn"
+                onClick={(e) => onAddToPlaylist && onAddToPlaylist(currentTrack?.track_id, e.currentTarget)}
+                disabled={!currentTrack?.track_id}
+                title={lang === 'ru' ? 'Добавить в плейлист' : 'Add to playlist'}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+              </button>
+              <button
+                type="button" className="player-icon-btn"
                 data-active={lyricsMode ? 'lyrics' : ''}
                 aria-pressed={lyricsMode}
                 onClick={onToggleLyrics}
@@ -9708,6 +9718,19 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
                             background: pPillBg,
                             border: `1px solid ${pBorderSubtle}`,
                           }}>{t.genre}</span>
+                        )}
+                        {i === hoveredQueueIdx && (
+                          <button
+                            type="button" className="player-icon-btn"
+                            onClick={(e) => { e.stopPropagation(); onAddToPlaylist && onAddToPlaylist(t.track_id, e.currentTarget); }}
+                            title={lang === 'ru' ? 'Добавить в плейлист' : 'Add to playlist'}
+                            style={{ width: 30, height: 30 }}
+                          >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                              <line x1="12" y1="5" x2="12" y2="19" />
+                              <line x1="5" y1="12" x2="19" y2="12" />
+                            </svg>
+                          </button>
                         )}
                         {i === hoveredQueueIdx && hit.score_breakdown && (
                           <PlayerScoreBars breakdown={hit.score_breakdown} isDark={isDark} />
@@ -10008,6 +10031,18 @@ function App() {
   const [collections, setCollections] = useState([]);
   const [activeCollection, setActiveCollection] = useState(() => localStorage.getItem('active_collection') || '');
   const aiStatus = useAIStatus(activeCollection);
+
+  // Plan 19 follow-up: lift usePlaylists + AddToPlaylistPopover to App-level
+  // so PlayerSection, SearchSection, LibrarySection share one source of truth
+  // and the popover can be triggered from any track-row in any surface.
+  const appPlaylists = usePlaylists(activeCollection);
+  const [addToPopoverInfo, setAddToPopoverInfo] = useState(null);  // { trackId, anchor } | null
+  const openAddToPlaylist = useCallback((trackId, anchor) => {
+    if (!trackId) return;
+    setAddToPopoverInfo({ trackId, anchor });
+  }, []);
+  const closeAddToPlaylist = useCallback(() => setAddToPopoverInfo(null), []);
+
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [stats, setStats] = useState(null);
 
@@ -10274,6 +10309,8 @@ function App() {
                 navigateToArtist={navigateToArtist}
                 aiStatus={aiStatus}
                 onNav={setSection}
+                onAddToPlaylist={openAddToPlaylist}
+                playlistsListing={appPlaylists}
               />
             </div>
           ))}
@@ -10337,6 +10374,17 @@ function App() {
         crossOrigin="anonymous"
         style={{ position:'absolute', width:0, height:0, pointerEvents:'none' }}
       />
+
+      {/* Plan 19 follow-up: App-level AddToPlaylistPopover shared across all sections */}
+      {addToPopoverInfo && (
+        <AddToPlaylistPopover
+          trackId={addToPopoverInfo.trackId}
+          anchor={addToPopoverInfo.anchor}
+          onClose={closeAddToPlaylist}
+          listing={appPlaylists}
+          lang={lang}
+        />
+      )}
     </div>
   );
 }
