@@ -1089,7 +1089,7 @@ CREATE TABLE recommendation_snapshots (
 > | **3**  Artist Atlas                   | ✅ Shipped (Plan 5)                       | `docs/superpowers/plans/2026-05-16-plan-5-artist-atlas.md` |
 > | **4**  Player v6 redesign             | ✅ Shipped (Plan 4) + post-plan polish round | `docs/superpowers/plans/2026-05-16-plan-4-player-redesign.md` |
 > | **5**  AI Chat & lyrics-explain       | ✅ **Shipped** — AIChatDrawer (slide-up panel replacing queue, FactsRail stays visible; slim 32px header; persistent suggested prompts above input; ↺ session-clear) + Inline ✨ explain (draw-under panel). Single endpoint POST /chat/track-chat with web_search tool fallback (pydantic-ai). Plan: `docs/superpowers/plans/2026-05-19-plan-5-ai-chat-lyrics-explain.md`, polish: `docs/superpowers/plans/2026-05-20-chat-drawer-replaces-queue.md` |
-> | **6**  Spotify-like MVP               | 🛠 **Library Overhaul shipped (sub-plan #1 of 3)** | feature/library-overhaul |
+> | **6**  Spotify-like MVP               | 🛠 **Library Overhaul + Playlists CRUD shipped (sub-plans #1, #2 of 3)** | feature/library-overhaul, feature/plan-19-playlists-crud |
 > | **6a** Home (Discovery Magazine)      | ⏳ Not started                            | — |
 > | **6b-B1** Search visual redesign      | ✅ **Shipped** — backend (SearchFilters + Qdrant payload + /sonic-facets) + frontend (Hybrid v3 visuals + RecentSearchesChips + hover breakdown + SonicFiltersChips). Plan: `docs/superpowers/plans/2026-05-19-plan-b1-search-section-redesign.md` |
 > | **6b-B2** Search AI gating + functional | ✅ **Shipped** — chat tab gated on aiStatus.aiActive, DecadeFiltersChips (OR) backed by /library/year-facets, card-click → Player auto-play (detail panel removed), hover play+like overlay extends B1's ScoreBreakdownTooltip, autocomplete typeahead fix, SearchFilters dead-field cleanup (year_from/year_to/duration_* dropped; year_range singular → year_ranges plural). Plan: `docs/superpowers/plans/2026-05-19-plan-b2-search-section-ai-gating.md` |
@@ -1219,9 +1219,11 @@ CREATE TABLE recommendation_snapshots (
 
 > **Status (2026-05-20)**: 🛠 **In progress.** Sub-plan #1 (Library Overhaul) shipped via `feature/library-overhaul`: full LibrarySection rewrite as track-picker hub with Albums browser (grouped by album_title, majority-vote primary artist, feat-artist pills, drill-into-modal with tracklist + Play All + per-track like-toggle) + Liked Songs glassy-row view + Recently Played glassy-row view (relative time + N× play count + sort by last_played/play_count) + compressed hero (5 values: tracks/albums/artists/genres/year-range) + expandable Distributions panel (decades / top-5 genres / top-5 artists) + 4 listening-stats widgets (∑ Listened / Top Track / Top Artist / Peak Hour). Backend adds 4 endpoints — `/library/albums`, `/library/liked-songs`, `/playback/recent`, `/library/listening-stats` — all with TDD coverage. No DB schema changes. Plan: `docs/superpowers/plans/2026-05-20-library-overhaul.md`. Spec: `docs/superpowers/specs/2026-05-20-library-overhaul-design.md`. Remaining sub-plans: (19) Playlists CRUD, (20) Manual Queue.
 
+> **Status (2026-05-21)**: ✅ **Sub-plan #2 (Playlists CRUD) shipped** via `feature/plan-19-playlists-crud`. Two SQLite tables (`playlists`, `playlist_tracks`) added to `MetadataDB._SCHEMA_SQL`; 8 endpoints under `/api/v1/playlists` (create / list / detail / rename / delete / add-track / remove-track / reorder) with full TDD coverage (26 integration + 20 unit DB + 9 model + 10 service tests). `list_playlists?include_track_id=Y` annotates each summary with `contains_track` for popover use without N+1 queries. Orphan tracks (in `playlist_tracks` but not in Qdrant) silently filtered on read into `missing_track_ids`; re-indexing restores them. Frontend: 4th tab in LibrarySection with mosaic 2×2 covers (adaptive 1/2/3/4 layout), inline-editable hero name + serif italic description, native HTML5 drag-drop reorder with purple-glow drop-target indicator. `AddToPlaylistPopover` (membership-aware, inline-create) wired to `＋` button in `LibraryGlassyRow` (Liked / Recently surfaces). Player-style icon buttons (`.player-icon-btn`) with `.player-icon-burst` radial pulse animation reused for ♥/＋/⨯ row actions. Plan: `docs/superpowers/plans/2026-05-21-plan-19-playlists-crud.md`. Spec: `docs/superpowers/specs/2026-05-21-plan-19-playlists-crud-design.md`. Mockup: `docs/superpowers/mockups/2026-05-21-plan-19-playlists.html`. **Deferred to follow-up**: `＋` button in PlayerSection title row + SearchSection hover overlay (avoiding prop-drilling explosion through 3+ components; Library surfaces cover MVP entry points).
+
 17. ✅ **Playback history backend** + `RecentlyPlayedRail` на Home/Library — shipped as part of Library Overhaul (recently-played tab in Library; rail-on-Home deferred to Phase 6a).
 18. ✅ **Liked Songs view** — фильтр + UI — shipped as part of Library Overhaul.
-19. ⏳ **Playlists CRUD** — backend tables + endpoints + UI. Plan 19 (next).
+19. ✅ **Playlists CRUD** — shipped 2026-05-21 in `feature/plan-19-playlists-crud`. 2 tables + 8 endpoints + 4th Library tab + AddToPlaylistPopover on Liked/Recently track-rows. Player+Search `＋` deferred to follow-up.
 20. ⏳ **Manual Queue panel** — frontend-only, drag-drop reorder, выезжает из ≡ кнопки.
 
 ### Phase 6a: Home (Discovery Magazine)
@@ -1399,6 +1401,17 @@ curl -X POST localhost:8000/api/v1/library/clusters/labels \
 curl -X POST 'localhost:8000/api/v1/library/sonic-classifier/train?collection=music_explorer'
 curl 'localhost:8000/api/v1/library/sonic-classifier/status?collection=music_explorer'
 # expected (after training): {"status":"ready", "trained_at":..., "accuracy":0.78, "classes":["Lo-fi indie", ...]}
+
+# Playlists CRUD (Plan 19)
+curl -X POST localhost:8000/api/v1/playlists -d '{"collection_name":"music_explorer","name":"Late night","description":"ночной дрифт"}'
+curl 'localhost:8000/api/v1/playlists?collection_name=music_explorer'
+curl 'localhost:8000/api/v1/playlists?collection_name=music_explorer&include_track_id=abc-123'
+curl localhost:8000/api/v1/playlists/1
+curl -X PUT localhost:8000/api/v1/playlists/1 -d '{"description":"updated"}'
+curl -X POST localhost:8000/api/v1/playlists/1/tracks -d '{"track_id":"abc-123"}'
+curl -X POST localhost:8000/api/v1/playlists/1/reorder -d '{"track_ids":["abc-123","def-456"]}'
+curl -X DELETE localhost:8000/api/v1/playlists/1/tracks/abc-123
+curl -X DELETE localhost:8000/api/v1/playlists/1
 ```
 
 ### What NOT to verify (explicit non-goals в MVP)
