@@ -5155,6 +5155,112 @@ function AlbumCard({ album, isDark, onClick, navigateToArtist, lang }) {
   );
 }
 
+// ─── PLAYLIST CARD ────────────────────────────────────────────────────────────
+function PlaylistCard({ playlist, onOpen, onPlayAll, lang }) {
+  return (
+    <div
+      onClick={() => onOpen(playlist.id)}
+      style={{
+        display: 'flex', flexDirection: 'column',
+        padding: 12, borderRadius: 14,
+        background: 'linear-gradient(180deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.015) 60%)',
+        border: '1px solid rgba(255,255,255,.06)',
+        boxShadow: 'inset 0 1px 0 rgba(255,255,255,.08), inset 0 -1px 0 rgba(0,0,0,.22), 0 4px 14px rgba(0,0,0,.22)',
+        cursor: 'pointer',
+        transition: 'transform .22s cubic-bezier(.22,.9,.3,1), border-color .22s, box-shadow .22s',
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.transform = 'translateY(-3px)';
+        e.currentTarget.style.borderColor = 'rgba(124,91,255,.35)';
+        e.currentTarget.style.boxShadow = 'inset 0 1px 0 rgba(255,255,255,.12), inset 0 -1px 0 rgba(0,0,0,.22), 0 8px 24px rgba(124,91,255,.18)';
+        const playBtn = e.currentTarget.querySelector('[data-play]');
+        if (playBtn) { playBtn.style.opacity = '1'; playBtn.style.transform = 'translateY(0)'; }
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.transform = '';
+        e.currentTarget.style.borderColor = 'rgba(255,255,255,.06)';
+        e.currentTarget.style.boxShadow = 'inset 0 1px 0 rgba(255,255,255,.08), inset 0 -1px 0 rgba(0,0,0,.22), 0 4px 14px rgba(0,0,0,.22)';
+        const playBtn = e.currentTarget.querySelector('[data-play]');
+        if (playBtn) { playBtn.style.opacity = '0'; playBtn.style.transform = 'translateY(6px)'; }
+      }}
+    >
+      <div style={{ position: 'relative' }}>
+        <MosaicCover trackIds={playlist.cover_track_ids || []} coverPaths={playlist.cover_art_paths || []} size={'100%'} />
+        <button
+          data-play
+          onClick={(e) => { e.stopPropagation(); onPlayAll(playlist.id); }}
+          title={lang === 'ru' ? 'Слушать всё' : 'Play all'}
+          style={{
+            position: 'absolute', right: 10, bottom: 10,
+            width: 44, height: 44, borderRadius: '50%',
+            display: 'grid', placeItems: 'center',
+            background: 'linear-gradient(180deg, oklch(72% 0.2 275) 0%, oklch(52% 0.24 282) 100%)',
+            color: '#fff', fontSize: 18, paddingLeft: 3,
+            border: 'none', cursor: 'pointer',
+            boxShadow: 'inset 0 1px 0 rgba(255,255,255,.4), 0 6px 18px rgba(0,0,0,.4), 0 0 0 3px rgba(124,91,255,.2)',
+            opacity: 0, transform: 'translateY(6px)',
+            transition: 'opacity .22s, transform .22s',
+          }}
+        >▶</button>
+      </div>
+      <div style={{ fontSize: 15, fontWeight: 500, marginTop: 12, color: '#eeeef3', letterSpacing: '-0.005em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {playlist.name}
+      </div>
+      <div className="mono" style={{ fontSize: 10, letterSpacing: '0.15em', color: 'rgba(238,238,243,.45)', marginTop: 4, textTransform: 'uppercase' }}>
+        {playlist.track_count} {lang === 'ru' ? (playlist.track_count === 1 ? 'трек' : 'треков') : 'tracks'}
+      </div>
+    </div>
+  );
+}
+
+
+function NewPlaylistTile({ onClick, lang }) {
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        display: 'grid', placeItems: 'center',
+        padding: 12, borderRadius: 14,
+        border: '1px dashed rgba(124,91,255,.35)',
+        background: 'linear-gradient(180deg, rgba(124,91,255,.04) 0%, rgba(124,91,255,.01) 100%)',
+        cursor: 'pointer',
+        transition: 'background .18s, border-color .18s',
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = 'linear-gradient(180deg, rgba(124,91,255,.10) 0%, rgba(124,91,255,.03) 100%)'; e.currentTarget.style.borderColor = 'rgba(124,91,255,.55)'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = 'linear-gradient(180deg, rgba(124,91,255,.04) 0%, rgba(124,91,255,.01) 100%)'; e.currentTarget.style.borderColor = 'rgba(124,91,255,.35)'; }}
+    >
+      <div style={{ aspectRatio: '1/1', width: '100%', display: 'grid', placeItems: 'center', borderRadius: 10, background: 'rgba(124,91,255,.06)', border: '1px dashed rgba(124,91,255,.25)' }}>
+        <span style={{ fontSize: 44, color: 'rgba(124,91,255,.5)', fontWeight: 200 }}>＋</span>
+      </div>
+      <div style={{ fontSize: 15, fontWeight: 500, marginTop: 12, color: '#d8ccff', textAlign: 'center' }}>
+        {lang === 'ru' ? 'Новый плейлист' : 'New playlist'}
+      </div>
+      <div className="mono" style={{ fontSize: 10, letterSpacing: '0.15em', color: 'rgba(238,238,243,.4)', marginTop: 4, textTransform: 'uppercase', textAlign: 'center' }}>
+        {lang === 'ru' ? 'создать с нуля' : 'create from scratch'}
+      </div>
+    </div>
+  );
+}
+
+
+function PlaylistsListView({ playlists, onOpen, onCreate, onPlayAll, lang }) {
+  return (
+    <>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 18 }}>
+        <span className="mono" style={{ fontSize: 11, letterSpacing: '0.18em', color: 'rgba(238,238,243,.5)' }}>
+          {playlists.length} {lang === 'ru' ? 'ПЛЕЙЛИСТОВ' : 'PLAYLISTS'}
+        </span>
+      </div>
+      <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fill, minmax(218px, 1fr))' }}>
+        <NewPlaylistTile onClick={onCreate} lang={lang} />
+        {playlists.map(p => (
+          <PlaylistCard key={p.id} playlist={p} onOpen={onOpen} onPlayAll={onPlayAll} lang={lang} />
+        ))}
+      </div>
+    </>
+  );
+}
+
 // ─── ALBUMS GRID TAB ──────────────────────────────────────────────────────────
 function AlbumsGridTab({ albums, sort, onSortChange, onAlbumOpen, isDark, lang, navigateToArtist }) {
   const c = useColors(isDark);
