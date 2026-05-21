@@ -5852,6 +5852,114 @@ function LibraryTabsStrip({ active, onChange, counts, lang }) {
     </div>
   );
 }
+// ─── NEW PLAYLIST MODAL ───────────────────────────────────────────────────────
+function NewPlaylistModal({ onCancel, onSubmit, lang }) {
+  const [name, setName] = React.useState('');
+  const [description, setDescription] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState(null);
+
+  React.useEffect(() => {
+    const onEsc = (e) => { if (e.key === 'Escape') onCancel(); };
+    document.addEventListener('keydown', onEsc);
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onEsc);
+      document.body.style.overflow = '';
+    };
+  }, [onCancel]);
+
+  const handleSubmit = async () => {
+    const n = name.trim();
+    if (!n) return;
+    setBusy(true); setError(null);
+    try {
+      await onSubmit(n, description.trim() || null);
+    } catch (e) {
+      const msg = e?.detail || e?.message || String(e);
+      if (/already exists|name already|409/.test(msg)) {
+        setError(lang === 'ru' ? 'Плейлист с таким именем уже существует' : 'Playlist with this name already exists');
+      } else {
+        setError(msg);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 2000,
+        background: 'rgba(8,6,16,.62)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
+        display: 'grid', placeItems: 'center',
+      }}
+    >
+      <div style={{
+        width: 440, padding: 28,
+        background: 'linear-gradient(180deg, rgba(32,28,48,0.97) 0%, rgba(20,16,32,0.97) 60%)',
+        border: '1px solid rgba(255,255,255,.08)',
+        borderRadius: 18,
+        boxShadow: 'inset 0 1px 0 rgba(255,255,255,.14), 0 28px 70px rgba(0,0,0,.6), 0 0 0 1px rgba(124,91,255,.18)',
+      }}>
+        <div className="mono" style={{ fontSize: 10, letterSpacing: '0.24em', color: 'rgba(238,238,243,.5)', marginBottom: 18, textTransform: 'uppercase' }}>
+          {lang === 'ru' ? 'Новый плейлист' : 'New playlist'}
+        </div>
+        <div style={{ fontSize: 12, color: 'rgba(238,238,243,.6)', margin: '14px 0 6px', letterSpacing: '0.02em' }}>
+          {lang === 'ru' ? 'Название' : 'Name'}
+        </div>
+        <input
+          autoFocus
+          value={name} onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') handleSubmit(); }}
+          placeholder={lang === 'ru' ? 'Например: Late night ride' : 'e.g.: Late night ride'}
+          style={{
+            width: '100%', padding: '10px 12px',
+            background: 'rgba(0,0,0,.32)', border: '1px solid rgba(255,255,255,.07)',
+            borderRadius: 10, color: '#fff', fontSize: 14, outline: 'none',
+            boxShadow: 'inset 0 1px 2px rgba(0,0,0,.3)',
+          }}
+        />
+        <div style={{ fontSize: 12, color: 'rgba(238,238,243,.6)', margin: '14px 0 6px', letterSpacing: '0.02em' }}>
+          {lang === 'ru' ? 'Описание (опционально)' : 'Description (optional)'}
+        </div>
+        <textarea
+          value={description} onChange={(e) => setDescription(e.target.value)}
+          rows={3}
+          style={{
+            width: '100%', padding: '10px 12px',
+            background: 'rgba(0,0,0,.32)', border: '1px solid rgba(255,255,255,.07)',
+            borderRadius: 10, color: '#fff',
+            fontFamily: "'Noto Serif Display', Georgia, serif", fontStyle: 'italic', fontSize: 15,
+            outline: 'none', boxShadow: 'inset 0 1px 2px rgba(0,0,0,.3)', resize: 'vertical', minHeight: 76,
+          }}
+        />
+        {error && (
+          <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 8, fontSize: 12, color: '#ffc99a', background: 'rgba(255,180,80,.08)', border: '1px solid rgba(255,180,80,.25)' }}>
+            {error}
+          </div>
+        )}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 22 }}>
+          <button
+            onClick={onCancel}
+            style={{
+              background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.07)',
+              color: 'rgba(238,238,243,.7)', padding: '10px 18px', borderRadius: 10, fontSize: 13, cursor: 'pointer',
+            }}>{lang === 'ru' ? 'Отмена' : 'Cancel'}</button>
+          <button
+            className="cta-v3"
+            disabled={busy || !name.trim()}
+            onClick={handleSubmit}
+            style={{ opacity: busy || !name.trim() ? 0.5 : 1 }}>
+            {busy ? '…' : (lang === 'ru' ? 'Создать ▶' : 'Create ▶')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AlbumModal({ album, onClose, onPlayTrack, navigateToArtist, isDark, lang }) {
   const c = useColors(isDark);
   const [hoverRow, setHoverRow] = useState(-1);
