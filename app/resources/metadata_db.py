@@ -141,6 +141,25 @@ _SCHEMA_SQL: Tuple[str, ...] = (
         generated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (artist_slug, collection_name, lang)
     )""",
+    # Custom Playlists (Plan 19)
+    """CREATE TABLE IF NOT EXISTS playlists (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        collection_name TEXT    NOT NULL,
+        name            TEXT    NOT NULL,
+        description     TEXT,
+        created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+        updated_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(collection_name, name)
+    )""",
+    """CREATE TABLE IF NOT EXISTS playlist_tracks (
+        playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+        track_id    TEXT    NOT NULL,
+        position    INTEGER NOT NULL,
+        added_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (playlist_id, track_id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_playlist_tracks_position ON playlist_tracks(playlist_id, position)",
+    "CREATE INDEX IF NOT EXISTS idx_playlists_collection ON playlists(collection_name)",
 )
 
 
