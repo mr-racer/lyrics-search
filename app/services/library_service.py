@@ -19,7 +19,6 @@ from ..domain.models import (
 from ..resources.metadata_db import MetadataDB
 from ..resources.model_registry import ModelRegistry
 from ..resources.db_client import DbClient
-from ..existing.folder_processor import FileProcessor
 from .artist_facts_service import fetch_facts_for_artists
 from .job_tracker import JobTracker, IndexStage, IndexStatus
 from .similarity_service import analyze_collection
@@ -165,6 +164,8 @@ class LibraryService:
             })
 
             logger.info("[LibraryService] Starting FileProcessor...")
+            # Imported lazily to avoid circular import at module level.
+            from ..existing.folder_processor import FileProcessor  # noqa: PLC0415
             processor = FileProcessor()
 
             async def on_lyrics_progress(current: int, total: int, message: str, details: dict = None):

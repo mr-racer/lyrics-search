@@ -1,10 +1,15 @@
 """DbClient — context manager for Qdrant + LyricsDB."""
 
+from __future__ import annotations
+
 import logging
 import os
+from typing import TYPE_CHECKING
 
 from qdrant_client import QdrantClient
-from ..existing.qdrant_db import LyricsDB
+
+if TYPE_CHECKING:
+    from ..existing.qdrant_db import LyricsDB
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +47,8 @@ class DbClient:
 
         # Create LyricsDB with lazy model loading (default)
         # Models are NOT loaded here — they load on first search/fit access
+        # Imported here to avoid circular import at module level.
+        from ..existing.qdrant_db import LyricsDB  # noqa: PLC0415
         self._lyrics_db = LyricsDB(
             qdrant_client=self._qdrant_client,
             collection_name=self.collection_name,

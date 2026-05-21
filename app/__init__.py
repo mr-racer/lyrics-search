@@ -31,8 +31,16 @@ from .services import LibraryService, SearchService
 
 from .api import app, create_app
 
-# Legacy wrappers (optional)
-from .existing import FileProcessor, LyricsDB
+# Legacy wrappers — imported lazily to avoid circular imports when
+# app.indexing submodules are loaded by file_processor shims.
+def __getattr__(name: str):
+    if name in ("FileProcessor", "LyricsDB"):
+        from .existing import FileProcessor, LyricsDB  # noqa: PLC0415
+        globals()["FileProcessor"] = FileProcessor
+        globals()["LyricsDB"] = LyricsDB
+        return globals()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     # Domain models
