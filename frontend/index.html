@@ -2705,6 +2705,48 @@ function AlbumCover({ title='', artist='', size=44, isDark, coverPath, radius, f
   );
 }
 
+// ─── MOSAIC COVER ─────────────────────────────────────────────────────────────
+function MosaicCover({ trackIds = [], coverPaths = [], size = 220, radius = 12 }) {
+  const n = Math.min(trackIds.length, 4);
+  const tileStyle = (path) => ({
+    backgroundImage: path ? `url(${API}${path})` : 'linear-gradient(135deg, rgba(124,91,255,.35) 0%, rgba(255,120,200,.25) 100%)',
+    backgroundSize: 'cover',
+    backgroundPosition: 'center',
+    backgroundColor: 'rgba(255,255,255,.04)',
+  });
+
+  if (n === 0) {
+    return (
+      <div style={{
+        width: size, height: size, borderRadius: radius, overflow: 'hidden',
+        background: 'linear-gradient(135deg, rgba(124,91,255,.22) 0%, rgba(255,120,200,.14) 100%)',
+        display: 'grid', placeItems: 'center', color: 'rgba(255,255,255,.45)',
+        fontSize: typeof size === 'number' ? Math.round(size * 0.34) : 36,
+      }}>♫</div>
+    );
+  }
+
+  const grid = {
+    width: size, height: size, borderRadius: radius, overflow: 'hidden',
+    display: 'grid', gap: 1, background: 'rgba(0,0,0,.4)',
+  };
+  if (n === 1) Object.assign(grid, { gridTemplateColumns: '1fr', gridTemplateRows: '1fr' });
+  if (n === 2) Object.assign(grid, { gridTemplateColumns: '1fr 1fr', gridTemplateRows: '1fr' });
+  if (n === 3) Object.assign(grid, { gridTemplateColumns: '1fr 1fr', gridTemplateRows: '1fr 1fr' });
+  if (n === 4) Object.assign(grid, { gridTemplateColumns: '1fr 1fr', gridTemplateRows: '1fr 1fr' });
+
+  return (
+    <div style={grid}>
+      {Array.from({ length: n }).map((_, i) => (
+        <div key={i} style={{
+          ...tileStyle(coverPaths[i]),
+          ...(n === 3 && i === 0 ? { gridColumn: '1 / -1' } : {}),
+        }} />
+      ))}
+    </div>
+  );
+}
+
 // ─── Custom Select ────────────────────────────────────────────────────────────
 function MusixSelect({ value, onChange, options, isDark, style={} }) {
   const c = useColors(isDark);
