@@ -56,3 +56,54 @@ def test_list_playlists_returns_only_target_collection_sorted_updated_desc():
 
 def test_get_playlist_row_returns_none_for_missing():
     assert MetadataDB.get_playlist_row(99999) is None
+
+
+def test_update_playlist_name_and_description():
+    pid = MetadataDB.create_playlist("col_a", "Old", "old desc")
+    MetadataDB.update_playlist(pid, name="New", description="new desc")
+    row = MetadataDB.get_playlist_row(pid)
+    assert row["name"] == "New"
+    assert row["description"] == "new desc"
+
+
+def test_update_playlist_description_only_leaves_name():
+    pid = MetadataDB.create_playlist("col_a", "Keep", "x")
+    MetadataDB.update_playlist(pid, name=None, description="y")
+    row = MetadataDB.get_playlist_row(pid)
+    assert row["name"] == "Keep"
+    assert row["description"] == "y"
+
+
+def test_update_playlist_can_clear_description():
+    pid = MetadataDB.create_playlist("col_a", "Keep", "had desc")
+    MetadataDB.update_playlist(pid, name=None, description=None, clear_description=True)
+    row = MetadataDB.get_playlist_row(pid)
+    assert row["description"] is None
+
+
+def test_update_playlist_rename_collision_raises():
+    MetadataDB.create_playlist("col_a", "A", None)
+    other = MetadataDB.create_playlist("col_a", "B", None)
+    with pytest.raises(Exception):
+        MetadataDB.update_playlist(other, name="A", description=None)
+
+
+def test_delete_playlist_removes_row():
+    pid = MetadataDB.create_playlist("col_a", "Bye", None)
+    MetadataDB.delete_playlist(pid)
+    assert MetadataDB.get_playlist_row(pid) is None
+
+
+def test_delete_playlist_cascades_to_tracks():
+    pid = MetadataDB.create_playlist("col_a", "WithTracks", None)
+    conn = MetadataDB.get()
+    conn.execute(
+        "INSERT INTO playlist_tracks (playlist_id, track_id, position) VALUES (?, 't1', 1)",
+        (pid,),
+    )
+    conn.commit()
+    MetadataDB.delete_playlist(pid)
+    remaining = conn.execute(
+        "SELECT COUNT(*) FROM playlist_tracks WHERE playlist_id = ?", (pid,)
+    ).fetchone()[0]
+    assert remaining == 0

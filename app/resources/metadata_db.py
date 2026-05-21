@@ -1409,3 +1409,38 @@ class MetadataDB:
             (playlist_id,),
         )
         conn.commit()
+
+    @classmethod
+    def update_playlist(
+        cls,
+        playlist_id: int,
+        *,
+        name: str | None,
+        description: str | None,
+        clear_description: bool = False,
+    ) -> None:
+        """Update name and/or description. Pass clear_description=True to set description to NULL."""
+        conn = cls._connect()
+        fields = []
+        params: list = []
+        if name is not None:
+            fields.append("name = ?")
+            params.append(name)
+        if description is not None:
+            fields.append("description = ?")
+            params.append(description)
+        elif clear_description:
+            fields.append("description = NULL")
+        if not fields:
+            return  # no-op
+        fields.append("updated_at = datetime('now')")
+        params.append(playlist_id)
+        conn.execute(f"UPDATE playlists SET {', '.join(fields)} WHERE id = ?", params)
+        conn.commit()
+
+    @classmethod
+    def delete_playlist(cls, playlist_id: int) -> None:
+        """Delete a playlist. CASCADE handles playlist_tracks."""
+        conn = cls._connect()
+        conn.execute("DELETE FROM playlists WHERE id = ?", (playlist_id,))
+        conn.commit()
