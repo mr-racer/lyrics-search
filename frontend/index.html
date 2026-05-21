@@ -3810,6 +3810,95 @@ function useRecentSearches(activeCollection) {
   return { items, push, remove, clearAll };
 }
 
+// ─── PLAYLISTS HOOK ───────────────────────────────────────────────────────────
+function usePlaylists(activeCollection) {
+  const [playlists, setPlaylists] = React.useState([]);
+  const [loading, setLoading]     = React.useState(false);
+
+  const refetchAll = React.useCallback(async () => {
+    if (!activeCollection) { setPlaylists([]); return; }
+    setLoading(true);
+    try {
+      const r = await apiFetch(`/playlists?collection_name=${encodeURIComponent(activeCollection)}`);
+      setPlaylists(r?.playlists || []);
+    } catch (e) {
+      console.warn('[usePlaylists] list failed', e);
+      setPlaylists([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [activeCollection]);
+
+  const fetchWithMembership = React.useCallback(async (trackId) => {
+    if (!activeCollection || !trackId) return { playlists: [], collection_name: activeCollection };
+    try {
+      return await apiFetch(`/playlists?collection_name=${encodeURIComponent(activeCollection)}&include_track_id=${encodeURIComponent(trackId)}`);
+    } catch (e) {
+      console.warn('[usePlaylists] membership fetch failed', e);
+      return { playlists: [], collection_name: activeCollection };
+    }
+  }, [activeCollection]);
+
+  const createPlaylist = async (name, description) => {
+    const r = await apiFetch(`/playlists`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ collection_name: activeCollection, name, description: description || null }),
+    });
+    await refetchAll();
+    return r;
+  };
+
+  const renamePlaylist = async (id, patch) => {
+    const r = await apiFetch(`/playlists/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    await refetchAll();
+    return r;
+  };
+
+  const deletePlaylist = async (id) => {
+    await apiFetch(`/playlists/${id}`, { method: 'DELETE' });
+    await refetchAll();
+  };
+
+  const addTrack = async (id, trackId) => {
+    const r = await apiFetch(`/playlists/${id}/tracks`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ track_id: trackId }),
+    });
+    await refetchAll();
+    return r;
+  };
+
+  const removeTrack = async (id, trackId) => {
+    await apiFetch(`/playlists/${id}/tracks/${encodeURIComponent(trackId)}`, { method: 'DELETE' });
+    await refetchAll();
+  };
+
+  const reorderTracks = async (id, trackIds) => {
+    const r = await apiFetch(`/playlists/${id}/reorder`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ track_ids: trackIds }),
+    });
+    await refetchAll();
+    return r;
+  };
+
+  React.useEffect(() => { refetchAll(); }, [refetchAll]);
+
+  return {
+    playlists, loading,
+    refetchAll, fetchWithMembership,
+    createPlaylist, renamePlaylist, deletePlaylist,
+    addTrack, removeTrack, reorderTracks,
+  };
+}
+
 // ─── RECENT SEARCHES CHIPS ────────────────────────────────────────────────────
 function RecentSearchesChips({ items, onPick, onRemove, onClearAll, isDark }) {
   const c = useColors(isDark);
