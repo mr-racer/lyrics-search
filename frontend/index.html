@@ -5490,6 +5490,32 @@ function RecentlyPlayedTab({ tracks, sort, onSortChange, isDark, lang, onPlayTra
   );
 }
 
+// ─── PLAYLISTS TAB ────────────────────────────────────────────────────────────
+function PlaylistsTab({ listing, activePlaylistId, onOpenPlaylist, onCloseDetail, onRequestCreate, onPlayTrack, isDark, lang, activeCollection, navigateToArtist }) {
+  if (activePlaylistId == null) {
+    return (
+      <PlaylistsListView
+        playlists={listing.playlists}
+        lang={lang}
+        onOpen={onOpenPlaylist}
+        onCreate={onRequestCreate}
+        onPlayAll={(id) => { /* wired in Task 17 via detail view */ }}
+      />
+    );
+  }
+  // Detail view will be replaced in Task 17 with full PlaylistDetailView
+  return (
+    <div>
+      <button onClick={onCloseDetail} className="mono" style={{ background: 'none', border: 'none', color: 'rgba(238,238,243,.5)', cursor: 'pointer', fontSize: 11, letterSpacing: '0.22em', padding: '0 0 18px' }}>
+        ← {lang === 'ru' ? 'К ПЛЕЙЛИСТАМ' : 'BACK TO PLAYLISTS'}
+      </button>
+      <div style={{ padding: 40, textAlign: 'center', color: 'rgba(238,238,243,.5)' }}>
+        Detail view coming in Task 17
+      </div>
+    </div>
+  );
+}
+
 // ─── LIBRARY SECTION ──────────────────────────────────────────────────────────
 function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateToArtist, playerTrack }) {
   const c = useColors(isDark);
@@ -5508,6 +5534,9 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
   const [distOpen, setDistOpen] = useState(() => localStorage.getItem('library_distributions_open') === '1');
   const [albumModal, setAlbumModal] = useState(null);  // currently-open AlbumSummary
   const [likedMap, setLikedMap] = useState({});
+  const playlists = usePlaylists(activeCollection);
+  const [activePlaylistId, setActivePlaylistId] = React.useState(null);
+  const [showNewPlaylistModal, setShowNewPlaylistModal] = React.useState(false);
 
   const toggleLike = async (track_id) => {
     const next = !(likedMap[track_id] !== false);   // default-true for items already in liked list
@@ -5574,7 +5603,7 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
           <LibraryTabsStrip
             active={activeTab}
             onChange={setActiveTab}
-            counts={{ albums: albumsCount, liked: likedCount, recent: recentCount }}
+            counts={{ albums: albumsCount, liked: likedCount, recent: recentCount, playlists: playlists.playlists.length }}
             isDark={isDark}
             lang={lang}
           />
@@ -5622,6 +5651,20 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
               currentTrackId={playerTrack?.track_id || null}
             />
           )}
+          {activeTab === 'playlists' && (
+            <PlaylistsTab
+              listing={playlists}
+              activePlaylistId={activePlaylistId}
+              onOpenPlaylist={setActivePlaylistId}
+              onCloseDetail={() => setActivePlaylistId(null)}
+              onRequestCreate={() => setShowNewPlaylistModal(true)}
+              onPlayTrack={onPlayTrack}
+              isDark={isDark}
+              lang={lang}
+              activeCollection={activeCollection}
+              navigateToArtist={navigateToArtist}
+            />
+          )}
 
         </div>
       </div>
@@ -5634,6 +5677,17 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
           navigateToArtist={navigateToArtist}
           isDark={isDark}
           lang={lang}
+        />
+      )}
+      {showNewPlaylistModal && (
+        <NewPlaylistModal
+          lang={lang}
+          onCancel={() => setShowNewPlaylistModal(false)}
+          onSubmit={async (name, desc) => {
+            const created = await playlists.createPlaylist(name, desc);
+            setShowNewPlaylistModal(false);
+            setActivePlaylistId(created.id);
+          }}
         />
       )}
     </div>
@@ -5839,14 +5893,14 @@ function ListeningWidgetsRow({ data, isDark, lang }) {
 }
 function LibraryTabsStrip({ active, onChange, counts, lang }) {
   const tabs = lang === 'ru'
-    ? [['albums','▦ Альбомы', counts.albums], ['liked','♥ Любимые', counts.liked], ['recent','⟲ Недавние', counts.recent]]
-    : [['albums','▦ Albums', counts.albums], ['liked','♥ Liked', counts.liked], ['recent','⟲ Recently', counts.recent]];
+    ? [['albums','▦ Альбомы', counts.albums], ['liked','♥ Любимые', counts.liked], ['recent','⟲ Недавние', counts.recent], ['playlists','♫ Плейлисты', counts.playlists]]
+    : [['albums','▦ Albums', counts.albums], ['liked','♥ Liked', counts.liked], ['recent','⟲ Recently', counts.recent], ['playlists','♫ Playlists', counts.playlists]];
   return (
     <div style={{display:'flex', gap:8}}>
       {tabs.map(([id, label, n]) => (
         <button key={id} onClick={() => onChange(id)}
           style={{padding:'8px 15px', borderRadius:10, fontSize:13, background: active===id ? 'oklch(60% 0.18 270)' : 'rgba(255,255,255,.04)', color: active===id ? '#fff' : '#aaa'}}>
-          {label} ({n})
+          {label} ({n ?? 0})
         </button>
       ))}
     </div>
