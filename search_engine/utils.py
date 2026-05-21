@@ -2,7 +2,6 @@ import numpy as np
 
 import torch
 import gc
-from sentence_transformers import SentenceTransformer
 
 import librosa
 import laion_clap
@@ -12,21 +11,6 @@ from qdrant_client import models
 
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-CLAP_WEIGHTS = r"C:/Users/ivans/Desktop/python/music_text_search/lyrics-search/weights/music_audioset_epoch_15_esc_90.14.pt"
-
-# MODEL FUNCTIONS
-
-def load_model(model: str, device=DEVICE):
-    model_loaded = SentenceTransformer(model, device=device)
-    vector_name = model.split('/')[-1].lower()
-    vector_dim = model_loaded.get_embedding_dimension()
-    return model_loaded, vector_name, vector_dim
-
-def unload_model(model):
-    del model
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
 
 
 # DATA FUNCTIONS
@@ -104,17 +88,6 @@ class TrackFeatures:
 def unit_norm(v):
     n = np.linalg.norm(v)
     return v / n if n > 0 else v
-
-def load_model_clap(device=DEVICE, clap_weights_path=CLAP_WEIGHTS):
-    model_clap = laion_clap.CLAP_Module(enable_fusion=False, amodel='HTSAT-base')
-    model_clap.load_ckpt(clap_weights_path)
-    model_clap.eval()
-    model_clap = model_clap.to(device)
-    gc.collect()
-
-    torch.manual_seed(0)
-    np.random.seed(0)
-    return model_clap
 
 def get_clap_embedding_long(clap_model, y: np.ndarray, sr: int,
                              chunk_sec: int = 30, device=DEVICE) -> np.ndarray:
@@ -196,7 +169,8 @@ def _encode_clap(
         return {}
 
     if not model_clap:
-        model_clap = load_model_clap()
+        from app.resources.model_registry import ModelRegistry
+        model_clap = ModelRegistry.load_clap()
 
     # Кодируем каждый файл отдельно (GPU — один поток), с защитой от ошибок
     clap_map: dict[tuple, np.ndarray] = {}

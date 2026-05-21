@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from .utils import (
-    load_model, prepare_metadata, build_filter,
-    build_text_for_embedding, _encode_clap, load_model_clap
+    prepare_metadata, build_filter,
+    build_text_for_embedding, _encode_clap,
 )
 
 import asyncio
@@ -102,10 +102,11 @@ class LyricsDB:
             logger.info("[LyricsDB] Using pre-loaded text model '%s' (dim=%d)",
                         model_name, vd)
         elif not lazy:
-            self._model, vn, vd = load_model(self.model_name)
+            from app.resources.model_registry import ModelRegistry
+            self._model, vn, vd = ModelRegistry.load_text_model(self.model_name)
             self._vector_name = vn
             self._vector_dim = vd
-            logger.info("[LyricsDB] Text model '%s' loaded eagerly (dim=%d)",
+            logger.info("[LyricsDB] Text model '%s' loaded eagerly via ModelRegistry (dim=%d)",
                         model_name, vd)
         else:
             self._model = None
@@ -119,8 +120,9 @@ class LyricsDB:
             self._model_clap = model_clap
             logger.info("[LyricsDB] Using pre-loaded CLAP model")
         elif include_clap and not lazy:
-            self._model_clap = load_model_clap()
-            logger.info("[LyricsDB] CLAP loaded eagerly")
+            from app.resources.model_registry import ModelRegistry
+            self._model_clap = ModelRegistry.load_clap()
+            logger.info("[LyricsDB] CLAP loaded eagerly via ModelRegistry")
         else:
             self._model_clap = None
             if include_clap:
@@ -156,64 +158,29 @@ class LyricsDB:
         return self._model_clap
 
     def _ensure_model(self):
-        """Load text model on first access (thread-safe).
-
-        Checks ModelRegistry cache first (populated by background preload),
-        falls back to loading directly via load_model().
-        """
+        """Load text model on first access (thread-safe), via ModelRegistry."""
         if self._model is not None:
             return
         with self._model_lock:
             if self._model is not None:
                 return  # double-check
-
-            # Try ModelRegistry cache first (avoids duplicate GPU memory)
-            try:
-                from app.resources.model_registry import ModelRegistry
-                cached = ModelRegistry._text_models.get(self.model_name)
-                if cached is not None:
-                    self._model = cached[0]
-                    self._vector_name = cached[1]
-                    self._vector_dim = cached[2]
-                    logger.info("[LyricsDB] Text model '%s' loaded from ModelRegistry cache",
-                                self.model_name)
-                    return
-            except (ImportError, ModuleNotFoundError):
-                pass  # app not available (running outside FastAPI)
-
-            # Fallback: load directly
-            logger.info("[LyricsDB] Lazy-loading text model '%s' ...", self.model_name)
-            self._model, self._vector_name, self._vector_dim = load_model(self.model_name)
+            from app.resources.model_registry import ModelRegistry
+            logger.info("[LyricsDB] Loading text model '%s' via ModelRegistry...", self.model_name)
+            self._model, self._vector_name, self._vector_dim = ModelRegistry.load_text_model(self.model_name)
             logger.info("[LyricsDB] Text model loaded (dim=%d)", self._vector_dim)
 
     def _ensure_clap(self):
-        """Load CLAP model on first access (thread-safe).
-
-        Checks ModelRegistry cache first (populated by background preload),
-        falls back to loading directly via load_model_clap().
-        """
+        """Load CLAP model on first access (thread-safe), via ModelRegistry."""
         if self._model_clap is not None:
             return
         with self._model_lock:
             if self._model_clap is not None:
                 return
             if not self.include_clap:
-                return  # CLAP not needed
-
-            # Try ModelRegistry cache first
-            try:
-                from app.resources.model_registry import ModelRegistry
-                cached = ModelRegistry._clap_model
-                if cached is not None:
-                    self._model_clap = cached
-                    logger.info("[LyricsDB] CLAP loaded from ModelRegistry cache")
-                    return
-            except (ImportError, ModuleNotFoundError):
-                pass  # app not available
-
-            # Fallback: load directly
-            logger.info("[LyricsDB] Lazy-loading CLAP ...")
-            self._model_clap = load_model_clap()
+                return
+            from app.resources.model_registry import ModelRegistry
+            logger.info("[LyricsDB] Loading CLAP via ModelRegistry...")
+            self._model_clap = ModelRegistry.load_clap()
             logger.info("[LyricsDB] CLAP loaded")
 
     # ── Qdrant init ──────────────────────────────────────────────────────────
