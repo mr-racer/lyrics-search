@@ -110,3 +110,73 @@ def test_reorder_renumbers_dense(client):
     rows = MetadataDB.list_playlist_tracks(p["id"])
     assert [r["track_id"] for r in rows] == ["t3", "t1", "t2"]
     assert [r["position"] for r in rows] == [1, 2, 3]
+
+
+def test_create_empty_name_returns_422(client):
+    r = client.post("/api/v1/playlists", json={"collection_name": "c", "name": "   "})
+    assert r.status_code == 422
+
+
+def test_create_duplicate_name_in_same_collection_returns_409(client):
+    client.post("/api/v1/playlists", json={"collection_name": "c", "name": "Mix"})
+    r = client.post("/api/v1/playlists", json={"collection_name": "c", "name": "Mix"})
+    assert r.status_code == 409
+
+
+def test_create_same_name_different_collection_ok(client):
+    r1 = client.post("/api/v1/playlists", json={"collection_name": "a", "name": "Mix"})
+    r2 = client.post("/api/v1/playlists", json={"collection_name": "b", "name": "Mix"})
+    assert r1.status_code == 201 and r2.status_code == 201
+
+
+def test_get_missing_returns_404(client):
+    r = client.get("/api/v1/playlists/9999999")
+    assert r.status_code == 404
+
+
+def test_rename_to_existing_name_returns_409(client):
+    client.post("/api/v1/playlists", json={"collection_name": "c", "name": "A"})
+    b = client.post("/api/v1/playlists", json={"collection_name": "c", "name": "B"}).json()
+    r = client.put(f"/api/v1/playlists/{b['id']}", json={"name": "A"})
+    assert r.status_code == 409
+
+
+def test_update_with_no_fields_returns_400(client):
+    p = client.post("/api/v1/playlists", json={"collection_name": "c", "name": "X"}).json()
+    r = client.put(f"/api/v1/playlists/{p['id']}", json={})
+    assert r.status_code == 400
+
+
+def test_delete_missing_returns_404(client):
+    r = client.delete("/api/v1/playlists/9999999")
+    assert r.status_code == 404
+
+
+def test_add_duplicate_track_returns_409(client):
+    p = client.post("/api/v1/playlists", json={"collection_name": "c", "name": "M"}).json()
+    client.post(f"/api/v1/playlists/{p['id']}/tracks", json={"track_id": "t1"})
+    r = client.post(f"/api/v1/playlists/{p['id']}/tracks", json={"track_id": "t1"})
+    assert r.status_code == 409
+
+
+def test_add_to_missing_playlist_returns_404(client):
+    r = client.post("/api/v1/playlists/9999999/tracks", json={"track_id": "t1"})
+    assert r.status_code == 404
+
+
+def test_remove_missing_track_returns_404(client):
+    p = client.post("/api/v1/playlists", json={"collection_name": "c", "name": "M"}).json()
+    r = client.delete(f"/api/v1/playlists/{p['id']}/tracks/no-such")
+    assert r.status_code == 404
+
+
+def test_reorder_with_set_mismatch_returns_400(client):
+    p = client.post("/api/v1/playlists", json={"collection_name": "c", "name": "M"}).json()
+    client.post(f"/api/v1/playlists/{p['id']}/tracks", json={"track_id": "t1"})
+    r = client.post(f"/api/v1/playlists/{p['id']}/reorder", json={"track_ids": ["t1", "nope"]})
+    assert r.status_code == 400
+
+
+def test_reorder_missing_playlist_returns_404(client):
+    r = client.post("/api/v1/playlists/9999999/reorder", json={"track_ids": []})
+    assert r.status_code == 404
