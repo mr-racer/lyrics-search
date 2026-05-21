@@ -5318,7 +5318,7 @@ function AlbumsGridTab({ albums, sort, onSortChange, onAlbumOpen, isDark, lang, 
 }
 
 // ─── LIBRARY GLASSY ROW (shared by Liked + Recently) ──────────────────────────
-function LibraryGlassyRow({ track, when, playCount, isDark, lang, onClick, onArtistClick, onAlbumClick, onToggleLike, isLiked, isCurrent }) {
+function LibraryGlassyRow({ track, when, playCount, isDark, lang, onClick, onArtistClick, onAlbumClick, onToggleLike, isLiked, isCurrent, onAddToPlaylist }) {
   const c = useColors(isDark);
   const fmtDur = (s) => {
     if (!s) return '—';
@@ -5382,15 +5382,10 @@ function LibraryGlassyRow({ track, when, playCount, isDark, lang, onClick, onArt
           }}
         >{isLiked ? '♥' : '♡'}</button>
         <button
-          title={lang==='ru'?'Доступно после Plan 19':'Available after Plan 19'}
-          disabled
-          style={{
-            width:'36px', height:'36px', borderRadius:'50%',
-            display:'grid', placeItems:'center',
-            background:'rgba(255,255,255,.02)',
-            color:'#444',
-            border:'none', cursor:'not-allowed', fontSize:'17px',
-          }}
+          className="player-icon-btn"
+          title={lang === 'ru' ? 'Добавить в плейлист' : 'Add to playlist'}
+          onClick={(e) => { e.stopPropagation(); onAddToPlaylist && onAddToPlaylist(track.track_id, e.currentTarget); }}
+          style={{ width: 36, height: 36 }}
         >＋</button>
       </div>
     </div>
@@ -5398,7 +5393,7 @@ function LibraryGlassyRow({ track, when, playCount, isDark, lang, onClick, onArt
 }
 
 // ─── LIKED SONGS TAB ──────────────────────────────────────────────────────────
-function LikedSongsTab({ tracks, isDark, lang, onPlayTrack, navigateToArtist, onAlbumClick, onToggleLike, likedMap, currentTrackId }) {
+function LikedSongsTab({ tracks, isDark, lang, onPlayTrack, navigateToArtist, onAlbumClick, onToggleLike, likedMap, currentTrackId, onAddToPlaylist }) {
   const c = useColors(isDark);
   if (!tracks || tracks.length === 0) {
     return <div style={{ padding:'40px 20px', textAlign:'center', color:c.textSubtle, fontSize:'13px' }}>{lang==='ru' ? 'Нет лайкнутых треков — лайкни что-нибудь из Player или Search' : 'No liked songs yet — like a track from Player or Search'}</div>;
@@ -5420,6 +5415,7 @@ function LikedSongsTab({ tracks, isDark, lang, onPlayTrack, navigateToArtist, on
             onArtistClick={(name) => { const slug = slugifyArtistName(name); if (slug && navigateToArtist) navigateToArtist(slug); }}
             onAlbumClick={(name) => onAlbumClick && onAlbumClick(name)}
             onToggleLike={onToggleLike}
+            onAddToPlaylist={onAddToPlaylist}
           />
         ))}
       </div>
@@ -5447,7 +5443,7 @@ function formatRelativeTime(iso, lang) {
 }
 
 // ─── RECENTLY PLAYED TAB ──────────────────────────────────────────────────────
-function RecentlyPlayedTab({ tracks, sort, onSortChange, isDark, lang, onPlayTrack, navigateToArtist, onAlbumClick, onToggleLike, likedMap, currentTrackId }) {
+function RecentlyPlayedTab({ tracks, sort, onSortChange, isDark, lang, onPlayTrack, navigateToArtist, onAlbumClick, onToggleLike, likedMap, currentTrackId, onAddToPlaylist }) {
   const c = useColors(isDark);
   if (!tracks || tracks.length === 0) {
     return <div style={{ padding:'40px 20px', textAlign:'center', color:c.textSubtle, fontSize:'13px' }}>{lang==='ru' ? 'История пуста — выбери что-нибудь и сыграй' : 'No playback history yet — pick something and play'}</div>;
@@ -5491,6 +5487,7 @@ function RecentlyPlayedTab({ tracks, sort, onSortChange, isDark, lang, onPlayTra
             onArtistClick={(name) => { const slug = slugifyArtistName(name); if (slug && navigateToArtist) navigateToArtist(slug); }}
             onAlbumClick={(name) => onAlbumClick && onAlbumClick(name)}
             onToggleLike={onToggleLike}
+            onAddToPlaylist={onAddToPlaylist}
           />
         ))}
       </div>
@@ -5943,6 +5940,7 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
   const playlists = usePlaylists(activeCollection);
   const [activePlaylistId, setActivePlaylistId] = React.useState(null);
   const [showNewPlaylistModal, setShowNewPlaylistModal] = React.useState(false);
+  const [addToPopover, setAddToPopover] = React.useState(null);
 
   const toggleLike = async (track_id) => {
     const next = !(likedMap[track_id] !== false);   // default-true for items already in liked list
@@ -6038,6 +6036,7 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
               onToggleLike={toggleLike}
               likedMap={likedMap}
               currentTrackId={playerTrack?.track_id || null}
+              onAddToPlaylist={(tid, anchor) => setAddToPopover({ trackId: tid, anchor })}
             />
           )}
           {activeTab === 'recent' && (
@@ -6055,6 +6054,7 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
               onToggleLike={toggleLike}
               likedMap={likedMap}
               currentTrackId={playerTrack?.track_id || null}
+              onAddToPlaylist={(tid, anchor) => setAddToPopover({ trackId: tid, anchor })}
             />
           )}
           {activeTab === 'playlists' && (
@@ -6094,6 +6094,15 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
             setShowNewPlaylistModal(false);
             setActivePlaylistId(created.id);
           }}
+        />
+      )}
+      {addToPopover && (
+        <AddToPlaylistPopover
+          trackId={addToPopover.trackId}
+          anchor={addToPopover.anchor}
+          onClose={() => setAddToPopover(null)}
+          listing={playlists}
+          lang={lang}
         />
       )}
     </div>
