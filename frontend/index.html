@@ -1428,6 +1428,14 @@
       from { opacity: 0; transform: translateY(-8px); }
       to   { opacity: 1; transform: translateY(0); }
     }
+    /* Plan 19: drop-target indicator for playlist drag-drop */
+    .drop-above { position: relative; }
+    .drop-above::before {
+      content: ''; position: absolute; top: -4px; left: 24px; right: 14px; height: 2px;
+      background: linear-gradient(90deg, transparent 0%, oklch(60% 0.18 270) 50%, transparent 100%);
+      box-shadow: 0 0 8px oklch(60% 0.18 270 / 0.6);
+      pointer-events: none;
+    }
   </style>
 </head>
 <body>
@@ -5490,6 +5498,404 @@ function RecentlyPlayedTab({ tracks, sort, onSortChange, isDark, lang, onPlayTra
   );
 }
 
+// ─── ADD TO PLAYLIST POPOVER (Task 19) ───────────────────────────────────────
+function AddToPlaylistPopover({ trackId, anchor, onClose, listing, lang }) {
+  const [data, setData] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [inlineMode, setInlineMode] = React.useState(false);
+  const [inlineName, setInlineName] = React.useState('');
+  const popRef = React.useRef(null);
+
+  React.useEffect(() => {
+    listing.fetchWithMembership(trackId).then(setData);
+  }, [trackId, listing]);
+
+  React.useEffect(() => {
+    const onDocClick = (e) => { if (popRef.current && !popRef.current.contains(e.target)) onClose(); };
+    const onEsc = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onEsc);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onEsc);
+    };
+  }, [onClose]);
+
+  if (!anchor) return null;
+  const rect = anchor.getBoundingClientRect();
+  const style = {
+    position: 'fixed', zIndex: 1500,
+    left: Math.max(8, rect.right - 280),
+    top: rect.bottom + 8,
+    width: 280, padding: 10, borderRadius: 14,
+    background: 'linear-gradient(180deg, rgba(28,24,40,0.92) 0%, rgba(18,16,28,0.92) 60%)',
+    backdropFilter: 'blur(24px) saturate(1.3)', WebkitBackdropFilter: 'blur(24px) saturate(1.3)',
+    border: '1px solid rgba(255,255,255,.08)',
+    boxShadow: 'inset 0 1px 0 rgba(255,255,255,.12), 0 14px 38px rgba(0,0,0,.5), 0 0 0 1px rgba(124,91,255,.12)',
+  };
+
+  const onAdd = async (pl) => {
+    if (busy || pl.contains_track) return;
+    setBusy(true);
+    try {
+      await listing.addTrack(pl.id, trackId);
+      if (typeof showToast === 'function') showToast(lang === 'ru' ? `Добавлено в «${pl.name}»` : `Added to "${pl.name}"`, 'success');
+      onClose();
+    } catch (e) {
+      if (typeof showToast === 'function') showToast(lang === 'ru' ? 'Не удалось добавить' : 'Failed to add', 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onCreateInline = async () => {
+    const name = inlineName.trim();
+    if (!name || busy) return;
+    setBusy(true);
+    try {
+      const created = await listing.createPlaylist(name, null);
+      await listing.addTrack(created.id, trackId);
+      if (typeof showToast === 'function') showToast(lang === 'ru' ? `Создан «${name}», трек добавлен` : `Created "${name}", track added`, 'success');
+      onClose();
+    } catch (e) {
+      if (typeof showToast === 'function') showToast(lang === 'ru' ? 'Не удалось создать' : 'Failed to create', 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div ref={popRef} style={style} onClick={(e) => e.stopPropagation()}>
+      <div className="mono" style={{ padding: '4px 10px 8px', fontSize: 9.5, letterSpacing: '0.24em', color: 'rgba(238,238,243,.45)', borderBottom: '1px solid rgba(255,255,255,.05)', marginBottom: 4, textTransform: 'uppercase' }}>
+        {lang === 'ru' ? 'Добавить в плейлист' : 'Add to playlist'}
+      </div>
+      {data === null ? (
+        <div style={{ padding: '14px 10px', color: 'rgba(238,238,243,.4)', fontSize: 12 }}>…</div>
+      ) : data.playlists.length === 0 ? (
+        <div style={{ padding: '14px 10px', color: 'rgba(238,238,243,.4)', fontSize: 12 }}>
+          {lang === 'ru' ? 'У вас пока нет плейлистов' : 'No playlists yet'}
+        </div>
+      ) : (
+        data.playlists.map(pl => (
+          <div key={pl.id}
+            onClick={() => onAdd(pl)}
+            style={{
+              display: 'grid', gridTemplateColumns: '24px 1fr auto', gap: 8, alignItems: 'center',
+              padding: '9px 10px', borderRadius: 9,
+              cursor: pl.contains_track ? 'default' : 'pointer',
+              color: pl.contains_track ? 'rgba(238,238,243,.55)' : '#eeeef3',
+              transition: 'background .12s',
+            }}
+            onMouseEnter={(e) => { if (!pl.contains_track) e.currentTarget.style.background = 'rgba(124,91,255,.12)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+          >
+            <span style={{ color: 'oklch(72% 0.13 145)', fontSize: 14 }}>{pl.contains_track ? '✓' : ''}</span>
+            <span style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pl.name}</span>
+            <span className="mono" style={{ fontSize: 10, color: 'rgba(238,238,243,.4)', letterSpacing: '0.08em' }}>{pl.track_count}</span>
+          </div>
+        ))
+      )}
+      <div style={{ height: 1, background: 'rgba(255,255,255,.05)', margin: '4px 0' }} />
+      {inlineMode ? (
+        <div style={{ display: 'flex', gap: 6, padding: 6 }}>
+          <input
+            autoFocus
+            value={inlineName} onChange={(e) => setInlineName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') onCreateInline(); else if (e.key === 'Escape') setInlineMode(false); }}
+            placeholder={lang === 'ru' ? 'Название плейлиста' : 'Playlist name'}
+            style={{ flex: 1, background: 'rgba(0,0,0,.3)', border: '1px solid rgba(124,91,255,.35)', borderRadius: 8, padding: '8px 10px', color: '#fff', fontSize: 13, outline: 'none' }}
+          />
+          <button onClick={onCreateInline}
+            style={{ background: 'linear-gradient(180deg, oklch(72% 0.2 275) 0%, oklch(52% 0.24 282) 100%)', color: '#fff', border: 'none', borderRadius: 8, padding: '0 12px', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+            ▶
+          </button>
+        </div>
+      ) : (
+        <div
+          onClick={() => setInlineMode(true)}
+          style={{ padding: '9px 10px', borderRadius: 9, cursor: 'pointer', color: '#d8ccff', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}
+          onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(124,91,255,.15)'}
+          onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
+          <span style={{ fontSize: 16, lineHeight: 1 }}>＋</span>
+          {lang === 'ru' ? 'Новый плейлист…' : 'New playlist…'}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── PLAYLIST TRACK ROW (Task 18) ────────────────────────────────────────────
+function PlaylistTrackRow({ track, isDragging, onDragStart, onDragOver, onDragLeave, onDrop, onPlay, onArtist, onRemove, playlistId, listing, lang }) {
+  const [liked, setLiked]       = React.useState(false);
+  const [popoverFor, setPopoverFor] = React.useState(null);
+
+  React.useEffect(() => {
+    apiFetch(`/search/tracks/${track.track_id}/reaction`).then(r => setLiked(r?.reaction === 'like')).catch(() => {});
+  }, [track.track_id]);
+
+  const fmtDur = (s) => { if (!s) return '—'; const m = Math.floor(s/60), r = Math.floor(s%60); return `${m}:${String(r).padStart(2,'0')}`; };
+
+  const burst = (btn, kind) => {
+    const b = document.createElement('span');
+    const kindForCss = kind === 'remove' ? 'dislike' : 'like';
+    b.className = `player-icon-burst player-icon-burst--${kindForCss}`;
+    if (kind === 'add') {
+      b.style.background = 'radial-gradient(circle, rgba(124,91,255,0.65) 0%, rgba(124,91,255,0) 70%)';
+    }
+    btn.appendChild(b);
+    setTimeout(() => b.remove(), 640);
+  };
+
+  const handleLike = async (e) => {
+    burst(e.currentTarget, 'like');
+    const next = !liked;
+    setLiked(next);
+    try {
+      await apiFetch(`/search/tracks/${track.track_id}/reaction`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reaction: next ? 'like' : null }),
+      });
+    } catch { setLiked(!next); }
+  };
+
+  const handleAdd = (e) => {
+    burst(e.currentTarget, 'add');
+    setPopoverFor({ track_id: track.track_id, anchor: e.currentTarget });
+  };
+
+  const handleRemove = (e) => {
+    burst(e.currentTarget, 'remove');
+    onRemove();
+  };
+
+  return (
+    <div
+      draggable
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      style={{
+        display: 'grid',
+        gridTemplateColumns: '20px 44px 1fr auto 78px auto',
+        gap: 14, alignItems: 'center',
+        padding: '9px 14px 9px 6px', borderRadius: 12,
+        background: 'rgba(255,255,255,.025)',
+        border: '1px solid rgba(255,255,255,.04)',
+        cursor: 'pointer',
+        transition: 'all .15s cubic-bezier(.22,.9,.3,1)',
+        opacity: isDragging ? 0.35 : 1,
+        position: 'relative',
+      }}
+      onClick={onPlay}
+      onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,.06)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,.08)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,.025)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,.04)'; e.currentTarget.style.transform = ''; }}
+    >
+      <span title={lang === 'ru' ? 'Перетащите' : 'Drag to reorder'} style={{ cursor: 'grab', color: 'rgba(238,238,243,.25)', fontSize: 14, letterSpacing: -2, userSelect: 'none' }}>⋮⋮</span>
+      <div style={{ width: 44, height: 44, borderRadius: 8, overflow: 'hidden' }}>
+        <AlbumCover title={track.title} artist={track.artist} size={44} coverPath={track.cover_art_path} radius={8} fluid />
+      </div>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 15, color: '#eeeef3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', letterSpacing: '-0.005em' }}>{track.title}</div>
+        <div style={{ fontSize: 12, color: 'rgba(238,238,243,.55)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <span onClick={(e) => { e.stopPropagation(); onArtist(); }} style={{ color: '#bba8ff', cursor: 'pointer' }}>{track.artist}</span>
+          {track.album && (<>{' · '}{track.album}</>)}
+        </div>
+      </div>
+      <div />
+      <div className="mono" style={{ fontSize: 12, color: 'rgba(238,238,243,.5)', textAlign: 'right' }}>{fmtDur(track.duration)}</div>
+      <div style={{ display: 'flex', gap: 4 }}>
+        <button className="player-icon-btn" data-active={liked ? 'like' : undefined} onClick={(e) => { e.stopPropagation(); handleLike(e); }} title={lang === 'ru' ? (liked ? 'Убрать лайк' : 'Лайкнуть') : (liked ? 'Unlike' : 'Like')}>{liked ? '♥' : '♡'}</button>
+        <button className="player-icon-btn" onClick={(e) => { e.stopPropagation(); handleAdd(e); }} title={lang === 'ru' ? 'Добавить в плейлист' : 'Add to playlist'}>＋</button>
+        <button className="player-icon-btn" onClick={(e) => { e.stopPropagation(); handleRemove(e); }} title={lang === 'ru' ? 'Убрать из плейлиста' : 'Remove from playlist'}>⨯</button>
+      </div>
+      {popoverFor && (
+        <AddToPlaylistPopover
+          trackId={popoverFor.track_id}
+          anchor={popoverFor.anchor}
+          onClose={() => setPopoverFor(null)}
+          listing={listing}
+          lang={lang}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── PLAYLIST DETAIL VIEW (Task 17) ──────────────────────────────────────────
+function PlaylistDetailView({ playlistId, lang, activeCollection, onClose, onPlayTrack, navigateToArtist, listing }) {
+  const [detail, setDetail] = React.useState(null);
+  const [error, setError] = React.useState(null);
+  const [dragId, setDragId] = React.useState(null);
+
+  const refetch = React.useCallback(async () => {
+    try {
+      const r = await apiFetch(`/playlists/${playlistId}`);
+      setDetail(r);
+    } catch (e) {
+      setError(e?.detail || String(e));
+    }
+  }, [playlistId]);
+
+  React.useEffect(() => { refetch(); }, [refetch]);
+
+  if (error) return <div style={{ padding: 40, color: '#ff7a8a' }}>{error}</div>;
+  if (!detail) return <div style={{ padding: 40, color: 'rgba(238,238,243,.5)' }}>…</div>;
+
+  const onRenameBlur = async (e) => {
+    const newName = (e.target.textContent || '').trim();
+    if (newName && newName !== detail.name) {
+      try {
+        await listing.renamePlaylist(playlistId, { name: newName });
+        await refetch();
+      } catch (err) {
+        e.target.textContent = detail.name;
+        if (typeof showToast === 'function') showToast(lang === 'ru' ? 'Имя уже занято' : 'Name already taken', 'warn');
+      }
+    }
+  };
+  const onDescBlur = async (e) => {
+    const v = (e.target.textContent || '').trim();
+    if (v === (detail.description || '')) return;
+    try {
+      if (v === '') await listing.renamePlaylist(playlistId, { clear_description: true });
+      else await listing.renamePlaylist(playlistId, { description: v });
+      await refetch();
+    } catch (err) {
+      e.target.textContent = detail.description || '';
+    }
+  };
+
+  const onDelete = async () => {
+    if (!confirm(lang === 'ru' ? `Удалить плейлист «${detail.name}»?` : `Delete playlist "${detail.name}"?`)) return;
+    await listing.deletePlaylist(playlistId);
+    onClose();
+  };
+
+  const onRemoveTrack = async (track_id) => {
+    setDetail({ ...detail, tracks: detail.tracks.filter(t => t.track_id !== track_id) });
+    try { await listing.removeTrack(playlistId, track_id); await refetch(); }
+    catch { refetch(); }
+  };
+
+  const onDragStart = (id) => (e) => { setDragId(id); e.dataTransfer.effectAllowed = 'move'; };
+  const onDragOver  = (id) => (e) => { e.preventDefault(); if (id !== dragId) e.currentTarget.classList.add('drop-above'); };
+  const onDragLeave = (e) => { e.currentTarget.classList.remove('drop-above'); };
+  const onDrop = (targetId) => async (e) => {
+    e.preventDefault();
+    document.querySelectorAll('.drop-above').forEach(el => el.classList.remove('drop-above'));
+    if (!dragId || dragId === targetId) return;
+    const ids = detail.tracks.map(t => t.track_id);
+    const from = ids.indexOf(dragId), to = ids.indexOf(targetId);
+    if (from < 0 || to < 0) return;
+    ids.splice(from, 1); ids.splice(to, 0, dragId);
+    const reordered = ids.map(tid => detail.tracks.find(t => t.track_id === tid));
+    setDetail({ ...detail, tracks: reordered });
+    try { await listing.reorderTracks(playlistId, ids); }
+    catch { refetch(); if (typeof showToast === 'function') showToast(lang === 'ru' ? 'Не удалось сохранить порядок' : 'Failed to save order', 'error'); }
+  };
+
+  const totalDur = detail.tracks.reduce((acc, t) => acc + (t.duration || 0), 0);
+  const fmtTotal = (s) => {
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    return h > 0 ? `${h}:${String(m).padStart(2,'0')}:00` : `${m}:${String(Math.floor(s % 60)).padStart(2,'0')}`;
+  };
+
+  return (
+    <div>
+      <button onClick={onClose} className="mono" style={{ background: 'none', border: 'none', color: 'rgba(238,238,243,.5)', cursor: 'pointer', fontSize: 11, letterSpacing: '0.22em', padding: '0 0 18px' }}>
+        ← {lang === 'ru' ? 'К ПЛЕЙЛИСТАМ' : 'BACK TO PLAYLISTS'}
+      </button>
+
+      <div style={{
+        display: 'grid', gridTemplateColumns: '240px 1fr', gap: 28,
+        padding: 20, borderRadius: 18,
+        background: 'linear-gradient(180deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.015) 60%)',
+        backdropFilter: 'blur(22px) saturate(1.1)', WebkitBackdropFilter: 'blur(22px) saturate(1.1)',
+        border: '1px solid rgba(255,255,255,.07)',
+        boxShadow: 'inset 0 1px 0 rgba(255,255,255,.12), 0 6px 24px rgba(0,0,0,.32)',
+        marginBottom: 22,
+      }}>
+        <MosaicCover trackIds={detail.tracks.slice(0,4).map(t => t.track_id)} coverPaths={detail.tracks.slice(0,4).map(t => t.cover_art_path)} size={240} radius={14} />
+        <div style={{ display: 'flex', flexDirection: 'column', padding: '4px 0' }}>
+          <div className="mono" style={{ fontSize: 10, letterSpacing: '0.22em', color: 'rgba(238,238,243,.5)', marginBottom: 12, textTransform: 'uppercase' }}>
+            {lang === 'ru' ? 'ПЛЕЙЛИСТ' : 'PLAYLIST'}
+          </div>
+          <h1
+            contentEditable suppressContentEditableWarning spellCheck={false}
+            onBlur={onRenameBlur}
+            style={{
+              fontFamily: "'Noto Serif Display', Georgia, serif", fontStyle: 'italic', fontWeight: 300,
+              fontSize: 48, lineHeight: 1.05, letterSpacing: '-0.015em', margin: '0 0 14px',
+              cursor: 'text', padding: 0, border: '1px solid transparent', borderRadius: 8, outline: 'none',
+            }}
+          >{detail.name}</h1>
+          <div className="mono" style={{ fontSize: 11, letterSpacing: '0.16em', color: 'rgba(238,238,243,.55)', marginBottom: 16, textTransform: 'uppercase' }}>
+            {detail.tracks.length} {lang === 'ru' ? 'ТРЕКОВ' : 'TRACKS'} · {fmtTotal(totalDur)}
+          </div>
+          <p
+            contentEditable suppressContentEditableWarning spellCheck={false}
+            onBlur={onDescBlur}
+            style={{
+              fontFamily: "'Noto Serif Display', Georgia, serif", fontStyle: 'italic', fontWeight: 300,
+              color: detail.description ? 'rgba(216,204,255,.85)' : 'rgba(238,238,243,.3)',
+              fontSize: 17, lineHeight: 1.45, maxWidth: 540, margin: '0 0 22px',
+              cursor: 'text', padding: '2px 0', border: '1px solid transparent', borderRadius: 8, outline: 'none',
+            }}
+          >{detail.description || (lang === 'ru' ? 'добавьте описание…' : 'add a description…')}</p>
+          <div style={{ display: 'flex', gap: 10, marginTop: 'auto', alignItems: 'center' }}>
+            <button
+              className="cta-v3" style={{ padding: '11px 24px' }}
+              onClick={() => { if (detail.tracks[0]) onPlayTrack(detail.tracks[0]); }}>
+              ▶ {lang === 'ru' ? 'Слушать всё' : 'Play all'}
+            </button>
+            <div style={{ flex: 1 }} />
+            <button
+              onClick={onDelete}
+              title={lang === 'ru' ? 'Удалить плейлист' : 'Delete playlist'}
+              style={{
+                width: 40, height: 40, borderRadius: '50%',
+                background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.06)',
+                color: 'rgba(238,238,243,.7)', cursor: 'pointer', fontSize: 16,
+              }}>🗑</button>
+          </div>
+        </div>
+      </div>
+
+      {detail.missing_track_ids.length > 0 && (
+        <div className="mono" style={{
+          padding: '10px 14px', borderRadius: 10, fontSize: 12, letterSpacing: '0.08em',
+          background: 'rgba(255,180,80,.05)', border: '1px solid rgba(255,180,80,.18)',
+          color: 'rgba(255,200,140,.7)', margin: '12px 0',
+        }}>
+          ⚠ {detail.missing_track_ids.length} {lang === 'ru' ? 'ТРЕК(А) НЕ НАЙДЕНЫ В ТЕКУЩЕЙ КОЛЛЕКЦИИ — СКРЫТЫ, НО НЕ УДАЛЕНЫ. РЕИНДЕКСАЦИЯ ВЕРНЁТ ИХ' : 'TRACK(S) NOT FOUND IN CURRENT COLLECTION — HIDDEN, NOT REMOVED. RE-INDEX TO RESTORE'}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {detail.tracks.map(t => (
+          <PlaylistTrackRow
+            key={t.track_id}
+            track={t}
+            isDragging={dragId === t.track_id}
+            onDragStart={onDragStart(t.track_id)}
+            onDragOver={onDragOver(t.track_id)}
+            onDragLeave={onDragLeave}
+            onDrop={onDrop(t.track_id)}
+            onPlay={() => onPlayTrack(t)}
+            onArtist={() => navigateToArtist && navigateToArtist(t.artist)}
+            onRemove={() => onRemoveTrack(t.track_id)}
+            playlistId={playlistId}
+            listing={listing}
+            lang={lang}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── PLAYLISTS TAB ────────────────────────────────────────────────────────────
 function PlaylistsTab({ listing, activePlaylistId, onOpenPlaylist, onCloseDetail, onRequestCreate, onPlayTrack, isDark, lang, activeCollection, navigateToArtist }) {
   if (activePlaylistId == null) {
@@ -5503,16 +5909,16 @@ function PlaylistsTab({ listing, activePlaylistId, onOpenPlaylist, onCloseDetail
       />
     );
   }
-  // Detail view will be replaced in Task 17 with full PlaylistDetailView
   return (
-    <div>
-      <button onClick={onCloseDetail} className="mono" style={{ background: 'none', border: 'none', color: 'rgba(238,238,243,.5)', cursor: 'pointer', fontSize: 11, letterSpacing: '0.22em', padding: '0 0 18px' }}>
-        ← {lang === 'ru' ? 'К ПЛЕЙЛИСТАМ' : 'BACK TO PLAYLISTS'}
-      </button>
-      <div style={{ padding: 40, textAlign: 'center', color: 'rgba(238,238,243,.5)' }}>
-        Detail view coming in Task 17
-      </div>
-    </div>
+    <PlaylistDetailView
+      playlistId={activePlaylistId}
+      lang={lang}
+      activeCollection={activeCollection}
+      onClose={onCloseDetail}
+      onPlayTrack={onPlayTrack}
+      navigateToArtist={navigateToArtist}
+      listing={listing}
+    />
   );
 }
 
