@@ -1352,3 +1352,60 @@ class MetadataDB:
             except Exception:
                 pass
         return result
+
+    # ─── Playlists CRUD (Plan 19) ────────────────────────────────────────
+    @classmethod
+    def _row_to_dict(cls, row) -> dict | None:
+        if row is None:
+            return None
+        return {key: row[key] for key in row.keys()}
+
+    @classmethod
+    def create_playlist(cls, collection_name: str, name: str, description: str | None) -> int:
+        """Insert a new playlist. Raises sqlite3.IntegrityError on (collection_name, name) collision."""
+        conn = cls._connect()
+        cur = conn.execute(
+            "INSERT INTO playlists (collection_name, name, description) VALUES (?, ?, ?)",
+            (collection_name, name, description),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+
+    @classmethod
+    def list_playlists(cls, collection_name: str) -> list[dict]:
+        """Return playlist rows for a collection, ordered by updated_at DESC."""
+        conn = cls._connect()
+        conn.row_factory = __import__("sqlite3").Row
+        try:
+            rows = conn.execute(
+                "SELECT id, collection_name, name, description, created_at, updated_at "
+                "FROM playlists WHERE collection_name = ? ORDER BY updated_at DESC, id DESC",
+                (collection_name,),
+            ).fetchall()
+            return [cls._row_to_dict(r) for r in rows]
+        finally:
+            conn.row_factory = None
+
+    @classmethod
+    def get_playlist_row(cls, playlist_id: int) -> dict | None:
+        conn = cls._connect()
+        conn.row_factory = __import__("sqlite3").Row
+        try:
+            row = conn.execute(
+                "SELECT id, collection_name, name, description, created_at, updated_at "
+                "FROM playlists WHERE id = ?",
+                (playlist_id,),
+            ).fetchone()
+            return cls._row_to_dict(row)
+        finally:
+            conn.row_factory = None
+
+    @classmethod
+    def touch_playlist(cls, playlist_id: int) -> None:
+        """Update `updated_at` to now. Used after any mutation."""
+        conn = cls._connect()
+        conn.execute(
+            "UPDATE playlists SET updated_at = datetime('now') WHERE id = ?",
+            (playlist_id,),
+        )
+        conn.commit()
