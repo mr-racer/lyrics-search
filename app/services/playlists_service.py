@@ -13,6 +13,7 @@ from app.domain.models import (
     PlaylistDetail, PlaylistSummary, PlaylistTrack,
 )
 from app.resources.metadata_db import MetadataDB
+from app.services._payload_coerce import coerce_float, coerce_year
 
 
 # ─── Exceptions ──────────────────────────────────────────────────────────
@@ -134,8 +135,8 @@ def get(playlist_id: int, *, qdrant) -> PlaylistDetail:
             title=pl.get("title") or "—",
             artist=pl.get("artist") or "—",
             album=pl.get("album"),
-            year=int(pl["year"]) if pl.get("year") and str(pl["year"]).isdigit() else None,
-            duration=pl.get("duration"),
+            year=coerce_year(pl.get("year")),
+            duration=coerce_float(pl.get("duration")),
             cover_art_path=pl.get("cover_art_path"),
         ))
     return PlaylistDetail(

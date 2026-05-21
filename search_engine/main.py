@@ -52,6 +52,7 @@ def _build_payload_for_upsert(song_info: dict, slug: str | None = None) -> dict:
         "year_range":     song_info.get("year_range"),
         "genre":          song_info.get("genre"),
         "duration":       song_info.get("duration"),
+        "duration_range": song_info.get("duration_range"),
         "file_path":      song_info.get("file_path"),
         "cover_art_path": song_info.get("cover_art_path"),
         "producer":       song_info.get("producer"),

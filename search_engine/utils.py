@@ -70,9 +70,12 @@ def prepare_metadata(data: dict):
     buckets = np.select(conditions, labels, default='')
     buckets = list(map(lambda x: str(x), list(buckets)))
 
-    # Собираем результат
+    # Собираем результат. `duration` остаётся числом (секунды) — Pydantic-модели
+    # ниже по конвейеру (LikedSongTrack/RecentTrack/PlaylistTrack) ждут float.
+    # `duration_range` — отдельный bucket-лейбл для фасета по длительности
+    # (зеркалит пару year/year_range).
     result = [
-        {**{k: v for k, v in d.items() if k != 'duration'}, 'duration': bucket}
+        {**d, 'duration_range': bucket}
         for d, bucket in zip(filtered, buckets)
     ]
 

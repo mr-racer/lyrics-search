@@ -506,7 +506,7 @@ async def get_stats(
                 collection_name=target_col,
                 offset=offset,
                 limit=250,
-                with_payload=["genre", "duration", "artist", "year"],
+                with_payload=["genre", "duration", "duration_range", "artist", "year"],
                 with_vectors=False,
             )
             for point in results:
@@ -514,9 +514,17 @@ async def get_stats(
                 genre = pl.get("genre")
                 if genre and str(genre).strip():
                     genre_counter[str(genre).strip()] += 1
-                dur = pl.get("duration")
-                if dur and str(dur).strip():
-                    duration_counter[str(dur).strip()] += 1
+                # Prefer the new bucket field `duration_range`; fall back to the
+                # legacy clobbered `duration` only if it's still a range string
+                # (pre-fix indexes). Numeric `duration` is the real seconds and
+                # has no place in a bucket histogram.
+                bucket = pl.get("duration_range")
+                if bucket is None:
+                    raw = pl.get("duration")
+                    if isinstance(raw, str) and "-" in raw:
+                        bucket = raw
+                if bucket and str(bucket).strip():
+                    duration_counter[str(bucket).strip()] += 1
                 artist = pl.get("artist")
                 if artist and str(artist).strip():
                     artist_counter[str(artist).strip()] += 1

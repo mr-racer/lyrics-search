@@ -42,12 +42,18 @@ class TestPrepareMetadata:
         result = utils_module.prepare_metadata({})
         assert result == []
 
-    def test_duration_replaced_with_bucket_string(self, sample_tracks_data):
+    def test_duration_kept_numeric_and_range_added(self, sample_tracks_data):
+        """Numeric `duration` must survive bucketing — downstream Pydantic
+        models (LikedSongTrack et al.) expect Optional[float]. The bucket
+        label lives in the parallel `duration_range` field, mirroring
+        the existing year/year_range pair."""
         result = utils_module.prepare_metadata(sample_tracks_data)
         for rec in result:
-            assert isinstance(rec["duration"], str), "Duration should be a bucket string"
-            # Bucket format: "X-Y"
-            assert "-" in rec["duration"]
+            assert isinstance(rec["duration"], (int, float)), (
+                "duration must remain numeric seconds, not a bucket string"
+            )
+            assert isinstance(rec["duration_range"], str)
+            assert "-" in rec["duration_range"]
 
     def test_year_range_added(self, sample_tracks_data):
         result = utils_module.prepare_metadata(sample_tracks_data)
@@ -89,13 +95,13 @@ class TestPrepareMetadata:
         assert len(result) == 1
         assert "year_range" not in result[0]
 
-    def test_original_duration_removed(self, sample_tracks_data):
-        """Raw duration (int) should be replaced by bucket string."""
+    def test_duration_range_bucket_shape(self, sample_tracks_data):
+        """`duration_range` must be a parseable 'X-Y' int-int bucket."""
         result = utils_module.prepare_metadata(sample_tracks_data)
         for rec in result:
-            dur = rec["duration"]
-            assert isinstance(dur, str)
-            # Should not be a raw integer
-            parts = dur.split("-")
+            dr = rec["duration_range"]
+            assert isinstance(dr, str)
+            parts = dr.split("-")
             assert len(parts) == 2
             int(parts[0])  # should not raise
+            int(parts[1])

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from app.domain.models import RecentTrack, RecentTracksResponse
 from app.resources.metadata_db import MetadataDB
+from app.services._payload_coerce import coerce_float, coerce_year
 
 
 def record_event(
@@ -55,8 +56,8 @@ def get_recent(*, qdrant_client, collection_name: str, limit: int = 50) -> Recen
             title=pl.get("title") or "—",
             artist=pl.get("artist") or "—",
             album=pl.get("album"),
-            year=int(pl["year"]) if pl.get("year") and str(pl["year"]).isdigit() else None,
-            duration=pl.get("duration"),
+            year=coerce_year(pl.get("year")),
+            duration=coerce_float(pl.get("duration")),
             cover_art_path=pl.get("cover_art_path"),
             genre=pl.get("genre"),
             last_played=lp,

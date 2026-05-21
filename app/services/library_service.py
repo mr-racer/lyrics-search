@@ -957,6 +957,7 @@ class LibraryService:
         ordered newest-liked first. Tracks whose Qdrant payload has been
         evicted (e.g. re-index churn) are silently skipped."""
         from app.domain.models import LikedSongTrack, LikedSongsResponse
+        from app.services._payload_coerce import coerce_float, coerce_year
         pairs = MetadataDB.get_liked_track_ids_with_updated_at(collection_name)
         if not pairs:
             return LikedSongsResponse(tracks=[], collection_name=collection_name)
@@ -982,8 +983,8 @@ class LibraryService:
                 title=pl.get("title") or "—",
                 artist=pl.get("artist") or "—",
                 album=pl.get("album"),
-                year=int(pl["year"]) if pl.get("year") and str(pl["year"]).isdigit() else None,
-                duration=pl.get("duration"),
+                year=coerce_year(pl.get("year")),
+                duration=coerce_float(pl.get("duration")),
                 cover_art_path=pl.get("cover_art_path"),
                 genre=pl.get("genre"),
                 liked_at=liked_at_by_id.get(str(p.id), ""),

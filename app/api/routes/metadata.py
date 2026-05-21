@@ -8,10 +8,12 @@ from __future__ import annotations
 
 from typing import List, Literal, Optional
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from ...domain.models import TrackMetadata
 from ...resources.metadata_db import MetadataDB
+from ...services._payload_coerce import coerce_float, coerce_year
 from ...services.artist_facts_service import _slugify as _slugify_artist
 from ...services.song_facts_service import get_song_facts_key
 
@@ -178,6 +180,56 @@ def get_track_facts(
     return TrackFacts(
         artist_name=artist, title=title,
         song_facts=song_facts, artist_facts=artist_facts,
+    )
+
+
+# ── Full track metadata ──────────────────────────────────────────────────────
+
+
+@router.get("/metadata/tracks/{track_id}", response_model=TrackMetadata)
+def get_track_metadata(
+    track_id: str,
+    collection: str = Query(..., description="Qdrant collection name"),
+    request: Request = None,
+) -> TrackMetadata:
+    """Return the full TrackMetadata for one track from Qdrant payload.
+
+    Used by the player when the user opens a song from Library / Recently /
+    Playlists — those endpoints return slim shapes (LikedSongTrack etc.) that
+    lack `lyrics`, `producer`, `samples`, `file_path` etc. This endpoint
+    backfills the missing fields so the player UI (lyrics back-face, info
+    pills) is fully populated regardless of origin.
+    """
+    if request is None or request.app.state.db_client is None:
+        raise HTTPException(status_code=503, detail="Qdrant unavailable")
+    qdrant = request.app.state.db_client.qdrant
+    try:
+        points = qdrant.retrieve(
+            collection_name=collection, ids=[track_id],
+            with_payload=True, with_vectors=False,
+        )
+    except Exception:
+        raise HTTPException(status_code=502, detail="Qdrant retrieve failed")
+    if not points:
+        raise HTTPException(status_code=404, detail="track not found")
+    pl = points[0].payload or {}
+    duration_sec = coerce_float(pl.get("duration")) or 0.0
+    return TrackMetadata(
+        track_id=track_id,
+        title=pl.get("title") or "",
+        artist=pl.get("artist") or "",
+        album=pl.get("album"),
+        year=coerce_year(pl.get("year")),
+        genre=pl.get("genre"),
+        duration_sec=duration_sec,
+        file_path=pl.get("file_path") or "",
+        lyrics=pl.get("lyrics"),
+        cover_art_path=pl.get("cover_art_path"),
+        producer=pl.get("producer"),
+        label=pl.get("label"),
+        samples=pl.get("samples"),
+        sampled_by=pl.get("sampled_by"),
+        bitrate_kbps=pl.get("bitrate_kbps"),
     )
 
 

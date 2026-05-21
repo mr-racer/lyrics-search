@@ -71,3 +71,23 @@ def test_get_liked_songs_empty_when_no_likes():
     qdrant = _stub_qdrant_retrieve({})
     res = LibraryService.get_liked_songs(qdrant_client=qdrant, collection_name="test_col")
     assert res.tracks == []
+
+
+def test_get_liked_songs_survives_legacy_bucket_duration():
+    """Pre-fix indexes overwrite numeric duration with a bucket string
+    like '203-234'. The endpoint must coerce instead of raising
+    Pydantic ValidationError for LikedSongTrack."""
+    MetadataDB.set_reaction(track_id="t1", collection_name="test_col", reaction="like")
+    MetadataDB.set_reaction(track_id="t2", collection_name="test_col", reaction="like")
+    qdrant = _stub_qdrant_retrieve({
+        "t1": {"title": "T1", "artist": "A", "duration": "203-234", "year": "2003-2004"},
+        "t2": {"title": "T2", "artist": "B", "duration": 220, "year": 2010},
+    })
+    res = LibraryService.get_liked_songs(qdrant_client=qdrant, collection_name="test_col")
+    assert {t.track_id for t in res.tracks} == {"t1", "t2"}
+    t1 = next(t for t in res.tracks if t.track_id == "t1")
+    # Bucket '203-234' midpoint is 218.5 — close enough to the real seconds
+    # that downstream UIs (which only show MM:SS) render sensibly.
+    assert t1.duration == pytest.approx(218.5)
+    # 'YYYY-YYYY' year range falls back to first year token.
+    assert t1.year == 2003
