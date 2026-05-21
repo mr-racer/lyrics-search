@@ -180,3 +180,44 @@ def test_reorder_with_set_mismatch_returns_400(client):
 def test_reorder_missing_playlist_returns_404(client):
     r = client.post("/api/v1/playlists/9999999/reorder", json={"track_ids": []})
     assert r.status_code == 404
+
+
+def test_cross_collection_list_isolation(client):
+    client.post("/api/v1/playlists", json={"collection_name": "a", "name": "X"})
+    client.post("/api/v1/playlists", json={"collection_name": "b", "name": "Y"})
+    r = client.get("/api/v1/playlists", params={"collection_name": "a"}).json()
+    assert [p["name"] for p in r["playlists"]] == ["X"]
+
+
+def test_orphan_tracks_partitioned_in_detail(client, monkeypatch):
+    """When Qdrant only resolves SOME track_ids, the rest land in missing_track_ids."""
+    import app.services.playlists_service as svc
+
+    def fake_resolve_payloads(qdrant, collection_name: str, track_ids: list) -> dict:
+        return {"t_real": {"title": "Real", "artist": "Artist"}}
+
+    monkeypatch.setattr(svc, "_resolve_payloads", fake_resolve_payloads)
+
+    p = client.post("/api/v1/playlists", json={"collection_name": "c", "name": "M"}).json()
+    client.post(f"/api/v1/playlists/{p['id']}/tracks", json={"track_id": "t_real"})
+    client.post(f"/api/v1/playlists/{p['id']}/tracks", json={"track_id": "t_orphan"})
+    detail = client.get(f"/api/v1/playlists/{p['id']}").json()
+    assert [t["track_id"] for t in detail["tracks"]] == ["t_real"]
+    assert detail["missing_track_ids"] == ["t_orphan"]
+
+
+def test_include_track_id_annotates_contains_track(client):
+    p1 = client.post("/api/v1/playlists", json={"collection_name": "c", "name": "Has"}).json()
+    p2 = client.post("/api/v1/playlists", json={"collection_name": "c", "name": "HasNot"}).json()
+    client.post(f"/api/v1/playlists/{p1['id']}/tracks", json={"track_id": "t-target"})
+
+    r = client.get("/api/v1/playlists", params={"collection_name": "c", "include_track_id": "t-target"}).json()
+    by_name = {p["name"]: p for p in r["playlists"]}
+    assert by_name["Has"]["contains_track"] is True
+    assert by_name["HasNot"]["contains_track"] is False
+
+
+def test_without_include_track_id_contains_track_is_null(client):
+    client.post("/api/v1/playlists", json={"collection_name": "c", "name": "X"})
+    r = client.get("/api/v1/playlists", params={"collection_name": "c"}).json()
+    assert r["playlists"][0]["contains_track"] is None
