@@ -28,7 +28,7 @@ def test_payload_includes_sonic_tags_when_present(db):
         tags=[{"tag": "melancholic", "score": 0.8}, {"tag": "lo-fi", "score": 0.7}],
     )
 
-    from search_engine.main import _build_payload_for_upsert
+    from app.services.indexing_service import _build_payload_for_upsert
     song_info = {"title": "Title Y", "artist": "Artist B", "album": None,
                  "year": 2019, "year_range": "2015-2019", "genre": None,
                  "duration": 180, "file_path": "/p", "cover_art_path": None,
@@ -40,7 +40,7 @@ def test_payload_includes_sonic_tags_when_present(db):
 
 def test_payload_omits_sonic_when_sqlite_empty(db):
     """Track whose SQLite row exists but has no sonic descriptor: payload has empty list."""
-    from search_engine.main import _build_payload_for_upsert
+    from app.services.indexing_service import _build_payload_for_upsert
     song_info = {"title": "Z", "artist": "C", "album": None, "year": None,
                  "year_range": None, "genre": None, "duration": None,
                  "file_path": "/p", "cover_art_path": None, "producer": None,
@@ -52,7 +52,7 @@ def test_payload_omits_sonic_when_sqlite_empty(db):
 
 def test_payload_tolerates_no_slug(db):
     """When the caller can't derive a slug, payload stays clean (empty tags)."""
-    from search_engine.main import _build_payload_for_upsert
+    from app.services.indexing_service import _build_payload_for_upsert
     song_info = {"title": "Z", "artist": "C", "album": None, "year": None,
                  "year_range": None, "genre": None, "duration": None,
                  "file_path": "/p", "cover_art_path": None, "producer": None,

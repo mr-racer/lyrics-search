@@ -1,6 +1,6 @@
 """Tests for file_processor.utils.normalize_genre()."""
 
-from file_processor.utils import normalize_genre
+from app.indexing.metadata_readers import normalize_genre
 
 
 class TestNormalizeGenre:

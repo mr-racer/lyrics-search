@@ -1220,14 +1220,14 @@ class LibraryService:
           - year: int | None  (not a range string)
           - duration: int     (raw seconds, not "MM:SS")
         """
-        from file_processor.utils import save_cover_art
+        from app.indexing.cover_art import save_cover_art
 
         tracks = []
         for key, info in metadata.items():
             file_path = info.get("file_path", "")
             track_id = self._compute_track_id(file_path)
 
-            # year is already int|None from file_processor
+            # year is already int|None from app.indexing.metadata_readers
             year = info.get("year")
             if isinstance(year, str):
                 # defensive: if somehow a string slipped in, parse first digits
@@ -1236,7 +1236,7 @@ class LibraryService:
                 except (ValueError, AttributeError):
                     year = None
 
-            # duration is already int (seconds) from file_processor
+            # duration is already int (seconds) from app.indexing.folder_scanner
             raw_duration = info.get("duration", 0)
             if isinstance(raw_duration, (int, float)):
                 duration_sec = float(raw_duration)

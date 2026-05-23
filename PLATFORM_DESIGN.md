@@ -1037,6 +1037,22 @@ CREATE TABLE recommendation_snapshots (
 
 ---
 
+> **Refactor (2026-05-23)**: Legacy packages `file_processor/`, `search_engine/`,
+> and the `app/existing/` facade were consolidated into the `app/` tree:
+>
+> - `app/indexing/` — 5 modules from `file_processor/utils.py` (metadata_readers,
+>   cover_art, lyrics_fetchers, audio_optimization, folder_scanner)
+> - `app/resources/lyrics_search_engine.py` — canonical search-side class (was
+>   half of `search_engine.main.LyricsDB`); ModelRegistry is now the sole entry
+>   point for text + CLAP loading
+> - `app/resources/qdrant_filters.py`, `qdrant_payload.py`, `clap_features.py` —
+>   the 3 mixed-concern halves of the old `search_engine/utils.py`
+> - `app/services/indexing_service.py` — orchestrates folder scan → encode →
+>   upsert (replaces FileProcessor + LyricsDB.fit pipeline)
+>
+> See `refactor/legacy-to-app-modules` branch for the 6-commit incremental
+> migration.
+
 ## 8. Critical Files Reference
 
 | Файл | Что меняется |

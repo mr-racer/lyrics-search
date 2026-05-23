@@ -7,7 +7,8 @@ app.indexing.*; file_processor.utils is a thin re-export shim.
 from pathlib import Path
 from unittest.mock import patch
 
-from file_processor.utils import get_lyrics, process_file
+from app.indexing.lyrics_fetchers import get_lyrics
+from app.indexing.folder_scanner import process_file
 
 
 class TestGetLyrics:

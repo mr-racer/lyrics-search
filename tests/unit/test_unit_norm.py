@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from search_engine.utils import unit_norm
+from app.resources.clap_features import unit_norm
 
 
 class TestUnitNorm:

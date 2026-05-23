@@ -1,6 +1,6 @@
 """Tests for search_engine.utils.build_text_for_embedding()."""
 
-from search_engine.utils import build_text_for_embedding
+from app.resources.qdrant_payload import build_text_for_embedding
 
 
 class TestBuildTextForEmbedding:

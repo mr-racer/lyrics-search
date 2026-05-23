@@ -1,6 +1,6 @@
 """Tests for file_processor.utils.validate_year()."""
 
-from file_processor.utils import validate_year
+from app.indexing.metadata_readers import validate_year
 
 
 class TestValidateYear:
