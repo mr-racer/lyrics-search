@@ -123,14 +123,20 @@ _SCHEMA_SQL: Tuple[str, ...] = (
         PRIMARY KEY (track_id, collection_name, lang)
     )""",
     # Refined Facts cache (added in Plan 3 Task 15)
+    # Key is (scope, scope_key, lang) — collection-INDEPENDENT. scope_key is a
+    # stable slug (song_slug from artist+title, or artist_slug), so the same
+    # song/artist refined once is reused across every collection. collection_name
+    # is kept only as provenance (last writer) for the per-collection cache reset.
+    # Pre-existing DBs are migrated from the old (…, collection_name, lang) PK by
+    # _migrate_refined_facts_key().
     """CREATE TABLE IF NOT EXISTS refined_facts (
         scope           TEXT NOT NULL,         -- 'song' or 'artist'
-        scope_key       TEXT NOT NULL,         -- track_id (song) or artist_slug (artist)
-        collection_name TEXT NOT NULL,
+        scope_key       TEXT NOT NULL,         -- song_slug (song) or artist_slug (artist)
         lang            TEXT NOT NULL,
+        collection_name TEXT,                  -- provenance only; NOT part of key
         refined_json    TEXT NOT NULL,         -- JSON array of {"text": str}
         generated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        PRIMARY KEY (scope, scope_key, collection_name, lang)
+        PRIMARY KEY (scope, scope_key, lang)
     )""",
     # Artist Bio cache (Plan 5)
     """CREATE TABLE IF NOT EXISTS artist_bios (
@@ -265,8 +271,89 @@ class MetadataDB:
             "n_skipped": "INTEGER NOT NULL DEFAULT 0",
         })
 
+        # Facts are unique per (slug, lang, fact) and per-slug refined facts are
+        # collection-independent. Both migrations are idempotent no-ops once applied.
+        if "artist_facts" in existing_tables:
+            cls._migrate_dedup_facts(conn)
+        if "refined_facts" in existing_tables:
+            cls._migrate_refined_facts_key(conn)
+
         conn.commit()
         logger.info("[MetadataDB] Schema initialised")
+
+    @classmethod
+    def _migrate_dedup_facts(cls, conn: sqlite3.Connection) -> None:
+        """Collapse duplicate fact rows and enforce uniqueness going forward.
+
+        Re-indexing the same folder used to append identical fact rows (no dedup
+        on insert, no UNIQUE constraint), so a single artist could accumulate the
+        same fact N times. Keep the lowest-id row per (slug, lang, fact), then add
+        UNIQUE indexes so future INSERT OR IGNORE silently drops repeats.
+        Idempotent: the DELETEs are no-ops once unique, indexes use IF NOT EXISTS.
+
+        Best-effort: a legacy/malformed schema (e.g. a pre-slug ``songs`` table
+        that breaks the song_facts foreign key) makes SQLite raise on the first
+        DML. A migration must never abort app startup, so such tables are logged
+        and skipped — the live schema this ships with is always well-formed.
+        """
+        for table, key_cols in (
+            ("artist_facts", "artist_slug, lang, fact"),
+            ("song_facts", "song_slug, lang, fact"),
+        ):
+            try:
+                conn.execute(
+                    f"DELETE FROM {table} WHERE id NOT IN "
+                    f"(SELECT MIN(id) FROM {table} GROUP BY {key_cols})"
+                )
+                conn.execute(
+                    f"CREATE UNIQUE INDEX IF NOT EXISTS uq_{table} ON {table}({key_cols})"
+                )
+            except sqlite3.OperationalError as e:
+                logger.warning("[MetadataDB] dedup migration skipped for %s: %s", table, e)
+
+    @classmethod
+    def _migrate_refined_facts_key(cls, conn: sqlite3.Connection) -> None:
+        """Drop collection_name from the refined_facts primary key.
+
+        scope_key is already a collection-independent slug, so keying refined
+        facts by collection forced the LLM refinement to re-run (and re-store)
+        per collection. Rebuild the table with PK (scope, scope_key, lang),
+        keeping the most-recent row per group. collection_name survives as a
+        plain provenance column. Idempotent: only rebuilds while the live PK
+        still contains collection_name.
+        """
+        cols = conn.execute("PRAGMA table_info(refined_facts)").fetchall()
+        # row layout: (cid, name, type, notnull, dflt, pk). pk>0 ⇒ in primary key.
+        collection_in_pk = any(c[1] == "collection_name" and c[5] > 0 for c in cols)
+        if not collection_in_pk:
+            return  # already migrated
+        conn.executescript(
+            """
+            CREATE TABLE refined_facts_new (
+                scope           TEXT NOT NULL,
+                scope_key       TEXT NOT NULL,
+                lang            TEXT NOT NULL,
+                collection_name TEXT,
+                refined_json    TEXT NOT NULL,
+                generated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (scope, scope_key, lang)
+            );
+            INSERT INTO refined_facts_new
+                (scope, scope_key, lang, collection_name, refined_json, generated_at)
+            SELECT scope, scope_key, lang, collection_name, refined_json, generated_at
+            FROM refined_facts rf
+            WHERE rf.rowid = (
+                SELECT rf2.rowid FROM refined_facts rf2
+                WHERE rf2.scope = rf.scope AND rf2.scope_key = rf.scope_key
+                      AND rf2.lang = rf.lang
+                ORDER BY rf2.generated_at DESC, rf2.rowid DESC
+                LIMIT 1
+            );
+            DROP TABLE refined_facts;
+            ALTER TABLE refined_facts_new RENAME TO refined_facts;
+            """
+        )
+        logger.info("[MetadataDB] refined_facts re-keyed to (scope, scope_key, lang)")
 
     @classmethod
     def _ensure_columns(cls, conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
@@ -419,7 +506,7 @@ class MetadataDB:
             (slug, artist_name, collection_name),
         )
         conn.execute(
-            """INSERT INTO artist_facts (artist_slug, lang, fact, category, source)
+            """INSERT OR IGNORE INTO artist_facts (artist_slug, lang, fact, category, source)
                VALUES (?, 'en', ?, ?, ?)""",
             (slug, fact_text, category, source),
         )
@@ -445,7 +532,7 @@ class MetadataDB:
             (slug, artist_name, collection_name),
         )
         conn.executemany(
-            """INSERT INTO artist_facts (artist_slug, lang, fact, source)
+            """INSERT OR IGNORE INTO artist_facts (artist_slug, lang, fact, source)
                VALUES (?, 'en', ?, ?)""",
             [(slug, f, source) for f in facts],
         )
@@ -544,7 +631,7 @@ class MetadataDB:
             (slug, slug.replace("-", " "), artist_slug, collection_name),
         )
         conn.execute(
-            """INSERT INTO song_facts (song_slug, lang, fact, category, source)
+            """INSERT OR IGNORE INTO song_facts (song_slug, lang, fact, category, source)
                VALUES (?, 'en', ?, ?, ?)""",
             (slug, fact_text, category, source),
         )
@@ -581,7 +668,7 @@ class MetadataDB:
             (slug, slug.replace("-", " "), artist_slug, collection_name),
         )
         conn.executemany(
-            """INSERT INTO song_facts (song_slug, lang, fact, source)
+            """INSERT OR IGNORE INTO song_facts (song_slug, lang, fact, source)
                VALUES (?, 'en', ?, ?)""",
             [(slug, f, source) for f in facts],
         )
@@ -1206,10 +1293,13 @@ class MetadataDB:
         """
         import json as _json
         conn = cls._connect()
+        # collection_name is accepted for signature stability but intentionally
+        # ignored: refined facts are keyed by (scope, scope_key, lang) so a
+        # song/artist refined under any collection is reused everywhere.
         row = conn.execute(
             "SELECT refined_json FROM refined_facts "
-            "WHERE scope = ? AND scope_key = ? AND collection_name = ? AND lang = ?",
-            (scope, scope_key, collection_name, lang),
+            "WHERE scope = ? AND scope_key = ? AND lang = ?",
+            (scope, scope_key, lang),
         ).fetchone()
         if not row:
             return None
@@ -1229,12 +1319,17 @@ class MetadataDB:
         import json as _json
         payload = _json.dumps([{"text": t} for t in refined], ensure_ascii=False)
         conn = cls._connect()
+        # Key is (scope, scope_key, lang); collection_name is stored as provenance
+        # (last writer) and updated on conflict so the cache-reset-by-collection
+        # admin action still has something meaningful to match on.
         conn.execute(
-            "INSERT INTO refined_facts (scope, scope_key, collection_name, lang, refined_json) "
+            "INSERT INTO refined_facts (scope, scope_key, lang, collection_name, refined_json) "
             "VALUES (?, ?, ?, ?, ?) "
-            "ON CONFLICT(scope, scope_key, collection_name, lang) DO UPDATE SET "
-            "refined_json = excluded.refined_json, generated_at = CURRENT_TIMESTAMP",
-            (scope, scope_key, collection_name, lang, payload),
+            "ON CONFLICT(scope, scope_key, lang) DO UPDATE SET "
+            "refined_json = excluded.refined_json, "
+            "collection_name = excluded.collection_name, "
+            "generated_at = CURRENT_TIMESTAMP",
+            (scope, scope_key, lang, collection_name, payload),
         )
         conn.commit()
 
@@ -1291,18 +1386,20 @@ class MetadataDB:
 
     @classmethod
     def get_all_refined_artist_facts(cls, collection_name: str) -> Dict[str, str]:
-        """Return ``{artist_slug: joined_refined_text}`` for a collection.
+        """Return ``{artist_slug: joined_refined_text}`` across all collections.
 
         Reads from the ``refined_facts`` table (scope='artist'). Each row's
-        ``refined_json`` is a JSON array of ``{"text": str}`` objects.
+        ``refined_json`` is a JSON array of ``{"text": str}`` objects. Refined
+        facts are collection-independent (keyed by slug), so the collection_name
+        arg is accepted for signature stability but not used to filter — the
+        caller merges by slug and only slugs present in its collection are used.
         """
         import json as _json
 
         conn = cls._connect()
         rows = conn.execute(
-            "SELECT scope_key, refined_json FROM refined_facts "
-            "WHERE scope = ? AND collection_name = ?",
-            ("artist", collection_name),
+            "SELECT scope_key, refined_json FROM refined_facts WHERE scope = ?",
+            ("artist",),
         ).fetchall()
 
         result: Dict[str, str] = {}
@@ -1321,12 +1418,14 @@ class MetadataDB:
 
     @classmethod
     def get_all_refined_song_facts(cls, collection_name: str) -> Dict[str, str]:
-        """Return ``{song_slug: joined_refined_text}`` for a collection.
+        """Return ``{song_slug: joined_refined_text}`` across all collections.
 
         Reads from the ``refined_facts`` table (scope='song'). The ``scope_key``
         is the song_slug (same format as song_facts table slugs).
 
-        Returns a dict keyed by song_slug so the search service can merge
+        Refined facts are collection-independent (keyed by slug), so the
+        collection_name arg is accepted for signature stability but not used to
+        filter. Returns a dict keyed by song_slug so the search service can merge
         refined facts into TrackHit.song_facts using the same key as
         load_all_song_facts_for_collection().
         """
@@ -1334,9 +1433,8 @@ class MetadataDB:
 
         conn = cls._connect()
         rows = conn.execute(
-            "SELECT scope_key, refined_json FROM refined_facts "
-            "WHERE scope = ? AND collection_name = ?",
-            ("song", collection_name),
+            "SELECT scope_key, refined_json FROM refined_facts WHERE scope = ?",
+            ("song",),
         ).fetchall()
 
         result: Dict[str, str] = {}

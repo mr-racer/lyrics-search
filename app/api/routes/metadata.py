@@ -186,6 +186,55 @@ def get_track_facts(
 # ── Full track metadata ──────────────────────────────────────────────────────
 
 
+@router.get("/metadata/tracks", response_model=List[TrackMetadata])
+def get_tracks_metadata_batch(
+    ids: str = Query(..., description="Comma-separated track_ids"),
+    collection: str = Query(..., description="Qdrant collection name"),
+    request: Request = None,
+) -> List[TrackMetadata]:
+    """Batch-resolve full TrackMetadata for many track_ids in one Qdrant retrieve.
+
+    Used by the player to enrich the whole queue at once when a list-source
+    (Playlists / Liked / Recently / Album) ships slim track shapes. Returning
+    everything single-call avoids fan-out of N /metadata/tracks/{id} requests.
+    Missing ids are silently dropped — caller can detect by comparing lengths.
+    """
+    if request is None or request.app.state.db_client is None:
+        raise HTTPException(status_code=503, detail="Qdrant unavailable")
+    track_ids = [s for s in (ids.split(",") if ids else []) if s]
+    if not track_ids:
+        return []
+    qdrant = request.app.state.db_client.qdrant
+    try:
+        points = qdrant.retrieve(
+            collection_name=collection, ids=track_ids,
+            with_payload=True, with_vectors=False,
+        )
+    except Exception:
+        raise HTTPException(status_code=502, detail="Qdrant retrieve failed")
+    out: List[TrackMetadata] = []
+    for p in points:
+        pl = p.payload or {}
+        out.append(TrackMetadata(
+            track_id=str(p.id),
+            title=pl.get("title") or "",
+            artist=pl.get("artist") or "",
+            album=pl.get("album"),
+            year=coerce_year(pl.get("year")),
+            genre=pl.get("genre"),
+            duration_sec=coerce_float(pl.get("duration")) or 0.0,
+            file_path=pl.get("file_path") or "",
+            lyrics=pl.get("lyrics"),
+            cover_art_path=pl.get("cover_art_path"),
+            producer=pl.get("producer"),
+            label=pl.get("label"),
+            samples=pl.get("samples"),
+            sampled_by=pl.get("sampled_by"),
+            bitrate_kbps=pl.get("bitrate_kbps"),
+        ))
+    return out
+
+
 @router.get("/metadata/tracks/{track_id}", response_model=TrackMetadata)
 def get_track_metadata(
     track_id: str,
