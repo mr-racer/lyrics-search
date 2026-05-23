@@ -1,7 +1,7 @@
 """Tests for search_engine.utils.prepare_metadata()."""
 
 import pytest
-import search_engine.utils as utils_module
+import app.resources.qdrant_payload as utils_module
 
 
 class TestPrepareMetadata:

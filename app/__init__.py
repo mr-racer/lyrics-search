@@ -3,10 +3,10 @@ Music Explorer — semantic music search platform.
 
 Architecture:
 - domain/: Pydantic models (TrackMetadata, TrackHit, SearchRequest...)
-- resources/: ModelRegistry + DbClient
-- services/: LibraryService + SearchService
+- resources/: ModelRegistry + DbClient + LyricsSearchEngine
+- indexing/: folder scanning, metadata reading, lyrics fetching, cover art, audio
+- services/: LibraryService + SearchService + IndexingService
 - api/: FastAPI app with lifespan and routes
-- existing/: Wrappers for user's legacy code
 """
 
 __version__ = "0.1.0"
@@ -31,8 +31,6 @@ from .services import LibraryService, SearchService
 
 from .api import app, create_app
 
-# Legacy wrappers (optional)
-from .existing import FileProcessor, LyricsDB
 
 __all__ = [
     # Domain models
@@ -58,8 +56,4 @@ __all__ = [
     # API
     "app",
     "create_app",
-
-    # Legacy wrappers
-    "FileProcessor",
-    "LyricsDB",
 ]

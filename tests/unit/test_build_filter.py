@@ -2,7 +2,7 @@
 
 from qdrant_client import models
 
-from search_engine.utils import build_filter
+from app.resources.qdrant_filters import build_filter
 
 
 class TestBuildFilter:

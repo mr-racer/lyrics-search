@@ -19,8 +19,8 @@ from ..domain.models import (
 from ..resources.metadata_db import MetadataDB
 from ..resources.model_registry import ModelRegistry
 from ..resources.db_client import DbClient
-from ..existing.folder_processor import FileProcessor
 from .artist_facts_service import fetch_facts_for_artists
+from .indexing_service import IndexingService, scan_folder
 from .job_tracker import JobTracker, IndexStage, IndexStatus
 from .similarity_service import analyze_collection
 from .song_facts_service import fetch_facts_for_songs
@@ -164,8 +164,7 @@ class LibraryService:
                 "message": f"Найдено {len(audio_files)} файлов",
             })
 
-            logger.info("[LibraryService] Starting FileProcessor...")
-            processor = FileProcessor()
+            logger.info("[LibraryService] Starting folder scan (IndexingService.scan_folder)...")
 
             async def on_lyrics_progress(current: int, total: int, message: str, details: dict = None):
                 stage_lyrics.current = current
@@ -176,7 +175,7 @@ class LibraryService:
                         stage_lyrics.found = details["found"]
                     if details.get("not_found") is not None:
                         stage_lyrics.not_found = details["not_found"]
-                eta = details.get("eta_seconds") or job.calculate_eta_seconds(IndexStage.LYRICS)
+                eta = (details or {}).get("eta_seconds") or job.calculate_eta_seconds(IndexStage.LYRICS)
                 notify_data = {
                     "stage": IndexStage.LYRICS.value,
                     "current": current,
@@ -186,17 +185,18 @@ class LibraryService:
                 }
                 await self._notify_progress(job, notify_data)
 
+            # Direct scan — FileProcessor is being retired; scan_folder is the new entry point.
             processed_files = await asyncio.to_thread(
-                processor.process_folder,
-                music_folder=folder_path,
-                better_lyrics_quality=better_lyrics_quality,
-                progress_callback=lambda c, t, m, d=None: asyncio.run_coroutine_threadsafe(
+                scan_folder,
+                folder_path,
+                better_lyrics_quality,
+                lambda c, t, m, d=None: asyncio.run_coroutine_threadsafe(
                     on_lyrics_progress(c, t, m, d), loop
                 ),
             )
 
             track_count = len(processed_files)
-            logger.info("[LibraryService] FileProcessor done, processed %d tracks", track_count)
+            logger.info("[LibraryService] Folder scan done, processed %d tracks", track_count)
             stage_lyrics.status = IndexStatus.COMPLETED
             stage_lyrics.current = track_count
             stage_lyrics.completed_at = time.time()
@@ -561,15 +561,58 @@ class LibraryService:
                 "total": len(tracks),
             })
 
-            if self.search_service and tracks:
-                logger.info("[LibraryService] Starting SearchService.index_tracks_with_progress...")
-                await self.search_service.index_tracks_with_progress(
-                    tracks,
-                    collection_name=collection_name,
-                    progress_callback=self._on_index_progress,
-                    text_model=text_model,
+            if self.db_client and tracks:
+                logger.info("[LibraryService] Starting IndexingService.fit_with_progress...")
+
+                # Switch engine to the requested text model if needed.
+                engine = self.db_client.search_engine
+                if text_model and text_model != engine.model_name:
+                    logger.info("[LibraryService] Switching text model: %s -> %s",
+                                engine.model_name, text_model)
+                    _model, _vname, _vdim = ModelRegistry.load_text_model(text_model)
+                    engine.model_name = text_model
+                    engine._model = _model
+                    engine._vector_name = _vname
+                    engine._vector_dim = _vdim
+
+                # Convert TrackMetadata list → dict[str, dict] for IndexingService.
+                index_data: dict[str, dict] = {}
+                for track in tracks:
+                    key = f"{track.artist} — {track.title}"
+                    index_data[key] = {
+                        "title":          track.title,
+                        "artist":         track.artist,
+                        "album":          track.album,
+                        "year":           track.year,
+                        "genre":          track.genre,
+                        "duration":       int(track.duration_sec) if track.duration_sec else 0,
+                        "lyrics":         track.lyrics or "",
+                        "file_path":      track.file_path,
+                        "cover_art_path": track.cover_art_path,
+                        "producer":       track.producer,
+                        "label":          track.label,
+                        "samples":        track.samples,
+                        "sampled_by":     track.sampled_by,
+                    }
+
+                # Bridge async progress callback into the sync executor call.
+                _loop = asyncio.get_event_loop()
+                def _sync_index_cb(stage, current, total, message):
+                    asyncio.run_coroutine_threadsafe(
+                        self._on_index_progress(stage, current, total, message), _loop
+                    )
+
+                indexing = IndexingService(engine)
+                await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    lambda: indexing.fit_with_progress(
+                        index_data,
+                        path=None,
+                        collection_name=collection_name,
+                        progress_callback=_sync_index_cb,
+                    ),
                 )
-                logger.info("[LibraryService] SearchService.index_tracks_with_progress done")
+                logger.info("[LibraryService] IndexingService.fit_with_progress done")
 
                 # ── Sonic Descriptor hook: per-track tags + class for freshly indexed tracks.
                 # Scrolls the collection once and invokes ``index_track_descriptor`` per point.
@@ -586,8 +629,8 @@ class LibraryService:
                         collection_name, e,
                     )
             else:
-                logger.warning("[LibraryService] Skipping indexing: search_service=%s, tracks=%d",
-                              self.search_service is not None, len(tracks))
+                logger.warning("[LibraryService] Skipping indexing: db_client=%s, tracks=%d",
+                              self.db_client is not None, len(tracks))
                 # Mark both as completed if skipped
                 for stage in (IndexStage.DENSE, IndexStage.AUDIO):
                     sp = job.stages[stage]
@@ -1177,14 +1220,14 @@ class LibraryService:
           - year: int | None  (not a range string)
           - duration: int     (raw seconds, not "MM:SS")
         """
-        from file_processor.utils import save_cover_art
+        from app.indexing.cover_art import save_cover_art
 
         tracks = []
         for key, info in metadata.items():
             file_path = info.get("file_path", "")
             track_id = self._compute_track_id(file_path)
 
-            # year is already int|None from file_processor
+            # year is already int|None from app.indexing.metadata_readers
             year = info.get("year")
             if isinstance(year, str):
                 # defensive: if somehow a string slipped in, parse first digits
@@ -1193,7 +1236,7 @@ class LibraryService:
                 except (ValueError, AttributeError):
                     year = None
 
-            # duration is already int (seconds) from file_processor
+            # duration is already int (seconds) from app.indexing.folder_scanner
             raw_duration = info.get("duration", 0)
             if isinstance(raw_duration, (int, float)):
                 duration_sec = float(raw_duration)

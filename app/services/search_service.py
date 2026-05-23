@@ -5,7 +5,7 @@ import logging
 from typing import List, Optional, Literal, Dict
 
 from ..domain.models import TrackMetadata, TrackHit, SearchFilters, ScoreBreakdown
-from ..existing.qdrant_db import LyricsDB
+from ..resources.lyrics_search_engine import LyricsSearchEngine as LyricsDB
 from ..resources.model_registry import ModelRegistry
 from ..resources.metadata_db import MetadataDB
 from .artist_facts_service import load_all_facts_for_collection, _slugify as _slugify_artist
@@ -495,84 +495,3 @@ class SearchService:
                 song_facts=song_facts,
             ))
         return hits
-
-    async def index_tracks_with_progress(
-        self,
-        tracks: List[TrackMetadata],
-        collection_name: Optional[str] = None,
-        progress_callback=None,
-        text_model: Optional[str] = None,
-    ) -> None:
-        """Index tracks into Qdrant with progress callbacks.
-
-        Args:
-            tracks: List of tracks to index
-            collection_name: Qdrant collection name
-            progress_callback: Async callback(stage, current, total, message) for progress updates
-            text_model: Override text embedding model for this indexing run.
-                        Must already be loaded via ModelRegistry.load_text_model().
-        """
-        if not tracks:
-            logger.warning("[SearchService] index_tracks_with_progress: no tracks to index")
-            return
-
-        logger.info("[SearchService] index_tracks_with_progress: %d tracks, collection=%s, text_model=%s",
-                    len(tracks), collection_name, text_model)
-
-        if text_model and text_model != self.lyrics_db.model_name:
-            logger.info("[SearchService] Switching LyricsDB text model: %s -> %s",
-                        self.lyrics_db.model_name, text_model)
-            model, vector_name, vector_dim = ModelRegistry.load_text_model(text_model)
-            self.lyrics_db.model_name = text_model
-            self.lyrics_db._model = model
-            self.lyrics_db._vector_name = vector_name
-            self.lyrics_db._vector_dim = vector_dim
-
-        # Build dict as prepare_metadata() expects: {"Artist — Title": {...}}
-        data: dict[str, dict] = {}
-        for track in tracks:
-            key = f"{track.artist} — {track.title}"
-            data[key] = {
-                "title": track.title,
-                "artist": track.artist,
-                "album": track.album,
-                "year": track.year,
-                "genre": track.genre,
-                "duration": int(track.duration_sec) if track.duration_sec else 0,
-                "lyrics": track.lyrics or "",
-                "file_path": track.file_path,
-                "cover_art_path": track.cover_art_path,
-                "producer": track.producer,
-                "label": track.label,
-                "samples": track.samples,
-                "sampled_by": track.sampled_by,
-            }
-
-        # Report progress: lyrics encoding started
-        if progress_callback:
-            await progress_callback("lyrics", 0, len(tracks), "Кодирование текстов песен...")
-
-        # Bridge async callback into sync context inside run_in_executor
-        loop = asyncio.get_event_loop()
-        def _sync_cb(stage, current, total, message):
-            if progress_callback:
-                asyncio.run_coroutine_threadsafe(
-                    progress_callback(stage, current, total, message), loop
-                )
-
-        # Call fit_with_progress in executor (sync op, may take minutes)
-        logger.info("[SearchService] Calling lyrics_db.fit_with_progress() in executor...")
-        try:
-            await asyncio.get_running_loop().run_in_executor(
-                None,
-                lambda: self.lyrics_db.fit_with_progress(
-                    data,
-                    path=None,
-                    collection_name=collection_name,
-                    progress_callback=_sync_cb if progress_callback else None,
-                ),
-            )
-            logger.info("[SearchService] lyrics_db.fit_with_progress() completed successfully")
-        except Exception as e:
-            logger.error("[SearchService] lyrics_db.fit_with_progress() failed: %s", e, exc_info=True)
-            raise
