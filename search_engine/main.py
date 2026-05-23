@@ -1,22 +1,19 @@
 from __future__ import annotations
 
-from .utils import (
-    prepare_metadata, build_filter,
-    build_text_for_embedding, _encode_clap,
-)
-
-import asyncio
 import gc
 import logging
-import threading
 import uuid
-import torch
-import numpy as np
 from pathlib import Path
 
+import numpy as np
+import torch
+from qdrant_client import models
 from tqdm.auto import tqdm
 
-from qdrant_client import QdrantClient, models
+from app.resources.lyrics_search_engine import LyricsSearchEngine
+from .utils import (
+    build_text_for_embedding, prepare_metadata, _encode_clap,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,8 +61,12 @@ def _build_payload_for_upsert(song_info: dict, slug: str | None = None) -> dict:
     }
 
 
-class LyricsDB:
+class LyricsDB(LyricsSearchEngine):
     """Manage a Qdrant collection with hybrid dense and sparse (BM25) lyric embeddings.
+
+    NOTE (Refactor 4): All search logic now lives in LyricsSearchEngine (superclass).
+    This subclass only retains indexing methods (fit, _create_collection,
+    _upsert_in_batches) which will move to app.services.indexing_service in Refactor 5.
 
     Model loading is lazy by default (lazy=True) — the text model and CLAP are loaded
     on first actual use (search/fit), not in __init__.  This allows the FastAPI server
@@ -75,125 +76,10 @@ class LyricsDB:
     entirely (useful when ModelRegistry already cached the model).
     """
 
-    def __init__(
-        self,
-        qdrant_client: QdrantClient,
-        collection_name: str,
-        model_name: str,
-        include_clap: bool = False,
-        lazy: bool = True,
-        model = None,
-        model_clap = None,
-    ):
-        self.qdrant_client = qdrant_client
-        self.collection_name = collection_name
-        self._init_qdrant()
+    # __init__, model accessors, _ensure_model, _ensure_clap, _init_qdrant,
+    # and search are all inherited from LyricsSearchEngine.
 
-        self.model_name = model_name
-        self.include_clap = include_clap
-
-        # Pre-loaded model takes priority
-        if model is not None:
-            self._model = model
-            # Derive vector config from the model
-            vd = model.get_sentence_embedding_dimension()
-            self._vector_name = f"text_{self.model_name.replace('/', '_')}"
-            self._vector_dim = vd
-            logger.info("[LyricsDB] Using pre-loaded text model '%s' (dim=%d)",
-                        model_name, vd)
-        elif not lazy:
-            from app.resources.model_registry import ModelRegistry
-            self._model, vn, vd = ModelRegistry.load_text_model(self.model_name)
-            self._vector_name = vn
-            self._vector_dim = vd
-            logger.info("[LyricsDB] Text model '%s' loaded eagerly via ModelRegistry (dim=%d)",
-                        model_name, vd)
-        else:
-            self._model = None
-            self._vector_name = None
-            self._vector_dim = None
-            logger.info("[LyricsDB] Text model '%s' — lazy load enabled", model_name)
-
-        self._model_lock = threading.Lock()
-
-        if model_clap is not None:
-            self._model_clap = model_clap
-            logger.info("[LyricsDB] Using pre-loaded CLAP model")
-        elif include_clap and not lazy:
-            from app.resources.model_registry import ModelRegistry
-            self._model_clap = ModelRegistry.load_clap()
-            logger.info("[LyricsDB] CLAP loaded eagerly via ModelRegistry")
-        else:
-            self._model_clap = None
-            if include_clap:
-                logger.info("[LyricsDB] CLAP — lazy load enabled")
-
-    # ── Lazy model accessors ─────────────────────────────────────────────────
-
-    @property
-    def _model_config(self) -> tuple[str, int]:
-        """Return (vector_name, vector_dim) — loads model if needed."""
-        if self._vector_name is None:
-            self._ensure_model()
-        return self._vector_name, self._vector_dim
-
-    @property
-    def vector_name(self) -> str:
-        return self._model_config[0]
-
-    @property
-    def vector_dim(self) -> int:
-        return self._model_config[1]
-
-    @property
-    def model(self):
-        """Return the text model, loading lazily if needed."""
-        self._ensure_model()
-        return self._model
-
-    @property
-    def model_clap(self):
-        """Return the CLAP model, loading lazily if needed."""
-        self._ensure_clap()
-        return self._model_clap
-
-    def _ensure_model(self):
-        """Load text model on first access (thread-safe), via ModelRegistry."""
-        if self._model is not None:
-            return
-        with self._model_lock:
-            if self._model is not None:
-                return  # double-check
-            from app.resources.model_registry import ModelRegistry
-            logger.info("[LyricsDB] Loading text model '%s' via ModelRegistry...", self.model_name)
-            self._model, self._vector_name, self._vector_dim = ModelRegistry.load_text_model(self.model_name)
-            logger.info("[LyricsDB] Text model loaded (dim=%d)", self._vector_dim)
-
-    def _ensure_clap(self):
-        """Load CLAP model on first access (thread-safe), via ModelRegistry."""
-        if self._model_clap is not None:
-            return
-        with self._model_lock:
-            if self._model_clap is not None:
-                return
-            if not self.include_clap:
-                return
-            from app.resources.model_registry import ModelRegistry
-            logger.info("[LyricsDB] Loading CLAP via ModelRegistry...")
-            self._model_clap = ModelRegistry.load_clap()
-            logger.info("[LyricsDB] CLAP loaded")
-
-    # ── Qdrant init ──────────────────────────────────────────────────────────
-
-    def _init_qdrant(self):
-        try:
-            self.qdrant_client.get_collections()
-        except Exception as e:
-            raise ConnectionError(
-                "Qdrant не запущен/не обнаружен. Пожалуйста, выключите VPN или перезапустите Docker"
-            ) from e
-
-
+    # ── Indexing (moves to IndexingService in Refactor 5) ───────────────────
 
     def _create_collection(self, clap_paths: list):
         collections = self.qdrant_client.get_collections().collections
@@ -223,7 +109,6 @@ class LyricsDB:
             },
         )
         print(f"Коллекция {self.collection_name} была успешно создана")
-
 
     def _upsert_in_batches(
         self,
@@ -364,80 +249,3 @@ class LyricsDB:
         # Upsert (сетевой запрос — модель на CPU не мешает)
         self._upsert_in_batches(filtered, text_vecs, clap_map or None)
         print("Тексты песен были успешно проиндексированы в DB")
-
-
-    def search(
-        self,
-        query: str,
-        limit: int = 1,
-        include_clap: bool = False,
-        min_dense_score: float = 0.4,
-        min_clap_score: float = 0.01,
-        artist: str | None = None,
-        album: str | None = None,
-        title: str | None = None,
-        genre: str | list[str] | None = None,
-        year: int | None = None,
-        year_ranges: list[str] | None = None,
-        sonic_tags: list[str] | None = None,
-        collection_name_override: str | None = None,
-    ) -> list[models.ScoredPoint]:
-        col = collection_name_override or self.collection_name
-
-        query_filter = build_filter(
-            artist=artist,
-            album=album,
-            title=title,
-            genre=genre,
-            year=year,
-            year_ranges=year_ranges,
-            sonic_tags=sonic_tags,
-        )
-
-        if not include_clap:
-            query_vector = self.model.encode(query).tolist()
-
-            results = self.qdrant_client.query_points(
-                collection_name=col,
-                prefetch=[
-                    models.Prefetch(
-                        query=query_vector,
-                        using=self.vector_name,
-                        limit=15,
-                        score_threshold=min_dense_score,
-                        filter=query_filter,
-                    ),
-                    models.Prefetch(
-                        query=models.Document(
-                            text=query,
-                            model="Qdrant/bm25",
-                        ),
-                        using="bm25",
-                        limit=25,
-                        filter=query_filter,
-                    ),
-                ],
-                query=models.FusionQuery(fusion=models.Fusion.RRF),
-                limit=limit,
-                with_payload=True,
-            )
-        else:
-            clap_vector = self.model_clap.get_text_embedding([query])[0].tolist()
-
-            results = self.qdrant_client.query_points(
-                collection_name=col,
-                prefetch=[
-                    models.Prefetch(
-                        query=clap_vector,
-                        using="clap",
-                        limit=15,
-                        score_threshold=min_clap_score,
-                        filter=query_filter,
-                    )
-                ],
-                # query=models.FusionQuery(fusion=models.Fusion.RRF),
-                limit=limit,
-                with_payload=True,
-            )
-
-        return results.points

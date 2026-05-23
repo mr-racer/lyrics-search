@@ -10,6 +10,7 @@ from qdrant_client import QdrantClient
 
 if TYPE_CHECKING:
     from ..existing.qdrant_db import LyricsDB
+    from .lyrics_search_engine import LyricsSearchEngine
 
 logger = logging.getLogger(__name__)
 
@@ -88,3 +89,13 @@ class DbClient:
         if self._lyrics_db is None:
             raise RuntimeError("DbClient not entered.")
         return self._lyrics_db
+
+    @property
+    def search_engine(self) -> "LyricsSearchEngine":
+        """Alias for ``lyrics_db`` exposing only the search surface (typed).
+
+        New code should prefer this over ``lyrics_db`` when only search is needed.
+        Once Refactor 5 lands and indexing migrates out, ``lyrics_db`` will be removed
+        and this property will become the canonical entry point.
+        """
+        return self.lyrics_db
