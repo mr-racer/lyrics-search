@@ -905,6 +905,19 @@
       background: rgba(22,22,32,0.10);
       color: rgba(22,22,32,0.92);
     }
+    /* Player facts: prev/next arrows flanking the "n / m" counter */
+    .fact-nav-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 20px; height: 20px; padding: 0;
+      border: 0; background: transparent; border-radius: 6px;
+      color: rgba(255,255,255,0.45);
+      font-family: 'JetBrains Mono', ui-monospace, monospace;
+      font-size: 15px; line-height: 1; cursor: pointer;
+      transition: background 160ms ease, color 160ms ease;
+    }
+    .fact-nav-btn:hover { color: rgba(255,255,255,0.9); background: rgba(255,255,255,0.08); }
+    body[data-theme="light"] .fact-nav-btn { color: rgba(22,22,32,0.45); }
+    body[data-theme="light"] .fact-nav-btn:hover { color: rgba(22,22,32,0.9); background: rgba(22,22,32,0.06); }
     body[data-theme="light"] .facts-scope-toggle > button:not(:disabled):hover {
       color: rgba(22,22,32,0.82);
     }
@@ -1507,15 +1520,21 @@ async function postPlaybackEvent({ trackId, collectionName, playedSec, totalDur 
     played_sec: playedSec,
     total_dur: totalDur ?? null,
   });
+  // Send the JSON payload with a CORS-safelisted content-type (text/plain) so
+  // the request stays "simple" and skips the preflight. An application/json
+  // beacon triggers a preflight that navigator.sendBeacon can't satisfy →
+  // cross-origin playback events were silently dropped (CORS error). The
+  // backend parses the body regardless of content-type.
   try {
     if (navigator.sendBeacon) {
-      const blob = new Blob([body], { type: 'application/json' });
+      const blob = new Blob([body], { type: 'text/plain;charset=UTF-8' });
       navigator.sendBeacon(`${API}/playback/events`, blob);
     } else {
       await fetch(`${API}/playback/events`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
         body,
+        keepalive: true,
       });
     }
   } catch (e) {
@@ -2409,7 +2428,7 @@ function FactsRail({ trackId, activeCollection, isDark, lang, accent, variant = 
   };
 
   const headerStyle = {
-    padding: isPlayer ? '0 0 8px' : '18px 22px 12px',
+    padding: isPlayer ? '0 0 2px' : '18px 22px 12px',
     borderBottom: isPlayer ? 'none' : `1px solid ${c.border}`,
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
     gap: 8,
@@ -2474,14 +2493,14 @@ function FactsRail({ trackId, activeCollection, isDark, lang, accent, variant = 
           onMouseEnter={() => setPaused(true)}
           onMouseLeave={() => setPaused(false)}
           style={{
-            padding:'24px 22px 18px',
+            padding: isPlayer ? '2px 22px 18px' : '24px 22px 18px',
             flex:1,
-            display:'flex', flexDirection:'column', gap:10,
+            display:'flex', flexDirection:'column', gap: isPlayer ? 6 : 10,
             animation: 'factIn 0.55s cubic-bezier(.22,.9,.3,1) both',
             overflowY: 'auto',
           }}
         >
-          <span style={{ width:24, height:1, background:c.border, marginTop:6 }} />
+          <span style={{ width:24, height:1, background:c.border, marginTop: isPlayer ? 0 : 6 }} />
           <div className="serif" style={{
             fontSize:factFontSize, lineHeight:1.55, color:c.text, letterSpacing:'-0.005em',
             fontWeight:400,
@@ -2552,31 +2571,27 @@ function FactsRail({ trackId, activeCollection, isDark, lang, accent, variant = 
             {lang==='ru'?'※ ЗНАЕШЬ ЛИ ТЫ':'※ DID YOU KNOW'}
           </span>
         )}
-        {/* Player variant: inline pagination dots */}
-        {isPlayer && status === 'loaded' && items.length > 1 && (
-          <div style={{ display: 'flex', gap: 4 }}>
-            {items.map((_, i) => (
-              <button
-                key={i}
-                onClick={() => {
-                  setIdx(i);
-                  setPaused(true);
-                  setTimeout(() => setPaused(false), 5000);
-                }}
-                aria-label={`Show fact ${i + 1} of ${items.length}`}
-                style={{
-                  width: 5,
-                  height: 5,
-                  borderRadius: '50%',
-                  padding: 0,
-                  border: 0,
-                  background: i === idx ? 'oklch(72% 0.13 75)' : (isDark ? '#444' : '#bbb'),
-                  cursor: 'pointer',
-                }}
-              />
-            ))}
-          </div>
-        )}
+        {/* Player variant: prev/next arrows + "n / m" counter. Manual nav
+            pauses the auto-rotation briefly so the chosen fact stays put. */}
+        {isPlayer && status === 'loaded' && items.length > 1 && (() => {
+          const nudge = (delta) => {
+            setIdx(i => (i + delta + items.length) % items.length);
+            setPaused(true);
+            setTimeout(() => setPaused(false), 5000);
+          };
+          return (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <button className="fact-nav-btn" onClick={() => nudge(-1)}
+                aria-label={lang==='ru'?'Предыдущий факт':'Previous fact'}>‹</button>
+              <span className="mono" style={{
+                fontSize: 10, color: c.textSubtle, letterSpacing: '0.1em',
+                minWidth: 32, textAlign: 'center',
+              }}>{idx + 1} / {items.length}</span>
+              <button className="fact-nav-btn" onClick={() => nudge(1)}
+                aria-label={lang==='ru'?'Следующий факт':'Next fact'}>›</button>
+            </div>
+          );
+        })()}
         {/* Landing variant: numeric counter */}
         {!isPlayer && status === 'loaded' && items.length > 1 && (
           <span className="mono" style={{ fontSize:10, color:c.textSubtle, letterSpacing:'0.1em' }}>
@@ -5630,13 +5645,14 @@ function AddToPlaylistPopover({ trackId, anchor, onClose, listing, lang }) {
 }
 
 // ─── PLAYLIST TRACK ROW (Task 18) ────────────────────────────────────────────
-function PlaylistTrackRow({ track, isDragging, onDragStart, onDragOver, onDragLeave, onDrop, onPlay, onArtist, onRemove, playlistId, listing, lang }) {
+function PlaylistTrackRow({ track, isDragging, onDragStart, onDragOver, onDragLeave, onDrop, onPlay, onArtist, onRemove, playlistId, listing, lang, activeCollection }) {
   const [liked, setLiked]       = React.useState(false);
   const [popoverFor, setPopoverFor] = React.useState(null);
 
   React.useEffect(() => {
-    apiFetch(`/search/tracks/${track.track_id}/reaction`).then(r => setLiked(r?.reaction === 'like')).catch(() => {});
-  }, [track.track_id]);
+    if (!activeCollection) return;
+    apiFetch(`/search/tracks/${track.track_id}/reaction?collection_name=${encodeURIComponent(activeCollection)}`).then(r => setLiked(r?.reaction === 'like')).catch(() => {});
+  }, [track.track_id, activeCollection]);
 
   const fmtDur = (s) => { if (!s) return '—'; const m = Math.floor(s/60), r = Math.floor(s%60); return `${m}:${String(r).padStart(2,'0')}`; };
 
@@ -5659,7 +5675,7 @@ function PlaylistTrackRow({ track, isDragging, onDragStart, onDragOver, onDragLe
       await apiFetch(`/search/tracks/${track.track_id}/reaction`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reaction: next ? 'like' : null }),
+        body: JSON.stringify({ collection_name: activeCollection, reaction: next ? 'like' : null }),
       });
     } catch { setLiked(!next); }
   };
@@ -5852,7 +5868,11 @@ function PlaylistDetailView({ playlistId, lang, activeCollection, onClose, onPla
           <div style={{ display: 'flex', gap: 10, marginTop: 'auto', alignItems: 'center' }}>
             <button
               className="cta-v3" style={{ padding: '11px 24px' }}
-              onClick={() => { if (detail.tracks[0]) onPlayTrack(detail.tracks[0]); }}>
+              onClick={() => {
+                if (!detail.tracks[0]) return;
+                const queue = detail.tracks.map(tr => ({ track: tr }));
+                onPlayTrack(queue[0], queue);
+              }}>
               ▶ {lang === 'ru' ? 'Слушать всё' : 'Play all'}
             </button>
             <div style={{ flex: 1 }} />
@@ -5879,23 +5899,30 @@ function PlaylistDetailView({ playlistId, lang, activeCollection, onClose, onPla
       )}
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {detail.tracks.map(t => (
-          <PlaylistTrackRow
-            key={t.track_id}
-            track={t}
-            isDragging={dragId === t.track_id}
-            onDragStart={onDragStart(t.track_id)}
-            onDragOver={onDragOver(t.track_id)}
-            onDragLeave={onDragLeave}
-            onDrop={onDrop(t.track_id)}
-            onPlay={() => onPlayTrack(t)}
-            onArtist={() => navigateToArtist && navigateToArtist(t.artist)}
-            onRemove={() => onRemoveTrack(t.track_id)}
-            playlistId={playlistId}
-            listing={listing}
-            lang={lang}
-          />
-        ))}
+        {(() => {
+          // Build the HIT-shaped queue once per render so every row's onPlay
+          // sends the SAME array — App.handlePlayTrack uses it both as the
+          // player's queue AND as the id-set for batch metadata enrichment.
+          const queue = detail.tracks.map(tr => ({ track: tr }));
+          return detail.tracks.map(t => (
+            <PlaylistTrackRow
+              key={t.track_id}
+              track={t}
+              isDragging={dragId === t.track_id}
+              onDragStart={onDragStart(t.track_id)}
+              onDragOver={onDragOver(t.track_id)}
+              onDragLeave={onDragLeave}
+              onDrop={onDrop(t.track_id)}
+              onPlay={() => onPlayTrack({ track: t }, queue)}
+              onArtist={() => navigateToArtist && navigateToArtist(t.artist)}
+              onRemove={() => onRemoveTrack(t.track_id)}
+              playlistId={playlistId}
+              listing={listing}
+              lang={lang}
+              activeCollection={activeCollection}
+            />
+          ));
+        })()}
       </div>
     </div>
   );
@@ -5956,7 +5983,7 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
       await apiFetch(`/search/tracks/${track_id}/reaction`, {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ reaction: next ? 'like' : null }),
+        body: JSON.stringify({ collection_name: activeCollection, reaction: next ? 'like' : null }),
       });
       apiFetch(`/library/liked-songs?collection_name=${encodeURIComponent(activeCollection)}`).then(setLikedData).catch(() => {});
     } catch {
@@ -6096,6 +6123,7 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
           navigateToArtist={navigateToArtist}
           isDark={isDark}
           lang={lang}
+          activeCollection={activeCollection}
         />
       )}
       {showNewPlaylistModal && (
@@ -6434,7 +6462,7 @@ function NewPlaylistModal({ onCancel, onSubmit, lang }) {
   );
 }
 
-function AlbumModal({ album, onClose, onPlayTrack, navigateToArtist, isDark, lang }) {
+function AlbumModal({ album, onClose, onPlayTrack, navigateToArtist, isDark, lang, activeCollection }) {
   const c = useColors(isDark);
   const [hoverRow, setHoverRow] = useState(-1);
   const [likedMap, setLikedMap] = useState({});
@@ -6456,11 +6484,12 @@ function AlbumModal({ album, onClose, onPlayTrack, navigateToArtist, isDark, lan
 
   // Lazy-load per-track reactions on mount
   useEffect(() => {
-    if (!album?.tracks?.length) return;
+    if (!album?.tracks?.length || !activeCollection) return;
+    const col = encodeURIComponent(activeCollection);
     Promise.all(album.tracks.map(t =>
-      apiFetch(`/search/tracks/${t.track_id}/reaction`).then(r => [t.track_id, r?.reaction === 'like']).catch(() => [t.track_id, false])
+      apiFetch(`/search/tracks/${t.track_id}/reaction?collection_name=${col}`).then(r => [t.track_id, r?.reaction === 'like']).catch(() => [t.track_id, false])
     )).then(pairs => setLikedMap(Object.fromEntries(pairs)));
-  }, [album?.album_title]);
+  }, [album?.album_title, activeCollection]);
 
   const toggleLike = async (track_id) => {
     if (likeLoading[track_id]) return;
@@ -6471,7 +6500,7 @@ function AlbumModal({ album, onClose, onPlayTrack, navigateToArtist, isDark, lan
       await apiFetch(`/search/tracks/${track_id}/reaction`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reaction: next ? 'like' : null }),
+        body: JSON.stringify({ collection_name: activeCollection, reaction: next ? 'like' : null }),
       });
     } catch {
       setLikedMap(p => ({ ...p, [track_id]: !next })); // rollback
@@ -10147,27 +10176,44 @@ function App() {
     setSection('player');
 
     // Library/Recently/Playlists ship slim track shapes (LikedSongTrack et al.)
-    // that lack `file_path`, `lyrics`, `producer`, `samples` — fields the
-    // player UI (lyrics back-face, info pills, chat context) reads directly
-    // off currentTrack. Enrich asynchronously via /metadata/tracks/{id}, then
-    // merge the full payload into both playerTrack and the playerPlaylist
-    // entry so re-derivations stay in lockstep.
-    if (flatTrack?.track_id && activeCollection && flatTrack.file_path === undefined) {
-      apiFetch(
-        `/metadata/tracks/${encodeURIComponent(flatTrack.track_id)}` +
-        `?collection=${encodeURIComponent(activeCollection)}`
-      )
-        .then(full => {
-          if (!full || full.track_id !== flatTrack.track_id) return;
-          // Preserve any slim-shape extras (e.g. liked_at) by spreading slim first.
-          const merged = { ...flatTrack, ...full, duration: full.duration_sec ?? flatTrack.duration };
-          setPlayerTrack(prev => (prev && prev.track_id === flatTrack.track_id ? merged : prev));
-          setPlayerPlaylist(prev => prev.map(h =>
-            h?.track?.track_id === flatTrack.track_id ? { ...h, track: merged } : h
-          ));
-        })
-        .catch(() => {/* keep slim shape — player still works, just no lyrics */});
+    // that lack `file_path`, `lyrics`, `producer`, `samples`, `genre` — fields the
+    // player UI (lyrics back-face, info pills, chat context, queue genre-pill)
+    // reads directly off currentTrack and queue items. Enrich the ENTIRE queue
+    // in one batch /metadata/tracks?ids= call so switching to any queue item
+    // doesn't show partial metadata. Slim items are detected by undefined file_path
+    // (Search/Recommend hits arrive with file_path populated and are skipped).
+    if (!activeCollection) return;
+    const queue = results || [];
+    const slimIds = new Set();
+    for (const h of queue) {
+      const t = (h && h.track) ? h.track : h;
+      if (t && t.track_id && t.file_path === undefined) slimIds.add(t.track_id);
     }
+    if (flatTrack?.track_id && flatTrack.file_path === undefined) slimIds.add(flatTrack.track_id);
+    if (slimIds.size === 0) return;
+    const ids = Array.from(slimIds);
+    apiFetch(
+      `/metadata/tracks?ids=${encodeURIComponent(ids.join(','))}` +
+      `&collection=${encodeURIComponent(activeCollection)}`
+    )
+      .then(full => {
+        if (!Array.isArray(full) || full.length === 0) return;
+        const byId = new Map();
+        for (const t of full) { if (t && t.track_id) byId.set(t.track_id, t); }
+        // Preserve any slim-shape extras (e.g. liked_at, added_at) by spreading slim first.
+        const mergeOne = (slim) => {
+          const fresh = byId.get(slim.track_id);
+          if (!fresh) return slim;
+          return { ...slim, ...fresh, duration: fresh.duration_sec ?? slim.duration };
+        };
+        setPlayerTrack(prev => (prev && byId.has(prev.track_id) ? mergeOne(prev) : prev));
+        setPlayerPlaylist(prev => prev.map(h => {
+          const slim = (h && h.track) ? h.track : null;
+          if (!slim || !byId.has(slim.track_id)) return h;
+          return { ...h, track: mergeOne(slim) };
+        }));
+      })
+      .catch(() => {/* keep slim shape — player still works, just no lyrics */});
   };
 
   // Called by PlayerSection when the user skips / picks a different playlist
