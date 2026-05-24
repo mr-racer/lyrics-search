@@ -15,11 +15,21 @@ from __future__ import annotations
 
 import argparse
 import logging
+import sys
 from typing import Iterable
 
 from qdrant_client import QdrantClient, models
 
-from app.services.artist_split import split_artists, artist_slugs
+# Importing app.services pulls in a heavy chain (clap_features → laion_clap),
+# which parses sys.argv at import time and would otherwise consume this script's
+# CLI flags (e.g. --collection) and exit. Neutralize argv across just this import,
+# then restore it so our own argparse below sees the real arguments.
+_saved_argv = sys.argv
+sys.argv = sys.argv[:1]
+try:
+    from app.services.artist_split import split_artists, artist_slugs
+finally:
+    sys.argv = _saved_argv
 
 logger = logging.getLogger("backfill_artist_slugs")
 
