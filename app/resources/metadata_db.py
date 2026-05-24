@@ -1035,17 +1035,27 @@ class MetadataDB:
         return (row[0], int(row[1])) if row else None
 
     @classmethod
-    def get_peak_hour(cls, collection_name: str) -> int | None:
-        """Return the most-frequent hour-of-day (0-23) across all non-skipped events, or None."""
+    def get_peak_hour(
+        cls, collection_name: str, tz_offset_minutes: int = 0,
+    ) -> int | None:
+        """Return the most-frequent hour-of-day (0-23) across all non-skipped events, or None.
+
+        ``played_at`` is stored in UTC (SQLite ``CURRENT_TIMESTAMP``). To report
+        the hour in the *user's* local time, the caller passes their UTC offset
+        in minutes (e.g. UTC+3 → +180); the offset is applied as a SQLite
+        datetime modifier before the hour is extracted. ``tz_offset_minutes`` is
+        coerced to int, so it cannot inject into the modifier string.
+        """
+        modifier = f"{int(tz_offset_minutes):+d} minutes"
         conn = cls._connect()
         row = conn.execute(
-            """SELECT CAST(strftime('%H', played_at) AS INT) AS h, COUNT(*) AS n
+            """SELECT CAST(strftime('%H', played_at, ?) AS INT) AS h, COUNT(*) AS n
                FROM playback_events
                WHERE collection_name = ? AND skipped_early = 0
                GROUP BY h
                ORDER BY n DESC
                LIMIT 1""",
-            (collection_name,),
+            (modifier, collection_name),
         ).fetchone()
         return int(row[0]) if row else None
 

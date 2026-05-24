@@ -404,6 +404,10 @@ async def get_library_listening_stats(
     request: Request,
     collection_name: str = Query(..., description="Collection name"),
     lang: str = Query("en", pattern="^(en|ru)$"),
+    tz_offset_minutes: int = Query(
+        0, ge=-840, le=840,
+        description="Client UTC offset in minutes (e.g. UTC+3 → 180) for local peak-hour bucketing",
+    ),
 ) -> ListeningStatsResponse:
     db_client = request.app.state.db_client
     if db_client is None or db_client.qdrant is None:
@@ -412,6 +416,7 @@ async def get_library_listening_stats(
         qdrant_client=db_client.qdrant,
         collection_name=collection_name,
         lang=lang,
+        tz_offset_minutes=tz_offset_minutes,
     )
 
 

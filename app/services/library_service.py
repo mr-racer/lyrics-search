@@ -1040,6 +1040,7 @@ class LibraryService:
     @classmethod
     def get_listening_stats(
         cls, *, qdrant_client, collection_name: str, lang: str = "en",
+        tz_offset_minutes: int = 0,
     ):
         """Aggregate listening summary for the Library overhaul UI.
 
@@ -1048,13 +1049,14 @@ class LibraryService:
           - Top track: most non-skipped plays; payload joined from Qdrant.
           - Top artist: per-artist sum of non-skipped plays via DB+payload join.
           - Peak hour: hour-of-day with most non-skipped plays, localised label.
+            Bucketed in the user's local time via ``tz_offset_minutes``.
         """
         from app.domain.models import (
             ListeningStatsResponse, TopTrackBrief, TopArtistBrief, PeakHour,
         )
         total_sec, since = MetadataDB.get_listening_total(collection_name)
         top_track_row = MetadataDB.get_top_played_track(collection_name)
-        peak_hour_int = MetadataDB.get_peak_hour(collection_name)
+        peak_hour_int = MetadataDB.get_peak_hour(collection_name, tz_offset_minutes)
 
         top_track = None
         top_artist = None

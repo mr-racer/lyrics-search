@@ -1542,6 +1542,58 @@ async function postPlaybackEvent({ trackId, collectionName, playedSec, totalDur 
   }
 }
 
+// ─── Listening-time accumulator ──────────────────────────────────────────────
+// A single continuous listen of a track must produce exactly ONE playback event
+// whose played_sec is the real number of seconds the user actually heard — NOT
+// the absolute playhead position. The previous model emitted el.currentTime on
+// pause / ended / track-change / tab-hide and the backend SUMmed those, so any
+// track that fired >1 event (pause→resume, tab switch, etc.) double-counted the
+// overlapping seconds and inflated the total. We instead accumulate true played
+// time from 'timeupdate' deltas (which only tick while audio is actually
+// playing) onto el.dataset, then flush once at the end of the listen.
+//
+// dataset fields (strings, persisted on the <audio> element):
+//   playAcc      — accumulated real played seconds for the current listen
+//   playLastPos  — last currentTime observed, to compute the next delta
+//   playEmitted  — '1' once this listen has been recorded (dedupe guard)
+function accumulatePlayedTime(el) {
+  const t = el.currentTime || 0;
+  const last = parseFloat(el.dataset.playLastPos || '0');
+  const dt = t - last;
+  // Count only forward steps taken while playing. dt >= 2 means a seek jump (or
+  // a background-tab throttle gap) — not real listening — so it's ignored;
+  // dt <= 0 is a rewind/seek-back. Either way we don't credit the time.
+  if (!el.paused && dt > 0 && dt < 2) {
+    el.dataset.playAcc = String(parseFloat(el.dataset.playAcc || '0') + dt);
+  }
+  el.dataset.playLastPos = String(t);
+}
+
+function resetPlaySession(el) {
+  if (!el) return;
+  el.dataset.playAcc = '0';
+  el.dataset.playEmitted = '0';
+  el.dataset.playLastPos = String(el.currentTime || 0);
+}
+
+// Emit the accumulated listen for `el` exactly once. Safe to call from every
+// terminal trigger (ended / track-change / unload) — the playEmitted guard
+// makes repeat calls no-ops until the next listen resets the session.
+function flushAccumulatedListen(el) {
+  if (!el || el.dataset.playEmitted === '1') return;
+  const trackId = el.dataset.playbackTrackId;
+  const collectionName = el.dataset.playbackCollection;
+  if (!trackId || !collectionName) return;
+  const acc = parseFloat(el.dataset.playAcc || '0');
+  if (acc < 1) return;  // nothing meaningful heard yet
+  el.dataset.playEmitted = '1';
+  postPlaybackEvent({
+    trackId, collectionName,
+    playedSec: acc,
+    totalDur: el.duration || null,
+  });
+}
+
 // ─── Lossless logo (inline SVG — scales perfectly at any size) ────────────────
 const LOSSLESS_LOGO_SRC = (function() {
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 215 64">' +
@@ -1629,24 +1681,14 @@ function useAudioPlayer() {
   // to the audio element via dataset for the next 'ended' to pick up.
   const setSrc = useCallback((src, meta) => {
     const el = audioRef.current;
+    // Switching to a different track ends the previous listen — flush it.
     if (el && el.dataset.playbackTrackId && meta && el.dataset.playbackTrackId !== meta.trackId) {
-      const prevId = el.dataset.playbackTrackId;
-      const prevCol = el.dataset.playbackCollection;
-      const playedSec = el.currentTime || 0;
-      const lastFlush = parseFloat(el.dataset.playbackFlushedAt || '0');
-      const totalDur = el.duration || null;
-      // Only emit if we haven't already flushed at this point (e.g. via pause).
-      if (playedSec > 0 && playedSec > lastFlush + 1) {
-        postPlaybackEvent({
-          trackId: prevId, collectionName: prevCol,
-          playedSec, totalDur,
-        });
-      }
+      flushAccumulatedListen(el);
     }
     if (el && meta) {
       el.dataset.playbackTrackId = meta.trackId || '';
       el.dataset.playbackCollection = meta.collectionName || '';
-      el.dataset.playbackFlushedAt = '';
+      resetPlaySession(el);
     }
     setCurrentSrc(src);
   }, []);
@@ -1702,66 +1744,39 @@ function useAudioPlayer() {
     audioRef.current = el;
     if (!el) { listenersAttached.current = false; return; }
     if (listenersAttached.current) return;
-    el.addEventListener('timeupdate',     () => timeStore.setTime(el.currentTime || 0));
+    el.addEventListener('timeupdate', () => {
+      timeStore.setTime(el.currentTime || 0);
+      // Credit real played time from the inter-tick delta (only ticks while
+      // actually playing; seeks/rewinds are filtered inside the helper).
+      accumulatePlayedTime(el);
+    });
     el.addEventListener('loadedmetadata', () => setDuration(el.duration || 0));
     el.addEventListener('durationchange', () => setDuration(el.duration || 0));
     el.addEventListener('ended', () => {
       setIsPlaying(false);
-      // Fire-and-forget playback event for the track that just finished.
-      const trackId = el.dataset.playbackTrackId;
-      const collectionName = el.dataset.playbackCollection;
-      if (trackId && collectionName) {
-        postPlaybackEvent({
-          trackId,
-          collectionName,
-          playedSec: el.duration || el.currentTime || 0,
-          totalDur: el.duration || null,
-        });
-        // Mark as flushed so subsequent pagehide/pause doesn't double-count.
-        el.dataset.playbackFlushedAt = String(el.currentTime || 0);
-      }
+      // Track finished — end of this listen, record the accumulated time.
+      flushAccumulatedListen(el);
     });
     el.addEventListener('play', () => {
       setIsPlaying(true);
-      // New listening session — reset the flush mark.
-      el.dataset.playbackFlushedAt = '';
+      // If the previous listen was already recorded (track ended, then replayed),
+      // this is a brand-new listen — start a fresh accumulator. Otherwise this
+      // is a resume mid-track: keep the accumulator, but re-anchor playLastPos so
+      // the paused gap (or a seek made while paused) isn't credited as listening.
+      if (el.dataset.playEmitted === '1') resetPlaySession(el);
+      else el.dataset.playLastPos = String(el.currentTime || 0);
     });
     el.addEventListener('pause', () => {
+      // No emit on pause: the accumulator already holds the seconds heard so far,
+      // and pausing is not the end of a listen (the user may resume). Emitting
+      // here is exactly what used to double-count on resume→end.
       setIsPlaying(false);
-      // Flush a partial-play event when the user pauses mid-track and stays
-      // paused — without this, single-play sessions never produce stats.
-      // Only counts when the user actually heard a meaningful chunk (>= 5s)
-      // and we haven't already flushed at this same currentTime.
-      const trackId = el.dataset.playbackTrackId;
-      const collectionName = el.dataset.playbackCollection;
-      const playedSec = el.currentTime || 0;
-      const lastFlush = parseFloat(el.dataset.playbackFlushedAt || '0');
-      if (trackId && collectionName && playedSec >= 5 && playedSec > lastFlush + 1) {
-        postPlaybackEvent({
-          trackId, collectionName,
-          playedSec, totalDur: el.duration || null,
-        });
-        el.dataset.playbackFlushedAt = String(playedSec);
-      }
     });
-    // Browser-close / tab-hide safety net — sendBeacon survives unload.
-    const flushOnHide = () => {
-      const trackId = el.dataset.playbackTrackId;
-      const collectionName = el.dataset.playbackCollection;
-      const playedSec = el.currentTime || 0;
-      const lastFlush = parseFloat(el.dataset.playbackFlushedAt || '0');
-      if (trackId && collectionName && playedSec >= 5 && playedSec > lastFlush + 1) {
-        postPlaybackEvent({
-          trackId, collectionName,
-          playedSec, totalDur: el.duration || null,
-        });
-        el.dataset.playbackFlushedAt = String(playedSec);
-      }
-    };
-    window.addEventListener('pagehide', flushOnHide);
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden') flushOnHide();
-    });
+    // Browser-close / tab-hide safety net — sendBeacon survives unload. We flush
+    // only on real page teardown (pagehide), NOT on visibilitychange: audio keeps
+    // playing (and accumulating) in a backgrounded tab, so flushing on tab-switch
+    // would prematurely seal the listen and drop the seconds heard after return.
+    window.addEventListener('pagehide', () => flushAccumulatedListen(el));
     listenersAttached.current = true;
   }, []);
 
@@ -5524,35 +5539,21 @@ function AddToPlaylistPopover({ trackId, anchor, onClose, listing, lang }) {
   const [busy, setBusy] = React.useState(false);
   const [inlineMode, setInlineMode] = React.useState(false);
   const [inlineName, setInlineName] = React.useState('');
-  const popRef = React.useRef(null);
 
   React.useEffect(() => {
     listing.fetchWithMembership(trackId).then(setData);
   }, [trackId, listing]);
 
   React.useEffect(() => {
-    const onDocClick = (e) => { if (popRef.current && !popRef.current.contains(e.target)) onClose(); };
     const onEsc = (e) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('mousedown', onDocClick);
     document.addEventListener('keydown', onEsc);
-    return () => {
-      document.removeEventListener('mousedown', onDocClick);
-      document.removeEventListener('keydown', onEsc);
-    };
+    return () => document.removeEventListener('keydown', onEsc);
   }, [onClose]);
 
-  if (!anchor) return null;
-  const rect = anchor.getBoundingClientRect();
-  const style = {
-    position: 'fixed', zIndex: 1500,
-    left: Math.max(8, rect.right - 280),
-    top: rect.bottom + 8,
-    width: 280, padding: 10, borderRadius: 14,
-    background: 'linear-gradient(180deg, rgba(28,24,40,0.92) 0%, rgba(18,16,28,0.92) 60%)',
-    backdropFilter: 'blur(24px) saturate(1.3)', WebkitBackdropFilter: 'blur(24px) saturate(1.3)',
-    border: '1px solid rgba(255,255,255,.08)',
-    boxShadow: 'inset 0 1px 0 rgba(255,255,255,.12), 0 14px 38px rgba(0,0,0,.5), 0 0 0 1px rgba(124,91,255,.12)',
-  };
+  // Centered modal (not an anchored popover): a small-screen player toolbar
+  // sits near the viewport bottom, so an anchored dropdown overflowed off
+  // screen. A dimmed full-screen overlay + scrollable card always fits.
+  if (!trackId) return null;
 
   const onAdd = async (pl) => {
     if (busy || pl.contains_track) return;
@@ -5585,61 +5586,96 @@ function AddToPlaylistPopover({ trackId, anchor, onClose, listing, lang }) {
   };
 
   return (
-    <div ref={popRef} style={style} onClick={(e) => e.stopPropagation()}>
-      <div className="mono" style={{ padding: '4px 10px 8px', fontSize: 9.5, letterSpacing: '0.24em', color: 'rgba(238,238,243,.45)', borderBottom: '1px solid rgba(255,255,255,.05)', marginBottom: 4, textTransform: 'uppercase' }}>
-        {lang === 'ru' ? 'Добавить в плейлист' : 'Add to playlist'}
-      </div>
-      {data === null ? (
-        <div style={{ padding: '14px 10px', color: 'rgba(238,238,243,.4)', fontSize: 12 }}>…</div>
-      ) : data.playlists.length === 0 ? (
-        <div style={{ padding: '14px 10px', color: 'rgba(238,238,243,.4)', fontSize: 12 }}>
-          {lang === 'ru' ? 'У вас пока нет плейлистов' : 'No playlists yet'}
+    <div
+      onMouseDown={onClose}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 2000,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: 'rgba(8,6,14,0.55)',
+        backdropFilter: 'blur(6px)', WebkitBackdropFilter: 'blur(6px)',
+        animation: 'fadeIn 0.18s ease',
+      }}
+    >
+      <div
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 'min(360px, calc(100vw - 32px))', maxHeight: '70vh',
+          display: 'flex', flexDirection: 'column',
+          padding: 10, borderRadius: 16,
+          background: 'linear-gradient(180deg, rgba(28,24,40,0.97) 0%, rgba(18,16,28,0.97) 60%)',
+          backdropFilter: 'blur(24px) saturate(1.3)', WebkitBackdropFilter: 'blur(24px) saturate(1.3)',
+          border: '1px solid rgba(255,255,255,.08)',
+          boxShadow: 'inset 0 1px 0 rgba(255,255,255,.12), 0 24px 60px rgba(0,0,0,.6), 0 0 0 1px rgba(124,91,255,.12)',
+          animation: 'toastIn 0.22s cubic-bezier(0.22,0.9,0.3,1)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 6px 8px', borderBottom: '1px solid rgba(255,255,255,.05)', marginBottom: 4 }}>
+          <span className="mono" style={{ fontSize: 9.5, letterSpacing: '0.24em', color: 'rgba(238,238,243,.45)', textTransform: 'uppercase' }}>
+            {lang === 'ru' ? 'Добавить в плейлист' : 'Add to playlist'}
+          </span>
+          <button
+            onClick={onClose}
+            aria-label={lang === 'ru' ? 'Закрыть' : 'Close'}
+            style={{ background: 'none', border: 'none', color: 'rgba(238,238,243,.5)', cursor: 'pointer', fontSize: 17, lineHeight: 1, padding: '2px 6px' }}
+          >✕</button>
         </div>
-      ) : (
-        data.playlists.map(pl => (
-          <div key={pl.id}
-            onClick={() => onAdd(pl)}
-            style={{
-              display: 'grid', gridTemplateColumns: '24px 1fr auto', gap: 8, alignItems: 'center',
-              padding: '9px 10px', borderRadius: 9,
-              cursor: pl.contains_track ? 'default' : 'pointer',
-              color: pl.contains_track ? 'rgba(238,238,243,.55)' : '#eeeef3',
-              transition: 'background .12s',
-            }}
-            onMouseEnter={(e) => { if (!pl.contains_track) e.currentTarget.style.background = 'rgba(124,91,255,.12)'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-          >
-            <span style={{ color: 'oklch(72% 0.13 145)', fontSize: 14 }}>{pl.contains_track ? '✓' : ''}</span>
-            <span style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pl.name}</span>
-            <span className="mono" style={{ fontSize: 10, color: 'rgba(238,238,243,.4)', letterSpacing: '0.08em' }}>{pl.track_count}</span>
+
+        <div style={{ overflowY: 'auto', flex: 1, minHeight: 0 }}>
+          {data === null ? (
+            <div style={{ padding: '14px 10px', color: 'rgba(238,238,243,.4)', fontSize: 12 }}>…</div>
+          ) : data.playlists.length === 0 ? (
+            <div style={{ padding: '14px 10px', color: 'rgba(238,238,243,.4)', fontSize: 12 }}>
+              {lang === 'ru' ? 'У вас пока нет плейлистов' : 'No playlists yet'}
+            </div>
+          ) : (
+            data.playlists.map(pl => (
+              <div key={pl.id}
+                onClick={() => onAdd(pl)}
+                style={{
+                  display: 'grid', gridTemplateColumns: '24px 1fr auto', gap: 8, alignItems: 'center',
+                  padding: '9px 10px', borderRadius: 9,
+                  cursor: pl.contains_track ? 'default' : 'pointer',
+                  color: pl.contains_track ? 'rgba(238,238,243,.55)' : '#eeeef3',
+                  transition: 'background .12s',
+                }}
+                onMouseEnter={(e) => { if (!pl.contains_track) e.currentTarget.style.background = 'rgba(124,91,255,.12)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+              >
+                <span style={{ color: 'oklch(72% 0.13 145)', fontSize: 14 }}>{pl.contains_track ? '✓' : ''}</span>
+                <span style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pl.name}</span>
+                <span className="mono" style={{ fontSize: 10, color: 'rgba(238,238,243,.4)', letterSpacing: '0.08em' }}>{pl.track_count}</span>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div style={{ height: 1, background: 'rgba(255,255,255,.05)', margin: '4px 0' }} />
+        {inlineMode ? (
+          <div style={{ display: 'flex', gap: 6, padding: 6 }}>
+            <input
+              autoFocus
+              value={inlineName} onChange={(e) => setInlineName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') onCreateInline(); else if (e.key === 'Escape') setInlineMode(false); }}
+              placeholder={lang === 'ru' ? 'Название плейлиста' : 'Playlist name'}
+              style={{ flex: 1, background: 'rgba(0,0,0,.3)', border: '1px solid rgba(124,91,255,.35)', borderRadius: 8, padding: '8px 10px', color: '#fff', fontSize: 13, outline: 'none' }}
+            />
+            <button onClick={onCreateInline}
+              style={{ background: 'linear-gradient(180deg, oklch(72% 0.2 275) 0%, oklch(52% 0.24 282) 100%)', color: '#fff', border: 'none', borderRadius: 8, padding: '0 12px', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
+              ▶
+            </button>
           </div>
-        ))
-      )}
-      <div style={{ height: 1, background: 'rgba(255,255,255,.05)', margin: '4px 0' }} />
-      {inlineMode ? (
-        <div style={{ display: 'flex', gap: 6, padding: 6 }}>
-          <input
-            autoFocus
-            value={inlineName} onChange={(e) => setInlineName(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') onCreateInline(); else if (e.key === 'Escape') setInlineMode(false); }}
-            placeholder={lang === 'ru' ? 'Название плейлиста' : 'Playlist name'}
-            style={{ flex: 1, background: 'rgba(0,0,0,.3)', border: '1px solid rgba(124,91,255,.35)', borderRadius: 8, padding: '8px 10px', color: '#fff', fontSize: 13, outline: 'none' }}
-          />
-          <button onClick={onCreateInline}
-            style={{ background: 'linear-gradient(180deg, oklch(72% 0.2 275) 0%, oklch(52% 0.24 282) 100%)', color: '#fff', border: 'none', borderRadius: 8, padding: '0 12px', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
-            ▶
-          </button>
-        </div>
-      ) : (
-        <div
-          onClick={() => setInlineMode(true)}
-          style={{ padding: '9px 10px', borderRadius: 9, cursor: 'pointer', color: '#d8ccff', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}
-          onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(124,91,255,.15)'}
-          onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
-          <span style={{ fontSize: 16, lineHeight: 1 }}>＋</span>
-          {lang === 'ru' ? 'Новый плейлист…' : 'New playlist…'}
-        </div>
-      )}
+        ) : (
+          <div
+            onClick={() => setInlineMode(true)}
+            style={{ padding: '9px 10px', borderRadius: 9, cursor: 'pointer', color: '#d8ccff', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}
+            onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(124,91,255,.15)'}
+            onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
+            <span style={{ fontSize: 16, lineHeight: 1 }}>＋</span>
+            {lang === 'ru' ? 'Новый плейлист…' : 'New playlist…'}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -6010,7 +6046,11 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
       setLikedMap(p => { const next = {...p}; (d?.tracks || []).forEach(t => { next[t.track_id] = true; }); return next; });
     }).catch(() => setLikedData({tracks:[]}));
     apiFetch(`/playback/recent?collection_name=${col}&limit=50`).then(setRecentData).catch(() => setRecentData({tracks:[]}));
-    apiFetch(`/library/listening-stats?collection_name=${col}&lang=${lang}`).then(setListenData).catch(() => setListenData(null));
+    // getTimezoneOffset() returns minutes where local = UTC - offset; negate it
+    // so the backend gets the additive UTC→local shift (UTC+3 → +180) for
+    // bucketing the peak hour in the user's own timezone.
+    const tzOffset = -new Date().getTimezoneOffset();
+    apiFetch(`/library/listening-stats?collection_name=${col}&lang=${lang}&tz_offset_minutes=${tzOffset}`).then(setListenData).catch(() => setListenData(null));
   }, [activeCollection, lang, visible]);
 
   // ── Effect 2: only albums (refires on sort change) ───────────────────
@@ -8783,6 +8823,88 @@ function InlineLyricExplain({
 }
 
 // ─── PLAYER SECTION ─────────────────────────────────────────────────────────
+// Volume control for the player toolbar: a Windows-style speaker icon whose
+// glyph reflects the current level (muted / low / mid / high). Click toggles
+// mute (remembering the prior level). The slider stays collapsed into the icon
+// and slides out to the right on hover, folding back when the pointer leaves —
+// unless a drag is in progress, so dragging past the icon edge doesn't snap it
+// shut. Positioned absolutely so the centered toolbar row doesn't reflow.
+function VolumeControl({ volume, onChange, isDark, lang }) {
+  const [hovered, setHovered] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const lastVolRef = useRef(volume > 0 ? volume : 0.85);
+
+  useEffect(() => { if (volume > 0) lastVolRef.current = volume; }, [volume]);
+  useEffect(() => {
+    if (!dragging) return;
+    const stop = () => setDragging(false);
+    window.addEventListener('mouseup', stop);
+    window.addEventListener('pointerup', stop);
+    return () => { window.removeEventListener('mouseup', stop); window.removeEventListener('pointerup', stop); };
+  }, [dragging]);
+
+  const expanded = hovered || dragging;
+  const pct = Math.round((volume || 0) * 100);
+  const fill = isDark ? 'rgba(255,255,255,0.62)' : 'rgba(0,0,0,0.42)';
+  const trackBg = isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.12)';
+  const muted = volume <= 0;
+  const lvl = muted ? 0 : volume <= 0.33 ? 1 : volume <= 0.66 ? 2 : 3;
+
+  const toggleMute = () => {
+    if (volume > 0) { lastVolRef.current = volume; onChange(0); }
+    else { onChange(lastVolRef.current > 0 ? lastVolRef.current : 0.85); }
+  };
+
+  return (
+    <div
+      style={{ position: 'relative', display: 'inline-flex', alignItems: 'center' }}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <button
+        type="button" className="player-icon-btn"
+        onClick={toggleMute}
+        aria-label={lang === 'ru' ? 'Громкость' : 'Volume'}
+        title={muted ? (lang === 'ru' ? 'Включить звук' : 'Unmute') : (lang === 'ru' ? 'Выключить звук' : 'Mute')}
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none" />
+          {muted ? (
+            <g><line x1="16" y1="9.5" x2="21.5" y2="14.5" /><line x1="21.5" y1="9.5" x2="16" y2="14.5" /></g>
+          ) : (
+            <g>
+              {lvl >= 1 && <path d="M14.5 9.5a3 3 0 0 1 0 5" />}
+              {lvl >= 2 && <path d="M16.6 7.8a6 6 0 0 1 0 8.4" />}
+              {lvl >= 3 && <path d="M18.7 6a9 9 0 0 1 0 12" />}
+            </g>
+          )}
+        </svg>
+      </button>
+      <div style={{
+        position: 'absolute', left: 'calc(100% + 2px)', top: '50%', transform: 'translateY(-50%)',
+        display: 'flex', alignItems: 'center',
+        width: expanded ? 94 : 0, opacity: expanded ? 1 : 0,
+        overflow: 'hidden', pointerEvents: expanded ? 'auto' : 'none',
+        transition: 'width 0.22s cubic-bezier(0.22,0.9,0.3,1), opacity 0.18s ease',
+      }}>
+        <input
+          type="range" min={0} max={1} step={0.01}
+          value={volume}
+          onChange={e => onChange(Number(e.target.value))}
+          onMouseDown={() => setDragging(true)}
+          onPointerDown={() => setDragging(true)}
+          className="player-volume"
+          aria-label={lang === 'ru' ? 'Уровень громкости' : 'Volume level'}
+          style={{
+            width: 84, height: 4, borderRadius: 2, margin: '0 5px',
+            background: `linear-gradient(to right, ${fill} ${pct}%, ${trackBg} ${pct}%)`,
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, audio, visible, lyricsMode, onToggleLyrics, onCloseLyrics, showToast, navigateToArtist, aiStatus, onAddToPlaylist }) {
   const [playlist, setPlaylist] = useState(initialPlaylist || []);
   const [currentIndex, setCurrentIndex] = useState(-1);
@@ -9030,7 +9152,19 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
     setCurrentIndex(idx);
     const track = initialPlaylist[idx].track;
     const url = `${API}/search/tracks/${track.track_id}/stream?collection_name=${encodeURIComponent(activeCollection || '')}`;
-    if (audio) { audio.setSrc(url, { trackId: track.track_id, collectionName: activeCollection }); setTimeout(() => audio.play(), 50); }
+    if (audio) {
+      // Home unmounts every section, so the first nav away from home REMOUNTS
+      // this section and re-runs this effect with the persisted playlist+track.
+      // Re-pointing the src must NOT resurrect a paused track: read the LIVE
+      // element state BEFORE setSrc (which synchronously rewrites
+      // dataset.playbackTrackId). Autoplay only when the section is visible AND
+      // this isn't just a remount of the already-loaded, paused track. A real
+      // user pick always carries a different track id, so it still autoplays.
+      const el = audio.audioRef?.current;
+      const reloadingPausedTrack = !!(el && el.dataset.playbackTrackId === String(track.track_id) && el.paused);
+      audio.setSrc(url, { trackId: track.track_id, collectionName: activeCollection });
+      if (visible && !reloadingPausedTrack) setTimeout(() => audio.play(), 50);
+    }
     fetchReaction(initialTrack.track_id);
   }, [initialPlaylist, initialTrack]);
 
@@ -9209,7 +9343,6 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
     : null;
 
   const progressPct = duration ? (currentTime / duration * 100) : 0;
-  const volumePct = volume * 100;
 
   return (
     <div style={{
@@ -9557,6 +9690,7 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
                   </svg>
                 </button>
               )}
+              <VolumeControl volume={volume} onChange={setVolume} isDark={isDark} lang={lang} />
             </div>
 
             {/* Lossless badge — shown for FLAC always, M4A when bitrate > 600 kbps */}
@@ -9592,23 +9726,6 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
               );
             })()}
 
-            {/* Volume */}
-            <div style={{ display:'flex', alignItems:'center', gap:'10px', padding:'0 20px' }}>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={pTextSubtle} strokeWidth="2" strokeLinecap="round">
-                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-                <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
-              </svg>
-              <input
-                type="range" min={0} max={1} step={0.01}
-                value={volume}
-                onChange={e => setVolume(Number(e.target.value))}
-                className="player-volume"
-                style={{
-                  flex:1, height:'4px', borderRadius:'2px',
-                  background: `linear-gradient(to right, ${pAccent} ${volumePct}%, ${pUnfilled} ${volumePct}%)`,
-                }}
-              />
-            </div>
           </div>
         </div>
 
@@ -10124,16 +10241,9 @@ function App() {
     // render) for no benefit, and could in principle leave a gap if a re-render
     // races with unload.
     const onUnload = () => {
-      const el = audio.audioRef.current;
-      if (!el || !el.dataset.playbackTrackId) return;
-      const playedSec = el.currentTime || 0;
-      if (playedSec <= 0) return;
-      postPlaybackEvent({
-        trackId: el.dataset.playbackTrackId,
-        collectionName: el.dataset.playbackCollection,
-        playedSec,
-        totalDur: el.duration || null,
-      });
+      // Flush the accumulated listen (real played seconds), deduped by the
+      // playEmitted guard so it can't double up with the pagehide listener.
+      flushAccumulatedListen(audio.audioRef.current);
     };
     window.addEventListener('beforeunload', onUnload);
     return () => window.removeEventListener('beforeunload', onUnload);

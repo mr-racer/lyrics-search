@@ -137,3 +137,33 @@ def test_get_recent_excludes_skipped_from_play_count():
     qdrant = _stub_qdrant_retrieve({"t1": {"title":"T1","artist":"A","duration":240}})
     res = get_recent(qdrant_client=qdrant, collection_name="c", limit=10)
     assert res.tracks[0].play_count == 1   # skipped excluded
+
+
+def _insert_event_at(played_at_utc: str, track_id: str = "t1"):
+    """Insert a non-skipped event with an explicit UTC played_at timestamp."""
+    conn = MetadataDB._connect()
+    conn.execute(
+        "INSERT INTO playback_events "
+        "(session_id, collection_name, track_id, played_at, played_sec, total_dur, skipped_early) "
+        "VALUES (?, ?, ?, ?, ?, ?, 0)",
+        ("s1", "c", track_id, played_at_utc, 200.0, 240.0),
+    )
+    conn.commit()
+
+
+def test_get_peak_hour_defaults_to_utc():
+    # Event at 22:30 UTC → peak hour 22 with no offset.
+    _insert_event_at("2026-05-24 22:30:00")
+    assert MetadataDB.get_peak_hour("c") == 22
+
+
+def test_get_peak_hour_applies_positive_tz_offset():
+    # 22:30 UTC + 180 min (UTC+3, Moscow) → 01:30 local → hour 1 (wraps past midnight).
+    _insert_event_at("2026-05-24 22:30:00")
+    assert MetadataDB.get_peak_hour("c", tz_offset_minutes=180) == 1
+
+
+def test_get_peak_hour_applies_negative_tz_offset():
+    # 02:30 UTC - 300 min (UTC-5) → 21:30 previous day local → hour 21 (wraps back).
+    _insert_event_at("2026-05-24 02:30:00")
+    assert MetadataDB.get_peak_hour("c", tz_offset_minutes=-300) == 21
