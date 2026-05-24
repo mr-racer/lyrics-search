@@ -1094,7 +1094,7 @@ CREATE TABLE recommendation_snapshots (
 
 Рекомендуемый порядок имплементации (каждый шаг можно проверить независимо).
 
-> ### Status snapshot (updated 2026-05-16)
+> ### Status snapshot (updated 2026-05-24)
 >
 > | Phase | Status | Reference |
 > |---|---|---|
@@ -1102,7 +1102,7 @@ CREATE TABLE recommendation_snapshots (
 > | **1b** Additional backend services    | 🛠 **1b.2 partial** — `/library/rediscover` + `/library/featured-artist` shipped (Home plan); For-You uses placeholder `/recommend/for-you-seed` (full personalization 1b.3 still pending). 1b.1/1b.4/1b.5/1b.6 not started | `docs/superpowers/plans/2026-05-24-home-discovery-magazine.md` |
 > | **1c** Sonic Descriptor Layer         | ✅ Shipped (merged from `feature/sonic-descriptor-layer`) — unblocks Sonic Sibling, Sonic Map cluster overlay, For You rationale | `app/services/sonic_descriptor_service.py`, `scripts/cluster_curator.py` |
 > | **2**  Frontend foundation            | ✅ Shipped (out-of-band — landed alongside Plan 4 timeframe) | inline in `frontend/index.html` |
-> | **3**  Artist Atlas                   | ✅ Shipped (Plan 5)                       | `docs/superpowers/plans/2026-05-16-plan-5-artist-atlas.md` |
+> | **3**  Artist Atlas                   | ✅ Shipped (Plan 5) + **artist canonicalization** (2026-05-24): a track's `artist` tag is split into participants at index time into multi-valued payload `artists[]`/`artist_slugs[]`/`primary_artist_slug` (curated splitter `app/services/artist_split.py` + `artist_split_rules.json`, whole-slug matching so "ye" never matches inside "kanye"). Artist page now filters by participant slug server-side (keyword index) → collaborations surface mixed-in and marked `feat.`; distinct-artist list explodes collabs into individuals. Backfill: `scripts/backfill_artist_slugs.py` (no vector re-encode). | `docs/superpowers/plans/2026-05-16-plan-5-artist-atlas.md`, `docs/superpowers/plans/2026-05-24-artist-canonicalization.md` |
 > | **4**  Player v6 redesign             | ✅ Shipped (Plan 4) + post-plan polish round | `docs/superpowers/plans/2026-05-16-plan-4-player-redesign.md` |
 > | **5**  AI Chat & lyrics-explain       | ✅ **Shipped** — AIChatDrawer (slide-up panel replacing queue, FactsRail stays visible; slim 32px header; persistent suggested prompts above input; ↺ session-clear) + Inline ✨ explain (draw-under panel). Single endpoint POST /chat/track-chat with web_search tool fallback (pydantic-ai). Plan: `docs/superpowers/plans/2026-05-19-plan-5-ai-chat-lyrics-explain.md`, polish: `docs/superpowers/plans/2026-05-20-chat-drawer-replaces-queue.md` |
 > | **6**  Spotify-like MVP               | 🛠 **Library Overhaul + Playlists CRUD shipped (sub-plans #1, #2 of 3)** | feature/library-overhaul, feature/plan-19-playlists-crud |
