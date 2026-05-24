@@ -20,7 +20,7 @@ def client(tmp_path, monkeypatch):
     class FakeQdrant:
         def __init__(self, points):
             self._points = points
-        def scroll(self, collection_name, limit, offset, with_payload, with_vectors):
+        def scroll(self, collection_name, limit, offset, with_payload, with_vectors, scroll_filter=None):
             if offset is None:
                 return list(self._points), None
             return [], None

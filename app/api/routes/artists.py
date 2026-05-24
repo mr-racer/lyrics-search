@@ -7,6 +7,7 @@ from collections import defaultdict
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from qdrant_client import models
 
 from app.domain.models import ArtistAggregate, ArtistAlbum, TrackMetadata
 from app.resources.metadata_db import MetadataDB
@@ -121,14 +122,22 @@ def build_artist_aggregate(db, collection: str, canonical_slug: str, lang: str) 
         "SELECT name FROM artists WHERE slug = ?", (canonical_slug,),
     ).fetchone()
 
-    # Scroll Qdrant collecting this artist's tracks (slug-matched)
+    # Server-side filter by participant slug (keyword index). The per-point
+    # membership guard below keeps this correct against test doubles that
+    # ignore scroll_filter, and against any point carrying extra slugs.
+    flt = models.Filter(must=[
+        models.FieldCondition(
+            key="artist_slugs",
+            match=models.MatchValue(value=canonical_slug),
+        )
+    ])
     artist_tracks: list[TrackMetadata] = []
     offset = None
     while True:
         try:
             points, offset = db.qdrant.scroll(
                 collection_name=collection, limit=64, offset=offset,
-                with_payload=True, with_vectors=False,
+                with_payload=True, with_vectors=False, scroll_filter=flt,
             )
         except Exception as e:
             logger.warning("[artists] scroll failed: %s", e)
@@ -140,7 +149,8 @@ def build_artist_aggregate(db, collection: str, canonical_slug: str, lang: str) 
             artist_name = (p.get("artist") or "").strip()
             if not artist_name:
                 continue
-            if _slugify_artist(artist_name) != canonical_slug:
+            slugs = p.get("artist_slugs") or artist_slugs(artist_name)
+            if canonical_slug not in slugs:
                 continue
             artist_tracks.append(_track_from_payload(str(pt.id), p))
         if offset is None:
