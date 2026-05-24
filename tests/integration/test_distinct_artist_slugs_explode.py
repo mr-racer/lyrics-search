@@ -39,3 +39,16 @@ def test_fallback_when_payload_lacks_slugs():
     slugs = {s for s, _ in result}
     assert "calvin-harris" in slugs
     assert "dua-lipa" in slugs
+
+
+def test_fallback_alias_display_name_is_artist_name_not_slug():
+    pt = MagicMock()
+    pt.payload = {"artist": "Ye"}
+    qdrant = MagicMock()
+    qdrant.scroll.return_value = ([pt], None)
+    result = LibraryService.list_distinct_artist_slugs(
+        qdrant_client=qdrant, collection_name="c",
+    )
+    slug_to_name = dict(result)
+    assert "kanye-west" in slug_to_name
+    assert slug_to_name["kanye-west"] == "Ye"

@@ -1382,8 +1382,11 @@ class LibraryService:
                 name = (payload.get("artist") or "").strip()
                 if not name:
                     continue
-                slugs = payload.get("artist_slugs") or artist_slugs(name)
-                names = payload.get("artists") or split_artists(name)
+                slugs = payload.get("artist_slugs")
+                names = payload.get("artists")
+                if not slugs or not names:
+                    slugs = artist_slugs(name)
+                    names = split_artists(name)
                 for i, slug in enumerate(slugs):
                     display = names[i] if i < len(names) else slug
                     seen.setdefault(slug, display)
