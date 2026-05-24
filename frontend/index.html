@@ -1449,6 +1449,30 @@
       box-shadow: 0 0 8px oklch(60% 0.18 270 / 0.6);
       pointer-events: none;
     }
+    /* ── Home / Discovery Magazine: For-You aurora start-control + deck ── */
+    @keyframes fyBlobA{0%{transform:translate(-25%,-15%) scale(1)}33%{transform:translate(35%,20%) scale(1.35)}66%{transform:translate(5%,-30%) scale(.85)}100%{transform:translate(-25%,-15%) scale(1)}}
+    @keyframes fyBlobB{0%{transform:translate(30%,25%) scale(1.1)}33%{transform:translate(-20%,-10%) scale(.9)}66%{transform:translate(25%,30%) scale(1.3)}100%{transform:translate(30%,25%) scale(1.1)}}
+    @keyframes fyBlobC{0%{transform:translate(10%,30%) scale(.9)}50%{transform:translate(-30%,-20%) scale(1.25)}100%{transform:translate(10%,30%) scale(.9)}}
+    @keyframes fyBlobD{0%{transform:translate(-30%,20%) scale(1.2)}50%{transform:translate(30%,-25%) scale(.95)}100%{transform:translate(-30%,20%) scale(1.2)}}
+    @keyframes fyGlowPulse{0%,100%{box-shadow:0 8px 26px rgba(124,91,255,.5)}50%{box-shadow:0 10px 34px rgba(255,120,200,.6)}}
+    @keyframes fyRingSpin{to{transform:rotate(360deg)}}
+    @keyframes fyHaloOut{0%{transform:scale(.7);opacity:.5}100%{transform:scale(1.8);opacity:0}}
+    .fy-hybrid{width:62px;height:62px;border-radius:50%;position:relative;overflow:visible;animation:fyGlowPulse 5s ease infinite;cursor:pointer;transition:transform .35s cubic-bezier(.22,.9,.3,1)}
+    .fy-hybrid .fy-clip{position:absolute;inset:0;border-radius:50%;overflow:hidden}
+    .fy-blob{position:absolute;width:54px;height:54px;border-radius:50%;filter:blur(9px)}
+    .fy-bg1{background:#7c5bff;top:2px;left:2px;animation:fyBlobA 7s ease-in-out infinite}
+    .fy-bg2{background:#ff78c8;top:6px;left:9px;animation:fyBlobB 9s ease-in-out infinite}
+    .fy-bg3{background:#e0b341;top:9px;left:-3px;animation:fyBlobC 11s ease-in-out infinite}
+    .fy-bg4{background:#b06bff;top:-3px;left:7px;animation:fyBlobD 8s ease-in-out infinite}
+    .fy-ring{position:absolute;inset:-5px;border-radius:50%;background:conic-gradient(from 0deg,#7c5bff,#ff78c8,#e0b341,#7c5bff);filter:blur(3px);opacity:.65;animation:fyRingSpin 6s linear infinite;z-index:0;transition:opacity .3s}
+    .fy-glasscap{position:absolute;inset:11px;border-radius:50%;backdrop-filter:blur(5px);z-index:4;box-shadow:inset 0 1px 0 rgba(255,255,255,.5),inset 0 -3px 8px rgba(0,0,0,.25)}
+    .fy-glyph{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:18px;z-index:6;text-shadow:0 1px 6px rgba(0,0,0,.45);margin-left:2px}
+    .fy-halo{position:absolute;inset:0;border-radius:50%;border:2px solid rgba(255,150,210,.6);opacity:0;z-index:2}
+    .tint-irid .fy-glasscap{background:linear-gradient(140deg,rgba(124,91,255,.5),rgba(255,120,200,.42) 55%,rgba(224,179,65,.4))}
+    .fy-hybrid:hover{transform:scale(1.09)}
+    .fy-hybrid:hover .fy-bg1{animation-duration:3.4s}.fy-hybrid:hover .fy-bg2{animation-duration:4s}.fy-hybrid:hover .fy-bg3{animation-duration:4.6s}.fy-hybrid:hover .fy-bg4{animation-duration:3.7s}
+    .fy-hybrid:hover .fy-ring{opacity:1;animation-duration:2.4s}
+    .fy-hybrid:hover .fy-halo{animation:fyHaloOut 1s ease-out infinite}
   </style>
 </head>
 <body>
