@@ -483,6 +483,35 @@ class RecentTracksResponse(BaseModel):
     collection_name: Optional[str] = None
 
 
+class HomeTrack(BaseModel):
+    """Lightweight track for Home (Discovery Magazine) blocks."""
+    track_id: str
+    title: str
+    artist: str
+    album: Optional[str] = None
+    year: Optional[int] = None
+    duration: Optional[float] = None
+    cover_art_path: Optional[str] = None
+    genre: Optional[str] = None
+
+
+class RediscoverResponse(BaseModel):
+    """Result of GET /library/rediscover — a long-unplayed track to revisit."""
+    track: Optional[HomeTrack] = None
+    last_played: Optional[str] = None   # ISO datetime, None when never played
+    never_played: bool = False
+    collection_name: Optional[str] = None
+
+
+class ForYouSeedResponse(BaseModel):
+    """Result of GET /recommend/for-you-seed — the seed that anchors the
+    For-You autoplay stream. Placeholder for future personalization ranking."""
+    seed_track_id: Optional[str] = None
+    track: Optional[HomeTrack] = None
+    source: str = "random"  # "liked" | "recent" | "random" (diagnostic)
+    collection_name: Optional[str] = None
+
+
 class TopTrackBrief(BaseModel):
     track_id: str
     title: str
