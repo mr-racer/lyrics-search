@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from app.domain.models import AutoplayQueueResponse
-from app.services import autoplay_service
+from app.domain.models import AutoplayQueueResponse, ForYouSeedResponse
+from app.services import autoplay_service, personalization_service
 
 router = APIRouter(prefix="/recommend", tags=["Recommend"])
 
@@ -33,6 +33,19 @@ def autoplay_queue(
         seed_track_id=seed_track_id,
         exclude_ids=excluded,
         limit=limit,
+    )
+
+
+@router.get("/for-you-seed", response_model=ForYouSeedResponse)
+def for_you_seed(
+    request: Request,
+    collection: str = Query(..., description="Qdrant collection name"),
+) -> ForYouSeedResponse:
+    db_client = request.app.state.db_client
+    if db_client is None or db_client.qdrant is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    return personalization_service.pick_for_you_seed(
+        qdrant_client=db_client.qdrant, collection_name=collection,
     )
 
 
