@@ -31,6 +31,12 @@ class TestSplitArtists:
         assert split_artists("") == []
         assert split_artists("   ") == []
 
+    def test_vs_separator(self):
+        assert split_artists("Jay-Z vs Nas") == ["Jay-Z", "Nas"]
+
+    def test_with_separator(self):
+        assert split_artists("Santana with Rob Thomas") == ["Santana", "Rob Thomas"]
+
 
 class TestKnownGroups:
     def test_earth_wind_and_fire_not_split(self):

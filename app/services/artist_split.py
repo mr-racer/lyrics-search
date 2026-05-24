@@ -37,18 +37,23 @@ def _load_rules() -> tuple[set[str], dict[str, str]]:
     except Exception:
         return set(), {}
     groups = {_slugify(g) for g in data.get("known_groups", []) if g}
-    aliases = {str(k): str(v) for k, v in (data.get("aliases") or {}).items()}
+    # Slug-normalize keys so an alias fires regardless of how it's written in JSON
+    # ("Ye" / "ye" both map). Values are already canonical slugs.
+    aliases = {_slugify(k): str(v) for k, v in (data.get("aliases") or {}).items()}
     return groups, aliases
 
 
 _KNOWN_GROUPS, _ALIASES = _load_rules()
 
 
-def split_artists(raw: str) -> list[str]:
+def split_artists(raw: str | None) -> list[str]:
     """['Kanye West', 'Sia'] from 'Kanye West, Sia'. Primary first, deduped."""
     norm = " ".join((raw or "").split())
     if not norm:
         return []
+    # Known-group protection only fires when the WHOLE string is a known group.
+    # A known group appearing as a collaborator (e.g. "Earth, Wind & Fire feat. X")
+    # can still be split — accepted as a rare edge case (no multi-pass matching).
     if _slugify(norm) in _KNOWN_GROUPS:
         return [norm]
     out: list[str] = []
@@ -62,10 +67,12 @@ def split_artists(raw: str) -> list[str]:
             continue
         seen.add(key)
         out.append(part)
+    # `out` is empty only for separator-only input (e.g. "&", ","), where every
+    # split token is blank — fall back to the normalized raw string.
     return out or [norm]
 
 
-def artist_slugs(raw: str) -> list[str]:
+def artist_slugs(raw: str | None) -> list[str]:
     """Canonical slugs for each participant, alias-resolved, deduped in order."""
     out: list[str] = []
     seen: set[str] = set()
@@ -79,7 +86,7 @@ def artist_slugs(raw: str) -> list[str]:
     return out
 
 
-def primary_artist(raw: str) -> str:
+def primary_artist(raw: str | None) -> str:
     """First (primary) participant, or the trimmed raw string if unsplittable."""
     parts = split_artists(raw)
     return parts[0] if parts else " ".join((raw or "").split())
