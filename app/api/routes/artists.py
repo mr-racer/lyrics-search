@@ -100,24 +100,9 @@ def _decade_range(years: list[int]) -> Optional[str]:
     return f"{valid[0]}s-{valid[-1]}s"
 
 
-@router.get("/{slug}", response_model=ArtistAggregate)
-def get_artist(
-    slug: str,
-    collection: str = Query(..., description="Target collection name"),
-    lang: str = Query("en", description="Bio language"),
-    request: Request = None,
-) -> ArtistAggregate:
-    """Aggregate an artist's universe — used by the Atlas screen."""
-    if request is None or request.app.state.db_client is None:
-        raise HTTPException(status_code=503, detail="Database unavailable")
-    db = request.app.state.db_client
-
-    # Tolerate slug variants from clients that use a simpler slugifier than
-    # artist_facts_service._slugify (which strips smart quotes / +, &, . etc).
-    # Re-slugifying the input through the canonical function makes
-    # "guns-n'-roses" / "guns-n-roses" / "Guns N' Roses" all resolve.
-    canonical_slug = _slugify_artist(slug.replace("-", " "))
-
+def build_artist_aggregate(db, collection: str, canonical_slug: str, lang: str) -> ArtistAggregate:
+    """Build the Atlas aggregate for one artist. Shared by GET /artists/{slug}
+    and GET /library/featured-artist. Raises HTTPException(404) if unknown."""
     # Resolve canonical artist name from SQLite (slug → name)
     conn = MetadataDB.get()
     row = conn.execute(
@@ -205,3 +190,17 @@ def get_artist(
         thumb_path=audiodb.get("thumb_path"),
         audiodb_mbid=audiodb.get("audiodb_mbid"),
     )
+
+
+@router.get("/{slug}", response_model=ArtistAggregate)
+def get_artist(
+    slug: str,
+    collection: str = Query(..., description="Target collection name"),
+    lang: str = Query("en", description="Bio language"),
+    request: Request = None,
+) -> ArtistAggregate:
+    """Aggregate an artist's universe — used by the Atlas screen."""
+    if request is None or request.app.state.db_client is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    canonical_slug = _slugify_artist(slug.replace("-", " "))
+    return build_artist_aggregate(request.app.state.db_client, collection, canonical_slug, lang)
