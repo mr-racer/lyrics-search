@@ -9919,12 +9919,19 @@ function ArtistAtlasSection({
                     >
                       <span style={{ color:c.textSubtle, minWidth:18, fontFamily:"'JetBrains Mono', monospace", fontSize:11 }}>▶</span>
                       <span style={{ flex:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t.title}</span>
+                      {/* feat. mark — collaborators other than the page artist. Excludes by
+                          display name; an aliased page name (e.g. "Ye" vs "Kanye West") is a
+                          known cosmetic limitation (the aliased name may still appear here). */}
                       {(t.artists?.length > 1) && (() => {
                         const others = t.artists.filter(
                           a => a.toLowerCase() !== (data.name || '').toLowerCase()
                         );
                         return others.length ? (
-                          <span className="mono" style={{ fontSize:10, color:c.textSubtle, fontStyle:'italic' }}>
+                          <span className="mono" style={{
+                            fontSize:10, color:c.textSubtle, fontStyle:'italic',
+                            flexShrink:0, maxWidth:'45%', overflow:'hidden',
+                            textOverflow:'ellipsis', whiteSpace:'nowrap',
+                          }}>
                             feat. {others.join(', ')}
                           </span>
                         ) : null;
