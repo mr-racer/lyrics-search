@@ -1099,14 +1099,14 @@ CREATE TABLE recommendation_snapshots (
 > | Phase | Status | Reference |
 > |---|---|---|
 > | **1**  Backend foundations            | ✅ Shipped (Plan 3)                       | `docs/superpowers/plans/2026-05-14-plan-3-backend-foundations.md` |
-> | **1b** Additional backend services    | ⏳ Not started                            | — |
+> | **1b** Additional backend services    | 🛠 **1b.2 partial** — `/library/rediscover` + `/library/featured-artist` shipped (Home plan); For-You uses placeholder `/recommend/for-you-seed` (full personalization 1b.3 still pending). 1b.1/1b.4/1b.5/1b.6 not started | `docs/superpowers/plans/2026-05-24-home-discovery-magazine.md` |
 > | **1c** Sonic Descriptor Layer         | ✅ Shipped (merged from `feature/sonic-descriptor-layer`) — unblocks Sonic Sibling, Sonic Map cluster overlay, For You rationale | `app/services/sonic_descriptor_service.py`, `scripts/cluster_curator.py` |
 > | **2**  Frontend foundation            | ✅ Shipped (out-of-band — landed alongside Plan 4 timeframe) | inline in `frontend/index.html` |
 > | **3**  Artist Atlas                   | ✅ Shipped (Plan 5)                       | `docs/superpowers/plans/2026-05-16-plan-5-artist-atlas.md` |
 > | **4**  Player v6 redesign             | ✅ Shipped (Plan 4) + post-plan polish round | `docs/superpowers/plans/2026-05-16-plan-4-player-redesign.md` |
 > | **5**  AI Chat & lyrics-explain       | ✅ **Shipped** — AIChatDrawer (slide-up panel replacing queue, FactsRail stays visible; slim 32px header; persistent suggested prompts above input; ↺ session-clear) + Inline ✨ explain (draw-under panel). Single endpoint POST /chat/track-chat with web_search tool fallback (pydantic-ai). Plan: `docs/superpowers/plans/2026-05-19-plan-5-ai-chat-lyrics-explain.md`, polish: `docs/superpowers/plans/2026-05-20-chat-drawer-replaces-queue.md` |
 > | **6**  Spotify-like MVP               | 🛠 **Library Overhaul + Playlists CRUD shipped (sub-plans #1, #2 of 3)** | feature/library-overhaul, feature/plan-19-playlists-crud |
-> | **6a** Home (Discovery Magazine)      | ⏳ Not started                            | — |
+> | **6a** Home (Discovery Magazine)      | ✅ **Shipped** — cinematic, embedded/boundaryless landing. **For-You-first reordering** vs §4.4 (For-You autoplay hero → Rediscovery interlude → Featured Artist → shelves Recently/Liked/Different/Playlists → Library/Search "another way to listen"). Components: `ForYouHero` (cover-deck + iridescent aurora start-control), `RediscoveryBand` (ambient cover-color wash + gap badge + teaser fact), `FeaturedArtistCard` (hover-spread stack), generic `Shelf`/`ShelfCard`, `AlternativeModes`. Old "Studio Console" launcher (LandingPlayer/doors/ticker/marquee) removed. | `docs/superpowers/plans/2026-05-24-home-discovery-magazine.md` |
 > | **6b-B1** Search visual redesign      | ✅ **Shipped** — backend (SearchFilters + Qdrant payload + /sonic-facets) + frontend (Hybrid v3 visuals + RecentSearchesChips + hover breakdown + SonicFiltersChips). Plan: `docs/superpowers/plans/2026-05-19-plan-b1-search-section-redesign.md` |
 > | **6b-B2** Search AI gating + functional | ✅ **Shipped** — chat tab gated on aiStatus.aiActive, DecadeFiltersChips (OR) backed by /library/year-facets, card-click → Player auto-play (detail panel removed), hover play+like overlay extends B1's ScoreBreakdownTooltip, autocomplete typeahead fix, SearchFilters dead-field cleanup (year_from/year_to/duration_* dropped; year_range singular → year_ranges plural). Plan: `docs/superpowers/plans/2026-05-19-plan-b2-search-section-ai-gating.md` |
 > | **6c** Stats redesign (Sonic Map)     | ⏳ Not started — partly blocked on 1c    | — |
@@ -1244,7 +1244,19 @@ CREATE TABLE recommendation_snapshots (
 
 ### Phase 6a: Home (Discovery Magazine)
 
-> **Status (2026-05-16)**: ⏳ **Not started.** Blocks on Phase 1b.2 (`/library/rediscover` + `/library/featured-artist`).
+> **Status (2026-05-24)**: ✅ **Shipped** on `feature/home-discovery-magazine`. Spec: `docs/superpowers/specs/2026-05-24-home-discovery-magazine-design.md`; Plan: `docs/superpowers/plans/2026-05-24-home-discovery-magazine.md`.
+>
+> **Design revisions vs the §4.4 sketch below** (decided in the 2026-05-24 brainstorm, visual companion):
+> - **For-You-first reordering**: the For-You autoplay stream is now the cinematic hero #1 (was a bottom CTA strip in §4.4). Order: ① For-You hero → ② Today's Rediscovery (centered ambient interlude) → ③ Featured Artist → ④ shelves (Recently / Liked / Try different / **Playlists** if any) → ⑤ "another way to listen" (Library / Search secondary entry points).
+> - **Visual language**: cinematic + **embedded / boundaryless** ("clean air" — zones separated by spacing + mono labels, no glass-card chrome). For-You and Rediscovery carry an ambient wash derived from the **dominant color of the cover** (reuses `useCoverColor`), fading smoothly at edges (mask-gradient).
+> - **For-You start control**: iridescent colored-glass aurora orb (`.fy-hybrid.tint-irid`) with hover (scale + faster swirl + halo) — distinct from Yandex "Моя волна".
+> - **For-You seed**: new placeholder endpoint `/recommend/for-you-seed` (weighted likes+recency) → existing `/recommend/autoplay-queue`. **Explicitly a placeholder** for the full personalization service (1b.3, §5.4) — to be swapped later.
+> - **Empty/no-history**: blocks degrade gracefully (each hides when its data is absent); hero still works from a random seed. Quick-Rate (§5.5) was **not** built (out of scope).
+>
+> **Backend shipped (Phase 1b.2):** `/library/rediscover` (least-recently-played / never-played), `/library/featured-artist` (deterministic daily rotation, reuses extracted `build_artist_aggregate`), `/recommend/for-you-seed` (placeholder). New `MetadataDB.get_play_recency_map`, `LibraryService.get_rediscover` + `list_distinct_artist_slugs`, `personalization_service.pick_for_you_seed`. No schema migration.
+>
+> **Deferred polish:** loading skeletons + the no-history albums-rail fallback (components currently hide empty shelves rather than substituting an albums rail); FFT "breathing" of the aurora control while a stream plays.
+
 6a.1. **HomeSection layout** — Hero row (двойной блок) + 3 shelves + bottom CTA.
 6a.2. **HeroRediscoveryCard** — uses `/library/rediscover` + facts из existing `/metadata/tracks/{id}/facts`. `[▶ PLAY]` запускает Player.
 6a.3. **HeroFeaturedArtistCard** — uses `/library/featured-artist`. Cover stack, bio summary, CTA → Artist Atlas.
