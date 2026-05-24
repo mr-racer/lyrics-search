@@ -36,3 +36,15 @@ def test_dry_run_writes_nothing():
     n = backfill_collection(qdrant, "c", dry_run=True)
     assert n == 1
     qdrant.set_payload.assert_not_called()
+    qdrant.create_payload_index.assert_not_called()
+
+
+def test_skips_already_backfilled_points():
+    pt = MagicMock()
+    pt.id = "1"
+    pt.payload = {"artist": "Drake", "artist_slugs": ["drake"]}
+    qdrant = MagicMock()
+    qdrant.scroll.return_value = ([pt], None)
+    n = backfill_collection(qdrant, "c", dry_run=False)
+    assert n == 0
+    qdrant.set_payload.assert_not_called()

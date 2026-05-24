@@ -2,6 +2,10 @@
 existing ``artist`` payload and push them onto every point — WITHOUT re-encoding
 vectors. Also ensures the ``artist_slugs`` keyword index exists.
 
+Writes one ``set_payload`` per point (consistent with ``backfill_sonic_payload.py``).
+Fine for a one-shot manual run on libraries up to tens of thousands of points; for
+much larger collections consider batching the updates.
+
 Usage
 -----
   python -m scripts.backfill_artist_slugs --collection New2
@@ -50,6 +54,11 @@ def backfill_collection(
             raw = (point.payload or {}).get("artist") or ""
             if not raw.strip():
                 continue
+            # Skip points already backfilled — keeps re-runs O(unprocessed) and the
+            # counter honest (also lets this double as a catch-up for new tracks).
+            # A full re-backfill after rule changes is handled by re-indexing.
+            if (point.payload or {}).get("artist_slugs"):
+                continue
             names = split_artists(raw)
             slugs = artist_slugs(raw)
             if not slugs:
@@ -74,7 +83,7 @@ def backfill_collection(
                 field_schema=models.PayloadSchemaType.KEYWORD,
             )
         except Exception as e:
-            logger.warning("artist_slugs index not created: %s", e)
+            logger.warning("artist_slugs index not created (%s): %s", type(e).__name__, e)
     return n_updated
 
 
