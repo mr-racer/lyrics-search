@@ -1,18 +1,20 @@
 """Library endpoints."""
 
 import asyncio
+import hashlib
 import heapq
 import logging
 import random
 import uuid
 from collections import Counter
+from datetime import date as _date
 from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 
 logger = logging.getLogger(__name__)
 
-from app.domain.models import IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RediscoverResponse
+from app.domain.models import ArtistAggregate, IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RediscoverResponse
 from app.services.library_service import LibraryService
 from app.services.similarity_service import load_top_pairs
 
@@ -411,6 +413,30 @@ async def get_library_rediscover(
         qdrant_client=db_client.qdrant,
         collection_name=collection_name,
     )
+
+
+# ── Featured artist (deterministic daily rotation) ───────────────────────────
+
+@router.get("/featured-artist", response_model=ArtistAggregate)
+async def get_library_featured_artist(
+    request: Request,
+    collection_name: str = Query(..., description="Collection name (required)"),
+    date: str | None = Query(None, description="YYYY-MM-DD; defaults to today"),
+    lang: str = Query("en"),
+) -> ArtistAggregate:
+    from app.api.routes.artists import build_artist_aggregate
+    db_client = request.app.state.db_client
+    if db_client is None or db_client.qdrant is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+    artists = LibraryService.list_distinct_artist_slugs(
+        qdrant_client=db_client.qdrant, collection_name=collection_name,
+    )
+    if not artists:
+        raise HTTPException(status_code=404, detail="no artists in collection")
+    day = date or _date.today().isoformat()
+    idx = int(hashlib.sha1(day.encode()).hexdigest(), 16) % len(artists)
+    slug, _name = artists[idx]
+    return build_artist_aggregate(db_client, collection_name, slug, lang)
 
 
 # ── Listening stats ───────────────────────────────────────────────────────────

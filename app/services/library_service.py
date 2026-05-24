@@ -1361,3 +1361,28 @@ class LibraryService:
         except (ValueError, IndexError):
             pass
         return 0.0
+
+    @classmethod
+    def list_distinct_artist_slugs(cls, *, qdrant_client, collection_name: str):
+        """Return a deterministically-sorted list of (slug, name) for every
+        distinct artist in the collection (slug-deduped)."""
+        from app.services.artist_facts_service import _slugify as _slugify_artist
+        seen: dict[str, str] = {}  # slug -> name (first seen)
+        offset = None
+        while True:
+            try:
+                points, offset = qdrant_client.scroll(
+                    collection_name=collection_name, limit=256, offset=offset,
+                    with_payload=True, with_vectors=False,
+                )
+            except Exception:
+                break
+            for pt in points:
+                name = ((pt.payload or {}).get("artist") or "").strip()
+                if not name:
+                    continue
+                slug = _slugify_artist(name)
+                seen.setdefault(slug, name)
+            if offset is None or not points:
+                break
+        return sorted(seen.items())
