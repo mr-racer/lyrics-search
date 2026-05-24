@@ -34,8 +34,10 @@ def pick_for_you_seed(*, qdrant_client, collection_name: str) -> ForYouSeedRespo
         weight = max(1, 5 - rank // 6)
         pool += [tid] * weight
 
-    source = "liked" if liked else ("recent" if recent else "random")
     chosen: str | None = random.choice(pool) if pool else None
+    # Report the source the chosen seed actually came from (likes take priority
+    # when a track is both liked and recent), not merely which lists are non-empty.
+    source = ("liked" if chosen in set(liked) else "recent") if chosen is not None else "random"
 
     if chosen is None:
         try:

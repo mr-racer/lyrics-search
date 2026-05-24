@@ -1970,55 +1970,6 @@ function secsToMMSS(s) {
   const sec = Math.round(s % 60);
   return `${m}:${String(sec).padStart(2, '0')}`;
 }
-function formatDurationRange(raw) {
-  if (!raw || typeof raw !== 'string') return raw || '—';
-  if (raw.includes(':')) return raw;
-  const parts = raw.split('-');
-  if (parts.length === 2) {
-    const a = parseInt(parts[0]), b = parseInt(parts[1]);
-    if (!isNaN(a) && !isNaN(b)) return `${secsToMMSS(a)} – ${secsToMMSS(b)}`;
-  }
-  return raw;
-}
-
-// ─── EqBars (mini equalizer animation) ──────────────────────────────────────
-function EqBars({ playing, color='oklch(60% 0.18 270)' }) {
-  const bars = [
-    { h:10, a:'eqBar1', d:'0.0s' }, { h:14, a:'eqBar2', d:'0.1s' },
-    { h:8,  a:'eqBar3', d:'0.05s' }, { h:16, a:'eqBar4', d:'0.15s' },
-    { h:6,  a:'eqBar5', d:'0.08s' },
-  ];
-  return (
-    <div style={{ display:'flex', alignItems:'flex-end', gap:'2px', height:20 }}>
-      {bars.map((b,i) => (
-        <div key={i} style={{
-          width:3, borderRadius:2, background:color, flexShrink:0,
-          height: playing ? b.h : 3,
-          animation: playing ? `${b.a} ${0.5+i*0.1}s ease-in-out ${b.d} infinite` : 'none',
-          transition:'height 0.3s ease',
-        }} />
-      ))}
-    </div>
-  );
-}
-
-// ─── CtrlBtn (skeuomorphic control button) ────────────────────────────────────
-function CtrlBtn({ icon, size=30, isDark, onClick, active, title }) {
-  const c = useColors(isDark);
-  return (
-    <button onClick={onClick} title={title} className={`ske-btn-${isDark?'d':'l'}`} style={{
-      width:size, height:size, borderRadius:'50%',
-      display:'flex', alignItems:'center', justifyContent:'center',
-      color: active ? 'oklch(60% 0.18 270)' : c.textMuted,
-      fontSize:size*0.45, flexShrink:0,
-      transition:'transform 0.18s,color 0.18s',
-    }}
-    onMouseEnter={e=>e.currentTarget.style.transform='scale(1.1)'}
-    onMouseLeave={e=>e.currentTarget.style.transform='scale(1)'}
-    >{icon}</button>
-  );
-}
-
 // Fisher-Yates partial shuffle — return up to n unique random elements from arr.
 // If arr has <= n items, returns a shuffled copy of the whole array.
 function sampleN(arr, n) {
@@ -2888,12 +2839,13 @@ function homeDeriveDifferent(resp) {
 
 // /playlists returns PlaylistsResponse: { playlists: [...], collection_name }
 // Each playlist has: id, name, track_count, cover_track_ids[], cover_art_paths[]
-function homePlaylistCards(resp) {
+function homePlaylistCards(resp, lang) {
   const arr = Array.isArray(resp) ? resp : ((resp && Array.isArray(resp.playlists)) ? resp.playlists : []);
+  const unit = lang === 'ru' ? 'треков' : 'tracks';
   return arr.map(p => ({
     track_id: p.id,
     title: p.name || '',
-    artist: `${p.track_count != null ? p.track_count : '?'} треков`,
+    artist: `${p.track_count != null ? p.track_count : '?'} ${unit}`,
     cover_art_path: (p.cover_art_paths && p.cover_art_paths.find(x => x)) || null,
   }));
 }
@@ -3078,8 +3030,8 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, activ
     apiFetch(`/playback/recent?collection_name=${col}&limit=12`).then(r => setRecent((r && r.tracks) || [])).catch(() => setRecent([]));
     apiFetch(`/library/liked-songs?collection_name=${col}`).then(r => setLiked(((r && r.tracks) || []).slice(0, 12))).catch(() => setLiked([]));
     apiFetch(`/library/top-pairs?collection_name=${col}`).then(r => setDifferent(homeDeriveDifferent(r))).catch(() => setDifferent([]));
-    apiFetch(`/playlists?collection_name=${col}`).then(r => setPlaylists(homePlaylistCards(r))).catch(() => setPlaylists([]));
-  }, [activeCollection]);
+    apiFetch(`/playlists?collection_name=${col}`).then(r => setPlaylists(homePlaylistCards(r, lang))).catch(() => setPlaylists([]));
+  }, [activeCollection, lang]);
 
   return (
     <div className="grain" style={{
@@ -10181,7 +10133,6 @@ function App() {
           onPlayTrack={handlePlayTrack}
           audio={audio}
           navigateToArtist={navigateToArtist}
-          aiStatus={aiStatus}
         />
       ) : (
         <Fragment>
