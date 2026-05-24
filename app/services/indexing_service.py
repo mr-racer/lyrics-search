@@ -39,6 +39,7 @@ from app.resources.clap_features import _encode_clap
 from app.resources.lyrics_search_engine import LyricsSearchEngine
 from app.resources.metadata_db import MetadataDB, _slugify
 from app.resources.qdrant_payload import build_text_for_embedding, prepare_metadata
+from app.services.artist_split import split_artists, artist_slugs as _artist_slugs
 
 logger = logging.getLogger(__name__)
 
@@ -84,24 +85,29 @@ def _build_payload_for_upsert(song_info: dict, slug: str | None = None) -> dict:
                 ]
         except Exception:
             pass
+    artists = split_artists(song_info.get("artist") or "")
+    slugs = _artist_slugs(song_info.get("artist") or "")
     return {
-        "lyrics":         song_info["lyrics"],
-        "title":          song_info["title"],
-        "artist":         song_info["artist"],
-        "album":          song_info["album"],
-        "year":           song_info.get("year"),
-        "year_range":     song_info.get("year_range"),
-        "genre":          song_info.get("genre"),
-        "duration":       song_info.get("duration"),
-        "duration_range": song_info.get("duration_range"),
-        "file_path":      song_info.get("file_path"),
-        "cover_art_path": song_info.get("cover_art_path"),
-        "producer":       song_info.get("producer"),
-        "label":          song_info.get("label"),
-        "samples":        song_info.get("samples"),
-        "sampled_by":     song_info.get("sampled_by"),
-        "bitrate_kbps":   song_info.get("bitrate_kbps"),
-        "sonic_tags":     sonic_tags,
+        "lyrics":              song_info["lyrics"],
+        "title":               song_info["title"],
+        "artist":              song_info["artist"],
+        "artists":             artists,
+        "artist_slugs":        slugs,
+        "primary_artist_slug": slugs[0] if slugs else None,
+        "album":               song_info["album"],
+        "year":                song_info.get("year"),
+        "year_range":          song_info.get("year_range"),
+        "genre":               song_info.get("genre"),
+        "duration":            song_info.get("duration"),
+        "duration_range":      song_info.get("duration_range"),
+        "file_path":           song_info.get("file_path"),
+        "cover_art_path":      song_info.get("cover_art_path"),
+        "producer":            song_info.get("producer"),
+        "label":               song_info.get("label"),
+        "samples":             song_info.get("samples"),
+        "sampled_by":          song_info.get("sampled_by"),
+        "bitrate_kbps":        song_info.get("bitrate_kbps"),
+        "sonic_tags":          sonic_tags,
     }
 
 
@@ -161,6 +167,16 @@ class IndexingService:
                 "bm25": models.SparseVectorParams(modifier=models.Modifier.IDF),
             },
         )
+        # Keyword index over the multi-valued artist_slugs so the artist page
+        # can filter server-side by participant (MatchValue per array element).
+        try:
+            client.create_payload_index(
+                collection_name=coll,
+                field_name="artist_slugs",
+                field_schema=models.PayloadSchemaType.KEYWORD,
+            )
+        except Exception as e:
+            logger.warning("[IndexingService] artist_slugs index not created: %s", e)
         logger.info("[IndexingService] Collection '%s' created", coll)
 
     def _upsert_in_batches(
