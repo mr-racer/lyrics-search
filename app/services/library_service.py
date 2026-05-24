@@ -1038,6 +1038,68 @@ class LibraryService:
         return LikedSongsResponse(tracks=tracks, collection_name=collection_name)
 
     @classmethod
+    def get_rediscover(cls, *, qdrant_client, collection_name: str):
+        """Pick a long-unplayed track to resurface. Never-played tracks win;
+        otherwise the oldest-played ones (random among the top-N gap)."""
+        import random
+        from app.domain.models import HomeTrack, RediscoverResponse
+        from app.services._payload_coerce import coerce_float, coerce_year
+
+        library_ids: list[str] = []
+        offset = None
+        while True:
+            try:
+                points, offset = qdrant_client.scroll(
+                    collection_name=collection_name, limit=256, offset=offset,
+                    with_payload=False, with_vectors=False,
+                )
+            except Exception:
+                break
+            library_ids.extend(str(p.id) for p in points)
+            if offset is None or not points:
+                break
+        if not library_ids:
+            return RediscoverResponse(collection_name=collection_name)
+
+        recency = MetadataDB.get_play_recency_map(collection_name)
+        never = [tid for tid in library_ids if tid not in recency]
+
+        if never:
+            chosen = random.choice(never)
+            last_played, never_played = None, True
+        else:
+            ordered = sorted(library_ids, key=lambda t: recency.get(t, ""))
+            pool = ordered[: min(20, len(ordered))]
+            chosen = random.choice(pool)
+            last_played, never_played = recency.get(chosen), False
+
+        try:
+            pts = qdrant_client.retrieve(
+                collection_name=collection_name, ids=[chosen],
+                with_payload=True, with_vectors=False,
+            )
+        except Exception:
+            pts = []
+        if not pts:
+            return RediscoverResponse(collection_name=collection_name)
+
+        p = pts[0].payload or {}
+        track = HomeTrack(
+            track_id=str(pts[0].id),
+            title=p.get("title") or "—",
+            artist=p.get("artist") or "—",
+            album=p.get("album"),
+            year=coerce_year(p.get("year")),
+            duration=coerce_float(p.get("duration")),
+            cover_art_path=p.get("cover_art_path"),
+            genre=p.get("genre"),
+        )
+        return RediscoverResponse(
+            track=track, last_played=last_played, never_played=never_played,
+            collection_name=collection_name,
+        )
+
+    @classmethod
     def get_listening_stats(
         cls, *, qdrant_client, collection_name: str, lang: str = "en",
         tz_offset_minutes: int = 0,

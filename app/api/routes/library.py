@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 logger = logging.getLogger(__name__)
 
-from app.domain.models import IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse
+from app.domain.models import IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RediscoverResponse
 from app.services.library_service import LibraryService
 from app.services.similarity_service import load_top_pairs
 
@@ -392,6 +392,22 @@ async def get_library_liked_songs(
     if db_client is None or db_client.qdrant is None:
         return LikedSongsResponse(tracks=[], collection_name=collection_name)
     return LibraryService.get_liked_songs(
+        qdrant_client=db_client.qdrant,
+        collection_name=collection_name,
+    )
+
+
+# ── Rediscover ────────────────────────────────────────────────────────────────
+
+@router.get("/rediscover", response_model=RediscoverResponse)
+async def get_library_rediscover(
+    request: Request,
+    collection_name: str = Query(..., description="Collection name (required)"),
+) -> RediscoverResponse:
+    db_client = request.app.state.db_client
+    if db_client is None or db_client.qdrant is None:
+        return RediscoverResponse(collection_name=collection_name)
+    return LibraryService.get_rediscover(
         qdrant_client=db_client.qdrant,
         collection_name=collection_name,
     )
