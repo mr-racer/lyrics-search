@@ -30,6 +30,9 @@ class TrackMetadata(BaseModel):
     sampled_by: list[str] | None = None
     reaction: Literal["like", "dislike"] | None = None
     bitrate_kbps: int | None = None
+    # Canonical participants derived from the raw `artist` string at index time.
+    artists: list[str] | None = None
+    primary_artist_slug: str | None = None
 
 
 class ScoreBreakdown(BaseModel):

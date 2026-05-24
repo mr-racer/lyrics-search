@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from app.domain.models import ArtistAggregate, ArtistAlbum, TrackMetadata
 from app.resources.metadata_db import MetadataDB
 from app.services.artist_facts_service import _slugify as _slugify_artist
+from app.services.artist_split import split_artists, artist_slugs
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/artists", tags=["Artists"])
@@ -72,10 +73,15 @@ def _coerce_year(val) -> Optional[int]:
 
 def _track_from_payload(point_id: str, p: dict) -> TrackMetadata:
     """Map a Qdrant payload dict to TrackMetadata. Returns minimal-field model."""
+    slugs = p.get("artist_slugs") or artist_slugs(p.get("artist") or "")
+    names = p.get("artists") or split_artists(p.get("artist") or "")
+    primary = p.get("primary_artist_slug") or (slugs[0] if slugs else None)
     return TrackMetadata(
         track_id=point_id,
         title=p.get("title") or "",
         artist=p.get("artist") or "",
+        artists=names or None,
+        primary_artist_slug=primary,
         album=p.get("album"),
         year=_coerce_year(p.get("year")),
         genre=p.get("genre"),
