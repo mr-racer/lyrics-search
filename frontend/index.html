@@ -1473,6 +1473,12 @@
     .fy-hybrid:hover .fy-bg1{animation-duration:3.4s}.fy-hybrid:hover .fy-bg2{animation-duration:4s}.fy-hybrid:hover .fy-bg3{animation-duration:4.6s}.fy-hybrid:hover .fy-bg4{animation-duration:3.7s}
     .fy-hybrid:hover .fy-ring{opacity:1;animation-duration:2.4s}
     .fy-hybrid:hover .fy-halo{animation:fyHaloOut 1s ease-out infinite}
+    /* Home loading skeletons — gray placeholder blocks with a sweeping shimmer.
+       (distinct from the .ske-* skeuomorphic surface classes above) */
+    .load-skel{position:relative;overflow:hidden;background:rgba(255,255,255,.05)}
+    .load-skel--l{background:rgba(0,0,0,.06)}
+    .load-skel::after{content:'';position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.10),transparent);background-size:200% 100%;animation:shimmer 1.5s ease-in-out infinite}
+    .load-skel--l::after{background:linear-gradient(90deg,transparent,rgba(255,255,255,.6),transparent);background-size:200% 100%}
   </style>
 </head>
 <body>
@@ -2723,17 +2729,45 @@ function HomeDeckCover({ src, rot, left, top, z, op }) {
   );
 }
 
+// Shimmer skeleton block. Sizes accept px numbers or CSS strings (e.g. '80%').
+function Skel({ w, h, r, isDark, style }) {
+  return (
+    <div className={isDark ? 'load-skel' : 'load-skel load-skel--l'}
+         style={{ width:w, height:h, borderRadius:(r==null?8:r), ...(style||{}) }} />
+  );
+}
+
+// One shelf-row placeholder (mono label + a row of cover tiles with title/artist lines).
+function ShelfSkeleton({ isDark, count }) {
+  const n = count || 6;
+  return (
+    <div style={{ padding:'0 40px', marginTop:34 }}>
+      <Skel w={140} h={11} r={4} isDark={isDark} />
+      <div style={{ display:'flex', gap:16, marginTop:14 }}>
+        {Array.from({ length:n }).map((_, i) => (
+          <div key={i} style={{ width:120, flex:'none' }}>
+            <Skel w={120} h={120} r={10} isDark={isDark} />
+            <Skel w={100} h={12} r={4} isDark={isDark} style={{ marginTop:9 }} />
+            <Skel w={68} h={11} r={4} isDark={isDark} style={{ marginTop:6 }} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ForYouHero({ isDark, lang, activeCollection, onPlayTrack, navigateToArtist }) {
   const c = useColors(isDark);
   const [lead, setLead] = useState(null);
   const [queue, setQueue] = useState([]);
   const [vibe, setVibe] = useState(null);
   const [hoverCtl, setHoverCtl] = useState(false);
+  const [loading, setLoading] = useState(true);
   const leadCoverUrl = homeCoverUrl(lead && lead.cover_art_path);
   const color = useCoverColor(leadCoverUrl);
 
   useEffect(() => {
-    if (!activeCollection) { setLead(null); setQueue([]); return; }
+    if (!activeCollection) { setLead(null); setQueue([]); setLoading(false); return; }
     let alive = true;
     apiFetch(`/recommend/for-you-seed?collection=${encodeURIComponent(activeCollection)}`)
       .then(r => {
@@ -2742,7 +2776,8 @@ function ForYouHero({ isDark, lang, activeCollection, onPlayTrack, navigateToArt
         return apiFetch(`/recommend/autoplay-queue?collection=${encodeURIComponent(activeCollection)}&seed_track_id=${encodeURIComponent(r.seed_track_id)}&limit=20`);
       })
       .then(q => { if (alive && q) setQueue(q.tracks || []); })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [activeCollection]);
 
@@ -2755,7 +2790,23 @@ function ForYouHero({ isDark, lang, activeCollection, onPlayTrack, navigateToArt
     return () => { alive = false; };
   }, [lead && lead.track_id]);
 
-  if (!lead) return null;
+  if (!lead) return loading ? (
+    <div style={{ padding:'44px 48px 64px' }}>
+      <div style={{ display:'flex', gap:54, alignItems:'flex-start', maxWidth:720, margin:'0 auto' }}>
+        <Skel w={168} h={168} r={14} isDark={isDark} style={{ flex:'none' }} />
+        <div style={{ flex:1, paddingTop:4 }}>
+          <Skel w={120} h={11} r={4} isDark={isDark} />
+          <Skel w={250} h={28} r={7} isDark={isDark} style={{ marginTop:16 }} />
+          <Skel w={150} h={13} r={5} isDark={isDark} style={{ marginTop:12 }} />
+          <Skel w={330} h={16} r={6} isDark={isDark} style={{ marginTop:16 }} />
+          <div style={{ display:'flex', alignItems:'center', gap:14, marginTop:24 }}>
+            <Skel w={62} h={62} r={'50%'} isDark={isDark} />
+            <Skel w={170} h={11} r={4} isDark={isDark} />
+          </div>
+        </div>
+      </div>
+    </div>
+  ) : null;
 
   const ambient = color
     ? `radial-gradient(ellipse 60% 90% at 72% 18%, hsla(${color.h},${color.s}%,${color.l}%,.30), transparent 62%), radial-gradient(ellipse 50% 70% at 12% 95%, rgba(255,120,200,.10), transparent 60%)`
@@ -2782,7 +2833,7 @@ function ForYouHero({ isDark, lang, activeCollection, onPlayTrack, navigateToArt
           </div>
         </div>
         <div style={{ flex:1, paddingTop:4 }}>
-          <div className="mono" style={{ fontSize:11, letterSpacing:'.28em', color:'#c9b8ff' }}>✦ FOR YOU · {lang==='ru'?'ВАШ СТРИМ':'YOUR STREAM'}</div>
+          <div className="mono" style={{ fontSize:11, letterSpacing:'.28em', color:'#c9b8ff' }}>{lang==='ru'?'✦ ДЛЯ ВАС':'✦ FOR YOU'}</div>
           <div className="serif" style={{ fontSize:29, fontWeight:300, letterSpacing:'-.01em', marginTop:14, color:c.text }}>{lead.title}</div>
           <div style={{ fontSize:13, color:c.textMuted, marginTop:4 }}>
             <span style={{ cursor:'pointer' }} onClick={() => navigateToArtist && navigateToArtist(slugifyArtistName(lead.artist))}>{lead.artist}</span>
@@ -2790,14 +2841,14 @@ function ForYouHero({ isDark, lang, activeCollection, onPlayTrack, navigateToArt
           </div>
           {vibe && <div className="serif" style={{ fontStyle:'italic', fontSize:16, color:'#f3ecff', opacity:.9, lineHeight:1.4, marginTop:14 }}>❝ {vibe} ❞</div>}
           <div style={{ display:'flex', alignItems:'center', gap:14, marginTop:24 }}>
-            <div className="fy-hybrid tint-irid" onMouseEnter={() => setHoverCtl(true)} onMouseLeave={() => setHoverCtl(false)} onClick={startStream} role="button" aria-label="Start For You stream">
+            <div className="fy-hybrid tint-irid" onMouseEnter={() => setHoverCtl(true)} onMouseLeave={() => setHoverCtl(false)} onClick={startStream} role="button" aria-label={lang==='ru'?'Включить ваш стрим':'Start your stream'}>
               <span className="fy-ring" />
               <span className="fy-clip"><span className="fy-blob fy-bg1" /><span className="fy-blob fy-bg2" /><span className="fy-blob fy-bg3" /><span className="fy-blob fy-bg4" /></span>
               <span className="fy-glasscap" />
               <span className="fy-glyph">▶</span>
               <span className="fy-halo" />
             </div>
-            <span className="mono" style={{ fontSize:11, letterSpacing:'.2em', color:hoverCtl?'#f3ecff':c.textMuted, transition:'color .3s' }}>START FOR YOU STREAM</span>
+            <span className="mono" style={{ fontSize:11, letterSpacing:'.2em', color:hoverCtl?'#f3ecff':c.textMuted, transition:'color .3s' }}>{lang==='ru'?'ВКЛЮЧИТЬ ВАШ СТРИМ':'START YOUR STREAM'}</span>
           </div>
         </div>
       </div>
@@ -2854,11 +2905,12 @@ function RediscoveryBand({ isDark, lang, activeCollection, onPick, navigateToArt
   const c = useColors(isDark);
   const [data, setData] = useState(null);
   const [fact, setFact] = useState(null);
+  const [loading, setLoading] = useState(true);
   const coverUrl = homeCoverUrl(data && data.track && data.track.cover_art_path);
   const color = useCoverColor(coverUrl);
 
   useEffect(() => {
-    if (!activeCollection) { setData(null); setFact(null); return; }
+    if (!activeCollection) { setData(null); setFact(null); setLoading(false); return; }
     let alive = true;
     apiFetch(`/library/rediscover?collection_name=${encodeURIComponent(activeCollection)}`)
       .then(r => {
@@ -2867,11 +2919,24 @@ function RediscoveryBand({ isDark, lang, activeCollection, onPick, navigateToArt
         return apiFetch(`/metadata/tracks/${encodeURIComponent(r.track.track_id)}/facts`);
       })
       .then(f => { if (alive && Array.isArray(f) && f.length) setFact(f[0].fact || f[0]); })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [activeCollection]);
 
-  if (!data || !data.track) return null;
+  if (!data || !data.track) return loading ? (
+    <div style={{ margin:'20px 0', padding:'40px 40px 44px' }}>
+      <div style={{ display:'flex', justifyContent:'space-between' }}>
+        <Skel w={150} h={11} r={4} isDark={isDark} />
+        <Skel w={110} h={11} r={4} isDark={isDark} />
+      </div>
+      <div style={{ textAlign:'center', marginTop:18 }}>
+        <Skel w={112} h={112} r={12} isDark={isDark} style={{ display:'inline-block' }} />
+        <div style={{ display:'flex', justifyContent:'center', marginTop:16 }}><Skel w={220} h={18} r={6} isDark={isDark} /></div>
+        <div style={{ display:'flex', justifyContent:'center', marginTop:12 }}><Skel w={420} h={15} r={6} isDark={isDark} style={{ maxWidth:'80%' }} /></div>
+      </div>
+    </div>
+  ) : null;
   const t = data.track;
   const wash = color
     ? `radial-gradient(ellipse 62% 130% at 50% 42%, hsla(${color.h},${color.s}%,${color.l}%,.17) 0%, hsla(${color.h},${color.s}%,${color.l}%,.09) 38%, transparent 80%)`
@@ -2882,7 +2947,7 @@ function RediscoveryBand({ isDark, lang, activeCollection, onPick, navigateToArt
                   WebkitMaskImage:'linear-gradient(180deg, transparent 0%, #000 22%, #000 78%, transparent 100%)',
                   maskImage:'linear-gradient(180deg, transparent 0%, #000 22%, #000 78%, transparent 100%)' }}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline' }}>
-        <div className="mono" style={{ fontSize:11, letterSpacing:'.24em', color:c.textSubtle }}>↺ TODAY'S REDISCOVERY</div>
+        <div className="mono" style={{ fontSize:11, letterSpacing:'.24em', color:c.textSubtle }}>{lang==='ru'?'↺ ОТКРОЙТЕ ЗАНОВО':"↺ TODAY'S REDISCOVERY"}</div>
         <div className="mono" style={{ fontSize:11, letterSpacing:'.16em', color:c.amber }}>{homeGapBadge(data, lang)}</div>
       </div>
       <div style={{ textAlign:'center', marginTop:18 }}>
@@ -2905,29 +2970,57 @@ function FeaturedArtistCard({ isDark, lang, activeCollection, navigateToArtist }
   const c = useColors(isDark);
   const [a, setA] = useState(null);
   const [hover, setHover] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!activeCollection) { setA(null); return; }
+    if (!activeCollection) { setA(null); setLoading(false); return; }
     let alive = true;
     apiFetch(`/library/featured-artist?collection_name=${encodeURIComponent(activeCollection)}&lang=${lang}`)
       .then(r => { if (alive && r && r.slug) setA(r); })
-      .catch(() => { if (alive) setA(null); });
+      .catch(() => { if (alive) setA(null); })
+      .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [activeCollection, lang]);
 
-  if (!a) return null;
+  // On lang change `a` is kept (not cleared), so the card swaps in place without a
+  // skeleton flash; the skeleton only shows on first mount while `a` is still null.
+  if (!a) return loading ? (
+    <div style={{ padding:'34px 40px 0' }}>
+      <Skel w={150} h={11} r={4} isDark={isDark} />
+      <div style={{ display:'flex', gap:34, alignItems:'center', marginTop:18 }}>
+        <Skel w={80} h={80} r={11} isDark={isDark} style={{ flex:'none' }} />
+        <div style={{ flex:1 }}>
+          <Skel w={200} h={20} r={6} isDark={isDark} />
+          <Skel w={150} h={13} r={5} isDark={isDark} style={{ marginTop:10 }} />
+          <Skel w={460} h={14} r={5} isDark={isDark} style={{ marginTop:10, maxWidth:'90%' }} />
+          <Skel w={120} h={13} r={5} isDark={isDark} style={{ marginTop:12 }} />
+        </div>
+      </div>
+    </div>
+  ) : null;
   const covers = (a.albums || []).map(al => homeCoverUrl(al.cover_art_path)).filter(Boolean).slice(0, 3);
-  const ctx = [a.genre, a.decade_range, a.album_count ? `${a.album_count} albums` : null].filter(Boolean).join(' · ');
+  const single = covers.length <= 1;
+  const ctx = [a.genre, a.decade_range, a.album_count ? `${a.album_count} ${lang==='ru'?'альбомов':'albums'}` : null].filter(Boolean).join(' · ');
   const tf = (base, hov) => (hover ? hov : base);
 
   return (
     <div style={{ padding:'34px 40px 0' }}>
-      <div className="mono" style={{ fontSize:11, letterSpacing:'.26em', color:c.textSubtle }}>★ FEATURED ARTIST</div>
+      <div className="mono" style={{ fontSize:11, letterSpacing:'.26em', color:c.textSubtle }}>{lang==='ru'?'★ АРТИСТ ДНЯ':'★ FEATURED ARTIST'}</div>
       <div style={{ display:'flex', gap:34, alignItems:'center', marginTop:18 }}>
         <div style={{ position:'relative', width:230, height:88, flex:'none', cursor:'pointer' }}
              onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
              onClick={() => navigateToArtist && navigateToArtist(a.slug)}>
-          {[0,1,2].map(i => covers[i] ? (
+          {single ? (
+            covers[0] ? (
+              // Lone album: centered, no fanned-stack animation — just a gentle lift on hover.
+              <div style={{ position:'absolute', width:80, height:80, left:75, top:4, borderRadius:11, overflow:'hidden',
+                zIndex:2, boxShadow:'0 12px 28px rgba(0,0,0,.45)',
+                transition:'transform .42s cubic-bezier(.22,.9,.3,1)',
+                transform: hover ? 'translateY(-6px) scale(1.04)' : 'none' }}>
+                <img src={covers[0]} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />
+              </div>
+            ) : null
+          ) : [0,1,2].map(i => covers[i] ? (
             <div key={i} style={{ position:'absolute', width:80, height:80, borderRadius:11, overflow:'hidden',
               left:[0,42,84][i], top:4, zIndex:i===1?2:1, boxShadow:'0 12px 28px rgba(0,0,0,.45)',
               transition:'transform .42s cubic-bezier(.22,.9,.3,1)',
@@ -2942,7 +3035,7 @@ function FeaturedArtistCard({ isDark, lang, activeCollection, navigateToArtist }
           <div className="serif" style={{ fontSize:22, fontWeight:300, color:c.text }}>{a.name}</div>
           <div style={{ fontSize:14, color:c.textMuted }}>{ctx}</div>
           {a.bio && <div style={{ fontSize:14, color:c.text, opacity:.72, marginTop:8, maxWidth:520, lineHeight:1.5, display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden' }}>{a.bio}</div>}
-          <div style={{ fontSize:13, color:'#c9b8ff', marginTop:11, cursor:'pointer' }} onClick={() => navigateToArtist && navigateToArtist(a.slug)}>→ {lang==='ru'?'Открыть Atlas':'Open Atlas'}</div>
+          <div style={{ fontSize:13, color:'#c9b8ff', marginTop:11, cursor:'pointer' }} onClick={() => navigateToArtist && navigateToArtist(a.slug)}>→ {lang==='ru'?'Открыть Атлас':'Open Atlas'}</div>
         </div>
       </div>
     </div>
@@ -2992,10 +3085,12 @@ function AlternativeModes({ isDark, lang, onNav }) {
   const Block = ({ id, icon, title, desc, cta }) => (
     <div onMouseEnter={() => setH(id)} onMouseLeave={() => setH(null)} onClick={() => onNav(id)}
          style={{ flex:1, padding:'22px 24px', borderRadius:14, cursor:'pointer',
-                  background: h===id ? 'linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,.01))' : 'linear-gradient(180deg,rgba(255,255,255,.022),rgba(255,255,255,0))',
-                  transform: h===id ? 'translateY(-3px)' : 'none', transition:'background .3s, transform .3s' }}>
+                  backgroundColor: h===id ? (isDark?'rgba(255,255,255,.05)':'rgba(0,0,0,.045)') : 'transparent',
+                  transform: h===id ? 'translateY(-3px)' : 'none',
+                  transition:'background-color .5s ease, transform .5s cubic-bezier(.22,.9,.3,1)' }}>
       <div style={{ display:'flex', alignItems:'center', gap:13 }}>
-        <span style={{ color:'#c9b8ff', display:'flex', filter: h===id ? 'drop-shadow(0 0 16px rgba(124,91,255,.6))' : 'drop-shadow(0 0 10px rgba(124,91,255,.4))' }}>{icon}</span>
+        <span style={{ color:'#c9b8ff', display:'flex', transition:'filter .55s ease',
+                       filter: h===id ? 'drop-shadow(0 0 16px rgba(124,91,255,.6))' : 'drop-shadow(0 0 10px rgba(124,91,255,.4))' }}>{icon}</span>
         <span className="serif" style={{ fontSize:22, fontWeight:300, color:c.text }}>{title}</span>
       </div>
       <div style={{ fontSize:14, color:c.textMuted, marginTop:12, lineHeight:1.5 }}>{desc}</div>
@@ -3023,14 +3118,23 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, activ
   const [liked, setLiked] = useState([]);
   const [different, setDifferent] = useState([]);
   const [playlists, setPlaylists] = useState([]);
+  const [loading, setLoading] = useState(true);
 
+  // `loading` starts true so the shelf skeletons paint on the very first frame
+  // after (re)mount — the tab-return blank-flash fix. It is only ever flipped to
+  // false (on settle), never back to true, so a lang toggle re-fetches in place
+  // without re-flashing skeletons over already-loaded shelves.
   useEffect(() => {
-    if (!activeCollection) { setRecent([]); setLiked([]); setDifferent([]); setPlaylists([]); return; }
+    if (!activeCollection) { setRecent([]); setLiked([]); setDifferent([]); setPlaylists([]); setLoading(false); return; }
+    let alive = true;
     const col = encodeURIComponent(activeCollection);
-    apiFetch(`/playback/recent?collection_name=${col}&limit=12`).then(r => setRecent((r && r.tracks) || [])).catch(() => setRecent([]));
-    apiFetch(`/library/liked-songs?collection_name=${col}`).then(r => setLiked(((r && r.tracks) || []).slice(0, 12))).catch(() => setLiked([]));
-    apiFetch(`/library/top-pairs?collection_name=${col}`).then(r => setDifferent(homeDeriveDifferent(r))).catch(() => setDifferent([]));
-    apiFetch(`/playlists?collection_name=${col}`).then(r => setPlaylists(homePlaylistCards(r, lang))).catch(() => setPlaylists([]));
+    Promise.allSettled([
+      apiFetch(`/playback/recent?collection_name=${col}&limit=12`).then(r => { if (alive) setRecent((r && r.tracks) || []); }),
+      apiFetch(`/library/liked-songs?collection_name=${col}`).then(r => { if (alive) setLiked(((r && r.tracks) || []).slice(0, 12)); }),
+      apiFetch(`/library/top-pairs?collection_name=${col}`).then(r => { if (alive) setDifferent(homeDeriveDifferent(r)); }),
+      apiFetch(`/playlists?collection_name=${col}`).then(r => { if (alive) setPlaylists(homePlaylistCards(r, lang)); }),
+    ]).finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
   }, [activeCollection, lang]);
 
   return (
@@ -3079,23 +3183,32 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, activ
       <div style={{ position:'relative', maxWidth:'1280px', margin:'0 auto', paddingBottom:'80px' }}>
         <ForYouHero isDark={isDark} lang={lang} activeCollection={activeCollection}
                     onPlayTrack={onPlayTrack} navigateToArtist={navigateToArtist} />
+        <FeaturedArtistCard isDark={isDark} lang={lang} activeCollection={activeCollection}
+                            navigateToArtist={navigateToArtist} />
         <RediscoveryBand isDark={isDark} lang={lang} activeCollection={activeCollection}
                          onPick={(t) => onPlayTrack && onPlayTrack({ track: t }, [{ track: t }])}
                          navigateToArtist={navigateToArtist} />
-        <FeaturedArtistCard isDark={isDark} lang={lang} activeCollection={activeCollection}
-                            navigateToArtist={navigateToArtist} />
-        <Shelf label={lang==='ru'?'НЕДАВНО ИГРАЛИ':'RECENTLY PLAYED'} items={recent} isDark={isDark}
-               onPick={(it) => onPlayTrack && onPlayTrack({ track: it }, recent.map(x => ({ track: x })))}
-               navigateToArtist={navigateToArtist} />
-        <Shelf label={lang==='ru'?'ВАШИ ЛАЙКИ':'YOUR LIKED SONGS'} items={liked} isDark={isDark}
-               onPick={(it) => onPlayTrack && onPlayTrack({ track: it }, liked.map(x => ({ track: x })))}
-               navigateToArtist={navigateToArtist} />
-        <Shelf label={lang==='ru'?'ПОПРОБУЙТЕ ДРУГОЕ':'TRY SOMETHING DIFFERENT'} items={different} isDark={isDark}
-               onPick={(it) => onPlayTrack && onPlayTrack({ track: it }, different.map(x => ({ track: x })))}
-               navigateToArtist={navigateToArtist} />
-        {playlists.length > 0 && (
-          <Shelf label={lang==='ru'?'ВАШИ ПЛЕЙЛИСТЫ':'YOUR PLAYLISTS'} items={playlists} isDark={isDark}
-                 onPick={() => onNav('library')} navigateToArtist={navigateToArtist} />
+        {loading ? (
+          <Fragment>
+            <ShelfSkeleton isDark={isDark} />
+            <ShelfSkeleton isDark={isDark} />
+          </Fragment>
+        ) : (
+          <Fragment>
+            <Shelf label={lang==='ru'?'НЕДАВНО ИГРАЛИ':'RECENTLY PLAYED'} items={recent} isDark={isDark}
+                   onPick={(it) => onPlayTrack && onPlayTrack({ track: it }, recent.map(x => ({ track: x })))}
+                   navigateToArtist={navigateToArtist} />
+            <Shelf label={lang==='ru'?'ВАШИ ЛАЙКИ':'YOUR LIKED SONGS'} items={liked} isDark={isDark}
+                   onPick={(it) => onPlayTrack && onPlayTrack({ track: it }, liked.map(x => ({ track: x })))}
+                   navigateToArtist={navigateToArtist} />
+            <Shelf label={lang==='ru'?'ПОПРОБУЙТЕ ДРУГОЕ':'TRY SOMETHING DIFFERENT'} items={different} isDark={isDark}
+                   onPick={(it) => onPlayTrack && onPlayTrack({ track: it }, different.map(x => ({ track: x })))}
+                   navigateToArtist={navigateToArtist} />
+            {playlists.length > 0 && (
+              <Shelf label={lang==='ru'?'ВАШИ ПЛЕЙЛИСТЫ':'YOUR PLAYLISTS'} items={playlists} isDark={isDark}
+                     onPick={() => onNav('library')} navigateToArtist={navigateToArtist} />
+            )}
+          </Fragment>
         )}
         <AlternativeModes isDark={isDark} lang={lang} onNav={onNav} />
       </div>

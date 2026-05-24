@@ -1247,7 +1247,7 @@ CREATE TABLE recommendation_snapshots (
 > **Status (2026-05-24)**: ✅ **Shipped** on `feature/home-discovery-magazine`. Spec: `docs/superpowers/specs/2026-05-24-home-discovery-magazine-design.md`; Plan: `docs/superpowers/plans/2026-05-24-home-discovery-magazine.md`.
 >
 > **Design revisions vs the §4.4 sketch below** (decided in the 2026-05-24 brainstorm, visual companion):
-> - **For-You-first reordering**: the For-You autoplay stream is now the cinematic hero #1 (was a bottom CTA strip in §4.4). Order: ① For-You hero → ② Today's Rediscovery (centered ambient interlude) → ③ Featured Artist → ④ shelves (Recently / Liked / Try different / **Playlists** if any) → ⑤ "another way to listen" (Library / Search secondary entry points).
+> - **For-You-first reordering**: the For-You autoplay stream is now the cinematic hero #1 (was a bottom CTA strip in §4.4). Order: ① For-You hero → ② Featured Artist → ③ Today's Rediscovery (centered ambient interlude) → ④ shelves (Recently / Liked / Try different / **Playlists** if any) → ⑤ "another way to listen" (Library / Search secondary entry points). _(Featured Artist promoted above Rediscovery in the 2026-05-24 polish round.)_
 > - **Visual language**: cinematic + **embedded / boundaryless** ("clean air" — zones separated by spacing + mono labels, no glass-card chrome). For-You and Rediscovery carry an ambient wash derived from the **dominant color of the cover** (reuses `useCoverColor`), fading smoothly at edges (mask-gradient).
 > - **For-You start control**: iridescent colored-glass aurora orb (`.fy-hybrid.tint-irid`) with hover (scale + faster swirl + halo) — distinct from Yandex "Моя волна".
 > - **For-You seed**: new placeholder endpoint `/recommend/for-you-seed` (weighted likes+recency) → existing `/recommend/autoplay-queue`. **Explicitly a placeholder** for the full personalization service (1b.3, §5.4) — to be swapped later.
@@ -1255,7 +1255,9 @@ CREATE TABLE recommendation_snapshots (
 >
 > **Backend shipped (Phase 1b.2):** `/library/rediscover` (least-recently-played / never-played), `/library/featured-artist` (deterministic daily rotation, reuses extracted `build_artist_aggregate`), `/recommend/for-you-seed` (placeholder). New `MetadataDB.get_play_recency_map`, `LibraryService.get_rediscover` + `list_distinct_artist_slugs`, `personalization_service.pick_for_you_seed`. No schema migration.
 >
-> **Deferred polish:** loading skeletons + the no-history albums-rail fallback (components currently hide empty shelves rather than substituting an albums rail); FFT "breathing" of the aurora control while a stream plays.
+> **Polish round (2026-05-24):** shipped — (1) **full RU/EN localization** of the landing (eyebrows `ДЛЯ ВАС` / `АРТИСТ ДНЯ` / `ОТКРОЙТЕ ЗАНОВО`, stream CTA, `albums`→`альбомов`, `Atlas`→`Атлас`; removed the duplicated "For You"); (2) **loading skeletons** — shimmer placeholders (`.load-skel`, reuses `@keyframes shimmer`) for hero / featured / rediscovery / shelves so a tab-return no longer flashes blank (each block starts `loading:true`, flips false on settle, never re-flashes on lang toggle); (3) **single-album Featured Artist** renders one centered cover with a gentle hover-lift instead of the fanned 3-cover stack; (4) **smoother "another way to listen" hover** — `background-color`/`filter` transitions (0.5s ease) replace the snapping gradient swap.
+>
+> **Deferred polish:** the no-history albums-rail fallback (components currently hide empty shelves rather than substituting an albums rail); FFT "breathing" of the aurora control while a stream plays.
 
 6a.1. **HomeSection layout** — Hero row (двойной блок) + 3 shelves + bottom CTA.
 6a.2. **HeroRediscoveryCard** — uses `/library/rediscover` + facts из existing `/metadata/tracks/{id}/facts`. `[▶ PLAY]` запускает Player.
