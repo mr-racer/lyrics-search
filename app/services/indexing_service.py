@@ -176,7 +176,7 @@ class IndexingService:
                 field_schema=models.PayloadSchemaType.KEYWORD,
             )
         except Exception as e:
-            logger.warning("[IndexingService] artist_slugs index not created: %s", e)
+            logger.warning("[IndexingService] artist_slugs index already exists or creation failed: %s", e)
         logger.info("[IndexingService] Collection '%s' created", coll)
 
     def _upsert_in_batches(

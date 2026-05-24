@@ -23,3 +23,11 @@ def test_payload_solo_artist():
     assert p["artists"] == ["Radiohead"]
     assert p["artist_slugs"] == ["radiohead"]
     assert p["primary_artist_slug"] == "radiohead"
+
+
+def test_payload_missing_artist():
+    info = {"lyrics": "x", "title": "T", "artist": "", "album": "A"}
+    p = _build_payload_for_upsert(info, slug=None)
+    assert p["artists"] == []
+    assert p["artist_slugs"] == []
+    assert p["primary_artist_slug"] is None
