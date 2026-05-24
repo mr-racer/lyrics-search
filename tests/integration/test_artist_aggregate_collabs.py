@@ -7,13 +7,14 @@ from fastapi.testclient import TestClient
 
 from app.api.main import app
 from app.resources.metadata_db import MetadataDB
+from app.services.artist_split import split_artists
 
 
 def _pt(tid, artist, slugs, primary, album="Al"):
     pt = MagicMock()
     pt.id = tid
     pt.payload = {
-        "title": f"T{tid}", "artist": artist, "artists": artist.split(", "),
+        "title": f"T{tid}", "artist": artist, "artists": split_artists(artist),
         "artist_slugs": slugs, "primary_artist_slug": primary,
         "album": album, "year": 2008, "duration": 200.0,
         "cover_art_path": "/c.jpg", "genre": "rap",
