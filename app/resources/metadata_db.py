@@ -1004,6 +1004,32 @@ class MetadataDB:
         ]
 
     @classmethod
+    def get_play_recency_map(cls, collection_name: str) -> dict[str, str]:
+        """Return {track_id: last_played_iso} for all played tracks in a
+        collection. Used by Rediscover (oldest gap) and For-You seed (recency)."""
+        conn = cls._connect()
+        rows = conn.execute(
+            """SELECT track_id, MAX(played_at) AS last_played
+               FROM playback_events
+               WHERE collection_name = ?
+               GROUP BY track_id""",
+            (collection_name,),
+        ).fetchall()
+        result = {}
+        for r in rows:
+            track_id = r[0]
+            played_at = r[1]
+            # PARSE_DECLTYPES may return datetime or string depending on SQLite mode.
+            # Convert to ISO format with T separator for consistent client parsing.
+            if hasattr(played_at, "isoformat"):
+                result[track_id] = played_at.isoformat()
+            else:
+                # If it's a string, ensure T-separated format (replace space with T)
+                s = str(played_at)
+                result[track_id] = s.replace(" ", "T", 1) if " " in s else s
+        return result
+
+    @classmethod
     def get_listening_total(cls, collection_name: str) -> tuple[float, str | None]:
         """Return (total_played_sec, first_played_iso_or_None)."""
         conn = cls._connect()
