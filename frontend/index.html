@@ -3112,6 +3112,245 @@ function TopRightControls({ isDark, lang, onLang, onTheme, onSettings, floating=
   );
 }
 
+// ─── Home (Discovery Magazine) shared helpers + blocks ───────────────────────
+function homeCoverUrl(path) {
+  if (!path) return null;
+  return path.startsWith('http') ? path : `${API}${path}`;
+}
+
+function HomeDeckCover({ src, rot, left, top, z, op }) {
+  return (
+    <div style={{ position:'absolute', left, top, width:152, height:152, borderRadius:13, overflow:'hidden',
+                  transform:`rotate(${rot}deg)`, zIndex:z, opacity:op, boxShadow:'0 16px 38px rgba(0,0,0,.5)', background:'#241d38' }}>
+      {src && <img src={src} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />}
+    </div>
+  );
+}
+
+function ForYouHero({ isDark, lang, activeCollection, onPlayTrack, navigateToArtist }) {
+  const c = useColors(isDark);
+  const [lead, setLead] = useState(null);
+  const [queue, setQueue] = useState([]);
+  const [vibe, setVibe] = useState(null);
+  const [hoverCtl, setHoverCtl] = useState(false);
+  const leadCoverUrl = homeCoverUrl(lead && lead.cover_art_path);
+  const color = useCoverColor(leadCoverUrl);
+
+  useEffect(() => {
+    if (!activeCollection) { setLead(null); setQueue([]); return; }
+    let alive = true;
+    apiFetch(`/recommend/for-you-seed?collection=${encodeURIComponent(activeCollection)}`)
+      .then(r => {
+        if (!alive || !r || !r.track) { setLead(null); return null; }
+        setLead(r.track);
+        return apiFetch(`/recommend/autoplay-queue?collection=${encodeURIComponent(activeCollection)}&seed_track_id=${encodeURIComponent(r.seed_track_id)}&limit=20`);
+      })
+      .then(q => { if (alive && q) setQueue(q.tracks || []); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [activeCollection]);
+
+  useEffect(() => {
+    if (!lead) { setVibe(null); return; }
+    let alive = true;
+    apiFetch(`/metadata/tracks/${encodeURIComponent(lead.track_id)}/sonic-vibe`)
+      .then(r => { if (alive) setVibe(r && r.phrase ? r.phrase : null); })
+      .catch(() => { if (alive) setVibe(null); });
+    return () => { alive = false; };
+  }, [lead && lead.track_id]);
+
+  if (!lead) return null;
+
+  const ambient = color
+    ? `radial-gradient(ellipse 60% 90% at 72% 18%, hsla(${color.h},${color.s}%,${color.l}%,.30), transparent 62%), radial-gradient(ellipse 50% 70% at 12% 95%, rgba(255,120,200,.10), transparent 60%)`
+    : `radial-gradient(ellipse 60% 90% at 72% 18%, rgba(124,91,255,.30), transparent 62%)`;
+
+  const startStream = () => {
+    if (!onPlayTrack) return;
+    const hits = [{ track: lead }, ...queue.map(t => ({ track: t }))];
+    onPlayTrack({ track: lead }, hits);
+  };
+
+  const q0 = homeCoverUrl(queue[0] && queue[0].cover_art_path);
+  const q1 = homeCoverUrl(queue[1] && queue[1].cover_art_path);
+
+  return (
+    <div style={{ position:'relative', padding:'44px 48px 64px', overflow:'hidden' }}>
+      <div style={{ position:'absolute', inset:0, background:ambient, pointerEvents:'none' }} />
+      <div style={{ position:'relative', display:'flex', gap:54, alignItems:'flex-start', maxWidth:720, margin:'0 auto' }}>
+        <div style={{ position:'relative', flex:'none', width:184, height:184 }}>
+          {q1 && <HomeDeckCover src={q1} rot={10} left={44} top={10} z={1} op={0.5} />}
+          {q0 && <HomeDeckCover src={q0} rot={5} left={24} top={5} z={2} op={0.8} />}
+          <div style={{ position:'absolute', left:0, top:0, width:168, height:168, borderRadius:14, overflow:'hidden', zIndex:3, boxShadow:'0 22px 55px rgba(124,91,255,.4), inset 0 1px 0 rgba(255,255,255,.14)', background:'#241d38' }}>
+            {leadCoverUrl && <img src={leadCoverUrl} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />}
+          </div>
+        </div>
+        <div style={{ flex:1, paddingTop:4 }}>
+          <div className="mono" style={{ fontSize:11, letterSpacing:'.28em', color:'#c9b8ff' }}>✦ FOR YOU · {lang==='ru'?'ВАШ СТРИМ':'YOUR STREAM'}</div>
+          <div className="serif" style={{ fontSize:29, fontWeight:300, letterSpacing:'-.01em', marginTop:14, color:c.text }}>{lead.title}</div>
+          <div style={{ fontSize:13, color:c.textMuted, marginTop:4 }}>
+            <span style={{ cursor:'pointer' }} onClick={() => navigateToArtist && navigateToArtist(slugifyArtistName(lead.artist))}>{lead.artist}</span>
+            {lead.year ? ` · ${lead.year}` : ''}{queue.length ? ` · +${queue.length} ${lang==='ru'?'в очереди':'in queue'}` : ''}
+          </div>
+          {vibe && <div className="serif" style={{ fontStyle:'italic', fontSize:16, color:'#f3ecff', opacity:.9, lineHeight:1.4, marginTop:14 }}>❝ {vibe} ❞</div>}
+          <div style={{ display:'flex', alignItems:'center', gap:14, marginTop:24 }}>
+            <div className="fy-hybrid tint-irid" onMouseEnter={() => setHoverCtl(true)} onMouseLeave={() => setHoverCtl(false)} onClick={startStream} role="button" aria-label="Start For You stream">
+              <span className="fy-ring" />
+              <span className="fy-clip"><span className="fy-blob fy-bg1" /><span className="fy-blob fy-bg2" /><span className="fy-blob fy-bg3" /><span className="fy-blob fy-bg4" /></span>
+              <span className="fy-glasscap" />
+              <span className="fy-glyph">▶</span>
+              <span className="fy-halo" />
+            </div>
+            <span className="mono" style={{ fontSize:11, letterSpacing:'.2em', color:hoverCtl?'#f3ecff':c.textMuted, transition:'color .3s' }}>START FOR YOU STREAM</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function homeGapBadge(data, lang) {
+  if (!data || data.never_played || !data.last_played) return lang==='ru' ? 'ИЗ ГЛУБИН БИБЛИОТЕКИ' : 'FROM THE DEEP CUTS';
+  const days = Math.floor((Date.now() - new Date(data.last_played).getTime()) / 86400000);
+  const months = Math.floor(days / 30);
+  if (lang==='ru') return months >= 1 ? `НЕ СЛУШАЛИ ~${months} МЕС` : `НЕ СЛУШАЛИ ${days} ДН`;
+  return months >= 1 ? `NOT PLAYED IN ~${months}MO` : `NOT PLAYED IN ${days}D`;
+}
+
+function RediscoveryBand({ isDark, lang, activeCollection, onPick, navigateToArtist }) {
+  const c = useColors(isDark);
+  const [data, setData] = useState(null);
+  const [fact, setFact] = useState(null);
+  const coverUrl = homeCoverUrl(data && data.track && data.track.cover_art_path);
+  const color = useCoverColor(coverUrl);
+
+  useEffect(() => {
+    if (!activeCollection) { setData(null); setFact(null); return; }
+    let alive = true;
+    apiFetch(`/library/rediscover?collection_name=${encodeURIComponent(activeCollection)}`)
+      .then(r => {
+        if (!alive || !r || !r.track) { setData(null); return null; }
+        setData(r);
+        return apiFetch(`/metadata/tracks/${encodeURIComponent(r.track.track_id)}/facts`);
+      })
+      .then(f => { if (alive && Array.isArray(f) && f.length) setFact(f[0].fact || f[0]); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [activeCollection]);
+
+  if (!data || !data.track) return null;
+  const t = data.track;
+  const wash = color
+    ? `radial-gradient(ellipse 62% 130% at 50% 42%, hsla(${color.h},${color.s}%,${color.l}%,.17) 0%, hsla(${color.h},${color.s}%,${color.l}%,.09) 38%, transparent 80%)`
+    : `radial-gradient(ellipse 62% 130% at 50% 42%, rgba(124,91,255,.15), transparent 80%)`;
+
+  return (
+    <div style={{ position:'relative', margin:'20px 0', padding:'40px 40px 44px', background:wash,
+                  WebkitMaskImage:'linear-gradient(180deg, transparent 0%, #000 22%, #000 78%, transparent 100%)',
+                  maskImage:'linear-gradient(180deg, transparent 0%, #000 22%, #000 78%, transparent 100%)' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline' }}>
+        <div className="mono" style={{ fontSize:11, letterSpacing:'.24em', color:c.textSubtle }}>↺ TODAY'S REDISCOVERY</div>
+        <div className="mono" style={{ fontSize:11, letterSpacing:'.16em', color:c.amber }}>{homeGapBadge(data, lang)}</div>
+      </div>
+      <div style={{ textAlign:'center', marginTop:18 }}>
+        <div style={{ position:'relative', display:'inline-block', cursor:'pointer' }} onClick={() => onPick && onPick(t)}>
+          <div style={{ width:112, height:112, borderRadius:12, overflow:'hidden', boxShadow:'0 16px 36px rgba(0,0,0,.45)', background:'#241d38' }}>
+            {coverUrl && <img src={coverUrl} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />}
+          </div>
+          <span style={{ position:'absolute', right:-10, bottom:-10, width:44, height:44, borderRadius:'50%', background:'linear-gradient(180deg,#9a7bff,#6a44d6)', color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', fontSize:16, boxShadow:'0 8px 20px rgba(124,91,255,.5)' }}>▶</span>
+        </div>
+        <div className="serif" style={{ fontSize:19, fontWeight:300, marginTop:14, color:c.text }}>
+          {t.title} <span style={{ fontSize:13, color:c.textMuted, cursor:'pointer' }} onClick={() => navigateToArtist && navigateToArtist(slugifyArtistName(t.artist))}>· {t.artist}</span>
+        </div>
+        {fact && <div className="serif" style={{ fontStyle:'italic', fontSize:16, color:c.text, opacity:.9, marginTop:10, maxWidth:500, marginLeft:'auto', marginRight:'auto', lineHeight:1.45 }}>❝ {fact} ❞</div>}
+      </div>
+    </div>
+  );
+}
+
+function FeaturedArtistCard({ isDark, lang, activeCollection, navigateToArtist }) {
+  const c = useColors(isDark);
+  const [a, setA] = useState(null);
+  const [hover, setHover] = useState(false);
+
+  useEffect(() => {
+    if (!activeCollection) { setA(null); return; }
+    let alive = true;
+    apiFetch(`/library/featured-artist?collection_name=${encodeURIComponent(activeCollection)}&lang=${lang}`)
+      .then(r => { if (alive && r && r.slug) setA(r); })
+      .catch(() => { if (alive) setA(null); });
+    return () => { alive = false; };
+  }, [activeCollection, lang]);
+
+  if (!a) return null;
+  const covers = (a.albums || []).map(al => homeCoverUrl(al.cover_art_path)).filter(Boolean).slice(0, 3);
+  const ctx = [a.genre, a.decade_range, a.album_count ? `${a.album_count} albums` : null].filter(Boolean).join(' · ');
+  const tf = (base, hov) => (hover ? hov : base);
+
+  return (
+    <div style={{ padding:'34px 40px 0' }}>
+      <div className="mono" style={{ fontSize:11, letterSpacing:'.26em', color:c.textSubtle }}>★ FEATURED ARTIST</div>
+      <div style={{ display:'flex', gap:34, alignItems:'center', marginTop:18 }}>
+        <div style={{ position:'relative', width:230, height:88, flex:'none', cursor:'pointer' }}
+             onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+             onClick={() => navigateToArtist && navigateToArtist(a.slug)}>
+          {[0,1,2].map(i => covers[i] ? (
+            <div key={i} style={{ position:'absolute', width:80, height:80, borderRadius:11, overflow:'hidden',
+              left:[0,42,84][i], top:4, zIndex:i===1?2:1, boxShadow:'0 12px 28px rgba(0,0,0,.45)',
+              transition:'transform .42s cubic-bezier(.22,.9,.3,1)',
+              transform:[ tf('rotate(-6deg)','rotate(-13deg) translateX(-26px) translateY(-4px)'),
+                          tf('rotate(0deg)','translateY(-8px) scale(1.04)'),
+                          tf('rotate(6deg)','rotate(13deg) translateX(26px) translateY(-4px)') ][i] }}>
+              <img src={covers[i]} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />
+            </div>
+          ) : null)}
+        </div>
+        <div style={{ flex:1 }}>
+          <div className="serif" style={{ fontSize:22, fontWeight:300, color:c.text }}>{a.name}</div>
+          <div style={{ fontSize:14, color:c.textMuted }}>{ctx}</div>
+          {a.bio && <div style={{ fontSize:14, color:c.text, opacity:.72, marginTop:8, maxWidth:520, lineHeight:1.5, display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden' }}>{a.bio}</div>}
+          <div style={{ fontSize:13, color:'#c9b8ff', marginTop:11, cursor:'pointer' }} onClick={() => navigateToArtist && navigateToArtist(a.slug)}>→ {lang==='ru'?'Открыть Atlas':'Open Atlas'}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ShelfCard({ item, isDark, onPick, navigateToArtist }) {
+  const c = useColors(isDark);
+  const [hover, setHover] = useState(false);
+  const src = homeCoverUrl(item.cover_art_path);
+  return (
+    <div style={{ width:120, flex:'none', cursor:'pointer' }}
+         onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} onClick={() => onPick && onPick(item)}>
+      <div style={{ width:120, height:120, borderRadius:10, overflow:'hidden', background:'#241d38',
+                    boxShadow:'0 10px 24px rgba(0,0,0,.35)', transform:hover?'translateY(-5px)':'none', transition:'transform .3s' }}>
+        {src && <img src={src} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />}
+      </div>
+      <div style={{ fontSize:12, color:c.text, marginTop:7, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{item.title}</div>
+      {item.artist ? (
+        <div style={{ fontSize:11, color:c.textMuted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', cursor:'pointer' }}
+             onClick={(e) => { e.stopPropagation(); navigateToArtist && navigateToArtist(slugifyArtistName(item.artist)); }}>{item.artist}</div>
+      ) : null}
+    </div>
+  );
+}
+
+function Shelf({ label, items, isDark, onPick, navigateToArtist }) {
+  const c = useColors(isDark);
+  if (!items || items.length === 0) return null;
+  return (
+    <div style={{ padding:'0 40px', marginTop:34 }}>
+      <div className="mono" style={{ fontSize:11, letterSpacing:'.26em', color:c.textSubtle }}>{label}</div>
+      <div style={{ display:'flex', gap:16, marginTop:14, overflowX:'auto', paddingBottom:6 }}>
+        {items.map((it, i) => (
+          <ShelfCard key={(it && (it.track_id || it.id)) || i} item={it} isDark={isDark} onPick={onPick} navigateToArtist={navigateToArtist} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── LandingScreen — Home view (restored after accidental Task 13 deletion) ──────
 function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, activeCollection, hasLibrary, stats, playerTrack, playerPlaylist, onTrackChange, audio, navigateToArtist }) {
   const c = useColors(isDark);
