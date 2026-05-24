@@ -9919,6 +9919,16 @@ function ArtistAtlasSection({
                     >
                       <span style={{ color:c.textSubtle, minWidth:18, fontFamily:"'JetBrains Mono', monospace", fontSize:11 }}>▶</span>
                       <span style={{ flex:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t.title}</span>
+                      {(t.artists?.length > 1) && (() => {
+                        const others = t.artists.filter(
+                          a => a.toLowerCase() !== (data.name || '').toLowerCase()
+                        );
+                        return others.length ? (
+                          <span className="mono" style={{ fontSize:10, color:c.textSubtle, fontStyle:'italic' }}>
+                            feat. {others.join(', ')}
+                          </span>
+                        ) : null;
+                      })()}
                       <span className="mono" style={{ fontSize:10, color:c.textSubtle }}>
                         {Math.floor((t.duration_sec || 0) / 60)}:{String(Math.floor((t.duration_sec||0) % 60)).padStart(2,'0')}
                       </span>
