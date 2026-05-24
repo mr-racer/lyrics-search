@@ -73,8 +73,14 @@ def _coerce_year(val) -> Optional[int]:
 
 def _track_from_payload(point_id: str, p: dict) -> TrackMetadata:
     """Map a Qdrant payload dict to TrackMetadata. Returns minimal-field model."""
-    slugs = p.get("artist_slugs") or artist_slugs(p.get("artist") or "")
-    names = p.get("artists") or split_artists(p.get("artist") or "")
+    # Prefer payload fields; if either is missing, recompute BOTH from the raw
+    # `artist` so names[i] and slugs[i] always describe the same participant.
+    names = p.get("artists")
+    slugs = p.get("artist_slugs")
+    if not names or not slugs:
+        raw = p.get("artist") or ""
+        names = split_artists(raw)
+        slugs = artist_slugs(raw)
     primary = p.get("primary_artist_slug") or (slugs[0] if slugs else None)
     return TrackMetadata(
         track_id=point_id,
