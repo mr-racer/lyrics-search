@@ -1366,7 +1366,7 @@ class LibraryService:
     def list_distinct_artist_slugs(cls, *, qdrant_client, collection_name: str):
         """Return a deterministically-sorted list of (slug, name) for every
         distinct artist in the collection (slug-deduped)."""
-        from app.services.artist_facts_service import _slugify as _slugify_artist
+        from app.services.artist_split import artist_slugs, split_artists
         seen: dict[str, str] = {}  # slug -> name (first seen)
         offset = None
         while True:
@@ -1378,11 +1378,15 @@ class LibraryService:
             except Exception:
                 break
             for pt in points:
-                name = ((pt.payload or {}).get("artist") or "").strip()
+                payload = pt.payload or {}
+                name = (payload.get("artist") or "").strip()
                 if not name:
                     continue
-                slug = _slugify_artist(name)
-                seen.setdefault(slug, name)
+                slugs = payload.get("artist_slugs") or artist_slugs(name)
+                names = payload.get("artists") or split_artists(name)
+                for i, slug in enumerate(slugs):
+                    display = names[i] if i < len(names) else slug
+                    seen.setdefault(slug, display)
             if offset is None or not points:
                 break
         return sorted(seen.items())
