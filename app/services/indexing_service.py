@@ -168,11 +168,13 @@ class IndexingService:
         data: list[dict],
         text_vecs: np.ndarray,
         clap_map: Optional[dict] = None,
+        clap_chunks_map: Optional[dict] = None,
         batch_size: int = 32,
     ) -> None:
         client = self.engine.qdrant_client
         coll = self.engine.collection_name
         matched = 0
+        chunks_attached = 0
 
         for i in tqdm(range(0, len(data), batch_size)):
             batch = data[i: i + batch_size]
@@ -186,11 +188,11 @@ class IndexingService:
                     ),
                     self.engine.vector_name: vec,
                 }
+                key = (
+                    song_info.get("artist", "").strip().lower(),
+                    song_info.get("title", "").strip().lower(),
+                )
                 if clap_map:
-                    key = (
-                        song_info.get("artist", "").strip().lower(),
-                        song_info.get("title", "").strip().lower(),
-                    )
                     clap_vec = clap_map.get(key)
                     if clap_vec is not None:
                         vector["clap"] = clap_vec
@@ -203,18 +205,26 @@ class IndexingService:
                 if artist and title:
                     slug = _slugify(artist) + "-" + _slugify(title)
 
+                payload = _build_payload_for_upsert(song_info, slug=slug)
+                if clap_chunks_map:
+                    chunk_list = clap_chunks_map.get(key)
+                    if chunk_list:
+                        payload["clap_chunks"] = [c.tolist() for c in chunk_list]
+                        chunks_attached += 1
+
                 points.append(models.PointStruct(
                     id=uuid.uuid4().hex,
                     vector=vector,
-                    payload=_build_payload_for_upsert(song_info, slug=slug),
+                    payload=payload,
                 ))
 
             client.upsert(collection_name=coll, points=points)
 
         if clap_map:
             logger.info(
-                "[IndexingService] CLAP vectors attached to %d / %d points",
-                matched, len(data),
+                "[IndexingService] CLAP vectors attached to %d / %d points "
+                "(per-chunk lists attached to %d)",
+                matched, len(data), chunks_attached,
             )
 
     def fit(
@@ -318,7 +328,7 @@ class IndexingService:
                     if progress_callback:
                         progress_callback("audio", c, t, "Encoding audio (CLAP)...")
 
-                clap_map = _encode_clap(
+                clap_map, clap_chunks_map = _encode_clap(
                     filtered,
                     self.engine.model_clap if self.engine.model_clap else None,
                     progress_callback=_clap_cb,
@@ -327,10 +337,13 @@ class IndexingService:
                     progress_callback("audio", total, total, "CLAP encoding done")
             else:
                 clap_map = {}
+                clap_chunks_map = {}
         finally:
             if text_device.type == "cuda" and torch.cuda.is_available():
                 self.engine.model.to(text_device)
 
         # Upsert (network IO — CPU model is fine)
-        self._upsert_in_batches(filtered, text_vecs, clap_map or None)
+        self._upsert_in_batches(
+            filtered, text_vecs, clap_map or None, clap_chunks_map or None,
+        )
         logger.info("[IndexingService] Indexing complete: %d tracks", total)
