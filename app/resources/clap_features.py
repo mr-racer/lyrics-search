@@ -38,7 +38,7 @@ def unit_norm(v):
 
 
 def get_clap_embedding_long(clap_model, y: np.ndarray, sr: int,
-                             chunk_sec: int = 30, device=DEVICE) -> np.ndarray | None:
+                             chunk_sec: int = 10, device=DEVICE) -> np.ndarray | None:
     """Split long audio into chunks, embed each, average — returns a single 512-d vector.
 
     Returns None when the audio is shorter than 5 seconds (no usable chunk).
@@ -70,7 +70,7 @@ def extract_clap_features(path: str, model, duration: int = 300, device=DEVICE) 
     if librosa is None:
         raise RuntimeError("librosa not installed — required for CLAP feature extraction")
     y, sr = librosa.load(path, duration=duration, sr=48000, mono=True)
-    clap_vec = get_clap_embedding_long(model, y, sr, chunk_sec=30, device=device)
+    clap_vec = get_clap_embedding_long(model, y, sr, chunk_sec=10, device=device)
     del y
     if clap_vec is None:
         return None
