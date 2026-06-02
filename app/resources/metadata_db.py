@@ -166,6 +166,31 @@ _SCHEMA_SQL: Tuple[str, ...] = (
     )""",
     "CREATE INDEX IF NOT EXISTS idx_playlist_tracks_position ON playlist_tracks(playlist_id, position)",
     "CREATE INDEX IF NOT EXISTS idx_playlists_collection ON playlists(collection_name)",
+    # Phase A: Auth Foundation — users + invites + instance_config
+    """CREATE TABLE IF NOT EXISTS users (
+        id            TEXT PRIMARY KEY,
+        email         TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        role          TEXT NOT NULL DEFAULT 'member'
+                        CHECK (role IN ('owner', 'member')),
+        created_at    REAL NOT NULL,
+        last_login_at REAL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)",
+    """CREATE TABLE IF NOT EXISTS invites (
+        code         TEXT PRIMARY KEY,
+        created_by   TEXT NOT NULL REFERENCES users(id),
+        created_at   REAL NOT NULL,
+        expires_at   REAL NOT NULL,
+        consumed_by  TEXT REFERENCES users(id),
+        consumed_at  REAL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_invites_unused ON invites (consumed_at) WHERE consumed_at IS NULL",
+    """CREATE TABLE IF NOT EXISTS instance_config (
+        id          INTEGER PRIMARY KEY CHECK (id = 1),
+        mode        TEXT NOT NULL CHECK (mode IN ('sharing', 'server')),
+        created_at  REAL NOT NULL
+    )""",
 )
 
 
