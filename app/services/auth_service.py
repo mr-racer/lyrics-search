@@ -29,11 +29,12 @@ from __future__ import annotations
 
 import logging
 import secrets
+import sqlite3
 import time
 import uuid
 from typing import Optional
 
-import jwt
+import jwt  # noqa: F401  # used by login/verify_token in Task 8
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, InvalidHashError
 
@@ -143,18 +144,18 @@ class AuthService:
         a noop-fail, never a clobber)."""
         email = self._normalize_email(email)
         self._validate_password_strength(password)
-        # Idempotency guard: any existing owner blocks creation.
-        conn = self.db._connect()
-        row = conn.execute("SELECT id FROM users WHERE role = 'owner' LIMIT 1").fetchone()
-        if row is not None:
-            raise OwnerAlreadyExistsError(f"owner already exists (id={row[0]})")
+        if self.db.has_owner():
+            raise OwnerAlreadyExistsError("owner already exists")
         if self.db.get_user_by_email(email) is not None:
             raise EmailAlreadyTakenError(email)
         uid = uuid.uuid4().hex
-        self.db.create_user(
-            user_id=uid, email=email, password_hash=self._hash_password(password),
-            role="owner", created_at=_now(),
-        )
+        try:
+            self.db.create_user(
+                user_id=uid, email=email, password_hash=self._hash_password(password),
+                role="owner", created_at=_now(),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise EmailAlreadyTakenError(email) from exc
         logger.info("[AuthService] owner created: id=%s", uid)
         return uid
 
@@ -176,10 +177,13 @@ class AuthService:
             raise EmailAlreadyTakenError(email)
         uid = uuid.uuid4().hex
         now = _now()
-        self.db.create_user(
-            user_id=uid, email=email, password_hash=self._hash_password(password),
-            role="member", created_at=now,
-        )
+        try:
+            self.db.create_user(
+                user_id=uid, email=email, password_hash=self._hash_password(password),
+                role="member", created_at=now,
+            )
+        except sqlite3.IntegrityError as exc:
+            raise EmailAlreadyTakenError(email) from exc
         self.db.consume_invite(invite_code, consumed_by=uid, consumed_at=now)
         logger.info(
             "[AuthService] member registered: id=%s via invite=%s",

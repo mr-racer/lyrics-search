@@ -1772,6 +1772,16 @@ class MetadataDB:
         conn.commit()
         return cur.rowcount > 0
 
+    @classmethod
+    def has_owner(cls) -> bool:
+        """True if any user with role='owner' exists. Used by create_owner
+        idempotency guard."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT 1 FROM users WHERE role = 'owner' LIMIT 1"
+        ).fetchone()
+        return row is not None
+
     # ─── Phase A: Invites CRUD ─────────────────────────────────────────────
     @classmethod
     def create_invite(

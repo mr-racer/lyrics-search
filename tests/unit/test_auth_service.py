@@ -4,7 +4,8 @@ import pytest
 
 from app.resources.metadata_db import MetadataDB
 from app.services.auth_service import (
-    AuthService, InvalidInviteError, EmailAlreadyTakenError, WeakPasswordError,
+    AuthService, InvalidInviteError, EmailAlreadyTakenError,
+    WeakPasswordError, OwnerAlreadyExistsError,
 )
 
 
@@ -80,7 +81,7 @@ def test_register_rejects_consumed_invite(auth):
         )
 
 
-def test_register_rejects_expired_invite(auth, monkeypatch):
+def test_register_rejects_expired_invite(auth):
     owner_id = _seed_owner(auth)
     # Force invite to be 8 days old.
     MetadataDB.create_invite(
@@ -115,3 +116,10 @@ def test_register_rejects_weak_password(auth):
         auth.register_with_invite(
             email="x@y.z", password="short", invite_code=code,
         )
+
+
+def test_create_owner_rejects_second_owner(auth):
+    """create_owner must refuse to clobber an existing owner row."""
+    _seed_owner(auth)
+    with pytest.raises(OwnerAlreadyExistsError):
+        auth.create_owner(email="usurper@example.com", password="usurperpass12")
