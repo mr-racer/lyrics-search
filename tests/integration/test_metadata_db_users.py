@@ -48,3 +48,68 @@ def test_users_role_check_constraint():
         pass
     conn.execute("DELETE FROM users")
     conn.commit()
+
+
+def test_create_user_and_get_by_email():
+    MetadataDB.init()
+    conn = MetadataDB.get()
+    conn.execute("DELETE FROM users")
+    conn.commit()
+    MetadataDB.create_user(
+        user_id="uid-1",
+        email="alice@example.com",
+        password_hash="$argon2id$...",
+        role="owner",
+        created_at=1700000000.0,
+    )
+    row = MetadataDB.get_user_by_email("alice@example.com")
+    assert row is not None
+    assert row["id"] == "uid-1"
+    assert row["email"] == "alice@example.com"
+    assert row["role"] == "owner"
+    assert row["password_hash"] == "$argon2id$..."
+    assert row["last_login_at"] is None
+
+
+def test_create_user_normalizes_email_case():
+    """Caller normalizes case; verify storage preserves what was passed."""
+    MetadataDB.init()
+    conn = MetadataDB.get()
+    conn.execute("DELETE FROM users")
+    conn.commit()
+    MetadataDB.create_user(
+        user_id="uid-2", email="bob@example.com", password_hash="h",
+        role="member", created_at=1700000000.0,
+    )
+    # Lookup with same casing returns the row
+    assert MetadataDB.get_user_by_email("bob@example.com") is not None
+    # Lookup with different casing returns None (caller's responsibility to normalize)
+    assert MetadataDB.get_user_by_email("BOB@example.com") is None
+
+
+def test_get_user_by_id_round_trip():
+    MetadataDB.init()
+    conn = MetadataDB.get()
+    conn.execute("DELETE FROM users")
+    conn.commit()
+    MetadataDB.create_user(
+        user_id="uid-3", email="c@d.e", password_hash="h",
+        role="member", created_at=1700000000.0,
+    )
+    row = MetadataDB.get_user_by_id("uid-3")
+    assert row is not None and row["email"] == "c@d.e"
+    assert MetadataDB.get_user_by_id("missing") is None
+
+
+def test_update_last_login_sets_timestamp():
+    MetadataDB.init()
+    conn = MetadataDB.get()
+    conn.execute("DELETE FROM users")
+    conn.commit()
+    MetadataDB.create_user(
+        user_id="uid-4", email="z@y.x", password_hash="h",
+        role="member", created_at=1700000000.0,
+    )
+    assert MetadataDB.get_user_by_id("uid-4")["last_login_at"] is None
+    MetadataDB.update_last_login("uid-4", 1700001234.5)
+    assert MetadataDB.get_user_by_id("uid-4")["last_login_at"] == 1700001234.5

@@ -1710,3 +1710,62 @@ class MetadataDB:
             (collection_name, track_id),
         ).fetchall()
         return [int(r[0]) for r in rows]
+
+    # ─── Phase A: Users CRUD ───────────────────────────────────────────────
+    @classmethod
+    def create_user(
+        cls, *, user_id: str, email: str, password_hash: str,
+        role: str, created_at: float,
+    ) -> None:
+        """Insert a new user. Raises sqlite3.IntegrityError on duplicate email
+        or invalid role. Caller is responsible for lower-casing email."""
+        conn = cls._connect()
+        conn.execute(
+            "INSERT INTO users (id, email, password_hash, role, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (user_id, email, password_hash, role, created_at),
+        )
+        conn.commit()
+
+    @classmethod
+    def get_user_by_email(cls, email: str) -> dict | None:
+        """Return user row dict or None. Email lookup is case-SENSITIVE — caller
+        must lower-case the input string (and we lower-case at write time, so
+        stored rows are already canonical)."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT id, email, password_hash, role, created_at, last_login_at "
+            "FROM users WHERE email = ?",
+            (email,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row[0], "email": row[1], "password_hash": row[2],
+            "role": row[3], "created_at": row[4], "last_login_at": row[5],
+        }
+
+    @classmethod
+    def get_user_by_id(cls, user_id: str) -> dict | None:
+        """Return user row dict or None."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT id, email, password_hash, role, created_at, last_login_at "
+            "FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row[0], "email": row[1], "password_hash": row[2],
+            "role": row[3], "created_at": row[4], "last_login_at": row[5],
+        }
+
+    @classmethod
+    def update_last_login(cls, user_id: str, ts: float) -> None:
+        conn = cls._connect()
+        conn.execute(
+            "UPDATE users SET last_login_at = ? WHERE id = ?",
+            (ts, user_id),
+        )
+        conn.commit()
