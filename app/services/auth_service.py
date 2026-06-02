@@ -34,7 +34,7 @@ import time
 import uuid
 from typing import Optional
 
-import jwt  # noqa: F401  # used by login/verify_token in Task 8
+import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError, InvalidHashError
 
@@ -204,3 +204,60 @@ class AuthService:
             created_at=now, expires_at=expires,
             consumed_by=None, consumed_at=None,
         )
+
+    # ── Token issuance / verification ───────────────────────────────────
+    def _issue_token(self, user: User) -> str:
+        now_int = int(_now())
+        payload = {
+            "sub": user.id,
+            "email": user.email,
+            "role": user.role,
+            "iat": now_int,
+            "exp": now_int + TOKEN_TTL_SECONDS,
+        }
+        return jwt.encode(payload, self.jwt_secret, algorithm="HS256")
+
+    def verify_token(self, token: str) -> User:
+        """Decode + signature-check + lookup. Raises TokenExpiredError /
+        InvalidTokenError. Returns the canonical User from DB (so role/email
+        changes since issuance are reflected; user-row deletion → 401)."""
+        try:
+            # PyJWT's built-in exp check uses its own clock; we disable it
+            # and re-check manually below using `_now` so monkeypatching
+            # `_now` in tests behaves the same as real wall-clock expiry.
+            claims = jwt.decode(
+                token, self.jwt_secret, algorithms=["HS256"],
+                options={"verify_exp": False},
+            )
+        except jwt.InvalidSignatureError as e:
+            raise InvalidTokenError(f"bad signature: {e}") from e
+        except jwt.DecodeError as e:
+            raise InvalidTokenError(f"malformed token: {e}") from e
+        exp = claims.get("exp")
+        if exp is None or _now() >= float(exp):
+            raise TokenExpiredError("token expired")
+        uid = claims.get("sub")
+        if not uid:
+            raise InvalidTokenError("missing sub claim")
+        row = self.db.get_user_by_id(uid)
+        if row is None:
+            raise InvalidTokenError(f"unknown user id {uid}")
+        return _row_to_user(row)
+
+    # ── Login ───────────────────────────────────────────────────────────
+    def login(self, *, email: str, password: str) -> tuple[User, str]:
+        """Verify email+password, stamp last_login_at, return (User, token).
+        Raises InvalidCredentialsError on miss — same error for unknown email
+        and wrong password (no user-enumeration leak)."""
+        email = self._normalize_email(email)
+        row = self.db.get_user_by_email(email)
+        if row is None:
+            raise InvalidCredentialsError("invalid credentials")
+        if not self._verify_password(row["password_hash"], password):
+            raise InvalidCredentialsError("invalid credentials")
+        now = _now()
+        self.db.update_last_login(row["id"], now)
+        # Re-read after update so the returned User carries the fresh last_login_at.
+        fresh = self.db.get_user_by_id(row["id"])
+        user = _row_to_user(fresh)
+        return user, self._issue_token(user)

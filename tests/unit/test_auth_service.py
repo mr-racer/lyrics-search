@@ -123,3 +123,74 @@ def test_create_owner_rejects_second_owner(auth):
     _seed_owner(auth)
     with pytest.raises(OwnerAlreadyExistsError):
         auth.create_owner(email="usurper@example.com", password="usurperpass12")
+
+
+from app.services.auth_service import (
+    InvalidCredentialsError, TokenExpiredError, InvalidTokenError,
+)
+
+
+def test_login_success_returns_user_and_token(auth):
+    auth.create_owner(email="lx@example.com", password="strongpass12")
+    user, token = auth.login(email="lx@example.com", password="strongpass12")
+    assert user.email == "lx@example.com"
+    assert token.count(".") == 2  # JWT has 3 segments
+
+
+def test_login_wrong_password_raises(auth):
+    auth.create_owner(email="lx2@example.com", password="strongpass12")
+    with pytest.raises(InvalidCredentialsError):
+        auth.login(email="lx2@example.com", password="WRONGpass12")
+
+
+def test_login_unknown_email_raises(auth):
+    with pytest.raises(InvalidCredentialsError):
+        auth.login(email="nobody@example.com", password="anything12345")
+
+
+def test_login_updates_last_login(auth):
+    auth.create_owner(email="lx3@example.com", password="strongpass12")
+    before = MetadataDB.get_user_by_email("lx3@example.com")["last_login_at"]
+    assert before is None
+    _, _ = auth.login(email="lx3@example.com", password="strongpass12")
+    after = MetadataDB.get_user_by_email("lx3@example.com")["last_login_at"]
+    assert after is not None and after > 0
+
+
+def test_verify_token_round_trip(auth):
+    auth.create_owner(email="vt@example.com", password="strongpass12")
+    _, token = auth.login(email="vt@example.com", password="strongpass12")
+    user = auth.verify_token(token)
+    assert user.email == "vt@example.com"
+    assert user.role == "owner"
+
+
+def test_verify_token_expired_raises(auth, monkeypatch):
+    auth.create_owner(email="exp@example.com", password="strongpass12")
+    _, token = auth.login(email="exp@example.com", password="strongpass12")
+    # Move clock forward 31 days; jwt.decode raises ExpiredSignatureError.
+    import app.services.auth_service as mod
+    monkeypatch.setattr(mod, "_now", lambda: time.time() + 31 * 86400)
+    with pytest.raises(TokenExpiredError):
+        auth.verify_token(token)
+
+
+def test_verify_token_bad_signature_raises(auth):
+    auth.create_owner(email="bad@example.com", password="strongpass12")
+    _, token = auth.login(email="bad@example.com", password="strongpass12")
+    # Corrupt the signature segment.
+    head, payload, _sig = token.split(".")
+    corrupted = ".".join([head, payload, "AAAAAAAAAAAA"])
+    with pytest.raises(InvalidTokenError):
+        auth.verify_token(corrupted)
+
+
+def test_verify_token_unknown_user_raises(auth):
+    auth.create_owner(email="del@example.com", password="strongpass12")
+    _, token = auth.login(email="del@example.com", password="strongpass12")
+    # Delete user out from under the token.
+    MetadataDB.get()  # ensure connection
+    MetadataDB.get().execute("DELETE FROM users")
+    MetadataDB.get().commit()
+    with pytest.raises(InvalidTokenError):
+        auth.verify_token(token)
