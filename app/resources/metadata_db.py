@@ -1762,10 +1762,12 @@ class MetadataDB:
         }
 
     @classmethod
-    def update_last_login(cls, user_id: str, ts: float) -> None:
+    def update_last_login(cls, user_id: str, ts: float) -> bool:
+        """Update last_login_at; return True if the user row was updated."""
         conn = cls._connect()
-        conn.execute(
+        cur = conn.execute(
             "UPDATE users SET last_login_at = ? WHERE id = ?",
             (ts, user_id),
         )
         conn.commit()
+        return cur.rowcount > 0
