@@ -637,3 +637,57 @@ class PlaylistReorderRequest(BaseModel):
 class PlaylistsResponse(BaseModel):
     playlists: list[PlaylistSummary]
     collection_name: str
+
+
+# ─── Phase A: Auth Foundation ─────────────────────────────────────────────
+
+
+class User(BaseModel):
+    """Public-facing user shape. password_hash is intentionally absent."""
+    id: str
+    email: str
+    role: Literal["owner", "member"]
+    created_at: float
+    last_login_at: Optional[float] = None
+
+
+class Invite(BaseModel):
+    """Full invite row, including consumer fields. Owner-only surface."""
+    code: str
+    created_by: str
+    created_at: float
+    expires_at: float
+    consumed_by: Optional[str] = None
+    consumed_at: Optional[float] = None
+
+
+class InstanceConfigResponse(BaseModel):
+    """Body of GET /instance/config — public, no auth."""
+    mode: Literal["sharing", "server"]
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+    invite_code: str
+
+
+class AuthResponse(BaseModel):
+    """Returned by /auth/login and /auth/register."""
+    token: str
+    user: User
+
+
+class InviteResponse(BaseModel):
+    """Returned by /auth/invites POST/GET. Slimmer than Invite — drops
+    `created_by` since the only consumer of this surface IS the creator."""
+    code: str
+    created_at: float
+    expires_at: float
+    consumed: bool
+    consumed_at: Optional[float] = None
