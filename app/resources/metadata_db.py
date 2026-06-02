@@ -1771,3 +1771,78 @@ class MetadataDB:
         )
         conn.commit()
         return cur.rowcount > 0
+
+    # ─── Phase A: Invites CRUD ─────────────────────────────────────────────
+    @classmethod
+    def create_invite(
+        cls, code: str, created_by: str, created_at: float, expires_at: float,
+    ) -> None:
+        """Insert a new invite row. Raises sqlite3.IntegrityError on duplicate code
+        or unknown created_by user."""
+        conn = cls._connect()
+        conn.execute(
+            "INSERT INTO invites (code, created_by, created_at, expires_at) "
+            "VALUES (?, ?, ?, ?)",
+            (code, created_by, created_at, expires_at),
+        )
+        conn.commit()
+
+    @classmethod
+    def get_invite(cls, code: str) -> dict | None:
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT code, created_by, created_at, expires_at, consumed_by, consumed_at "
+            "FROM invites WHERE code = ?",
+            (code,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "code": row[0], "created_by": row[1],
+            "created_at": row[2], "expires_at": row[3],
+            "consumed_by": row[4], "consumed_at": row[5],
+        }
+
+    @classmethod
+    def consume_invite(cls, code: str, *, consumed_by: str, consumed_at: float) -> None:
+        """Stamp an invite as consumed. Does NOT validate it's still open — that's
+        AuthService's job (atomicity is enforced by checking get_invite first +
+        AuthService running under a single request)."""
+        conn = cls._connect()
+        conn.execute(
+            "UPDATE invites SET consumed_by = ?, consumed_at = ? WHERE code = ?",
+            (consumed_by, consumed_at, code),
+        )
+        conn.commit()
+
+    @classmethod
+    def list_invites(cls, *, include_consumed: bool = False) -> list[dict]:
+        """Return all invites (newest first). When include_consumed=False, only
+        rows with consumed_at IS NULL are returned."""
+        conn = cls._connect()
+        if include_consumed:
+            sql = (
+                "SELECT code, created_by, created_at, expires_at, consumed_by, consumed_at "
+                "FROM invites ORDER BY created_at DESC"
+            )
+            rows = conn.execute(sql).fetchall()
+        else:
+            sql = (
+                "SELECT code, created_by, created_at, expires_at, consumed_by, consumed_at "
+                "FROM invites WHERE consumed_at IS NULL ORDER BY created_at DESC"
+            )
+            rows = conn.execute(sql).fetchall()
+        return [
+            {
+                "code": r[0], "created_by": r[1],
+                "created_at": r[2], "expires_at": r[3],
+                "consumed_by": r[4], "consumed_at": r[5],
+            }
+            for r in rows
+        ]
+
+    @classmethod
+    def delete_invite(cls, code: str) -> None:
+        conn = cls._connect()
+        conn.execute("DELETE FROM invites WHERE code = ?", (code,))
+        conn.commit()
