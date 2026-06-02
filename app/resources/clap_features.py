@@ -38,10 +38,13 @@ def unit_norm(v):
 
 
 def get_clap_embedding_long(clap_model, y: np.ndarray, sr: int,
-                             chunk_sec: int = 30, device=DEVICE) -> np.ndarray | None:
-    """Split long audio into chunks, embed each, average — returns a single 512-d vector.
+                             chunk_sec: int = 10, device=DEVICE
+                             ) -> tuple[np.ndarray | None, list[np.ndarray] | None]:
+    """Split long audio into chunks, embed each, return (mean, per-chunk list).
 
-    Returns None when the audio is shorter than 5 seconds (no usable chunk).
+    Both outputs come from the same forward pass. The mean is NOT unit-norm yet
+    (caller decides); per-chunk vectors are returned as-is from the model.
+    Returns ``(None, None)`` when the audio is shorter than 5 seconds.
     """
     chunk_len = sr * chunk_sec
 
@@ -56,33 +59,46 @@ def get_clap_embedding_long(clap_model, y: np.ndarray, sr: int,
 
     if not chunks:
         logger.debug("[CLAP] audio too short — skipping")
-        return None
+        return None, None
 
     batch = torch.from_numpy(np.stack(chunks)).to(device)
     with torch.no_grad():
         embeddings = clap_model.get_audio_embedding_from_data(x=batch, use_tensor=True)
 
-    return embeddings.mean(dim=0).cpu().numpy()
+    emb_np = embeddings.cpu().numpy()                  # (N_chunks, 512)
+    mean_vec = emb_np.mean(axis=0)                     # (512,)
+    chunk_list = [emb_np[i] for i in range(emb_np.shape[0])]
+    return mean_vec, chunk_list
 
 
-def extract_clap_features(path: str, model, duration: int = 300, device=DEVICE) -> np.ndarray | None:
-    """Load audio file via librosa and produce a unit-normalised CLAP embedding."""
+def extract_clap_features(path: str, model, duration: int = 300, device=DEVICE
+                          ) -> tuple[np.ndarray | None, list[np.ndarray] | None]:
+    """Load audio file via librosa and return (unit-norm mean vector, unit-norm per-chunk list).
+
+    Per-chunk vectors are L2-normalised individually so callers can dot-product
+    them directly for cosine similarity without further preprocessing.
+    """
     if librosa is None:
         raise RuntimeError("librosa not installed — required for CLAP feature extraction")
     y, sr = librosa.load(path, duration=duration, sr=48000, mono=True)
-    clap_vec = get_clap_embedding_long(model, y, sr, chunk_sec=30, device=device)
+    mean_vec, chunk_list = get_clap_embedding_long(model, y, sr, chunk_sec=10, device=device)
     del y
-    if clap_vec is None:
-        return None
-    return unit_norm(clap_vec)
+    if mean_vec is None:
+        return None, None
+    return unit_norm(mean_vec), [unit_norm(c) for c in (chunk_list or [])]
 
 
 def _encode_clap(
     tracks: list[dict],
     model_clap=None,
     progress_callback=None,
-) -> dict[tuple, np.ndarray]:
-    """Encode each track's audio with CLAP and return {(artist_lower, title_lower): vec}.
+) -> tuple[dict[tuple, np.ndarray], dict[tuple, list[np.ndarray]]]:
+    """Encode each track's audio with CLAP.
+
+    Returns ``(means_map, chunks_map)``, both keyed by ``(artist_lower, title_lower)``.
+    ``means_map[key]`` is the unit-norm pooled vector used for the named CLAP vector
+    in Qdrant (search path). ``chunks_map[key]`` is the list of unit-norm per-chunk
+    vectors used to populate the ``clap_chunks`` payload field (analysis path).
 
     Args:
         tracks: list of track dicts that include ``file_path``, ``artist``, ``title``.
@@ -100,19 +116,22 @@ def _encode_clap(
 
     if not path_to_key:
         logger.warning("[CLAP] No tracks with valid file_path + artist + title — skipping")
-        return {}
+        return {}, {}
 
     if not model_clap:
         from app.resources.model_registry import ModelRegistry
         model_clap = ModelRegistry.load_clap()
 
     clap_map: dict[tuple, np.ndarray] = {}
+    chunks_map: dict[tuple, list[np.ndarray]] = {}
     total = len(path_to_key)
     for idx, (fp, key) in enumerate(path_to_key.items(), 1):
         try:
-            vec = extract_clap_features(fp, model_clap, 300)
-            if vec is not None:
-                clap_map[key] = vec
+            mean_vec, chunk_list = extract_clap_features(fp, model_clap, 300)
+            if mean_vec is not None:
+                clap_map[key] = mean_vec
+                if chunk_list:
+                    chunks_map[key] = chunk_list
         except Exception as e:
             logger.warning("[CLAP] Failed to encode %s (%s — %s): %s", fp, *key, e)
 
@@ -128,5 +147,8 @@ def _encode_clap(
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    logger.info("[CLAP] Mapped %d / %d tracks", len(clap_map), total)
-    return clap_map
+    logger.info(
+        "[CLAP] Mapped %d / %d tracks (per-chunk lists captured for %d)",
+        len(clap_map), total, len(chunks_map),
+    )
+    return clap_map, chunks_map
