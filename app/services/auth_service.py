@@ -229,10 +229,10 @@ class AuthService:
                 token, self.jwt_secret, algorithms=["HS256"],
                 options={"verify_exp": False},
             )
-        except jwt.InvalidSignatureError as e:
-            raise InvalidTokenError(f"bad signature: {e}") from e
-        except jwt.DecodeError as e:
-            raise InvalidTokenError(f"malformed token: {e}") from e
+        except jwt.PyJWTError as e:
+            # Catches InvalidSignature, Decode, InvalidAlgorithm,
+            # ImmatureSignature, etc. — every failure becomes a 401.
+            raise InvalidTokenError(f"invalid token: {e}") from e
         exp = claims.get("exp")
         if exp is None or _now() >= float(exp):
             raise TokenExpiredError("token expired")
@@ -259,5 +259,8 @@ class AuthService:
         self.db.update_last_login(row["id"], now)
         # Re-read after update so the returned User carries the fresh last_login_at.
         fresh = self.db.get_user_by_id(row["id"])
+        if fresh is None:
+            # User row vanished between password check and re-read (admin race).
+            raise InvalidCredentialsError("invalid credentials")
         user = _row_to_user(fresh)
         return user, self._issue_token(user)

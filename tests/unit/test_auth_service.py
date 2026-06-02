@@ -6,6 +6,7 @@ from app.resources.metadata_db import MetadataDB
 from app.services.auth_service import (
     AuthService, InvalidInviteError, EmailAlreadyTakenError,
     WeakPasswordError, OwnerAlreadyExistsError,
+    InvalidCredentialsError, TokenExpiredError, InvalidTokenError,
 )
 
 
@@ -125,11 +126,6 @@ def test_create_owner_rejects_second_owner(auth):
         auth.create_owner(email="usurper@example.com", password="usurperpass12")
 
 
-from app.services.auth_service import (
-    InvalidCredentialsError, TokenExpiredError, InvalidTokenError,
-)
-
-
 def test_login_success_returns_user_and_token(auth):
     auth.create_owner(email="lx@example.com", password="strongpass12")
     user, token = auth.login(email="lx@example.com", password="strongpass12")
@@ -168,7 +164,8 @@ def test_verify_token_round_trip(auth):
 def test_verify_token_expired_raises(auth, monkeypatch):
     auth.create_owner(email="exp@example.com", password="strongpass12")
     _, token = auth.login(email="exp@example.com", password="strongpass12")
-    # Move clock forward 31 days; jwt.decode raises ExpiredSignatureError.
+    # Move clock forward 31 days; our manual `_now() >= exp` check fires
+    # (we disable PyJWT's built-in verify_exp to honor monkeypatched _now).
     import app.services.auth_service as mod
     monkeypatch.setattr(mod, "_now", lambda: time.time() + 31 * 86400)
     with pytest.raises(TokenExpiredError):
@@ -194,3 +191,15 @@ def test_verify_token_unknown_user_raises(auth):
     MetadataDB.get().commit()
     with pytest.raises(InvalidTokenError):
         auth.verify_token(token)
+
+
+def test_verify_token_wrong_algorithm_raises(auth):
+    """Token forged with a different algorithm must yield 401, not 500.
+    Defends against the alg-confusion attack class."""
+    import jwt as pyjwt
+    payload = {"sub": "x", "email": "x@y.z", "role": "owner",
+               "iat": int(time.time()), "exp": int(time.time()) + 60}
+    # Sign with HS512 — our verify pins HS256 only.
+    forged = pyjwt.encode(payload, "anything", algorithm="HS512")
+    with pytest.raises(InvalidTokenError):
+        auth.verify_token(forged)
