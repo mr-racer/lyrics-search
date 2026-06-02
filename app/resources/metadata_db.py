@@ -179,10 +179,10 @@ _SCHEMA_SQL: Tuple[str, ...] = (
     "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)",
     """CREATE TABLE IF NOT EXISTS invites (
         code         TEXT PRIMARY KEY,
-        created_by   TEXT NOT NULL REFERENCES users(id),
+        created_by   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         created_at   REAL NOT NULL,
         expires_at   REAL NOT NULL,
-        consumed_by  TEXT REFERENCES users(id),
+        consumed_by  TEXT REFERENCES users(id) ON DELETE SET NULL,
         consumed_at  REAL
     )""",
     "CREATE INDEX IF NOT EXISTS idx_invites_unused ON invites (consumed_at) WHERE consumed_at IS NULL",
