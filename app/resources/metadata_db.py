@@ -1846,3 +1846,28 @@ class MetadataDB:
         conn = cls._connect()
         conn.execute("DELETE FROM invites WHERE code = ?", (code,))
         conn.commit()
+
+    # ─── Phase A: Instance Config ──────────────────────────────────────────
+    @classmethod
+    def get_instance_config(cls) -> dict | None:
+        """Return {"mode": ..., "created_at": ...} or None if instance never
+        initialized."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT mode, created_at FROM instance_config WHERE id = 1"
+        ).fetchone()
+        if row is None:
+            return None
+        return {"mode": row[0], "created_at": row[1]}
+
+    @classmethod
+    def set_instance_config(cls, *, mode: str, created_at: float) -> None:
+        """Write the single instance_config row. Raises sqlite3.IntegrityError
+        if a row already exists (per spec §4.2 — mode is locked at first write).
+        Use scripts/change_instance_mode.py to migrate (not in Phase A scope)."""
+        conn = cls._connect()
+        conn.execute(
+            "INSERT INTO instance_config (id, mode, created_at) VALUES (1, ?, ?)",
+            (mode, created_at),
+        )
+        conn.commit()

@@ -45,3 +45,35 @@ def test_instance_config_mode_check_constraint():
         pass
     conn.execute("DELETE FROM instance_config")
     conn.commit()
+
+
+def test_get_instance_config_returns_none_when_empty():
+    MetadataDB.init()
+    conn = MetadataDB.get()
+    conn.execute("DELETE FROM instance_config")
+    conn.commit()
+    assert MetadataDB.get_instance_config() is None
+
+
+def test_set_and_get_instance_config():
+    MetadataDB.init()
+    conn = MetadataDB.get()
+    conn.execute("DELETE FROM instance_config")
+    conn.commit()
+    MetadataDB.set_instance_config(mode="sharing", created_at=1700000000.0)
+    row = MetadataDB.get_instance_config()
+    assert row == {"mode": "sharing", "created_at": 1700000000.0}
+
+
+def test_set_instance_config_rejects_second_write():
+    """Per spec §4.2: mode is locked at first write. Second set_ raises."""
+    MetadataDB.init()
+    conn = MetadataDB.get()
+    conn.execute("DELETE FROM instance_config")
+    conn.commit()
+    MetadataDB.set_instance_config(mode="sharing", created_at=1700000000.0)
+    try:
+        MetadataDB.set_instance_config(mode="server", created_at=1700000100.0)
+        raise AssertionError("expected IntegrityError on second instance_config write")
+    except sqlite3.IntegrityError:
+        pass
