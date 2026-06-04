@@ -12,6 +12,7 @@ DbClient:
 """
 
 import gc
+import threading
 from pathlib import Path
 import torch
 from typing import Any, Optional
@@ -50,37 +51,66 @@ class ModelRegistry:
     - CLAP model (audio embeddings) — loaded once at startup
     """
 
+    # Phase B: get_text_model is the canonical accessor — returns the
+    # (model, vector_name, vector_dim) triple and lazy-loads on first call.
+    # Concurrent first-loads of the same name serialise on a per-name lock so
+    # only one SentenceTransformer(...) instantiation happens (no GPU-mem waste).
     _text_models: dict[str, tuple[Any, str, int]] = {}
+    _load_locks: dict[str, threading.Lock] = {}
+    _load_locks_master: threading.Lock = threading.Lock()
     _clap_model: Optional[Any] = None
 
     # ── Text models ──
 
     @classmethod
-    def load_text_model(cls, model_name: str) -> tuple[Any, str, int]:
-        """Load a text embedding model (cached)."""
-        if model_name in cls._text_models:
-            return cls._text_models[model_name]
-
-        model = SentenceTransformer(model_name, device=DEVICE)
-        dim = model.get_sentence_embedding_dimension()
-        vector_name = f"text_{model_name.replace('/', '_')}"
-
-        cls._text_models[model_name] = (model, vector_name, dim)
-        return cls._text_models[model_name]
+    def _lock_for(cls, model_name: str) -> threading.Lock:
+        """Return the per-model load lock, creating it under the master lock."""
+        lock = cls._load_locks.get(model_name)
+        if lock is not None:
+            return lock
+        with cls._load_locks_master:
+            # Double-check after acquiring the master lock.
+            lock = cls._load_locks.get(model_name)
+            if lock is None:
+                lock = threading.Lock()
+                cls._load_locks[model_name] = lock
+            return lock
 
     @classmethod
-    def get_text_model(cls, model_name: str) -> Any:
-        """Get a loaded text model by name"""
-        if model_name not in cls._text_models:
-            raise RuntimeError(f"Text model '{model_name}' not loaded. Call load_text_model first.")
-        return cls._text_models[model_name][0]
+    def get_text_model(cls, model_name: str) -> tuple[Any, str, int]:
+        """Return ``(model, vector_name, vector_dim)`` for ``model_name``.
+
+        Lazy-loads on first call. Subsequent calls return the cached triple.
+        Thread-safe: concurrent first-loads of the same name serialise on a
+        per-name lock so only one ``SentenceTransformer(...)`` is instantiated.
+        """
+        cached = cls._text_models.get(model_name)
+        if cached is not None:
+            return cached
+
+        with cls._lock_for(model_name):
+            cached = cls._text_models.get(model_name)
+            if cached is not None:
+                return cached
+            model = SentenceTransformer(model_name, device=DEVICE)
+            dim = model.get_sentence_embedding_dimension()
+            vector_name = f"text_{model_name.replace('/', '_')}"
+            triple = (model, vector_name, dim)
+            cls._text_models[model_name] = triple
+            return triple
+
+    @classmethod
+    def load_text_model(cls, model_name: str) -> tuple[Any, str, int]:
+        """Back-compat alias for ``get_text_model``. Existing callers
+        (lyrics_search_engine, library_service, search/chat routes) keep
+        working and now get the per-model load lock for free."""
+        return cls.get_text_model(model_name)
 
     @classmethod
     def get_text_model_config(cls, model_name: str) -> tuple[str, int]:
-        """Get vector_name and dim for a loaded text model."""
-        if model_name not in cls._text_models:
-            raise RuntimeError(f"Text model '{model_name}' not loaded.")
-        return cls._text_models[model_name][1], cls._text_models[model_name][2]
+        """Get vector_name and dim for a text model (loads if needed)."""
+        _, vector_name, dim = cls.get_text_model(model_name)
+        return vector_name, dim
 
     @classmethod
     def list_text_models(cls) -> dict[str, dict]:
