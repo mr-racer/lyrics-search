@@ -7134,7 +7134,121 @@ function CollectionAIToggle({ collectionName, isActive, aiStatus, lang, isDark }
 }
 
 // ─── Settings overlay (slides in from right) ─────────────────────────────────
-function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeCollection, aiStatus, onTheme, onLang, collections, onCollectionSwitch, onCollectionDelete }) {
+// ─── Phase A: Account + Invites panels (rendered inside SettingsPanel) ───
+function AccountSettings({ onLogout, lang }) {
+  const email = localStorage.getItem('musix_user_email') || '';
+  const role  = localStorage.getItem('musix_user_role')  || '';
+  return (
+    <div style={{ padding: '16px 0', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+      <div className="mono" style={{ fontSize: 11, letterSpacing: '0.18em', color: 'rgba(238,238,243,.5)', marginBottom: 8 }}>
+        {lang === 'ru' ? 'АККАУНТ' : 'ACCOUNT'}
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <div style={{ fontSize: 14, color: '#eee' }}>{email}</div>
+          <div style={{ fontSize: 11, color: '#888', marginTop: 2, textTransform: 'uppercase', letterSpacing: '0.1em' }}>{role}</div>
+        </div>
+        <button onClick={onLogout}
+          style={{
+            padding: '6px 14px', borderRadius: 8, fontSize: 13,
+            background: 'rgba(255,80,80,0.12)', color: '#ff9090',
+            border: '1px solid rgba(255,80,80,0.2)',
+          }}>
+          {lang === 'ru' ? 'Выйти' : 'Log out'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function InvitesPanel({ lang, showToast }) {
+  const [invites, setInvites] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [creating, setCreating] = useState(false);
+
+  const reload = useCallback(() => {
+    setLoading(true);
+    apiFetch('/auth/invites')
+      .then(setInvites)
+      .catch(err => showToast(String(err.message || err)))
+      .finally(() => setLoading(false));
+  }, [showToast]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  const onCreate = async () => {
+    setCreating(true);
+    try {
+      const inv = await apiFetch('/auth/invites', { method: 'POST' });
+      navigator.clipboard?.writeText(inv.code).catch(() => {});
+      showToast(`${lang === 'ru' ? 'Код' : 'Code'}: ${inv.code} ${lang === 'ru' ? '(скопирован)' : '(copied)'}`);
+      reload();
+    } catch (err) {
+      showToast(String(err.message || err));
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const onRevoke = async (code) => {
+    try {
+      await apiFetch(`/auth/invites/${encodeURIComponent(code)}`, { method: 'DELETE' });
+      reload();
+    } catch (err) {
+      showToast(String(err.message || err));
+    }
+  };
+
+  return (
+    <div style={{ padding: '16px 0', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <span className="mono" style={{ fontSize: 11, letterSpacing: '0.18em', color: 'rgba(238,238,243,.5)' }}>
+          {lang === 'ru' ? 'ИНВАЙТЫ' : 'INVITES'}
+        </span>
+        <button onClick={onCreate} disabled={creating}
+          style={{
+            padding: '5px 12px', borderRadius: 8, fontSize: 12,
+            background: 'rgba(124,91,255,0.2)', color: '#bba8ff',
+            border: '1px solid rgba(124,91,255,0.3)',
+          }}>
+          {creating ? '…' : (lang === 'ru' ? '＋ Новый' : '＋ New')}
+        </button>
+      </div>
+      {loading && <div style={{ fontSize: 12, color: '#666' }}>{lang === 'ru' ? 'Загрузка…' : 'Loading…'}</div>}
+      {!loading && invites.length === 0 && (
+        <div style={{ fontSize: 12, color: '#666' }}>
+          {lang === 'ru' ? 'Открытых инвайтов нет' : 'No open invites'}
+        </div>
+      )}
+      {invites.map(iv => {
+        const expiresIn = Math.max(0, Math.floor((iv.expires_at * 1000 - Date.now()) / 86400000));
+        return (
+          <div key={iv.code} style={{
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            padding: '8px 0', borderBottom: '1px solid rgba(255,255,255,0.03)',
+          }}>
+            <div>
+              <div className="mono" style={{ fontSize: 13, color: '#eee', letterSpacing: '0.05em' }}>{iv.code}</div>
+              <div style={{ fontSize: 11, color: '#666', marginTop: 2 }}>
+                {lang === 'ru' ? `истекает через ${expiresIn} дн.` : `expires in ${expiresIn} d`}
+              </div>
+            </div>
+            <button onClick={() => onRevoke(iv.code)}
+              style={{
+                fontSize: 11, padding: '4px 10px', borderRadius: 6,
+                background: 'transparent', color: '#888',
+                border: '1px solid rgba(255,255,255,0.06)',
+              }}>
+              {lang === 'ru' ? 'Удалить' : 'Revoke'}
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeCollection, aiStatus, onTheme, onLang, collections, onCollectionSwitch, onCollectionDelete, onLogout, instanceMode, showToast }) {
   const c = useColors(isDark);
   const [models, setModels] = useState({});
   // Guard against legacy localStorage values: Web Storage stringifies `null` to the
@@ -7661,6 +7775,10 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
             }}
             onAiBootstrapLater={() => setShowModal(false)}
           />
+        )}
+        <AccountSettings onLogout={onLogout} lang={lang} />
+        {instanceMode === 'server' && (localStorage.getItem('musix_user_role') === 'owner') && (
+          <InvitesPanel lang={lang} showToast={showToast} />
         )}
       </div>
     </>
@@ -10525,7 +10643,10 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
           onLang={handleLang}
           collections={collections}
           onCollectionSwitch={switchCollection}
-          onCollectionDelete={(name) => setDeleteConfirm(name)} />
+          onCollectionDelete={(name) => setDeleteConfirm(name)}
+          onLogout={onLogout}
+          instanceMode={instanceMode}
+          showToast={showToast} />
       )}
 
       {deleteConfirm && (
