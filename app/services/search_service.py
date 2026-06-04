@@ -22,8 +22,49 @@ class SearchService:
     - hybrid: parallel dense+BM25 + CLAP, merged with 0.5/0.5 score weighting
     """
 
+    # Last-resort fallback when neither the collection nor the user pins a model.
+    # Must be a model that actually loads in this env and is in the TEXT_MODELS
+    # catalog — jina-v3 needs trust_remote_code/custom_st (not installed) and no
+    # existing collection is indexed with it. v2-small-en matches what every
+    # current collection was indexed with (see collection_settings).
+    DEFAULT_TEXT_MODEL = "jinaai/jina-embeddings-v2-small-en"
+
     def __init__(self, lyrics_db: LyricsDB):
         self.lyrics_db = lyrics_db
+
+    def _resolve_model_name(self, account_id: Optional[str], collection_name: Optional[str]) -> str:
+        """Decide which text model to use, WITHOUT mutating any shared engine
+        state. Order:
+
+            collection_settings  →  user.text_model_name  →  hardcoded default
+
+        ``collection_settings`` records the model the collection was actually
+        indexed with — its Qdrant vectors are named after it, so it is the
+        correctness ground-truth and must win over a user's (possibly defaulted)
+        preference. The user setting is the fallback for collections with no
+        recorded model; the hardcoded default is the last resort. ``account_id``
+        may be None (unauthenticated / pre-Phase-D paths) — that just skips the
+        user branch.
+
+        Callers that pass an explicit ``text_model`` override bypass this
+        entirely (handled in ``_search_text``)."""
+        if collection_name:
+            try:
+                MetadataDB.init()
+                pinned = MetadataDB.get_collection_text_model(collection_name)
+                if pinned:
+                    return pinned
+            except Exception:
+                logger.debug("[SearchService] collection settings lookup failed; continuing", exc_info=True)
+        if account_id:
+            try:
+                MetadataDB.init()
+                s = MetadataDB.get_user_settings(account_id)
+                if s and s.get("text_model_name"):
+                    return s["text_model_name"]
+            except Exception:
+                logger.debug("[SearchService] user settings lookup failed; continuing", exc_info=True)
+        return self.DEFAULT_TEXT_MODEL
 
     async def search(
         self,
@@ -33,14 +74,18 @@ class SearchService:
         filters: Optional[SearchFilters] = None,
         limit: int = 10,
         collection_name: Optional[str] = None,
+        account_id: Optional[str] = None,
     ) -> List[TrackHit]:
-        """Unified search dispatching to mode-specific handlers."""
+        """Unified search dispatching to mode-specific handlers.
+
+        ``text_model``: explicit override (highest precedence). When None we
+        resolve via ``_resolve_model_name(account_id, collection_name)``."""
         if mode == "audio":
             return await self._search_audio(query, filters, limit, collection_name)
         elif mode == "hybrid":
-            return await self._search_hybrid(query, filters, limit, collection_name)
+            return await self._search_hybrid(query, filters, limit, collection_name, account_id, text_model)
         else:  # text
-            return await self._search_text(query, filters, limit, collection_name)
+            return await self._search_text(query, filters, limit, collection_name, account_id, text_model)
 
     # ── Text search (dense + BM25) ──
 
@@ -50,16 +95,18 @@ class SearchService:
         filters: Optional[SearchFilters],
         limit: int,
         collection_name: Optional[str] = None,
+        account_id: Optional[str] = None,
+        text_model: Optional[str] = None,
     ) -> List[TrackHit]:
         """Text-based search using dense + BM25 fusion."""
         col = collection_name or self.lyrics_db.collection_name
-        await self._ensure_model_for_collection(col)
+        effective_model = text_model or self._resolve_model_name(account_id, col)
 
         filter_kwargs = self._extract_filter_kwargs(filters)
         active = {k: v for k, v in filter_kwargs.items() if v is not None}
         logger.info(
-            "[SearchService] _search_text: query=%r  collection=%s  filters=%s",
-            query, col, active or "(none)",
+            "[SearchService] _search_text: query=%r  collection=%s  model=%s  filters=%s",
+            query, col, effective_model, active or "(none)",
         )
 
         results = self.lyrics_db.search(
@@ -68,60 +115,12 @@ class SearchService:
             min_dense_score=0.3,
             include_clap=False,
             collection_name_override=collection_name,
+            model_name=effective_model,
             **filter_kwargs,
         )
 
         logger.info("[SearchService] _search_text: Qdrant returned %d points", len(results))
         return self._points_to_hits(results[:limit], matched_on="lyrics", collection_name=collection_name)
-
-    async def _ensure_model_for_collection(self, collection_name: str) -> None:
-        """Ensure LyricsDB uses the correct text model for the given collection.
-
-        Reads the collection's vector config from Qdrant to find which text
-        embedding model was used during indexing, then switches LyricsDB
-        to match it.
-        """
-        try:
-            info = self.lyrics_db.qdrant_client.get_collection(collection_name)
-            vec_names = list(info.config.params.vectors.keys())
-        except Exception:
-            return
-
-        # Find text vector name (not 'bm25', not 'clap')
-        text_vec = None
-        for vn in vec_names:
-            if vn in ('bm25', 'clap'):
-                continue
-            if vn.startswith('text_'):
-                text_vec = vn
-                break
-        if text_vec is None:
-            # Fallback: pick first non-special vector
-            for vn in vec_names:
-                if vn not in ('bm25', 'clap'):
-                    text_vec = vn
-                    break
-
-        if text_vec is None or text_vec == self.lyrics_db._vector_name:
-            return
-
-        # Derive model name from vector name (text_{org}_{model} -> org/model)
-        vec_without_prefix = text_vec[len('text_'):]
-        parts = vec_without_prefix.split('_', 1)
-        if len(parts) == 2:
-            model_name = f"{parts[0]}/{parts[1]}"
-        else:
-            model_name = vec_without_prefix
-
-        # Try to load from ModelRegistry
-        if model_name in ModelRegistry._text_models:
-            logger.info("[SearchService] Auto-switching model for collection '%s': %s",
-                        collection_name, model_name)
-            model, vector_name, vector_dim = ModelRegistry.load_text_model(model_name)
-            self.lyrics_db.model_name = model_name
-            self.lyrics_db._model = model
-            self.lyrics_db._vector_name = vector_name
-            self.lyrics_db._vector_dim = vector_dim
 
     # ── Audio search (CLAP only) ──
 
@@ -205,13 +204,15 @@ class SearchService:
         filters: Optional[SearchFilters],
         limit: int,
         collection_name: Optional[str] = None,
+        account_id: Optional[str] = None,
+        text_model: Optional[str] = None,
     ) -> List[TrackHit]:
         """Hybrid search: parallel text (dense+BM25) + CLAP, merge with 0.5/0.5 weighting.
-        
+
         If audio search fails, gracefully degrades to text-only results.
         """
         text_task = asyncio.create_task(
-            self._search_text(query, filters, limit * 2, collection_name)
+            self._search_text(query, filters, limit * 2, collection_name, account_id, text_model)
         )
         audio_task = asyncio.create_task(
             self._search_audio(query, filters, limit * 2, collection_name)

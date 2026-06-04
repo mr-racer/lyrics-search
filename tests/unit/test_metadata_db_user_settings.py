@@ -33,7 +33,7 @@ def _seed_user(user_id: str) -> None:
 def test_new_user_has_default_settings():
     _seed_user("acct-1")
     s = MetadataDB.get_user_settings("acct-1")
-    assert s["text_model_name"] == "jinaai/jina-embeddings-v3"
+    assert s["text_model_name"] == "jinaai/jina-embeddings-v2-small-en"
     assert s["clap_enabled"] is True
 
 
@@ -51,14 +51,14 @@ def test_update_user_settings_persists_clap_enabled():
     s = MetadataDB.get_user_settings("acct-1")
     assert s["clap_enabled"] is False
     # text_model_name untouched by a clap-only update
-    assert s["text_model_name"] == "jinaai/jina-embeddings-v3"
+    assert s["text_model_name"] == "jinaai/jina-embeddings-v2-small-en"
 
 
 def test_update_user_settings_noop_when_all_none():
     _seed_user("acct-1")
     MetadataDB.update_user_settings("acct-1")  # no fields → no-op, no error
     s = MetadataDB.get_user_settings("acct-1")
-    assert s["text_model_name"] == "jinaai/jina-embeddings-v3"
+    assert s["text_model_name"] == "jinaai/jina-embeddings-v2-small-en"
     assert s["clap_enabled"] is True
 
 

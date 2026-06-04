@@ -304,7 +304,9 @@ class MetadataDB:
         # it coexists with the auth columns regardless of migration order.
         if "users" in existing_tables:
             cls._ensure_columns(conn, "users", {
-                "text_model_name": "TEXT NOT NULL DEFAULT 'jinaai/jina-embeddings-v3'",
+                # v2-small-en matches what collections are actually indexed with
+                # and is loadable without trust_remote_code (jina-v3 needs custom_st).
+                "text_model_name": "TEXT NOT NULL DEFAULT 'jinaai/jina-embeddings-v2-small-en'",
                 "clap_enabled":    "INTEGER NOT NULL DEFAULT 1",
             })
 
