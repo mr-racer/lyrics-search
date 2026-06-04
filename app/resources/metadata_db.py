@@ -22,8 +22,11 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["MetadataDB"]
 
+import os as _os
 DB_DIR = Path(__file__).resolve().parent.parent.parent / "cache"
-DB_PATH = DB_DIR / "metadata.db"
+# MUSIX_METADATA_DB env override lets tests + CLI scripts point at a tmp DB
+# without monkey-patching. Falls back to the default cache location.
+DB_PATH = Path(_os.environ.get("MUSIX_METADATA_DB", str(DB_DIR / "metadata.db")))
 
 _SCHEMA_SQL: Tuple[str, ...] = (
     """CREATE TABLE IF NOT EXISTS artists (
