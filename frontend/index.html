@@ -10008,6 +10008,165 @@ function ArtistAtlasSection({
   );
 }
 
+// ─── Phase A: Login + Register screens ────────────────────────────────────
+function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
+  const [tab, setTab]           = useState('login'); // 'login' | 'register'
+  const [email, setEmail]       = useState('');
+  const [password, setPassword] = useState('');
+  const [invite, setInvite]     = useState(() => {
+    // Pre-fill from URL hash like #/register?invite=ABCDEFGH1234
+    const m = window.location.hash.match(/invite=([\w-]{12})/);
+    return m ? m[1] : '';
+  });
+  const [error, setError]   = useState('');
+  const [busy, setBusy]     = useState(false);
+
+  useEffect(() => {
+    if (window.location.hash.startsWith('#/register') && instanceMode === 'server') {
+      setTab('register');
+    }
+  }, [instanceMode]);
+
+  const canRegister = instanceMode === 'server';
+
+  const onSubmit = async (e) => {
+    e.preventDefault();
+    setError(''); setBusy(true);
+    try {
+      const path = tab === 'login' ? '/auth/login' : '/auth/register';
+      const body = tab === 'login'
+        ? { email: email.trim(), password }
+        : { email: email.trim(), password, invite_code: invite.trim() };
+      const res = await fetch(API + path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      setStoredAuth(data);
+      onAuthSuccess(data);
+    } catch (err) {
+      setError(String(err.message || err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{
+      minHeight: '100vh', display: 'grid', placeItems: 'center',
+      background: 'radial-gradient(ellipse at top, #1a1a24 0%, #0a0a10 100%)',
+      color: '#eee',
+    }}>
+      <form onSubmit={onSubmit} style={{
+        width: 360, padding: 32, borderRadius: 16,
+        background: 'rgba(255,255,255,0.04)',
+        border: '1px solid rgba(255,255,255,0.08)',
+        boxShadow: '0 16px 48px rgba(0,0,0,0.5)',
+      }}>
+        <h1 style={{ fontSize: 22, fontWeight: 600, marginBottom: 4 }}>MusiX</h1>
+        <div style={{ fontSize: 12, color: '#888', marginBottom: 20 }}>
+          {instanceMode === 'sharing'
+            ? (lang === 'ru' ? 'личный self-host' : 'personal self-host')
+            : (lang === 'ru' ? 'multi-account сервер' : 'multi-account server')}
+        </div>
+
+        {canRegister && (
+          <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+            <button type="button" onClick={() => { setTab('login'); setError(''); }}
+              style={{
+                flex: 1, padding: '8px 12px', borderRadius: 8,
+                background: tab === 'login' ? 'rgba(124,91,255,0.2)' : 'transparent',
+                color: tab === 'login' ? '#bba8ff' : '#888',
+                border: '1px solid rgba(255,255,255,0.06)',
+              }}>{lang === 'ru' ? 'Войти' : 'Log in'}</button>
+            <button type="button" onClick={() => { setTab('register'); setError(''); }}
+              style={{
+                flex: 1, padding: '8px 12px', borderRadius: 8,
+                background: tab === 'register' ? 'rgba(124,91,255,0.2)' : 'transparent',
+                color: tab === 'register' ? '#bba8ff' : '#888',
+                border: '1px solid rgba(255,255,255,0.06)',
+              }}>{lang === 'ru' ? 'Регистрация' : 'I have an invite'}</button>
+          </div>
+        )}
+
+        <input
+          type="email" required autoFocus
+          placeholder={lang === 'ru' ? 'email' : 'email'}
+          value={email}
+          onChange={e => setEmail(e.target.value)}
+          style={{
+            width: '100%', padding: '10px 12px', marginBottom: 10,
+            borderRadius: 8, background: 'rgba(0,0,0,0.3)',
+            border: '1px solid rgba(255,255,255,0.08)', color: '#eee',
+          }}
+        />
+        <input
+          type="password" required
+          placeholder={lang === 'ru' ? 'пароль' : 'password'}
+          value={password}
+          onChange={e => setPassword(e.target.value)}
+          style={{
+            width: '100%', padding: '10px 12px', marginBottom: 10,
+            borderRadius: 8, background: 'rgba(0,0,0,0.3)',
+            border: '1px solid rgba(255,255,255,0.08)', color: '#eee',
+          }}
+        />
+        {tab === 'register' && (
+          <input
+            type="text" required
+            placeholder={lang === 'ru' ? 'инвайт-код (12 символов)' : 'invite code (12 chars)'}
+            value={invite}
+            onChange={e => setInvite(e.target.value)}
+            maxLength={12}
+            style={{
+              width: '100%', padding: '10px 12px', marginBottom: 10,
+              borderRadius: 8, background: 'rgba(0,0,0,0.3)',
+              border: '1px solid rgba(255,255,255,0.08)', color: '#eee',
+              fontFamily: 'monospace', letterSpacing: '0.1em',
+            }}
+          />
+        )}
+
+        {error && (
+          <div style={{
+            padding: '8px 12px', marginBottom: 10, borderRadius: 8,
+            background: 'rgba(255,80,80,0.12)', color: '#ff9090',
+            fontSize: 13,
+          }}>{error}</div>
+        )}
+
+        <button type="submit" disabled={busy}
+          style={{
+            width: '100%', padding: '12px', borderRadius: 8,
+            background: busy ? 'rgba(124,91,255,0.4)' : 'rgba(124,91,255,0.7)',
+            color: '#fff', fontWeight: 600, fontSize: 14,
+            border: 'none', cursor: busy ? 'wait' : 'pointer',
+            marginTop: 6,
+          }}>
+          {busy
+            ? (lang === 'ru' ? 'Подождите…' : 'Please wait…')
+            : (tab === 'login'
+                ? (lang === 'ru' ? 'Войти' : 'Log in')
+                : (lang === 'ru' ? 'Создать аккаунт' : 'Create account'))}
+        </button>
+
+        {!canRegister && (
+          <div style={{ fontSize: 11, color: '#666', marginTop: 16, lineHeight: 1.5 }}>
+            {lang === 'ru'
+              ? 'Регистрация недоступна — sharing mode. Запустите scripts/create_owner для первого пользователя.'
+              : 'Registration disabled in sharing mode. Run scripts/create_owner to seed the owner.'}
+          </div>
+        )}
+      </form>
+    </div>
+  );
+}
+
 // ─── App ──────────────────────────────────────────────────────────────────────
 function App() {
   const [isDark, setDark] = useState(() => (localStorage.getItem('musix_theme') || 'dark') === 'dark');
