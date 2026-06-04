@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from app.api.main import app
 from app.resources.metadata_db import MetadataDB
 from app.services import ai_indexing_service
+from ._auth_helper import authenticate_test_client
 
 
 @pytest.fixture(autouse=True)
@@ -43,7 +44,9 @@ def client(tmp_path, monkeypatch):
     db_stub.qdrant = qdrant
     app.state.db_client = db_stub
 
-    yield TestClient(app)
+    c = TestClient(app)
+    authenticate_test_client(c, app)
+    yield c
     MetadataDB._reset_for_tests()
 
 

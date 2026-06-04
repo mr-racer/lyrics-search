@@ -10,7 +10,10 @@ from .ai_indexing import router as ai_indexing_router
 from .artists import router as artists_router
 from .system import router as system_router
 from .playlists import router as playlists_router
+from .instance import router as instance_router
+from .auth import router as auth_router
 
 __all__ = ["search_router", "library_router", "chat_router", "metadata_router",
            "playback_router", "recommend_router", "ai_indexing_router",
-           "artists_router", "system_router", "playlists_router"]
+           "artists_router", "system_router", "playlists_router",
+           "instance_router", "auth_router"]

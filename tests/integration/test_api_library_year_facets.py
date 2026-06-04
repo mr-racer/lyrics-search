@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from app.api.main import create_app
 from app.resources.metadata_db import MetadataDB
+from ._auth_helper import authenticate_test_client
 
 
 def _col(name: str) -> MagicMock:
@@ -33,7 +34,9 @@ def client(tmp_path, monkeypatch):
     MetadataDB._reset_for_tests()
     MetadataDB.init()
     app = create_app()
-    yield app, TestClient(app)
+    tc = TestClient(app)
+    authenticate_test_client(tc, app)
+    yield app, tc
     MetadataDB._reset_for_tests()
 
 

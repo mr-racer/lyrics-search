@@ -1498,11 +1498,51 @@ function slugifyArtistName(name) {
   return (name || '').toLowerCase().trim().split(/\s+/).join('-');
 }
 
+// ─── Phase A: Auth helpers ─────────────────────────────────────────────────
+function getStoredToken() {
+  return localStorage.getItem('musix_token') || '';
+}
+
+function setStoredAuth({ token, user }) {
+  if (token) localStorage.setItem('musix_token', token);
+  if (user) {
+    localStorage.setItem('musix_user_id',    user.id || '');
+    localStorage.setItem('musix_user_email', user.email || '');
+    localStorage.setItem('musix_user_role',  user.role || '');
+  }
+}
+
+function clearStoredAuth() {
+  localStorage.removeItem('musix_token');
+  localStorage.removeItem('musix_user_id');
+  localStorage.removeItem('musix_user_email');
+  localStorage.removeItem('musix_user_role');
+}
+
+// Soft-redirect on 401 — clear storage and force a full reload so the App
+// re-renders into the LoginScreen branch. window.location.reload is the
+// simplest "remount everything" lever and sidesteps stale React state.
+function _onAuthFailure() {
+  clearStoredAuth();
+  // Avoid reload-loops if we're already on the login screen.
+  if (window.location.hash !== '#login') {
+    window.location.hash = '#login';
+    window.location.reload();
+  }
+}
+
 async function apiFetch(path, opts = {}) {
-  const res = await fetch(API + path, {
-    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
-    ...opts,
-  });
+  const token = getStoredToken();
+  const headers = {
+    "Content-Type": "application/json",
+    ...(opts.headers || {}),
+  };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(API + path, { ...opts, headers });
+  if (res.status === 401) {
+    _onAuthFailure();
+    throw new Error("HTTP 401: not authenticated");
+  }
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`);
@@ -7094,7 +7134,121 @@ function CollectionAIToggle({ collectionName, isActive, aiStatus, lang, isDark }
 }
 
 // ─── Settings overlay (slides in from right) ─────────────────────────────────
-function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeCollection, aiStatus, onTheme, onLang, collections, onCollectionSwitch, onCollectionDelete }) {
+// ─── Phase A: Account + Invites panels (rendered inside SettingsPanel) ───
+function AccountSettings({ onLogout, lang }) {
+  const email = localStorage.getItem('musix_user_email') || '';
+  const role  = localStorage.getItem('musix_user_role')  || '';
+  return (
+    <div style={{ padding: '16px 0', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+      <div className="mono" style={{ fontSize: 11, letterSpacing: '0.18em', color: 'rgba(238,238,243,.5)', marginBottom: 8 }}>
+        {lang === 'ru' ? 'АККАУНТ' : 'ACCOUNT'}
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <div style={{ fontSize: 14, color: '#eee' }}>{email}</div>
+          <div style={{ fontSize: 11, color: '#888', marginTop: 2, textTransform: 'uppercase', letterSpacing: '0.1em' }}>{role}</div>
+        </div>
+        <button onClick={onLogout}
+          style={{
+            padding: '6px 14px', borderRadius: 8, fontSize: 13,
+            background: 'rgba(255,80,80,0.12)', color: '#ff9090',
+            border: '1px solid rgba(255,80,80,0.2)',
+          }}>
+          {lang === 'ru' ? 'Выйти' : 'Log out'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function InvitesPanel({ lang, showToast }) {
+  const [invites, setInvites] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [creating, setCreating] = useState(false);
+
+  const reload = useCallback(() => {
+    setLoading(true);
+    apiFetch('/auth/invites')
+      .then(setInvites)
+      .catch(err => showToast(String(err.message || err)))
+      .finally(() => setLoading(false));
+  }, [showToast]);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  const onCreate = async () => {
+    setCreating(true);
+    try {
+      const inv = await apiFetch('/auth/invites', { method: 'POST' });
+      navigator.clipboard?.writeText(inv.code).catch(() => {});
+      showToast(`${lang === 'ru' ? 'Код' : 'Code'}: ${inv.code} ${lang === 'ru' ? '(скопирован)' : '(copied)'}`);
+      reload();
+    } catch (err) {
+      showToast(String(err.message || err));
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const onRevoke = async (code) => {
+    try {
+      await apiFetch(`/auth/invites/${encodeURIComponent(code)}`, { method: 'DELETE' });
+      reload();
+    } catch (err) {
+      showToast(String(err.message || err));
+    }
+  };
+
+  return (
+    <div style={{ padding: '16px 0', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <span className="mono" style={{ fontSize: 11, letterSpacing: '0.18em', color: 'rgba(238,238,243,.5)' }}>
+          {lang === 'ru' ? 'ИНВАЙТЫ' : 'INVITES'}
+        </span>
+        <button onClick={onCreate} disabled={creating}
+          style={{
+            padding: '5px 12px', borderRadius: 8, fontSize: 12,
+            background: 'rgba(124,91,255,0.2)', color: '#bba8ff',
+            border: '1px solid rgba(124,91,255,0.3)',
+          }}>
+          {creating ? '…' : (lang === 'ru' ? '＋ Новый' : '＋ New')}
+        </button>
+      </div>
+      {loading && <div style={{ fontSize: 12, color: '#666' }}>{lang === 'ru' ? 'Загрузка…' : 'Loading…'}</div>}
+      {!loading && invites.length === 0 && (
+        <div style={{ fontSize: 12, color: '#666' }}>
+          {lang === 'ru' ? 'Открытых инвайтов нет' : 'No open invites'}
+        </div>
+      )}
+      {invites.map(iv => {
+        const expiresIn = Math.max(0, Math.floor((iv.expires_at * 1000 - Date.now()) / 86400000));
+        return (
+          <div key={iv.code} style={{
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            padding: '8px 0', borderBottom: '1px solid rgba(255,255,255,0.03)',
+          }}>
+            <div>
+              <div className="mono" style={{ fontSize: 13, color: '#eee', letterSpacing: '0.05em' }}>{iv.code}</div>
+              <div style={{ fontSize: 11, color: '#666', marginTop: 2 }}>
+                {lang === 'ru' ? `истекает через ${expiresIn} дн.` : `expires in ${expiresIn} d`}
+              </div>
+            </div>
+            <button onClick={() => onRevoke(iv.code)}
+              style={{
+                fontSize: 11, padding: '4px 10px', borderRadius: 6,
+                background: 'transparent', color: '#888',
+                border: '1px solid rgba(255,255,255,0.06)',
+              }}>
+              {lang === 'ru' ? 'Удалить' : 'Revoke'}
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeCollection, aiStatus, onTheme, onLang, collections, onCollectionSwitch, onCollectionDelete, onLogout, instanceMode, showToast }) {
   const c = useColors(isDark);
   const [models, setModels] = useState({});
   // Guard against legacy localStorage values: Web Storage stringifies `null` to the
@@ -7621,6 +7775,10 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
             }}
             onAiBootstrapLater={() => setShowModal(false)}
           />
+        )}
+        <AccountSettings onLogout={onLogout} lang={lang} />
+        {instanceMode === 'server' && (localStorage.getItem('musix_user_role') === 'owner') && (
+          <InvitesPanel lang={lang} showToast={showToast} />
         )}
       </div>
     </>
@@ -9968,8 +10126,167 @@ function ArtistAtlasSection({
   );
 }
 
+// ─── Phase A: Login + Register screens ────────────────────────────────────
+function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
+  const [tab, setTab]           = useState('login'); // 'login' | 'register'
+  const [email, setEmail]       = useState('');
+  const [password, setPassword] = useState('');
+  const [invite, setInvite]     = useState(() => {
+    // Pre-fill from URL hash like #/register?invite=ABCDEFGH1234
+    const m = window.location.hash.match(/invite=([\w-]{12})/);
+    return m ? m[1] : '';
+  });
+  const [error, setError]   = useState('');
+  const [busy, setBusy]     = useState(false);
+
+  useEffect(() => {
+    if (window.location.hash.startsWith('#/register') && instanceMode === 'server') {
+      setTab('register');
+    }
+  }, [instanceMode]);
+
+  const canRegister = instanceMode === 'server';
+
+  const onSubmit = async (e) => {
+    e.preventDefault();
+    setError(''); setBusy(true);
+    try {
+      const path = tab === 'login' ? '/auth/login' : '/auth/register';
+      const body = tab === 'login'
+        ? { email: email.trim(), password }
+        : { email: email.trim(), password, invite_code: invite.trim() };
+      const res = await fetch(API + path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const detail = await res.json().catch(() => ({}));
+        throw new Error(detail.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      setStoredAuth(data);
+      onAuthSuccess(data);
+    } catch (err) {
+      setError(String(err.message || err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{
+      minHeight: '100vh', display: 'grid', placeItems: 'center',
+      background: 'radial-gradient(ellipse at top, #1a1a24 0%, #0a0a10 100%)',
+      color: '#eee',
+    }}>
+      <form onSubmit={onSubmit} style={{
+        width: 360, padding: 32, borderRadius: 16,
+        background: 'rgba(255,255,255,0.04)',
+        border: '1px solid rgba(255,255,255,0.08)',
+        boxShadow: '0 16px 48px rgba(0,0,0,0.5)',
+      }}>
+        <h1 style={{ fontSize: 22, fontWeight: 600, marginBottom: 4 }}>MusiX</h1>
+        <div style={{ fontSize: 12, color: '#888', marginBottom: 20 }}>
+          {instanceMode === 'sharing'
+            ? (lang === 'ru' ? 'личный self-host' : 'personal self-host')
+            : (lang === 'ru' ? 'multi-account сервер' : 'multi-account server')}
+        </div>
+
+        {canRegister && (
+          <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+            <button type="button" onClick={() => { setTab('login'); setError(''); }}
+              style={{
+                flex: 1, padding: '8px 12px', borderRadius: 8,
+                background: tab === 'login' ? 'rgba(124,91,255,0.2)' : 'transparent',
+                color: tab === 'login' ? '#bba8ff' : '#888',
+                border: '1px solid rgba(255,255,255,0.06)',
+              }}>{lang === 'ru' ? 'Войти' : 'Log in'}</button>
+            <button type="button" onClick={() => { setTab('register'); setError(''); }}
+              style={{
+                flex: 1, padding: '8px 12px', borderRadius: 8,
+                background: tab === 'register' ? 'rgba(124,91,255,0.2)' : 'transparent',
+                color: tab === 'register' ? '#bba8ff' : '#888',
+                border: '1px solid rgba(255,255,255,0.06)',
+              }}>{lang === 'ru' ? 'Регистрация' : 'I have an invite'}</button>
+          </div>
+        )}
+
+        <input
+          type="email" required autoFocus
+          placeholder={lang === 'ru' ? 'email' : 'email'}
+          value={email}
+          onChange={e => setEmail(e.target.value)}
+          style={{
+            width: '100%', padding: '10px 12px', marginBottom: 10,
+            borderRadius: 8, background: 'rgba(0,0,0,0.3)',
+            border: '1px solid rgba(255,255,255,0.08)', color: '#eee',
+          }}
+        />
+        <input
+          type="password" required
+          placeholder={lang === 'ru' ? 'пароль' : 'password'}
+          value={password}
+          onChange={e => setPassword(e.target.value)}
+          style={{
+            width: '100%', padding: '10px 12px', marginBottom: 10,
+            borderRadius: 8, background: 'rgba(0,0,0,0.3)',
+            border: '1px solid rgba(255,255,255,0.08)', color: '#eee',
+          }}
+        />
+        {tab === 'register' && (
+          <input
+            type="text" required
+            placeholder={lang === 'ru' ? 'инвайт-код (12 символов)' : 'invite code (12 chars)'}
+            value={invite}
+            onChange={e => setInvite(e.target.value)}
+            maxLength={12}
+            style={{
+              width: '100%', padding: '10px 12px', marginBottom: 10,
+              borderRadius: 8, background: 'rgba(0,0,0,0.3)',
+              border: '1px solid rgba(255,255,255,0.08)', color: '#eee',
+              fontFamily: 'monospace', letterSpacing: '0.1em',
+            }}
+          />
+        )}
+
+        {error && (
+          <div style={{
+            padding: '8px 12px', marginBottom: 10, borderRadius: 8,
+            background: 'rgba(255,80,80,0.12)', color: '#ff9090',
+            fontSize: 13,
+          }}>{error}</div>
+        )}
+
+        <button type="submit" disabled={busy}
+          style={{
+            width: '100%', padding: '12px', borderRadius: 8,
+            background: busy ? 'rgba(124,91,255,0.4)' : 'rgba(124,91,255,0.7)',
+            color: '#fff', fontWeight: 600, fontSize: 14,
+            border: 'none', cursor: busy ? 'wait' : 'pointer',
+            marginTop: 6,
+          }}>
+          {busy
+            ? (lang === 'ru' ? 'Подождите…' : 'Please wait…')
+            : (tab === 'login'
+                ? (lang === 'ru' ? 'Войти' : 'Log in')
+                : (lang === 'ru' ? 'Создать аккаунт' : 'Create account'))}
+        </button>
+
+        {!canRegister && (
+          <div style={{ fontSize: 11, color: '#666', marginTop: 16, lineHeight: 1.5 }}>
+            {lang === 'ru'
+              ? 'Регистрация недоступна — sharing mode. Запустите scripts/create_owner для первого пользователя.'
+              : 'Registration disabled in sharing mode. Run scripts/create_owner to seed the owner.'}
+          </div>
+        )}
+      </form>
+    </div>
+  );
+}
+
 // ─── App ──────────────────────────────────────────────────────────────────────
-function App() {
+function App({ instanceMode = 'sharing', onLogout = () => {} }) {
   const [isDark, setDark] = useState(() => (localStorage.getItem('musix_theme') || 'dark') === 'dark');
   const [lang, setLang]   = useState(() => localStorage.getItem('musix_lang') || 'ru');
 
@@ -10326,7 +10643,10 @@ function App() {
           onLang={handleLang}
           collections={collections}
           onCollectionSwitch={switchCollection}
-          onCollectionDelete={(name) => setDeleteConfirm(name)} />
+          onCollectionDelete={(name) => setDeleteConfirm(name)}
+          onLogout={onLogout}
+          instanceMode={instanceMode}
+          showToast={showToast} />
       )}
 
       {deleteConfirm && (
@@ -10388,7 +10708,79 @@ function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+// ─── Phase A: Root — handles auth gating before mounting App ──────────────
+function Root() {
+  const [token, setToken] = useState(() => getStoredToken());
+  const [instanceMode, setInstanceMode] = useState(null);     // 'sharing' | 'server' | null
+  const [instanceLoaded, setInstanceLoaded] = useState(false);
+  const [bootError, setBootError] = useState('');
+
+  // Boot: fetch /instance/config (no auth required) to learn the mode.
+  // BEFORE rendering anything else — this drives both the LoginScreen UX
+  // (show 'I have an invite' tab only in server mode) and the App layout.
+  // Declared via useEffect deps=[]: runs exactly once on mount.
+  useEffect(() => {
+    fetch(API + '/instance/config')
+      .then(r => {
+        if (r.status === 404) {
+          // Instance not initialized yet — instruct the user.
+          setBootError(
+            'Instance not initialized. Run: python -m scripts.create_owner --email <you> --password <pw> --mode sharing|server',
+          );
+          setInstanceLoaded(true);
+          return null;
+        }
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then(data => {
+        if (data && data.mode) setInstanceMode(data.mode);
+        setInstanceLoaded(true);
+      })
+      .catch(err => {
+        setBootError(`Cannot reach server: ${err.message || err}`);
+        setInstanceLoaded(true);
+      });
+  }, []);
+
+  // After login, store auth and flip the token state so we re-render into App.
+  const onAuthSuccess = useCallback(({ token: t }) => {
+    setToken(t);
+  }, []);
+
+  if (!instanceLoaded) {
+    return (
+      <div style={{
+        minHeight: '100vh', display: 'grid', placeItems: 'center',
+        background: '#0a0a10', color: '#666', fontFamily: 'sans-serif',
+      }}>
+        Loading…
+      </div>
+    );
+  }
+
+  if (bootError) {
+    return (
+      <div style={{
+        minHeight: '100vh', display: 'grid', placeItems: 'center',
+        background: '#0a0a10', color: '#aaa', padding: 24,
+        fontFamily: 'monospace', fontSize: 13, lineHeight: 1.6, whiteSpace: 'pre-wrap',
+      }}>
+        {bootError}
+      </div>
+    );
+  }
+
+  if (!token) {
+    return <LoginScreen instanceMode={instanceMode} onAuthSuccess={onAuthSuccess} lang={localStorage.getItem('musix_lang') || 'ru'} />;
+  }
+
+  // Token present → mount App. We pass instanceMode down so App can branch
+  // on it (e.g. hide the Invites panel in sharing mode).
+  return <App instanceMode={instanceMode} onLogout={() => { clearStoredAuth(); setToken(''); }} />;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<Root />);
 </script>
 </body>
 </html>

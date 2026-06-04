@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from ._auth_helper import authenticate_test_client
 
 
 @pytest.fixture
@@ -19,7 +20,9 @@ def client():
     if not getattr(app.state, "sonic_descriptor_service", None):
         from app.services.sonic_descriptor_service import SonicDescriptorService
         app.state.sonic_descriptor_service = SonicDescriptorService()
-    return TestClient(app)
+    c = TestClient(app)
+    authenticate_test_client(c, app)
+    return c
 
 
 def test_get_sonic_descriptor_unknown_returns_404(client, monkeypatch):

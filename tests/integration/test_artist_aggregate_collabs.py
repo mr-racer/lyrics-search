@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from app.api.main import app
 from app.resources.metadata_db import MetadataDB
 from app.services.artist_split import split_artists
+from ._auth_helper import authenticate_test_client
 
 
 def _pt(tid, artist, slugs, primary, album="Al"):
@@ -39,7 +40,9 @@ def client(tmp_path, monkeypatch):
     qdrant.scroll.return_value = (pts, None)
     db = MagicMock(); db.qdrant = qdrant
     app.state.db_client = db
-    yield TestClient(app)
+    c = TestClient(app)
+    authenticate_test_client(c, app)
+    yield c
     MetadataDB._reset_for_tests()
     app.state.db_client = None
 

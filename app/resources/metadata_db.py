@@ -22,8 +22,11 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["MetadataDB"]
 
+import os as _os
 DB_DIR = Path(__file__).resolve().parent.parent.parent / "cache"
-DB_PATH = DB_DIR / "metadata.db"
+# MUSIX_METADATA_DB env override lets tests + CLI scripts point at a tmp DB
+# without monkey-patching. Falls back to the default cache location.
+DB_PATH = Path(_os.environ.get("MUSIX_METADATA_DB", str(DB_DIR / "metadata.db")))
 
 _SCHEMA_SQL: Tuple[str, ...] = (
     """CREATE TABLE IF NOT EXISTS artists (
@@ -166,6 +169,31 @@ _SCHEMA_SQL: Tuple[str, ...] = (
     )""",
     "CREATE INDEX IF NOT EXISTS idx_playlist_tracks_position ON playlist_tracks(playlist_id, position)",
     "CREATE INDEX IF NOT EXISTS idx_playlists_collection ON playlists(collection_name)",
+    # Phase A: Auth Foundation — users + invites + instance_config
+    """CREATE TABLE IF NOT EXISTS users (
+        id            TEXT PRIMARY KEY,
+        email         TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        role          TEXT NOT NULL DEFAULT 'member'
+                        CHECK (role IN ('owner', 'member')),
+        created_at    REAL NOT NULL,
+        last_login_at REAL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)",
+    """CREATE TABLE IF NOT EXISTS invites (
+        code         TEXT PRIMARY KEY,
+        created_by   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at   REAL NOT NULL,
+        expires_at   REAL NOT NULL,
+        consumed_by  TEXT REFERENCES users(id) ON DELETE SET NULL,
+        consumed_at  REAL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_invites_unused ON invites (consumed_at) WHERE consumed_at IS NULL",
+    """CREATE TABLE IF NOT EXISTS instance_config (
+        id          INTEGER PRIMARY KEY CHECK (id = 1),
+        mode        TEXT NOT NULL CHECK (mode IN ('sharing', 'server')),
+        created_at  REAL NOT NULL
+    )""",
 )
 
 
@@ -1685,3 +1713,188 @@ class MetadataDB:
             (collection_name, track_id),
         ).fetchall()
         return [int(r[0]) for r in rows]
+
+    # ─── Phase A: Users CRUD ───────────────────────────────────────────────
+    @classmethod
+    def create_user(
+        cls, *, user_id: str, email: str, password_hash: str,
+        role: str, created_at: float,
+    ) -> None:
+        """Insert a new user. Raises sqlite3.IntegrityError on duplicate email
+        or invalid role. Caller is responsible for lower-casing email."""
+        conn = cls._connect()
+        conn.execute(
+            "INSERT INTO users (id, email, password_hash, role, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (user_id, email, password_hash, role, created_at),
+        )
+        conn.commit()
+
+    @classmethod
+    def get_user_by_email(cls, email: str) -> dict | None:
+        """Return user row dict or None. Email lookup is case-SENSITIVE — caller
+        must lower-case the input string (and we lower-case at write time, so
+        stored rows are already canonical)."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT id, email, password_hash, role, created_at, last_login_at "
+            "FROM users WHERE email = ?",
+            (email,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row[0], "email": row[1], "password_hash": row[2],
+            "role": row[3], "created_at": row[4], "last_login_at": row[5],
+        }
+
+    @classmethod
+    def get_user_by_id(cls, user_id: str) -> dict | None:
+        """Return user row dict or None."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT id, email, password_hash, role, created_at, last_login_at "
+            "FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row[0], "email": row[1], "password_hash": row[2],
+            "role": row[3], "created_at": row[4], "last_login_at": row[5],
+        }
+
+    @classmethod
+    def update_last_login(cls, user_id: str, ts: float) -> bool:
+        """Update last_login_at; return True if the user row was updated."""
+        conn = cls._connect()
+        cur = conn.execute(
+            "UPDATE users SET last_login_at = ? WHERE id = ?",
+            (ts, user_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+    @classmethod
+    def has_owner(cls) -> bool:
+        """True if any user with role='owner' exists. Used by create_owner
+        idempotency guard."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT 1 FROM users WHERE role = 'owner' LIMIT 1"
+        ).fetchone()
+        return row is not None
+
+    @classmethod
+    def delete_user(cls, user_id: str) -> bool:
+        """Delete a user row; return True if a row was removed. Used to roll back
+        a registration that lost the invite-claim race."""
+        conn = cls._connect()
+        cur = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        conn.commit()
+        return cur.rowcount > 0
+
+    # ─── Phase A: Invites CRUD ─────────────────────────────────────────────
+    @classmethod
+    def create_invite(
+        cls, code: str, created_by: str, created_at: float, expires_at: float,
+    ) -> None:
+        """Insert a new invite row. Raises sqlite3.IntegrityError on duplicate code
+        or unknown created_by user."""
+        conn = cls._connect()
+        conn.execute(
+            "INSERT INTO invites (code, created_by, created_at, expires_at) "
+            "VALUES (?, ?, ?, ?)",
+            (code, created_by, created_at, expires_at),
+        )
+        conn.commit()
+
+    @classmethod
+    def get_invite(cls, code: str) -> dict | None:
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT code, created_by, created_at, expires_at, consumed_by, consumed_at "
+            "FROM invites WHERE code = ?",
+            (code,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "code": row[0], "created_by": row[1],
+            "created_at": row[2], "expires_at": row[3],
+            "consumed_by": row[4], "consumed_at": row[5],
+        }
+
+    @classmethod
+    def consume_invite(cls, code: str, *, consumed_by: str, consumed_at: float) -> bool:
+        """Atomically claim an open invite. The `consumed_at IS NULL` predicate in
+        the UPDATE makes this a compare-and-swap: only the first concurrent caller
+        wins. Returns True if this call claimed it, False if the code was unknown
+        or already consumed (lets AuthService roll back a racing registration)."""
+        conn = cls._connect()
+        cur = conn.execute(
+            "UPDATE invites SET consumed_by = ?, consumed_at = ? "
+            "WHERE code = ? AND consumed_at IS NULL",
+            (consumed_by, consumed_at, code),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+    @classmethod
+    def list_invites(cls, *, include_consumed: bool = False) -> list[dict]:
+        """Return all invites (newest first). When include_consumed=False, only
+        rows with consumed_at IS NULL are returned."""
+        conn = cls._connect()
+        if include_consumed:
+            sql = (
+                "SELECT code, created_by, created_at, expires_at, consumed_by, consumed_at "
+                "FROM invites ORDER BY created_at DESC"
+            )
+            rows = conn.execute(sql).fetchall()
+        else:
+            sql = (
+                "SELECT code, created_by, created_at, expires_at, consumed_by, consumed_at "
+                "FROM invites WHERE consumed_at IS NULL ORDER BY created_at DESC"
+            )
+            rows = conn.execute(sql).fetchall()
+        return [
+            {
+                "code": r[0], "created_by": r[1],
+                "created_at": r[2], "expires_at": r[3],
+                "consumed_by": r[4], "consumed_at": r[5],
+            }
+            for r in rows
+        ]
+
+    @classmethod
+    def delete_invite(cls, code: str) -> bool:
+        """Delete an invite by code; return True if a row was removed."""
+        conn = cls._connect()
+        cur = conn.execute("DELETE FROM invites WHERE code = ?", (code,))
+        conn.commit()
+        return cur.rowcount > 0
+
+    # ─── Phase A: Instance Config ──────────────────────────────────────────
+    @classmethod
+    def get_instance_config(cls) -> dict | None:
+        """Return {"mode": ..., "created_at": ...} or None if instance never
+        initialized."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT mode, created_at FROM instance_config WHERE id = 1"
+        ).fetchone()
+        if row is None:
+            return None
+        return {"mode": row[0], "created_at": row[1]}
+
+    @classmethod
+    def set_instance_config(cls, *, mode: str, created_at: float) -> None:
+        """Write the single instance_config row. Raises sqlite3.IntegrityError
+        if a row already exists (per spec §4.2 — mode is locked at first write).
+        Use scripts/change_instance_mode.py to migrate (not in Phase A scope)."""
+        conn = cls._connect()
+        conn.execute(
+            "INSERT INTO instance_config (id, mode, created_at) VALUES (1, ?, ?)",
+            (mode, created_at),
+        )
+        conn.commit()

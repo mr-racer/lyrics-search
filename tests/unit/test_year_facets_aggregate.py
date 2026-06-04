@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
 from app.api.main import create_app
+from tests.integration._auth_helper import authenticate_test_client
 
 
 def _make_point(yr: str | None) -> MagicMock:
@@ -57,17 +58,25 @@ def client_with_qdrant(tmp_path, monkeypatch):
         db_client_mock = MagicMock()
         db_client_mock.qdrant = qdrant_mock
         app.state.db_client = db_client_mock
-        return TestClient(app)
+        c = TestClient(app)
+        authenticate_test_client(c, app)
+        return c
 
     yield _factory
     MetadataDB._reset_for_tests()
 
 
-def test_year_facets_returns_empty_when_no_db_client():
+def test_year_facets_returns_empty_when_no_db_client(tmp_path, monkeypatch):
     """Endpoint returns empty list gracefully when db_client is None."""
+    monkeypatch.setattr("app.resources.metadata_db.DB_PATH", tmp_path / "test.db")
+    monkeypatch.setattr("app.resources.metadata_db.DB_DIR", tmp_path)
+    from app.resources.metadata_db import MetadataDB
+    MetadataDB._reset_for_tests()
+    MetadataDB.init()
     app = create_app()
     app.state.db_client = None
     client = TestClient(app)
+    authenticate_test_client(client, app)
     r = client.get("/api/v1/library/year-facets")
     assert r.status_code == 200
     assert r.json() == {"year_ranges": []}

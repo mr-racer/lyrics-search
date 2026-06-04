@@ -4,12 +4,14 @@ from fastapi.testclient import TestClient
 
 from app.api.main import create_app
 from app.resources.metadata_db import MetadataDB
+from ._auth_helper import authenticate_test_client
 
 
 @pytest.fixture()
 def client():
-    app = create_app()
-    with TestClient(app) as c:
+    _app = create_app()
+    with TestClient(_app) as c:
+        authenticate_test_client(c, _app)
         MetadataDB.init()
         conn = MetadataDB.get()
         conn.execute("DELETE FROM playlist_tracks")

@@ -3,6 +3,7 @@
 from fastapi.testclient import TestClient
 
 from app.api.main import create_app
+from ._auth_helper import authenticate_test_client
 
 
 class TestChatAPI:
@@ -10,6 +11,7 @@ class TestChatAPI:
         """POST /api/v1/chat/ returns a response even with limited setup."""
         app = create_app()
         with TestClient(app) as c:
+            authenticate_test_client(c, app)
             resp = c.post(
                 "/api/v1/chat/",
                 json={"message": "Find some pop songs"},
@@ -21,6 +23,7 @@ class TestChatAPI:
     def test_chat_with_mode(self):
         app = create_app()
         with TestClient(app) as c:
+            authenticate_test_client(c, app)
             resp = c.post(
                 "/api/v1/chat/",
                 json={
@@ -34,6 +37,7 @@ class TestChatAPI:
     def test_chat_with_history(self):
         app = create_app()
         with TestClient(app) as c:
+            authenticate_test_client(c, app)
             resp = c.post(
                 "/api/v1/chat/",
                 json={
@@ -50,6 +54,7 @@ class TestChatAPI:
         """Empty message should fail validation."""
         app = create_app()
         with TestClient(app) as c:
+            authenticate_test_client(c, app)
             resp = c.post(
                 "/api/v1/chat/",
                 json={},
@@ -59,6 +64,7 @@ class TestChatAPI:
     def test_chat_with_llm_settings(self):
         app = create_app()
         with TestClient(app) as c:
+            authenticate_test_client(c, app)
             resp = c.post(
                 "/api/v1/chat/",
                 json={
