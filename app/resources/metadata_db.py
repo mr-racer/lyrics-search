@@ -1785,6 +1785,15 @@ class MetadataDB:
         ).fetchone()
         return row is not None
 
+    @classmethod
+    def delete_user(cls, user_id: str) -> bool:
+        """Delete a user row; return True if a row was removed. Used to roll back
+        a registration that lost the invite-claim race."""
+        conn = cls._connect()
+        cur = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        conn.commit()
+        return cur.rowcount > 0
+
     # ─── Phase A: Invites CRUD ─────────────────────────────────────────────
     @classmethod
     def create_invite(
@@ -1817,16 +1826,19 @@ class MetadataDB:
         }
 
     @classmethod
-    def consume_invite(cls, code: str, *, consumed_by: str, consumed_at: float) -> None:
-        """Stamp an invite as consumed. Does NOT validate it's still open — that's
-        AuthService's job (atomicity is enforced by checking get_invite first +
-        AuthService running under a single request)."""
+    def consume_invite(cls, code: str, *, consumed_by: str, consumed_at: float) -> bool:
+        """Atomically claim an open invite. The `consumed_at IS NULL` predicate in
+        the UPDATE makes this a compare-and-swap: only the first concurrent caller
+        wins. Returns True if this call claimed it, False if the code was unknown
+        or already consumed (lets AuthService roll back a racing registration)."""
         conn = cls._connect()
-        conn.execute(
-            "UPDATE invites SET consumed_by = ?, consumed_at = ? WHERE code = ?",
+        cur = conn.execute(
+            "UPDATE invites SET consumed_by = ?, consumed_at = ? "
+            "WHERE code = ? AND consumed_at IS NULL",
             (consumed_by, consumed_at, code),
         )
         conn.commit()
+        return cur.rowcount > 0
 
     @classmethod
     def list_invites(cls, *, include_consumed: bool = False) -> list[dict]:

@@ -184,7 +184,13 @@ class AuthService:
             )
         except sqlite3.IntegrityError as exc:
             raise EmailAlreadyTakenError(email) from exc
-        self.db.consume_invite(invite_code, consumed_by=uid, consumed_at=now)
+        # Atomically claim the invite. consume_invite's `consumed_at IS NULL`
+        # predicate is the real guard against the get_invite→here TOCTOU window:
+        # if a concurrent registration claimed the same code first, rowcount is 0
+        # and we roll back the user we just created.
+        if not self.db.consume_invite(invite_code, consumed_by=uid, consumed_at=now):
+            self.db.delete_user(uid)
+            raise InvalidInviteError("invite already used")
         logger.info(
             "[AuthService] member registered: id=%s via invite=%s",
             uid, invite_code[:4] + "…",

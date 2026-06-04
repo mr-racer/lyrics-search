@@ -67,10 +67,39 @@ def test_consume_invite_marks_row():
         created_at=1700000000.0,
         expires_at=1700000000.0 + 86400,
     )
-    MetadataDB.consume_invite("code1", consumed_by="member-1", consumed_at=1700000150.0)
+    claimed = MetadataDB.consume_invite("code1", consumed_by="member-1", consumed_at=1700000150.0)
+    assert claimed is True
     row = MetadataDB.get_invite("code1")
     assert row["consumed_by"] == "member-1"
     assert row["consumed_at"] == 1700000150.0
+
+
+def test_consume_invite_is_atomic_second_claim_fails():
+    """The `consumed_at IS NULL` predicate makes consume a compare-and-swap:
+    a second claim of the same code returns False and does not overwrite."""
+    _seed_owner()
+    MetadataDB.create_user(
+        user_id="m-a", email="a@x.y", password_hash="h",
+        role="member", created_at=1700000100.0,
+    )
+    MetadataDB.create_user(
+        user_id="m-b", email="b@x.y", password_hash="h",
+        role="member", created_at=1700000110.0,
+    )
+    MetadataDB.create_invite("race", "owner-1", 1700000000.0, 1700100000.0)
+    first = MetadataDB.consume_invite("race", consumed_by="m-a", consumed_at=1700000150.0)
+    second = MetadataDB.consume_invite("race", consumed_by="m-b", consumed_at=1700000160.0)
+    assert first is True
+    assert second is False
+    # The first claimant's stamp is preserved.
+    row = MetadataDB.get_invite("race")
+    assert row["consumed_by"] == "m-a"
+    assert row["consumed_at"] == 1700000150.0
+
+
+def test_consume_unknown_invite_returns_false():
+    _seed_owner()
+    assert MetadataDB.consume_invite("ghost", consumed_by="x", consumed_at=1.0) is False
 
 
 def test_list_invites_filters_consumed():

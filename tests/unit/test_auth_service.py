@@ -120,6 +120,24 @@ def test_register_rejects_weak_password(auth):
         )
 
 
+def test_register_rolls_back_user_when_invite_claim_lost(auth, monkeypatch):
+    """Simulate the TOCTOU race: the invite passes the get_invite open-check but
+    a concurrent registration claims it before our consume_invite runs (consume
+    returns False). The just-created user must be rolled back and
+    InvalidInviteError raised — no orphan account left behind."""
+    owner_id = _seed_owner(auth)
+    code = _open_invite(auth, owner_id)
+    # Force the race-lost branch: consume_invite returns False as if another
+    # request claimed the code in the get_invite→consume window.
+    monkeypatch.setattr(auth.db, "consume_invite", lambda *a, **k: False)
+    with pytest.raises(InvalidInviteError):
+        auth.register_with_invite(
+            email="raced@x.y", password="racedpass123", invite_code=code,
+        )
+    # The rolled-back user must NOT linger in the DB.
+    assert MetadataDB.get_user_by_email("raced@x.y") is None
+
+
 def test_create_owner_rejects_second_owner(auth):
     """create_owner must refuse to clobber an existing owner row."""
     _seed_owner(auth)
