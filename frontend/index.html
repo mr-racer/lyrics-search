@@ -1498,11 +1498,51 @@ function slugifyArtistName(name) {
   return (name || '').toLowerCase().trim().split(/\s+/).join('-');
 }
 
+// ─── Phase A: Auth helpers ─────────────────────────────────────────────────
+function getStoredToken() {
+  return localStorage.getItem('musix_token') || '';
+}
+
+function setStoredAuth({ token, user }) {
+  if (token) localStorage.setItem('musix_token', token);
+  if (user) {
+    localStorage.setItem('musix_user_id',    user.id || '');
+    localStorage.setItem('musix_user_email', user.email || '');
+    localStorage.setItem('musix_user_role',  user.role || '');
+  }
+}
+
+function clearStoredAuth() {
+  localStorage.removeItem('musix_token');
+  localStorage.removeItem('musix_user_id');
+  localStorage.removeItem('musix_user_email');
+  localStorage.removeItem('musix_user_role');
+}
+
+// Soft-redirect on 401 — clear storage and force a full reload so the App
+// re-renders into the LoginScreen branch. window.location.reload is the
+// simplest "remount everything" lever and sidesteps stale React state.
+function _onAuthFailure() {
+  clearStoredAuth();
+  // Avoid reload-loops if we're already on the login screen.
+  if (window.location.hash !== '#login') {
+    window.location.hash = '#login';
+    window.location.reload();
+  }
+}
+
 async function apiFetch(path, opts = {}) {
-  const res = await fetch(API + path, {
-    headers: { "Content-Type": "application/json", ...(opts.headers || {}) },
-    ...opts,
-  });
+  const token = getStoredToken();
+  const headers = {
+    "Content-Type": "application/json",
+    ...(opts.headers || {}),
+  };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(API + path, { ...opts, headers });
+  if (res.status === 401) {
+    _onAuthFailure();
+    throw new Error("HTTP 401: not authenticated");
+  }
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new Error(`HTTP ${res.status}: ${body.slice(0, 200)}`);
