@@ -66,9 +66,12 @@ def get_current_user(
             status_code=401, detail="token expired",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    except InvalidTokenError as e:
+    except InvalidTokenError:
+        # Do NOT echo the exception text: verify_token's messages may carry an
+        # internal user id ("unknown user id <uid>"). A fixed string keeps the
+        # boundary leak-free; the detailed reason stays in server-side logs.
         raise HTTPException(
-            status_code=401, detail=f"invalid token: {e}",
+            status_code=401, detail="invalid token",
             headers={"WWW-Authenticate": "Bearer"},
         )
 

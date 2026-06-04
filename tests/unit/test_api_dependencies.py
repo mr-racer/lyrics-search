@@ -86,6 +86,42 @@ def test_get_owner_403_for_member(monkeypatch):
     assert r.status_code == 403
 
 
+def test_get_owner_200_for_owner(monkeypatch):
+    monkeypatch.setenv("MUSIX_JWT_SECRET", JWT_SECRET)
+    auth = AuthService(jwt_secret=JWT_SECRET)
+    auth.create_owner(email="owh@x.y", password="ownerpass1234")
+    _, token = auth.login(email="owh@x.y", password="ownerpass1234")
+    app = _make_app(auth)
+    r = TestClient(app).get(
+        "/owner-only", headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200
+
+
+def test_get_current_user_401_on_empty_bearer(monkeypatch):
+    monkeypatch.setenv("MUSIX_JWT_SECRET", JWT_SECRET)
+    auth = AuthService(jwt_secret=JWT_SECRET)
+    app = _make_app(auth)
+    r = TestClient(app).get("/protected", headers={"Authorization": "Bearer "})
+    assert r.status_code == 401
+    assert r.json()["detail"] == "empty bearer token"
+
+
+def test_get_current_user_401_on_expired_token(monkeypatch):
+    monkeypatch.setenv("MUSIX_JWT_SECRET", JWT_SECRET)
+    auth = AuthService(jwt_secret=JWT_SECRET)
+    auth.create_owner(email="ex@x.y", password="ownerpass1234")
+    _, token = auth.login(email="ex@x.y", password="ownerpass1234")
+    import app.services.auth_service as mod
+    monkeypatch.setattr(mod, "_now", lambda: __import__("time").time() + 31 * 86400)
+    app = _make_app(auth)
+    r = TestClient(app).get(
+        "/protected", headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 401
+    assert r.json()["detail"] == "token expired"
+
+
 def test_require_mode_404_when_mode_mismatch(monkeypatch):
     monkeypatch.setenv("MUSIX_JWT_SECRET", JWT_SECRET)
     MetadataDB.set_instance_config(mode="sharing", created_at=1.0)
