@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import logging
 import re
+import threading
 import time
 from collections import Counter
 from pathlib import Path
@@ -66,6 +67,40 @@ class LibraryService:
         self.sonic_descriptor_service = sonic_descriptor_service
         self._job_tracker = JobTracker()
         self._current_job_id = None
+        # Phase B: per-account active-job map (replaces the single _current_job_id
+        # slot, which rejected B's indexing while A indexed). Lock guards the dict;
+        # maps account_id → in-flight job_id. Wired into index_folder in Task B7.
+        self._active_jobs: dict[str, str] = {}
+        self._active_jobs_lock = threading.Lock()
+
+    # ── Per-account indexing queue (Phase B) ───────────────────────────────
+
+    def try_start_job(self, account_id: str, job_id: str) -> bool:
+        """Atomically claim the indexing slot for ``account_id``.
+
+        Returns True if the slot was free and is now claimed by ``job_id``;
+        False if this account already has an in-flight job. Other accounts are
+        unaffected — a compare-and-swap under the lock, so 50 racing threads for
+        the same account yield exactly one winner.
+        """
+        with self._active_jobs_lock:
+            if account_id in self._active_jobs:
+                return False
+            self._active_jobs[account_id] = job_id
+            return True
+
+    def finish_job(self, account_id: str) -> None:
+        """Release the indexing slot for ``account_id`` (idempotent)."""
+        with self._active_jobs_lock:
+            self._active_jobs.pop(account_id, None)
+
+    def is_account_indexing(self, account_id: str) -> bool:
+        with self._active_jobs_lock:
+            return account_id in self._active_jobs
+
+    def get_account_job_id(self, account_id: str) -> Optional[str]:
+        with self._active_jobs_lock:
+            return self._active_jobs.get(account_id)
 
     async def index_folder(
         self,
