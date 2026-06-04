@@ -14,7 +14,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncGenerator
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse, Response
 
@@ -37,6 +37,7 @@ from ..services.auth_service import AuthService
 # is empty.
 from ..services import ai_tasks  # noqa: F401
 from .routes import search_router, library_router, chat_router, metadata_router, playback_router, recommend_router, ai_indexing_router, artists_router, system_router, playlists_router, instance_router, auth_router
+from .dependencies import get_current_user
 from .sse_utils import event_stream
 
 logger = logging.getLogger(__name__)
@@ -242,16 +243,21 @@ def create_app() -> FastAPI:
 
     # Routers — MUST be registered BEFORE the SPA catch-all so Starlette
     # matches /api/v1/... routes first (routes are evaluated in order).
-    app.include_router(search_router,       prefix="/api/v1")
-    app.include_router(library_router,      prefix="/api/v1")
-    app.include_router(chat_router,         prefix="/api/v1")
-    app.include_router(metadata_router,     prefix="/api/v1")
-    app.include_router(playback_router,     prefix="/api/v1")
-    app.include_router(recommend_router,    prefix="/api/v1")
-    app.include_router(ai_indexing_router,  prefix="/api/v1")
-    app.include_router(artists_router,      prefix="/api/v1")
-    app.include_router(system_router,       prefix="/api/v1")
-    app.include_router(playlists_router,    prefix="/api/v1")
+    # Phase A: dependencies=[Depends(get_current_user)] gates every existing
+    # surface on a valid JWT. The auth + instance routers stay open so the
+    # frontend can log in / probe the mode before it holds a token.
+    auth_gate = [Depends(get_current_user)]
+    app.include_router(search_router,       prefix="/api/v1", dependencies=auth_gate)
+    app.include_router(library_router,      prefix="/api/v1", dependencies=auth_gate)
+    app.include_router(chat_router,         prefix="/api/v1", dependencies=auth_gate)
+    app.include_router(metadata_router,     prefix="/api/v1", dependencies=auth_gate)
+    app.include_router(playback_router,     prefix="/api/v1", dependencies=auth_gate)
+    app.include_router(recommend_router,    prefix="/api/v1", dependencies=auth_gate)
+    app.include_router(ai_indexing_router,  prefix="/api/v1", dependencies=auth_gate)
+    app.include_router(artists_router,      prefix="/api/v1", dependencies=auth_gate)
+    app.include_router(system_router,       prefix="/api/v1", dependencies=auth_gate)
+    app.include_router(playlists_router,    prefix="/api/v1", dependencies=auth_gate)
+    # Public routes — NO auth gate (login / mode probe happen pre-token).
     app.include_router(instance_router,     prefix="/api/v1")
     app.include_router(auth_router,         prefix="/api/v1")
 
