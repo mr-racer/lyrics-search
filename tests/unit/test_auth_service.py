@@ -7,6 +7,7 @@ from app.services.auth_service import (
     AuthService, InvalidInviteError, EmailAlreadyTakenError,
     WeakPasswordError, OwnerAlreadyExistsError,
     InvalidCredentialsError, TokenExpiredError, InvalidTokenError,
+    OwnerOnlyError,
 )
 
 
@@ -203,3 +204,71 @@ def test_verify_token_wrong_algorithm_raises(auth):
     forged = pyjwt.encode(payload, "anything", algorithm="HS512")
     with pytest.raises(InvalidTokenError):
         auth.verify_token(forged)
+
+
+def test_create_invite_returns_12_char_code(auth):
+    owner_id = auth.create_owner(email="iv@example.com", password="ownerpass1234")
+    inv = auth.create_invite(owner_id=owner_id)
+    assert len(inv.code) == 12
+    assert inv.expires_at - inv.created_at == 7 * 86400
+
+
+def test_create_invite_rejects_non_owner(auth):
+    owner_id = auth.create_owner(email="iv2@example.com", password="ownerpass1234")
+    code = auth.create_invite(owner_id=owner_id).code
+    member = auth.register_with_invite(
+        email="mem@example.com", password="memberpass12", invite_code=code,
+    )
+    with pytest.raises(OwnerOnlyError):
+        auth.create_invite(owner_id=member.id)
+
+
+def test_create_invite_rejects_unknown_user(auth):
+    with pytest.raises(OwnerOnlyError):
+        auth.create_invite(owner_id="ghost-uid")
+
+
+def test_list_invites_owner_only(auth):
+    owner_id = auth.create_owner(email="li@example.com", password="ownerpass1234")
+    auth.create_invite(owner_id=owner_id)
+    auth.create_invite(owner_id=owner_id)
+    invites = auth.list_invites(owner_id=owner_id, include_consumed=False)
+    assert len(invites) == 2
+
+    code = invites[0].code
+    member = auth.register_with_invite(
+        email="m2@example.com", password="memberpass12", invite_code=code,
+    )
+    with pytest.raises(OwnerOnlyError):
+        auth.list_invites(owner_id=member.id, include_consumed=False)
+
+
+def test_list_invites_filters_consumed(auth):
+    owner_id = auth.create_owner(email="li2@example.com", password="ownerpass1234")
+    a = auth.create_invite(owner_id=owner_id).code
+    b = auth.create_invite(owner_id=owner_id).code
+    auth.register_with_invite(
+        email="cn@example.com", password="memberpass12", invite_code=a,
+    )
+    open_only = auth.list_invites(owner_id=owner_id, include_consumed=False)
+    assert {i.code for i in open_only} == {b}
+    everything = auth.list_invites(owner_id=owner_id, include_consumed=True)
+    assert {i.code for i in everything} == {a, b}
+
+
+def test_revoke_invite_removes_row(auth):
+    owner_id = auth.create_owner(email="rv@example.com", password="ownerpass1234")
+    code = auth.create_invite(owner_id=owner_id).code
+    auth.revoke_invite(code=code, owner_id=owner_id)
+    assert MetadataDB.get_invite(code) is None
+
+
+def test_revoke_invite_owner_only(auth):
+    owner_id = auth.create_owner(email="rv2@example.com", password="ownerpass1234")
+    code = auth.create_invite(owner_id=owner_id).code
+    c2 = auth.create_invite(owner_id=owner_id).code
+    member = auth.register_with_invite(
+        email="rvm@example.com", password="memberpass12", invite_code=c2,
+    )
+    with pytest.raises(OwnerOnlyError):
+        auth.revoke_invite(code=code, owner_id=member.id)

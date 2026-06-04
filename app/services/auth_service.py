@@ -191,19 +191,36 @@ class AuthService:
         )
         return _row_to_user(self.db.get_user_by_id(uid))
 
-    # ── Invites (minimal — Task 9 adds owner gating + list + revoke) ─────
+    # ── Invite admin (owner-only) ────────────────────────────────────────
+    def _assert_owner(self, owner_id: str) -> None:
+        row = self.db.get_user_by_id(owner_id)
+        if row is None or row["role"] != "owner":
+            raise OwnerOnlyError("only owner may manage invites")
+
     def create_invite(self, *, owner_id: str) -> Invite:
-        """Mint a new single-use invite. Owner gating happens in Task 9."""
+        self._assert_owner(owner_id)
         code = _gen_invite_code()
         now = _now()
-        expires = now + INVITE_TTL_SECONDS
-        self.db.create_invite(code=code, created_by=owner_id,
-                              created_at=now, expires_at=expires)
+        self.db.create_invite(
+            code=code, created_by=owner_id,
+            created_at=now, expires_at=now + INVITE_TTL_SECONDS,
+        )
         return Invite(
             code=code, created_by=owner_id,
-            created_at=now, expires_at=expires,
+            created_at=now, expires_at=now + INVITE_TTL_SECONDS,
             consumed_by=None, consumed_at=None,
         )
+
+    def list_invites(
+        self, *, owner_id: str, include_consumed: bool = False,
+    ) -> list[Invite]:
+        self._assert_owner(owner_id)
+        rows = self.db.list_invites(include_consumed=include_consumed)
+        return [Invite(**r) for r in rows]
+
+    def revoke_invite(self, *, code: str, owner_id: str) -> None:
+        self._assert_owner(owner_id)
+        self.db.delete_invite(code)
 
     # ── Token issuance / verification ───────────────────────────────────
     def _issue_token(self, user: User) -> str:
