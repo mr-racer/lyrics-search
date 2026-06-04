@@ -34,7 +34,7 @@ from ..services.sonic_descriptor_service import SonicDescriptorService
 # because the routes find the type in _TASK_TYPES but the service registry
 # is empty.
 from ..services import ai_tasks  # noqa: F401
-from .routes import search_router, library_router, chat_router, metadata_router, playback_router, recommend_router, ai_indexing_router, artists_router, system_router, playlists_router, instance_router
+from .routes import search_router, library_router, chat_router, metadata_router, playback_router, recommend_router, ai_indexing_router, artists_router, system_router, playlists_router, instance_router, auth_router
 from .sse_utils import event_stream
 
 logger = logging.getLogger(__name__)
@@ -98,6 +98,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     searches or indexes.
     """
     db: DbClient | None = None
+
+    # Phase A: build AuthService from MUSIX_JWT_SECRET env. Use a developer
+    # default in DEBUG dev runs so the repo is runnable out of the box, but
+    # log a loud warning so prod ops don't accidentally ship it.
+    import os as _os
+    jwt_secret = _os.environ.get("MUSIX_JWT_SECRET", "")
+    if not jwt_secret:
+        jwt_secret = "DEV-ONLY-JWT-SECRET-set-MUSIX_JWT_SECRET-in-production-32+chars"
+        logger.warning(
+            "[AUTH] MUSIX_JWT_SECRET not set — using dev fallback. "
+            "DO NOT DEPLOY this way; set the env var to a 32+ char random string."
+        )
+    from ..services.auth_service import AuthService
+    app.state.auth_service = AuthService(jwt_secret=jwt_secret)
 
     try:
         db = DbClient()
@@ -239,6 +253,7 @@ def create_app() -> FastAPI:
     app.include_router(system_router,       prefix="/api/v1")
     app.include_router(playlists_router,    prefix="/api/v1")
     app.include_router(instance_router,     prefix="/api/v1")
+    app.include_router(auth_router,         prefix="/api/v1")
 
     # SPA catch-all — must be LAST so it doesn't shadow API routes
     @app.get("/{full_path:path}")
