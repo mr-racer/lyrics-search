@@ -120,6 +120,40 @@ def test_register_400_on_invalid_invite(server_mode_app):
     assert "invite" in r.json()["detail"].lower()
 
 
+def test_register_400_on_weak_password(server_mode_app):
+    owner_token = _login(server_mode_app, "owner@example.com", "ownerpass12345")
+    code = server_mode_app.post(
+        "/api/v1/auth/invites",
+        headers={"Authorization": f"Bearer {owner_token}"},
+    ).json()["code"]
+    r = server_mode_app.post(
+        "/api/v1/auth/register",
+        json={"email": "weak@x.y", "password": "short", "invite_code": code},
+    )
+    assert r.status_code == 400
+
+
+def test_register_409_on_duplicate_email(server_mode_app):
+    owner_token = _login(server_mode_app, "owner@example.com", "ownerpass12345")
+    c1 = server_mode_app.post(
+        "/api/v1/auth/invites",
+        headers={"Authorization": f"Bearer {owner_token}"},
+    ).json()["code"]
+    c2 = server_mode_app.post(
+        "/api/v1/auth/invites",
+        headers={"Authorization": f"Bearer {owner_token}"},
+    ).json()["code"]
+    server_mode_app.post(
+        "/api/v1/auth/register",
+        json={"email": "dup@x.y", "password": "duppassword1", "invite_code": c1},
+    )
+    r = server_mode_app.post(
+        "/api/v1/auth/register",
+        json={"email": "dup@x.y", "password": "duppassword1", "invite_code": c2},
+    )
+    assert r.status_code == 409
+
+
 # ── /auth/me ──
 
 def test_me_returns_user(server_mode_app):
@@ -209,6 +243,15 @@ def test_delete_invite_removes_row(server_mode_app):
     )
     assert r.status_code == 200
     assert MetadataDB.get_invite(code) is None
+
+
+def test_revoke_unknown_invite_returns_404(server_mode_app):
+    owner_token = _login(server_mode_app, "owner@example.com", "ownerpass12345")
+    r = server_mode_app.delete(
+        "/api/v1/auth/invites/does-not-exist",
+        headers={"Authorization": f"Bearer {owner_token}"},
+    )
+    assert r.status_code == 404
 
 
 def test_invite_routes_404_in_sharing_mode(sharing_mode_app):

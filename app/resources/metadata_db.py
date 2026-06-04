@@ -1852,10 +1852,12 @@ class MetadataDB:
         ]
 
     @classmethod
-    def delete_invite(cls, code: str) -> None:
+    def delete_invite(cls, code: str) -> bool:
+        """Delete an invite by code; return True if a row was removed."""
         conn = cls._connect()
-        conn.execute("DELETE FROM invites WHERE code = ?", (code,))
+        cur = conn.execute("DELETE FROM invites WHERE code = ?", (code,))
         conn.commit()
+        return cur.rowcount > 0
 
     # ─── Phase A: Instance Config ──────────────────────────────────────────
     @classmethod

@@ -218,12 +218,17 @@ class AuthService:
         rows = self.db.list_invites(include_consumed=include_consumed)
         return [Invite(**r) for r in rows]
 
-    def revoke_invite(self, *, code: str, owner_id: str) -> None:
+    def revoke_invite(self, *, code: str, owner_id: str) -> bool:
+        """Delete an invite. Returns True if a row was removed, False if the
+        code did not exist (lets the route surface 404 on a typo)."""
         self._assert_owner(owner_id)
-        self.db.delete_invite(code)
+        return self.db.delete_invite(code)
 
     # ── Token issuance / verification ───────────────────────────────────
-    def _issue_token(self, user: User) -> str:
+    def issue_token(self, user: User) -> str:
+        """Sign an HS256 JWT for an already-authenticated User. Public because
+        register() issues a token for a freshly-created user without a second
+        password round-trip."""
         now_int = int(_now())
         payload = {
             "sub": user.id,
@@ -280,4 +285,4 @@ class AuthService:
             # User row vanished between password check and re-read (admin race).
             raise InvalidCredentialsError("invalid credentials")
         user = _row_to_user(fresh)
-        return user, self._issue_token(user)
+        return user, self.issue_token(user)

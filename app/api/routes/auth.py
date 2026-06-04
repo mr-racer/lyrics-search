@@ -68,8 +68,10 @@ def register(
         raise HTTPException(status_code=409, detail="email already registered")
     except WeakPasswordError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    # Issue a token immediately so the new user is logged in.
-    _, token = auth.login(email=req.email, password=req.password)
+    # Issue a token directly from the freshly-created user — avoids a second
+    # argon2 verify (login re-hashes the password) and the limbo state where
+    # the account exists but a failing second call leaves the client tokenless.
+    token = auth.issue_token(user)
     return AuthResponse(token=token, user=user)
 
 
@@ -132,7 +134,9 @@ def revoke_invite(
     auth: AuthService = Depends(get_auth_service),
 ) -> dict:
     try:
-        auth.revoke_invite(code=code, owner_id=owner.id)
+        removed = auth.revoke_invite(code=code, owner_id=owner.id)
     except AuthError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    if not removed:
+        raise HTTPException(status_code=404, detail="invite not found")
     return {"ok": True}

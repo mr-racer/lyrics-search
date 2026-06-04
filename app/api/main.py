@@ -9,6 +9,7 @@ Main FastAPI application.
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncGenerator
@@ -28,6 +29,7 @@ from ..services.search_service import SearchService
 from ..services.library_service import LibraryService
 from ..services.job_tracker import JobTracker
 from ..services.sonic_descriptor_service import SonicDescriptorService
+from ..services.auth_service import AuthService
 # Side-effect import: each ai_tasks module calls register_task() at import
 # time, populating the AI Indexing service registry. Without this, every
 # POST /library/ai-index/{task_type} bails with HTTP 400 "unknown task_type"
@@ -102,15 +104,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Phase A: build AuthService from MUSIX_JWT_SECRET env. Use a developer
     # default in DEBUG dev runs so the repo is runnable out of the box, but
     # log a loud warning so prod ops don't accidentally ship it.
-    import os as _os
-    jwt_secret = _os.environ.get("MUSIX_JWT_SECRET", "")
+    jwt_secret = os.environ.get("MUSIX_JWT_SECRET", "")
     if not jwt_secret:
         jwt_secret = "DEV-ONLY-JWT-SECRET-set-MUSIX_JWT_SECRET-in-production-32+chars"
         logger.warning(
             "[AUTH] MUSIX_JWT_SECRET not set — using dev fallback. "
             "DO NOT DEPLOY this way; set the env var to a 32+ char random string."
         )
-    from ..services.auth_service import AuthService
     app.state.auth_service = AuthService(jwt_secret=jwt_secret)
 
     try:
