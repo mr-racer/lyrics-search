@@ -10168,7 +10168,7 @@ function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
 }
 
 // ─── App ──────────────────────────────────────────────────────────────────────
-function App() {
+function App({ instanceMode = 'sharing', onLogout = () => {} }) {
   const [isDark, setDark] = useState(() => (localStorage.getItem('musix_theme') || 'dark') === 'dark');
   const [lang, setLang]   = useState(() => localStorage.getItem('musix_lang') || 'ru');
 
@@ -10587,7 +10587,79 @@ function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+// ─── Phase A: Root — handles auth gating before mounting App ──────────────
+function Root() {
+  const [token, setToken] = useState(() => getStoredToken());
+  const [instanceMode, setInstanceMode] = useState(null);     // 'sharing' | 'server' | null
+  const [instanceLoaded, setInstanceLoaded] = useState(false);
+  const [bootError, setBootError] = useState('');
+
+  // Boot: fetch /instance/config (no auth required) to learn the mode.
+  // BEFORE rendering anything else — this drives both the LoginScreen UX
+  // (show 'I have an invite' tab only in server mode) and the App layout.
+  // Declared via useEffect deps=[]: runs exactly once on mount.
+  useEffect(() => {
+    fetch(API + '/instance/config')
+      .then(r => {
+        if (r.status === 404) {
+          // Instance not initialized yet — instruct the user.
+          setBootError(
+            'Instance not initialized. Run: python -m scripts.create_owner --email <you> --password <pw> --mode sharing|server',
+          );
+          setInstanceLoaded(true);
+          return null;
+        }
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then(data => {
+        if (data && data.mode) setInstanceMode(data.mode);
+        setInstanceLoaded(true);
+      })
+      .catch(err => {
+        setBootError(`Cannot reach server: ${err.message || err}`);
+        setInstanceLoaded(true);
+      });
+  }, []);
+
+  // After login, store auth and flip the token state so we re-render into App.
+  const onAuthSuccess = useCallback(({ token: t }) => {
+    setToken(t);
+  }, []);
+
+  if (!instanceLoaded) {
+    return (
+      <div style={{
+        minHeight: '100vh', display: 'grid', placeItems: 'center',
+        background: '#0a0a10', color: '#666', fontFamily: 'sans-serif',
+      }}>
+        Loading…
+      </div>
+    );
+  }
+
+  if (bootError) {
+    return (
+      <div style={{
+        minHeight: '100vh', display: 'grid', placeItems: 'center',
+        background: '#0a0a10', color: '#aaa', padding: 24,
+        fontFamily: 'monospace', fontSize: 13, lineHeight: 1.6, whiteSpace: 'pre-wrap',
+      }}>
+        {bootError}
+      </div>
+    );
+  }
+
+  if (!token) {
+    return <LoginScreen instanceMode={instanceMode} onAuthSuccess={onAuthSuccess} lang={localStorage.getItem('musix_lang') || 'ru'} />;
+  }
+
+  // Token present → mount App. We pass instanceMode down so App can branch
+  // on it (e.g. hide the Invites panel in sharing mode).
+  return <App instanceMode={instanceMode} onLogout={() => { clearStoredAuth(); setToken(''); }} />;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<Root />);
 </script>
 </body>
 </html>
