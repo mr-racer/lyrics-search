@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from app.api.main import create_app
 from app.services.search_service import SearchService
+from ._auth_helper import authenticate_test_client
 
 
 class TestSearchAPI:
@@ -13,6 +14,7 @@ class TestSearchAPI:
         """POST /api/v1/search/ returns 503 when Qdrant is down."""
         app = create_app()
         with TestClient(app) as c:
+            authenticate_test_client(c, app)
             resp = c.post(
                 "/api/v1/search/",
                 json={"query": "test", "mode": "text"},
@@ -30,6 +32,7 @@ class TestSearchAPI:
         mock_service.search = mock_search
 
         with TestClient(app) as c:
+            authenticate_test_client(c, app)
             c.app.state.search_service = mock_service
             resp = c.post(
                 "/api/v1/search/",
@@ -55,6 +58,7 @@ class TestSearchAPI:
         mock_service.search = mock_search
 
         with TestClient(app) as c:
+            authenticate_test_client(c, app)
             c.app.state.search_service = mock_service
             resp = c.post(
                 "/api/v1/search/",
@@ -73,6 +77,7 @@ class TestSearchAPI:
         mock_service.search = mock_search
 
         with TestClient(app) as c:
+            authenticate_test_client(c, app)
             c.app.state.search_service = mock_service
             resp = c.post(
                 "/api/v1/search/",
@@ -91,6 +96,7 @@ class TestSearchAPI:
         mock_service.search = mock_search
 
         with TestClient(app) as c:
+            authenticate_test_client(c, app)
             c.app.state.search_service = mock_service
             resp = c.post(
                 "/api/v1/search/",
@@ -106,6 +112,7 @@ class TestSearchAPI:
         """Empty query should fail validation."""
         app = create_app()
         with TestClient(app) as c:
+            authenticate_test_client(c, app)
             resp = c.post(
                 "/api/v1/search/",
                 json={"mode": "text"},
@@ -115,12 +122,14 @@ class TestSearchAPI:
     def test_search_models_text_endpoint(self):
         app = create_app()
         with TestClient(app) as c:
+            authenticate_test_client(c, app)
             resp = c.get("/api/v1/search/models/text")
             assert resp.status_code == 200
 
     def test_search_models_loaded_endpoint(self):
         app = create_app()
         with TestClient(app) as c:
+            authenticate_test_client(c, app)
             resp = c.get("/api/v1/search/models/loaded")
             assert resp.status_code == 200
             data = resp.json()

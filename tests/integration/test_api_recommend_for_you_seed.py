@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.api.main import app
 from app.resources.metadata_db import MetadataDB
+from ._auth_helper import authenticate_test_client
 
 
 def _pt(tid):
@@ -23,7 +24,9 @@ def client(tmp_path, monkeypatch):
     qdrant.retrieve.side_effect = lambda **kw: [_pt(kw["ids"][0])]
     db = MagicMock(); db.qdrant = qdrant
     app.state.db_client = db
-    yield TestClient(app)
+    c = TestClient(app)
+    authenticate_test_client(c, app)
+    yield c
     MetadataDB._reset_for_tests()
     app.state.db_client = None
 

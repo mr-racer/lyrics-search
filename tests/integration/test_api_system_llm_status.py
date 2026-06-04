@@ -6,12 +6,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.main import create_app
+from ._auth_helper import authenticate_test_client
 
 
 @pytest.fixture
 def client():
-    app = create_app()
-    return TestClient(app)
+    _app = create_app()
+    c = TestClient(_app)
+    authenticate_test_client(c, _app)
+    return c
 
 
 def test_status_returns_available_true_on_2xx_response(client):

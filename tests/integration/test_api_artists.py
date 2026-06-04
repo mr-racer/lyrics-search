@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.api.main import create_app
 from app.resources.metadata_db import MetadataDB
+from ._auth_helper import authenticate_test_client
 
 
 @pytest.fixture
@@ -46,7 +47,9 @@ def client(tmp_path, monkeypatch):
     db = MagicMock()
     db.qdrant = FakeQdrant(points)
     app.state.db_client = db
-    yield TestClient(app)
+    c = TestClient(app)
+    authenticate_test_client(c, app)
+    yield c
     MetadataDB._reset_for_tests()
 
 

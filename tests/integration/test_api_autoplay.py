@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.api.main import app
 from app.resources.metadata_db import MetadataDB
+from ._auth_helper import authenticate_test_client
 
 
 def _mk_point(track_id, score, artist="A"):
@@ -42,7 +43,9 @@ def client(tmp_path, monkeypatch):
     db_stub.qdrant = qdrant
     app.state.db_client = db_stub
 
-    yield TestClient(app)
+    c = TestClient(app)
+    authenticate_test_client(c, app)
+    yield c
     MetadataDB._reset_for_tests()
 
 

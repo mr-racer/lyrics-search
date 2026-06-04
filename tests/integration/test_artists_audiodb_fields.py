@@ -4,6 +4,7 @@ from fastapi.testclient import TestClient
 
 from app.api.main import create_app
 from app.resources.metadata_db import MetadataDB
+from ._auth_helper import authenticate_test_client
 
 
 @pytest.fixture
@@ -12,7 +13,10 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr("app.resources.metadata_db.DB_DIR", tmp_path)
     MetadataDB._reset_for_tests()
     MetadataDB.init()
-    yield TestClient(create_app(), raise_server_exceptions=False)
+    _app = create_app()
+    c = TestClient(_app, raise_server_exceptions=False)
+    authenticate_test_client(c, _app)
+    yield c
     MetadataDB._reset_for_tests()
 
 
