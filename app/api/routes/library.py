@@ -784,6 +784,13 @@ async def index_folder(
 
     Returns {"status": "completed", "count": N, "message": "..."}
     """
+    # Service availability first — if Qdrant/the whole library service is down,
+    # 503 takes precedence over a bad folder (and preserves the pre-Phase-C
+    # /index contract).
+    service: LibraryService = request.app.state.library_service
+    if service is None:
+        raise HTTPException(status_code=503, detail="Library service unavailable — is Qdrant running?")
+
     # Sanity check: folder must exist on the host. Done BEFORE delegating so a
     # typo gives a clean 400 instead of a confusing mid-pipeline failure.
     if not Path(req.folder_path).is_dir():
@@ -791,10 +798,6 @@ async def index_folder(
             status_code=400,
             detail=f"folder does not exist on this host: {req.folder_path}",
         )
-
-    service: LibraryService = request.app.state.library_service
-    if service is None:
-        raise HTTPException(status_code=503, detail="Library service unavailable — is Qdrant running?")
     # Phase B: key the in-flight indexing slot by the authenticated account, so
     # two accounts can index concurrently while one account can't double-start.
     result = await service.index_folder(
