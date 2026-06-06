@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -38,8 +39,13 @@ class SonicDescriptorService:
         # → [SonicTag(tag="anxious", score=0.72), ...]
     """
 
-    # Lazy classifier cache to avoid disk reads on every prediction
+    # Per-collection lazy classifier cache to avoid disk reads on every
+    # prediction. Per-collection isolation is enforced by the dict's keying
+    # (already correct). Phase B adds a lock so two concurrent first-time
+    # predict_class calls for the SAME collection don't both joblib.load the
+    # model (which would burn IO + RAM loading the same file twice).
     _classifier_cache: dict[str, tuple] = {}
+    _classifier_cache_lock: threading.Lock = threading.Lock()
 
     def __init__(
         self,
@@ -422,18 +428,29 @@ class SonicDescriptorService:
         return meta
 
     def _load_classifier(self, collection: str) -> Optional[tuple]:
-        """Return (model, classes_list) tuple, or None if no trained classifier exists."""
-        if collection in self._classifier_cache:
-            return self._classifier_cache[collection]
+        """Return (model, classes_list) tuple, or None if no trained classifier exists.
+
+        Thread-safe lazy load via double-checked locking: a cheap lock-free dict
+        lookup first, then lock + re-check only on a miss so eight concurrent
+        first-time callers for the same collection trigger exactly one
+        ``joblib.load`` (Phase B §6.3).
+        """
+        cached = self._classifier_cache.get(collection)
+        if cached is not None:
+            return cached
         model_path = self.classifier_dir / f"{collection}.joblib"
         meta_path = self.classifier_dir / f"{collection}_meta.json"
         if not model_path.exists() or not meta_path.exists():
             return None
-        import joblib
-        model = joblib.load(model_path)
-        meta = json.loads(meta_path.read_text())
-        self._classifier_cache[collection] = (model, meta["classes"])
-        return self._classifier_cache[collection]
+        with self._classifier_cache_lock:
+            cached = self._classifier_cache.get(collection)
+            if cached is not None:
+                return cached
+            import joblib
+            model = joblib.load(model_path)
+            meta = json.loads(meta_path.read_text())
+            self._classifier_cache[collection] = (model, meta["classes"])
+            return self._classifier_cache[collection]
 
     def predict_class(
         self,
