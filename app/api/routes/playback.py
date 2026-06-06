@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import ValidationError
 
+from app.api.dependencies import get_current_user
+from app.api.helpers import derive_collection_for_user, deprecated_collection_warning
 from app.domain.models import (
     PlaybackEventIn,
     PlaybackEventOut,
     RecentTracksResponse,
+    User,
 )
 from app.services import playback_service
 
@@ -18,7 +21,10 @@ router = APIRouter(prefix="/playback", tags=["Playback"])
 
 
 @router.post("/events", response_model=PlaybackEventOut)
-async def record_playback_event(request: Request) -> PlaybackEventOut:
+async def record_playback_event(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> PlaybackEventOut:
     """Record a playback event.
 
     The browser delivers these via ``navigator.sendBeacon`` on pause / track
@@ -29,15 +35,20 @@ async def record_playback_event(request: Request) -> PlaybackEventOut:
     ourselves instead of declaring a JSON Pydantic parameter (which would 422
     on a non-JSON content-type). Plain ``fetch`` with application/json still
     works through the same path.
+
+    Phase D (D-soft): ``collection_name`` in the request body is accepted for
+    backward compat but ignored. The server derives the collection from the JWT.
     """
     raw = await request.body()
     try:
         req = PlaybackEventIn.model_validate(json.loads(raw))
     except (json.JSONDecodeError, ValueError, ValidationError) as e:
         raise HTTPException(status_code=422, detail=str(e))
+    derived = derive_collection_for_user(current_user)
+    deprecated_collection_warning(req.collection_name, derived, "/playback/events")
     new_id = playback_service.record_event(
         session_id=req.session_id,
-        collection_name=req.collection_name,
+        collection_name=derived,
         track_id=req.track_id,
         played_sec=req.played_sec,
         total_dur=req.total_dur,
@@ -48,14 +59,22 @@ async def record_playback_event(request: Request) -> PlaybackEventOut:
 @router.get("/recent", response_model=RecentTracksResponse)
 async def get_recent(
     request: Request,
-    collection_name: str = Query(..., description="Collection name (required)"),
+    current_user: User = Depends(get_current_user),
+    collection_name: str | None = Query(None, deprecated=True),
     limit: int = Query(50, ge=1, le=200),
 ) -> RecentTracksResponse:
+    """Return recently played tracks for the current user's collection.
+
+    Phase D (D-soft): ``collection_name`` query param is accepted for backward
+    compat but ignored. The server derives the collection from the JWT.
+    """
+    derived = derive_collection_for_user(current_user)
+    deprecated_collection_warning(collection_name, derived, "/playback/recent")
     db_client = request.app.state.db_client
     if db_client is None or db_client.qdrant is None:
-        return RecentTracksResponse(tracks=[], collection_name=collection_name)
+        return RecentTracksResponse(tracks=[], collection_name=derived)
     return playback_service.get_recent(
         qdrant_client=db_client.qdrant,
-        collection_name=collection_name,
+        collection_name=derived,
         limit=limit,
     )

@@ -329,7 +329,8 @@ class ClusterLabelsRequest(BaseModel):
 class PlaybackEventIn(BaseModel):
     """Request body for POST /playback/events."""
     session_id: str
-    collection_name: str
+    # Phase D (D-soft): optional + ignored; removed in D-hard
+    collection_name: Optional[str] = None
     track_id: str
     played_sec: float
     total_dur: float | None = None
