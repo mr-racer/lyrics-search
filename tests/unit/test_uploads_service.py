@@ -33,3 +33,14 @@ class TestSniffAudioMime:
         data = b"\xff\xd8\xff\xe0\x00\x10JFIF" + b"\x00" * 64
         mime = sniff_audio_mime(data)
         assert not mime.startswith("audio/")
+
+
+class TestFixtures:
+    def test_flac_fixture_loadable(self, audio_bytes):
+        data = audio_bytes("tiny.flac")
+        assert data[:4] == b"fLaC"
+
+    def test_mp3_fixture_loadable(self, audio_bytes):
+        data = audio_bytes("tiny.mp3")
+        # MP3 files start with either an ID3 tag block or an MPEG frame sync.
+        assert data[:3] == b"ID3" or data[0] == 0xFF
