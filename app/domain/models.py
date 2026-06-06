@@ -135,7 +135,10 @@ class ChatResponse(BaseModel):
 
 class TrackReactionRequest(BaseModel):
     """Запрос на установку реакции на трек."""
-    collection_name: str
+    # Phase D (D-soft): optional + ignored. Server derives the collection from
+    # the JWT user; a new client that drops the field must NOT 422. Removed
+    # entirely in D-hard.
+    collection_name: Optional[str] = None
     reaction: Literal["like", "dislike"] | None = None  # None = remove reaction
 
 

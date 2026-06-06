@@ -250,3 +250,31 @@ class TestPhaseDSoft:
         data = resp.json()
         assert captured["collection_name"] == "acct_user-A"
         assert data["collection_name"] == "acct_user-A"
+
+    def test_reaction_post_without_collection_name_is_accepted(self):
+        """D-soft: a client that DROPS collection_name from the body must NOT
+        get a 422 — the field is optional now (frontend stops sending it at the
+        same deploy as D-soft). Server still derives + uses acct_<user.id>."""
+        from unittest.mock import patch
+        from app.api.main import create_app
+        from app.api.routes import search as search_route
+        from types import SimpleNamespace
+
+        app = create_app()
+        fixed_user = SimpleNamespace(id="user-A", email="a@x")
+        app.dependency_overrides[search_route.get_current_user] = lambda: fixed_user
+
+        captured = {}
+
+        def fake_set_reaction(track_id, collection_name, reaction):
+            captured["collection_name"] = collection_name
+
+        with patch("app.resources.metadata_db.MetadataDB.init"), \
+             patch("app.resources.metadata_db.MetadataDB.set_reaction", side_effect=fake_set_reaction):
+            with TestClient(app) as c:
+                resp = c.post(
+                    "/api/v1/search/tracks/T1/reaction",
+                    json={"reaction": "like"},  # NO collection_name
+                )
+        assert resp.status_code == 200
+        assert captured["collection_name"] == "acct_user-A"
