@@ -317,8 +317,12 @@ class ClusterRepresentative(BaseModel):
 
 
 class ClusterLabelsRequest(BaseModel):
-    """Body for POST /library/clusters/labels — user-assigned cluster names."""
-    collection: str
+    """Body for POST /library/clusters/labels — user-assigned cluster names.
+
+    Phase D (D-soft): ``collection`` is accepted for backward compat but ignored;
+    the server derives the collection from the JWT.
+    """
+    collection: Optional[str] = None
     labels: dict[int, str]  # {0: "Lo-fi indie", 1: "Cinematic drone", ...}
 
 
