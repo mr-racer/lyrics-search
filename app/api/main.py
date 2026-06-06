@@ -163,9 +163,39 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         app.state.library_service = None
         app.state.job_tracker = JobTracker()
 
+    # Phase C: background cleanup — sweep stale quarantine *.tmp + purge old
+    # completed pending_uploads. Cheap, hourly, no Qdrant — so it runs even in
+    # limited mode.
+    async def _cleanup_loop():
+        from app.services.uploads_service import sweep_old_quarantine
+        from app.resources.metadata_db import MetadataDB as _MDB
+        while True:
+            try:
+                await asyncio.sleep(3600)  # 1h
+                nq = sweep_old_quarantine()
+                np_ = _MDB.purge_old_pending_uploads()
+                if nq or np_:
+                    logger.info(
+                        "[cleanup] swept %d quarantine, purged %d done uploads", nq, np_,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning("[cleanup] iteration failed: %s", e)
+
+    app.state._cleanup_task = asyncio.create_task(_cleanup_loop())
+
     yield  # ← app serves requests here
 
-    # Shutdown
+    # Shutdown — cancel the background cleanup loop cleanly.
+    _ct = getattr(app.state, "_cleanup_task", None)
+    if _ct is not None and not _ct.done():
+        _ct.cancel()
+        try:
+            await _ct
+        except (asyncio.CancelledError, Exception):
+            pass
+
     if db is not None:
         try:
             db._disconnect()
