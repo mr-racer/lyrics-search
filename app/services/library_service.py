@@ -112,6 +112,102 @@ class LibraryService:
         with self._active_jobs_lock:
             return self._active_jobs.get(account_id)
 
+    # ── Server-mode upload indexing (Phase C) ──────────────────────────────
+
+    def enqueue_upload_indexing(self, *, account_id: str, upload_ids: list[str]) -> str:
+        """Server-mode batch-commit entry point. Returns the JobTracker job_id.
+
+        Reuses Phase B's per-account queue: a second commit for the SAME account
+        while one is RUNNING raises 409; different accounts run concurrently,
+        bounded by the global MAX_PARALLEL_INDEXING_JOBS semaphore inside the
+        background runner.
+        """
+        from fastapi import HTTPException
+
+        existing = self.get_account_job_id(account_id)
+        if existing:
+            cur = self._job_tracker.get_job(existing)
+            if cur and cur.overall_status == IndexStatus.RUNNING:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"indexing already in progress for this account (job={existing})",
+                )
+            self.finish_job(account_id)  # stale entry left by a crashed job
+
+        collection_name = f"acct_{account_id}"
+        job = self._job_tracker.create_job(
+            folder_path=f"<uploads:{len(upload_ids)}>",
+            collection_name=collection_name,
+        )
+        if not self.try_start_job(account_id=account_id, job_id=job.job_id):
+            self._job_tracker.remove_completed_job(job.job_id)
+            raise HTTPException(
+                status_code=409,
+                detail="indexing already in progress for this account",
+            )
+        job.overall_status = IndexStatus.RUNNING
+        asyncio.create_task(self._run_upload_indexing_job(job, account_id, upload_ids))
+        return job.job_id
+
+    async def _run_upload_indexing_job(self, job, account_id: str, upload_ids: list[str]):
+        """Background runner for server-mode uploads — mirrors _run_indexing_job."""
+        await asyncio.to_thread(_INDEX_SEMAPHORE.acquire)
+        try:
+            rows = []
+            for uid in upload_ids:
+                row = MetadataDB.get_pending_upload(uid)
+                if row and row["account_id"] == account_id:
+                    rows.append(row)
+            if not rows:
+                job.overall_status = IndexStatus.FAILED
+                job.error_message = "no valid upload ids"
+                await self._notify_progress(job, {
+                    "overall_status": IndexStatus.FAILED.value, "error": job.error_message,
+                })
+                return
+            if self.db_client is None:
+                job.overall_status = IndexStatus.FAILED
+                job.error_message = "DB client unavailable"
+                await self._notify_progress(job, {
+                    "overall_status": IndexStatus.FAILED.value, "error": job.error_message,
+                })
+                return
+
+            engine = self.db_client.search_engine
+            indexing = IndexingService(engine)
+
+            loop = asyncio.get_event_loop()
+            def _sync_cb(stage, current, total, message):
+                # _on_index_progress takes an explicit job (Phase B) — pass it.
+                asyncio.run_coroutine_threadsafe(
+                    self._on_index_progress(job, stage, current, total, message), loop,
+                )
+
+            # index_uploads sets+restores engine.collection_name = acct_<id>
+            # internally via fit_with_progress, so we don't mutate it here.
+            await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: indexing.index_uploads(
+                    account_id=account_id, upload_rows=rows, progress_callback=_sync_cb,
+                ),
+            )
+
+            job.overall_status = IndexStatus.COMPLETED
+            await self._notify_progress(job, {
+                "overall_status": IndexStatus.COMPLETED.value,
+                "message": f"Загружено {len(rows)} треков",
+            })
+        except Exception as e:
+            logger.exception("[LibraryService] upload indexing job %s failed", job.job_id)
+            job.overall_status = IndexStatus.FAILED
+            job.error_message = str(e)
+            await self._notify_progress(job, {
+                "overall_status": IndexStatus.FAILED.value, "error": str(e),
+            })
+        finally:
+            _INDEX_SEMAPHORE.release()
+            self.finish_job(account_id=account_id)
+
     async def index_folder(
         self,
         folder_path: str,

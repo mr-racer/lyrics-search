@@ -10,13 +10,16 @@ from collections import Counter
 from datetime import date as _date
 from pathlib import Path
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
 from app.domain.models import ArtistAggregate, IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RediscoverResponse, User
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_user, require_mode
 from app.services.library_service import LibraryService
+from app.services import uploads_service
+from app.services._magic_sniff import sniff_audio_mime
 from app.services.similarity_service import load_top_pairs
 
 router = APIRouter(prefix="/library", tags=["Library"])
@@ -768,19 +771,33 @@ async def pick_folder() -> dict:
 
 # ── Index folder ──────────────────────────────────────────────────────────────
 
-@router.post("/index")
+@router.post("/index", dependencies=[Depends(require_mode("sharing"))])
 async def index_folder(
     req: IndexRequest,
     request: Request,
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """Index a folder with music files.
+    """Index a folder with music files (sharing mode only).
+
+    In server mode this endpoint 404s — members upload via POST /library/upload
+    and the owner bulk-imports via `python -m scripts.hardlink_owner_library`.
 
     Returns {"status": "completed", "count": N, "message": "..."}
     """
+    # Service availability first — if Qdrant/the whole library service is down,
+    # 503 takes precedence over a bad folder (and preserves the pre-Phase-C
+    # /index contract).
     service: LibraryService = request.app.state.library_service
     if service is None:
         raise HTTPException(status_code=503, detail="Library service unavailable — is Qdrant running?")
+
+    # Sanity check: folder must exist on the host. Done BEFORE delegating so a
+    # typo gives a clean 400 instead of a confusing mid-pipeline failure.
+    if not Path(req.folder_path).is_dir():
+        raise HTTPException(
+            status_code=400,
+            detail=f"folder does not exist on this host: {req.folder_path}",
+        )
     # Phase B: key the in-flight indexing slot by the authenticated account, so
     # two accounts can index concurrently while one account can't double-start.
     result = await service.index_folder(
@@ -792,6 +809,211 @@ async def index_folder(
         account_id=current_user.id,
     )
     return result
+
+
+# ── Server-mode uploads (Phase C) ──────────────────────────────────────────────
+
+@router.post("/upload", dependencies=[Depends(require_mode("server"))])
+async def upload_audio(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Stream-upload one audio file into the caller's managed library.
+
+    Server mode only. Pipeline:
+      1. Stream the multipart body into ``media/_quarantine/<id>.tmp`` computing
+         SHA-256 incrementally; reject if size > MAX_UPLOAD_BYTES.
+      2. Sniff the first 64 KB via libmagic; reject non-audio (falling back to the
+         extension whitelist only when the sniff is inconclusive / libmagic absent).
+      3. Idempotency: if (account_id, sha256) is already 'done', drop the
+         quarantine copy and return the existing track_id.
+      4. Atomic rename into ``media/<account_id>/audio/<sha>.<ext>``.
+      5. Insert a pending_uploads row with status='uploaded'.
+
+    Returns: {upload_id, sha256, size, status}.
+    """
+    import uuid as _uuid
+    from pathlib import Path as _Path
+    from app.resources.metadata_db import MetadataDB
+
+    if file.filename is None:
+        raise HTTPException(status_code=400, detail="missing filename")
+
+    account_id = current_user.id
+    media_root = uploads_service.media_root_default()
+    quarantine_root = uploads_service.quarantine_root_default()
+    quarantine_root.mkdir(parents=True, exist_ok=True)
+
+    q_path = quarantine_root / f"{_uuid.uuid4().hex}.tmp"
+
+    try:
+        sha256, total, head = uploads_service.write_to_quarantine(
+            file.file, q_path, max_bytes=uploads_service.MAX_UPLOAD_BYTES,
+        )
+    except uploads_service.UploadOversize as e:
+        raise HTTPException(status_code=400, detail=f"upload too large: {e}")
+    except Exception as e:
+        logger.exception("[upload] quarantine write failed")
+        raise HTTPException(status_code=500, detail=f"upload failed: {e}")
+
+    # MIME gate: a definite non-audio sniff rejects even if the filename claims
+    # an audio extension (stops a .flac-named shell script). Only when libmagic
+    # is unavailable (octet-stream) do we trust the extension whitelist.
+    mime = sniff_audio_mime(head)
+    ext_ok = _Path(file.filename).suffix.lower() in uploads_service._AUDIO_EXTENSIONS
+    accept = ext_ok if mime == "application/octet-stream" else mime.startswith("audio/")
+    if not accept:
+        q_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=f"file is not audio (mime={mime})")
+
+    # Idempotency: same SHA already indexed for this account → return existing.
+    MetadataDB.init()
+    existing = MetadataDB.find_done_upload_by_sha(account_id=account_id, sha256=sha256)
+    if existing:
+        q_path.unlink(missing_ok=True)
+        return {
+            "upload_id": existing["upload_id"],
+            "sha256": sha256,
+            "size": existing["size_bytes"],
+            "status": "done",
+            "track_id": existing["track_id"],
+        }
+
+    ext = uploads_service.choose_extension(mime, original=file.filename)
+    final_path = uploads_service.atomic_promote_to_managed(
+        quarantine_path=q_path,
+        media_root=media_root,
+        account_id=account_id,
+        sha256=sha256,
+        extension=ext,
+    )
+
+    upload_id = MetadataDB.create_pending_upload(
+        account_id=account_id,
+        sha256=sha256,
+        original_filename=file.filename,
+        size_bytes=total,
+        storage_path=str(final_path),
+    )
+
+    return {
+        "upload_id": upload_id,
+        "sha256": sha256,
+        "size": total,
+        "status": "uploaded",
+    }
+
+
+@router.get("/upload/{upload_id}", dependencies=[Depends(require_mode("server"))])
+async def get_upload_status(
+    upload_id: str,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Look up an upload's status. Owner-aware: 404 if the row belongs to another account."""
+    from app.resources.metadata_db import MetadataDB
+    MetadataDB.init()
+    row = MetadataDB.get_pending_upload(upload_id)
+    if not row or row["account_id"] != current_user.id:
+        # Deliberately collapse "not yours" with "doesn't exist" — no leak.
+        raise HTTPException(status_code=404, detail="not found")
+    return {
+        "upload_id": row["upload_id"],
+        "sha256": row["sha256"],
+        "size": row["size_bytes"],
+        "status": row["status"],
+        "track_id": row["track_id"],
+        "error": row["error"],
+    }
+
+
+class _BatchCommitRequest(BaseModel):
+    upload_ids: list[str]
+
+
+@router.post("/upload/batch-commit", dependencies=[Depends(require_mode("server"))])
+async def batch_commit_uploads(
+    req: _BatchCommitRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Enqueue indexing for a set of already-uploaded files (server mode)."""
+    from app.resources.metadata_db import MetadataDB
+    if not req.upload_ids:
+        raise HTTPException(status_code=400, detail="upload_ids must not be empty")
+    service: LibraryService = request.app.state.library_service
+    if service is None:
+        raise HTTPException(status_code=503, detail="Library service unavailable")
+
+    # Filter to the caller's OWN uploads to prevent cross-account triggering.
+    MetadataDB.init()
+    mine = [
+        uid for uid in req.upload_ids
+        if (row := MetadataDB.get_pending_upload(uid)) and row["account_id"] == current_user.id
+    ]
+    if not mine:
+        raise HTTPException(
+            status_code=400, detail="none of the upload_ids belong to the caller",
+        )
+
+    job_id = service.enqueue_upload_indexing(account_id=current_user.id, upload_ids=mine)
+    return {"job_id": job_id}
+
+
+@router.delete("/tracks/{track_id}", dependencies=[Depends(require_mode("server"))])
+async def delete_track(
+    track_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Remove a track from Qdrant and delete its file from ``media/<account>/``.
+
+    Server mode only. Owner-aware: 404 if the track's storage_path is not under
+    the caller's account namespace (prevents path-traversal abuse via a forged
+    track_id, and refuses pre-Phase-C folder-scan tracks).
+    """
+    import os as _os
+    from app.services.audio_streaming import drop_transcoded_for_tracks
+
+    collection_name = f"acct_{current_user.id}"
+    db_client = request.app.state.db_client
+    if db_client is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    qdrant = db_client.qdrant
+    try:
+        result = qdrant.retrieve(collection_name=collection_name, ids=[track_id], with_payload=True)
+    except Exception:
+        raise HTTPException(status_code=404, detail="track not found")
+    if not result:
+        raise HTTPException(status_code=404, detail="track not found")
+
+    payload = result[0].payload or {}
+    file_path = payload.get("file_path") or ""
+    expected_prefix = str(uploads_service.media_root_default() / current_user.id) + _os.sep
+    if not file_path.startswith(expected_prefix):
+        # Cross-account or pre-Phase-C (folder-scan) track — refuse.
+        raise HTTPException(status_code=404, detail="track not found")
+
+    # Delete from Qdrant first; on failure we don't orphan the row by removing
+    # the file too.
+    try:
+        qdrant.delete(collection_name=collection_name, points_selector=[track_id])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"qdrant delete failed: {e}")
+
+    # Delete the physical file (idempotent — missing is fine).
+    try:
+        Path(file_path).unlink(missing_ok=True)
+    except OSError as e:
+        logger.warning("[delete_track] file unlink failed for %s: %s", file_path, e)
+
+    # Drop the per-account transcoded cache (Phase B §6.6 keyed by collection_name).
+    try:
+        drop_transcoded_for_tracks(account_id=collection_name, track_ids=[track_id])
+    except Exception:
+        pass
+
+    return {"ok": True, "track_id": track_id}
 
 
 # ── Status / progress ─────────────────────────────────────────────────────────

@@ -23,6 +23,7 @@ def clean_metadata_db(tmp_path, monkeypatch):
             conn = sqlite3.connect(str(mod.DB_PATH), detect_types=sqlite3.PARSE_DECLTYPES, check_same_thread=False)
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA foreign_keys=ON")
+            conn.execute("PRAGMA busy_timeout=5000")  # mirror prod: survive concurrent writes
             cls._instance = conn
         return cls._instance
     MetadataDB._connect = _patched_connect

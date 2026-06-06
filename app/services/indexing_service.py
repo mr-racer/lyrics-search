@@ -290,6 +290,125 @@ class IndexingService:
         finally:
             self.engine.collection_name = _saved
 
+    def index_uploads(
+        self,
+        account_id: str,
+        upload_rows: list[dict],
+        *,
+        progress_callback: Optional[Callable] = None,
+    ) -> dict[str, str]:
+        """Index a list of already-uploaded files (server mode).
+
+        Each row in ``upload_rows`` is a ``pending_uploads`` record produced by
+        the multipart upload endpoint; the file already lives at
+        ``row['storage_path']`` (``media/<account_id>/audio/<sha>.<ext>``).
+
+        We reuse the folder-scan pipeline unchanged: ``process_file`` builds the
+        same per-track ``song_info`` dict the folder flow produces (so slugging
+        flows through ``_build_payload_for_upsert`` — see two_divergent_slugify
+        memo), then ``fit_with_progress`` runs it against
+        ``collection_name = f"acct_{account_id}"``. Returns ``{upload_id: track_id}``
+        for every row that landed in Qdrant; updates ``pending_uploads.status``
+        per row (indexing → done/failed).
+        """
+        from app.indexing.folder_scanner import process_file
+        from app.resources.metadata_db import MetadataDB
+
+        # Mark all rows 'indexing' so the status endpoint reflects in-progress
+        # work even if the heavy pipeline takes minutes.
+        for r in upload_rows:
+            MetadataDB.update_pending_upload_status(r["upload_id"], status="indexing")
+
+        collection_name = f"acct_{account_id}"
+        data: dict[str, dict] = {}
+        upload_by_key: dict[str, str] = {}   # "Artist — Title" -> upload_id
+
+        for row in upload_rows:
+            file_path = Path(row["storage_path"])
+            if not file_path.exists():
+                MetadataDB.update_pending_upload_status(
+                    row["upload_id"], status="failed",
+                    error=f"file missing on disk: {file_path}",
+                )
+                continue
+            try:
+                info = process_file(file_path, False)
+                if not info or not info.get("title") or not info.get("artist"):
+                    MetadataDB.update_pending_upload_status(
+                        row["upload_id"], status="failed",
+                        error="missing title/artist in metadata tags",
+                    )
+                    continue
+                if not info.get("lyrics"):
+                    info["lyrics"] = "No lyrics were found :("
+                info["file_path"] = str(file_path)
+                key = f"{info['artist']} — {info['title']}"
+                data[key] = info
+                upload_by_key[key] = row["upload_id"]
+            except Exception as e:
+                logger.exception("[index_uploads] metadata read failed for %s", file_path)
+                MetadataDB.update_pending_upload_status(
+                    row["upload_id"], status="failed", error=str(e),
+                )
+
+        if not data:
+            logger.info("[index_uploads] nothing to index for account=%s", account_id)
+            return {}
+
+        # Run the same pipeline as the folder-scan flow. fit_with_progress sets
+        # (and restores) engine.collection_name around _fit_impl, so the upsert
+        # lands in acct_<account_id> without mutating the shared engine's default.
+        self.fit_with_progress(
+            data, path=None, collection_name=collection_name,
+            progress_callback=progress_callback,
+        )
+
+        # After upsert, scroll the collection to pick up freshly created point ids
+        # and update pending_uploads.track_id. We match by (artist, title) which
+        # is unique within a single batch — same caveat as scan_folder.
+        try:
+            client = self.engine.qdrant_client
+            offset = None
+            id_by_key: dict[str, str] = {}
+            while True:
+                points, next_offset = client.scroll(
+                    collection_name=collection_name,
+                    offset=offset,
+                    limit=500,
+                    with_payload=["title", "artist"],
+                    with_vectors=False,
+                )
+                for p in points:
+                    pl = p.payload or {}
+                    k = f"{(pl.get('artist') or '').strip()} — {(pl.get('title') or '').strip()}"
+                    if k in upload_by_key and k not in id_by_key:
+                        id_by_key[k] = str(p.id)
+                if next_offset is None or not points:
+                    break
+                offset = next_offset
+
+            out: dict[str, str] = {}
+            for key, upload_id in upload_by_key.items():
+                track_id = id_by_key.get(key)
+                if track_id:
+                    MetadataDB.update_pending_upload_status(
+                        upload_id, status="done", track_id=track_id,
+                    )
+                    out[upload_id] = track_id
+                else:
+                    MetadataDB.update_pending_upload_status(
+                        upload_id, status="failed",
+                        error="track did not appear in Qdrant after upsert",
+                    )
+            return out
+        except Exception as e:
+            logger.exception("[index_uploads] post-upsert resolve failed")
+            for upload_id in upload_by_key.values():
+                MetadataDB.update_pending_upload_status(
+                    upload_id, status="failed", error=str(e),
+                )
+            return {}
+
     def _fit_impl(
         self,
         data: dict,
