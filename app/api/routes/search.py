@@ -125,7 +125,13 @@ async def stream_track(
 
     # ALAC m4a is transcoded to FLAC on the fly (lossless→lossless, bit-exact);
     # other formats served as-is. FileResponse handles Range internally.
-    serve_path, content_type = await get_streamable_path(track_id, audio_path)
+    # Phase B §6.6: scope the transcoded-cache namespace by collection_name so
+    # two accounts sharing a track_id don't serve each other's cached blob.
+    # collection_name is the stable per-tenant key here (Phase D makes it
+    # acct_<id>); delete_collection purges under the same key.
+    serve_path, content_type = await get_streamable_path(
+        account_id=collection_name, track_id=track_id, file_path=audio_path,
+    )
 
     return FileResponse(
         serve_path,

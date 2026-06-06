@@ -857,11 +857,13 @@ async def delete_collection(collection_name: str, request: Request):
     except Exception:
         pass
 
-    # Drop transcoded ALAC→FLAC cache for the deleted tracks.
+    # Drop transcoded ALAC→FLAC cache for the deleted tracks. Phase B §6.6:
+    # keyed by collection_name — the same namespace /stream writes under — so the
+    # purge hits this account's cache only and never another account's.
     if track_ids:
         try:
             from app.services.audio_streaming import drop_transcoded_for_tracks
-            drop_transcoded_for_tracks(track_ids)
+            drop_transcoded_for_tracks(account_id=collection_name, track_ids=track_ids)
         except Exception:
             pass
 
