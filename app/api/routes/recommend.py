@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from app.domain.models import AutoplayQueueResponse, ForYouSeedResponse
+from app.domain.models import AutoplayQueueResponse, ForYouSeedResponse, User
+from app.api.dependencies import get_current_user
+from app.api.helpers import derive_collection_for_user, deprecated_collection_warning
 from app.services import autoplay_service, personalization_service
 
 router = APIRouter(prefix="/recommend", tags=["Recommend"])
@@ -13,7 +15,8 @@ router = APIRouter(prefix="/recommend", tags=["Recommend"])
 @router.get("/autoplay-queue", response_model=AutoplayQueueResponse)
 def autoplay_queue(
     request: Request,
-    collection: str = Query(..., description="Qdrant collection name"),
+    current_user: User = Depends(get_current_user),
+    collection: str | None = Query(None, deprecated=True, description="Deprecated — collection is derived from the JWT user"),
     seed_track_id: str = Query(..., description="Track id used as similarity anchor"),
     exclude_ids: str | None = Query(
         None,
@@ -26,10 +29,14 @@ def autoplay_queue(
     if db_client is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
+    # Phase D-soft: derive collection from JWT user; ignore client-supplied value.
+    derived = derive_collection_for_user(current_user)
+    deprecated_collection_warning(collection, derived, "/recommend/autoplay-queue")
+
     excluded = [x.strip() for x in (exclude_ids or "").split(",") if x.strip()]
     return autoplay_service.next_queue(
         qdrant_client=db_client.qdrant,
-        collection_name=collection,
+        collection_name=derived,
         seed_track_id=seed_track_id,
         exclude_ids=excluded,
         limit=limit,
@@ -39,20 +46,27 @@ def autoplay_queue(
 @router.get("/for-you-seed", response_model=ForYouSeedResponse)
 def for_you_seed(
     request: Request,
-    collection: str = Query(..., description="Qdrant collection name"),
+    current_user: User = Depends(get_current_user),
+    collection: str | None = Query(None, deprecated=True, description="Deprecated — collection is derived from the JWT user"),
 ) -> ForYouSeedResponse:
     db_client = request.app.state.db_client
     if db_client is None or db_client.qdrant is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
+
+    # Phase D-soft: derive collection from JWT user; ignore client-supplied value.
+    derived = derive_collection_for_user(current_user)
+    deprecated_collection_warning(collection, derived, "/recommend/for-you-seed")
+
     return personalization_service.pick_for_you_seed(
-        qdrant_client=db_client.qdrant, collection_name=collection,
+        qdrant_client=db_client.qdrant, collection_name=derived,
     )
 
 
 @router.get("/sonic-sibling")
 def sonic_sibling_stub(
     track_id: str = Query(...),
-    collection: str = Query(...),
+    current_user: User = Depends(get_current_user),
+    collection: str | None = Query(None, deprecated=True, description="Deprecated — collection is derived from the JWT user"),
 ):
     """Slot reserved for the Sonic Sibling endpoint (deferred to a future plan).
 
