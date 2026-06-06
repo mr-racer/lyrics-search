@@ -771,16 +771,27 @@ async def pick_folder() -> dict:
 
 # ── Index folder ──────────────────────────────────────────────────────────────
 
-@router.post("/index")
+@router.post("/index", dependencies=[Depends(require_mode("sharing"))])
 async def index_folder(
     req: IndexRequest,
     request: Request,
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """Index a folder with music files.
+    """Index a folder with music files (sharing mode only).
+
+    In server mode this endpoint 404s — members upload via POST /library/upload
+    and the owner bulk-imports via `python -m scripts.hardlink_owner_library`.
 
     Returns {"status": "completed", "count": N, "message": "..."}
     """
+    # Sanity check: folder must exist on the host. Done BEFORE delegating so a
+    # typo gives a clean 400 instead of a confusing mid-pipeline failure.
+    if not Path(req.folder_path).is_dir():
+        raise HTTPException(
+            status_code=400,
+            detail=f"folder does not exist on this host: {req.folder_path}",
+        )
+
     service: LibraryService = request.app.state.library_service
     if service is None:
         raise HTTPException(status_code=503, detail="Library service unavailable — is Qdrant running?")
@@ -943,6 +954,63 @@ async def batch_commit_uploads(
 
     job_id = service.enqueue_upload_indexing(account_id=current_user.id, upload_ids=mine)
     return {"job_id": job_id}
+
+
+@router.delete("/tracks/{track_id}", dependencies=[Depends(require_mode("server"))])
+async def delete_track(
+    track_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Remove a track from Qdrant and delete its file from ``media/<account>/``.
+
+    Server mode only. Owner-aware: 404 if the track's storage_path is not under
+    the caller's account namespace (prevents path-traversal abuse via a forged
+    track_id, and refuses pre-Phase-C folder-scan tracks).
+    """
+    import os as _os
+    from app.services.audio_streaming import drop_transcoded_for_tracks
+
+    collection_name = f"acct_{current_user.id}"
+    db_client = request.app.state.db_client
+    if db_client is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    qdrant = db_client.qdrant
+    try:
+        result = qdrant.retrieve(collection_name=collection_name, ids=[track_id], with_payload=True)
+    except Exception:
+        raise HTTPException(status_code=404, detail="track not found")
+    if not result:
+        raise HTTPException(status_code=404, detail="track not found")
+
+    payload = result[0].payload or {}
+    file_path = payload.get("file_path") or ""
+    expected_prefix = str(uploads_service.media_root_default() / current_user.id) + _os.sep
+    if not file_path.startswith(expected_prefix):
+        # Cross-account or pre-Phase-C (folder-scan) track — refuse.
+        raise HTTPException(status_code=404, detail="track not found")
+
+    # Delete from Qdrant first; on failure we don't orphan the row by removing
+    # the file too.
+    try:
+        qdrant.delete(collection_name=collection_name, points_selector=[track_id])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"qdrant delete failed: {e}")
+
+    # Delete the physical file (idempotent — missing is fine).
+    try:
+        Path(file_path).unlink(missing_ok=True)
+    except OSError as e:
+        logger.warning("[delete_track] file unlink failed for %s: %s", file_path, e)
+
+    # Drop the per-account transcoded cache (Phase B §6.6 keyed by collection_name).
+    try:
+        drop_transcoded_for_tracks(account_id=collection_name, track_ids=[track_id])
+    except Exception:
+        pass
+
+    return {"ok": True, "track_id": track_id}
 
 
 # ── Status / progress ─────────────────────────────────────────────────────────
