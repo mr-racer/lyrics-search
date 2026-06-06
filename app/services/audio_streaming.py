@@ -8,8 +8,8 @@ the first request and cache the result on disk.
 FLAC, MP3, AAC-in-m4a, OGG, WAV, OPUS are served as-is.
 
 Public API:
-  get_streamable_path(track_id, file_path) -> (Path, mime_type)
-  drop_transcoded_for_tracks(track_ids: Iterable[str]) -> int
+  get_streamable_path(account_id, track_id, file_path) -> (Path, mime_type)
+  drop_transcoded_for_tracks(account_id, track_ids: Iterable[str]) -> int
 """
 
 from __future__ import annotations
@@ -119,31 +119,51 @@ def _transcode_alac_to_flac(src: Path, dst: Path) -> bool:
         return False
 
 
-async def get_streamable_path(track_id: str, file_path: Path) -> tuple[Path, str]:
+def _cache_path(account_id: str, track_id: str) -> Path:
+    """Per-account, content-addressed transcoded cache path (Phase B §6.6).
+
+    Namespacing by ``account_id`` closes the cross-account leak: ``track_id`` is
+    ``sha256(file_path)[:16]``, so two accounts whose libraries share a path
+    would otherwise collide on a single flat ``cache/transcoded/<id>.flac`` and
+    one would serve the other's audio. Callers pass the owning collection name
+    as ``account_id`` (Phase D renames collections to ``acct_<id>``, at which
+    point the key is literally per-account).
+    """
+    return _CACHE_DIR / account_id / f"{track_id}.flac"
+
+
+async def get_streamable_path(
+    account_id: str,
+    track_id: str,
+    file_path: Path,
+) -> tuple[Path, str]:
     """Resolve the path FastAPI should hand to FileResponse, plus its mime type.
 
     - Non-ALAC files: returned as-is with their native mime type.
-    - ALAC m4a files: transcoded to FLAC (cached at cache/transcoded/{id}.flac)
-      and the cache path is returned with audio/flac. First call blocks ~1–2s;
-      subsequent calls are instant. Concurrent first-calls are serialized
-      per track_id so only one ffmpeg runs.
+    - ALAC m4a files: transcoded to FLAC (cached at
+      ``cache/transcoded/<account_id>/<track_id>.flac``) and the cache path is
+      returned with audio/flac. First call blocks ~1–2s; subsequent calls are
+      instant. Concurrent first-calls are serialized per (account_id, track_id)
+      so only one ffmpeg runs.
     """
     if not _is_alac_m4a(file_path):
         return file_path, _content_type(file_path)
 
-    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    cached = _CACHE_DIR / f"{track_id}.flac"
+    cached = _cache_path(account_id, track_id)
+    cached.parent.mkdir(parents=True, exist_ok=True)
 
     if cached.exists():
         return cached, _FLAC_MIME
 
-    lock = _locks[track_id]
+    # Lock key includes account_id so two different accounts transcoding the
+    # same (rare) track_id aren't serialised against each other.
+    lock = _locks[f"{account_id}::{track_id}"]
     async with lock:
         # Re-check after acquiring the lock — another request may have just finished.
         if cached.exists():
             return cached, _FLAC_MIME
 
-        logger.info("[audio_streaming] transcoding ALAC→FLAC: %s", file_path.name)
+        logger.info("[audio_streaming] transcoding ALAC→FLAC: %s (acct=%s)", file_path.name, account_id)
         # ffmpeg is blocking; run in default thread executor so the event loop
         # stays responsive for other requests.
         ok = await asyncio.get_running_loop().run_in_executor(
@@ -163,13 +183,18 @@ async def get_streamable_path(track_id: str, file_path: Path) -> tuple[Path, str
     return cached, _FLAC_MIME
 
 
-def drop_transcoded_for_tracks(track_ids: Iterable[str]) -> int:
-    """Remove cached transcoded files for the given track ids. Returns count deleted."""
-    if not _CACHE_DIR.exists():
+def drop_transcoded_for_tracks(account_id: str, track_ids: Iterable[str]) -> int:
+    """Remove cached transcoded files for given track ids in ``account_id`` only.
+
+    Scoped to the account's namespace so purging one account's collection never
+    touches another account's cache. Returns count deleted.
+    """
+    account_dir = _CACHE_DIR / account_id
+    if not account_dir.exists():
         return 0
     n = 0
     for tid in track_ids:
-        p = _CACHE_DIR / f"{tid}.flac"
+        p = account_dir / f"{tid}.flac"
         if p.exists():
             try:
                 p.unlink()

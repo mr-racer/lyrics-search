@@ -10,11 +10,12 @@ from collections import Counter
 from datetime import date as _date
 from pathlib import Path
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 logger = logging.getLogger(__name__)
 
-from app.domain.models import ArtistAggregate, IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RediscoverResponse
+from app.domain.models import ArtistAggregate, IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RediscoverResponse, User
+from app.api.dependencies import get_current_user
 from app.services.library_service import LibraryService
 from app.services.similarity_service import load_top_pairs
 
@@ -768,7 +769,11 @@ async def pick_folder() -> dict:
 # ── Index folder ──────────────────────────────────────────────────────────────
 
 @router.post("/index")
-async def index_folder(req: IndexRequest, request: Request) -> dict:
+async def index_folder(
+    req: IndexRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> dict:
     """Index a folder with music files.
 
     Returns {"status": "completed", "count": N, "message": "..."}
@@ -776,12 +781,15 @@ async def index_folder(req: IndexRequest, request: Request) -> dict:
     service: LibraryService = request.app.state.library_service
     if service is None:
         raise HTTPException(status_code=503, detail="Library service unavailable — is Qdrant running?")
+    # Phase B: key the in-flight indexing slot by the authenticated account, so
+    # two accounts can index concurrently while one account can't double-start.
     result = await service.index_folder(
         folder_path=req.folder_path,
         collection_name=req.collection_name,
         better_lyrics_quality=req.better_lyrics_quality,
         text_model=req.text_model,
         enhance_by_musicbrainz=req.enhance_by_musicbrainz,
+        account_id=current_user.id,
     )
     return result
 
@@ -789,12 +797,15 @@ async def index_folder(req: IndexRequest, request: Request) -> dict:
 # ── Status / progress ─────────────────────────────────────────────────────────
 
 @router.get("/status")
-async def get_status(request: Request) -> dict:
-    """Return current indexing status."""
+async def get_status(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Return current indexing status for the authenticated account."""
     service: LibraryService = request.app.state.library_service
     if service is None:
         raise HTTPException(status_code=503, detail="Library service unavailable — is Qdrant running?")
-    return await service.get_status()
+    return await service.get_status(account_id=current_user.id)
 
 
 @router.get("/progress/{job_id}")
@@ -846,11 +857,13 @@ async def delete_collection(collection_name: str, request: Request):
     except Exception:
         pass
 
-    # Drop transcoded ALAC→FLAC cache for the deleted tracks.
+    # Drop transcoded ALAC→FLAC cache for the deleted tracks. Phase B §6.6:
+    # keyed by collection_name — the same namespace /stream writes under — so the
+    # purge hits this account's cache only and never another account's.
     if track_ids:
         try:
             from app.services.audio_streaming import drop_transcoded_for_tracks
-            drop_transcoded_for_tracks(track_ids)
+            drop_transcoded_for_tracks(account_id=collection_name, track_ids=track_ids)
         except Exception:
             pass
 

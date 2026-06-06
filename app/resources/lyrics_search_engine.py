@@ -27,10 +27,20 @@ logger = logging.getLogger(__name__)
 class LyricsSearchEngine:
     """Search-focused wrapper over one Qdrant collection.
 
-    Model loading is lazy by default — text + CLAP models load on first actual
-    search call. Pre-loaded models can be passed via ``model`` / ``model_clap``
-    to skip lazy loading entirely (used by indexing service which preloads
-    models for the whole batch).
+    STATELESS DISPATCH (Phase B): ``search()`` accepts ``model_name`` and
+    resolves the text model via ``ModelRegistry.get_text_model`` per call. It
+    must NOT mutate ``self.model_name`` / ``self._model`` / ``self._vector_name``
+    in the search path — that pattern caused concurrent searches from two
+    accounts with different models to race (one thread's model leaked into the
+    other's Qdrant query). If you reach for a ``self._model = ...`` assignment
+    inside ``search()`` you are reintroducing the race. See
+    docs/superpowers/plans/2026-06-02-phase-b-singleton-fixes.md.
+
+    Model loading is lazy by default. The ``__init__`` ``model_name`` remains a
+    per-engine default (used when ``search`` is called with ``model_name=None``)
+    and the pre-load target for the indexing path (which calls ``engine.model``
+    directly to encode batches). Pre-loaded models can be passed via ``model`` /
+    ``model_clap`` to skip lazy loading entirely.
     """
 
     def __init__(
@@ -166,11 +176,19 @@ class LyricsSearchEngine:
         year_ranges: list[str] | None = None,
         sonic_tags: list[str] | None = None,
         collection_name_override: str | None = None,
+        model_name: str | None = None,
     ) -> list[models.ScoredPoint]:
         """Hybrid (dense + BM25) or CLAP search against the collection.
 
+        ``model_name`` selects the text embedding model and is resolved via
+        ``ModelRegistry.get_text_model`` per call (stateless dispatch); falls
+        back to ``self.model_name`` when not supplied. The engine does NOT cache
+        the resolved model on ``self`` — keeping search stateless makes
+        concurrent calls with different models safe.
+
         When ``include_clap=True`` the query is converted to a CLAP text embedding
-        and matched against the ``clap`` audio vectors. Otherwise the query is
+        and matched against the ``clap`` audio vectors (CLAP is the single global
+        audio model, so it is not per-account). Otherwise the query is
         sentence-encoded + matched against the dense lyric vectors, fused (RRF)
         with sparse BM25 results over the metadata+lyrics document.
         """
@@ -182,13 +200,17 @@ class LyricsSearchEngine:
         )
 
         if not include_clap:
-            query_vector = self.model.encode(query).tolist()
+            # Resolve the text model per call — stateless dispatch, no self.* write.
+            from .model_registry import ModelRegistry
+            effective_model_name = model_name or self.model_name
+            text_model, vector_name, _vector_dim = ModelRegistry.get_text_model(effective_model_name)
+            query_vector = text_model.encode(query).tolist()
             results = self.qdrant_client.query_points(
                 collection_name=col,
                 prefetch=[
                     models.Prefetch(
                         query=query_vector,
-                        using=self.vector_name,
+                        using=vector_name,
                         limit=15,
                         score_threshold=min_dense_score,
                         filter=query_filter,

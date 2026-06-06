@@ -299,6 +299,17 @@ class MetadataDB:
             "n_skipped": "INTEGER NOT NULL DEFAULT 0",
         })
 
+        # Phase B: per-user settings live as columns on the (Phase A) users
+        # table — model selection + CLAP toggle, keyed by users.id. Additive so
+        # it coexists with the auth columns regardless of migration order.
+        if "users" in existing_tables:
+            cls._ensure_columns(conn, "users", {
+                # v2-small-en matches what collections are actually indexed with
+                # and is loadable without trust_remote_code (jina-v3 needs custom_st).
+                "text_model_name": "TEXT NOT NULL DEFAULT 'jinaai/jina-embeddings-v2-small-en'",
+                "clap_enabled":    "INTEGER NOT NULL DEFAULT 1",
+            })
+
         # Facts are unique per (slug, lang, fact) and per-slug refined facts are
         # collection-independent. Both migrations are idempotent no-ops once applied.
         if "artist_facts" in existing_tables:
@@ -1793,6 +1804,48 @@ class MetadataDB:
         cur = conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
         conn.commit()
         return cur.rowcount > 0
+
+    # ── Phase B: per-user settings (columns on the users table) ────────────
+    @classmethod
+    def get_user_settings(cls, user_id: str) -> Optional[Dict]:
+        """Return {'text_model_name': str, 'clap_enabled': bool} for an existing
+        user, or None if the user doesn't exist. Settings are columns on the
+        users table with defaults, so any user created via create_user/
+        create_owner already carries sane values."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT text_model_name, clap_enabled FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {"text_model_name": row[0], "clap_enabled": bool(row[1])}
+
+    @classmethod
+    def update_user_settings(
+        cls,
+        user_id: str,
+        text_model_name: Optional[str] = None,
+        clap_enabled: Optional[bool] = None,
+    ) -> None:
+        """Partial update — only non-None args are written. No-op when both are
+        None. Targets an existing user row (creating users is Phase A's job)."""
+        if text_model_name is None and clap_enabled is None:
+            return
+        conn = cls._connect()
+        fields, values = [], []
+        if text_model_name is not None:
+            fields.append("text_model_name = ?")
+            values.append(text_model_name)
+        if clap_enabled is not None:
+            fields.append("clap_enabled = ?")
+            values.append(1 if clap_enabled else 0)
+        values.append(user_id)
+        conn.execute(
+            f"UPDATE users SET {', '.join(fields)} WHERE id = ?",
+            values,
+        )
+        conn.commit()
 
     # ─── Phase A: Invites CRUD ─────────────────────────────────────────────
     @classmethod

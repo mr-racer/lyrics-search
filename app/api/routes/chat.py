@@ -294,25 +294,25 @@ async def chat(req: ChatRequest, request: Request) -> dict:
             "classification": {},
         }
 
-    # Resolve and load the text model for this collection (mirrors search.py).
-    # Without this, chat always uses the default jina model even if the collection
-    # was indexed with qwen — the Qdrant vector name wouldn't match.
+    # Resolve which text model this collection was indexed with, so chat's
+    # searches hit the matching Qdrant vector_name (a collection indexed with
+    # qwen must not be queried with the default jina vectors).
+    #
+    # Phase B: resolve the NAME only and thread it through as `text_model=` to
+    # service.search (which forwards it to the now-stateless engine). We MUST NOT
+    # mutate db.lyrics_db._model / _vector_name / _vector_dim here — that global
+    # mutation is exactly the cross-account race Phase B removed from search.py.
+    # The agent/planner paths pass collection_name, and
+    # SearchService._resolve_model_name falls back to the collection's pinned
+    # model when text_model is None, so they resolve correctly without mutation.
     resolved_text_model: str | None = None
     if req.collection_name:
         from app.resources.metadata_db import MetadataDB
-        from app.resources.model_registry import ModelRegistry
         try:
             MetadataDB.init()
             persisted = MetadataDB.get_collection_text_model(req.collection_name)
             if persisted:
                 resolved_text_model = persisted
-                model, vector_name, vector_dim = ModelRegistry.load_text_model(persisted)
-                db = request.app.state.db_client
-                if db:
-                    db.lyrics_db.model_name = persisted
-                    db.lyrics_db._model = model
-                    db.lyrics_db._vector_name = vector_name
-                    db.lyrics_db._vector_dim = vector_dim
                 logger.info("[chat] text model resolved: %s", persisted)
         except Exception as exc:
             logger.warning("[chat] text model lookup failed (non-fatal): %s", exc)

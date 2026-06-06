@@ -2,13 +2,14 @@
 
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from app.domain.models import (
-    SearchRequest, SearchResponse, TrackHit,
+    SearchRequest, SearchResponse, TrackHit, User,
     TrackReactionRequest, TrackReactionResponse,
 )
+from app.api.dependencies import get_current_user
 from app.resources.model_registry import ModelRegistry
 from app.services.audio_streaming import get_streamable_path
 
@@ -33,6 +34,7 @@ def get_db_client(request: Request):
 async def search_tracks(
     req: SearchRequest,
     request: Request,
+    current_user: User = Depends(get_current_user),
 ) -> SearchResponse:
     """
     Search tracks by lyrics or audio.
@@ -49,31 +51,10 @@ async def search_tracks(
     if requested_model in ("", "null", "undefined", "None"):
         requested_model = None
 
-    # If the request did NOT specify a text model, fall back to the model that
-    # this collection was indexed with — otherwise we'd search for vectors under
-    # a name (e.g. ``text_jinaai_...``) that doesn't exist in this Qdrant
-    # collection (the embedding spaces also wouldn't match anyway).
-    if not requested_model and req.collection_name:
-        from app.resources.metadata_db import MetadataDB
-        try:
-            MetadataDB.init()
-            persisted = MetadataDB.get_collection_text_model(req.collection_name)
-            if persisted:
-                requested_model = persisted
-        except Exception:
-            pass  # MetadataDB issue is non-fatal; fall through to default
-
-    # Load + switch text model if specified
-    if requested_model:
-        model, vector_name, vector_dim = ModelRegistry.load_text_model(requested_model)
-        # Switch LyricsDB to use the requested model
-        db = request.app.state.db_client
-        if db:
-            db.lyrics_db.model_name = requested_model
-            db.lyrics_db._model = model
-            db.lyrics_db._vector_name = vector_name
-            db.lyrics_db._vector_dim = vector_dim
-
+    # Phase B: no more db.lyrics_db.* mutation. The stateless engine resolves the
+    # model per call — SearchService._resolve_model_name reads collection_settings
+    # (the indexed model) → user.text_model_name → default. An explicit
+    # requested_model still wins as a per-request override.
     hits = await service.search(
         query=req.query,
         mode=req.mode,
@@ -81,6 +62,7 @@ async def search_tracks(
         filters=req.filters,
         limit=req.limit,
         collection_name=req.collection_name,
+        account_id=current_user.id,
     )
 
     return SearchResponse(hits=hits, query=req.query, mode=req.mode)
@@ -143,7 +125,13 @@ async def stream_track(
 
     # ALAC m4a is transcoded to FLAC on the fly (lossless→lossless, bit-exact);
     # other formats served as-is. FileResponse handles Range internally.
-    serve_path, content_type = await get_streamable_path(track_id, audio_path)
+    # Phase B §6.6: scope the transcoded-cache namespace by collection_name so
+    # two accounts sharing a track_id don't serve each other's cached blob.
+    # collection_name is the stable per-tenant key here (Phase D makes it
+    # acct_<id>); delete_collection purges under the same key.
+    serve_path, content_type = await get_streamable_path(
+        account_id=collection_name, track_id=track_id, file_path=audio_path,
+    )
 
     return FileResponse(
         serve_path,

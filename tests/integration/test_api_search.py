@@ -11,10 +11,15 @@ from ._auth_helper import authenticate_test_client
 
 class TestSearchAPI:
     def test_search_503_when_service_unavailable(self):
-        """POST /api/v1/search/ returns 503 when Qdrant is down."""
+        """POST /api/v1/search/ returns 503 when the search service is down.
+
+        Force search_service=None so this is deterministic regardless of whether
+        Qdrant happens to be reachable in the dev env (the lifespan would
+        otherwise wire a real SearchService when Qdrant is up)."""
         app = create_app()
         with TestClient(app) as c:
             authenticate_test_client(c, app)
+            app.state.search_service = None
             resp = c.post(
                 "/api/v1/search/",
                 json={"query": "test", "mode": "text"},
