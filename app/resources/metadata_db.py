@@ -194,6 +194,21 @@ _SCHEMA_SQL: Tuple[str, ...] = (
         mode        TEXT NOT NULL CHECK (mode IN ('sharing', 'server')),
         created_at  REAL NOT NULL
     )""",
+    # Phase C: server-mode upload pipeline. One row per file upload — survives
+    # restart so an interrupted batch-commit can be resumed via /library/upload/{id}.
+    """CREATE TABLE IF NOT EXISTS pending_uploads (
+        upload_id          TEXT PRIMARY KEY,
+        account_id         TEXT NOT NULL REFERENCES users(id),
+        sha256             TEXT NOT NULL,
+        original_filename  TEXT NOT NULL,
+        size_bytes         INTEGER NOT NULL,
+        storage_path       TEXT NOT NULL,
+        status             TEXT NOT NULL,
+        track_id           TEXT,
+        error              TEXT,
+        created_at         REAL NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_pending_uploads_account_status ON pending_uploads (account_id, status)",
 )
 
 
@@ -1846,6 +1861,133 @@ class MetadataDB:
             values,
         )
         conn.commit()
+
+    # ── Pending uploads (Phase C: server mode) ──
+
+    @classmethod
+    def create_pending_upload(
+        cls, *,
+        account_id: str,
+        sha256: str,
+        original_filename: str,
+        size_bytes: int,
+        storage_path: str,
+    ) -> str:
+        """Insert a row with status='uploaded'. Returns the generated upload_id."""
+        import time
+        import uuid as _uuid
+        conn = cls._connect()
+        upload_id = _uuid.uuid4().hex
+        conn.execute(
+            """INSERT INTO pending_uploads
+               (upload_id, account_id, sha256, original_filename, size_bytes,
+                storage_path, status, track_id, error, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, 'uploaded', NULL, NULL, ?)""",
+            (upload_id, account_id, sha256, original_filename, size_bytes,
+             storage_path, time.time()),
+        )
+        conn.commit()
+        return upload_id
+
+    @classmethod
+    def get_pending_upload(cls, upload_id: str) -> dict | None:
+        conn = cls._connect()
+        row = conn.execute(
+            """SELECT upload_id, account_id, sha256, original_filename,
+                      size_bytes, storage_path, status, track_id, error, created_at
+               FROM pending_uploads WHERE upload_id = ?""",
+            (upload_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "upload_id": row[0], "account_id": row[1], "sha256": row[2],
+            "original_filename": row[3], "size_bytes": row[4],
+            "storage_path": row[5], "status": row[6], "track_id": row[7],
+            "error": row[8], "created_at": row[9],
+        }
+
+    @classmethod
+    def update_pending_upload_status(
+        cls, upload_id: str, *,
+        status: str,
+        track_id: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        conn = cls._connect()
+        conn.execute(
+            """UPDATE pending_uploads
+               SET status = ?, track_id = COALESCE(?, track_id),
+                   error = COALESCE(?, error)
+               WHERE upload_id = ?""",
+            (status, track_id, error, upload_id),
+        )
+        conn.commit()
+
+    @classmethod
+    def list_pending_uploads_by_account(
+        cls, account_id: str, *, status: str | None = None,
+    ) -> list[dict]:
+        conn = cls._connect()
+        if status:
+            cursor = conn.execute(
+                """SELECT upload_id, account_id, sha256, original_filename,
+                          size_bytes, storage_path, status, track_id, error, created_at
+                   FROM pending_uploads WHERE account_id = ? AND status = ?
+                   ORDER BY created_at""",
+                (account_id, status),
+            )
+        else:
+            cursor = conn.execute(
+                """SELECT upload_id, account_id, sha256, original_filename,
+                          size_bytes, storage_path, status, track_id, error, created_at
+                   FROM pending_uploads WHERE account_id = ?
+                   ORDER BY created_at""",
+                (account_id,),
+            )
+        return [
+            {
+                "upload_id": r[0], "account_id": r[1], "sha256": r[2],
+                "original_filename": r[3], "size_bytes": r[4],
+                "storage_path": r[5], "status": r[6], "track_id": r[7],
+                "error": r[8], "created_at": r[9],
+            }
+            for r in cursor.fetchall()
+        ]
+
+    @classmethod
+    def find_done_upload_by_sha(cls, *, account_id: str, sha256: str) -> dict | None:
+        """Idempotency lookup: has this account already uploaded + indexed this SHA?"""
+        conn = cls._connect()
+        row = conn.execute(
+            """SELECT upload_id, account_id, sha256, original_filename,
+                      size_bytes, storage_path, status, track_id, error, created_at
+               FROM pending_uploads
+               WHERE account_id = ? AND sha256 = ? AND status = 'done'
+               ORDER BY created_at DESC LIMIT 1""",
+            (account_id, sha256),
+        ).fetchone()
+        if not row:
+            return None
+        return {
+            "upload_id": row[0], "account_id": row[1], "sha256": row[2],
+            "original_filename": row[3], "size_bytes": row[4],
+            "storage_path": row[5], "status": row[6], "track_id": row[7],
+            "error": row[8], "created_at": row[9],
+        }
+
+    @classmethod
+    def purge_old_pending_uploads(cls, older_than_seconds: int = 7 * 86400) -> int:
+        """Delete ``status='done'`` rows older than the cutoff. Returns count deleted."""
+        import time
+        conn = cls._connect()
+        cutoff = time.time() - older_than_seconds
+        cursor = conn.execute(
+            "DELETE FROM pending_uploads WHERE status = 'done' AND created_at < ?",
+            (cutoff,),
+        )
+        conn.commit()
+        return cursor.rowcount or 0
 
     # ─── Phase A: Invites CRUD ─────────────────────────────────────────────
     @classmethod
