@@ -66,10 +66,9 @@ class LibraryService:
         self.db_client = db_client
         self.sonic_descriptor_service = sonic_descriptor_service
         self._job_tracker = JobTracker()
-        self._current_job_id = None
         # Phase B: per-account active-job map (replaces the single _current_job_id
         # slot, which rejected B's indexing while A indexed). Lock guards the dict;
-        # maps account_id → in-flight job_id. Wired into index_folder in Task B7.
+        # maps account_id → in-flight job_id.
         self._active_jobs: dict[str, str] = {}
         self._active_jobs_lock = threading.Lock()
 
@@ -109,34 +108,58 @@ class LibraryService:
         better_lyrics_quality: bool = False,
         text_model: Optional[str] = None,
         enhance_by_musicbrainz: bool = False,
+        account_id: str = "default",
     ) -> dict:
         """
         Index all audio files in folder with progress tracking.
         Returns dict with job_id for tracking progress via SSE.
-        """
-        logger.info("[LibraryService] index_folder called: folder=%s, collection=%s, text_model=%s",
-                    folder_path, collection_name, text_model)
 
-        # Check if indexing is already in progress
-        if self._current_job_id:
-            current_job = self._job_tracker.get_job(self._current_job_id)
+        ``account_id``: per-account indexing slot (Phase B). Defaults to
+        ``"default"`` so callers that don't thread an identity through still
+        share a single bucket; the /library/index route passes ``current_user.id``.
+        Two distinct accounts may index concurrently; a second job for the SAME
+        account is rejected.
+        """
+        logger.info(
+            "[LibraryService] index_folder called: account=%s folder=%s collection=%s text_model=%s",
+            account_id, folder_path, collection_name, text_model,
+        )
+
+        # Reject if THIS account is already indexing (other accounts unaffected).
+        existing = self.get_account_job_id(account_id)
+        if existing:
+            current_job = self._job_tracker.get_job(existing)
             if current_job and current_job.overall_status == IndexStatus.RUNNING:
-                logger.warning("[LibraryService] Indexing already in progress, rejecting new request")
+                logger.warning(
+                    "[LibraryService] account=%s already indexing job=%s, rejecting",
+                    account_id, existing,
+                )
                 return {
                     "status": "failed",
-                    "message": "Indexing already in progress",
-                    "job_id": self._current_job_id,
+                    "message": "Indexing already in progress for this account",
+                    "job_id": existing,
                 }
+            # Stale entry (a prior job finished/failed without finally cleanup).
+            self.finish_job(account_id)
 
-        # Create new job
+        # Create the job, then atomically claim the slot. If the claim races and
+        # loses, drop the freshly-created job and bail.
         job = self._job_tracker.create_job(folder_path, collection_name)
-        self._current_job_id = job.job_id
+        if not self.try_start_job(account_id=account_id, job_id=job.job_id):
+            self._job_tracker.remove_completed_job(job.job_id)
+            return {
+                "status": "failed",
+                "message": "Indexing already in progress for this account",
+                "job_id": self.get_account_job_id(account_id),
+            }
         job.overall_status = IndexStatus.RUNNING
-        logger.info("[LibraryService] Job created: %s", job.job_id)
+        logger.info("[LibraryService] Job created: %s (account=%s)", job.job_id, account_id)
 
         # Start indexing in background task to allow SSE progress updates
         task = asyncio.create_task(
-            self._run_indexing_job(job, better_lyrics_quality, text_model, enhance_by_musicbrainz)
+            self._run_indexing_job(
+                job, better_lyrics_quality, text_model, enhance_by_musicbrainz, account_id
+            )
         )
         logger.info("[LibraryService] Background task created: %s", task)
 
@@ -148,7 +171,7 @@ class LibraryService:
 
     async def _run_indexing_job(
         self, job, better_lyrics_quality: bool, text_model: Optional[str] = None,
-        enhance_by_musicbrainz: bool = False,
+        enhance_by_musicbrainz: bool = False, account_id: str = "default",
     ):
         """Execute the indexing process with progress updates."""
         folder_path = job.folder_path
@@ -599,16 +622,33 @@ class LibraryService:
             if self.db_client and tracks:
                 logger.info("[LibraryService] Starting IndexingService.fit_with_progress...")
 
-                # Switch engine to the requested text model if needed.
+                # Phase B: select the text model for THIS indexing batch without
+                # hand-assigning the engine's resolved-model objects. ModelRegistry
+                # is the single source of truth and caches loads across callers.
+                #
+                # We update the lightweight engine.model_name hint (IndexingService
+                # reads engine.vector_name / engine.vector_dim / engine.model to
+                # create the collection and encode batches) and INVALIDATE the
+                # engine's lazy cache so the next access reloads the correct model
+                # via _ensure_model() → ModelRegistry (a cache hit). Setting the
+                # cache to None is invalidation, not the search-path mutation the
+                # class docstring warns about — search() is stateless and no longer
+                # reads these fields.
+                #
+                # Residual limitation (acceptable per spec §6.2): two concurrent
+                # indexing jobs for DIFFERENT models on the shared engine could
+                # still interleave these writes. Spec pins one text model per
+                # collection and the Task-8 semaphore bounds parallelism; Phase C
+                # removes the shared-engine indexing path entirely.
                 engine = self.db_client.search_engine
                 if text_model and text_model != engine.model_name:
-                    logger.info("[LibraryService] Switching text model: %s -> %s",
+                    logger.info("[LibraryService] Setting batch text model: %s -> %s",
                                 engine.model_name, text_model)
-                    _model, _vname, _vdim = ModelRegistry.load_text_model(text_model)
                     engine.model_name = text_model
-                    engine._model = _model
-                    engine._vector_name = _vname
-                    engine._vector_dim = _vdim
+                    engine._model = None
+                    engine._vector_name = None
+                    engine._vector_dim = None
+                    ModelRegistry.get_text_model(text_model)  # warm cache
 
                 # Convert TrackMetadata list → dict[str, dict] for IndexingService.
                 index_data: dict[str, dict] = {}
@@ -634,7 +674,7 @@ class LibraryService:
                 _loop = asyncio.get_event_loop()
                 def _sync_index_cb(stage, current, total, message):
                     asyncio.run_coroutine_threadsafe(
-                        self._on_index_progress(stage, current, total, message), _loop
+                        self._on_index_progress(job, stage, current, total, message), _loop
                     )
 
                 indexing = IndexingService(engine)
@@ -692,7 +732,7 @@ class LibraryService:
                     await analyze_collection(
                         qdrant_client=self.db_client.qdrant,
                         collection_name=collection_name,
-                        progress_callback=self._on_analysis_progress,
+                        progress_callback=lambda *a, **kw: self._on_analysis_progress(job, *a, **kw),
                     )
                     stage_analysis.status = IndexStatus.COMPLETED
                     stage_analysis.current = 1
@@ -741,50 +781,53 @@ class LibraryService:
                 "error": str(e),
             })
         finally:
-            self._current_job_id = None
-            logger.info("[LibraryService] _run_indexing_job FINALLY, cleared current_job_id")
+            self.finish_job(account_id=account_id)
+            logger.info(
+                "[LibraryService] _run_indexing_job FINALLY, released account=%s job=%s",
+                account_id, job.job_id,
+            )
 
     async def _notify_progress(self, job, data: dict):
         """Send progress update to all subscribers."""
         await job.notify_subscribers(data)
 
-    async def _on_index_progress(self, stage: str, current: int, total: int, message: str):
+    async def _on_index_progress(self, job, stage: str, current: int, total: int, message: str):
         """Callback from SearchService for indexing progress.
 
         Maps internal stage keys ("lyrics" → DENSE, "audio" → AUDIO) and marks
-        stages COMPLETED as soon as their encoding finishes.
+        stages COMPLETED as soon as their encoding finishes. Phase B: the active
+        ``job`` is passed in explicitly (was looked up via the now-removed global
+        ``_current_job_id``) so concurrent per-account jobs don't cross wires.
         """
-        if self._current_job_id:
-            job = self._job_tracker.get_job(self._current_job_id)
-            if not job:
-                return
+        if job is None:
+            return
 
-            # Map callback stage keys to IndexStage enum
-            if stage == "lyrics":
-                index_stage = IndexStage.DENSE
-            elif stage == "audio":
-                index_stage = IndexStage.AUDIO
-            else:
-                return
+        # Map callback stage keys to IndexStage enum
+        if stage == "lyrics":
+            index_stage = IndexStage.DENSE
+        elif stage == "audio":
+            index_stage = IndexStage.AUDIO
+        else:
+            return
 
-            sp = job.stages[index_stage]
-            sp.current = current
-            sp.total = total
-            sp.message = message
+        sp = job.stages[index_stage]
+        sp.current = current
+        sp.total = total
+        sp.message = message
 
-            # Mark COMPLETED immediately when encoding finishes
-            if current >= total and total > 0:
-                sp.status = IndexStatus.COMPLETED
-                sp.completed_at = time.time()
+        # Mark COMPLETED immediately when encoding finishes
+        if current >= total and total > 0:
+            sp.status = IndexStatus.COMPLETED
+            sp.completed_at = time.time()
 
-            eta = job.calculate_eta_seconds(index_stage)
-            await self._notify_progress(job, {
-                "stage": index_stage.value,
-                "current": current,
-                "total": total,
-                "message": message,
-                "eta_seconds": eta,
-            })
+        eta = job.calculate_eta_seconds(index_stage)
+        await self._notify_progress(job, {
+            "stage": index_stage.value,
+            "current": current,
+            "total": total,
+            "message": message,
+            "eta_seconds": eta,
+        })
 
     def _run_sonic_descriptor_hook(self, collection_name: str) -> None:
         """Per-track Sonic Descriptor pass over a freshly indexed collection.
@@ -851,37 +894,42 @@ class LibraryService:
             n_processed, collection_name,
         )
 
-    async def _on_analysis_progress(self, stage: IndexStage, current: int, total: int, message: str):
-        """Callback from SimilarityService for analysis progress."""
-        if self._current_job_id:
-            job = self._job_tracker.get_job(self._current_job_id)
-            if job:
-                job.stages[IndexStage.ANALYSIS].current = current
-                job.stages[IndexStage.ANALYSIS].total = total
-                job.stages[IndexStage.ANALYSIS].message = message
+    async def _on_analysis_progress(self, job, stage: IndexStage, current: int, total: int, message: str):
+        """Callback from SimilarityService for analysis progress.
 
-                await self._notify_progress(job, {
-                    "stage": IndexStage.ANALYSIS.value,
-                    "current": current,
-                    "total": total,
-                    "message": message,
-                })
+        Phase B: ``job`` is bound explicitly by the caller (see the lambda in
+        ``_run_indexing_job``) instead of resolved via the removed global
+        ``_current_job_id``.
+        """
+        if job is None:
+            return
+        job.stages[IndexStage.ANALYSIS].current = current
+        job.stages[IndexStage.ANALYSIS].total = total
+        job.stages[IndexStage.ANALYSIS].message = message
 
-    async def get_status(self) -> dict:
-        """Return current indexing status."""
-        if not self._current_job_id:
+        await self._notify_progress(job, {
+            "stage": IndexStage.ANALYSIS.value,
+            "current": current,
+            "total": total,
+            "message": message,
+        })
+
+    async def get_status(self, account_id: str = "default") -> dict:
+        """Return current indexing status for ``account_id`` (Phase B)."""
+        job_id = self.get_account_job_id(account_id)
+        if not job_id:
             return {
                 "indexing_in_progress": False,
                 "current_job_id": None,
             }
-        
-        job = self._job_tracker.get_job(self._current_job_id)
+
+        job = self._job_tracker.get_job(job_id)
         if not job:
             return {
                 "indexing_in_progress": False,
                 "current_job_id": None,
             }
-        
+
         return self._job_tracker.get_progress_summary(job)
 
     @classmethod
