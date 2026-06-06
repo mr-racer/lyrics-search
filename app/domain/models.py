@@ -591,7 +591,7 @@ class PlaylistDetail(BaseModel):
 
 
 class PlaylistCreate(BaseModel):
-    collection_name: str
+    collection_name: Optional[str] = None  # Phase D (D-soft): optional + ignored; removed in D-hard
     name: str
     description: Optional[str] = None
 
