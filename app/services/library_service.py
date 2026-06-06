@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import logging
+import os
 import re
 import threading
 import time
@@ -29,6 +30,16 @@ from .sonic_descriptor_service import SonicDescriptorService
 from ._WIP_musicbraniz_search import MusicBrainzLookup
 
 logger = logging.getLogger(__name__)
+
+# Phase B (spec §6.2): global cap on concurrent indexing jobs across ALL
+# accounts. Indexing is heavy (CLAP encoding is GPU-bound, lyrics fetch is
+# I/O-bound) — two accounts in parallel is fine, ten would saturate the box.
+# The per-account slot (_active_jobs) prevents an account double-starting;
+# this semaphore bounds total parallelism. Env-tunable, default 2. Bounded so
+# an over-release in a buggy finally raises ValueError instead of silently
+# leaking capacity.
+MAX_PARALLEL_INDEXING_JOBS = int(os.environ.get("MAX_PARALLEL_INDEXING_JOBS", "2"))
+_INDEX_SEMAPHORE = threading.BoundedSemaphore(MAX_PARALLEL_INDEXING_JOBS)
 
 
 def _slugify_artist_for_album(name: str) -> str:
@@ -179,6 +190,11 @@ class LibraryService:
         logger.info("[LibraryService] _run_indexing_job START: job=%s, folder=%s, collection=%s",
                     job.job_id, folder_path, collection_name)
 
+        # Phase B (spec §6.2): gate heavy indexing on the global semaphore so N
+        # accounts starting on the same minute don't all saturate GPU/network.
+        # Acquired in a worker thread because BoundedSemaphore.acquire() blocks —
+        # to_thread keeps the event loop responsive while this job waits its turn.
+        await asyncio.to_thread(_INDEX_SEMAPHORE.acquire)
         try:
             # Sanitize text_model: treat literal strings "null"/"undefined"/"" the
             # same as None. This guards against legacy frontend localStorage where
@@ -781,9 +797,10 @@ class LibraryService:
                 "error": str(e),
             })
         finally:
+            _INDEX_SEMAPHORE.release()
             self.finish_job(account_id=account_id)
             logger.info(
-                "[LibraryService] _run_indexing_job FINALLY, released account=%s job=%s",
+                "[LibraryService] _run_indexing_job FINALLY, released semaphore + account=%s job=%s",
                 account_id, job.job_id,
             )
 
