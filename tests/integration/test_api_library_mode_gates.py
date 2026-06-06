@@ -85,3 +85,40 @@ class TestSharingIndexSanityCheck:
             )
             assert resp.status_code == 400
             assert "does not exist" in resp.json()["detail"].lower()
+
+
+class TestModeGateMatrix:
+    """Pin the surface: each endpoint reachable in exactly one mode."""
+
+    SERVER_ONLY = [
+        ("POST", "/api/v1/library/upload", "file"),
+        ("GET", "/api/v1/library/upload/some-id", None),
+        ("POST", "/api/v1/library/upload/batch-commit", {"upload_ids": ["x"]}),
+        ("DELETE", "/api/v1/library/tracks/some-track", None),
+    ]
+    SHARING_ONLY = [
+        ("POST", "/api/v1/library/index", {"folder_path": "/tmp", "collection_name": "x"}),
+    ]
+
+    @pytest.mark.parametrize("method,path,body", SERVER_ONLY)
+    def test_server_only_404s_in_sharing(self, method, path, body):
+        _setup_mode("sharing")
+        app = create_app()
+        _login(app)  # bypass auth so the 404 is unambiguously from the mode gate
+        with TestClient(app) as c:
+            kwargs = {}
+            if body == "file":
+                kwargs["files"] = {"file": ("x.flac", b"x", "audio/flac")}
+            elif isinstance(body, dict):
+                kwargs["json"] = body
+            resp = c.request(method, path, **kwargs)
+            assert resp.status_code == 404, f"{method} {path}: {resp.status_code} {resp.text}"
+
+    @pytest.mark.parametrize("method,path,body", SHARING_ONLY)
+    def test_sharing_only_404s_in_server(self, method, path, body):
+        _setup_mode("server")
+        app = create_app()
+        _login(app)
+        with TestClient(app) as c:
+            resp = c.request(method, path, json=body)
+            assert resp.status_code == 404

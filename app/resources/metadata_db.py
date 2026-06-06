@@ -258,6 +258,11 @@ class MetadataDB:
             conn = sqlite3.connect(str(DB_PATH), detect_types=sqlite3.PARSE_DECLTYPES, check_same_thread=False)
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA foreign_keys=ON")
+            # The connection is shared across FastAPI's request threads. Without a
+            # busy timeout, two concurrent writes (e.g. parallel /library/upload
+            # from two accounts) can hit "database is locked" immediately; this
+            # makes the loser wait for the lock instead (Phase C concurrency).
+            conn.execute("PRAGMA busy_timeout=5000")
             cls._instance = conn
             logger.info("[MetadataDB] Connected to %s", DB_PATH)
         return cls._instance
