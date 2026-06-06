@@ -11,6 +11,7 @@ from datetime import date as _date
 from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -887,6 +888,61 @@ async def upload_audio(
         "size": total,
         "status": "uploaded",
     }
+
+
+@router.get("/upload/{upload_id}", dependencies=[Depends(require_mode("server"))])
+async def get_upload_status(
+    upload_id: str,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Look up an upload's status. Owner-aware: 404 if the row belongs to another account."""
+    from app.resources.metadata_db import MetadataDB
+    MetadataDB.init()
+    row = MetadataDB.get_pending_upload(upload_id)
+    if not row or row["account_id"] != current_user.id:
+        # Deliberately collapse "not yours" with "doesn't exist" — no leak.
+        raise HTTPException(status_code=404, detail="not found")
+    return {
+        "upload_id": row["upload_id"],
+        "sha256": row["sha256"],
+        "size": row["size_bytes"],
+        "status": row["status"],
+        "track_id": row["track_id"],
+        "error": row["error"],
+    }
+
+
+class _BatchCommitRequest(BaseModel):
+    upload_ids: list[str]
+
+
+@router.post("/upload/batch-commit", dependencies=[Depends(require_mode("server"))])
+async def batch_commit_uploads(
+    req: _BatchCommitRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Enqueue indexing for a set of already-uploaded files (server mode)."""
+    from app.resources.metadata_db import MetadataDB
+    if not req.upload_ids:
+        raise HTTPException(status_code=400, detail="upload_ids must not be empty")
+    service: LibraryService = request.app.state.library_service
+    if service is None:
+        raise HTTPException(status_code=503, detail="Library service unavailable")
+
+    # Filter to the caller's OWN uploads to prevent cross-account triggering.
+    MetadataDB.init()
+    mine = [
+        uid for uid in req.upload_ids
+        if (row := MetadataDB.get_pending_upload(uid)) and row["account_id"] == current_user.id
+    ]
+    if not mine:
+        raise HTTPException(
+            status_code=400, detail="none of the upload_ids belong to the caller",
+        )
+
+    job_id = service.enqueue_upload_indexing(account_id=current_user.id, upload_ids=mine)
+    return {"job_id": job_id}
 
 
 # ── Status / progress ─────────────────────────────────────────────────────────

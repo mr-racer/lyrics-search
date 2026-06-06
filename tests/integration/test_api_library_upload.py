@@ -141,3 +141,45 @@ class TestCrossAccount:
         sha = _sha(data)
         assert (_server_mode / "acct_alice" / "audio" / f"{sha}.flac").exists()
         assert (_server_mode / "acct_bob" / "audio" / f"{sha}.flac").exists()
+
+
+class TestUploadStatus:
+    def test_owner_can_read_own_upload(self, _server_mode, audio_bytes):
+        app = create_app()
+        _login(app, "acct_alice")
+        with TestClient(app) as c:
+            data = audio_bytes("tiny.flac")
+            created = c.post(
+                "/api/v1/library/upload",
+                files={"file": ("song.flac", data, "audio/flac")},
+            ).json()
+            resp = c.get(f"/api/v1/library/upload/{created['upload_id']}")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["status"] == "uploaded"
+            assert body["track_id"] is None
+            assert body["error"] is None
+
+    def test_cross_account_returns_404(self, _server_mode, audio_bytes):
+        data = audio_bytes("tiny.flac")
+        # Alice uploads.
+        app_a = create_app()
+        _login(app_a, "acct_alice")
+        with TestClient(app_a) as c:
+            up = c.post(
+                "/api/v1/library/upload",
+                files={"file": ("song.flac", data, "audio/flac")},
+            ).json()
+        # Bob tries to peek at Alice's upload.
+        app_b = create_app()
+        _login(app_b, "acct_bob")
+        with TestClient(app_b) as c:
+            resp = c.get(f"/api/v1/library/upload/{up['upload_id']}")
+            assert resp.status_code == 404
+
+    def test_unknown_upload_returns_404(self, _server_mode):
+        app = create_app()
+        _login(app, "acct_alice")
+        with TestClient(app) as c:
+            resp = c.get("/api/v1/library/upload/no-such-id")
+            assert resp.status_code == 404
