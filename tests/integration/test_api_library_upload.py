@@ -1,0 +1,143 @@
+"""POST /library/upload — multipart upload → quarantine → atomic promote → row insert."""
+
+import hashlib
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.api.main import create_app
+from app.api.dependencies import get_current_user
+from app.domain.models import User
+
+
+def _sha(b: bytes) -> str:
+    return hashlib.sha256(b).hexdigest()
+
+
+@pytest.fixture
+def _server_mode(clean_metadata_db, tmp_path, monkeypatch):
+    """Instance mode = 'server', seed accounts, redirect media dirs to tmp.
+
+    Relies on the autouse ``clean_metadata_db`` fixture (tests/integration/conftest)
+    for an isolated, thread-safe tmp DB.
+    """
+    from app.resources.metadata_db import MetadataDB
+    MetadataDB.set_instance_config(mode="server", created_at=1700000000.0)
+    for uid, email in [("acct_alice", "alice@example.com"), ("acct_bob", "bob@example.com")]:
+        MetadataDB.create_user(
+            user_id=uid, email=email, password_hash="h", role="member",
+            created_at=1700000000.0,
+        )
+    media_root = tmp_path / "media"
+    monkeypatch.setattr("app.services.uploads_service.media_root_default", lambda: media_root)
+    monkeypatch.setattr(
+        "app.services.uploads_service.quarantine_root_default", lambda: media_root / "_quarantine",
+    )
+    return media_root
+
+
+def _login(app, uid: str, email: str = "x@example.com") -> None:
+    """Override the auth dependency (router gate + route param share the key)."""
+    app.dependency_overrides[get_current_user] = lambda: User(
+        id=uid, email=email, role="member", created_at=0.0,
+    )
+
+
+class TestUploadHappyPath:
+    def test_flac_upload_returns_queued(self, _server_mode, audio_bytes):
+        app = create_app()
+        _login(app, "acct_alice", "alice@example.com")
+        with TestClient(app) as c:
+            data = audio_bytes("tiny.flac")
+            resp = c.post(
+                "/api/v1/library/upload",
+                files={"file": ("song.flac", data, "audio/flac")},
+            )
+            assert resp.status_code == 200, resp.text
+            body = resp.json()
+            assert "upload_id" in body
+            assert body["sha256"] == _sha(data)
+            assert body["size"] == len(data)
+            assert body["status"] == "uploaded"
+            dest = _server_mode / "acct_alice" / "audio" / f"{body['sha256']}.flac"
+            assert dest.exists()
+            assert dest.read_bytes() == data
+
+    def test_mp3_upload(self, _server_mode, audio_bytes):
+        app = create_app()
+        _login(app, "acct_alice")
+        with TestClient(app) as c:
+            data = audio_bytes("tiny.mp3")
+            resp = c.post(
+                "/api/v1/library/upload",
+                files={"file": ("song.mp3", data, "audio/mpeg")},
+            )
+            assert resp.status_code == 200, resp.text
+            assert (_server_mode / "acct_alice" / "audio" / f"{resp.json()['sha256']}.mp3").exists()
+
+
+class TestUploadIdempotent:
+    def test_second_upload_same_sha_returns_existing(self, _server_mode, audio_bytes):
+        from app.resources.metadata_db import MetadataDB
+        app = create_app()
+        _login(app, "acct_alice")
+        with TestClient(app) as c:
+            data = audio_bytes("tiny.flac")
+            first = c.post(
+                "/api/v1/library/upload",
+                files={"file": ("song.flac", data, "audio/flac")},
+            ).json()
+            MetadataDB.update_pending_upload_status(
+                first["upload_id"], status="done", track_id="t_fake",
+            )
+            second = c.post(
+                "/api/v1/library/upload",
+                files={"file": ("song.flac", data, "audio/flac")},
+            ).json()
+            assert second["status"] == "done"
+            assert second["sha256"] == first["sha256"]
+            assert second.get("track_id") == "t_fake"
+
+
+class TestUploadRejected:
+    def test_oversize_returns_400(self, _server_mode, monkeypatch):
+        monkeypatch.setattr("app.services.uploads_service.MAX_UPLOAD_BYTES", 100)
+        big = b"x" * 1024
+        app = create_app()
+        _login(app, "acct_alice")
+        with TestClient(app) as c:
+            resp = c.post(
+                "/api/v1/library/upload",
+                files={"file": ("song.flac", big, "audio/flac")},
+            )
+            assert resp.status_code == 400
+            assert "too large" in resp.json()["detail"].lower() or \
+                   "exceeds" in resp.json()["detail"].lower()
+
+    def test_non_audio_returns_400(self, _server_mode):
+        app = create_app()
+        _login(app, "acct_alice")
+        with TestClient(app) as c:
+            resp = c.post(
+                "/api/v1/library/upload",
+                files={"file": ("song.flac", b"#!/bin/sh\necho hi\n", "text/plain")},
+            )
+            # libmagic gives a definite non-audio sniff → reject despite .flac name.
+            assert resp.status_code == 400
+
+
+class TestCrossAccount:
+    def test_same_sha_two_accounts_two_files(self, _server_mode, audio_bytes):
+        data = audio_bytes("tiny.flac")
+        for uid in ("acct_alice", "acct_bob"):
+            app = create_app()
+            _login(app, uid)
+            with TestClient(app) as c:
+                resp = c.post(
+                    "/api/v1/library/upload",
+                    files={"file": ("song.flac", data, "audio/flac")},
+                )
+                assert resp.status_code == 200, resp.text
+        sha = _sha(data)
+        assert (_server_mode / "acct_alice" / "audio" / f"{sha}.flac").exists()
+        assert (_server_mode / "acct_bob" / "audio" / f"{sha}.flac").exists()

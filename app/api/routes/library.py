@@ -10,13 +10,15 @@ from collections import Counter
 from datetime import date as _date
 from pathlib import Path
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 
 logger = logging.getLogger(__name__)
 
 from app.domain.models import ArtistAggregate, IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RediscoverResponse, User
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_user, require_mode
 from app.services.library_service import LibraryService
+from app.services import uploads_service
+from app.services._magic_sniff import sniff_audio_mime
 from app.services.similarity_service import load_top_pairs
 
 router = APIRouter(prefix="/library", tags=["Library"])
@@ -792,6 +794,99 @@ async def index_folder(
         account_id=current_user.id,
     )
     return result
+
+
+# ── Server-mode uploads (Phase C) ──────────────────────────────────────────────
+
+@router.post("/upload", dependencies=[Depends(require_mode("server"))])
+async def upload_audio(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Stream-upload one audio file into the caller's managed library.
+
+    Server mode only. Pipeline:
+      1. Stream the multipart body into ``media/_quarantine/<id>.tmp`` computing
+         SHA-256 incrementally; reject if size > MAX_UPLOAD_BYTES.
+      2. Sniff the first 64 KB via libmagic; reject non-audio (falling back to the
+         extension whitelist only when the sniff is inconclusive / libmagic absent).
+      3. Idempotency: if (account_id, sha256) is already 'done', drop the
+         quarantine copy and return the existing track_id.
+      4. Atomic rename into ``media/<account_id>/audio/<sha>.<ext>``.
+      5. Insert a pending_uploads row with status='uploaded'.
+
+    Returns: {upload_id, sha256, size, status}.
+    """
+    import uuid as _uuid
+    from pathlib import Path as _Path
+    from app.resources.metadata_db import MetadataDB
+
+    if file.filename is None:
+        raise HTTPException(status_code=400, detail="missing filename")
+
+    account_id = current_user.id
+    media_root = uploads_service.media_root_default()
+    quarantine_root = uploads_service.quarantine_root_default()
+    quarantine_root.mkdir(parents=True, exist_ok=True)
+
+    q_path = quarantine_root / f"{_uuid.uuid4().hex}.tmp"
+
+    try:
+        sha256, total, head = uploads_service.write_to_quarantine(
+            file.file, q_path, max_bytes=uploads_service.MAX_UPLOAD_BYTES,
+        )
+    except uploads_service.UploadOversize as e:
+        raise HTTPException(status_code=400, detail=f"upload too large: {e}")
+    except Exception as e:
+        logger.exception("[upload] quarantine write failed")
+        raise HTTPException(status_code=500, detail=f"upload failed: {e}")
+
+    # MIME gate: a definite non-audio sniff rejects even if the filename claims
+    # an audio extension (stops a .flac-named shell script). Only when libmagic
+    # is unavailable (octet-stream) do we trust the extension whitelist.
+    mime = sniff_audio_mime(head)
+    ext_ok = _Path(file.filename).suffix.lower() in uploads_service._AUDIO_EXTENSIONS
+    accept = ext_ok if mime == "application/octet-stream" else mime.startswith("audio/")
+    if not accept:
+        q_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=f"file is not audio (mime={mime})")
+
+    # Idempotency: same SHA already indexed for this account → return existing.
+    MetadataDB.init()
+    existing = MetadataDB.find_done_upload_by_sha(account_id=account_id, sha256=sha256)
+    if existing:
+        q_path.unlink(missing_ok=True)
+        return {
+            "upload_id": existing["upload_id"],
+            "sha256": sha256,
+            "size": existing["size_bytes"],
+            "status": "done",
+            "track_id": existing["track_id"],
+        }
+
+    ext = uploads_service.choose_extension(mime, original=file.filename)
+    final_path = uploads_service.atomic_promote_to_managed(
+        quarantine_path=q_path,
+        media_root=media_root,
+        account_id=account_id,
+        sha256=sha256,
+        extension=ext,
+    )
+
+    upload_id = MetadataDB.create_pending_upload(
+        account_id=account_id,
+        sha256=sha256,
+        original_filename=file.filename,
+        size_bytes=total,
+        storage_path=str(final_path),
+    )
+
+    return {
+        "upload_id": upload_id,
+        "sha256": sha256,
+        "size": total,
+        "status": "uploaded",
+    }
 
 
 # ── Status / progress ─────────────────────────────────────────────────────────
