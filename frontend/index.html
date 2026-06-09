@@ -79,6 +79,7 @@
     .stagger > *:nth-child(3) { animation-delay: 0.27s; }
     .stagger > *:nth-child(4) { animation-delay: 0.38s; }
     .stagger > *:nth-child(5) { animation-delay: 0.49s; }
+    .stagger > *:nth-child(6) { animation-delay: 0.60s; }
 
     .theme-fade { animation: themeFade 0.4s ease; }
     .theme-transition * { transition: background-color 0.35s ease, border-color 0.35s ease, color 0.3s ease, box-shadow 0.35s ease !important; }
@@ -1566,6 +1567,26 @@
     .fy-hybrid:hover .fy-bg1{animation-duration:3.4s}.fy-hybrid:hover .fy-bg2{animation-duration:4s}.fy-hybrid:hover .fy-bg3{animation-duration:4.6s}.fy-hybrid:hover .fy-bg4{animation-duration:3.7s}
     .fy-hybrid:hover .fy-ring{opacity:1;animation-duration:2.4s}
     .fy-hybrid:hover .fy-halo{animation:fyHaloOut 1s ease-out infinite}
+    /* Home hero stream console: vinyl record that slides out from behind the lead cover.
+       The slide transform lives on a wrapper div (React inline style); this class only
+       owns the disc look + the perpetual slow spin, so the two transforms never clash. */
+    .vinyl-disc{position:relative;width:100%;height:100%;border-radius:50%;
+      background:
+        radial-gradient(circle at 34% 28%, rgba(255,255,255,.16), transparent 42%),
+        repeating-radial-gradient(circle at 50% 50%, #0b0b0d 0px, #0b0b0d 2px, #161619 2.5px, #0b0b0d 4px);
+      box-shadow:0 16px 38px rgba(0,0,0,.55), inset 0 1px 1px rgba(255,255,255,.07), 0 0 0 1px rgba(255,255,255,.05);
+      animation:vinylSpin 10s linear infinite;
+    }
+    .vinyl-disc::after{content:'';position:absolute;left:50%;top:50%;width:9px;height:9px;margin:-4.5px 0 0 -4.5px;border-radius:50%;background:#08080a;box-shadow:inset 0 1px 2px rgba(0,0,0,.9),0 1px 0 rgba(255,255,255,.08);z-index:2}
+    .vinyl-label{position:absolute;inset:33%;border-radius:50%;box-shadow:inset 0 0 0 1px rgba(0,0,0,.35), inset 0 1px 1px rgba(255,255,255,.22)}
+    /* Tiny live equalizer next to the hero kicker (heights driven by eqBar1-5 keyframes) */
+    .hero-eq{display:inline-flex;align-items:flex-end;gap:2.5px;height:14px;margin-right:9px}
+    .hero-eq span{width:2.5px;border-radius:1.5px;background:linear-gradient(180deg,#ff78c8,#7c5bff)}
+    .hero-eq span:nth-child(1){animation:eqBar1 .92s ease-in-out infinite}
+    .hero-eq span:nth-child(2){animation:eqBar2 1.06s ease-in-out infinite}
+    .hero-eq span:nth-child(3){animation:eqBar3 .84s ease-in-out infinite}
+    .hero-eq span:nth-child(4){animation:eqBar4 1.18s ease-in-out infinite}
+    .hero-eq span:nth-child(5){animation:eqBar5 .98s ease-in-out infinite}
     /* Home loading skeletons — gray placeholder blocks with a sweeping shimmer.
        (distinct from the .ske-* skeuomorphic surface classes above) */
     .load-skel{position:relative;overflow:hidden;background:rgba(255,255,255,.05)}
@@ -2813,15 +2834,6 @@ function homeCoverUrl(path) {
   return path.startsWith('http') ? path : `${API}${path}`;
 }
 
-function HomeDeckCover({ src, rot, left, top, z, op }) {
-  return (
-    <div style={{ position:'absolute', left, top, width:152, height:152, borderRadius:13, overflow:'hidden',
-                  transform:`rotate(${rot}deg)`, zIndex:z, opacity:op, boxShadow:'0 16px 38px rgba(0,0,0,.5)', background:'#241d38' }}>
-      {src && <img src={src} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />}
-    </div>
-  );
-}
-
 // Shimmer skeleton block. Sizes accept px numbers or CSS strings (e.g. '80%').
 function Skel({ w, h, r, isDark, style }) {
   return (
@@ -2855,6 +2867,7 @@ function ForYouHero({ isDark, lang, activeCollection, onPlayTrack, navigateToArt
   const [queue, setQueue] = useState([]);
   const [vibe, setVibe] = useState(null);
   const [hoverCtl, setHoverCtl] = useState(false);
+  const [hoverDeck, setHoverDeck] = useState(false);
   const [loading, setLoading] = useState(true);
   const leadCoverUrl = homeCoverUrl(lead && lead.cover_art_path);
   const color = useCoverColor(leadCoverUrl);
@@ -2884,17 +2897,19 @@ function ForYouHero({ isDark, lang, activeCollection, onPlayTrack, navigateToArt
   }, [lead && lead.track_id]);
 
   if (!lead) return loading ? (
-    <div style={{ padding:'44px 48px 64px' }}>
-      <div style={{ display:'flex', gap:54, alignItems:'flex-start', maxWidth:720, margin:'0 auto' }}>
-        <Skel w={168} h={168} r={14} isDark={isDark} style={{ flex:'none' }} />
-        <div style={{ flex:1, paddingTop:4 }}>
-          <Skel w={120} h={11} r={4} isDark={isDark} />
-          <Skel w={250} h={28} r={7} isDark={isDark} style={{ marginTop:16 }} />
-          <Skel w={150} h={13} r={5} isDark={isDark} style={{ marginTop:12 }} />
-          <Skel w={330} h={16} r={6} isDark={isDark} style={{ marginTop:16 }} />
-          <div style={{ display:'flex', alignItems:'center', gap:14, marginTop:24 }}>
-            <Skel w={62} h={62} r={'50%'} isDark={isDark} />
-            <Skel w={170} h={11} r={4} isDark={isDark} />
+    <div style={{ padding:'40px 40px 26px' }}>
+      <div className={ske('panel', isDark)} style={{ maxWidth:920, margin:'0 auto', borderRadius:24, padding:'40px 48px 38px' }}>
+        <div style={{ display:'flex', gap:52, alignItems:'center' }}>
+          <Skel w={204} h={204} r={16} isDark={isDark} style={{ flex:'none' }} />
+          <div style={{ flex:1 }}>
+            <Skel w={120} h={11} r={4} isDark={isDark} />
+            <Skel w={250} h={28} r={7} isDark={isDark} style={{ marginTop:14 }} />
+            <Skel w={150} h={13} r={5} isDark={isDark} style={{ marginTop:10 }} />
+            <Skel w={330} h={16} r={6} isDark={isDark} style={{ marginTop:14 }} />
+            <div style={{ display:'flex', alignItems:'center', gap:14, marginTop:22 }}>
+              <Skel w={62} h={62} r={'50%'} isDark={isDark} />
+              <Skel w={170} h={11} r={4} isDark={isDark} />
+            </div>
           </div>
         </div>
       </div>
@@ -2902,8 +2917,12 @@ function ForYouHero({ isDark, lang, activeCollection, onPlayTrack, navigateToArt
   ) : null;
 
   const ambient = color
-    ? `radial-gradient(ellipse 60% 90% at 72% 18%, hsla(${color.h},${color.s}%,${color.l}%,.30), transparent 62%), radial-gradient(ellipse 50% 70% at 12% 95%, rgba(255,120,200,.10), transparent 60%)`
-    : `radial-gradient(ellipse 60% 90% at 72% 18%, rgba(124,91,255,.30), transparent 62%)`;
+    ? `radial-gradient(ellipse 70% 120% at 78% 10%, hsla(${color.h},${color.s}%,${color.l}%,.32), transparent 60%), radial-gradient(ellipse 50% 80% at 6% 100%, rgba(255,120,200,.12), transparent 60%)`
+    : `radial-gradient(ellipse 70% 120% at 78% 10%, rgba(124,91,255,.32), transparent 60%)`;
+  // Vinyl center label picks up the lead cover's dominant hue (same source as the ambient wash).
+  const labelBg = color
+    ? `radial-gradient(circle at 38% 32%, hsla(${color.h},${color.s}%,${Math.min(color.l + 18, 82)}%,.95), hsla(${color.h},${color.s}%,${color.l}%,1) 70%)`
+    : 'radial-gradient(circle at 38% 32%, #b06bff, #6a44d6 70%)';
 
   const startStream = () => {
     if (!onPlayTrack) return;
@@ -2911,37 +2930,77 @@ function ForYouHero({ isDark, lang, activeCollection, onPlayTrack, navigateToArt
     onPlayTrack({ track: lead }, hits);
   };
 
-  const q0 = homeCoverUrl(queue[0] && queue[0].cover_art_path);
-  const q1 = homeCoverUrl(queue[1] && queue[1].cover_art_path);
+  const upNext = queue.slice(0, 4);
+  const deckEase = 'cubic-bezier(.22,.9,.3,1)';
 
   return (
-    <div style={{ position:'relative', padding:'44px 48px 64px', overflow:'hidden' }}>
-      <div style={{ position:'absolute', inset:0, background:ambient, pointerEvents:'none' }} />
-      <div style={{ position:'relative', display:'flex', gap:54, alignItems:'flex-start', maxWidth:720, margin:'0 auto' }}>
-        <div style={{ position:'relative', flex:'none', width:184, height:184 }}>
-          {q1 && <HomeDeckCover src={q1} rot={10} left={44} top={10} z={1} op={0.5} />}
-          {q0 && <HomeDeckCover src={q0} rot={5} left={24} top={5} z={2} op={0.8} />}
-          <div style={{ position:'absolute', left:0, top:0, width:168, height:168, borderRadius:14, overflow:'hidden', zIndex:3, boxShadow:'0 22px 55px rgba(124,91,255,.4), inset 0 1px 0 rgba(255,255,255,.14)', background:'#241d38' }}>
-            {leadCoverUrl && <img src={leadCoverUrl} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />}
-          </div>
-        </div>
-        <div style={{ flex:1, paddingTop:4 }}>
-          <div className="mono" style={{ fontSize:11, letterSpacing:'.28em', color:'#c9b8ff' }}>{lang==='ru'?'✦ ДЛЯ ВАС':'✦ FOR YOU'}</div>
-          <div className="serif" style={{ fontSize:29, fontWeight:300, letterSpacing:'-.01em', marginTop:14, color:c.text }}>{lead.title}</div>
-          <div style={{ fontSize:13, color:c.textMuted, marginTop:4 }}>
-            <span style={{ cursor:'pointer' }} onClick={() => navigateToArtist && navigateToArtist(slugifyArtistName(lead.artist))}>{lead.artist}</span>
-            {lead.year ? ` · ${lead.year}` : ''}{queue.length ? ` · +${queue.length} ${lang==='ru'?'в очереди':'in queue'}` : ''}
-          </div>
-          {vibe && <div className="serif" style={{ fontStyle:'italic', fontSize:16, color:'#f3ecff', opacity:.9, lineHeight:1.4, marginTop:14 }}>❝ {vibe} ❞</div>}
-          <div style={{ display:'flex', alignItems:'center', gap:14, marginTop:24 }}>
-            <div className="fy-hybrid tint-irid" onMouseEnter={() => setHoverCtl(true)} onMouseLeave={() => setHoverCtl(false)} onClick={startStream} role="button" aria-label={lang==='ru'?'Включить ваш стрим':'Start your stream'}>
-              <span className="fy-ring" />
-              <span className="fy-clip"><span className="fy-blob fy-bg1" /><span className="fy-blob fy-bg2" /><span className="fy-blob fy-bg3" /><span className="fy-blob fy-bg4" /></span>
-              <span className="fy-glasscap" />
-              <span className="fy-glyph">▶</span>
-              <span className="fy-halo" />
+    <div style={{ padding:'40px 40px 26px' }}>
+      {/* The one raised "device" on the landing page — everything else stays flat/editorial. */}
+      <div className={ske('panel', isDark)} style={{ position:'relative', maxWidth:920, margin:'0 auto', borderRadius:24, overflow:'hidden', padding:'40px 48px 38px' }}>
+        <div className={brushed(isDark)} style={{ position:'absolute', top:0, left:0, right:0, height:9 }} />
+        <div style={{ position:'absolute', inset:0, background:ambient, pointerEvents:'none' }} />
+        <div style={{ position:'relative', display:'flex', gap:52, alignItems:'center' }}>
+          {/* Deck: lead cover as a record sleeve; the vinyl slides out on hover */}
+          <div style={{ position:'relative', flex:'none', width:316, height:204, cursor:'pointer' }}
+               onMouseEnter={() => setHoverDeck(true)} onMouseLeave={() => setHoverDeck(false)}
+               onClick={startStream} role="button" aria-label={lang==='ru'?'Включить ваш стрим':'Start your stream'}>
+            <div style={{ position:'absolute', left:10, top:7, width:190, height:190, zIndex:2,
+                          transform: hoverDeck ? 'translateX(112px) rotate(12deg)' : 'translateX(38px)',
+                          transition:`transform .55s ${deckEase}` }}>
+              <div className="vinyl-disc"><span className="vinyl-label" style={{ background:labelBg }} /></div>
             </div>
-            <span className="mono" style={{ fontSize:11, letterSpacing:'.2em', color:hoverCtl?'#f3ecff':c.textMuted, transition:'color .3s' }}>{lang==='ru'?'ВКЛЮЧИТЬ ВАШ СТРИМ':'START YOUR STREAM'}</span>
+            <div style={{ position:'absolute', left:0, top:0, width:204, height:204, borderRadius:16, overflow:'hidden', zIndex:3,
+                          background:'#241d38', transition:`transform .55s ${deckEase}, box-shadow .55s ease`,
+                          transform: hoverDeck ? 'rotate(-2.5deg) translateX(-6px)' : 'none',
+                          boxShadow: hoverDeck
+                            ? '0 26px 60px rgba(124,91,255,.5), inset 0 1px 0 rgba(255,255,255,.16)'
+                            : '0 22px 55px rgba(124,91,255,.4), inset 0 1px 0 rgba(255,255,255,.14)' }}>
+              {leadCoverUrl && <img src={leadCoverUrl} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />}
+            </div>
+          </div>
+          {/* Copy + controls */}
+          <div className="stagger" style={{ flex:1, minWidth:0 }}>
+            <div className="mono" style={{ display:'flex', alignItems:'center', fontSize:11, letterSpacing:'.28em', color: isDark ? '#c9b8ff' : 'oklch(46% 0.19 280)' }}>
+              <span className="hero-eq" aria-hidden="true"><span /><span /><span /><span /><span /></span>
+              {lang==='ru'?'ВАШ СТРИМ':'YOUR STREAM'}
+            </div>
+            <div className="serif" style={{ fontSize:32, fontWeight:300, letterSpacing:'-.01em', marginTop:12, color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{lead.title}</div>
+            <div style={{ fontSize:13, color:c.textMuted, marginTop:4 }}>
+              <span style={{ cursor:'pointer' }} onClick={() => navigateToArtist && navigateToArtist(slugifyArtistName(lead.artist))}>{lead.artist}</span>
+              {lead.year ? ` · ${lead.year}` : ''}
+            </div>
+            {vibe && <div className="serif" style={{ fontStyle:'italic', fontSize:15.5, color: isDark ? '#f3ecff' : '#2c2440', opacity:.88, lineHeight:1.45, marginTop:13, display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden' }}>❝ {vibe} ❞</div>}
+            <div style={{ display:'flex', alignItems:'center', gap:14, marginTop:22 }}>
+              <div className="fy-hybrid tint-irid" onMouseEnter={() => setHoverCtl(true)} onMouseLeave={() => setHoverCtl(false)} onClick={startStream} role="button" aria-label={lang==='ru'?'Включить ваш стрим':'Start your stream'}>
+                <span className="fy-ring" />
+                <span className="fy-clip"><span className="fy-blob fy-bg1" /><span className="fy-blob fy-bg2" /><span className="fy-blob fy-bg3" /><span className="fy-blob fy-bg4" /></span>
+                <span className="fy-glasscap" />
+                <span className="fy-glyph">▶</span>
+                <span className="fy-halo" />
+              </div>
+              <span className="mono" style={{ fontSize:11, letterSpacing:'.2em', color:(hoverCtl||hoverDeck)?(isDark?'#f3ecff':'#2c2440'):c.textMuted, transition:'color .3s' }}>{lang==='ru'?'ВКЛЮЧИТЬ ВАШ СТРИМ':'START YOUR STREAM'}</span>
+            </div>
+            {upNext.length > 0 && (
+              <div style={{ display:'flex', alignItems:'center', gap:11, marginTop:20 }}>
+                <span className="mono" style={{ fontSize:10, letterSpacing:'.2em', color:c.textSubtle }}>{lang==='ru'?'ДАЛЕЕ':'UP NEXT'}</span>
+                <div style={{ display:'flex' }}>
+                  {upNext.map((t, i) => {
+                    const src = homeCoverUrl(t.cover_art_path);
+                    return (
+                      <div key={t.track_id || i} title={`${t.title || ''}${t.artist ? ' — ' + t.artist : ''}`}
+                           style={{ width:30, height:30, borderRadius:8, overflow:'hidden', marginLeft: i ? -9 : 0,
+                                    position:'relative', zIndex: 10 - i, background:'#241d38',
+                                    border:`1.5px solid ${isDark ? '#26262d' : '#fff'}`, boxShadow:'0 4px 10px rgba(0,0,0,.35)' }}>
+                        {src && <img src={src} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />}
+                      </div>
+                    );
+                  })}
+                </div>
+                {queue.length > upNext.length && (
+                  <span className="mono" style={{ fontSize:10, color:c.textSubtle }}>+{queue.length - upNext.length}</span>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -3142,9 +3201,17 @@ function ShelfCard({ item, isDark, onPick, navigateToArtist }) {
   return (
     <div style={{ width:120, flex:'none', cursor:'pointer' }}
          onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} onClick={() => onPick && onPick(item)}>
-      <div style={{ width:120, height:120, borderRadius:10, overflow:'hidden', background:'#241d38',
-                    boxShadow:'0 10px 24px rgba(0,0,0,.35)', transform:hover?'translateY(-5px)':'none', transition:'transform .3s' }}>
+      <div style={{ position:'relative', width:120, height:120, borderRadius:10, overflow:'hidden', background:'#241d38',
+                    boxShadow: hover ? '0 16px 32px rgba(0,0,0,.45)' : '0 10px 24px rgba(0,0,0,.35)',
+                    transform: hover ? 'translateY(-6px) rotate(-1.6deg) scale(1.02)' : 'none',
+                    transition:'transform .35s cubic-bezier(.22,.9,.3,1), box-shadow .35s ease' }}>
         {src && <img src={src} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />}
+        <span style={{ position:'absolute', right:7, bottom:7, width:28, height:28, borderRadius:'50%',
+                       background:'linear-gradient(180deg,#9a7bff,#6a44d6)', color:'#fff',
+                       display:'flex', alignItems:'center', justifyContent:'center', fontSize:10,
+                       boxShadow:'0 6px 14px rgba(124,91,255,.5), inset 0 1px 0 rgba(255,255,255,.3)',
+                       opacity: hover ? 1 : 0, transform: hover ? 'translateY(0)' : 'translateY(8px)',
+                       transition:'opacity .28s ease, transform .28s cubic-bezier(.22,.9,.3,1)' }}>▶</span>
       </div>
       <div style={{ fontSize:12, color:c.text, marginTop:7, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{item.title}</div>
       {item.artist ? (
@@ -3161,7 +3228,10 @@ function Shelf({ label, items, isDark, onPick, navigateToArtist }) {
   return (
     <div style={{ padding:'0 40px', marginTop:34 }}>
       <div className="mono" style={{ fontSize:11, letterSpacing:'.26em', color:c.textSubtle }}>{label}</div>
-      <div style={{ display:'flex', gap:16, marginTop:14, overflowX:'auto', paddingBottom:6 }}>
+      {/* paddingTop gives the hover lift (translateY(-6px) + scale) headroom inside the
+          overflowX:auto row — an auto-overflow container clips vertical overflow too,
+          so without it the raised cover gets sheared at the top edge. */}
+      <div style={{ display:'flex', gap:16, marginTop:4, overflowX:'auto', paddingTop:14, paddingBottom:6 }}>
         {items.map((it, i) => (
           <ShelfCard key={(it && (it.track_id || it.id)) || i} item={it} isDark={isDark} onPick={onPick} navigateToArtist={navigateToArtist} />
         ))}
@@ -3200,6 +3270,115 @@ function AlternativeModes({ isDark, lang, onNav }) {
         <Block id="search" icon={searchIcon} title={lang==='ru'?'Поиск':'Search'}
                desc={lang==='ru'?'Найти конкретное и разобрать лирику — по тексту, по звуку или по настроению.':'Find a specific track and explore lyrics — by text, sound, or mood.'}
                cta={lang==='ru'?'→ Открыть поиск':'→ Open search'} />
+      </div>
+    </div>
+  );
+}
+
+// ─── NowPlayingStrip — airy quick-player line above the stream console ───────
+// Rendered on the landing page only while a track is loaded into the shared
+// audio controller. Sits in the same 920px column as the hero console but is
+// deliberately weightless (glass + hairline border, no ske-panel) so the
+// skeuomorphic deck below keeps the visual lead.
+function NowPlayingStrip({ track, audio, isDark, lang, activeCollection, onOpenPlayer }) {
+  const c = useColors(isDark);
+  const [liked, setLiked] = useState(false);
+  const currentTime = useCurrentTime();
+  const duration = (audio && audio.duration) || 0;
+  const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0;
+  const cover = homeCoverUrl(track && track.cover_art_path);
+  const isPlaying = !!(audio && audio.isPlaying);
+
+  useEffect(() => {
+    if (!track || !track.track_id || !activeCollection) { setLiked(false); return; }
+    let alive = true;
+    apiFetch(`/search/tracks/${encodeURIComponent(track.track_id)}/reaction?collection_name=${encodeURIComponent(activeCollection)}`)
+      .then(r => { if (alive) setLiked((r && r.reaction) === 'like'); })
+      .catch(() => { if (alive) setLiked(false); });
+    return () => { alive = false; };
+  }, [track && track.track_id, activeCollection]);
+
+  if (!track) return null;
+
+  const toggleLike = async () => {
+    const next = !liked;
+    setLiked(next);
+    try {
+      await apiFetch(`/search/tracks/${encodeURIComponent(track.track_id)}/reaction`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ collection_name: activeCollection, reaction: next ? 'like' : null }),
+      });
+    } catch { setLiked(!next); }
+  };
+
+  const fmt = (s) => {
+    if (!s || isNaN(s)) return '0:00';
+    const m = Math.floor(s / 60);
+    const sec = Math.round(s % 60);
+    return `${m}:${String(sec).padStart(2, '0')}`;
+  };
+  const meta = [track.artist, track.album].filter(Boolean).join(' · ');
+  const scrubberTrack = isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)';
+
+  return (
+    <div style={{ padding:'34px 40px 0' }}>
+      <div style={{ maxWidth:920, margin:'0 auto', display:'flex', alignItems:'center', gap:14,
+                    padding:'9px 14px 9px 9px', borderRadius:16,
+                    background: isDark ? 'rgba(255,255,255,0.035)' : 'rgba(255,255,255,0.55)',
+                    border:`1px solid ${isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)'}`,
+                    backdropFilter:'blur(18px)', WebkitBackdropFilter:'blur(18px)',
+                    boxShadow: isDark
+                      ? 'inset 0 1px 0 rgba(255,255,255,0.06), 0 6px 22px rgba(0,0,0,0.25)'
+                      : 'inset 0 1px 0 rgba(255,255,255,0.9), 0 6px 18px rgba(40,30,60,0.10)',
+                    animation:'fadeInUp .5s cubic-bezier(.22,.9,.3,1)' }}>
+        {/* Cover thumb → opens the full player */}
+        <div onClick={onOpenPlayer} title={lang==='ru'?'Открыть плеер':'Open player'}
+             style={{ width:44, height:44, borderRadius:10, overflow:'hidden', flex:'none', cursor:'pointer',
+                      background:'#241d38', boxShadow:'0 4px 12px rgba(0,0,0,.35)' }}>
+          {cover && <img src={cover} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />}
+        </div>
+        {/* Title line + scrubber */}
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ display:'flex', alignItems:'baseline', gap:8, minWidth:0 }}>
+            <span onClick={onOpenPlayer}
+                  style={{ fontSize:13, fontWeight:600, color:c.text, cursor:'pointer',
+                           whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title || '—'}</span>
+            {meta && <span style={{ fontSize:11.5, color:c.textMuted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', flexShrink:4 }}>{meta}</span>}
+          </div>
+          <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:5 }}>
+            <span className="mono" style={{ fontSize:9.5, letterSpacing:'.08em', color:c.textSubtle }}>{fmt(currentTime)}</span>
+            <input type="range" min={0} max={1} step={0.001} value={progress}
+                   onChange={(e) => {
+                     if (!audio || !duration) return;
+                     audio.seek(parseFloat(e.target.value) * duration);
+                   }}
+                   className="mini-scrubber"
+                   style={{ flex:1, height:4, borderRadius:2,
+                            WebkitAppearance:'none', appearance:'none', outline:'none', border:'none', cursor:'pointer',
+                            background:`linear-gradient(90deg, oklch(60% 0.18 270) ${progress*100}%, ${scrubberTrack} ${progress*100}%)` }} />
+            <span className="mono" style={{ fontSize:9.5, letterSpacing:'.08em', color:c.textSubtle }}>{fmt(duration)}</span>
+          </div>
+        </div>
+        {/* Controls: play/pause (embossed) + like */}
+        <button className={ske('btn', isDark)} onClick={() => audio && audio.togglePlay && audio.togglePlay()}
+                title={isPlaying ? (lang==='ru'?'Пауза':'Pause') : (lang==='ru'?'Играть':'Play')}
+                style={{ width:34, height:34, borderRadius:'50%', flex:'none',
+                         display:'grid', placeItems:'center', color:c.text }}>
+          {isPlaying
+            ? <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+            : <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style={{ marginLeft:2 }}><polygon points="6,4 20,12 6,20"/></svg>}
+        </button>
+        <button onClick={toggleLike}
+                title={liked ? (lang==='ru'?'Убрать лайк':'Unlike') : (lang==='ru'?'Лайкнуть':'Like')}
+                style={{ width:30, height:30, flex:'none', display:'grid', placeItems:'center',
+                         fontSize:16, lineHeight:1, color: liked ? '#ff78c8' : c.textMuted,
+                         textShadow: liked ? '0 0 12px rgba(255,120,200,.55)' : 'none',
+                         transition:'color .25s ease, text-shadow .25s ease, transform .15s ease' }}
+                onMouseDown={(e) => { e.currentTarget.style.transform = 'scale(1.25)'; }}
+                onMouseUp={(e) => { e.currentTarget.style.transform = 'scale(1)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.transform = 'scale(1)'; }}>
+          {liked ? '♥' : '♡'}
+        </button>
       </div>
     </div>
   );
@@ -3274,6 +3453,8 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, activ
 
       {/* Discovery Magazine body */}
       <div style={{ position:'relative', maxWidth:'1280px', margin:'0 auto', paddingBottom:'80px' }}>
+        <NowPlayingStrip track={playerTrack} audio={audio} isDark={isDark} lang={lang}
+                         activeCollection={activeCollection} onOpenPlayer={() => onNav('player')} />
         <ForYouHero isDark={isDark} lang={lang} activeCollection={activeCollection}
                     onPlayTrack={onPlayTrack} navigateToArtist={navigateToArtist} />
         <FeaturedArtistCard isDark={isDark} lang={lang} activeCollection={activeCollection}
