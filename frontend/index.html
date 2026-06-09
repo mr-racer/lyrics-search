@@ -498,6 +498,99 @@
     .tab-enter > *:nth-child(2) { animation-delay: 0.12s; opacity: 0; animation: tabFadeIn 0.3s ease forwards; }
     .tab-enter > *:nth-child(3) { animation-delay: 0.19s; opacity: 0; animation: tabFadeIn 0.3s ease forwards; }
 
+    /* ── Library section ──────────────────────────────────────── */
+    @keyframes libRise {
+      from { opacity: 0; transform: translateY(26px); filter: blur(5px); }
+      to   { opacity: 1; transform: translateY(0);    filter: blur(0); }
+    }
+    .lib-rise {
+      opacity: 0;
+      animation: libRise 0.65s cubic-bezier(.22,.9,.3,1) forwards;
+      animation-delay: var(--lib-d, 0s);
+    }
+    .lib-tab-pane {
+      opacity: 0;
+      animation: tabFadeIn 0.45s cubic-bezier(.22,.9,.3,1) 0.05s forwards;
+    }
+    @keyframes libCardIn {
+      from { opacity: 0; transform: translateY(18px) scale(0.97); }
+      to   { opacity: 1; transform: translateY(0)    scale(1); }
+    }
+    .lib-album-card {
+      opacity: 0;
+      animation: libCardIn 0.55s cubic-bezier(.22,.9,.3,1) forwards;
+      animation-delay: calc(var(--lib-i, 0) * 45ms);
+      transition: transform 0.35s cubic-bezier(.22,.9,.3,1), box-shadow 0.35s ease;
+    }
+    .lib-album-card:hover {
+      transform: translateY(-6px) scale(1.015);
+      box-shadow: 0 16px 36px rgba(0,0,0,.34), 0 0 0 1px rgba(124,91,255,.28);
+    }
+    .lib-album-cover {
+      position: absolute;
+      inset: 0;
+      transition: transform 0.55s cubic-bezier(.22,.9,.3,1);
+    }
+    .lib-album-card:hover .lib-album-cover {
+      transform: scale(1.06);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .lib-rise, .lib-tab-pane, .lib-album-card {
+        animation: none !important;
+        opacity: 1 !important;
+      }
+      .lib-album-card:hover, .lib-album-card:hover .lib-album-cover { transform: none; }
+    }
+
+    /* ── Album gatefold modal (vinyl flip) ────────────────────── */
+    @keyframes albumFlipIn  { from { transform: rotateY(0deg); }   to { transform: rotateY(180deg); } }
+    @keyframes albumFlipOut { from { transform: rotateY(180deg); } to { transform: rotateY(360deg); } }
+    .album-flip-stage { perspective: 1800px; }
+    .album-flip {
+      position: relative; width: 100%; height: 100%;
+      transform-style: preserve-3d;
+      animation: albumFlipIn 0.85s cubic-bezier(.35,.72,.22,1) 0.06s both;
+    }
+    .album-flip.closing {
+      animation: albumFlipOut 0.5s cubic-bezier(.5,.08,.4,1) both;
+    }
+    .album-flip-face {
+      position: absolute; inset: 0;
+      backface-visibility: hidden; -webkit-backface-visibility: hidden;
+      border-radius: 18px; overflow: hidden;
+      box-shadow: 0 30px 80px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.07);
+    }
+    .album-flip-back { transform: rotateY(180deg); }
+    @keyframes albumBackRise {
+      from { opacity: 0; transform: translateY(16px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .album-back-rise {
+      opacity: 0;
+      animation: albumBackRise 0.55s cubic-bezier(.22,.9,.3,1) forwards;
+      animation-delay: var(--ab-d, 0.5s);
+    }
+    @keyframes albumRowIn {
+      from { opacity: 0; transform: translateX(-10px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+    .album-row-in {
+      opacity: 0;
+      animation: albumRowIn 0.4s cubic-bezier(.22,.9,.3,1) forwards;
+      animation-delay: calc(0.62s + var(--ar-i, 0) * 35ms);
+    }
+    .album-vinyl {
+      border-radius: 50%;
+      background: repeating-radial-gradient(circle at center, #0d0a12 0 1.5px, #1a1622 1.5px 3.5px);
+      box-shadow: 0 10px 30px rgba(0,0,0,.55), inset 0 0 22px rgba(0,0,0,.8), inset 0 1px 1px rgba(255,255,255,.08);
+      animation: vinylSpin 16s linear infinite;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .album-flip, .album-flip.closing { animation: none !important; transform: rotateY(180deg); }
+      .album-back-rise, .album-row-in { animation: none !important; opacity: 1 !important; }
+      .album-vinyl { animation: none !important; }
+    }
+
     /* ── Filter autocomplete dropdown ─────────────────────────── */
     @keyframes dropdownIn {
       from { opacity: 0; transform: translateY(-4px); }
@@ -4946,7 +5039,7 @@ function VUMeter({ value, max=100, label, sub, isDark, hue=265, size=180 }) {
 }
 
 // ─── ALBUM CARD ───────────────────────────────────────────────────────────────
-function AlbumCard({ album, isDark, onClick, navigateToArtist, lang }) {
+function AlbumCard({ album, isDark, onClick, navigateToArtist, lang, index = 0 }) {
   const c = useColors(isDark);
   const yearStr = album.year_range || (album.year ? String(album.year) : '');
   const topGenre = album.top_genres?.[0];
@@ -4957,25 +5050,26 @@ function AlbumCard({ album, isDark, onClick, navigateToArtist, lang }) {
   return (
     <div
       onClick={onClick}
+      className="lib-album-card"
       style={{
-        borderRadius:'10px', overflow:'hidden',
+        '--lib-i': Math.min(index, 18),
+        borderRadius:'14px', overflow:'hidden',
         background:'rgba(255,255,255,.04)',
         border:`1px solid ${c.border}`,
         cursor:'pointer',
-        transition:'all .18s cubic-bezier(.22,.9,.3,1)',
       }}
-      onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,.07)'; e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.boxShadow = '0 6px 16px rgba(0,0,0,.18)'; }}
-      onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,.04)'; e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = 'none'; }}
     >
-      <div style={{ position:'relative', aspectRatio:'1' }}>
-        <AlbumCover title={album.album_title} artist={album.primary_artist} size={264} isDark={isDark} coverPath={album.cover_art_path} radius={0} fluid />
+      <div style={{ position:'relative', aspectRatio:'1', overflow:'hidden' }}>
+        <div className="lib-album-cover">
+          <AlbumCover title={album.album_title} artist={album.primary_artist} size={264} isDark={isDark} coverPath={album.cover_art_path} radius={0} fluid />
+        </div>
         <div style={{
-          position:'absolute', top:'7px', right:'7px',
+          position:'absolute', top:'8px', right:'8px',
           padding:'3px 9px', borderRadius:'12px', fontSize:'12px', fontFamily:"'JetBrains Mono', monospace",
           background:'rgba(0,0,0,.7)', color:'#bba8ff', backdropFilter:'blur(6px)',
         }}>{album.track_count} {lang==='ru'?'тр':'tr'}</div>
       </div>
-      <div style={{ padding:'10px 12px' }}>
+      <div style={{ padding:'13px 15px 15px' }}>
         <div style={{ fontSize:'15px', fontWeight:600, color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{album.album_title}</div>
         <div style={{ fontSize:'14px', marginTop:'3px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
           <span style={{ color:'#bba8ff', cursor:'pointer' }} onClick={onArtistClick(album.primary_artist_slug)} title={lang==='ru'?'Открыть страницу артиста':'Open artist'}>{album.primary_artist}</span>
@@ -5114,21 +5208,22 @@ function AlbumsGridTab({ albums, sort, onSortChange, onAlbumOpen, isDark, lang, 
     {id:'track_count_desc', label: lang==='ru' ? 'больше треков' : 'most tracks'},
   ];
   if (!albums || albums.length === 0) {
-    return <div style={{ padding:'40px 20px', textAlign:'center', color:c.textSubtle, fontSize:'13px' }}>{lang==='ru' ? 'Нет треков с album-тегом в этой коллекции' : 'No tracks with album tag in this collection'}</div>;
+    return <div style={{ padding:'64px 20px', textAlign:'center', color:c.textSubtle, fontSize:'14px' }}>{lang==='ru' ? 'Нет треков с album-тегом в этой коллекции' : 'No tracks with album tag in this collection'}</div>;
   }
   return (
     <>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'4px 0 12px', fontSize:'13px' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'6px 2px 18px', fontSize:'13px' }}>
         <span className="mono" style={{ color:c.textSubtle, letterSpacing:'0.06em' }}>{albums.length} {lang==='ru'?'альбомов':'albums'}</span>
         <div style={{ display:'flex', gap:'6px' }}>
           {sortOpts.map(o => (
             <button key={o.id} onClick={() => onSortChange(o.id)}
               className="mono"
               style={{
-                padding:'4px 11px', borderRadius:'14px', fontSize:'12px', cursor:'pointer',
+                padding:'5px 13px', borderRadius:'14px', fontSize:'12px', cursor:'pointer',
                 background: sort===o.id ? 'rgba(120,80,200,.18)' : 'rgba(255,255,255,.04)',
                 color: sort===o.id ? '#bba8ff' : c.textMuted,
                 border:'none',
+                transition:'all .2s',
               }}>{o.label}</button>
           ))}
         </div>
@@ -5136,15 +5231,22 @@ function AlbumsGridTab({ albums, sort, onSortChange, onAlbumOpen, isDark, lang, 
       <div style={{
         display:'grid',
         gridTemplateColumns: 'repeat(auto-fill, minmax(216px, 1fr))',
-        gap:'14px',
+        gap:'22px',
       }}>
-        {albums.map(a => (
+        {albums.map((a, i) => (
           <AlbumCard
             key={`${a.primary_artist_slug}-${a.album_title}`}
             album={a}
+            index={i}
             isDark={isDark} lang={lang}
             navigateToArtist={navigateToArtist}
-            onClick={() => onAlbumOpen(a)}
+            onClick={(e) => {
+              // Capture the cover square's on-screen rect so the modal can
+              // fly out of this exact card (shared-element transition).
+              const coverEl = e?.currentTarget?.querySelector('.lib-album-cover');
+              const r = (coverEl || e?.currentTarget)?.getBoundingClientRect?.();
+              onAlbumOpen(a, r ? { top: r.top, left: r.left, width: r.width, height: r.height } : null);
+            }}
           />
         ))}
       </div>
@@ -5803,7 +5905,7 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
   // ── UI state ──────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState(() => localStorage.getItem('library_active_tab') || 'albums');
   const [distOpen, setDistOpen] = useState(() => localStorage.getItem('library_distributions_open') === '1');
-  const [albumModal, setAlbumModal] = useState(null);  // currently-open AlbumSummary
+  const [albumModal, setAlbumModal] = useState(null);  // { album: AlbumSummary, originRect: DOMRect|null }
   const [likedMap, setLikedMap] = useState({});
   // playlistsListing is now provided by App-level usePlaylists (lifted in Plan 19 follow-up)
   const [activePlaylistId, setActivePlaylistId] = React.useState(null);
@@ -5826,6 +5928,14 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
 
   useEffect(() => { localStorage.setItem('library_active_tab', activeTab); }, [activeTab]);
   useEffect(() => { localStorage.setItem('library_distributions_open', distOpen ? '1' : '0'); }, [distOpen]);
+
+  // ── Entrance animation epoch ──────────────────────────────────────────
+  // The section stays mounted (visibility-toggled at App level), so CSS
+  // entrance animations would fire once while hidden and never replay.
+  // Bumping this key on every visible→true transition remounts the content
+  // subtree, replaying the staggered .lib-rise reveal on each visit.
+  const [enterEpoch, setEnterEpoch] = useState(0);
+  useEffect(() => { if (visible !== false) setEnterEpoch(e => e + 1); }, [visible]);
 
   // ── Effect 1: 4 endpoints unrelated to albumSort ─────────────────────
   // Re-fires when the user navigates back to Library (visible→true) so that
@@ -5871,31 +5981,37 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
         accent={lang==='ru' ? 'в звуках' : 'in sounds'}
       />
 
-      <div style={{ flex:1, overflowY:'auto', padding:'18px 24px 60px' }}>
-        <div style={{ maxWidth:'1180px', margin:'0 auto', display:'flex', flexDirection:'column', gap:'10px' }}>
+      <div style={{ flex:1, overflowY:'auto', padding:'clamp(36px, 7vh, 72px) 32px 100px' }}>
+        <div key={`lib-enter-${enterEpoch}`} style={{ maxWidth:'1180px', margin:'0 auto', display:'flex', flexDirection:'column', gap:'20px' }}>
 
-          <LibraryHeroLine stats={stats} albumCount={albumsCount} isDark={isDark} lang={lang} collection={activeCollection} />
+          <div className="lib-rise">
+            <LibraryHeroLine stats={stats} albumCount={albumsCount} isDark={isDark} lang={lang} collection={activeCollection} />
+            <DistributionsToggle open={distOpen} onToggle={() => setDistOpen(o => !o)} isDark={isDark} lang={lang} />
+            {distOpen && <div style={{ marginTop:'14px' }}><DistributionsPanel stats={stats} isDark={isDark} lang={lang} /></div>}
+          </div>
 
-          <DistributionsToggle open={distOpen} onToggle={() => setDistOpen(o => !o)} isDark={isDark} lang={lang} />
-          {distOpen && <DistributionsPanel stats={stats} isDark={isDark} lang={lang} />}
+          <div className="lib-rise" style={{ '--lib-d':'0.1s' }}>
+            <ListeningWidgetsRow data={listenData} isDark={isDark} lang={lang} />
+          </div>
 
-          <ListeningWidgetsRow data={listenData} isDark={isDark} lang={lang} />
+          <div className="lib-rise" style={{ '--lib-d':'0.18s' }}>
+            <LibraryTabsStrip
+              active={activeTab}
+              onChange={setActiveTab}
+              counts={{ albums: albumsCount, liked: likedCount, recent: recentCount, playlists: playlistsListing.playlists.length }}
+              isDark={isDark}
+              lang={lang}
+            />
+          </div>
 
-          <LibraryTabsStrip
-            active={activeTab}
-            onChange={setActiveTab}
-            counts={{ albums: albumsCount, liked: likedCount, recent: recentCount, playlists: playlistsListing.playlists.length }}
-            isDark={isDark}
-            lang={lang}
-          />
-
-          {/* Tab content */}
+          {/* Tab content — keyed by tab so switching replays the pane reveal */}
+          <div key={`lib-tab-${activeTab}`} className="lib-tab-pane">
           {activeTab === 'albums' && (
             <AlbumsGridTab
               albums={albumsData?.albums || []}
               sort={albumSort}
               onSortChange={setAlbumSort}
-              onAlbumOpen={(a) => setAlbumModal(a)}
+              onAlbumOpen={(a, rect) => setAlbumModal({ album: a, originRect: rect || null })}
               isDark={isDark} lang={lang}
               navigateToArtist={navigateToArtist}
             />
@@ -5908,7 +6024,7 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
               navigateToArtist={navigateToArtist}
               onAlbumClick={(albumTitle) => {
                 const found = (albumsData?.albums || []).find(a => a.album_title === albumTitle);
-                if (found) setAlbumModal(found);
+                if (found) setAlbumModal({ album: found, originRect: null });
               }}
               onToggleLike={toggleLike}
               likedMap={likedMap}
@@ -5926,7 +6042,7 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
               navigateToArtist={navigateToArtist}
               onAlbumClick={(albumTitle) => {
                 const found = (albumsData?.albums || []).find(a => a.album_title === albumTitle);
-                if (found) setAlbumModal(found);
+                if (found) setAlbumModal({ album: found, originRect: null });
               }}
               onToggleLike={toggleLike}
               likedMap={likedMap}
@@ -5948,13 +6064,15 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
               navigateToArtist={navigateToArtist}
             />
           )}
+          </div>
 
         </div>
       </div>
 
       {albumModal && (
         <AlbumModal
-          album={albumModal}
+          album={albumModal.album}
+          originRect={albumModal.originRect}
           onClose={() => setAlbumModal(null)}
           onPlayTrack={onPlayTrack}
           navigateToArtist={navigateToArtist}
@@ -5991,15 +6109,15 @@ function LibraryHeroLine({ stats, albumCount, isDark, lang, collection }) {
     <div style={{
       background: 'linear-gradient(90deg, rgba(120,80,200,.15) 0%, rgba(120,80,200,.04) 60%, transparent 100%)',
       border: `1px solid ${c.border}`,
-      borderRadius: '14px',
-      padding: '12px 18px',
+      borderRadius: '16px',
+      padding: '18px 24px',
       backdropFilter: 'blur(20px)',
       WebkitBackdropFilter: 'blur(20px)',
     }}>
       <div className="mono" style={{ fontSize:'10px', color:c.textSubtle, letterSpacing:'0.22em', textTransform:'uppercase' }}>
         {lang==='ru' ? 'РАЗДЕЛ 03 · БИБЛИОТЕКА' : 'SECTION 03 · LIBRARY'} · {collection || '—'}
       </div>
-      <div className="mono" style={{ fontSize:'13px', color:c.textMuted, letterSpacing:'0.04em', marginTop:'2px' }}>
+      <div className="mono" style={{ fontSize:'14px', color:c.textMuted, letterSpacing:'0.04em', marginTop:'6px' }}>
         <b style={{ color:c.text, fontWeight:600 }}>{total.toLocaleString ? total.toLocaleString() : total}</b> {lang==='ru' ? 'треков' : 'tracks'}
         {dot}<b style={{ color:c.text, fontWeight:600 }}>{albumCount}</b> {lang==='ru' ? 'альбомов' : 'albums'}
         {dot}<b style={{ color:c.text, fontWeight:600 }}>{artists}</b> {lang==='ru' ? 'артистов' : 'artists'}
@@ -6048,11 +6166,11 @@ function DistributionsPanel({ stats, isDark, lang }) {
   return (
     <div style={{
       background: isDark ? 'rgba(15,12,25,.5)' : 'rgba(255,255,255,.5)',
-      border: `1px solid ${c.border}`, borderRadius:'12px',
+      border: `1px solid ${c.border}`, borderRadius:'14px',
       backdropFilter:'blur(20px)', WebkitBackdropFilter:'blur(20px)',
-      padding:'14px 18px',
-      display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'22px',
-      animation: 'fadeIn 0.28s cubic-bezier(.22,.9,.3,1)',
+      padding:'20px 24px',
+      display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'30px',
+      animation: 'fadeIn 0.32s cubic-bezier(.22,.9,.3,1)',
     }}>
       {/* Decades */}
       <div>
@@ -6137,10 +6255,10 @@ function ListeningWidgetsRow({ data, isDark, lang }) {
     <div style={{
       background: 'rgba(255,255,255,.04)',
       border: `1px solid ${c.border}`,
-      borderRadius: '10px',
-      padding: '10px 12px',
+      borderRadius: '14px',
+      padding: '14px 16px',
       backdropFilter:'blur(20px)',
-      display:'flex', flexDirection:'column', gap:'2px',
+      display:'flex', flexDirection:'column', gap:'4px',
     }}>
       <div className="mono" style={{ fontSize:'9px', color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase' }}>{lbl}</div>
       <div style={{ fontSize: typeof val === 'string' && val.length > 12 ? '13px' : '18px', color: tint || c.text, fontWeight: 500, lineHeight: 1.2 }}>{val}</div>
@@ -6148,7 +6266,7 @@ function ListeningWidgetsRow({ data, isDark, lang }) {
     </div>
   );
   return (
-    <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:'8px' }}>
+    <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:'12px' }}>
       {widget(
         lang==='ru' ? '∑ ПРОСЛУШАНО' : '∑ LISTENED',
         fmtDur(data?.total_seconds_listened),
@@ -6176,18 +6294,43 @@ function ListeningWidgetsRow({ data, isDark, lang }) {
     </div>
   );
 }
-function LibraryTabsStrip({ active, onChange, counts, lang }) {
+function LibraryTabsStrip({ active, onChange, counts, lang, isDark }) {
+  const c = useColors(isDark);
   const tabs = lang === 'ru'
     ? [['albums','▦ Альбомы', counts.albums], ['liked','♥ Любимые', counts.liked], ['recent','⟲ Недавние', counts.recent], ['playlists','♫ Плейлисты', counts.playlists]]
     : [['albums','▦ Albums', counts.albums], ['liked','♥ Liked', counts.liked], ['recent','⟲ Recently', counts.recent], ['playlists','♫ Playlists', counts.playlists]];
   return (
-    <div style={{display:'flex', gap:8}}>
-      {tabs.map(([id, label, n]) => (
-        <button key={id} onClick={() => onChange(id)}
-          style={{padding:'8px 15px', borderRadius:10, fontSize:13, background: active===id ? 'oklch(60% 0.18 270)' : 'rgba(255,255,255,.04)', color: active===id ? '#fff' : '#aaa'}}>
-          {label} ({n ?? 0})
-        </button>
-      ))}
+    <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
+      {tabs.map(([id, label, n]) => {
+        const isActive = active === id;
+        return (
+          <button key={id} onClick={() => onChange(id)}
+            style={{
+              display:'flex', alignItems:'center', gap:8,
+              padding:'10px 18px', borderRadius:12, fontSize:13, cursor:'pointer',
+              background: isActive
+                ? 'linear-gradient(180deg, oklch(64% 0.18 272) 0%, oklch(53% 0.2 276) 100%)'
+                : 'rgba(255,255,255,.04)',
+              color: isActive ? '#fff' : c.textMuted,
+              border: `1px solid ${isActive ? 'rgba(124,91,255,.45)' : c.border}`,
+              boxShadow: isActive
+                ? 'inset 0 1px 0 rgba(255,255,255,.28), 0 6px 18px rgba(124,91,255,.28)'
+                : 'inset 0 1px 0 rgba(255,255,255,.04)',
+              transition:'all .25s cubic-bezier(.22,.9,.3,1)',
+            }}
+            onMouseEnter={e => { if (!isActive) { e.currentTarget.style.background = 'rgba(255,255,255,.08)'; e.currentTarget.style.color = c.text; e.currentTarget.style.transform = 'translateY(-1px)'; } }}
+            onMouseLeave={e => { if (!isActive) { e.currentTarget.style.background = 'rgba(255,255,255,.04)'; e.currentTarget.style.color = c.textMuted; e.currentTarget.style.transform = 'translateY(0)'; } }}
+          >
+            <span>{label}</span>
+            <span className="mono" style={{
+              fontSize:10, padding:'2px 8px', borderRadius:9, letterSpacing:'0.04em',
+              background: isActive ? 'rgba(255,255,255,.2)' : 'rgba(255,255,255,.06)',
+              color: isActive ? '#fff' : c.textSubtle,
+              transition:'all .25s',
+            }}>{n ?? 0}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -6299,11 +6442,53 @@ function NewPlaylistModal({ onCancel, onSubmit, lang }) {
   );
 }
 
-function AlbumModal({ album, onClose, onPlayTrack, navigateToArtist, isDark, lang, activeCollection }) {
-  const c = useColors(isDark);
+function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist, isDark, lang, activeCollection }) {
   const [hoverRow, setHoverRow] = useState(-1);
   const [likedMap, setLikedMap] = useState({});
   const [likeLoading, setLikeLoading] = useState({});
+
+  // ── Shared-element fly-in (FLIP): start at the clicked grid cover ────
+  // originRect is the viewport rect of the cover the user clicked; the
+  // stage starts translated+scaled onto it, then transitions to center
+  // while the gatefold flip rotates. Falls back to flip-in-place if null.
+  const stageRef = useRef(null);
+  const originTransformRef = useRef(null);
+  const prefersReducedMotion = () =>
+    window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  useLayoutEffect(() => {
+    const el = stageRef.current;
+    if (!el || !originRect || prefersReducedMotion()) return;
+    const final = el.getBoundingClientRect();
+    if (!final.width || !final.height) return;
+    const sx = originRect.width / final.width;
+    const sy = originRect.height / final.height;
+    const dx = (originRect.left + originRect.width / 2) - (final.left + final.width / 2);
+    const dy = (originRect.top + originRect.height / 2) - (final.top + final.height / 2);
+    const atOrigin = `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`;
+    originTransformRef.current = atOrigin;
+    el.style.transform = atOrigin;
+    // Double rAF: let the at-origin transform paint before transitioning out.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      el.style.transition = 'transform 0.7s cubic-bezier(.3,.75,.25,1)';
+      el.style.transform = 'translate(0px, 0px) scale(1, 1)';
+    }));
+  }, []);
+
+  // ── Gatefold close: reverse flip + fly back to the grid cover ────────
+  const [closing, setClosing] = useState(false);
+  const closingRef = useRef(false);
+  const requestClose = useCallback(() => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    setClosing(true);
+    const el = stageRef.current;
+    if (el && originTransformRef.current && !prefersReducedMotion()) {
+      el.style.transition = 'transform 0.45s cubic-bezier(.55,.06,.5,.9)';
+      el.style.transform = originTransformRef.current;
+    }
+    setTimeout(onClose, 460);   // must outlive albumFlipOut (0.5s) start→visual close
+  }, [onClose]);
 
   // Lock body scroll while open
   useEffect(() => {
@@ -6314,10 +6499,10 @@ function AlbumModal({ album, onClose, onPlayTrack, navigateToArtist, isDark, lan
 
   // Esc to close
   useEffect(() => {
-    const h = (e) => { if (e.key === 'Escape') onClose(); };
+    const h = (e) => { if (e.key === 'Escape') requestClose(); };
     document.addEventListener('keydown', h);
     return () => document.removeEventListener('keydown', h);
-  }, [onClose]);
+  }, [requestClose]);
 
   // Lazy-load per-track reactions on mount
   useEffect(() => {
@@ -6350,7 +6535,7 @@ function AlbumModal({ album, onClose, onPlayTrack, navigateToArtist, isDark, lan
     const t = album.tracks[idx];
     if (!t || !onPlayTrack) return;
     onPlayTrack({ track: t }, album.tracks.map(tt => ({ track: tt })));
-    onClose();
+    requestClose();
   };
 
   const fmtDur = (s) => {
@@ -6361,97 +6546,166 @@ function AlbumModal({ album, onClose, onPlayTrack, navigateToArtist, isDark, lan
   const totalDur = album.duration_seconds || 0;
   const totalDurFmt = `${Math.floor(totalDur/60)}:${String(Math.floor(totalDur%60)).padStart(2,'0')}`;
 
+  // Cover URL + fallback hue (same scheme as AlbumCover)
+  const hue = (((album.album_title||'?').charCodeAt(0)||65)*37 + ((album.primary_artist||'?').charCodeAt(0)||65)*17) % 360;
+  const coverUrl = album.cover_art_path
+    ? (album.cover_art_path.startsWith('http') ? album.cover_art_path : `${API}${album.cover_art_path}`)
+    : null;
+
   return (
     <div
-      onClick={onClose}
+      onClick={requestClose}
       style={{
         position:'fixed', inset:0, zIndex:100,
-        background:'rgba(0,0,0,.6)', backdropFilter:'blur(6px)', WebkitBackdropFilter:'blur(6px)',
-        display:'grid', placeItems:'center', padding:'20px',
-        animation:'fadeIn 0.18s ease',
+        background:'rgba(0,0,0,.65)', backdropFilter:'blur(8px)', WebkitBackdropFilter:'blur(8px)',
+        display:'grid', placeItems:'center', padding:'24px',
+        animation: closing ? 'fadeOverlayOut 0.35s ease 0.15s forwards' : 'fadeIn 0.25s ease',
       }}
     >
       <div
+        ref={stageRef}
+        className="album-flip-stage"
         onClick={e => e.stopPropagation()}
-        style={{
-          background: isDark ? 'rgba(15,12,25,.96)' : 'rgba(255,255,255,.96)',
-          border: `1px solid ${c.border}`,
-          borderRadius:'14px',
-          backdropFilter:'blur(20px)', WebkitBackdropFilter:'blur(20px)',
-          padding:'18px',
-          maxWidth:'720px', width:'100%', maxHeight:'80vh',
-          display:'flex', flexDirection:'column', gap:'12px',
-          boxShadow:'0 20px 60px rgba(0,0,0,.5)',
-        }}
+        style={{ width:'min(700px, 94vw)', height:'min(84vh, 700px)', willChange:'transform' }}
       >
-        {/* Hero */}
-        <div style={{ display:'flex', gap:'14px' }}>
-          <div style={{ width:'140px', flexShrink:0 }}>
-            <AlbumCover title={album.album_title} artist={album.primary_artist} size={140} isDark={isDark} coverPath={album.cover_art_path} radius={10} fluid />
-          </div>
-          <div style={{ flex:1, minWidth:0 }}>
-            <div className="mono" style={{ fontSize:'10px', color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase' }}>{lang==='ru'?'АЛЬБОМ':'ALBUM'}</div>
-            <div style={{ fontSize:'24px', lineHeight:1.1, color:c.text, margin:'4px 0', letterSpacing:'-0.01em' }}>{album.album_title}</div>
-            <div
-              onClick={() => { if (album.primary_artist_slug && navigateToArtist) { navigateToArtist(album.primary_artist_slug); onClose(); } }}
-              style={{ fontSize:'13px', color:'#bba8ff', cursor:'pointer', display:'inline-block' }}
-            >{album.primary_artist} →</div>
-            {album.feat_artists?.length > 0 && (
-              <div style={{ marginTop:'4px', display:'flex', gap:'5px', flexWrap:'wrap' }}>
-                {album.feat_artists.map(f => (
-                  <span key={f.slug}
-                    onClick={() => { if (navigateToArtist) { navigateToArtist(f.slug); onClose(); } }}
-                    style={{ padding:'2px 8px', borderRadius:'10px', background:'rgba(120,80,200,.18)', border:'1px solid rgba(120,80,200,.3)', color:'#bba8ff', fontSize:'10px', cursor:'pointer' }}>
-                    {f.name}
-                  </span>
-                ))}
-              </div>
+        <div className={`album-flip${closing ? ' closing' : ''}`}>
+
+          {/* ── FRONT: sleeve cover ─────────────────────────────── */}
+          <div className="album-flip-face" style={{ background:'#0d0a12' }}>
+            {coverUrl ? (
+              <img src={coverUrl} alt="" style={{ width:'100%', height:'100%', objectFit:'cover', display:'block' }} />
+            ) : (
+              <div style={{
+                width:'100%', height:'100%', display:'grid', placeItems:'center',
+                background:`linear-gradient(135deg, oklch(38% 0.13 ${hue}), oklch(52% 0.18 ${(hue+45)%360}))`,
+                fontFamily:"'JetBrains Mono', monospace", fontSize:'52px', fontWeight:700, color:'rgba(255,255,255,.65)', letterSpacing:'0.04em',
+              }}>{(album.album_title||'?').slice(0,2).toUpperCase()}</div>
             )}
-            <div className="mono" style={{ display:'flex', gap:'14px', fontSize:'11px', color:c.textMuted, marginTop:'8px', letterSpacing:'0.06em' }}>
-              <span>{album.year_range || album.year || '—'}</span>
-              <span>·</span>
-              <span>{album.track_count} {lang==='ru'?'треков':'tracks'}</span>
-              <span>·</span>
-              <span>{totalDurFmt}</span>
+            {/* sleeve sheen */}
+            <div aria-hidden="true" style={{ position:'absolute', inset:0, background:'linear-gradient(115deg, rgba(255,255,255,.14) 0%, transparent 32%, transparent 68%, rgba(0,0,0,.28) 100%)' }} />
+          </div>
+
+          {/* ── BACK: blurred cover + tracklist ─────────────────── */}
+          <div className="album-flip-face album-flip-back" style={{ background:'#0d0a12' }}>
+            {coverUrl ? (
+              <img src={coverUrl} alt="" aria-hidden="true" style={{
+                position:'absolute', top:'-12%', left:'-12%', width:'124%', height:'124%',
+                objectFit:'cover', filter:'blur(64px) saturate(1.35) brightness(.45)',
+              }} />
+            ) : (
+              <div aria-hidden="true" style={{ position:'absolute', inset:0, background:`linear-gradient(135deg, oklch(28% 0.1 ${hue}), oklch(20% 0.08 ${(hue+45)%360}))` }} />
+            )}
+            <div aria-hidden="true" style={{ position:'absolute', inset:0, background:'linear-gradient(180deg, rgba(10,8,18,.32) 0%, rgba(10,8,18,.66) 100%)' }} />
+
+            <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', gap:'16px', padding:'26px 28px 24px' }}>
+
+              {/* Hero: small cover + vinyl peeking out */}
+              <div className="album-back-rise" style={{ '--ab-d':'0.45s', display:'flex', gap:'22px', alignItems:'center' }}>
+                <div style={{ position:'relative', width:'196px', height:'132px', flexShrink:0 }}>
+                  <div className="album-vinyl" style={{ position:'absolute', left:'64px', top:'4px', width:'124px', height:'124px' }}>
+                    <div style={{ position:'absolute', inset:0, display:'grid', placeItems:'center' }}>
+                      <div style={{
+                        width:'40px', height:'40px', borderRadius:'50%',
+                        background:`linear-gradient(135deg, oklch(55% 0.16 ${hue}), oklch(40% 0.14 ${(hue+45)%360}))`,
+                        display:'grid', placeItems:'center', boxShadow:'0 0 0 1px rgba(0,0,0,.6)',
+                      }}>
+                        <div style={{ width:'7px', height:'7px', borderRadius:'50%', background:'#0d0a12' }} />
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ position:'absolute', left:0, top:0, width:'132px', height:'132px', filter:'drop-shadow(6px 0 14px rgba(0,0,0,.45))' }}>
+                    <AlbumCover title={album.album_title} artist={album.primary_artist} size={132} isDark={true} coverPath={album.cover_art_path} radius={12} />
+                  </div>
+                </div>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div className="mono" style={{ fontSize:'10px', color:'rgba(238,235,248,.5)', letterSpacing:'0.24em', textTransform:'uppercase' }}>{lang==='ru'?'АЛЬБОМ':'ALBUM'}</div>
+                  <div style={{
+                    fontFamily:"'Noto Serif Display', Georgia, serif", fontSize:'30px', lineHeight:1.08,
+                    color:'#f5f3fa', margin:'6px 0 4px', letterSpacing:'-0.01em',
+                    textShadow:'0 2px 18px rgba(0,0,0,.5)',
+                    overflow:'hidden', display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical',
+                  }}>{album.album_title}</div>
+                  <div
+                    onClick={() => { if (album.primary_artist_slug && navigateToArtist) { navigateToArtist(album.primary_artist_slug); requestClose(); } }}
+                    style={{ fontSize:'14px', color:'#cdbcff', cursor:'pointer', display:'inline-block' }}
+                  >{album.primary_artist} →</div>
+                  {album.feat_artists?.length > 0 && (
+                    <div style={{ marginTop:'7px', display:'flex', gap:'5px', flexWrap:'wrap' }}>
+                      {album.feat_artists.map(f => (
+                        <span key={f.slug}
+                          onClick={() => { if (navigateToArtist) { navigateToArtist(f.slug); requestClose(); } }}
+                          style={{ padding:'2px 9px', borderRadius:'10px', background:'rgba(120,80,200,.25)', border:'1px solid rgba(160,130,255,.35)', color:'#d4c8ff', fontSize:'10px', cursor:'pointer' }}>
+                          {f.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  <div className="mono" style={{ display:'flex', gap:'14px', fontSize:'11px', color:'rgba(238,235,248,.55)', marginTop:'10px', letterSpacing:'0.06em' }}>
+                    <span>{album.year_range || album.year || '—'}</span>
+                    <span>·</span>
+                    <span>{album.track_count} {lang==='ru'?'треков':'tracks'}</span>
+                    <span>·</span>
+                    <span>{totalDurFmt}</span>
+                  </div>
+                </div>
+                <button
+                  onClick={requestClose}
+                  style={{ alignSelf:'flex-start', background:'rgba(255,255,255,.06)', color:'rgba(238,235,248,.7)', fontSize:'15px', cursor:'pointer', width:'34px', height:'34px', borderRadius:'50%', border:'1px solid rgba(255,255,255,.1)', display:'grid', placeItems:'center', transition:'all .2s' }}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,.14)'; e.currentTarget.style.color = '#fff'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,.06)'; e.currentTarget.style.color = 'rgba(238,235,248,.7)'; }}
+                >✕</button>
+              </div>
+
+              {/* Actions */}
+              <div className="album-back-rise" style={{ '--ab-d':'0.55s', display:'flex', gap:'8px' }}>
+                <button onClick={() => playFromIdx(0)} style={{
+                  padding:'9px 18px', borderRadius:'10px', fontSize:'12px', fontFamily:"'JetBrains Mono', monospace", letterSpacing:'0.06em',
+                  background:'linear-gradient(180deg, oklch(62% 0.21 272), oklch(49% 0.22 283))', color:'#fff', border:'none', cursor:'pointer',
+                  boxShadow:'inset 0 1px 0 rgba(255,255,255,.3), 0 6px 18px rgba(124,91,255,.35)',
+                }}>▶ {lang==='ru'?'Играть всё':'Play All'}</button>
+              </div>
+
+              {/* Tracklist */}
+              <div style={{
+                background:'rgba(8,6,14,.45)', border:'1px solid rgba(255,255,255,.08)', borderRadius:'14px',
+                backdropFilter:'blur(14px)', WebkitBackdropFilter:'blur(14px)',
+                overflow:'auto', flex:1, minHeight:0,
+              }}>
+                {album.tracks.map((t, i) => {
+                  const liked = !!likedMap[t.track_id];
+                  return (
+                    <div
+                      key={t.track_id}
+                      className="album-row-in"
+                      onClick={() => playFromIdx(i)}
+                      onMouseEnter={() => setHoverRow(i)}
+                      onMouseLeave={() => setHoverRow(-1)}
+                      style={{
+                        '--ar-i': Math.min(i, 20),
+                        display:'grid', gridTemplateColumns:'28px 1fr 60px 30px',
+                        gap:'10px', padding:'9px 14px', alignItems:'center',
+                        borderBottom:'1px solid rgba(255,255,255,.06)',
+                        fontSize:'13px', cursor:'pointer',
+                        background: hoverRow === i ? 'rgba(255,255,255,.06)' : 'transparent',
+                        transition:'background .15s',
+                      }}
+                    >
+                      <span className="mono" style={{ color: hoverRow === i ? '#cdbcff' : 'rgba(238,235,248,.4)', fontSize:'11px', textAlign:'center' }}>{hoverRow === i ? '▶' : i+1}</span>
+                      <span style={{ color:'#ece9f4', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t.title}</span>
+                      <span className="mono" style={{ color:'rgba(238,235,248,.4)', fontSize:'11px', textAlign:'right' }}>{fmtDur(t.duration)}</span>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); toggleLike(t.track_id); }}
+                        style={{ background:'transparent', border:'none', cursor:'pointer', fontSize:'13px', color: liked ? '#ff7aa8' : 'rgba(238,235,248,.4)', padding:0 }}
+                        title={liked ? (lang==='ru'?'Убрать лайк':'Unlike') : (lang==='ru'?'Лайкнуть':'Like')}
+                      >{liked ? '♥' : '♡'}</button>
+                    </div>
+                  );
+                })}
+              </div>
+
             </div>
           </div>
-          <button onClick={onClose} style={{ alignSelf:'flex-start', background:'transparent', color:c.textMuted, fontSize:'18px', cursor:'pointer', padding:'4px 8px', border:'none' }}>✕</button>
-        </div>
 
-        {/* Actions */}
-        <div style={{ display:'flex', gap:'8px' }}>
-          <button onClick={() => playFromIdx(0)} style={{ padding:'7px 14px', borderRadius:'8px', fontSize:'12px', fontFamily:"'JetBrains Mono', monospace", background:'linear-gradient(180deg, oklch(60% 0.21 270), oklch(48% 0.22 285))', color:'#fff', border:'none', cursor:'pointer' }}>▶ {lang==='ru'?'Играть всё':'Play All'}</button>
-        </div>
-
-        {/* Tracklist */}
-        <div style={{ background:'rgba(0,0,0,.25)', borderRadius:'8px', overflow:'auto', flex:1 }}>
-          {album.tracks.map((t, i) => {
-            const liked = !!likedMap[t.track_id];
-            return (
-              <div
-                key={t.track_id}
-                onClick={() => playFromIdx(i)}
-                onMouseEnter={() => setHoverRow(i)}
-                onMouseLeave={() => setHoverRow(-1)}
-                style={{
-                  display:'grid', gridTemplateColumns:'24px 1fr 60px 30px',
-                  gap:'10px', padding:'8px 12px', alignItems:'center',
-                  borderBottom:`1px solid ${c.border}`,
-                  fontSize:'12px', cursor:'pointer',
-                  background: hoverRow === i ? 'rgba(255,255,255,.04)' : 'transparent',
-                }}
-              >
-                <span className="mono" style={{ color: hoverRow === i ? '#bba8ff' : c.textSubtle, fontSize:'11px', textAlign:'center' }}>{hoverRow === i ? '▶' : i+1}</span>
-                <span style={{ color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t.title}</span>
-                <span className="mono" style={{ color:c.textSubtle, fontSize:'11px', textAlign:'right' }}>{fmtDur(t.duration)}</span>
-                <button
-                  onClick={(e) => { e.stopPropagation(); toggleLike(t.track_id); }}
-                  style={{ background:'transparent', border:'none', cursor:'pointer', fontSize:'13px', color: liked ? '#ff7aa8' : c.textSubtle, padding:0 }}
-                  title={liked ? (lang==='ru'?'Убрать лайк':'Unlike') : (lang==='ru'?'Лайкнуть':'Like')}
-                >{liked ? '♥' : '♡'}</button>
-              </div>
-            );
-          })}
         </div>
       </div>
     </div>
