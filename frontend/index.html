@@ -917,29 +917,29 @@
       gap: 2px;
       pointer-events: none;
       z-index: 0;
-      filter: blur(12px) saturate(1.35);
-      -webkit-filter: blur(12px) saturate(1.35);
+      filter: blur(9px) saturate(1.5);
+      -webkit-filter: blur(9px) saturate(1.5);
       overflow: visible;  /* let the blur halo bleed past strip edges */
     }
     /* Outer-edge mask gradient: bars fade from transparent at the column
-       edge to fully opaque ~35% across. Without this, the strip's bounding
+       edge to fully opaque ~12% across. Without this, the strip's bounding
        box terminates abruptly at the row edge — bars at the outer position
        just stop dead. With the gradient mask, the wave "dissolves" into
        the column's empty space instead. Inner edge needs no fade because
        the cover sits there and naturally hides the strip. */
     .player-spectrum--left {
       left: 0;
-      -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 35%, #000 100%);
-              mask-image: linear-gradient(to right, transparent 0%, #000 35%, #000 100%);
+      -webkit-mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 100%);
+              mask-image: linear-gradient(to right, transparent 0%, #000 12%, #000 100%);
     }
     .player-spectrum--right {
       right: 0;
-      -webkit-mask-image: linear-gradient(to left,  transparent 0%, #000 35%, #000 100%);
-              mask-image: linear-gradient(to left,  transparent 0%, #000 35%, #000 100%);
+      -webkit-mask-image: linear-gradient(to left,  transparent 0%, #000 12%, #000 100%);
+              mask-image: linear-gradient(to left,  transparent 0%, #000 12%, #000 100%);
     }
     .player-spectrum-bar {
-      flex: 0 0 clamp(5px, 0.7vw, 9px);
-      height: 72%;          /* ~30% taller than the prior 55% */
+      flex: 0 0 clamp(6px, 0.85vw, 13px);
+      height: 86%;          /* near full row height — bigger visual amplitude */
       border-radius: 999px; /* round caps top + bottom — wave feel */
       transform: scaleY(0);
       transform-origin: center;
@@ -947,8 +947,8 @@
       background: linear-gradient(
         to top,
         transparent 0%,
-        var(--bar-color, oklch(62% 0.16 270)) 45%,
-        var(--bar-color, oklch(62% 0.16 270)) 55%,
+        var(--bar-color, oklch(62% 0.16 270)) 35%,
+        var(--bar-color, oklch(62% 0.16 270)) 65%,
         transparent 100%
       );
     }
@@ -8688,9 +8688,11 @@ function SpectrumBars({ side, analyserRef, dataArrayRef, color, isPlaying, barCo
       const analyser = analyserRef?.current;
       if (analyser && data) {
         analyser.getByteFrequencyData(data);
-        // Use the lower ~60% of bins — that's where vocal/melody/bass live.
-        // Top bins are mostly air noise on most material.
-        const usefulBins = Math.floor(data.length * 0.6);
+        // Use the lower ~45% of bins — that's where vocal/melody/bass live.
+        // Top bins are mostly air noise on most material; trimming them
+        // spreads real energy across the full strip width so the outer
+        // bars don't sit permanently dead.
+        const usefulBins = Math.floor(data.length * 0.45);
         for (let i = 0; i < barCount; i++) {
           const start = Math.floor(i * usefulBins / barCount);
           const end   = Math.floor((i + 1) * usefulBins / barCount);
@@ -8715,9 +8717,10 @@ function SpectrumBars({ side, analyserRef, dataArrayRef, color, isPlaying, barCo
           const v = Math.max(0, Math.min(1, currentsRef.current[d]));
           // No minimum scale — bars must fully collapse when fade=0 so they
           // don't show as thin sliver lines while paused.
-          // Boost (×1.3) lifts quiet sections so the wave reads more clearly,
-          // clamped so peaks don't clip past the strip height.
-          const scale = Math.min(1, v * 1.3) * fadeRef.current;
+          // tanh soft-knee instead of a hard clamp: lifts quiet sections
+          // (×~1.8 near zero) yet saturates gradually, so loud choruses keep
+          // a visible wave shape instead of a flat row of maxed bars.
+          const scale = Math.tanh(v * 1.8) * fadeRef.current;
           el.style.transform = `scaleY(${scale})`;
         }
       }
@@ -8745,7 +8748,7 @@ function SpectrumBars({ side, analyserRef, dataArrayRef, color, isPlaying, barCo
         const proximity = side === 'left'
           ? i / (barCount - 1)
           : (barCount - 1 - i) / (barCount - 1);
-        const opacity = 0.22 + proximity * 0.58;
+        const opacity = 0.32 + proximity * 0.6;
         return (
           <div key={i}
             ref={el => { barsRef.current[i] = el; }}
@@ -9172,6 +9175,16 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
   // mirrored SpectrumBars that flank the cover row during playback.
   const { analyserRef, dataArrayRef } = useAudioAnalyser(audio?.audioRef, isPlaying);
 
+  // More bars on wide screens so the strips don't look sparse when the
+  // cover row stretches (27"+ monitors). Computed once per mount — the
+  // section remounts on every nav, which covers window resizes in practice.
+  const spectrumBarCount = useMemo(() => {
+    const w = window.innerWidth || 1280;
+    if (w >= 2200) return 56;
+    if (w >= 1700) return 44;
+    return 32;
+  }, []);
+
   // Vinyl-stack transition: snapshot of outgoing track + direction, plus a
   // nonce that bumps on every track change to re-trigger the CSS entry
   // animation (CSS animations only replay when the keyed element remounts).
@@ -9347,12 +9360,6 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
         : `${API}${currentTrack.cover_art_path}`)
     : null;
   const coverColor = useCoverColor(coverUrl);
-
-  // Derive ambient hue from track
-  const ambientHue = useMemo(() => {
-    if (!currentTrack) return 270;
-    return ((currentTrack.title?.charCodeAt(0)||65)*37 + (currentTrack.artist?.charCodeAt(0)||65)*17) % 360;
-  }, [currentTrack]);
 
   // Premium color tokens — theme-aware so the player's deep "console" feel
   // adapts to light theme instead of staying jet-black everywhere.
@@ -9586,13 +9593,6 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
           the (now collapsed) section header bar. */}
       <div style={{ flex:1, display:'flex', overflow:'hidden', padding:'clamp(24px, 5vh, 56px) 32px 24px', gap:'28px', position:'relative' }}>
 
-        {/* Ambient glow orb behind left panel */}
-        <div className="player-ambient-orb" style={{
-          width: 400, height: 400,
-          top: '80px', left: '60px',
-          background: `radial-gradient(circle, hsl(${ambientHue}, 70%, 50%), transparent 70%)`,
-        }} />
-
         {/* ════════════════ LEFT: Player ════════════════
             justifyContent:center keeps the cover+controls visually centered
             within the column when there's vertical slack. The cover-row sits
@@ -9637,6 +9637,7 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
               dataArrayRef={dataArrayRef}
               color={coverColor}
               isPlaying={isPlaying}
+              barCount={spectrumBarCount}
             />
             <SpectrumBars
               side="right"
@@ -9644,6 +9645,7 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
               dataArrayRef={dataArrayRef}
               color={coverColor}
               isPlaying={isPlaying}
+              barCount={spectrumBarCount}
             />
             <button
               type="button" className="player-side-btn"
@@ -9962,14 +9964,17 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
         </div>
 
         {/* ════════════════ RIGHT: Facts + Queue ════════════════
-            Capped at 40% width. Top padding matches the left column's, so the
+            Capped at 40% width, but never wider than 620px — on large
+            monitors (27"+) the rail doesn't need to keep growing, so the
+            freed space goes to the cover row and its spectrum strips.
+            Top padding matches the left column's, so the
             "О ПЕСНЕ" header aligns with the cover's vertical start. When the
             queue is empty, the column centers its content vertically so the
             facts+queue cards don't sit awkwardly at the top with empty space
             beneath. When the queue has items, it grows + scrolls normally. */}
         <div style={{
-          flex: '0 0 40%',
-          maxWidth: '40%',
+          flex: '0 0 min(40%, 620px)',
+          maxWidth: 'min(40%, 620px)',
           display: 'flex',
           flexDirection: 'column',
           justifyContent: playlist.length === 0 ? 'center' : 'flex-start',
