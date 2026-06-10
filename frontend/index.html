@@ -7247,7 +7247,7 @@ function InvitesPanel({ lang, showToast }) {
   );
 }
 
-function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeCollection, aiStatus, onTheme, onLang, collections, onCollectionSwitch, onCollectionDelete, onLogout, instanceMode, showToast }) {
+function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeCollection, aiStatus, onTheme, onLang, collections, onLogout, instanceMode, showToast }) {
   const c = useColors(isDark);
   const [models, setModels] = useState({});
   // Guard against legacy localStorage values: Web Storage stringifies `null` to the
@@ -7518,75 +7518,26 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
           </div>
         </section>
 
-        {/* ─── Collections (Task 4.5) — theme-aware ─── */}
+        {/* ─── Library (Phase D) — read-only; one collection per account ─── */}
         <section style={{ marginBottom: 24 }}>
           <h3 style={{ fontFamily:"'JetBrains Mono', ui-monospace, monospace", fontWeight:500, textTransform:'uppercase', fontSize: 11, letterSpacing:'0.22em', color: c.textSubtle, marginBottom: 12, padding: '0 4px' }}>
-            {lang === 'ru' ? 'КОЛЛЕКЦИИ' : 'COLLECTIONS'}
+            {lang === 'ru' ? 'БИБЛИОТЕКА' : 'LIBRARY'}
           </h3>
-          {(!collections || collections.length === 0) ? (
-            <div style={{ fontSize: 12, color: c.textMuted, padding: '8px 4px' }}>
-              {lang === 'ru' ? 'Пока нет коллекций — создайте ниже.' : 'No collections yet — create one below.'}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 10,
+            padding: '10px 12px', borderRadius: 10,
+            background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)',
+            border: `1px solid ${c.border}`,
+          }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, color: c.text, fontWeight: 500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                {localStorage.getItem('musix_user_email') || (lang === 'ru' ? 'не вошёл' : 'not logged in')}
+              </div>
+              <div style={{ fontFamily:"'JetBrains Mono', ui-monospace, monospace", fontWeight:500, textTransform:'uppercase', fontSize: 9, letterSpacing:'0.2em', color: c.textMuted }}>
+                {(collections?.[0]?.count) || 0} {lang === 'ru' ? 'треков' : 'tracks'}
+              </div>
             </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {collections.map(col => {
-                const isActive = col.name === activeCollection;
-                const rowBg     = isActive
-                  ? (isDark ? 'rgba(124,91,255,0.13)' : 'rgba(124,91,255,0.10)')
-                  : (isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)');
-                const rowBorder = isActive
-                  ? 'oklch(60% 0.18 270 / 0.35)'
-                  : c.border;
-                return (
-                  <div key={col.name} style={{
-                    display: 'flex', alignItems: 'center', gap: 10,
-                    padding: '10px 12px', borderRadius: 10,
-                    background: rowBg,
-                    border: `1px solid ${rowBorder}`,
-                  }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13, color: c.text, fontWeight: isActive ? 600 : 500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                        {col.name}
-                      </div>
-                      <div style={{ fontFamily:"'JetBrains Mono', ui-monospace, monospace", fontWeight:500, textTransform:'uppercase', fontSize: 9, letterSpacing:'0.2em', color: c.textMuted }}>
-                        {col.count || 0} {lang === 'ru' ? 'треков' : 'tracks'}
-                      </div>
-                      {/* AI features toggle (Plan 6) */}
-                      <div style={{
-                        display:'flex', alignItems:'center', gap:10,
-                        marginTop: 6, fontSize: 12, color: isDark ? '#aaa' : '#555',
-                      }}>
-                        <span>🤖 {lang==='ru'?'AI-фичи':'AI features'}:</span>
-                        <CollectionAIToggle
-                          collectionName={col.name}
-                          isActive={col.name === activeCollection}
-                          aiStatus={aiStatus}
-                          lang={lang}
-                          isDark={isDark}
-                        />
-                      </div>
-                    </div>
-                    {!isActive && (
-                      <button onClick={() => onCollectionSwitch && onCollectionSwitch(col.name)}
-                        style={{
-                          background: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)',
-                          border: `1px solid ${c.border}`, borderRadius: 999,
-                          padding: '5px 10px', fontSize: 11, fontWeight: 500,
-                          color: c.text, cursor: 'pointer',
-                        }}>
-                        {lang === 'ru' ? 'Активировать' : 'Activate'}
-                      </button>
-                    )}
-                    <button onClick={() => onCollectionDelete && onCollectionDelete(col.name)}
-                            title={lang === 'ru' ? 'Удалить' : 'Delete'}
-                            style={{ background: 'transparent', border: 0, color: c.textMuted, cursor: 'pointer', padding: 4 }}>
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+          </div>
         </section>
 
           {/* Add collection */}
@@ -10577,7 +10528,6 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
   }, []);
   const closeAddToPlaylist = useCallback(() => setAddToPopoverInfo(null), []);
 
-  const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [stats, setStats] = useState(null);
 
   // Player state
@@ -10758,31 +10708,6 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     apiFetch(`/library/stats${col}`).then(setStats).catch(()=>{});
   }, [activeCollection, appState]);
 
-  const switchCollection = (name) => {
-    setActiveCollection(name);
-    localStorage.setItem('active_collection', name);
-  };
-
-  const deleteCollection = async (name) => {
-    try {
-      await apiFetch(`/library/collection/${encodeURIComponent(name)}`, { method:'DELETE' });
-      const res = await apiFetch('/library/collections');
-      const cols = res.collections || [];
-      setCollections(cols);
-      if (name === activeCollection) {
-        if (cols.length > 0) {
-          const best = cols.reduce((a,b) => b.count > a.count ? b : a, cols[0]);
-          setActiveCollection(best.name);
-          localStorage.setItem('active_collection', best.name);
-        } else {
-          setActiveCollection('');
-          localStorage.removeItem('active_collection');
-        }
-      }
-      setDeleteConfirm(null);
-    } catch (e) { alert((lang==='ru'?'Ошибка: ':'Error: ') + e.message); }
-  };
-
   const handleTheme = () => {
     setThemeAnim(true);
     setTimeout(() => setThemeAnim(false), 380);
@@ -10893,17 +10818,9 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
           onTheme={handleTheme}
           onLang={handleLang}
           collections={collections}
-          onCollectionSwitch={switchCollection}
-          onCollectionDelete={(name) => setDeleteConfirm(name)}
           onLogout={onLogout}
           instanceMode={instanceMode}
           showToast={showToast} />
-      )}
-
-      {deleteConfirm && (
-        <DeleteConfirm isDark={isDark} lang={lang} name={deleteConfirm}
-          onCancel={() => setDeleteConfirm(null)}
-          onConfirm={() => deleteCollection(deleteConfirm)} />
       )}
 
       {toast && (
