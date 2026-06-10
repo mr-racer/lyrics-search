@@ -13,6 +13,7 @@ translations.
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from pathlib import Path
@@ -307,8 +308,13 @@ class MetadataDB:
         # AI Mode infrastructure (Plan 6) — per-collection opt-in for live-LLM
         # features. DEFAULT 1 means existing rows immediately report on,
         # matching the pre-flag world where AI features were always available.
+        # ai_enabled — AI Mode (Plan 6). axis_norm_stats + stream_liked_share —
+        # Stream RecSys: per-collection sonic-axis mean/std (JSON, recomputed on
+        # each indexing run) and the liked/new slider default.
         cls._ensure_columns(conn, "collection_settings", {
             "ai_enabled": "INTEGER NOT NULL DEFAULT 1",
+            "axis_norm_stats": "TEXT",
+            "stream_liked_share": "REAL",
         })
 
         # AI indexing — distinguish "processed" from "silently skipped" so the
@@ -997,6 +1003,42 @@ class MetadataDB:
             (collection_name, 1 if enabled else 0),
         )
         conn.commit()
+
+    # ── Stream RecSys: sonic-axis normalisation stats ──
+
+    @classmethod
+    def set_axis_norm_stats(cls, collection_name: str, stats: Dict) -> None:
+        """Persist per-collection axis mean/std as JSON.
+
+        ``stats`` shape: ``{"version": str, "n": int,
+        "mean": {axis: float}, "std": {axis: float}}`` — recomputed after every
+        indexing run so z-scores stay honest as the collection grows.
+        """
+        conn = cls._connect()
+        conn.execute(
+            """INSERT INTO collection_settings (collection_name, axis_norm_stats)
+               VALUES (?, ?)
+               ON CONFLICT(collection_name) DO UPDATE SET
+                 axis_norm_stats = excluded.axis_norm_stats""",
+            (collection_name, json.dumps(stats)),
+        )
+        conn.commit()
+
+    @classmethod
+    def get_axis_norm_stats(cls, collection_name: str) -> Optional[Dict]:
+        """Return the stored axis stats dict, or None when absent/corrupt."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT axis_norm_stats FROM collection_settings WHERE collection_name = ?",
+            (collection_name,),
+        ).fetchone()
+        if not row or not row[0]:
+            return None
+        try:
+            return json.loads(row[0])
+        except (TypeError, ValueError):
+            logger.warning("[MetadataDB] corrupt axis_norm_stats for %s — ignoring", collection_name)
+            return None
 
     # ── Playback history ──
 

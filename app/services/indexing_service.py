@@ -35,7 +35,13 @@ from qdrant_client import QdrantClient, models
 from tqdm.auto import tqdm
 
 from app.indexing.folder_scanner import scan_and_enrich_folder
-from app.resources.clap_features import _encode_clap
+from app.resources.clap_features import (
+    AXIS_NAMES,
+    _encode_clap,
+    axes_for_clap_vectors,
+    axis_version,
+    compute_axis_text_embeddings,
+)
 from app.resources.lyrics_search_engine import LyricsSearchEngine
 from app.resources.metadata_db import MetadataDB, _slugify
 from app.resources.qdrant_payload import build_text_for_embedding, prepare_metadata
@@ -186,6 +192,7 @@ class IndexingService:
         clap_map: Optional[dict] = None,
         clap_chunks_map: Optional[dict] = None,
         batch_size: int = 32,
+        sonic_axes_map: Optional[dict] = None,
     ) -> None:
         client = self.engine.qdrant_client
         coll = self.engine.collection_name
@@ -227,6 +234,10 @@ class IndexingService:
                     if chunk_list:
                         payload["clap_chunks"] = [c.tolist() for c in chunk_list]
                         chunks_attached += 1
+                if sonic_axes_map:
+                    axes = sonic_axes_map.get(key)
+                    if axes:
+                        payload["sonic_axes"] = axes
 
                 points.append(models.PointStruct(
                     id=uuid.uuid4().hex,
@@ -473,6 +484,11 @@ class IndexingService:
             else:
                 clap_map = {}
                 clap_chunks_map = {}
+
+            # Sonic axes (Stream RecSys): project pooled CLAP vectors onto the
+            # 6-axis prompt space while the CLAP model is still loaded. Raw
+            # scores go into the payload; z-scoring happens at read time.
+            sonic_axes_map = self._compute_sonic_axes(clap_map)
         finally:
             if text_device.type == "cuda" and torch.cuda.is_available():
                 self.engine.model.to(text_device)
@@ -480,5 +496,63 @@ class IndexingService:
         # Upsert (network IO — CPU model is fine)
         self._upsert_in_batches(
             filtered, text_vecs, clap_map or None, clap_chunks_map or None,
+            sonic_axes_map=sonic_axes_map or None,
         )
+
+        # Indexing drops + recreates the collection, so this batch IS the whole
+        # collection — its mean/std are the collection's normalisation stats.
+        self._persist_axis_norm_stats(sonic_axes_map)
         logger.info("[IndexingService] Indexing complete: %d tracks", total)
+
+    def _compute_sonic_axes(self, clap_map: dict) -> dict:
+        """Map ``(artist, title) → {axis: raw_score}`` for every CLAP-encoded track.
+
+        Axis failures must never block indexing — returns {} on any error.
+        """
+        if not clap_map:
+            return {}
+        try:
+            model_clap = self.engine.model_clap
+            if not model_clap:
+                from app.resources.model_registry import ModelRegistry
+                model_clap = ModelRegistry.load_clap()
+            text_emb = compute_axis_text_embeddings(model_clap)
+            keys = list(clap_map)
+            axes_dicts = axes_for_clap_vectors(
+                np.stack([clap_map[k] for k in keys]), text_emb,
+            )
+            logger.info("[IndexingService] sonic axes computed for %d tracks", len(keys))
+            return dict(zip(keys, axes_dicts))
+        except Exception:
+            logger.exception("[IndexingService] sonic axes failed — indexing continues without them")
+            return {}
+
+    def _persist_axis_norm_stats(self, sonic_axes_map: dict) -> None:
+        """Write per-collection axis mean/std to collection_settings.
+
+        ``ddof=1`` matches the notebook's pandas ``.std()``; with n=1 that is
+        NaN — sanitised to 0.0 (readers must guard zero-std anyway).
+        """
+        if not sonic_axes_map:
+            return
+        try:
+            arr = np.array(
+                [[d[a] for a in AXIS_NAMES] for d in sonic_axes_map.values()],
+                dtype=float,
+            )
+            mean = arr.mean(axis=0)
+            std = arr.std(axis=0, ddof=1) if arr.shape[0] > 1 else np.zeros(len(AXIS_NAMES))
+            std = np.nan_to_num(std, nan=0.0)
+            stats = {
+                "version": axis_version(),
+                "n": int(arr.shape[0]),
+                "mean": {a: float(v) for a, v in zip(AXIS_NAMES, mean)},
+                "std": {a: float(v) for a, v in zip(AXIS_NAMES, std)},
+            }
+            MetadataDB.set_axis_norm_stats(str(self.engine.collection_name), stats)
+            logger.info(
+                "[IndexingService] axis_norm_stats persisted for '%s' (n=%d)",
+                self.engine.collection_name, stats["n"],
+            )
+        except Exception:
+            logger.exception("[IndexingService] failed to persist axis_norm_stats")
