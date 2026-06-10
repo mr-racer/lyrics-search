@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import ValidationError
 
 from app.api.dependencies import get_current_user
-from app.api.helpers import derive_collection_for_user, deprecated_collection_warning
+from app.api.helpers import derive_collection_for_user
 from app.domain.models import (
     PlaybackEventIn,
     PlaybackEventOut,
@@ -45,7 +45,6 @@ async def record_playback_event(
     except (json.JSONDecodeError, ValueError, ValidationError) as e:
         raise HTTPException(status_code=422, detail=str(e))
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(req.collection_name, derived, "/playback/events")
     new_id = playback_service.record_event(
         session_id=req.session_id,
         collection_name=derived,
@@ -60,7 +59,6 @@ async def record_playback_event(
 async def get_recent(
     request: Request,
     current_user: User = Depends(get_current_user),
-    collection_name: str | None = Query(None, deprecated=True),
     limit: int = Query(50, ge=1, le=200),
 ) -> RecentTracksResponse:
     """Return recently played tracks for the current user's collection.
@@ -69,7 +67,6 @@ async def get_recent(
     compat but ignored. The server derives the collection from the JWT.
     """
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection_name, derived, "/playback/recent")
     db_client = request.app.state.db_client
     if db_client is None or db_client.qdrant is None:
         return RecentTracksResponse(tracks=[], collection_name=derived)

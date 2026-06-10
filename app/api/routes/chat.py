@@ -28,7 +28,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.domain.models import ChatRequest, SearchFilters, TrackChatRequest, TrackChatResponse, TrackHit, User
 from app.api.dependencies import get_current_user
-from app.api.helpers import derive_collection_for_user, deprecated_collection_warning
+from app.api.helpers import derive_collection_for_user
 from app.services.agents import (
     PLANNER_PROMPT,
     SCORER_PROMPT,
@@ -302,7 +302,6 @@ async def chat(
 
     # Phase D-soft: derive collection from JWT user; ignore client-supplied value.
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(req.collection_name, derived, "POST /chat/")
 
     # Resolve which text model this collection was indexed with, so chat's
     # searches hit the matching Qdrant vector_name (a collection indexed with
@@ -798,7 +797,6 @@ async def track_chat(
 ) -> TrackChatResponse:
     """Single-track conversational chat (drawer or per-line explain)."""
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(req.collection_name, derived, "POST /chat/track-chat")
     req = req.model_copy(update={"collection_name": derived})
 
     if req.mode == "lyric_explain" and not req.selected_line:

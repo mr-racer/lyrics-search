@@ -11,7 +11,7 @@ from app.domain.models import (
     PlaylistTrackAdd, PlaylistUpdate, PlaylistsResponse, User,
 )
 from app.api.dependencies import get_current_user
-from app.api.helpers import derive_collection_for_user, deprecated_collection_warning
+from app.api.helpers import derive_collection_for_user
 from app.services import playlists_service
 from app.services.playlists_service import (
     PlaylistNameCollision, PlaylistNotFound, TrackAlreadyInPlaylist, TrackNotInPlaylist,
@@ -34,7 +34,6 @@ def create_playlist(
 ) -> PlaylistSummary:
     # Phase D-soft: derive collection from JWT user; ignore client-supplied value.
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(req.collection_name, derived, "POST /playlists")
     try:
         return playlists_service.create(
             derived, req.name, req.description, qdrant=_qdrant(request)
@@ -47,12 +46,10 @@ def create_playlist(
 def list_playlists(
     request: Request,
     current_user: User = Depends(get_current_user),
-    collection_name: Optional[str] = Query(None, deprecated=True),
     include_track_id: Optional[str] = Query(None),
 ) -> PlaylistsResponse:
     # Phase D-soft: derive collection from JWT user; ignore client-supplied value.
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection_name, derived, "GET /playlists")
     summaries = playlists_service.list_playlists(
         derived,
         include_track_id=include_track_id,

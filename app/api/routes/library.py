@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 from app.domain.models import ArtistAggregate, IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RediscoverResponse, User
 from app.api.dependencies import get_current_user, require_mode
-from app.api.helpers import derive_collection_for_user, deprecated_collection_warning
+from app.api.helpers import derive_collection_for_user
 from app.services.library_service import LibraryService
 from app.services import uploads_service
 from app.services._magic_sniff import sniff_audio_mime
@@ -53,7 +53,6 @@ async def browse_tracks(
     current_user: User = Depends(get_current_user),
     q: Optional[str] = Query(None, min_length=2, description="Search query (title / artist / album). Omit to return all tracks."),
     limit: int = Query(6, ge=1, le=50, description="Max results"),
-    collection_name: Optional[str] = Query(None, deprecated=True, description="Ignored; collection is derived from the JWT"),
 ) -> list[dict]:
     """Payload-only search across title, artist, album with relevance scoring.
 
@@ -66,7 +65,6 @@ async def browse_tracks(
         return []
 
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection_name, derived, "/library/browse")
 
     has_query = q is not None and len(q.strip()) >= 2
     q_full = q.strip().lower() if has_query else ""
@@ -189,7 +187,6 @@ async def browse_tracks(
 async def get_random_tracks(
     request: Request = None,
     current_user: User = Depends(get_current_user),
-    collection_name: Optional[str] = Query(None, deprecated=True, description="Ignored; collection is derived from the JWT"),
     limit: int = Query(1, ge=1, le=20, description="Number of random tracks"),
     pool: int = Query(1000, ge=50, le=5000, description="Upper bound of sampling pool"),
 ) -> list[dict]:
@@ -207,7 +204,6 @@ async def get_random_tracks(
         return []
 
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection_name, derived, "/library/random")
 
     # Collection is ALWAYS the caller's derived account collection.
     try:
@@ -382,11 +378,9 @@ async def set_collection_ai_enabled_legacy(collection_name: str, req: AIEnabledR
 async def get_library_albums(
     request: Request,
     current_user: User = Depends(get_current_user),
-    collection_name: Optional[str] = Query(None, deprecated=True, description="Ignored; collection is derived from the JWT"),
     sort: str = Query("alphabetical", description="alphabetical | year_desc | year_asc | track_count_desc"),
 ) -> LibraryAlbumsResponse:
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection_name, derived, "/library/albums")
     db_client = request.app.state.db_client
     if db_client is None or db_client.qdrant is None:
         return LibraryAlbumsResponse(
@@ -405,10 +399,8 @@ async def get_library_albums(
 async def get_library_liked_songs(
     request: Request,
     current_user: User = Depends(get_current_user),
-    collection_name: Optional[str] = Query(None, deprecated=True, description="Ignored; collection is derived from the JWT"),
 ) -> LikedSongsResponse:
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection_name, derived, "/library/liked-songs")
     db_client = request.app.state.db_client
     if db_client is None or db_client.qdrant is None:
         return LikedSongsResponse(tracks=[], collection_name=derived)
@@ -424,10 +416,8 @@ async def get_library_liked_songs(
 async def get_library_rediscover(
     request: Request,
     current_user: User = Depends(get_current_user),
-    collection_name: Optional[str] = Query(None, deprecated=True, description="Ignored; collection is derived from the JWT"),
 ) -> RediscoverResponse:
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection_name, derived, "/library/rediscover")
     db_client = request.app.state.db_client
     if db_client is None or db_client.qdrant is None:
         return RediscoverResponse(collection_name=derived)
@@ -443,13 +433,11 @@ async def get_library_rediscover(
 async def get_library_featured_artist(
     request: Request,
     current_user: User = Depends(get_current_user),
-    collection_name: Optional[str] = Query(None, deprecated=True, description="Ignored; collection is derived from the JWT"),
     date: str | None = Query(None, description="YYYY-MM-DD; defaults to today"),
     lang: str = Query("en"),
 ) -> ArtistAggregate:
     from app.api.routes.artists import build_artist_aggregate
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection_name, derived, "/library/featured-artist")
     db_client = request.app.state.db_client
     if db_client is None or db_client.qdrant is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
@@ -470,7 +458,6 @@ async def get_library_featured_artist(
 async def get_library_listening_stats(
     request: Request,
     current_user: User = Depends(get_current_user),
-    collection_name: Optional[str] = Query(None, deprecated=True, description="Ignored; collection is derived from the JWT"),
     lang: str = Query("en", pattern="^(en|ru)$"),
     tz_offset_minutes: int = Query(
         0, ge=-840, le=840,
@@ -478,7 +465,6 @@ async def get_library_listening_stats(
     ),
 ) -> ListeningStatsResponse:
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection_name, derived, "/library/listening-stats")
     db_client = request.app.state.db_client
     if db_client is None or db_client.qdrant is None:
         return ListeningStatsResponse()
@@ -496,7 +482,6 @@ async def get_library_listening_stats(
 async def get_stats(
     request: Request,
     current_user: User = Depends(get_current_user),
-    collection_name: Optional[str] = Query(None, deprecated=True, description="Ignored; collection is derived from the JWT"),
 ) -> dict:
     """Library statistics: total tracks, top genres (from Qdrant payload).
 
@@ -512,7 +497,6 @@ async def get_stats(
     """
     db_client = request.app.state.db_client
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection_name, derived, "/library/stats")
     empty_payload = {
         "total_tracks": 0,
         "collection_name": None,
@@ -656,7 +640,6 @@ async def get_stats(
 async def get_top_pairs(
     request: Request,
     current_user: User = Depends(get_current_user),
-    collection_name: Optional[str] = Query(None, deprecated=True, description="Ignored; collection is derived from the JWT"),
 ) -> dict:
     """Get cached top-similar and top-dissimilar track pairs.
 
@@ -671,7 +654,6 @@ async def get_top_pairs(
         }
     """
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection_name, derived, "/library/top-pairs")
     db_client = request.app.state.db_client
     if db_client is None:
         return {
@@ -787,7 +769,6 @@ async def index_folder(
         raise HTTPException(status_code=503, detail="Library service unavailable — is Qdrant running?")
 
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(req.collection_name, derived, "/library/index")
 
     # Sanity check: folder must exist on the host. Done BEFORE delegating so a
     # typo gives a clean 400 instead of a confusing mid-pipeline failure.
@@ -1195,11 +1176,9 @@ async def _run_cluster_discovery_job(collection: str) -> dict:
 async def post_cluster_discovery(
     request: Request,
     current_user: User = Depends(get_current_user),
-    collection: str | None = Query(None, deprecated=True, description="Ignored; collection is derived from the JWT"),
 ) -> dict:
     """Trigger HDBSCAN clustering. Returns immediately with a job_id."""
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection, derived, "/library/cluster-discovery")
     job_id = uuid.uuid4().hex[:12]
     _CLUSTER_JOBS[job_id] = {"status": "running", "result": None, "error": None}
 
@@ -1229,11 +1208,9 @@ async def get_cluster_job(job_id: str) -> dict:
 async def get_cluster_representatives(
     request: Request,
     current_user: User = Depends(get_current_user),
-    collection: str | None = Query(None, deprecated=True, description="Ignored; collection is derived from the JWT"),
 ) -> list[dict]:
     """Return the cluster grid for the curator UI: id, size, representatives, current label."""
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection, derived, "/library/clusters/representatives")
     svc = request.app.state.sonic_descriptor_service
     if svc is None:
         raise HTTPException(status_code=503, detail="Sonic Descriptor Service unavailable")
@@ -1256,7 +1233,6 @@ async def post_cluster_labels(
     if svc is None:
         raise HTTPException(status_code=503, detail="Sonic Descriptor Service unavailable")
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(payload.get("collection"), derived, "/library/clusters/labels")
     raw_labels = payload.get("labels", {})
     if not isinstance(raw_labels, dict):
         raise HTTPException(status_code=400, detail="Body must include a 'labels' dict")
@@ -1272,11 +1248,9 @@ async def post_cluster_labels(
 async def get_sonic_clusters(
     request: Request,
     current_user: User = Depends(get_current_user),
-    collection: str | None = Query(None, deprecated=True, description="Ignored; collection is derived from the JWT"),
 ) -> list[dict]:
     """Return labeled clusters for Sonic Map overlay. Empty list if curator not run yet."""
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection, derived, "/library/sonic-clusters")
     svc = request.app.state.sonic_descriptor_service
     if svc is None:
         raise HTTPException(status_code=503, detail="Sonic Descriptor Service unavailable")
@@ -1322,11 +1296,9 @@ async def _run_classifier_training_job(collection: str) -> dict:
 async def post_train_classifier(
     request: Request,
     current_user: User = Depends(get_current_user),
-    collection: str | None = Query(None, deprecated=True, description="Ignored; collection is derived from the JWT"),
 ) -> dict:
     """Train MLP classifier on labeled clusters. Returns job_id immediately."""
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection, derived, "/library/sonic-classifier/train")
     job_id = uuid.uuid4().hex[:12]
     _TRAINING_JOBS[job_id] = {"status": "running", "result": None, "error": None}
 
@@ -1347,11 +1319,9 @@ async def post_train_classifier(
 async def get_sonic_classifier_status(
     request: Request,
     current_user: User = Depends(get_current_user),
-    collection: str | None = Query(None, deprecated=True, description="Ignored; collection is derived from the JWT"),
 ) -> dict:
     """Return readiness of the classifier."""
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection, derived, "/library/sonic-classifier/status")
     svc = request.app.state.sonic_descriptor_service
     if svc is None:
         raise HTTPException(status_code=503, detail="Sonic Descriptor Service unavailable")

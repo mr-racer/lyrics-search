@@ -79,7 +79,6 @@ class SearchRequest(BaseModel):
     text_model: Optional[str] = Field(None, description="Text embedding model to use")
     filters: SearchFilters | None = None
     limit: int = 10
-    collection_name: Optional[str] = Field(None, description="Qdrant collection to search in")
 
 
 class SearchResponse(BaseModel):
@@ -92,7 +91,6 @@ class SearchResponse(BaseModel):
 class IndexRequest(BaseModel):
     """Запрос на индексацию папки с музыкой."""
     folder_path: str
-    collection_name: str = "music_explorer"
     better_lyrics_quality: bool = False
     text_model: Optional[str] = None
     enhance_by_musicbrainz: bool = False
@@ -122,7 +120,6 @@ class ChatRequest(BaseModel):
     # LLM connection — overrides env vars LLM_BASE_URL / LLM_MODEL if set
     llm_base_url: Optional[str] = Field(None, description="e.g. http://localhost:8000/v1")
     llm_model: Optional[str] = Field(None, description="e.g. openai/gpt-oss-20b")
-    collection_name: Optional[str] = Field(None, description="Qdrant collection to search in")
 
 
 class ChatResponse(BaseModel):
@@ -135,10 +132,6 @@ class ChatResponse(BaseModel):
 
 class TrackReactionRequest(BaseModel):
     """Запрос на установку реакции на трек."""
-    # Phase D (D-soft): optional + ignored. Server derives the collection from
-    # the JWT user; a new client that drops the field must NOT 422. Removed
-    # entirely in D-hard.
-    collection_name: Optional[str] = None
     reaction: Literal["like", "dislike"] | None = None  # None = remove reaction
 
 
@@ -169,7 +162,6 @@ class TrackChatRequest(BaseModel):
     message: str
     llm_base_url: Optional[str] = None
     llm_model: Optional[str] = None
-    collection_name: Optional[str] = None
 
 
 class TrackChatResponse(BaseModel):
@@ -319,18 +311,15 @@ class ClusterRepresentative(BaseModel):
 class ClusterLabelsRequest(BaseModel):
     """Body for POST /library/clusters/labels — user-assigned cluster names.
 
-    Phase D (D-soft): ``collection`` is accepted for backward compat but ignored;
-    the server derives the collection from the JWT.
+    Phase D (D-hard): the server derives the collection from the JWT; the
+    client no longer supplies it.
     """
-    collection: Optional[str] = None
     labels: dict[int, str]  # {0: "Lo-fi indie", 1: "Cinematic drone", ...}
 
 
 class PlaybackEventIn(BaseModel):
     """Request body for POST /playback/events."""
     session_id: str
-    # Phase D (D-soft): optional + ignored; removed in D-hard
-    collection_name: Optional[str] = None
     track_id: str
     played_sec: float
     total_dur: float | None = None
@@ -591,7 +580,6 @@ class PlaylistDetail(BaseModel):
 
 
 class PlaylistCreate(BaseModel):
-    collection_name: Optional[str] = None  # Phase D (D-soft): optional + ignored; removed in D-hard
     name: str
     description: Optional[str] = None
 

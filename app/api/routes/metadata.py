@@ -1,8 +1,7 @@
 """Metadata routes — CRUD for artist/song facts stored in SQLite.
 
-All endpoints accept an optional ``collection`` query parameter for backward
-compatibility (D-soft phase) but IGNORE it — the collection is derived from
-the JWT user as ``acct_<user.id>``.
+The collection is derived from the JWT user as ``acct_<user.id>``; clients no
+longer pass a collection (Phase D-hard removed the parameter).
 """
 
 from __future__ import annotations
@@ -13,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.api.dependencies import get_current_user
-from app.api.helpers import derive_collection_for_user, deprecated_collection_warning
+from app.api.helpers import derive_collection_for_user
 from app.domain.models import TrackMetadata, User
 from app.resources.metadata_db import MetadataDB
 from app.services._payload_coerce import coerce_float, coerce_year
@@ -28,7 +27,6 @@ router = APIRouter(tags=["Metadata"])
 class FactIn(BaseModel):
     """Payload for adding a fact."""
     fact: str
-    collection: Optional[str] = None
 
 
 class FactOut(BaseModel):
@@ -50,11 +48,9 @@ class RandomFact(BaseModel):
 def get_artist_facts(
     slug: str,
     current_user: User = Depends(get_current_user),
-    collection: Optional[str] = Query(None, deprecated=True),
 ) -> List[str]:
     """Return all cached facts for an artist in a collection."""
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection, derived, "GET /metadata/artists/{slug}/facts")
     return MetadataDB.get_artist_facts(slug, derived)
 
 
@@ -66,7 +62,6 @@ def add_artist_fact(
 ) -> dict:
     """Add a new fact for an artist."""
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(body.collection, derived, "POST /metadata/artists/{slug}/facts")
     MetadataDB.add_artist_fact(
         slug=slug,
         collection_name=derived,
@@ -82,11 +77,9 @@ def add_artist_fact(
 def get_song_facts(
     slug: str,
     current_user: User = Depends(get_current_user),
-    collection: Optional[str] = Query(None, deprecated=True),
 ) -> List[str]:
     """Return all cached facts for a song in a collection."""
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection, derived, "GET /metadata/songs/{slug}/facts")
     return MetadataDB.get_song_facts(slug, derived)
 
 
@@ -98,7 +91,6 @@ def add_song_fact(
 ) -> dict:
     """Add a new fact for a song."""
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(body.collection, derived, "POST /metadata/songs/{slug}/facts")
     MetadataDB.add_song_fact(
         slug=slug,
         collection_name=derived,
@@ -113,12 +105,10 @@ def add_song_fact(
 @router.get("/metadata/random-facts")
 def get_random_facts(
     current_user: User = Depends(get_current_user),
-    collection: Optional[str] = Query(None, deprecated=True),
     limit: int = Query(5, ge=1, le=20, description="Number of random facts"),
 ) -> List[RandomFact]:
     """Return random facts from the collection's fact pool."""
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection, derived, "GET /metadata/random-facts")
     raw = MetadataDB.get_random_facts(collection_name=derived, limit=limit)
     return [RandomFact(**r) for r in raw]
 
@@ -137,7 +127,6 @@ class TrackFacts(BaseModel):
 def get_track_facts(
     track_id: str,
     current_user: User = Depends(get_current_user),
-    collection: Optional[str] = Query(None, deprecated=True),
     lang: str = Query("en"),
     request: Request = None,
 ) -> TrackFacts:
@@ -148,7 +137,6 @@ def get_track_facts(
     not a fallback to originals.
     """
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection, derived, "GET /metadata/tracks/{track_id}/facts")
     empty = TrackFacts(artist_name="", title="", song_facts=[], artist_facts=[])
     if request is None:
         return empty
@@ -211,7 +199,6 @@ def get_track_facts(
 def get_tracks_metadata_batch(
     ids: str = Query(..., description="Comma-separated track_ids"),
     current_user: User = Depends(get_current_user),
-    collection: Optional[str] = Query(None, deprecated=True),
     request: Request = None,
 ) -> List[TrackMetadata]:
     """Batch-resolve full TrackMetadata for many track_ids in one Qdrant retrieve.
@@ -222,7 +209,6 @@ def get_tracks_metadata_batch(
     Missing ids are silently dropped — caller can detect by comparing lengths.
     """
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection, derived, "GET /metadata/tracks")
     if request is None or request.app.state.db_client is None:
         raise HTTPException(status_code=503, detail="Qdrant unavailable")
     track_ids = [s for s in (ids.split(",") if ids else []) if s]
@@ -263,7 +249,6 @@ def get_tracks_metadata_batch(
 def get_track_metadata(
     track_id: str,
     current_user: User = Depends(get_current_user),
-    collection: Optional[str] = Query(None, deprecated=True),
     request: Request = None,
 ) -> TrackMetadata:
     """Return the full TrackMetadata for one track from Qdrant payload.
@@ -275,7 +260,6 @@ def get_track_metadata(
     pills) is fully populated regardless of origin.
     """
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection, derived, "GET /metadata/tracks/{track_id}")
     if request is None or request.app.state.db_client is None:
         raise HTTPException(status_code=503, detail="Qdrant unavailable")
     qdrant = request.app.state.db_client.qdrant
@@ -322,13 +306,11 @@ class SonicVibeOut(BaseModel):
 def get_sonic_vibe_endpoint(
     track_id: str,
     current_user: User = Depends(get_current_user),
-    collection: Optional[str] = Query(None, deprecated=True),
     lang: str = Query("en"),
 ) -> SonicVibeOut:
     """Return the cached Sonic Vibe phrase. Does NOT lazy-generate — population
     happens through the AI Indexing batch job."""
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection, derived, "GET /metadata/tracks/{track_id}/sonic-vibe")
     cached = MetadataDB.get_sonic_vibe(track_id, derived, lang)
     if cached:
         return SonicVibeOut(track_id=track_id, lang=lang, **cached)

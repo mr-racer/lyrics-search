@@ -10,7 +10,7 @@ from app.domain.models import (
     TrackReactionRequest, TrackReactionResponse,
 )
 from app.api.dependencies import get_current_user
-from app.api.helpers import derive_collection_for_user, deprecated_collection_warning
+from app.api.helpers import derive_collection_for_user
 from app.resources.model_registry import ModelRegistry
 from app.services.audio_streaming import get_streamable_path
 
@@ -54,7 +54,6 @@ async def search_tracks(
 
     # Phase D-soft: derive collection from JWT user; ignore client-supplied value.
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(req.collection_name, derived, "/search/")
 
     # Phase B: no more db.lyrics_db.* mutation. The stateless engine resolves the
     # model per call — SearchService._resolve_model_name reads collection_settings
@@ -95,14 +94,12 @@ async def stream_track(
     track_id: str,
     request: Request,
     current_user: User = Depends(get_current_user),
-    collection_name: str | None = Query(None, deprecated=True),
 ):
     """
     Serve a music file by its Qdrant track_id using FastAPI's FileResponse.
     """
     # Phase D-soft: derive collection from JWT user; ignore client-supplied value.
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection_name, derived, "/search/tracks/{id}/stream")
 
     db = request.app.state.db_client
     if db is None:
@@ -163,7 +160,6 @@ async def set_track_reaction(
 
     # Phase D-soft: derive collection from JWT user; ignore client-supplied value.
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(req.collection_name, derived, "POST /search/tracks/{id}/reaction")
 
     MetadataDB.init()
     MetadataDB.set_reaction(track_id, derived, req.reaction)
@@ -180,14 +176,12 @@ async def get_track_reaction(
     track_id: str,
     request: Request,
     current_user: User = Depends(get_current_user),
-    collection_name: str | None = Query(None, deprecated=True),
 ) -> TrackReactionResponse:
     """Get the current reaction for a track in a collection."""
     from app.resources.metadata_db import MetadataDB
 
     # Phase D-soft: derive collection from JWT user; ignore client-supplied value.
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection_name, derived, "GET /search/tracks/{id}/reaction")
 
     MetadataDB.init()
     reaction = MetadataDB.get_reaction(track_id, derived)

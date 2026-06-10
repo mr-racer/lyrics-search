@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from qdrant_client import models
 
 from app.api.dependencies import get_current_user
-from app.api.helpers import derive_collection_for_user, deprecated_collection_warning
+from app.api.helpers import derive_collection_for_user
 from app.domain.models import ArtistAggregate, ArtistAlbum, TrackMetadata, User
 from app.resources.metadata_db import MetadataDB
 from app.services.artist_facts_service import _slugify as _slugify_artist
@@ -222,12 +222,10 @@ def get_artist(
     request: Request,
     current_user: User = Depends(get_current_user),
     lang: str = Query("en", description="Bio language"),
-    collection: str | None = Query(None, deprecated=True),
 ) -> ArtistAggregate:
     """Aggregate an artist's universe — used by the Atlas screen."""
     # Phase D-soft: derive collection from JWT user; ignore client-supplied value.
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection, derived, "/artists/{slug}")
 
     if request.app.state.db_client is None:
         raise HTTPException(status_code=503, detail="Database unavailable")

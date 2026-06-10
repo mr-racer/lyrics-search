@@ -1,7 +1,7 @@
 """User-triggered AI indexing endpoints.
 
 POST   /library/ai-index/{task_type}        — start a job
-GET    /library/ai-index/status?collection= — status per task type
+GET    /library/ai-index/status             — status per task type
 DELETE /library/ai-index/{task_type}/cache  — wipe cache rows for the task
 """
 
@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.api.dependencies import get_current_user
-from app.api.helpers import derive_collection_for_user, deprecated_collection_warning
+from app.api.helpers import derive_collection_for_user
 from app.domain.models import AIJobStatus, User
 from app.resources.metadata_db import MetadataDB
 from app.services import ai_indexing_service
@@ -24,7 +24,6 @@ _TASK_TYPES = {"sonic_vibe", "refined_facts", "artist_bio"}
 
 
 class StartJobRequest(BaseModel):
-    collection_name: Optional[str] = None  # Phase D (D-soft): optional + ignored; removed in D-hard
     lang: str  # "ru" | "en" (free-form for forward-compat)
     llm_base_url: Optional[str] = None
     llm_model: Optional[str] = None
@@ -73,7 +72,6 @@ async def start_job(
         raise HTTPException(status_code=503, detail="Database unavailable")
 
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(req.collection_name, derived, f"POST /library/ai-index/{task_type}")
 
     n_total = _count_eligible(db_client, derived)
     try:
@@ -99,11 +97,9 @@ async def start_job(
 
 @router.get("/status", response_model=StatusResponse)
 def status(
-    collection: Optional[str] = Query(None, deprecated=True),
     current_user: User = Depends(get_current_user),
 ) -> StatusResponse:
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection, derived, "GET /library/ai-index/status")
     out = StatusResponse()
     for tt in _TASK_TYPES:
         row = MetadataDB.get_latest_ai_job(derived, tt)
@@ -119,7 +115,6 @@ def status(
 @router.delete("/{task_type}/cache", response_model=CacheResetResponse)
 def reset_cache(
     task_type: str,
-    collection: Optional[str] = Query(None, deprecated=True),
     current_user: User = Depends(get_current_user),
 ) -> CacheResetResponse:
     """Drop all cached output rows for the given task type + collection.
@@ -129,7 +124,6 @@ def reset_cache(
     runtime via MetadataDB.
     """
     derived = derive_collection_for_user(current_user)
-    deprecated_collection_warning(collection, derived, f"DELETE /library/ai-index/{task_type}/cache")
     if task_type == "sonic_vibe":
         if not hasattr(MetadataDB, "delete_sonic_vibes"):
             raise HTTPException(status_code=501, detail="cache reset not yet implemented")
