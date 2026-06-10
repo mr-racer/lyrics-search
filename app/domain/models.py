@@ -323,6 +323,9 @@ class PlaybackEventIn(BaseModel):
     track_id: str
     played_sec: float
     total_dur: float | None = None
+    # Stream RecSys idle rule: did the user touch any control during this track
+    # (like/skip/pause/seek)? None = client doesn't report it (legacy frontend).
+    interacted: bool | None = None
 
 
 class PlaybackEventOut(BaseModel):

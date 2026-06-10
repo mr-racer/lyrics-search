@@ -325,6 +325,13 @@ class MetadataDB:
             "n_skipped": "INTEGER NOT NULL DEFAULT 0",
         })
 
+        # Stream RecSys idle rule: did the user touch ANY control during this
+        # track (like/skip/pause/seek)? NULL = legacy events, treated as
+        # interacted so old history keeps moving the taste profile.
+        cls._ensure_columns(conn, "playback_events", {
+            "interacted": "INTEGER",
+        })
+
         # Phase B: per-user settings live as columns on the (Phase A) users
         # table — model selection + CLAP toggle, keyed by users.id. Additive so
         # it coexists with the auth columns regardless of migration order.
@@ -1051,6 +1058,7 @@ class MetadataDB:
         track_id: str,
         played_sec: float,
         total_dur: float | None,
+        interacted: bool | None = None,
     ) -> int:
         """Insert a playback event. Returns the new row id.
 
@@ -1069,10 +1077,11 @@ class MetadataDB:
         conn = cls._connect()
         cur = conn.execute(
             "INSERT INTO playback_events "
-            "(session_id, collection_name, track_id, played_sec, total_dur, skipped_early) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "(session_id, collection_name, track_id, played_sec, total_dur, skipped_early, interacted) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (session_id, collection_name, track_id, played_sec, total_dur,
-             1 if skipped_early else 0),
+             1 if skipped_early else 0,
+             None if interacted is None else (1 if interacted else 0)),
         )
         conn.commit()
         return int(cur.lastrowid)
