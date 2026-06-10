@@ -1589,7 +1589,6 @@ async function postPlaybackEvent({ trackId, collectionName, playedSec, totalDur 
   if (!trackId || !collectionName || playedSec == null) return;
   const body = JSON.stringify({
     session_id: getSessionId(),
-    collection_name: collectionName,
     track_id: trackId,
     played_sec: playedSec,
     total_dur: totalDur ?? null,
@@ -2082,7 +2081,7 @@ function FactsRail({ trackId, activeCollection, isDark, lang, accent, variant = 
     setStatus('loading');
     setIdx(0);
 
-    apiFetch(`/metadata/tracks/${encodeURIComponent(trackId)}/facts?collection=${encodeURIComponent(activeCollection)}&lang=${encodeURIComponent(lang)}`)
+    apiFetch(`/metadata/tracks/${encodeURIComponent(trackId)}/facts?lang=${encodeURIComponent(lang)}`)
       .then(res => {
         if (cancelled) return;
         const songs = res.song_facts || [];
@@ -2104,7 +2103,7 @@ function FactsRail({ trackId, activeCollection, isDark, lang, accent, variant = 
           setFallbackItems([]);
           return;
         }
-        apiFetch(`/metadata/random-facts?collection=${encodeURIComponent(activeCollection)}&limit=5`)
+        apiFetch(`/metadata/random-facts?limit=5`)
           .then(rand => {
             if (cancelled) return;
             const arr = (Array.isArray(rand) ? rand : []).map(r => ({
@@ -2813,11 +2812,11 @@ function ForYouHero({ isDark, lang, activeCollection, onPlayTrack, navigateToArt
   useEffect(() => {
     if (!activeCollection) { setLead(null); setQueue([]); setLoading(false); return; }
     let alive = true;
-    apiFetch(`/recommend/for-you-seed?collection=${encodeURIComponent(activeCollection)}`)
+    apiFetch(`/recommend/for-you-seed`)
       .then(r => {
         if (!alive || !r || !r.track) { setLead(null); return null; }
         setLead(r.track);
-        return apiFetch(`/recommend/autoplay-queue?collection=${encodeURIComponent(activeCollection)}&seed_track_id=${encodeURIComponent(r.seed_track_id)}&limit=20`);
+        return apiFetch(`/recommend/autoplay-queue?seed_track_id=${encodeURIComponent(r.seed_track_id)}&limit=20`);
       })
       .then(q => { if (alive && q) setQueue(q.tracks || []); })
       .catch(() => {})
@@ -2956,7 +2955,7 @@ function RediscoveryBand({ isDark, lang, activeCollection, onPick, navigateToArt
   useEffect(() => {
     if (!activeCollection) { setData(null); setFact(null); setLoading(false); return; }
     let alive = true;
-    apiFetch(`/library/rediscover?collection_name=${encodeURIComponent(activeCollection)}`)
+    apiFetch(`/library/rediscover`)
       .then(r => {
         if (!alive || !r || !r.track) { setData(null); return null; }
         setData(r);
@@ -3019,7 +3018,7 @@ function FeaturedArtistCard({ isDark, lang, activeCollection, navigateToArtist }
   useEffect(() => {
     if (!activeCollection) { setA(null); setLoading(false); return; }
     let alive = true;
-    apiFetch(`/library/featured-artist?collection_name=${encodeURIComponent(activeCollection)}&lang=${lang}`)
+    apiFetch(`/library/featured-artist?lang=${lang}`)
       .then(r => { if (alive && r && r.slug) setA(r); })
       .catch(() => { if (alive) setA(null); })
       .finally(() => { if (alive) setLoading(false); });
@@ -3173,10 +3172,10 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, activ
     let alive = true;
     const col = encodeURIComponent(activeCollection);
     Promise.allSettled([
-      apiFetch(`/playback/recent?collection_name=${col}&limit=12`).then(r => { if (alive) setRecent((r && r.tracks) || []); }),
-      apiFetch(`/library/liked-songs?collection_name=${col}`).then(r => { if (alive) setLiked(((r && r.tracks) || []).slice(0, 12)); }),
-      apiFetch(`/library/top-pairs?collection_name=${col}`).then(r => { if (alive) setDifferent(homeDeriveDifferent(r)); }),
-      apiFetch(`/playlists?collection_name=${col}`).then(r => { if (alive) setPlaylists(homePlaylistCards(r, lang)); }),
+      apiFetch(`/playback/recent?limit=12`).then(r => { if (alive) setRecent((r && r.tracks) || []); }),
+      apiFetch(`/library/liked-songs`).then(r => { if (alive) setLiked(((r && r.tracks) || []).slice(0, 12)); }),
+      apiFetch(`/library/top-pairs`).then(r => { if (alive) setDifferent(homeDeriveDifferent(r)); }),
+      apiFetch(`/playlists`).then(r => { if (alive) setPlaylists(homePlaylistCards(r, lang)); }),
     ]).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [activeCollection, lang]);
@@ -3746,7 +3745,7 @@ function usePlaylists(activeCollection) {
     if (!activeCollection) { setPlaylists([]); return; }
     setLoading(true);
     try {
-      const r = await apiFetch(`/playlists?collection_name=${encodeURIComponent(activeCollection)}`);
+      const r = await apiFetch(`/playlists`);
       setPlaylists(r?.playlists || []);
     } catch (e) {
       console.warn('[usePlaylists] list failed', e);
@@ -3757,12 +3756,12 @@ function usePlaylists(activeCollection) {
   }, [activeCollection]);
 
   const fetchWithMembership = React.useCallback(async (trackId) => {
-    if (!activeCollection || !trackId) return { playlists: [], collection_name: activeCollection };
+    if (!activeCollection || !trackId) return { playlists: []};
     try {
-      return await apiFetch(`/playlists?collection_name=${encodeURIComponent(activeCollection)}&include_track_id=${encodeURIComponent(trackId)}`);
+      return await apiFetch(`/playlists?include_track_id=${encodeURIComponent(trackId)}`);
     } catch (e) {
       console.warn('[usePlaylists] membership fetch failed', e);
-      return { playlists: [], collection_name: activeCollection };
+      return { playlists: []};
     }
   }, [activeCollection]);
 
@@ -3770,7 +3769,7 @@ function usePlaylists(activeCollection) {
     const r = await apiFetch(`/playlists`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ collection_name: activeCollection, name, description: description || null }),
+      body: JSON.stringify({ name, description: description || null }),
     });
     await refetchAll();
     return r;
@@ -3915,7 +3914,7 @@ function DecadeFiltersChips({ activeCollection, selectedRanges, onToggleRange, i
   useEffect(() => {
     let alive = true;
     setError(false);
-    const col = activeCollection ? `&collection_name=${encodeURIComponent(activeCollection)}` : '';
+    const col = activeCollection ? `` : '';
     apiFetch(`/library/year-facets?top_k=30${col}`)
       .then(data => { if (alive) setFacets(data || { year_ranges: [] }); })
       .catch(() => { if (alive) setError(true); });
@@ -3993,7 +3992,6 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
   const getLLMSettings = () => ({
     llm_base_url: localStorage.getItem('llm_base_url') || undefined,
     llm_model:    localStorage.getItem('llm_model')    || undefined,
-    collection_name: activeCollection || undefined,
     planner_enabled: true,
   });
 
@@ -4001,7 +3999,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
   const ensureLikeStatus = async (trackId) => {
     if (!trackId || trackId in likedMap || !activeCollection) return;
     try {
-      const r = await apiFetch(`/search/tracks/${encodeURIComponent(trackId)}/reaction?collection_name=${encodeURIComponent(activeCollection)}`);
+      const r = await apiFetch(`/search/tracks/${encodeURIComponent(trackId)}/reaction`);
       setLikedMap(prev => ({ ...prev, [trackId]: r?.reaction === 'like' }));
     } catch {
       setLikedMap(prev => ({ ...prev, [trackId]: false }));
@@ -4017,7 +4015,6 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
       await apiFetch(`/search/tracks/${encodeURIComponent(trackId)}/reaction`, {
         method: 'POST',
         body: JSON.stringify({
-          collection_name: activeCollection,
           reaction: isLiked ? null : 'like',
         }),
       });
@@ -4084,7 +4081,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
       if (filters.year_ranges.length) f.year_ranges = filters.year_ranges;
       const res = await apiFetch('/search/', { method:'POST', body: JSON.stringify({
         query:searchQuery, mode:searchMode, filters:Object.keys(f).length?f:null,
-        limit:20, collection_name:activeCollection||undefined
+        limit:20
       }) });
       setResults(res.hits||[]);
       setSearchExecuted(true);
@@ -4100,7 +4097,7 @@ function SearchSection({ isDark, lang, activeCollection, onPlayTrack, navigateTo
       return;
     }
     try {
-      const col = activeCollection ? `&collection_name=${encodeURIComponent(activeCollection)}` : '';
+      const col = activeCollection ? `` : '';
       const data = await apiFetch(`/library/browse?q=${encodeURIComponent(query)}&limit=3${col}`);
       // /browse returns: { track_id, title, artist, album, cover_art_path, score }
       const seen = new Set();
@@ -4662,13 +4659,13 @@ function RecommendSection({ isDark, lang, activeCollection, onPlayTrack }) {
   const [stats, setStats] = useState(null);
 
   useEffect(() => {
-    const col = activeCollection ? `?collection_name=${encodeURIComponent(activeCollection)}` : '';
+    const col = activeCollection ? `` : '';
     apiFetch(`/library/stats${col}`).then(setStats).catch(()=>{});
   }, [activeCollection]);
 
   const lookupTracks = async (q) => {
     if (!q.trim()) { setTrackOptions([]); setTrackPicker(false); return; }
-    const col = activeCollection ? `&collection_name=${encodeURIComponent(activeCollection)}` : '';
+    const col = activeCollection ? `` : '';
     try {
       const res = await apiFetch(`/library/browse?q=${encodeURIComponent(q)}&limit=6${col}`);
       const hits = (res || []).map(item => ({
@@ -4698,7 +4695,7 @@ function RecommendSection({ isDark, lang, activeCollection, onPlayTrack }) {
       // Use audio mode with title+artist as a CLAP-friendly query
       const q = `${seedArtist} ${seedTitle}`.trim();
       const res = await apiFetch('/search/', { method:'POST', body: JSON.stringify({
-        query: q, mode:'audio', limit: 12, collection_name: activeCollection || undefined
+        query: q, mode:'audio', limit: 12
       })});
       const filtered = (res.hits || []).filter(h => !(h.track?.title === seedTitle && h.track?.artist === seedArtist));
       setSimilar(filtered.slice(0, 10));
@@ -4725,8 +4722,7 @@ function RecommendSection({ isDark, lang, activeCollection, onPlayTrack }) {
     setActivePreset(p.id); setPresetLoading(true);
     try {
       const res = await apiFetch('/search/', { method:'POST', body: JSON.stringify({
-        query: p.q, mode: p.mode, limit: presetLimit, collection_name: activeCollection || undefined,
-      })});
+        query: p.q, mode: p.mode, limit: presetLimit, })});
       setPresetResults(res.hits || []);
     } catch(e) { setPresetResults([]); }
     finally { setPresetLoading(false); }
@@ -5528,7 +5524,7 @@ function PlaylistTrackRow({ track, isDragging, onDragStart, onDragOver, onDragLe
 
   React.useEffect(() => {
     if (!activeCollection) return;
-    apiFetch(`/search/tracks/${track.track_id}/reaction?collection_name=${encodeURIComponent(activeCollection)}`).then(r => setLiked(r?.reaction === 'like')).catch(() => {});
+    apiFetch(`/search/tracks/${track.track_id}/reaction`).then(r => setLiked(r?.reaction === 'like')).catch(() => {});
   }, [track.track_id, activeCollection]);
 
   const fmtDur = (s) => { if (!s) return '—'; const m = Math.floor(s/60), r = Math.floor(s%60); return `${m}:${String(r).padStart(2,'0')}`; };
@@ -5552,7 +5548,7 @@ function PlaylistTrackRow({ track, isDragging, onDragStart, onDragOver, onDragLe
       await apiFetch(`/search/tracks/${track.track_id}/reaction`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ collection_name: activeCollection, reaction: next ? 'like' : null }),
+        body: JSON.stringify({ reaction: next ? 'like' : null }),
       });
     } catch { setLiked(!next); }
   };
@@ -5860,9 +5856,9 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
       await apiFetch(`/search/tracks/${track_id}/reaction`, {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ collection_name: activeCollection, reaction: next ? 'like' : null }),
+        body: JSON.stringify({ reaction: next ? 'like' : null }),
       });
-      apiFetch(`/library/liked-songs?collection_name=${encodeURIComponent(activeCollection)}`).then(setLikedData).catch(() => {});
+      apiFetch(`/library/liked-songs`).then(setLikedData).catch(() => {});
     } catch {
       setLikedMap(p => ({ ...p, [track_id]: !next }));   // rollback
     }
@@ -5881,24 +5877,24 @@ function LibrarySection({ isDark, lang, activeCollection, onPlayTrack, navigateT
     if (!activeCollection) return;
     if (visible === false) return;
     const col = encodeURIComponent(activeCollection);
-    apiFetch(`/library/stats?collection_name=${col}`).then(setStats).catch(() => setStats(null));
-    apiFetch(`/library/liked-songs?collection_name=${col}`).then(d => {
+    apiFetch(`/library/stats`).then(setStats).catch(() => setStats(null));
+    apiFetch(`/library/liked-songs`).then(d => {
       setLikedData(d);
       setLikedMap(p => { const next = {...p}; (d?.tracks || []).forEach(t => { next[t.track_id] = true; }); return next; });
     }).catch(() => setLikedData({tracks:[]}));
-    apiFetch(`/playback/recent?collection_name=${col}&limit=50`).then(setRecentData).catch(() => setRecentData({tracks:[]}));
+    apiFetch(`/playback/recent?limit=50`).then(setRecentData).catch(() => setRecentData({tracks:[]}));
     // getTimezoneOffset() returns minutes where local = UTC - offset; negate it
     // so the backend gets the additive UTC→local shift (UTC+3 → +180) for
     // bucketing the peak hour in the user's own timezone.
     const tzOffset = -new Date().getTimezoneOffset();
-    apiFetch(`/library/listening-stats?collection_name=${col}&lang=${lang}&tz_offset_minutes=${tzOffset}`).then(setListenData).catch(() => setListenData(null));
+    apiFetch(`/library/listening-stats?lang=${lang}&tz_offset_minutes=${tzOffset}`).then(setListenData).catch(() => setListenData(null));
   }, [activeCollection, lang, visible]);
 
   // ── Effect 2: only albums (refires on sort change) ───────────────────
   useEffect(() => {
     if (!activeCollection) return;
     const col = encodeURIComponent(activeCollection);
-    apiFetch(`/library/albums?collection_name=${col}&sort=${albumSort}`)
+    apiFetch(`/library/albums?sort=${albumSort}`)
       .then(setAlbumsData).catch(() => setAlbumsData({albums:[]}));
   }, [activeCollection, albumSort]);
 
@@ -6368,7 +6364,7 @@ function AlbumModal({ album, onClose, onPlayTrack, navigateToArtist, isDark, lan
     if (!album?.tracks?.length || !activeCollection) return;
     const col = encodeURIComponent(activeCollection);
     Promise.all(album.tracks.map(t =>
-      apiFetch(`/search/tracks/${t.track_id}/reaction?collection_name=${col}`).then(r => [t.track_id, r?.reaction === 'like']).catch(() => [t.track_id, false])
+      apiFetch(`/search/tracks/${t.track_id}/reaction`).then(r => [t.track_id, r?.reaction === 'like']).catch(() => [t.track_id, false])
     )).then(pairs => setLikedMap(Object.fromEntries(pairs)));
   }, [album?.album_title, activeCollection]);
 
@@ -6381,7 +6377,7 @@ function AlbumModal({ album, onClose, onPlayTrack, navigateToArtist, isDark, lan
       await apiFetch(`/search/tracks/${track_id}/reaction`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ collection_name: activeCollection, reaction: next ? 'like' : null }),
+        body: JSON.stringify({ reaction: next ? 'like' : null }),
       });
     } catch {
       setLikedMap(p => ({ ...p, [track_id]: !next })); // rollback
@@ -6847,7 +6843,7 @@ function AIIndexingCard({ isDark, lang, activeCollection, aiStatus }) {
   const refresh = useCallback(async () => {
     if (!activeCollection) return;
     try {
-      const data = await apiFetch(`/library/ai-index/status?collection=${encodeURIComponent(activeCollection)}`);
+      const data = await apiFetch(`/library/ai-index/status`);
       setStatus(data);
     } catch { /* swallow — surface via error state only if Run/Reset fails */ }
   }, [activeCollection]);
@@ -6879,7 +6875,6 @@ function AIIndexingCard({ isDark, lang, activeCollection, aiStatus }) {
       await apiFetch(`/library/ai-index/${taskType}`, {
         method: 'POST',
         body: JSON.stringify({
-          collection_name: activeCollection,
           lang,
           llm_base_url: localStorage.getItem('llm_base_url') || undefined,
           llm_model:    localStorage.getItem('llm_model')    || undefined,
@@ -6903,7 +6898,7 @@ function AIIndexingCard({ isDark, lang, activeCollection, aiStatus }) {
     setError(null);
     try {
       await apiFetch(
-        `/library/ai-index/${taskType}/cache?collection=${encodeURIComponent(activeCollection)}`,
+        `/library/ai-index/${taskType}/cache`,
         { method: 'DELETE' },
       );
       refresh();
@@ -7321,7 +7316,7 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
       // falls back to its default. Avoid sending the literal string "null".
       const validModel = (textModel && typeof textModel === 'string' && textModel !== 'null') ? textModel : undefined;
       const res = await apiFetch('/library/index', { method:'POST',
-        body: JSON.stringify({ folder_path:folderPath, collection_name:colName, better_lyrics_quality:betterLyrics, text_model:validModel, enhance_by_musicbrainz:refineMetadata }) });
+        body: JSON.stringify({ folder_path:folderPath, better_lyrics_quality:betterLyrics, text_model:validModel, enhance_by_musicbrainz:refineMetadata }) });
       if (res.status === 'failed') { setModalError(res.message); setIndexing(false); return; }
       if (!res.job_id) {
         setStepStatus({ metadata:'done', lyrics:'done', audio:'done', analysis:'done' });
@@ -7768,7 +7763,7 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
               const llmModel   = localStorage.getItem('llm_model')    || undefined;
               const results = await Promise.allSettled(tasks.map(t =>
                 apiFetch(`/library/ai-index/${t}`, { method:'POST', body: JSON.stringify({
-                  collection_name: colName, lang: lang2, llm_base_url: llmBaseUrl, llm_model: llmModel,
+                  lang: lang2, llm_base_url: llmBaseUrl, llm_model: llmModel,
                   ...(t === 'artist_bio' && { bio_source: 'web' }),
                 }) })
               ));
@@ -8056,7 +8051,7 @@ function OnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
     const c = collName.trim() || 'my_collection';
     try {
       const res = await apiFetch('/library/index', { method:'POST',
-        body: JSON.stringify({ folder_path:folderPath, collection_name:c, better_lyrics_quality:betterLyrics, enhance_by_musicbrainz:refineMetadata }) });
+        body: JSON.stringify({ folder_path:folderPath, better_lyrics_quality:betterLyrics, enhance_by_musicbrainz:refineMetadata }) });
       if (res.status === 'failed') { setModalError(res.message); setIndexing(false); return; }
       if (!res.job_id) {
         setStepStatus({ metadata:'done', lyrics:'done', audio:'done', analysis:'done' });
@@ -8408,8 +8403,7 @@ function VibeLine({ trackId, collection, lang, isDark }) {
     let cancelled = false;
     apiFetch(
       `/metadata/tracks/${encodeURIComponent(trackId)}/sonic-vibe` +
-      `?collection=${encodeURIComponent(collection)}` +
-      `&lang=${encodeURIComponent(lang || 'en')}`
+      `?lang=${encodeURIComponent(lang || 'en')}`
     )
       .then(res => { if (!cancelled) setPhrase(res?.phrase || null); })
       .catch(() => { if (!cancelled) setPhrase(null); });
@@ -8780,8 +8774,7 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, activeCollection, 
   const getLlmKw = () => ({
     llm_base_url: localStorage.getItem('llm_base_url') || undefined,
     llm_model: localStorage.getItem('llm_model') || undefined,
-    collection_name: activeCollection || undefined,
-  });
+    });
 
   const handleSend = async () => {
     const text = input.trim();
@@ -9226,8 +9219,7 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
           message: lang === 'ru' ? 'Объясни эту строчку' : 'Explain this line',
           llm_base_url: localStorage.getItem('llm_base_url') || undefined,
           llm_model: localStorage.getItem('llm_model') || undefined,
-          collection_name: activeCollection || undefined,
-        }),
+          }),
       });
       setExplainStates(prev => {
         const next = new Map(prev);
@@ -9365,7 +9357,7 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
     if (idx < 0) return;
     setCurrentIndex(idx);
     const track = initialPlaylist[idx].track;
-    const url = `${API}/search/tracks/${track.track_id}/stream?collection_name=${encodeURIComponent(activeCollection || '')}`;
+    const url = `${API}/search/tracks/${track.track_id}/stream`;
     if (audio) {
       // Home unmounts every section, so the first nav away from home REMOUNTS
       // this section and re-runs this effect with the persisted playlist+track.
@@ -9385,7 +9377,7 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
   // Sync audio source when current track changes
   useEffect(() => {
     if (!currentTrack || !audio) return;
-    const url = `${API}/search/tracks/${currentTrack.track_id}/stream?collection_name=${encodeURIComponent(activeCollection || '')}`;
+    const url = `${API}/search/tracks/${currentTrack.track_id}/stream`;
     audio.setSrc(url, { trackId: currentTrack.track_id, collectionName: activeCollection });
     // Only auto-play when section is visible
     if (visible && isPlaying) setTimeout(() => audio.play(), 50);
@@ -9407,7 +9399,7 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
   const fetchReaction = async (trackId) => {
     if (!activeCollection || !trackId) return;
     try {
-      const data = await apiFetch(`/search/tracks/${trackId}/reaction?collection_name=${encodeURIComponent(activeCollection)}`, { headers: {} });
+      const data = await apiFetch(`/search/tracks/${trackId}/reaction`, { headers: {} });
       setLiked(data.reaction || null);
     } catch { setLiked(null); }
   };
@@ -9425,7 +9417,7 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
 
     setCurrentIndex(index);
     const track = playlist[index].track;
-    const url = `${API}/search/tracks/${track.track_id}/stream?collection_name=${encodeURIComponent(activeCollection || '')}`;
+    const url = `${API}/search/tracks/${track.track_id}/stream`;
     if (audio) { audio.setSrc(url, { trackId: track.track_id, collectionName: activeCollection }); setTimeout(() => audio.play(), 50); }
     fetchReaction(track.track_id);
     // Propagate the new track up so App.playerTrack stays in sync. Without
@@ -9523,7 +9515,7 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
     try {
       await apiFetch(`/search/tracks/${currentTrack.track_id}/reaction`, {
         method: 'POST',
-        body: JSON.stringify({ collection_name: activeCollection, reaction: val }),
+        body: JSON.stringify({ reaction: val }),
       });
       setLiked(val === liked ? null : val);
     } catch (e) { console.error('Failed to set reaction:', e); }
@@ -9553,7 +9545,7 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
   };
 
   const streamUrl = currentTrack
-    ? `${API}/search/tracks/${currentTrack.track_id}/stream?collection_name=${encodeURIComponent(activeCollection || '')}`
+    ? `${API}/search/tracks/${currentTrack.track_id}/stream`
     : null;
 
   const progressPct = duration ? (currentTime / duration * 100) : 0;
@@ -10143,7 +10135,7 @@ function ArtistAtlasSection({
     if (!visible || !artistSlug || !activeCollection) return;
     let cancelled = false;
     setStatus('loading');
-    apiFetch(`/artists/${encodeURIComponent(artistSlug)}?collection=${encodeURIComponent(activeCollection)}&lang=${encodeURIComponent(lang)}`)
+    apiFetch(`/artists/${encodeURIComponent(artistSlug)}?lang=${encodeURIComponent(lang)}`)
       .then(res => {
         if (cancelled) return;
         setData(res);
@@ -10694,7 +10686,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     const ids = Array.from(slimIds);
     apiFetch(
       `/metadata/tracks?ids=${encodeURIComponent(ids.join(','))}` +
-      `&collection=${encodeURIComponent(activeCollection)}`
+      ``
     )
       .then(full => {
         if (!Array.isArray(full) || full.length === 0) return;
@@ -10738,8 +10730,8 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     const excluded = Array.from(playedTrackIdsRef.current).slice(-200).join(',');
     try {
       const data = await apiFetch(
-        `/recommend/autoplay-queue?collection=${encodeURIComponent(activeCollection)}` +
-        `&seed_track_id=${encodeURIComponent(seedTrack.track_id)}` +
+        `/recommend/autoplay-queue` +
+        `?seed_track_id=${encodeURIComponent(seedTrack.track_id)}` +
         (excluded ? `&exclude_ids=${encodeURIComponent(excluded)}` : '') +
         `&limit=20`
       );
@@ -10762,7 +10754,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
   // Stats for landing
   useEffect(() => {
     if (appState !== 'ready' || !activeCollection) return;
-    const col = `?collection_name=${encodeURIComponent(activeCollection)}`;
+    const col = ``;
     apiFetch(`/library/stats${col}`).then(setStats).catch(()=>{});
   }, [activeCollection, appState]);
 
