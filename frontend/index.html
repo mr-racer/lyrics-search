@@ -204,18 +204,6 @@
         0 2px 10px rgba(40,30,60,0.08);
     }
 
-    /* ── Custom select chevron ────────────────────────────────── */
-    .mx-select {
-      appearance: none;
-      -webkit-appearance: none;
-      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23999' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");
-      background-repeat: no-repeat;
-      background-position: right 12px center;
-      padding-right: 32px !important;
-      cursor: pointer;
-    }
-    .mx-select:focus { outline: none; }
-
     /* Underlay grain texture */
     .grain::after {
       content:'';
@@ -696,6 +684,143 @@
         opacity 320ms cubic-bezier(0.16, 1, 0.3, 1) 80ms,
         transform 320ms cubic-bezier(0.16, 1, 0.3, 1) 80ms;
     }
+
+    /* ── Liquid-glass nav rail (iOS-26 style floating islands) ──────────
+       Three detached glass surfaces float on the page background: a brand
+       coin, the tab capsule, and a bottom utility island. Each island is a
+       real refractive surface: heavy backdrop blur + saturation boost, a
+       bright top/left inner stroke (the "lens edge"), and a soft drop
+       shadow that lifts it off the canvas. */
+    .lg-island {
+      position: relative;
+      backdrop-filter: blur(28px) saturate(1.7);
+      -webkit-backdrop-filter: blur(28px) saturate(1.7);
+      border: 1px solid rgba(255,255,255,0.13);
+      background:
+        linear-gradient(165deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.05) 32%, rgba(255,255,255,0.02) 64%, rgba(255,255,255,0.10) 100%),
+        rgba(24,24,32,0.36);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.25),
+        inset 0 -1px 0 rgba(255,255,255,0.07),
+        inset 1px 0 0 rgba(255,255,255,0.06),
+        0 18px 42px rgba(0,0,0,0.45),
+        0 2px 10px rgba(0,0,0,0.28);
+    }
+    .lg-light .lg-island {
+      border: 1px solid rgba(255,255,255,0.75);
+      background:
+        linear-gradient(165deg, rgba(255,255,255,0.92) 0%, rgba(255,255,255,0.58) 36%, rgba(255,255,255,0.42) 66%, rgba(255,255,255,0.80) 100%),
+        rgba(244,243,250,0.35);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.95),
+        inset 0 -1px 0 rgba(255,255,255,0.40),
+        0 18px 42px rgba(46,36,86,0.16),
+        0 2px 10px rgba(46,36,86,0.08);
+    }
+    /* Specular sheen that sweeps across the glass on hover — the liquid glint. */
+    .lg-island::after {
+      content: '';
+      position: absolute; inset: 0;
+      border-radius: inherit;
+      pointer-events: none;
+      background: linear-gradient(115deg, transparent 30%, rgba(255,255,255,0.15) 46%, rgba(255,255,255,0.03) 54%, transparent 70%);
+      background-size: 220% 220%;
+      background-position: 120% 120%;
+      opacity: 0;
+      transition: opacity 0.5s ease, background-position 1.1s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .lg-island:hover::after { opacity: 1; background-position: 0% 0%; }
+    .lg-logo {
+      transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    .lg-logo:hover { transform: scale(1.08); }
+    .lg-logo:active { transform: scale(0.95); }
+    /* The active-tab indicator is itself a droplet of glass that springs
+       between tabs (overshoot bezier = liquid wobble on arrival). */
+    .lg-blob {
+      position: absolute;
+      left: 6px; top: 6px;
+      border-radius: 19px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.20) 0%, rgba(255,255,255,0.05) 100%);
+      border: 1px solid oklch(60% 0.18 270 / 0.5);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.30),
+        0 0 18px oklch(60% 0.18 270 / 0.35),
+        0 4px 12px rgba(0,0,0,0.25);
+      transition: transform 0.55s cubic-bezier(0.30, 1.45, 0.42, 1), opacity 0.3s ease;
+      pointer-events: none;
+    }
+    .lg-light .lg-blob {
+      background: linear-gradient(180deg, rgba(255,255,255,0.95) 0%, rgba(124,91,255,0.10) 100%);
+      border: 1px solid oklch(60% 0.18 270 / 0.40);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,1),
+        0 0 18px oklch(60% 0.18 270 / 0.22),
+        0 4px 12px rgba(46,36,86,0.14);
+    }
+    .lg-tab {
+      position: relative; z-index: 1;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 3px; padding: 0; border: 0; border-radius: 19px;
+      background: transparent; cursor: pointer;
+      transition: color 0.2s ease, transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    .lg-tab:active { transform: scale(0.92); }
+    /* Now-playing pebble slot collapses on the player view (height + fly-up
+       + fade so the island reflows smoothly) — the player itself already
+       shows the cover, so the rail stays clean there. */
+    .lg-pebble-slot {
+      width: 48px; height: 48px; display: grid; place-items: center;
+      transition:
+        height 0.4s cubic-bezier(0.4, 0, 0.2, 1),
+        opacity 0.28s ease,
+        transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .lg-pebble-slot[data-hidden="true"] {
+      height: 0; opacity: 0;
+      transform: translateY(-14px) scale(0.25);
+      pointer-events: none; overflow: hidden;
+    }
+
+    /* ── Settings: two-stop embedding-tier slider (light / heavy) ────────
+       A wide inset track with a glass knob that springs between the two
+       halves. Clicking either half (or the track) flips the tier. */
+    .tier-slider {
+      position: relative; display: flex; width: 100%;
+      border-radius: 999px; padding: 3px;
+      background: rgba(0,0,0,0.28);
+      border: 1px solid rgba(255,255,255,0.07);
+      box-shadow: inset 0 2px 6px rgba(0,0,0,0.35);
+      cursor: pointer; user-select: none;
+    }
+    body[data-theme="light"] .tier-slider {
+      background: rgba(0,0,0,0.06);
+      border: 1px solid rgba(0,0,0,0.08);
+      box-shadow: inset 0 2px 6px rgba(40,30,60,0.10);
+    }
+    .tier-slider-knob {
+      position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc(50% - 3px);
+      border-radius: 999px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.06) 100%);
+      border: 1px solid rgba(124,91,255,0.45);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.2), 0 0 14px oklch(60% 0.18 270 / 0.3);
+      transition: transform 0.4s cubic-bezier(0.3, 1.3, 0.5, 1);
+      pointer-events: none;
+    }
+    .tier-slider[data-tier="heavy"] .tier-slider-knob { transform: translateX(100%); }
+    body[data-theme="light"] .tier-slider-knob {
+      background: linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(255,255,255,0.85) 100%);
+      box-shadow: inset 0 1px 0 #fff, 0 1px 6px rgba(40,30,60,0.18), 0 0 12px oklch(60% 0.18 270 / 0.2);
+    }
+    .tier-slider-opt {
+      position: relative; z-index: 1; flex: 1; text-align: center;
+      padding: 8px 0; font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
+      color: rgba(238,238,243,0.55); transition: color 0.25s ease;
+      background: transparent; border: 0; cursor: pointer;
+    }
+    .tier-slider-opt[data-active="true"] { color: #fff; }
+    body[data-theme="light"] .tier-slider-opt { color: rgba(22,22,32,0.55); }
+    body[data-theme="light"] .tier-slider-opt[data-active="true"] { color: #161620; }
 
     /* Mini-popout scrubber: tiny thumb that fits inside the 4px track. */
     .mini-scrubber { -webkit-appearance: none; appearance: none; }
@@ -1246,12 +1371,37 @@
       font-weight: 500;
     }
 
-    /* Ambient background orb */
-    .player-ambient-orb {
-      position: absolute; border-radius: 50%;
-      filter: blur(80px); opacity: 0.15;
-      pointer-events: none; z-index: 0;
-      transition: background 1s ease;
+    /* ─── Player background stack: blurred cover + film grain + vignette ───
+       Three pointer-events:none layers painted under the z:1 content columns.
+       - .player-bg-cover: the album art stretched over the whole section,
+         heavily blurred. inset:-60px + scale(1.12) bleed past the edges so
+         the blur never reveals a hard border. Opacity set inline (theme-aware)
+         and transitioned so track changes wash over softly.
+       - .player-bg-grain: tiny SVG fractal-noise tile — static film grain.
+       - .player-bg-vignette: darkened corners pull focus to the center. */
+    .player-bg-cover {
+      position: absolute; inset: -60px;
+      background-size: cover; background-position: center;
+      filter: blur(64px) saturate(1.25);
+      transform: scale(1.12);
+      pointer-events: none;
+      transition: opacity 0.8s ease;
+    }
+    .player-bg-shade { position: absolute; inset: 0; pointer-events: none; }
+    .player-bg-grain {
+      position: absolute; inset: 0; pointer-events: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      background-repeat: repeat;
+      opacity: 0.05;
+      mix-blend-mode: overlay;
+    }
+    body[data-theme="light"] .player-bg-grain { opacity: 0.035; }
+    .player-bg-vignette {
+      position: absolute; inset: 0; pointer-events: none;
+      background: radial-gradient(ellipse 78% 72% at 50% 44%, transparent 52%, rgba(0,0,0,0.36) 100%);
+    }
+    body[data-theme="light"] .player-bg-vignette {
+      background: radial-gradient(ellipse 78% 72% at 50% 44%, transparent 55%, rgba(40,30,60,0.14) 100%);
     }
 
     /* Fade in */
@@ -2525,30 +2675,6 @@ function MosaicCover({ trackIds = [], coverPaths = [], size = 220, radius = 12 }
   );
 }
 
-// ─── Custom Select ────────────────────────────────────────────────────────────
-function MusixSelect({ value, onChange, options, isDark, style={} }) {
-  const c = useColors(isDark);
-  return (
-    <select
-      value={value}
-      onChange={e => onChange(e.target.value)}
-      className={`mx-select ${ske('inset', isDark)}`}
-      style={{
-        padding: '8px 32px 8px 12px', borderRadius: '9px',
-        color: c.text, fontSize: '12px', fontFamily: "'JetBrains Mono', monospace",
-        border: 'none',
-        ...style,
-      }}
-    >
-      {options.map(o => (
-        <option key={o.value} value={o.value} style={{ background: isDark ? '#1e1e24' : '#fff', color: c.text }}>
-          {o.label}
-        </option>
-      ))}
-    </select>
-  );
-}
-
 // ─── ToggleSwitch (rocker button) ─────────────────────────────────────────────
 function ToggleSwitch({ checked, onChange, isDark }) {
   const leftActive = !checked;
@@ -3490,32 +3616,19 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, activ
   );
 }
 
-// ─── FloatingIconNav (v3) — 64px-wide vertical bar with icons + labels + Now Playing pebble ──
+// ─── FloatingIconNav (v4) — liquid-glass floating islands: brand coin, tab capsule, pebble dock ──
 function FloatingIconNav({ section, onNav, isDark, lang, onSettings, currentTrack, audio, playlist, onTrackChange }) {
   const c = useColors(isDark);
   const [popoutOpen, setPopoutOpen] = useState(false);
   const popoutTimer = useRef(null);
 
   // Theme-aware tokens so nav stays readable on both dark and light backgrounds.
-  const inactiveColor = isDark ? 'rgba(238,238,243,0.6)'  : 'rgba(22,22,32,0.6)';
+  // Glass surfaces themselves live in CSS (.lg-island / .lg-blob, themed via
+  // the .lg-light wrapper class) — only text/icon colors stay inline.
+  const inactiveColor = isDark ? 'rgba(238,238,243,0.55)' : 'rgba(22,22,32,0.55)';
   const hoverColor    = c.text;
-  const hoverBg       = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)';
   const settingsColor = isDark ? 'rgba(238,238,243,0.55)' : 'rgba(22,22,32,0.55)';
-  const activeBg      = isDark
-    ? 'linear-gradient(180deg, rgba(255,255,255,0.13) 0%, rgba(255,255,255,0.04) 100%)'
-    : 'linear-gradient(180deg, rgba(124,91,255,0.12) 0%, rgba(124,91,255,0.04) 100%)';
-  const activeShadow  = isDark
-    ? 'inset 0 1px 0 rgba(255,255,255,0.15), 0 0 16px oklch(60% 0.18 270 / 0.3)'
-    : 'inset 0 1px 0 rgba(255,255,255,0.85), 0 0 16px oklch(60% 0.18 270 / 0.22)';
   const activeFg      = isDark ? '#fff' : c.text;
-  // Panel surface: tinted dark vs light so the column reads on both themes.
-  const panelBg = isDark
-    ? 'linear-gradient(180deg, rgba(255,255,255,0.07) 0%, rgba(255,255,255,0.02) 60%)'
-    : 'linear-gradient(180deg, rgba(0,0,0,0.05) 0%, rgba(0,0,0,0.02) 60%)';
-  const panelBorder = isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.08)';
-  const panelShadow = isDark
-    ? 'inset 0 1px 0 rgba(255,255,255,0.05), 0 5px 20px rgba(0,0,0,0.3)'
-    : 'inset 0 1px 0 rgba(255,255,255,0.85), 0 5px 20px rgba(40,30,60,0.08)';
 
   // 80ms enter delay swallows accidental mouse-bys (cursor briefly passing over
   // the pebble); 200ms close delay gives the user time to traverse from pebble
@@ -3529,58 +3642,72 @@ function FloatingIconNav({ section, onNav, isDark, lang, onSettings, currentTrac
     popoutTimer.current = setTimeout(() => setPopoutOpen(false), 200);
   };
 
+  // Tab order: player first (primary surface), then library → recommend → search.
+  // 'home' is no longer a tab — the brand coin above the capsule handles it.
   const navItems = [
-    { id:'home',      label: lang==='ru'?'ДОМ':'HOME',
-      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg> },
-    { id:'search',    label: lang==='ru'?'ПОИСК':'SRCH',
-      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg> },
+    { id:'player',    label: lang==='ru'?'ПЛЕЕР':'PLAY',
+      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/></svg> },
     { id:'library',   label: lang==='ru'?'БИБЛ':'LIB',
       icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></svg> },
     { id:'recommend', label: lang==='ru'?'РЕК':'REC',
       icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2 15 8l6 1-4.5 4.5L18 20l-6-3-6 3 1.5-6.5L3 9l6-1z"/></svg> },
-    { id:'player',    label: lang==='ru'?'ПЛЕЕР':'PLAY',
-      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/></svg> },
+    { id:'search',    label: lang==='ru'?'ПОИСК':'SRCH',
+      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg> },
   ];
 
+  // Geometry shared by tabs and the sliding glass blob.
+  const TAB_H = 56, TAB_GAP = 6;
+  const activeIdx = navItems.findIndex(i => i.id === section);
+  // Remember the last tab position so the blob shrinks in place (instead of
+  // jumping to the top) when a non-tab section like 'artist' is open.
+  const lastIdxRef = useRef(0);
+  if (activeIdx >= 0) lastIdxRef.current = activeIdx;
+  const blobY = (activeIdx >= 0 ? activeIdx : lastIdxRef.current) * (TAB_H + TAB_GAP);
+
+  // On the player tab the bottom pebble is redundant (the player itself shows
+  // the cover full-size), so the rail stays clean there. Also nothing to show
+  // without a track.
+  const pebbleHidden = section === 'player' || !currentTrack;
+
   return (
-    <div style={{
-      width:'64px', minWidth:'64px', height:'100vh', display:'flex', flexDirection:'column',
-      alignItems:'center', padding:'18px 0 14px', borderRadius:0,
-      background: panelBg,
-      backdropFilter: 'blur(22px) saturate(1.1)',
-      WebkitBackdropFilter: 'blur(22px) saturate(1.1)',
-      borderRight:`1px solid ${panelBorder}`, borderTop:0, borderBottom:0, borderLeft:0,
-      boxShadow: panelShadow,
-      gap:'4px', zIndex:10, flexShrink:0,
+    <div className={isDark ? undefined : 'lg-light'} style={{
+      width:'92px', minWidth:'92px', height:'100vh', display:'flex', flexDirection:'column',
+      alignItems:'center', padding:'14px 0 16px',
+      background:'transparent', zIndex:10, flexShrink:0,
     }}>
-      {/* Brand mark (clickable, returns to home) */}
-      <button onClick={() => onNav('home')} title={lang==='ru'?'На главную':'Home'}
-        style={{ width:36, height:36, borderRadius:10, display:'grid', placeItems:'center', cursor:'pointer',
-                 background:'transparent', border:0, color:c.text, marginBottom:14 }}>
-        <span className="serif-display" style={{ fontSize:22, lineHeight:1, fontStyle:'normal' }}>
+      {/* Brand mark — free-floating letterpress glyph, returns to the landing */}
+      <button className="lg-logo" onClick={() => onNav('home')} title={lang==='ru'?'На главную':'Home'}
+        style={{ width:50, height:50, display:'grid', placeItems:'center', cursor:'pointer',
+                 background:'transparent', border:0, color:c.text, padding:0 }}>
+        <span className="serif-display" style={{
+          fontSize:22, lineHeight:1, fontStyle:'normal',
+          textShadow: isDark
+            ? '0 1px 0 rgba(255,255,255,0.10), 0 -1px 1px rgba(0,0,0,0.65), 0 3px 8px rgba(0,0,0,0.50)'
+            : '0 1px 0 rgba(255,255,255,0.95), 0 -1px 1px rgba(40,30,80,0.22), 0 3px 8px rgba(40,30,80,0.12)',
+        }}>
           M<i style={{ color:'oklch(60% 0.18 270)' }}>X</i>
         </span>
       </button>
 
-      {/* Nav icons */}
-      <nav style={{ display:'flex', flexDirection:'column', gap:'2px', flex:'0 0 auto' }}>
+      <div style={{ flex:1 }} />
+
+      {/* Floating glass capsule with the four tabs + sliding blob indicator */}
+      <nav className="lg-island" style={{ width:TAB_H + 12, borderRadius:(TAB_H + 12) / 2, padding:6,
+        position:'relative', display:'flex', flexDirection:'column', gap:TAB_GAP }}>
+        <div className="lg-blob" style={{
+          width:TAB_H, height:TAB_H,
+          transform:`translateY(${blobY}px) scale(${activeIdx >= 0 ? 1 : 0.4})`,
+          opacity: activeIdx >= 0 ? 1 : 0,
+        }} />
         {navItems.map(item => {
           const active = section === item.id;
           return (
-            <button key={item.id} onClick={() => onNav(item.id)} title={item.label}
-              style={{
-                width:48, minHeight:54, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
-                gap:4, padding:'8px 6px', borderRadius:12, cursor:'pointer',
-                background: active ? activeBg : 'transparent',
-                border: active ? '1px solid oklch(60% 0.18 270 / 0.45)' : '1px solid transparent',
-                boxShadow: active ? activeShadow : 'none',
-                color: active ? activeFg : inactiveColor,
-                transition: 'all 0.18s ease',
-              }}
-              onMouseEnter={e => { if(!active) { e.currentTarget.style.color = hoverColor; e.currentTarget.style.background = hoverBg; } }}
-              onMouseLeave={e => { if(!active) { e.currentTarget.style.color = inactiveColor; e.currentTarget.style.background = 'transparent'; } }}>
+            <button key={item.id} className="lg-tab" onClick={() => onNav(item.id)} title={item.label}
+              style={{ width:TAB_H, height:TAB_H, color: active ? activeFg : inactiveColor }}
+              onMouseEnter={e => { if(!active) e.currentTarget.style.color = hoverColor; }}
+              onMouseLeave={e => { if(!active) e.currentTarget.style.color = inactiveColor; }}>
               <span style={{ display:'flex' }}>{item.icon}</span>
-              <span style={{ fontFamily:"'JetBrains Mono', ui-monospace, monospace", fontWeight:500, textTransform:'uppercase', fontSize:8.5, color:'inherit', letterSpacing:'0.18em' }}>{item.label}</span>
+              <span style={{ fontFamily:"'JetBrains Mono', ui-monospace, monospace", fontWeight:500, textTransform:'uppercase', fontSize:8, color:'inherit', letterSpacing:'0.16em' }}>{item.label}</span>
             </button>
           );
         })}
@@ -3588,30 +3715,34 @@ function FloatingIconNav({ section, onNav, isDark, lang, onSettings, currentTrac
 
       <div style={{ flex:1 }} />
 
-      {/* Settings icon — opens existing SettingsPanel */}
-      <button onClick={onSettings} title={lang==='ru'?'Настройки':'Settings'}
-        style={{ width:40, height:40, borderRadius:12, display:'grid', placeItems:'center', cursor:'pointer',
-                 background:'transparent', border:0, color:settingsColor }}
-        onMouseEnter={e => e.currentTarget.style.color=c.text}
-        onMouseLeave={e => e.currentTarget.style.color=settingsColor}>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="3"/>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-        </svg>
-      </button>
+      {/* Bottom glass island: settings + Now Playing pebble. The pebble slot
+          collapses (flies up + fades) on the player view to keep the rail clean. */}
+      <div className="lg-island" style={{ width:60, borderRadius:30, padding:6,
+        display:'flex', flexDirection:'column', alignItems:'center', gap:2 }}>
+        <button onClick={onSettings} title={lang==='ru'?'Настройки':'Settings'}
+          style={{ width:44, height:44, borderRadius:22, display:'grid', placeItems:'center', cursor:'pointer',
+                   background:'transparent', border:0, color:settingsColor, transition:'color 0.2s ease' }}
+          onMouseEnter={e => e.currentTarget.style.color=c.text}
+          onMouseLeave={e => e.currentTarget.style.color=settingsColor}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+        </button>
 
-      {/* Now Playing Pebble — Task 7 */}
-      <div style={{ height:48, width:48, marginTop:8, display:'grid', placeItems:'center' }} data-pebble-slot="active">
-        <NowPlayingPebble
-          track={currentTrack}
-          isPlaying={!!(audio && audio.isPlaying)}
-          isDark={isDark}
-          onClick={() => { if (currentTrack) onNav('player'); }}
-          onHoverChange={(hovered) => {
-            if (!currentTrack) return;  // no point opening an empty popout
-            if (hovered) openPopout(); else closePopoutSoon();
-          }}
-        />
+        {/* Now Playing Pebble — hidden on the player view (the player shows the cover itself) */}
+        <div className="lg-pebble-slot" data-hidden={pebbleHidden ? 'true' : 'false'} data-pebble-slot="active">
+          <NowPlayingPebble
+            track={currentTrack}
+            isPlaying={!!(audio && audio.isPlaying)}
+            isDark={isDark}
+            onClick={() => { if (currentTrack) onNav('player'); }}
+            onHoverChange={(hovered) => {
+              if (!currentTrack) return;  // no point opening an empty popout
+              if (hovered) openPopout(); else closePopoutSoon();
+            }}
+          />
+        </div>
       </div>
 
       {/* Mini playback popout — always mounted so the exit transition can play.
@@ -3619,7 +3750,7 @@ function FloatingIconNav({ section, onNav, isDark, lang, onSettings, currentTrac
       <div
         className="mini-popout-shell"
         data-state={popoutOpen && currentTrack ? 'open' : 'closed'}
-        style={{ position: 'fixed', left: 72, bottom: 18, zIndex: 1000 }}
+        style={{ position: 'fixed', left: 96, bottom: 18, zIndex: 1000 }}
         onMouseEnter={openPopout}
         onMouseLeave={closePopoutSoon}
       >
@@ -7228,24 +7359,33 @@ function IndexingModal({
 }
 
 // ─── AI Indexing card (inside SettingsPanel) ──────────────────────────────────
+// Pipeline order: tasks run back-to-back so a local LLM serves one job at a time.
+const AI_ENRICH_TASKS = ['sonic_vibe', 'refined_facts', 'artist_bio'];
+
 function AIIndexingCard({ isDark, lang, activeCollection, aiStatus }) {
   const c = useColors(isDark);
   const [status, setStatus] = useState({ sonic_vibe: null, refined_facts: null, artist_bio: null });
-  const [busy, setBusy] = useState({ sonic_vibe: false, refined_facts: false, artist_bio: false });
+  const [pipelineTask, setPipelineTask] = useState(null);  // task currently driven by the run-all pipeline
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [error, setError] = useState(null);
   const pollRef = useRef(null);
+  const cancelRef = useRef(false);
 
   const refresh = useCallback(async () => {
-    if (!activeCollection) return;
+    if (!activeCollection) return null;
     try {
       const data = await apiFetch(`/library/ai-index/status?collection=${encodeURIComponent(activeCollection)}`);
       setStatus(data);
-    } catch { /* swallow — surface via error state only if Run/Reset fails */ }
+      return data;
+    } catch { return null; /* swallow — surface via error state only if Run/Reset fails */ }
   }, [activeCollection]);
 
   useEffect(() => {
     refresh();
-    return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
+    return () => {
+      cancelRef.current = true;
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+    };
   }, [refresh]);
 
   const isRunning = (s) => s && s.status === 'running';
@@ -7262,26 +7402,40 @@ function AIIndexingCard({ isDark, lang, activeCollection, aiStatus }) {
     }
   }, [someRunning, refresh]);
 
-  const runJob = async (taskType) => {
+  // One-button pipeline: POST each task in order, then poll its status until
+  // it leaves 'running' before starting the next. This replaces the old
+  // per-task Run buttons whose busy flags reset as soon as the POST returned
+  // (the job kept running server-side), leaving buttons in wrong states.
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const runAll = async () => {
     if (!activeCollection) { setError(lang === 'ru' ? 'Выбери коллекцию' : 'Pick a collection first'); return; }
     setError(null);
-    setBusy(b => ({ ...b, [taskType]: true }));
     try {
-      await apiFetch(`/library/ai-index/${taskType}`, {
-        method: 'POST',
-        body: JSON.stringify({
-          collection_name: activeCollection,
-          lang,
-          llm_base_url: localStorage.getItem('llm_base_url') || undefined,
-          llm_model:    localStorage.getItem('llm_model')    || undefined,
-          ...(taskType === 'artist_bio' && { bio_source: 'web' }),
-        }),
-      });
-      refresh();
+      for (const taskType of AI_ENRICH_TASKS) {
+        if (cancelRef.current) return;
+        setPipelineTask(taskType);
+        await apiFetch(`/library/ai-index/${taskType}`, {
+          method: 'POST',
+          body: JSON.stringify({
+            collection_name: activeCollection,
+            lang,
+            llm_base_url: localStorage.getItem('llm_base_url') || undefined,
+            llm_model:    localStorage.getItem('llm_model')    || undefined,
+            ...(taskType === 'artist_bio' && { bio_source: 'web' }),
+          }),
+        });
+        let s;
+        do {
+          await sleep(3000);
+          if (cancelRef.current) return;
+          const data = await refresh();
+          s = data && data[taskType];
+        } while (s && s.status === 'running');
+      }
     } catch (e) {
       setError(e?.message || String(e));
     } finally {
-      setBusy(b => ({ ...b, [taskType]: false }));
+      if (!cancelRef.current) setPipelineTask(null);
     }
   };
 
@@ -7342,86 +7496,36 @@ function AIIndexingCard({ isDark, lang, activeCollection, aiStatus }) {
       : 'No song or artist facts to refine. Enrich your library with facts first.';
   };
 
-  const Row = ({ title, taskType }) => {
-    const s = status[taskType];
-    const running = isRunning(s);
-    return (
-      <div style={{ padding: '12px 0', borderBottom: `1px solid ${c.border}` }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-          <div style={{ fontWeight: 600, color: c.text, fontSize: 14 }}>{title}</div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button
-              disabled={busy[taskType] || running || !activeCollection || !aiStatus?.aiAvailable}
-              onClick={() => runJob(taskType)}
-              title={!aiStatus?.aiAvailable
-                ? (lang==='ru'?'LLM не подключён':'Connect LLM to enable')
-                : undefined}
-              style={{
-                padding: '6px 12px', borderRadius: 8, cursor: (busy[taskType] || running || !activeCollection) ? 'not-allowed' : 'pointer',
-                fontSize: 12, fontWeight: 500,
-                background: isDark ? 'rgba(124,91,255,0.18)' : 'rgba(124,91,255,0.10)',
-                color: isDark ? '#cdb8ff' : '#5b3fd6',
-                border: `1px solid ${isDark ? 'rgba(124,91,255,0.35)' : 'rgba(124,91,255,0.30)'}`,
-                opacity: (busy[taskType] || running || !activeCollection) ? 0.5 : 1,
-              }}>
-              {running
-                ? (lang === 'ru' ? 'Идёт…' : 'Running…')
-                : (lang === 'ru' ? '▶ Запустить' : '▶ Run')}
-            </button>
-            <button
-              onClick={() => resetCache(taskType)}
-              disabled={!activeCollection}
-              style={{
-                padding: '6px 12px', borderRadius: 8, cursor: activeCollection ? 'pointer' : 'not-allowed',
-                fontSize: 12, fontWeight: 500,
-                background: 'transparent', color: c.textMuted,
-                border: `1px solid ${c.border}`,
-                opacity: activeCollection ? 1 : 0.5,
-              }}>
-              ↻ {lang === 'ru' ? 'Сброс' : 'Reset'}
-            </button>
-          </div>
-        </div>
-        <div style={{ marginTop: 6, fontSize: 11, color: c.textMuted, fontFamily: "'JetBrains Mono', monospace" }}>
-          {fmtStatus(s)}
-        </div>
-        {isEmptyDone(s) && (
-          <div style={{
-            marginTop: 6, fontSize: 11, lineHeight: 1.5,
-            color: 'oklch(70% 0.13 75)',
-          }}>
-            ⚠ {lang === 'ru'
-              ? 'Завершено без реальной работы — все треки пропущены.'
-              : 'Completed with no real work — every track was skipped.'}
-            <br />{skipReasonHint(taskType)}
-          </div>
-        )}
-        {s && s.error && (
-          <div style={{ marginTop: 6, fontSize: 11, lineHeight: 1.5, color: 'oklch(62% 0.18 25)' }}>
-            ✗ {s.error}
-          </div>
-        )}
-      </div>
-    );
-  };
+  const taskTitle = (t) => ({
+    sonic_vibe:    'Sonic Vibe',
+    refined_facts: lang === 'ru' ? 'Уточнённые факты' : 'Refined facts',
+    artist_bio:    lang === 'ru' ? 'Биографии артистов' : 'Artist bios',
+  })[t];
+
+  const busyAll = !!pipelineTask || someRunning;
+  const canRun = !busyAll && activeCollection && aiStatus?.aiAvailable && aiStatus?.aiEnabledForCollection !== false;
+
+  // Aggregate line across tasks that have ever run.
+  const agg = AI_ENRICH_TASKS.reduce((acc, t) => {
+    const s = status[t];
+    if (s) { acc.ran += 1; acc.done += s.n_done || 0; acc.total += s.n_total || 0; acc.failed += s.n_failed || 0; }
+    return acc;
+  }, { ran: 0, done: 0, total: 0, failed: 0 });
 
   return (
-    <div style={{
-      padding: '16px 18px', borderRadius: 12,
-      border: `1px solid ${c.border}`, marginTop: 18,
-      background: isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.02)',
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
-        <div className="mono-label" style={{ color: c.textMuted, fontSize: 11, letterSpacing: '0.15em' }}>
-          AI INDEXING
+    <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid ${c.border}` }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
+        <div className="mono-label" style={{ color: c.textMuted }}>
+          {lang === 'ru' ? 'ИИ-ОБОГАЩЕНИЕ' : 'AI ENRICHMENT'}
         </div>
         <div style={{ fontSize: 11, color: c.textSubtle }}>
-          {lang === 'ru' ? 'Текущий язык' : 'Current language'}: {lang.toUpperCase()}
+          {lang === 'ru' ? 'Язык' : 'Language'}: {lang.toUpperCase()}
         </div>
       </div>
+
       {aiStatus?.aiEnabledForCollection === false && (
         <div style={{
-          margin: '8px 0 14px', padding: '10px 14px', borderRadius: 8,
+          margin: '0 0 12px', padding: '9px 12px', borderRadius: 10,
           fontSize: 12, lineHeight: 1.5,
           background: isDark ? 'rgba(255,160,40,0.10)' : 'rgba(255,160,40,0.08)',
           border: '1px solid rgba(255,160,40,0.35)',
@@ -7430,8 +7534,8 @@ function AIIndexingCard({ isDark, lang, activeCollection, aiStatus }) {
         }}>
           <span style={{ flex: 1 }}>
             ⚠ {lang==='ru'
-              ? 'AI отключён для этой коллекции. Индексация недоступна.'
-              : 'AI is disabled for this collection. Indexing is unavailable.'}
+              ? 'ИИ отключён для этой коллекции.'
+              : 'AI is disabled for this collection.'}
           </span>
           <button
             onClick={async () => {
@@ -7444,21 +7548,92 @@ function AIIndexingCard({ isDark, lang, activeCollection, aiStatus }) {
               } catch (e) { console.error(e); }
             }}
             style={{
-              padding: '5px 12px', borderRadius: 6, fontSize: 12, fontWeight: 600,
+              padding: '5px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600,
               background: 'rgba(255,160,40,0.20)', color: 'inherit',
               border: '1px solid rgba(255,160,40,0.50)', cursor: 'pointer',
             }}
           >{lang==='ru'?'Включить':'Enable'}</button>
         </div>
       )}
-      <Row title="Sonic Vibe" taskType="sonic_vibe" />
-      <Row title={lang === 'ru' ? 'Уточнённые факты' : 'Refined Facts'} taskType="refined_facts" />
-      <Row title={lang === 'ru' ? 'Биография артистов' : 'Artist Bio'} taskType="artist_bio" />
-      <div style={{ fontSize: 11, color: c.textMuted, marginTop: 12, lineHeight: 1.5 }}>
-        ⚠ {lang === 'ru'
-          ? 'AI-индексация использует текущий язык фронта. Чтобы получить результат на другом языке, смени язык и запусти повторно.'
-          : 'AI indexing uses your current frontend language. To get results in another language, switch language and re-run.'}
+
+      <div style={{ fontSize: 12, color: c.textMuted, lineHeight: 1.55, marginBottom: 12 }}>
+        {lang === 'ru'
+          ? 'Sonic vibe, уточнённые факты и биографии артистов. Три задачи выполняются по очереди на вашем LLM.'
+          : 'Sonic vibe, refined facts and artist bios. The three tasks run back to back on your LLM.'}
       </div>
+
+      <button className="cta-v3" disabled={!canRun} onClick={runAll}
+        title={!aiStatus?.aiAvailable ? (lang==='ru'?'LLM не подключён':'Connect LLM to enable') : undefined}
+        style={{ width: '100%', opacity: canRun ? 1 : 0.45, cursor: canRun ? 'pointer' : 'not-allowed' }}>
+        {busyAll
+          ? `⏳ ${pipelineTask ? taskTitle(pipelineTask) : (lang==='ru'?'Идёт обработка':'Processing')}…`
+          : (lang === 'ru' ? '▶ Запустить обогащение' : '▶ Run enrichment')}
+      </button>
+
+      <div style={{
+        marginTop: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+        fontSize: 11, color: c.textMuted, fontFamily: "'JetBrains Mono', monospace",
+      }}>
+        <span>
+          {agg.ran === 0
+            ? (lang === 'ru' ? 'Ещё не запускалось' : 'Never run')
+            : `${agg.done}/${agg.total} ${lang==='ru'?'обработано':'processed'}${agg.failed ? ` · ${agg.failed} ${lang==='ru'?'ошибок':'failed'}` : ''}`}
+        </span>
+        <button className="pill-v3" onClick={() => setDetailsOpen(o => !o)}
+          style={{ padding: '4px 12px', fontSize: 11 }}>
+          {lang === 'ru' ? 'Детали' : 'Details'} {detailsOpen ? '▴' : '▾'}
+        </button>
+      </div>
+
+      {detailsOpen && AI_ENRICH_TASKS.map(t => {
+        const s = status[t];
+        return (
+          <div key={t} style={{ padding: '10px 0 0', marginTop: 10, borderTop: `1px solid ${c.border}` }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+              <div style={{ fontWeight: 600, color: c.text, fontSize: 13 }}>
+                {taskTitle(t)}
+                {(pipelineTask === t || isRunning(s)) && <span style={{ color: c.textMuted, fontWeight: 400 }}> · {lang==='ru'?'идёт':'running'}…</span>}
+              </div>
+              <button onClick={() => resetCache(t)} disabled={!activeCollection || busyAll}
+                title={lang==='ru'?'Сбросить кэш задачи':'Reset task cache'}
+                style={{
+                  padding: '3px 10px', borderRadius: 999, fontSize: 11,
+                  background: 'transparent', color: c.textMuted,
+                  border: `1px solid ${c.border}`,
+                  cursor: (!activeCollection || busyAll) ? 'not-allowed' : 'pointer',
+                  opacity: (!activeCollection || busyAll) ? 0.45 : 1,
+                }}>
+                ↻ {lang === 'ru' ? 'Сброс' : 'Reset'}
+              </button>
+            </div>
+            <div style={{ marginTop: 4, fontSize: 11, color: c.textMuted, fontFamily: "'JetBrains Mono', monospace" }}>
+              {fmtStatus(s)}
+            </div>
+            {isEmptyDone(s) && (
+              <div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.5, color: 'oklch(70% 0.13 75)' }}>
+                ⚠ {lang === 'ru'
+                  ? 'Завершено без реальной работы — все треки пропущены.'
+                  : 'Completed with no real work — every track was skipped.'}
+                <br />{skipReasonHint(t)}
+              </div>
+            )}
+            {s && s.error && (
+              <div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.5, color: 'oklch(62% 0.18 25)' }}>
+                ✗ {s.error}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {detailsOpen && (
+        <div style={{ fontSize: 11, color: c.textSubtle, marginTop: 10, lineHeight: 1.5 }}>
+          {lang === 'ru'
+            ? 'Результат генерируется на текущем языке интерфейса. Смени язык и запусти повторно для другого.'
+            : 'Output is generated in the current UI language. Switch language and re-run for another.'}
+        </div>
+      )}
+
       {error && (
         <div style={{ marginTop: 10, fontSize: 12, color: 'oklch(62% 0.18 25)' }}>
           {error}
@@ -7529,17 +7704,17 @@ function CollectionAIToggle({ collectionName, isActive, aiStatus, lang, isDark }
 }
 
 // ─── Settings overlay (slides in from right) ─────────────────────────────────
+// Embedding tiers for the new-collection form — a two-stop slider replaces the
+// raw model dropdown. Light = backend default (CPU-friendly), heavy = higher
+// quality but really wants a GPU. Names must match ModelRegistry.TEXT_MODELS.
+const HEAVY_TEXT_MODEL = 'Qwen/Qwen3-Embedding-0.6B';
+
 function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeCollection, aiStatus, onTheme, onLang, collections, onCollectionSwitch, onCollectionDelete }) {
   const c = useColors(isDark);
-  const [models, setModels] = useState({});
-  // Guard against legacy localStorage values: Web Storage stringifies `null` to the
-  // literal string "null", which would then be sent to backend and tried as a HF
-  // repo_id. Coerce any falsy/"null"/"undefined" to actual null so backend uses
-  // its default model (jinaai/jina-embeddings-v2-small-en).
-  const [textModel, setTextModel] = useState(() => {
-    const v = localStorage.getItem('text_model');
-    return (v && v !== 'null' && v !== 'undefined') ? v : null;
-  });
+  // 'light' | 'heavy' — derived from the legacy text_model localStorage key so
+  // an earlier explicit heavy pick survives the UI change.
+  const [modelTier, setModelTier] = useState(() =>
+    localStorage.getItem('text_model') === HEAVY_TEXT_MODEL ? 'heavy' : 'light');
   const [collName, setCollName] = useState('');
   const [folderPath, setFolderPath] = useState('');
   const [picking, setPicking] = useState(false);
@@ -7558,19 +7733,18 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
   const [llmModel, setLlmModel] = useState(() => localStorage.getItem('llm_model') || '');
   const [llmSaved, setLlmSaved] = useState(false);
 
-  useEffect(() => {
-    apiFetch('/search/models/text').then(setModels).catch(() => {});
-  }, []);
+  // Section UI state: collection switcher list, LLM advanced fields, and the
+  // new-collection modal.
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [llmOpen, setLlmOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
 
-  // Persist only valid model names; otherwise REMOVE the key so getItem returns
-  // null next time (instead of the string "null").
+  // Persist the heavy pick under the legacy key; remove it for light so the
+  // backend falls back to its default model (never store the string "null").
   useEffect(() => {
-    if (textModel && typeof textModel === 'string') {
-      localStorage.setItem('text_model', textModel);
-    } else {
-      localStorage.removeItem('text_model');
-    }
-  }, [textModel]);
+    if (modelTier === 'heavy') localStorage.setItem('text_model', HEAVY_TEXT_MODEL);
+    else localStorage.removeItem('text_model');
+  }, [modelTier]);
 
   const handlePick = async () => {
     setPicking(true);
@@ -7580,6 +7754,7 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
 
   const handleIndex = () => {
     if (!folderPath.trim() || indexing) return;
+    setCreateOpen(false);  // the staged IndexingModal takes over from the form
     setIndexPhase('ai-setup');
     setShowModal(true);
   };
@@ -7594,9 +7769,9 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
     setIndexing(true); setModalError(null); setModalTrackCount(null); setStageProgress({});
     setStepStatus({ lyrics:'idle', facts:'idle', metadata:'idle', dense:'idle', audio:'idle', analysis:'idle' });
     try {
-      // Only send text_model if user picked one — omit otherwise so backend
-      // falls back to its default. Avoid sending the literal string "null".
-      const validModel = (textModel && typeof textModel === 'string' && textModel !== 'null') ? textModel : undefined;
+      // Only send text_model for the heavy tier — omit otherwise so backend
+      // falls back to its default (the light model).
+      const validModel = modelTier === 'heavy' ? HEAVY_TEXT_MODEL : undefined;
       const res = await apiFetch('/library/index', { method:'POST',
         body: JSON.stringify({ folder_path:folderPath, collection_name:colName, better_lyrics_quality:betterLyrics, text_model:validModel, enhance_by_musicbrainz:refineMetadata }) });
       if (res.status === 'failed') { setModalError(res.message); setIndexing(false); return; }
@@ -7675,23 +7850,28 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
     } catch (e) { setModalError(e.message); setIndexing(false); }
   };
 
-  const saveLLM = () => {
-    localStorage.setItem('llm_base_url', llmBaseUrl.trim());
-    localStorage.setItem('llm_model',    llmModel.trim());
+  // Save + probe in one step: trim, sync state with what we persist (so a
+  // later save can't desync from what was tested), then re-probe the LLM.
+  const saveLLM = async () => {
+    const url = llmBaseUrl.trim(), model = llmModel.trim();
+    setLlmBaseUrl(url); setLlmModel(model);
+    localStorage.setItem('llm_base_url', url);
+    localStorage.setItem('llm_model', model);
     setLlmSaved(true); setTimeout(() => setLlmSaved(false), 2000);
+    await aiStatus?.refresh?.();
   };
 
   const fieldLabel = (text) => (
-    <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'7px' }}>{text}</div>
+    <div className="mono-label" style={{ color:c.textSubtle, marginBottom:7 }}>{text}</div>
   );
-  const inputClass = ske('inset', isDark);
   const inputStyle = {
-    width:'100%', padding:'10px 13px', borderRadius:'10px', border:'none',
-    color: c.text, fontSize:'15px', outline:'none', fontFamily:"'JetBrains Mono', monospace",
+    width:'100%', padding:'10px 13px', borderRadius:10,
+    border:`1px solid ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.10)'}`,
+    background: isDark ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.75)',
+    color: c.text, fontSize:14, outline:'none', fontFamily:"'JetBrains Mono', monospace",
   };
-  const card = (children) => (
-    <div className={ske('panel', isDark)} style={{ padding:'22px 24px', borderRadius:'16px' }}>{children}</div>
-  );
+  const activeCol = (collections || []).find(col => col.name === activeCollection) || null;
+  const otherCols = (collections || []).filter(col => col.name !== activeCollection);
 
   return (
     <>
@@ -7701,314 +7881,306 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, activeColle
         backdropFilter:'blur(4px)',
         animation:'fadeIn 0.2s ease',
       }} />
-      <div className={`${ske('panel', isDark)} grain`} style={{
+      <div className="grain" style={{
         position:'fixed', top:0, right:0, bottom:0, zIndex:91,
         width:'min(540px, 92vw)', display:'flex', flexDirection:'column',
-        borderRadius:'0', overflow:'hidden',
+        borderRadius:0, overflow:'hidden',
+        background: isDark
+          ? 'linear-gradient(180deg, rgba(24,24,32,0.92) 0%, rgba(14,14,20,0.95) 100%)'
+          : 'linear-gradient(180deg, rgba(250,249,253,0.94) 0%, rgba(238,237,245,0.96) 100%)',
+        backdropFilter:'blur(28px) saturate(1.3)',
+        WebkitBackdropFilter:'blur(28px) saturate(1.3)',
+        borderLeft:`1px solid ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'}`,
+        boxShadow: isDark ? '-18px 0 50px rgba(0,0,0,0.5)' : '-18px 0 50px rgba(40,30,80,0.14)',
         animation:'slideRight 0.32s cubic-bezier(.22,.9,.3,1)',
       }}>
-        <div style={{ padding:'24px 28px 18px', borderBottom:`1px solid ${c.border}`, display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+        <div style={{ padding:'24px 28px 18px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
           <div>
-            <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'6px' }}>
+            <div className="mono-label" style={{ color:c.textSubtle, marginBottom:6 }}>
               {lang==='ru'?'НАСТРОЙКИ':'SETTINGS'}
             </div>
-            <div className="serif" style={{ fontSize:'32px', lineHeight:'1', letterSpacing:'-0.02em', color:c.text }}>
+            <div className="serif" style={{ fontSize:'30px', lineHeight:'1', letterSpacing:'-0.02em', color:c.text }}>
               {lang==='ru'?'Студия':'Studio'} <i style={{ color:'oklch(62% 0.2 275)' }}>{lang==='ru'?'настроек':'tools'}</i>
             </div>
           </div>
-          <button onClick={onClose} className={ske('btn', isDark)} style={{
-            width:'36px', height:'36px', borderRadius:'10px',
-            display:'flex', alignItems:'center', justifyContent:'center', color: c.textMuted,
+          <button onClick={onClose} className="pill-v3" style={{
+            width:34, height:34, padding:0, borderRadius:'50%',
+            display:'grid', placeItems:'center',
           }}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
           </button>
         </div>
 
-        <div style={{ flex:1, overflowY:'auto', padding:'22px 28px 32px', display:'flex', flexDirection:'column', gap:'16px' }}>
+        <div style={{ flex:1, overflowY:'auto', padding:'18px 28px 32px', display:'flex', flexDirection:'column', gap:18 }}>
 
-        {/* AI Mode — LLM status indicator (Plan 6) */}
-        <div style={{
-          margin: '8px 24px 16px',
-          padding: '10px 14px',
-          borderRadius: 10,
-          display: 'flex', alignItems: 'center', gap: 10,
-          fontSize: 12,
-          background: aiStatus?.aiAvailable === true
-            ? (isDark ? 'rgba(40,160,80,0.10)' : 'rgba(40,160,80,0.08)')
-            : aiStatus?.aiAvailable === false
-              ? (isDark ? 'rgba(239,68,68,0.10)' : 'rgba(239,68,68,0.08)')
-              : (isDark ? 'rgba(255,160,40,0.08)' : 'rgba(255,160,40,0.06)'),
-          border: `1px solid ${aiStatus?.aiAvailable === true ? 'rgba(40,160,80,0.35)'
-            : aiStatus?.aiAvailable === false ? 'rgba(239,68,68,0.35)'
-            : 'rgba(255,160,40,0.35)'}`,
-          color: isDark ? '#ddd' : '#333',
-        }}>
-          <span style={{
-            display:'inline-block', width:8, height:8, borderRadius:'50%',
-            background: aiStatus?.aiAvailable === true ? 'oklch(65% 0.18 145)'
-              : aiStatus?.aiAvailable === false ? 'oklch(60% 0.20 25)'
-              : 'oklch(72% 0.16 60)',
-          }} />
-          <span style={{ flex: 1 }}>
-            {aiStatus?.aiAvailable === true && (lang === 'ru'
-              ? `LLM подключён${aiStatus.llmInfo?.model ? ` · ${aiStatus.llmInfo.model}` : ''}`
-              : `LLM connected${aiStatus.llmInfo?.model ? ` · ${aiStatus.llmInfo.model}` : ''}`)}
-            {aiStatus?.aiAvailable === false && (lang === 'ru'
-              ? `LLM офлайн · ${aiStatus.llmError || 'не отвечает'}`
-              : `LLM offline · ${aiStatus.llmError || 'no response'}`)}
-            {aiStatus?.aiAvailable === null && (lang === 'ru' ? 'Проверка LLM...' : 'Probing LLM...')}
-          </span>
-          <button
-            onClick={() => aiStatus?.refresh?.()}
-            style={{
-              padding: '4px 10px', borderRadius: 6, fontSize: 11,
-              background: 'transparent', cursor: 'pointer',
-              border: `1px solid ${isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.15)'}`,
-              color: 'inherit',
-            }}
-          >↻ {lang==='ru'?'Проверить':'Re-check'}</button>
-        </div>
-
-        {/* ─── Appearance (Task 4.5) — theme-aware ─── */}
-        <section style={{ marginBottom: 20 }}>
-          <h3 style={{ fontFamily:"'JetBrains Mono', ui-monospace, monospace", fontWeight:500, textTransform:'uppercase', fontSize: 11, letterSpacing:'0.22em', color: c.textSubtle, marginBottom: 12, padding: '0 4px' }}>
-            {lang === 'ru' ? 'ВНЕШНИЙ ВИД' : 'APPEARANCE'}
-          </h3>
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-            <button onClick={onTheme}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 8,
-                background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)',
-                border: `1px solid ${c.border}`, borderRadius: 999,
-                padding: '7px 14px', fontSize: 12, fontWeight: 500,
-                color: c.text, cursor: 'pointer',
-              }}>
-              {isDark
-                ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
-                : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>}
-              <span>{lang === 'ru' ? (isDark ? 'Светлая тема' : 'Тёмная тема') : (isDark ? 'Light theme' : 'Dark theme')}</span>
-            </button>
-            <button onClick={() => onLang && onLang(lang === 'ru' ? 'en' : 'ru')}
-              style={{
-                background: isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)',
-                border: `1px solid ${c.border}`, borderRadius: 999,
-                padding: '7px 14px', fontSize: 12, fontWeight: 500,
-                color: c.text, cursor: 'pointer',
-              }}>
-              {lang === 'ru' ? 'EN' : 'RU'}
-            </button>
-          </div>
-        </section>
-
-        {/* ─── Collections (Task 4.5) — theme-aware ─── */}
-        <section style={{ marginBottom: 24 }}>
-          <h3 style={{ fontFamily:"'JetBrains Mono', ui-monospace, monospace", fontWeight:500, textTransform:'uppercase', fontSize: 11, letterSpacing:'0.22em', color: c.textSubtle, marginBottom: 12, padding: '0 4px' }}>
-            {lang === 'ru' ? 'КОЛЛЕКЦИИ' : 'COLLECTIONS'}
-          </h3>
-          {(!collections || collections.length === 0) ? (
-            <div style={{ fontSize: 12, color: c.textMuted, padding: '8px 4px' }}>
-              {lang === 'ru' ? 'Пока нет коллекций — создайте ниже.' : 'No collections yet — create one below.'}
+          {/* ─── Account (collections become accounts later — keep it account-shaped) ─── */}
+          <section className="panel-v3" style={{ padding:'18px 20px' }}>
+            <div className="mono-label" style={{ color:c.textSubtle, marginBottom:14 }}>
+              {lang==='ru'?'АККАУНТ':'ACCOUNT'}
             </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {collections.map(col => {
-                const isActive = col.name === activeCollection;
-                const rowBg     = isActive
-                  ? (isDark ? 'rgba(124,91,255,0.13)' : 'rgba(124,91,255,0.10)')
-                  : (isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)');
-                const rowBorder = isActive
-                  ? 'oklch(60% 0.18 270 / 0.35)'
-                  : c.border;
-                return (
-                  <div key={col.name} style={{
-                    display: 'flex', alignItems: 'center', gap: 10,
-                    padding: '10px 12px', borderRadius: 10,
-                    background: rowBg,
-                    border: `1px solid ${rowBorder}`,
-                  }}>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 13, color: c.text, fontWeight: isActive ? 600 : 500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-                        {col.name}
-                      </div>
-                      <div style={{ fontFamily:"'JetBrains Mono', ui-monospace, monospace", fontWeight:500, textTransform:'uppercase', fontSize: 9, letterSpacing:'0.2em', color: c.textMuted }}>
-                        {col.count || 0} {lang === 'ru' ? 'треков' : 'tracks'}
-                      </div>
-                      {/* AI features toggle (Plan 6) */}
-                      <div style={{
-                        display:'flex', alignItems:'center', gap:10,
-                        marginTop: 6, fontSize: 12, color: isDark ? '#aaa' : '#555',
-                      }}>
-                        <span>🤖 {lang==='ru'?'AI-фичи':'AI features'}:</span>
-                        <CollectionAIToggle
-                          collectionName={col.name}
-                          isActive={col.name === activeCollection}
-                          aiStatus={aiStatus}
-                          lang={lang}
-                          isDark={isDark}
-                        />
-                      </div>
-                    </div>
-                    {!isActive && (
-                      <button onClick={() => onCollectionSwitch && onCollectionSwitch(col.name)}
-                        style={{
-                          background: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)',
-                          border: `1px solid ${c.border}`, borderRadius: 999,
-                          padding: '5px 10px', fontSize: 11, fontWeight: 500,
-                          color: c.text, cursor: 'pointer',
-                        }}>
-                        {lang === 'ru' ? 'Активировать' : 'Activate'}
-                      </button>
-                    )}
-                    <button onClick={() => onCollectionDelete && onCollectionDelete(col.name)}
-                            title={lang === 'ru' ? 'Удалить' : 'Delete'}
-                            style={{ background: 'transparent', border: 0, color: c.textMuted, cursor: 'pointer', padding: 4 }}>
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
-                    </button>
+            {activeCol ? (
+              <div style={{ display:'flex', alignItems:'center', gap:14 }}>
+                <div style={{
+                  width:46, height:46, borderRadius:'50%', flexShrink:0,
+                  display:'grid', placeItems:'center',
+                  background:'linear-gradient(135deg, oklch(66% 0.19 280) 0%, oklch(50% 0.21 265) 100%)',
+                  boxShadow:'inset 0 1px 0 rgba(255,255,255,0.35), 0 4px 14px oklch(60% 0.18 270 / 0.35)',
+                }}>
+                  <span className="serif-display" style={{ color:'#fff', fontSize:20, fontStyle:'normal' }}>
+                    {(activeCol.name || '?')[0].toUpperCase()}
+                  </span>
+                </div>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:15, fontWeight:600, color:c.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                    {activeCol.name}
                   </div>
-                );
-              })}
-            </div>
-          )}
-        </section>
-
-          {/* Add collection */}
-          {card(<>
-            <div style={{ display:'flex', alignItems:'center', gap:'12px', marginBottom:'18px' }}>
-              <div className="ske-accent" style={{
-                width:'34px', height:'34px', borderRadius:'10px',
-                display:'flex', alignItems:'center', justifyContent:'center',
-              }}>
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>
-              </div>
-              <div>
-                <div className="serif" style={{ fontSize:'20px', color:c.text, letterSpacing:'-0.01em' }}>
-                  {lang==='ru'?'Новая коллекция':'New collection'}
+                  <div className="mono-label" style={{ color:c.textMuted, marginTop:3, letterSpacing:'0.14em' }}>
+                    {activeCol.count || 0} {lang==='ru'?'ТРЕКОВ':'TRACKS'} · {lang==='ru'?'ЛОКАЛЬНО':'LOCAL'}
+                  </div>
                 </div>
-                <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.12em', marginTop:'2px' }}>
-                  {lang==='ru'?'ИНДЕКСИРОВАТЬ ПАПКУ → QDRANT':'INDEX A FOLDER → QDRANT'}
+                <div style={{ display:'flex', alignItems:'center', gap:6, fontSize:11, color:c.textMuted }}>
+                  <span>{lang==='ru'?'ИИ':'AI'}</span>
+                  <CollectionAIToggle collectionName={activeCol.name} isActive={true}
+                    aiStatus={aiStatus} lang={lang} isDark={isDark} />
                 </div>
               </div>
-            </div>
+            ) : (
+              <div style={{ fontSize:12, color:c.textMuted }}>
+                {lang==='ru'?'Нет активной коллекции — добавьте первую.':'No active collection — add your first one.'}
+              </div>
+            )}
 
-            {fieldLabel(lang==='ru'?'ИМЯ КОЛЛЕКЦИИ':'COLLECTION NAME')}
-            <input value={collName} onChange={e=>setCollName(e.target.value)} disabled={indexing}
-              placeholder={lang==='ru'?'например: my_music':'e.g. my_music'} className={inputClass} style={{ ...inputStyle, marginBottom:'12px' }} />
-
-            {fieldLabel(lang==='ru'?'ПУТЬ К ПАПКЕ':'FOLDER PATH')}
-            <div style={{ display:'flex', gap:'8px', marginBottom:'12px' }}>
-              <button onClick={handlePick} disabled={picking||indexing} className={ske('btn', isDark)} style={{
-                padding:'10px 14px', borderRadius:'10px', fontSize:'14px',
-                color: c.textMuted, display:'flex', alignItems:'center', gap:'6px', flexShrink:0,
-                cursor: picking||indexing?'not-allowed':'pointer',
-              }}>
-                {picking ? <Spinner size={12} /> : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>}
-                {lang==='ru'?'Выбрать':'Pick'}
+            <div style={{ display:'flex', gap:8, marginTop:14, flexWrap:'wrap' }}>
+              {otherCols.length > 0 && (
+                <button className={`pill-v3${switcherOpen ? ' pill-v3-active' : ''}`}
+                  onClick={() => setSwitcherOpen(o => !o)}>
+                  {lang==='ru'?'Сменить':'Switch'} ({otherCols.length}) {switcherOpen ? '▴' : '▾'}
+                </button>
+              )}
+              <button className="pill-v3" onClick={() => setCreateOpen(true)}>
+                + {lang==='ru'?'Новая коллекция':'New collection'}
               </button>
-              <input value={folderPath} onChange={e=>setFolderPath(e.target.value)} disabled={indexing}
-                placeholder={lang==='ru'?'/path/to/music':'/path/to/music'} className={inputClass} style={{ ...inputStyle, flex:1 }} />
             </div>
 
-            {fieldLabel(lang==='ru'?'МОДЕЛЬ ТЕКСТА':'TEXT MODEL')}
-            <MusixSelect isDark={isDark} value={textModel} onChange={setTextModel}
-              options={Object.keys(models).length > 0
-                ? Object.keys(models).map(n => ({value:n, label:n}))
-                : [{value:'jinaai/jina-embeddings-v2-small-en', label:'jina-embeddings-v2-small-en'}]}
-              style={{ width:'100%', marginBottom:'14px' }} />
-
-            <label style={{ display:'flex', alignItems:'center', gap:'8px', fontSize:'14px', color:c.textMuted, marginBottom:'8px' }}>
-              <ToggleSwitch checked={betterLyrics} onChange={v=>setBetterLyrics(v)} isDark={isDark} />
-              {lang==='ru'?'Лучшее качество текстов (медленнее)':'Better lyrics quality (slower)'}
-            </label>
-            <label style={{ display:'flex', alignItems:'center', gap:'8px', fontSize:'14px', color:c.textMuted, marginBottom:'18px' }}>
-              <ToggleSwitch checked={refineMetadata} onChange={v=>setRefineMetadata(v)} isDark={isDark} />
-              {lang==='ru'?'Дополнить пропущенные метаданные из интернета':'Refine metadata with online lookup'}
-            </label>
-
-            <button onClick={handleIndex} disabled={indexing||!folderPath.trim()}
-              className="ske-accent" style={{
-                width:'100%', padding:'12px 20px', borderRadius:'12px',
-                fontSize:'15px', fontWeight:'600', letterSpacing:'0.06em',
-                opacity: indexing||!folderPath.trim() ? 0.5 : 1,
-                cursor: indexing||!folderPath.trim() ? 'not-allowed' : 'pointer',
-                display:'flex', alignItems:'center', justifyContent:'center', gap:'8px',
-              }}>
-              {indexing ? <><Spinner size={14} color="white" /> {lang==='ru'?'ИДЁТ ИНДЕКСАЦИЯ…':'INDEXING…'}</> : (lang==='ru'?'▶ ЗАПУСТИТЬ ИНДЕКСАЦИЮ':'▶ START INDEXING')}
-            </button>
-          </>)}
-
-          {/* LLM */}
-          {card(<>
-            <div style={{ display:'flex', alignItems:'center', gap:'12px', marginBottom:'18px' }}>
-              <div className={ske('inset', isDark)} style={{
-                width:'34px', height:'34px', borderRadius:'10px',
-                display:'flex', alignItems:'center', justifyContent:'center', color: c.amber,
-              }}>
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
-              </div>
-              <div>
-                <div className="serif" style={{ fontSize:'20px', color:c.text, letterSpacing:'-0.01em' }}>
-                  {lang==='ru'?'LLM подключение':'LLM connection'}
+            {switcherOpen && (collections || []).map(col => {
+              const isActive = col.name === activeCollection;
+              return (
+                <div key={col.name} style={{
+                  display:'flex', alignItems:'center', gap:10,
+                  padding:'9px 12px', borderRadius:10, marginTop:8,
+                  background: isActive
+                    ? (isDark ? 'rgba(124,91,255,0.13)' : 'rgba(124,91,255,0.10)')
+                    : (isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)'),
+                  border:`1px solid ${isActive ? 'oklch(60% 0.18 270 / 0.35)' : c.border}`,
+                }}>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:13, color:c.text, fontWeight:isActive?600:500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                      {col.name}
+                    </div>
+                    <div className="mono-label" style={{ color:c.textMuted, fontSize:9, letterSpacing:'0.18em' }}>
+                      {col.count || 0} {lang==='ru'?'ТРЕКОВ':'TRACKS'}
+                    </div>
+                  </div>
+                  {!isActive && (
+                    <button className="pill-v3" style={{ padding:'4px 12px', fontSize:11 }}
+                      onClick={() => onCollectionSwitch && onCollectionSwitch(col.name)}>
+                      {lang==='ru'?'Активировать':'Activate'}
+                    </button>
+                  )}
+                  <button onClick={() => onCollectionDelete && onCollectionDelete(col.name)}
+                    title={lang==='ru'?'Удалить':'Delete'}
+                    style={{ background:'transparent', border:0, color:c.textMuted, cursor:'pointer', padding:4 }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+                  </button>
                 </div>
-                <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.12em', marginTop:'2px' }}>
-                  {lang==='ru'?'LM STUDIO · OLLAMA · OPENAI':'LM STUDIO · OLLAMA · OPENAI'}
-                </div>
-              </div>
+              );
+            })}
+          </section>
+
+          {/* ─── Intelligence: LLM status + advanced fields + one-button enrichment ─── */}
+          <section className="panel-v3" style={{ padding:'18px 20px' }}>
+            <div className="mono-label" style={{ color:c.textSubtle, marginBottom:14 }}>
+              {lang==='ru'?'ИНТЕЛЛЕКТ':'INTELLIGENCE'}
             </div>
-            {fieldLabel('BASE URL')}
-            <input value={llmBaseUrl} onChange={e=>setLlmBaseUrl(e.target.value)}
-              placeholder="http://localhost:1234/v1" className={inputClass} style={{ ...inputStyle, marginBottom:'14px' }} />
-            {fieldLabel(lang==='ru'?'МОДЕЛЬ':'MODEL')}
-            <input value={llmModel} onChange={e=>setLlmModel(e.target.value)}
-              placeholder="gpt-4o-mini" className={inputClass} style={{ ...inputStyle, marginBottom:'18px' }} />
-            {/* Test connection (Plan 6) */}
-            <button
-              type="button"
-              onClick={async () => {
-                // Sync React state with the trimmed values we're about to
-                // probe — otherwise the input field keeps its un-trimmed
-                // copy and a later Save can overwrite localStorage with
-                // the untrimmed value, desyncing it from what was tested.
-                const trimmedUrl = llmBaseUrl.trim();
-                const trimmedModel = llmModel.trim();
-                setLlmBaseUrl(trimmedUrl);
-                setLlmModel(trimmedModel);
-                localStorage.setItem('llm_base_url', trimmedUrl);
-                localStorage.setItem('llm_model', trimmedModel);
-                await aiStatus?.refresh?.();
-              }}
-              style={{
-                marginTop: 8, marginRight: 8, padding: '6px 14px', borderRadius: 8,
-                fontSize: 12, fontWeight: 500,
-                background: isDark ? 'rgba(124,91,255,0.12)' : 'rgba(124,91,255,0.08)',
-                color: isDark ? '#cdb8ff' : '#5b3fd6',
-                border: `1px solid rgba(124,91,255,0.35)`,
-                cursor: 'pointer',
-              }}
-            >{lang==='ru'?'✓ Проверить соединение':'✓ Test connection'}</button>
-            <button onClick={saveLLM} className={llmSaved ? '' : 'ske-accent'} style={{
-              padding:'10px 20px', borderRadius:'10px',
-              fontSize:'14px', fontWeight:'600', letterSpacing:'0.06em',
-              background: llmSaved ? 'linear-gradient(180deg, oklch(63% 0.17 142), oklch(53% 0.18 138))' : undefined,
-              color: 'white',
-              boxShadow: llmSaved ? 'inset 0 1px 0 rgba(255,255,255,0.25), 0 3px 10px oklch(63% 0.17 142 / 0.4)' : undefined,
-            }}>
-              {llmSaved ? (lang==='ru'?'✓ СОХРАНЕНО':'✓ SAVED') : (lang==='ru'?'СОХРАНИТЬ':'SAVE')}
-            </button>
-          </>)}
 
-          {/* AI Indexing */}
-          <AIIndexingCard isDark={isDark} lang={lang} activeCollection={activeCollection} aiStatus={aiStatus} />
+            <div style={{ display:'flex', alignItems:'center', gap:10, fontSize:12, color:c.text }}>
+              <span style={{
+                display:'inline-block', width:8, height:8, borderRadius:'50%', flexShrink:0,
+                background: aiStatus?.aiAvailable === true ? 'oklch(65% 0.18 145)'
+                  : aiStatus?.aiAvailable === false ? 'oklch(60% 0.20 25)'
+                  : 'oklch(72% 0.16 60)',
+                boxShadow: aiStatus?.aiAvailable === true ? '0 0 8px oklch(65% 0.18 145 / 0.6)' : 'none',
+              }} />
+              <span style={{ flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                {aiStatus?.aiAvailable === true && (lang === 'ru'
+                  ? `LLM подключён${aiStatus.llmInfo?.model ? ` · ${aiStatus.llmInfo.model}` : ''}`
+                  : `LLM connected${aiStatus.llmInfo?.model ? ` · ${aiStatus.llmInfo.model}` : ''}`)}
+                {aiStatus?.aiAvailable === false && (lang === 'ru'
+                  ? `LLM офлайн · ${aiStatus.llmError || 'не отвечает'}`
+                  : `LLM offline · ${aiStatus.llmError || 'no response'}`)}
+                {aiStatus?.aiAvailable === null && (lang === 'ru' ? 'Проверка LLM…' : 'Probing LLM…')}
+              </span>
+              <button className="pill-v3" style={{ padding:'4px 12px', fontSize:11 }}
+                onClick={() => aiStatus?.refresh?.()}>
+                ↻ {lang==='ru'?'Проверить':'Re-check'}
+              </button>
+              <button className={`pill-v3${llmOpen ? ' pill-v3-active' : ''}`} style={{ padding:'4px 12px', fontSize:11 }}
+                onClick={() => setLlmOpen(o => !o)}>
+                {lang==='ru'?'Настроить':'Configure'} {llmOpen ? '▴' : '▾'}
+              </button>
+            </div>
 
-          {/* About */}
-          <div style={{ padding:'18px 22px', textAlign:'center' }}>
-            <div className="serif" style={{ fontSize:'18px', color:c.textMuted, fontStyle:'italic', lineHeight:'1.4' }}>
+            {llmOpen && (
+              <div style={{ marginTop:14 }}>
+                {fieldLabel('BASE URL')}
+                <input value={llmBaseUrl} onChange={e=>setLlmBaseUrl(e.target.value)}
+                  placeholder="http://localhost:1234/v1" style={{ ...inputStyle, marginBottom:12 }} />
+                {fieldLabel(lang==='ru'?'МОДЕЛЬ':'MODEL')}
+                <input value={llmModel} onChange={e=>setLlmModel(e.target.value)}
+                  placeholder="gpt-4o-mini" style={{ ...inputStyle, marginBottom:14 }} />
+                <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+                  <button onClick={saveLLM} className="cta-v3" style={{
+                    padding:'9px 18px', fontSize:13,
+                    background: llmSaved ? 'linear-gradient(180deg, oklch(63% 0.17 142), oklch(53% 0.18 138))' : undefined,
+                    boxShadow: llmSaved ? 'inset 0 1px 0 rgba(255,255,255,0.25), 0 3px 10px oklch(63% 0.17 142 / 0.4)' : undefined,
+                  }}>
+                    {llmSaved ? (lang==='ru'?'✓ Сохранено':'✓ Saved') : (lang==='ru'?'Сохранить и проверить':'Save & test')}
+                  </button>
+                  <span className="mono-label" style={{ color:c.textSubtle, letterSpacing:'0.14em' }}>
+                    LM STUDIO · OLLAMA · OPENAI
+                  </span>
+                </div>
+              </div>
+            )}
+
+            <AIIndexingCard isDark={isDark} lang={lang} activeCollection={activeCollection} aiStatus={aiStatus} />
+          </section>
+
+          {/* ─── Appearance ─── */}
+          <section className="panel-v3" style={{ padding:'18px 20px' }}>
+            <div className="mono-label" style={{ color:c.textSubtle, marginBottom:14 }}>
+              {lang === 'ru' ? 'ВНЕШНИЙ ВИД' : 'APPEARANCE'}
+            </div>
+            <div style={{ display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' }}>
+              <button className="pill-v3" onClick={onTheme}
+                style={{ display:'flex', alignItems:'center', gap:8 }}>
+                {isDark
+                  ? <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+                  : <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>}
+                <span>{lang === 'ru' ? (isDark ? 'Светлая тема' : 'Тёмная тема') : (isDark ? 'Light theme' : 'Dark theme')}</span>
+              </button>
+              <button className="pill-v3" onClick={() => onLang && onLang(lang === 'ru' ? 'en' : 'ru')}>
+                {lang === 'ru' ? 'EN' : 'RU'}
+              </button>
+            </div>
+          </section>
+
+          {/* ─── About ─── */}
+          <div style={{ padding:'6px 22px', textAlign:'center' }}>
+            <div className="serif" style={{ fontSize:16, color:c.textMuted, fontStyle:'italic', lineHeight:1.4 }}>
               {lang==='ru'?'«Слушай смысл, не названия.»':'"Listen to the meaning, not the titles."'}
             </div>
-            <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em', marginTop:'10px' }}>
+            <div className="mono-label" style={{ color:c.textSubtle, marginTop:8 }}>
               MUSIX · STUDIO CONSOLE · v2
             </div>
           </div>
         </div>
+
+        {/* ─── New collection modal (form moved out of the panel body) ─── */}
+        {createOpen && (
+          <Fragment>
+            <div onClick={() => !indexing && setCreateOpen(false)} style={{
+              position:'fixed', inset:0, zIndex:99,
+              background: isDark ? 'rgba(0,0,0,0.55)' : 'rgba(40,30,60,0.30)',
+              backdropFilter:'blur(4px)', animation:'fadeIn 0.2s ease',
+            }} />
+            <div className="panel-v3 grain" style={{
+              position:'fixed', top:'50%', left:'50%', transform:'translate(-50%,-50%)', zIndex:100,
+              width:'min(480px, 92vw)', maxHeight:'90vh', overflowY:'auto',
+              padding:'24px 26px', animation:'fadeIn 0.25s ease',
+              background: isDark
+                ? 'linear-gradient(180deg, rgba(28,28,38,0.96) 0%, rgba(18,18,26,0.97) 100%)'
+                : 'linear-gradient(180deg, rgba(252,251,255,0.97) 0%, rgba(242,241,248,0.98) 100%)',
+            }}>
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:18 }}>
+                <div>
+                  <div className="serif" style={{ fontSize:22, color:c.text, letterSpacing:'-0.01em' }}>
+                    {lang==='ru'?'Новая коллекция':'New collection'}
+                  </div>
+                  <div className="mono-label" style={{ color:c.textSubtle, marginTop:4 }}>
+                    {lang==='ru'?'ИНДЕКСИРОВАТЬ ПАПКУ':'INDEX A FOLDER'}
+                  </div>
+                </div>
+                <button onClick={() => setCreateOpen(false)} className="pill-v3" style={{
+                  width:30, height:30, padding:0, borderRadius:'50%', display:'grid', placeItems:'center',
+                }}>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                </button>
+              </div>
+
+              {fieldLabel(lang==='ru'?'ИМЯ КОЛЛЕКЦИИ':'COLLECTION NAME')}
+              <input value={collName} onChange={e=>setCollName(e.target.value)} disabled={indexing}
+                placeholder={lang==='ru'?'например: my_music':'e.g. my_music'} style={{ ...inputStyle, marginBottom:14 }} />
+
+              {fieldLabel(lang==='ru'?'ПУТЬ К ПАПКЕ':'FOLDER PATH')}
+              <div style={{ display:'flex', gap:8, marginBottom:14 }}>
+                <button onClick={handlePick} disabled={picking||indexing} className="pill-v3" style={{
+                  borderRadius:10, display:'flex', alignItems:'center', gap:6, flexShrink:0,
+                  cursor: picking||indexing?'not-allowed':'pointer',
+                }}>
+                  {picking ? <Spinner size={12} /> : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>}
+                  {lang==='ru'?'Выбрать':'Pick'}
+                </button>
+                <input value={folderPath} onChange={e=>setFolderPath(e.target.value)} disabled={indexing}
+                  placeholder="/path/to/music" style={{ ...inputStyle, flex:1, width:'auto' }} />
+              </div>
+
+              {fieldLabel(lang==='ru'?'МОДЕЛЬ ЭМБЕДДИНГОВ':'EMBEDDING MODEL')}
+              <div className="tier-slider" data-tier={modelTier}
+                onClick={() => !indexing && setModelTier(t => t === 'light' ? 'heavy' : 'light')}>
+                <div className="tier-slider-knob" />
+                <button type="button" className="tier-slider-opt" data-active={modelTier==='light'}
+                  onClick={(e) => { e.stopPropagation(); if (!indexing) setModelTier('light'); }}>
+                  {lang==='ru'?'Лёгкая':'Light'}
+                </button>
+                <button type="button" className="tier-slider-opt" data-active={modelTier==='heavy'}
+                  onClick={(e) => { e.stopPropagation(); if (!indexing) setModelTier('heavy'); }}>
+                  {lang==='ru'?'Тяжёлая':'Heavy'}
+                </button>
+              </div>
+              <div style={{ fontSize:11, color:c.textMuted, lineHeight:1.5, margin:'8px 2px 16px' }}>
+                {modelTier === 'light'
+                  ? (lang==='ru'
+                      ? 'Быстрая и экономная — отлично работает на CPU.'
+                      : 'Fast and lean — runs great on CPU.')
+                  : (lang==='ru'
+                      ? 'Заметно точнее, но медленнее — для комфортной индексации лучше иметь GPU.'
+                      : 'Noticeably more accurate but slower — a GPU is recommended for indexing.')}
+              </div>
+
+              <label style={{ display:'flex', alignItems:'center', gap:8, fontSize:13, color:c.textMuted, marginBottom:8 }}>
+                <ToggleSwitch checked={betterLyrics} onChange={v=>setBetterLyrics(v)} isDark={isDark} />
+                {lang==='ru'?'Лучшее качество текстов (медленнее)':'Better lyrics quality (slower)'}
+              </label>
+              <label style={{ display:'flex', alignItems:'center', gap:8, fontSize:13, color:c.textMuted, marginBottom:18 }}>
+                <ToggleSwitch checked={refineMetadata} onChange={v=>setRefineMetadata(v)} isDark={isDark} />
+                {lang==='ru'?'Дополнить метаданные из интернета':'Refine metadata with online lookup'}
+              </label>
+
+              <button onClick={handleIndex} disabled={indexing||!folderPath.trim()}
+                className="cta-v3" style={{
+                  width:'100%',
+                  opacity: indexing||!folderPath.trim() ? 0.45 : 1,
+                  cursor: indexing||!folderPath.trim() ? 'not-allowed' : 'pointer',
+                  display:'flex', alignItems:'center', justifyContent:'center', gap:8,
+                }}>
+                {indexing
+                  ? <Fragment><Spinner size={14} color="white" /> {lang==='ru'?'Идёт индексация…':'Indexing…'}</Fragment>
+                  : (lang==='ru'?'▶ Запустить индексацию':'▶ Start indexing')}
+              </button>
+            </div>
+          </Fragment>
+        )}
 
         {showModal && (
           <IndexingModal isDark={isDark} lang={lang} collectionName={collName||'my_collection'}
@@ -9589,6 +9761,27 @@ function PlayerSection({ isDark, lang, activeCollection, initialPlaylist, initia
       background: `linear-gradient(180deg, ${pBg} 0%, ${pBgEnd} 100%)`,
       position: 'relative',
     }}>
+      {/* Background stack: blurred current cover + shade for text contrast +
+          film grain + vignette. All pointer-events:none; content columns sit
+          above at z:1. The shade gradient keeps controls readable even over
+          very bright covers. */}
+      {coverUrl && (
+        <div
+          className="player-bg-cover"
+          style={{
+            backgroundImage: `url(${coverUrl})`,
+            opacity: isDark ? 0.48 : 0.26,
+          }}
+        />
+      )}
+      <div className="player-bg-shade" style={{
+        background: isDark
+          ? `linear-gradient(180deg, ${pBg}66 0%, ${pBg}b3 70%, ${pBg}e6 100%)`
+          : `linear-gradient(180deg, ${pBg}8c 0%, ${pBg}d0 100%)`,
+      }} />
+      <div className="player-bg-grain" />
+      <div className="player-bg-vignette" />
+
       {/* Main content area — top padding gives the cover breathing room from
           the (now collapsed) section header bar. */}
       <div style={{ flex:1, display:'flex', overflow:'hidden', padding:'clamp(24px, 5vh, 56px) 32px 24px', gap:'28px', position:'relative' }}>
