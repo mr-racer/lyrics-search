@@ -12,6 +12,7 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -138,6 +139,76 @@ def axes_for_clap_vectors(clap_vectors: np.ndarray, text_emb: np.ndarray) -> lis
         {name: float(row[j]) for j, name in enumerate(AXIS_NAMES)}
         for row in axes
     ]
+
+
+# --------------------------------------------------------------------------
+# Axis normalisation: reference stats + shrinkage blending (design §8).
+#
+# A 5-track collection produces garbage mean/std → dead axes. Shrinkage pulls
+# small collections toward a reference built from a large diverse library
+# (scripts/build_axis_norm_reference.py); big collections trust themselves.
+# --------------------------------------------------------------------------
+
+AXIS_NORM_REFERENCE_PATH = Path(__file__).parent / "data" / "axis_norm_reference.json"
+AXIS_SHRINKAGE_PSEUDO_N = 100   # λ = n / (n + PSEUDO_N): n=100 → 50/50 blend
+
+
+def _usable_axis_stats(stats: dict | None) -> bool:
+    """A stats dict counts only with mean+std AND a version matching the
+    current axis space — stats from old prompts must not leak into z-scores."""
+    return bool(
+        stats
+        and stats.get("mean")
+        and stats.get("std")
+        and stats.get("version") == axis_version()
+    )
+
+
+def load_axis_norm_reference(path: Path | None = None) -> dict | None:
+    """Load the reference stats file; None when missing, corrupt, or stale."""
+    p = path or AXIS_NORM_REFERENCE_PATH
+    if not p.exists():
+        return None
+    try:
+        ref = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        logger.warning("[axes] unreadable axis_norm_reference at %s — ignoring", p)
+        return None
+    if not _usable_axis_stats(ref):
+        logger.warning(
+            "[axes] axis_norm_reference at %s is stale or malformed (version %r != %r) — "
+            "rebuild via scripts/build_axis_norm_reference.py",
+            p, ref.get("version"), axis_version(),
+        )
+        return None
+    return ref
+
+
+def blend_axis_stats(collection_stats: dict | None, reference: dict | None) -> dict | None:
+    """Shrinkage blend: ``λ = n/(n+100)``, ``stats = λ·collection + (1−λ)·reference``.
+
+    Either source may be missing or version-stale — it is then dropped. Returns
+    None when nothing usable remains (callers must disable axis z-scoring).
+    """
+    coll_ok = _usable_axis_stats(collection_stats)
+    ref_ok = _usable_axis_stats(reference)
+    if not coll_ok and not ref_ok:
+        return None
+    if not coll_ok:
+        return {"mean": dict(reference["mean"]), "std": dict(reference["std"]),
+                "n": 0, "source": "reference"}
+    if not ref_ok:
+        return {"mean": dict(collection_stats["mean"]), "std": dict(collection_stats["std"]),
+                "n": collection_stats.get("n", 0), "source": "collection"}
+
+    n = collection_stats.get("n", 0)
+    lam = n / (n + AXIS_SHRINKAGE_PSEUDO_N)
+    mean: dict[str, float] = {}
+    std: dict[str, float] = {}
+    for a in AXIS_NAMES:
+        mean[a] = lam * collection_stats["mean"].get(a, 0.0) + (1 - lam) * reference["mean"].get(a, 0.0)
+        std[a] = lam * collection_stats["std"].get(a, 0.0) + (1 - lam) * reference["std"].get(a, 0.0)
+    return {"mean": mean, "std": std, "n": n, "source": "blend", "lambda": lam}
 
 
 def unit_norm(v):
