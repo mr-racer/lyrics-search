@@ -1,13 +1,20 @@
 """Integration tests for GET /artists/{slug}."""
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
 from app.api.main import create_app
+from app.api.routes import artists as art_route
 from app.resources.metadata_db import MetadataDB
-from ._auth_helper import authenticate_test_client
+
+# Phase D-soft: server derives the collection from the JWT user, never from the
+# client. Override get_current_user with a fixed user so the derived collection
+# is deterministic ("acct_user-A") and seed all collection-scoped data under it.
+_FIXED_USER = SimpleNamespace(id="user-A", email="a@x")
+_DERIVED = "acct_user-A"
 
 
 @pytest.fixture
@@ -16,6 +23,7 @@ def client(tmp_path, monkeypatch):
     MetadataDB._reset_for_tests()
     MetadataDB.init()
     app = create_app()
+    app.dependency_overrides[art_route.get_current_user] = lambda: _FIXED_USER
 
     # Stub db_client with a qdrant mock that returns canned points
     class FakeQdrant:
@@ -48,7 +56,6 @@ def client(tmp_path, monkeypatch):
     db.qdrant = FakeQdrant(points)
     app.state.db_client = db
     c = TestClient(app)
-    authenticate_test_client(c, app)
     yield c
     MetadataDB._reset_for_tests()
 
@@ -59,12 +66,12 @@ def test_get_artist_not_found(client):
 
 
 def test_get_artist_aggregates_tracks_and_albums(client):
-    # Seed artist + facts
+    # Seed artist + facts under the DERIVED collection (server ignores ?collection).
     conn = MetadataDB.get()
     conn.execute("INSERT INTO artists (slug, name, collection_name) VALUES (?, ?, ?)",
-                  ("dua-lipa", "Dua Lipa", "col_a"))
+                  ("dua-lipa", "Dua Lipa", _DERIVED))
     conn.commit()
-    MetadataDB.add_artist_facts_batch("dua-lipa", "col_a", ["fact1", "fact2"], source="test")
+    MetadataDB.add_artist_facts_batch("dua-lipa", _DERIVED, ["fact1", "fact2"], source="test")
     r = client.get("/api/v1/artists/dua-lipa?collection=col_a")
     assert r.status_code == 200
     body = r.json()
@@ -81,9 +88,9 @@ def test_get_artist_aggregates_tracks_and_albums(client):
 def test_get_artist_includes_bio_when_indexed(client):
     conn = MetadataDB.get()
     conn.execute("INSERT INTO artists (slug, name, collection_name) VALUES (?, ?, ?)",
-                  ("dua-lipa", "Dua Lipa", "col_a"))
+                  ("dua-lipa", "Dua Lipa", _DERIVED))
     conn.commit()
-    MetadataDB.set_artist_bio("dua-lipa", "col_a", "en", "Indie-pop, London.")
+    MetadataDB.set_artist_bio("dua-lipa", _DERIVED, "en", "Indie-pop, London.")
     r = client.get("/api/v1/artists/dua-lipa?collection=col_a&lang=en")
     assert r.status_code == 200
     assert r.json()["bio"] == "Indie-pop, London."
@@ -92,7 +99,7 @@ def test_get_artist_includes_bio_when_indexed(client):
 def test_get_artist_decade_range_from_year_span(client):
     conn = MetadataDB.get()
     conn.execute("INSERT INTO artists (slug, name, collection_name) VALUES (?, ?, ?)",
-                  ("dua-lipa", "Dua Lipa", "col_a"))
+                  ("dua-lipa", "Dua Lipa", _DERIVED))
     conn.commit()
     r = client.get("/api/v1/artists/dua-lipa?collection=col_a")
     body = r.json()
@@ -124,3 +131,21 @@ def test_track_coercion_handles_messy_payload_values():
     assert _coerce_year("") is None
     assert _coerce_year(0) is None  # zero treated as missing
     assert _coerce_year("garbage") is None
+
+
+def test_get_artist_ignores_supplied_collection(client):
+    """D-soft: even when the client passes ?collection=acct_BAD, the server uses
+    the JWT-derived collection (acct_user-A) when building the aggregate."""
+    from unittest.mock import patch
+
+    captured: dict = {}
+
+    def fake_build(db, collection, slug, lang):
+        captured["collection"] = collection
+        from app.domain.models import ArtistAggregate
+        return ArtistAggregate(slug=slug, name="X", track_count=0, album_count=0)
+
+    with patch.object(art_route, "build_artist_aggregate", side_effect=fake_build):
+        r = client.get("/api/v1/artists/some-slug?collection=acct_BAD")
+    assert r.status_code == 200
+    assert captured["collection"] == _DERIVED
