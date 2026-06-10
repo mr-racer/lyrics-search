@@ -1087,6 +1087,60 @@ class MetadataDB:
         return int(cur.lastrowid)
 
     @classmethod
+    def get_playback_signals(
+        cls, collection_name: str, limit: int = 2000,
+    ) -> list[Dict]:
+        """Last ``limit`` playback events in CHRONOLOGICAL order (Stream RecSys).
+
+        Chronology matters: replay detection and the idle rule scan a session's
+        events in play order. ``played_at`` is normalised to ``datetime``;
+        ``interacted`` to ``bool | None`` (NULL = legacy = treated as action).
+        """
+        from datetime import datetime as _dt
+        conn = cls._connect()
+        rows = conn.execute(
+            """SELECT track_id, played_sec, total_dur, played_at, session_id, interacted
+               FROM playback_events
+               WHERE collection_name = ?
+               ORDER BY id DESC LIMIT ?""",
+            (collection_name, limit),
+        ).fetchall()
+        out: List[Dict] = []
+        for r in reversed(rows):
+            played_at = r[3]
+            if not hasattr(played_at, "isoformat"):
+                try:
+                    played_at = _dt.fromisoformat(str(played_at))
+                except ValueError:
+                    continue  # unparseable timestamp — drop the row, not the request
+            out.append({
+                "track_id": r[0],
+                "played_sec": float(r[1] or 0.0),
+                "total_dur": float(r[2]) if r[2] is not None else None,
+                "played_at": played_at,
+                "session_id": r[4],
+                "interacted": None if r[5] is None else bool(r[5]),
+            })
+        return out
+
+    @classmethod
+    def get_reactions_with_updated_at(
+        cls, collection_name: str,
+    ) -> list[Tuple[str, str, str]]:
+        """All reactions as ``(track_id, reaction, updated_at_iso)`` (Stream RecSys)."""
+        conn = cls._connect()
+        rows = conn.execute(
+            "SELECT track_id, reaction, updated_at FROM track_reactions "
+            "WHERE collection_name = ?",
+            (collection_name,),
+        ).fetchall()
+        return [
+            (r[0], r[1],
+             r[2].isoformat() if hasattr(r[2], "isoformat") else str(r[2]))
+            for r in rows
+        ]
+
+    @classmethod
     def get_recent_tracks(
         cls, collection_name: str, limit: int = 50,
     ) -> list[tuple[str, str, int]]:
