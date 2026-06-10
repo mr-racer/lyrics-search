@@ -125,11 +125,15 @@ class TestIndexRequest:
     def test_basic(self):
         req = IndexRequest(folder_path="/music")
         assert req.folder_path == "/music"
-        assert req.collection_name == "music_explorer"
 
-    def test_custom_collection(self):
+    def test_collection_name_dropped_in_d_hard(self):
+        # Phase D-hard: collection_name was removed from the request schema.
+        # A stale client still sending it is NOT rejected (Pydantic ignores the
+        # extra field — graceful, no extra='forbid'), but the model no longer
+        # carries it; the server derives the collection from the JWT user.
         req = IndexRequest(folder_path="/music", collection_name="my_lib")
-        assert req.collection_name == "my_lib"
+        assert req.folder_path == "/music"
+        assert not hasattr(req, "collection_name")
 
 
 class TestIndexProgress:
