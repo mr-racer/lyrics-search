@@ -1,11 +1,15 @@
-"""CLAP audio feature extraction.
+"""CLAP audio feature extraction + sonic axes (Stream RecSys).
 
 Extracted from legacy search_engine/utils.py during Refactor 2.
+Sonic axes ported from notebooks/similar_music.ipynb (cell 67) for the
+stream recsys design (docs/2026-06-09-stream-recsys-design.md §8).
 """
 
 from __future__ import annotations
 
 import gc
+import hashlib
+import json
 import logging
 from dataclasses import dataclass
 
@@ -29,6 +33,111 @@ class TrackFeatures:
     title: str
     artist: str
     vector_clap: list
+
+
+# --------------------------------------------------------------------------
+# Sonic axes — CLAP text prompts → interpretable per-track axes.
+#
+# Antonym pairs become differential axes (energetic − calm, …) because the
+# difference of two cosines cancels the shared "music-ness" component and
+# isolates the contrast; single prompts stay absolute.
+# Prompt wording is tuned against listening tests in similar_music.ipynb —
+# do not edit casually: any change bumps AXIS_VERSION and invalidates the
+# reference norm file.
+# --------------------------------------------------------------------------
+
+AXIS_PROMPTS: dict[str, str] = {
+    'calm': 'a calm, relaxing, peaceful and quiet song with soft, gentle, airy sound',
+    'energetic': 'an energetic, powerful track — either intense and driving or heavy '
+                 'and bass-driven with deep low-end and hard-hitting groovy drums',
+    'vocal': 'a vocal-led song where singing or rap is the main focus, with strong '
+             'prominent lead vocals carrying the track',
+    'instrumental': 'an instrument-led track where music and instruments are the main '
+                    'focus, with little or no singing, vocals in the background or absent',
+    'spacious': 'a song with a spacious, wide, open sound — lush reverb, echo and delay '
+                'effects, a deep sense of space and a broad immersive stereo image',
+    'experimental': 'experimental track with erratic shifting rhythm, abrupt beat changes, '
+                    'distorted gritty texture, chaotic and unpredictable',
+    'stable': 'conventional track with steady predictable beat, smooth transitions, '
+              'clean polished texture, orderly and consistent',
+    'bright': 'a bright track with sparkling, crisp, airy high frequencies and lots of treble',
+    'dark': 'a dark track with dull, muffled, subdued tone and rolled-off, recessed '
+            'high frequencies',
+    'acoustic': 'a track played on real live acoustic instruments: piano, acoustic guitar, '
+                'strings, drums, brass and woodwinds',
+    'synthetic': 'an electronic track built from synthesizers, drum machines, samplers '
+                 'and digital programmed sounds',
+}
+
+# Stubs — prompts that do NOT form an axis yet. 'dense' is unoptimized; future
+# iterations may add text-derived axes here (see design doc §11).
+AXIS_PROMPT_STUBS: dict[str, str] = {
+    'dense': 'a dense, rich, layered, busy and saturated production',
+}
+
+AXIS_NAMES: tuple[str, ...] = (
+    'energy', 'vocal_lead', 'spacious', 'experimental', 'brightness', 'acousticness',
+)
+
+_PROMPT_IDX = {name: i for i, name in enumerate(AXIS_PROMPTS)}
+
+
+def axis_version() -> str:
+    """Hash of (active prompts + checkpoint name) — versions the axis space.
+
+    Stored alongside norm stats so a prompt/checkpoint change invalidates
+    stale reference files instead of silently mixing incompatible scales.
+    """
+    from app.resources.model_registry import CLAP_WEIGHTS_PATH
+    blob = json.dumps(AXIS_PROMPTS, sort_keys=True) + CLAP_WEIGHTS_PATH.name
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:12]
+
+
+def compute_axis_text_embeddings(clap_model) -> np.ndarray:
+    """Encode AXIS_PROMPTS with the CLAP text tower → (n_prompts, 512), L2-normalised rows."""
+    emb = clap_model.get_text_embedding(list(AXIS_PROMPTS.values()), use_tensor=False)
+    emb = np.asarray(emb, dtype=np.float32)
+    norms = np.linalg.norm(emb, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    return emb / norms
+
+
+def make_axes(scores: np.ndarray) -> np.ndarray:
+    """Raw prompt cosines (N, len(AXIS_PROMPTS)) → axis values (N, len(AXIS_NAMES)).
+
+    Column order follows AXIS_NAMES.
+    """
+    scores = np.atleast_2d(np.asarray(scores))
+    if scores.shape[1] != len(AXIS_PROMPTS):
+        raise ValueError(
+            f"expected {len(AXIS_PROMPTS)} prompt scores per row, got {scores.shape[1]}"
+        )
+    i = _PROMPT_IDX
+    cols = [
+        scores[:, i['energetic']] - scores[:, i['calm']],        # energy
+        scores[:, i['vocal']] - scores[:, i['instrumental']],    # vocal_lead
+        scores[:, i['spacious']],                                # spacious
+        scores[:, i['experimental']] - scores[:, i['stable']],   # experimental
+        scores[:, i['bright']] - scores[:, i['dark']],           # brightness
+        scores[:, i['acoustic']] - scores[:, i['synthetic']],    # acousticness
+    ]
+    return np.stack(cols, axis=1)
+
+
+def axes_for_clap_vectors(clap_vectors: np.ndarray, text_emb: np.ndarray) -> list[dict[str, float]]:
+    """Project unit-norm CLAP audio vectors onto the axis space.
+
+    Returns one ``{axis_name: raw_score}`` dict per input vector — the exact
+    shape stored in the Qdrant ``sonic_axes`` payload field (raw scores, NOT
+    z-scores: normalisation happens at read time from collection stats).
+    """
+    clap_vectors = np.atleast_2d(np.asarray(clap_vectors, dtype=np.float32))
+    scores = clap_vectors @ text_emb.T                # (N, n_prompts)
+    axes = make_axes(scores)                          # (N, n_axes)
+    return [
+        {name: float(row[j]) for j, name in enumerate(AXIS_NAMES)}
+        for row in axes
+    ]
 
 
 def unit_norm(v):
