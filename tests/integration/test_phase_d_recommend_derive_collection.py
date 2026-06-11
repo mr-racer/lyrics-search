@@ -10,11 +10,10 @@ from fastapi.testclient import TestClient
 
 from app.api.main import create_app
 from app.api.routes import recommend as rec_route
-from app.services import autoplay_service, personalization_service
+from app.services import autoplay_service, stream_service
 from app.domain.models import (
     AutoplayQueueDiagnostics,
     AutoplayQueueResponse,
-    ForYouSeedResponse,
 )
 
 
@@ -32,13 +31,8 @@ def _autoplay_response(seed_id: str = "X") -> AutoplayQueueResponse:
     )
 
 
-def _for_you_response() -> ForYouSeedResponse:
-    return ForYouSeedResponse(
-        seed_track_id=None,
-        track=None,
-        source="random",
-        collection_name=None,
-    )
+def _stream_response() -> dict:
+    return {"tracks": [], "diagnostics": {}}
 
 
 # ---------------------------------------------------------------------------
@@ -88,49 +82,28 @@ def test_autoplay_derives_collection_when_no_collection_supplied():
 
 
 # ---------------------------------------------------------------------------
-# /recommend/for-you-seed
+# /recommend/stream/next
 # ---------------------------------------------------------------------------
 
-def test_for_you_seed_ignores_supplied_collection():
-    """Endpoint must use acct_<user.id> regardless of the supplied collection param."""
-    from app.services import personalization_service
-
+def test_stream_next_derives_collection_from_jwt():
+    """The stream endpoint takes no collection param at all (D-hard) — the
+    service must be called with acct_<user.id>."""
     fixed = SimpleNamespace(id="user-C", email="c@x")
     app = create_app()
     app.dependency_overrides[rec_route.get_current_user] = lambda: fixed
     captured = {}
 
-    def fake_pick(**kwargs):
+    def fake_next_chunk(**kwargs):
         captured.update(kwargs)
-        return _for_you_response()
+        return _stream_response()
 
-    with patch.object(personalization_service, "pick_for_you_seed", side_effect=fake_pick):
+    with patch.object(stream_service, "next_chunk", side_effect=fake_next_chunk), \
+         patch.object(rec_route.MetadataDB, "get_stream_liked_share", return_value=None):
         with TestClient(app) as c:
             c.app.state.db_client = MagicMock()
-            c.get("/api/v1/recommend/for-you-seed?collection=acct_WRONG")
+            c.get("/api/v1/recommend/stream/next?session_id=s1")
 
     assert captured["collection_name"] == "acct_user-C"
-
-
-def test_for_you_seed_derives_collection_when_no_collection_supplied():
-    """When collection is omitted entirely, still derives from JWT."""
-    from app.services import personalization_service
-
-    fixed = SimpleNamespace(id="user-D", email="d@x")
-    app = create_app()
-    app.dependency_overrides[rec_route.get_current_user] = lambda: fixed
-    captured = {}
-
-    def fake_pick(**kwargs):
-        captured.update(kwargs)
-        return _for_you_response()
-
-    with patch.object(personalization_service, "pick_for_you_seed", side_effect=fake_pick):
-        with TestClient(app) as c:
-            c.app.state.db_client = MagicMock()
-            c.get("/api/v1/recommend/for-you-seed")
-
-    assert captured["collection_name"] == "acct_user-D"
 
 
 # ---------------------------------------------------------------------------

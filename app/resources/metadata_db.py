@@ -1032,6 +1032,28 @@ class MetadataDB:
         conn.commit()
 
     @classmethod
+    def set_stream_liked_share(cls, collection_name: str, share: float) -> None:
+        """Persist the liked/new slider position (0.0–1.0) for the stream."""
+        conn = cls._connect()
+        conn.execute(
+            """INSERT INTO collection_settings (collection_name, stream_liked_share)
+               VALUES (?, ?)
+               ON CONFLICT(collection_name) DO UPDATE SET
+                 stream_liked_share = excluded.stream_liked_share""",
+            (collection_name, float(share)),
+        )
+        conn.commit()
+
+    @classmethod
+    def get_stream_liked_share(cls, collection_name: str) -> Optional[float]:
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT stream_liked_share FROM collection_settings WHERE collection_name = ?",
+            (collection_name,),
+        ).fetchone()
+        return float(row[0]) if row and row[0] is not None else None
+
+    @classmethod
     def get_axis_norm_stats(cls, collection_name: str) -> Optional[Dict]:
         """Return the stored axis stats dict, or None when absent/corrupt."""
         conn = cls._connect()

@@ -506,13 +506,28 @@ class RediscoverResponse(BaseModel):
     collection_name: Optional[str] = None
 
 
-class ForYouSeedResponse(BaseModel):
-    """Result of GET /recommend/for-you-seed — the seed that anchors the
-    For-You autoplay stream. Placeholder for future personalization ranking."""
-    seed_track_id: Optional[str] = None
-    track: Optional[HomeTrack] = None
-    source: str = "random"  # "liked" | "recent" | "random" (diagnostic)
-    collection_name: Optional[str] = None
+class StreamTrack(TrackMetadata):
+    """One track in the personalized stream + per-track diagnostics.
+
+    The diagnostics double as raw material for a future rationale chip
+    («почему этот трек») — design §7.
+    """
+    pool: Literal["anchor", "explore", "liked"]
+    anchor_track_id: Optional[str] = None   # closest anchor (pool=anchor only)
+    axis_match: Optional[float] = None
+    score: Optional[float] = None
+
+
+class StreamNextResponse(BaseModel):
+    """Result of GET /recommend/stream/next."""
+    session_id: str
+    tracks: List[StreamTrack]
+    diagnostics: dict
+
+
+class StreamSettingsIn(BaseModel):
+    """Body for PUT /recommend/stream/settings — persists the slider."""
+    liked_share: float = Field(ge=0.0, le=1.0)
 
 
 class TopTrackBrief(BaseModel):

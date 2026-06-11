@@ -13,10 +13,13 @@ from __future__ import annotations
 
 import logging
 import math
+import random as _random_module
 from dataclasses import dataclass
 from datetime import datetime
 
 import numpy as np
+
+from app.resources.metadata_db import MetadataDB
 
 logger = logging.getLogger(__name__)
 
@@ -764,3 +767,208 @@ def assemble_chunk(
         artist_tail.append(_artist(c))
         artist_tail = artist_tail[-ARTIST_REPEAT_WINDOW:]
     return out
+
+
+# ── Orchestration: GET /stream/next entry point ─────────────────────────────
+
+def _parse_iso(ts: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(ts)
+    except (TypeError, ValueError):
+        return None
+
+
+def _retrieve_track_data(
+    qdrant_client, collection_name: str, track_ids: list[str],
+) -> tuple[dict[str, np.ndarray], dict[str, dict]]:
+    """Batch-fetch ``{id: clap_vector}`` + ``{id: payload}`` from Qdrant."""
+    if not track_ids:
+        return {}, {}
+    try:
+        pts = qdrant_client.retrieve(
+            collection_name=collection_name, ids=track_ids,
+            with_payload=True, with_vectors=["clap"],
+        )
+    except Exception:
+        logger.exception("[stream] track data retrieve failed")
+        return {}, {}
+    vectors: dict[str, np.ndarray] = {}
+    payloads: dict[str, dict] = {}
+    for p in pts:
+        tid = str(p.id)
+        payloads[tid] = p.payload or {}
+        v = p.vector.get("clap") if isinstance(p.vector, dict) else p.vector
+        if v:
+            vectors[tid] = np.asarray(v, dtype=np.float32)
+    return vectors, payloads
+
+
+def next_chunk(
+    *,
+    qdrant_client,
+    collection_name: str,
+    session_id: str,
+    n: int = DEFAULT_CHUNK_N,
+    liked_share: float | None = None,
+    exclude_ids: list[str] | None = None,
+    rng=None,
+    now: datetime | None = None,
+) -> dict:
+    """Stateless «Поток»: rebuild profiles from SQLite, pull candidates from
+    Qdrant, score, assemble. Returns ``{"tracks": [StreamCandidate], "diagnostics": {…}}``.
+
+    ``exclude_ids`` covers the frontend prefetch buffer — tracks already issued
+    but not yet reported as playback events (the stateless gap design §2 closes
+    by re-requesting after strong signals).
+    """
+    from app.resources.clap_features import (
+        AXIS_NAMES, blend_axis_stats, load_axis_norm_reference,
+    )
+
+    now = now or datetime.utcnow()
+    rng = rng or _random_module
+
+    # 1. Signals from SQLite.
+    raw_signals = MetadataDB.get_playback_signals(collection_name, LONG_TERM_EVENT_CAP)
+    signals = [PlaybackSignal(**r) for r in raw_signals]
+    reactions = []
+    for tid, reaction, ts in MetadataDB.get_reactions_with_updated_at(collection_name):
+        dt = _parse_iso(ts)
+        if dt is not None:
+            reactions.append(ReactionSignal(track_id=tid, reaction=reaction, updated_at=dt))
+
+    # 2. Session split. In-session reactions = updated after the session began.
+    session_events = [s for s in signals if s.session_id == session_id]
+    if session_events:
+        session_start = session_events[0].played_at
+        session_reactions = [r for r in reactions if r.updated_at >= session_start]
+    else:
+        session_reactions = []
+
+    # 3. Profiles + blend.
+    long_weights = combine_weights(
+        aggregate_event_weights(signals, now),
+        aggregate_reaction_weights(reactions, now),
+    )
+    session_weights = combine_weights(
+        aggregate_event_weights(session_events, now),
+        aggregate_reaction_weights(session_reactions, now),
+    )
+    n_session_signals = count_session_signals(session_events, session_reactions)
+    w_s = session_blend_weight(n_session_signals)
+    anchor_weights = union_anchor_weights(long_weights, session_weights, w_s)
+    negatives = negative_track_ids(signals, reactions, now)
+
+    # 4. Anchor candidates → vectors → merge → top effective.
+    anchor_cands = select_positive_anchors(anchor_weights)
+    positive_ids = [a.track_id for a in anchor_cands]
+    session_positive = [tid for tid, w in session_weights.items() if w > 0.0]
+    fetch_ids = list(dict.fromkeys(positive_ids + session_positive + sorted(negatives)))
+    vectors, payloads = _retrieve_track_data(qdrant_client, collection_name, fetch_ids)
+
+    merged = merge_anchors(anchor_cands, vectors)
+    merged.sort(key=lambda a: a.weight, reverse=True)
+    top_anchors = merged[:TOP_EFFECTIVE_ANCHORS]
+
+    # 5. Axis preferences in z-space (shrinkage-blended collection stats).
+    axis_stats = blend_axis_stats(
+        MetadataDB.get_axis_norm_stats(collection_name),
+        load_axis_norm_reference(),
+    )
+    z_by_track = {
+        tid: z for tid, pl in payloads.items()
+        if (z := z_scores_for_axes(pl.get("sonic_axes"), axis_stats, AXIS_NAMES))
+    }
+    p_long, conf_long = axis_preferences(long_weights, z_by_track, AXIS_NAMES)
+    p_sess, conf_sess = axis_preferences(session_weights, z_by_track, AXIS_NAMES)
+    p_final = blend_axis_preferences(p_long, p_sess, w_s, AXIS_NAMES)
+    confidence = (1.0 - w_s) * conf_long + w_s * conf_sess
+
+    # 6. Shared filter set + per-track stats.
+    session_played = {s.track_id for s in session_events}
+    liked_ids = {r.track_id for r in reactions if r.reaction == "like"}
+    excluded = negatives | session_played | set(exclude_ids or []) | liked_ids
+
+    play_counts = MetadataDB.get_play_counts_by_track(collection_name)
+    recency_hours: dict[str, float] = {}
+    for tid, iso in MetadataDB.get_play_recency_map(collection_name).items():
+        dt = _parse_iso(iso)
+        if dt is not None:
+            recency_hours[tid] = max(0.0, (now - dt).total_seconds() / 3600.0)
+
+    # 7. Pools.
+    pool_a = pool_anchor_candidates(qdrant_client, collection_name, top_anchors, excluded)
+    main = list(pool_a.values())
+
+    liked_quota = max(0, min(n, round(n * (liked_share if liked_share is not None
+                                           else DEFAULT_LIKED_SHARE))))
+    non_liked_slots = n - liked_quota
+    frac = EXPLORE_SHARE * non_liked_slots
+    explore_slots = int(frac) + (1 if rng.random() < (frac - int(frac)) else 0)
+    # Cold start: no anchors at all → the whole non-liked budget is exploration.
+    if not top_anchors:
+        explore_slots = non_liked_slots
+    explore_cands: list[StreamCandidate] = []
+    if explore_slots > 0:
+        negative_vectors = [vectors[t] for t in negatives if t in vectors]
+        explore_cands = pool_explore_candidates(
+            qdrant_client, collection_name,
+            excluded=excluded, reacted_ids={r.track_id for r in reactions},
+            play_counts=play_counts, axis_stats=axis_stats,
+            negative_vectors=negative_vectors, axis_names=AXIS_NAMES, rng=rng,
+        )
+
+    liked_cands: list[StreamCandidate] = []
+    if liked_quota > 0 and liked_ids:
+        liked_weights = {
+            tid: w for tid, w in aggregate_reaction_weights(
+                [r for r in reactions if r.reaction == "like"], now,
+            ).items() if w > 0.0
+        }
+        sampled = sample_liked_tracks(
+            liked_weights, recency_hours, liked_quota, rng,
+            excluded=set(exclude_ids or []) | session_played,
+        )
+        _, liked_payloads = _retrieve_track_data(qdrant_client, collection_name, sampled)
+        liked_cands = [
+            StreamCandidate(track_id=t, payload=liked_payloads.get(t, {}), pool="liked")
+            for t in sampled
+        ]
+
+    # 8. Score + assemble.
+    score_candidates(
+        main, p_final=p_final, confidence=confidence,
+        play_counts=play_counts, recency_hours=recency_hours,
+        axis_stats=axis_stats, axis_names=AXIS_NAMES,
+    )
+
+    recent_artists = [
+        (payloads.get(s.track_id) or {}).get("artist", "").strip().lower()
+        for s in session_events[-ARTIST_REPEAT_WINDOW:]
+    ]
+    explore_picks = explore_cands[:explore_slots]
+    chunk = assemble_chunk(
+        main, liked_cands,
+        n=n - len(explore_picks), liked_share=(liked_quota / n if n else 0.0),
+        recent_artists=recent_artists,
+    )
+    # Explore picks slot in at random positions — exploration shouldn't always
+    # land at the tail where it is most likely to be cut off by a re-request.
+    for c in explore_picks:
+        chunk.insert(rng.randrange(len(chunk) + 1), c)
+    chunk = chunk[:n]
+
+    diagnostics = {
+        "n_session_signals": n_session_signals,
+        "w_session": round(w_s, 3),
+        "anchors": [{"track_id": a.track_id, "weight": round(a.weight, 3)}
+                    for a in top_anchors],
+        "n_negatives": len(negatives),
+        "profile_confidence": round(confidence, 3),
+        "axis_stats_source": (axis_stats or {}).get("source"),
+        "pool_sizes": {"anchor": len(pool_a), "explore": len(explore_cands),
+                       "liked": len(liked_cands)},
+        "liked_quota": liked_quota,
+        "explore_slots": len(explore_picks),
+    }
+    return {"tracks": chunk, "diagnostics": diagnostics}
