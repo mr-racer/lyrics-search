@@ -114,7 +114,10 @@ class LibraryService:
 
     # ── Server-mode upload indexing (Phase C) ──────────────────────────────
 
-    def enqueue_upload_indexing(self, *, account_id: str, upload_ids: list[str]) -> str:
+    def enqueue_upload_indexing(
+        self, *, account_id: str, upload_ids: list[str],
+        text_model: Optional[str] = None,
+    ) -> str:
         """Server-mode batch-commit entry point. Returns the JobTracker job_id.
 
         Reuses Phase B's per-account queue: a second commit for the SAME account
@@ -146,10 +149,15 @@ class LibraryService:
                 detail="indexing already in progress for this account",
             )
         job.overall_status = IndexStatus.RUNNING
-        asyncio.create_task(self._run_upload_indexing_job(job, account_id, upload_ids))
+        asyncio.create_task(
+            self._run_upload_indexing_job(job, account_id, upload_ids, text_model)
+        )
         return job.job_id
 
-    async def _run_upload_indexing_job(self, job, account_id: str, upload_ids: list[str]):
+    async def _run_upload_indexing_job(
+        self, job, account_id: str, upload_ids: list[str],
+        text_model: Optional[str] = None,
+    ):
         """Background runner for server-mode uploads — mirrors _run_indexing_job."""
         await asyncio.to_thread(_INDEX_SEMAPHORE.acquire)
         try:
@@ -174,6 +182,23 @@ class LibraryService:
                 return
 
             engine = self.db_client.search_engine
+
+            # Same sanitize + batch-model selection as the folder flow
+            # (_run_indexing_job): treat stringified-null junk as None, point
+            # the shared engine at the requested model, invalidate its lazy
+            # caches, and warm the registry. Same residual concurrent-models
+            # limitation as the folder flow (acceptable per spec §6.2).
+            if text_model in (None, "", "null", "undefined", "None"):
+                text_model = None
+            if text_model and text_model != engine.model_name:
+                logger.info("[LibraryService] upload batch text model: %s -> %s",
+                            engine.model_name, text_model)
+                engine.model_name = text_model
+                engine._model = None
+                engine._vector_name = None
+                engine._vector_dim = None
+                ModelRegistry.get_text_model(text_model)  # warm cache
+
             indexing = IndexingService(engine)
 
             loop = asyncio.get_event_loop()
@@ -191,6 +216,16 @@ class LibraryService:
                     account_id=account_id, upload_rows=rows, progress_callback=_sync_cb,
                 ),
             )
+
+            # Persist which text model this collection was indexed with so
+            # future searches resolve the matching vector_name
+            # (collection_settings → user → default).
+            try:
+                MetadataDB.set_collection_text_model(f"acct_{account_id}", text_model)
+            except Exception as e:
+                logger.warning(
+                    "[LibraryService] failed to persist collection_settings: %s", e,
+                )
 
             job.overall_status = IndexStatus.COMPLETED
             await self._notify_progress(job, {

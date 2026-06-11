@@ -928,6 +928,8 @@ async def get_upload_status(
 
 class _BatchCommitRequest(BaseModel):
     upload_ids: list[str]
+    # Wizard slider tier; None = backend default model (jina-small).
+    text_model: str | None = None
 
 
 @router.post("/upload/batch-commit", dependencies=[Depends(require_mode("server"))])
@@ -955,7 +957,9 @@ async def batch_commit_uploads(
             status_code=400, detail="none of the upload_ids belong to the caller",
         )
 
-    job_id = service.enqueue_upload_indexing(account_id=current_user.id, upload_ids=mine)
+    job_id = service.enqueue_upload_indexing(
+        account_id=current_user.id, upload_ids=mine, text_model=req.text_model,
+    )
     return {"job_id": job_id}
 
 

@@ -90,3 +90,32 @@ class TestBatchCommit:
                 json={"upload_ids": [not_mine]},
             )
             assert resp.status_code == 400
+
+    def test_text_model_threaded_to_service(self, _server_mode):
+        u1 = _mk("acct_alice", "d" * 64, "x.flac")
+        app = create_app()
+        _login(app, "acct_alice")
+        with patch("app.services.library_service.LibraryService.enqueue_upload_indexing") as enq:
+            enq.return_value = "job_tm"
+            with TestClient(app) as c:
+                resp = c.post(
+                    "/api/v1/library/upload/batch-commit",
+                    json={"upload_ids": [u1],
+                          "text_model": "intfloat/multilingual-e5-base"},
+                )
+                assert resp.status_code == 200, resp.text
+            assert enq.call_args.kwargs.get("text_model") == "intfloat/multilingual-e5-base"
+
+    def test_text_model_optional_defaults_none(self, _server_mode):
+        u1 = _mk("acct_alice", "e" * 64, "y.flac")
+        app = create_app()
+        _login(app, "acct_alice")
+        with patch("app.services.library_service.LibraryService.enqueue_upload_indexing") as enq:
+            enq.return_value = "job_tm2"
+            with TestClient(app) as c:
+                resp = c.post(
+                    "/api/v1/library/upload/batch-commit",
+                    json={"upload_ids": [u1]},
+                )
+                assert resp.status_code == 200, resp.text
+            assert enq.call_args.kwargs.get("text_model") is None
