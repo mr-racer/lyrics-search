@@ -82,12 +82,16 @@ def client(tmp_path, monkeypatch):
     from unittest.mock import MagicMock
     db = MagicMock(); db.qdrant = fake
     app.state.db_client = db
+    # ai-playlist needs a search_service on app.state; the AI tests patch the
+    # service function itself, so a MagicMock is never actually searched.
+    app.state.search_service = MagicMock()
     c = TestClient(app)
     authenticate_test_client(c, app)
     c.fake_qdrant = fake
     yield c
     MetadataDB._reset_for_tests()
     app.state.db_client = None
+    app.state.search_service = None
 
 
 def _owner_collection(client) -> str:
@@ -307,6 +311,56 @@ class TestProfileAndAxisPlaylist:
         # other language has no cache → no portrait
         assert client.get("/api/v1/recommend/profile",
                           params={"lang": "en"}).json()["portrait"] is None
+
+
+class TestAIEndpointsRegistered:
+    """Per [[feedback_registry_pattern_needs_e2e]]: hit the live routes, do not
+    trust unit coverage — a missing include_router fails only here. LLM calls
+    are patched; we verify routing + request/response wiring."""
+
+    def test_ai_playlist_route_wired(self, client):
+        from unittest.mock import AsyncMock, patch
+        from app.api.routes import recommend as rec_route
+
+        canned = {
+            "title": "Тест",
+            "steps": [{"tool": "clap_search", "query": "q", "found": 1}],
+            "tracks": [{"track_id": "a0", "title": "T", "artist": "A",
+                        "duration": 100.0, "file_path": "/a0.mp3", "tool": "clap_search",
+                        "reason": "ок"}],
+        }
+        with patch.object(rec_route.recsys_ai_service, "ai_playlist",
+                          new=AsyncMock(return_value=canned)) as m:
+            resp = client.post("/api/v1/recommend/ai-playlist",
+                               json={"prompt": "дождь и кофе", "lang": "ru"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["title"] == "Тест"
+        assert body["tracks"][0]["reason"] == "ок"
+        assert body["tracks"][0]["source_tool"] == "clap_search"
+        assert m.call_args.kwargs["collection_name"].startswith("acct_")
+
+    def test_ai_enrich_route_wired(self, client):
+        from unittest.mock import AsyncMock, patch
+        from app.api.routes import recommend as rec_route
+
+        canned = {"portrait": "П.", "island_names": {"x": "Имя"}, "islands": []}
+        with patch.object(rec_route.recsys_ai_service, "enrich_profile",
+                          new=AsyncMock(return_value=canned)):
+            resp = client.post("/api/v1/recommend/profile/ai-enrich",
+                               json={"lang": "ru"})
+        assert resp.status_code == 200
+        assert resp.json() == {"portrait": "П.", "island_names": {"x": "Имя"}}
+
+    def test_ai_playlist_llm_failure_returns_502(self, client):
+        from unittest.mock import AsyncMock, patch
+        from app.api.routes import recommend as rec_route
+
+        with patch.object(rec_route.recsys_ai_service, "ai_playlist",
+                          new=AsyncMock(side_effect=RuntimeError("llm down"))):
+            resp = client.post("/api/v1/recommend/ai-playlist",
+                               json={"prompt": "что-нибудь"})
+        assert resp.status_code == 502
 
 
 class TestSimilar:
