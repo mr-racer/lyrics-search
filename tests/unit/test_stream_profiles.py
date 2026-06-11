@@ -129,8 +129,10 @@ class TestAnchors:
 
 
 class TestSessionBlend:
-    @pytest.mark.parametrize("n,expected", [(0, 0.0), (5, 0.5), (10, 1.0), (25, 1.0)])
-    def test_w_s_saturates_at_10(self, n, expected):
+    @pytest.mark.parametrize("n,expected", [(0, 0.0), (3, 0.3), (5, 0.5), (10, 0.5), (25, 0.5)])
+    def test_w_s_caps_at_half(self, n, expected):
+        """Session influence ramps 0.1/signal but never exceeds parity (0.5) —
+        long-term taste always keeps an equal vote (anti-trap guarantee)."""
         assert session_blend_weight(n) == pytest.approx(expected)
 
     def test_count_ignores_zero_weight_events(self):

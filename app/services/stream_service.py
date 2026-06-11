@@ -149,8 +149,12 @@ ANCHOR_MERGE_THRESHOLD = 0.85   # cos > this → same taste region, weights merg
 # «≥2 скипа, decayed»: two fresh skips sum to 2.0 and fade below this after
 # roughly two weeks of not touching the track.
 SKIP_NEG_DECAYED_COUNT = 1.5
-SESSION_SIGNALS_SATURATION = 10  # w_s = min(1, n_signals / 10)
-SESSION_ANCHOR_BOOST = 2.0       # session anchor weight × (1 + BOOST·w_s)
+SESSION_SIGNALS_SATURATION = 10  # w_s ramp: each signal adds 1/10
+# Hard ceiling on session influence: the session never outweighs long-term
+# (50/50 at most). A session drifting into a weird corner must stay escapable —
+# long-term anchors always keep at least half the vote.
+SESSION_BLEND_MAX = 0.5
+SESSION_ANCHOR_BOOST = 2.0       # session anchor weight × (1 + BOOST·w_s), ≤ ×2 at the cap
 CONFIDENCE_SATURATION = 5.0      # axis-pref confidence = min(1, Σpos_weight / this)
 
 
@@ -281,8 +285,13 @@ def merge_anchors(
 
 
 def session_blend_weight(n_session_signals: int) -> float:
-    """w_s = min(1, n/10): by ~10 session signals the session taste dominates."""
-    return min(1.0, n_session_signals / SESSION_SIGNALS_SATURATION)
+    """w_s = min(0.5, n/10): session influence ramps up but caps at parity.
+
+    By ~5 signals the session reaches its 50% ceiling — it colors the stream
+    strongly, yet long-term taste always keeps an equal vote so a session that
+    wandered somewhere strange cannot trap the user there.
+    """
+    return min(SESSION_BLEND_MAX, n_session_signals / SESSION_SIGNALS_SATURATION)
 
 
 def count_session_signals(

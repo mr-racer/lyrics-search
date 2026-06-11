@@ -146,9 +146,11 @@ class TestStreamNext:
         resp = client.get("/api/v1/recommend/stream/next",
                           params={"session_id": "live", "n": 3, "liked_share": 0.0})
         body = resp.json()
-        assert body["diagnostics"]["w_session"] == 1.0
-        # Session taste dominates the anchor set: the strongest anchor must be
-        # a session (B-cluster) track thanks to the ×(1+2·w_s) boost…
+        # w_s ramps with session signals but caps at 0.5 — long-term always
+        # keeps an equal vote (anti-trap), so a wild session can't take over.
+        assert body["diagnostics"]["w_session"] == 0.5
+        # Session taste still leads the anchor set: the strongest anchor must
+        # be a session (B-cluster) track thanks to the ×(1+2·w_s) boost…
         assert body["diagnostics"]["anchors"][0]["track_id"].startswith("b")
         # …and unheard B-cluster tracks surface in the queue. Long-term (A)
         # anchors legitimately remain — the design blends, never erases.
