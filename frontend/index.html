@@ -10987,7 +10987,7 @@ const WIZ_TIERS = [
     noteRu: 'мультиязычный · медленнее', noteEn: 'multilingual · slower' },
 ];
 
-const WIZ_STEPS = ['welcome', 'account', 'mode'];
+const WIZ_STEPS = ['welcome', 'account', 'mode', 'music'];
 
 function WizardDots({ count, active, c }) {
   return (
@@ -11022,6 +11022,19 @@ function SetupWizard({ onComplete }) {
   const [setupError, setSetupError]   = useState('');
   const [alreadyInit, setAlreadyInit] = useState(false);
 
+  // music — folder (sharing) / uploads (server) + quality slider.
+  // jobId: async indexing job to watch; syncDoneCount: sharing-mode small
+  // libraries can finish inline (no job_id) — remember the count instead.
+  const [tier, setTier]                     = useState(1);   // default: Balanced
+  const [folderPath, setFolderPath]         = useState('');
+  const [picking, setPicking]               = useState(false);
+  const [files, setFiles]                   = useState([]);
+  const [uploadProgress, setUploadProgress] = useState([]);
+  const [musicBusy, setMusicBusy]           = useState(false);
+  const [musicError, setMusicError]         = useState('');
+  const [jobId, setJobId]                   = useState(null);
+  const [syncDoneCount, setSyncDoneCount]   = useState(null);
+
   const handleTheme = () => setDark(d => {
     const next = !d; localStorage.setItem('musix_theme', next ? 'dark' : 'light'); return next;
   });
@@ -11029,8 +11042,92 @@ function SetupWizard({ onComplete }) {
 
   const stepIndex = WIZ_STEPS.indexOf(step);
 
-  // Task 7 re-points this at the music step; for now setup drops into the app.
-  const advanceFromSetup = () => onComplete({ mode });
+  const advanceFromSetup = () => setStep('music');
+  // Task 8 re-points this at the AI step; for now music drops into the app.
+  const advanceFromMusic = () => onComplete({ mode });
+
+  const applyTierToLocalStorage = () => {
+    // Mirror the Settings panel behavior: search must use the same model the
+    // collection is indexed with; server also pins it in collection_settings
+    // at the end of the job.
+    const m = WIZ_TIERS[tier].model;
+    if (m) localStorage.setItem('text_model', m);
+    else localStorage.removeItem('text_model');
+  };
+
+  const handlePickFolder = async () => {
+    setPicking(true); setMusicError('');
+    try {
+      const res = await apiFetch('/library/pick-folder');
+      if (res.path) setFolderPath(res.path);
+    } catch (e) { setMusicError(e.message); }
+    finally { setPicking(false); }
+  };
+
+  const startIndexingSharing = async () => {
+    if (!folderPath.trim() || musicBusy) return;
+    setMusicBusy(true); setMusicError('');
+    applyTierToLocalStorage();
+    try {
+      const body = { folder_path: folderPath.trim() };
+      if (WIZ_TIERS[tier].model) body.text_model = WIZ_TIERS[tier].model;
+      const res = await apiFetch('/library/index', { method:'POST', body: JSON.stringify(body) });
+      if (res.status === 'failed') throw new Error(res.message || 'indexing failed');
+      if (res.job_id) setJobId(res.job_id);
+      else setSyncDoneCount(res.count || 0);
+      advanceFromMusic();
+    } catch (e) {
+      setMusicError(/HTTP 503/.test(String(e.message))
+        ? (ru ? 'Qdrant недоступен — запустите docker-compose up -d и повторите.'
+              : 'Qdrant is unavailable — run docker-compose up -d and retry.')
+        : e.message);
+    } finally { setMusicBusy(false); }
+  };
+
+  const onWizPick = (e) => {
+    const picked = Array.from(e.target.files || []);
+    setFiles(picked);
+    setUploadProgress(picked.map(f => ({ name: f.name, status: 'queued' })));
+  };
+  const onWizDrop = (e) => {
+    e.preventDefault();
+    const dropped = Array.from(e.dataTransfer.files || []).filter(
+      f => /\.(flac|mp3|m4a|aac|ogg|wav|opus)$/i.test(f.name),
+    );
+    setFiles(dropped);
+    setUploadProgress(dropped.map(f => ({ name: f.name, status: 'queued' })));
+  };
+
+  const startIndexingServer = async () => {
+    if (!files.length || musicBusy) return;
+    setMusicBusy(true); setMusicError('');
+    applyTierToLocalStorage();
+    try {
+      // Sequential like ServerOnboardingScreen — keeps server memory bounded.
+      const ids = [];
+      for (let i = 0; i < files.length; i++) {
+        setUploadProgress(p => p.map((row, j) => j === i ? { ...row, status:'uploading' } : row));
+        try {
+          const fd = new FormData();
+          fd.append('file', files[i], files[i].name);
+          const res = await apiFetch('/library/upload', { method:'POST', body: fd });
+          ids.push(res.upload_id);
+          setUploadProgress(p => p.map((row, j) => j === i ? { ...row, status:'done' } : row));
+        } catch (e) {
+          setUploadProgress(p => p.map((row, j) => j === i ? { ...row, status:'failed', error: e.message } : row));
+        }
+      }
+      if (!ids.length) throw new Error(ru ? 'Ни один файл не загрузился' : 'No files were uploaded');
+      const body = { upload_ids: ids };
+      if (WIZ_TIERS[tier].model) body.text_model = WIZ_TIERS[tier].model;
+      const res = await apiFetch('/library/upload/batch-commit', { method:'POST', body: JSON.stringify(body) });
+      setJobId(res.job_id);
+      advanceFromMusic();
+    } catch (e) { setMusicError(e.message); }
+    finally { setMusicBusy(false); }
+  };
+
+  const skipMusic = () => { setJobId(null); setSyncDoneCount(null); advanceFromMusic(); };
 
   const emailOk = /\S+@\S+\.\S+/.test(email.trim());
   const passOk  = password.length >= 6;
@@ -11168,6 +11265,121 @@ function SetupWizard({ onComplete }) {
     </div>
   );
 
+  const renderSlider = () => (
+    <div style={{ marginTop:'20px', marginBottom:'4px' }}>
+      <div className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'10px', textAlign:'center' }}>
+        {ru ? 'КАЧЕСТВО ПОИСКА' : 'SEARCH QUALITY'}
+      </div>
+      <input type="range" min="0" max="2" step="1" value={tier}
+        onChange={e => setTier(Number(e.target.value))}
+        disabled={musicBusy}
+        style={{ width:'100%', accentColor:'oklch(62% 0.2 275)', cursor:'pointer' }} />
+      <div style={{ display:'flex', marginTop:'6px' }}>
+        {WIZ_TIERS.map((t, i) => (
+          <div key={i} onClick={() => !musicBusy && setTier(i)}
+            style={{ flex:1, textAlign: i === 0 ? 'left' : i === 2 ? 'right' : 'center', cursor:'pointer' }}>
+            <div style={{ fontSize:'13px', fontWeight: tier === i ? '600' : '400', color: tier === i ? c.text : c.textMuted }}>
+              {ru ? t.ru : t.en}
+            </div>
+            <div style={{ fontSize:'11px', color:c.textSubtle }}>
+              {(ru ? t.noteRu : t.noteEn)} · {t.dim}d
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  const renderMusic = () => (
+    <div className={ske('panel', isDark)} style={{ padding:'30px 32px', borderRadius:'18px' }}>
+      <h2 className="serif" style={{ fontSize:'30px', letterSpacing:'-0.02em', marginBottom:'6px' }}>
+        {ru ? 'Добавьте музыку' : 'Add your music'}
+      </h2>
+      <p style={{ fontSize:'13px', color:c.textMuted, lineHeight:'1.5', marginBottom:'20px' }}>
+        {mode === 'server'
+          ? (ru ? 'Файлы будут храниться на сервере под вашим аккаунтом. FLAC, MP3, M4A.'
+                : 'Files are stored on the server under your account. FLAC, MP3, M4A.')
+          : (ru ? 'Укажите папку с музыкой на этом компьютере — проиндексируем её на месте.'
+                : 'Point at a music folder on this machine — we index it in place.')}
+      </p>
+
+      {mode !== 'server' && (
+        <div style={{ display:'flex', gap:'8px' }}>
+          <button onClick={handlePickFolder} disabled={picking || musicBusy}
+            className={ske('btn', isDark)} style={{ padding:'11px 16px', borderRadius:'10px', fontSize:'14px',
+              color:c.textMuted, display:'flex', alignItems:'center', gap:'6px', flexShrink:0,
+              cursor: picking || musicBusy ? 'not-allowed' : 'pointer' }}>
+            {picking ? <Spinner size={12} /> : '📁'}
+            {picking ? '…' : (ru ? 'Выбрать' : 'Pick')}
+          </button>
+          <input value={folderPath} onChange={e => setFolderPath(e.target.value)} disabled={musicBusy}
+            placeholder="C:\Music"
+            className={ske('inset', isDark)} style={{ flex:1, padding:'11px 13px', borderRadius:'10px', border:'none',
+              color:c.text, fontSize:'15px', outline:'none', fontFamily:"'JetBrains Mono', monospace" }} />
+        </div>
+      )}
+
+      {mode === 'server' && (
+        <div>
+          <div onDragOver={(e) => e.preventDefault()} onDrop={onWizDrop}
+            style={{ padding:'28px 20px', borderRadius:'14px', border:`2px dashed ${c.border}`, textAlign:'center' }}>
+            <div style={{ fontSize:'34px', marginBottom:'8px' }}>📁</div>
+            <p style={{ fontSize:'13px', color:c.textMuted, marginBottom:'10px' }}>
+              {ru ? 'Перетащите аудиофайлы сюда, или' : 'Drag audio files here, or'}
+            </p>
+            <input type="file" multiple
+              accept=".flac,.mp3,.m4a,.aac,.ogg,.wav,.opus"
+              onChange={onWizPick} disabled={musicBusy}
+              style={{ display:'none' }} id="wiz-picker" />
+            <label htmlFor="wiz-picker" className="ske-accent"
+              style={{ display:'inline-block', padding:'9px 18px', borderRadius:'10px', fontSize:'13px',
+                cursor:'pointer', opacity: musicBusy ? 0.5 : 1, pointerEvents: musicBusy ? 'none' : 'auto' }}>
+              {ru ? 'ВЫБРАТЬ ФАЙЛЫ' : 'PICK FILES'}
+            </label>
+          </div>
+          {uploadProgress.length > 0 && (
+            <div style={{ maxHeight:'160px', overflow:'auto', marginTop:'10px' }}>
+              {uploadProgress.map((p, i) => (
+                <div key={i} style={{ display:'flex', justifyContent:'space-between',
+                  padding:'5px 0', borderBottom:`1px solid ${c.border}`, fontSize:'12px' }}>
+                  <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{p.name}</span>
+                  <span style={{ flexShrink:0, marginLeft:'10px',
+                    color: p.status === 'done' ? 'oklch(70% 0.18 145)' : p.status === 'failed' ? c.red : c.textSubtle }}>
+                    {p.status === 'done' ? '✓' : p.status === 'failed' ? `✗ ${p.error || ''}` : p.status === 'uploading' ? '…' : '·'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {renderSlider()}
+
+      {musicError && (
+        <div style={{ padding:'9px 13px', marginTop:'14px', borderRadius:'10px', background:c.redBg, color:c.red, fontSize:'13px' }}>{musicError}</div>
+      )}
+
+      <button onClick={mode === 'server' ? startIndexingServer : startIndexingSharing}
+        disabled={musicBusy || (mode === 'server' ? !files.length : !folderPath.trim())}
+        className="ske-accent" style={{
+          width:'100%', marginTop:'18px', padding:'13px 20px', borderRadius:'12px',
+          fontSize:'15px', fontWeight:'600', letterSpacing:'0.08em',
+          opacity: musicBusy || (mode === 'server' ? !files.length : !folderPath.trim()) ? 0.5 : 1,
+          cursor: musicBusy ? 'wait' : 'pointer',
+          display:'flex', alignItems:'center', justifyContent:'center', gap:'8px' }}>
+        {musicBusy
+          ? <><Spinner size={14} color="white" /> {ru ? 'ЗАПУСКАЕМ…' : 'STARTING…'}</>
+          : (ru ? '▶ ПРОИНДЕКСИРОВАТЬ' : '▶ INDEX')}
+      </button>
+      <button onClick={skipMusic} disabled={musicBusy}
+        style={{ width:'100%', marginTop:'10px', padding:'10px', borderRadius:'10px', background:'transparent',
+          border:`1px solid ${c.border}`, color:c.textMuted, fontSize:'13px', cursor:'pointer' }}>
+        {ru ? 'Пропустить — добавлю музыку позже' : 'Skip — I will add music later'}
+      </button>
+    </div>
+  );
+
   if (alreadyInit) {
     return (
       <div className="grain" style={{
@@ -11213,6 +11425,7 @@ function SetupWizard({ onComplete }) {
           {step === 'welcome' && renderWelcome()}
           {step === 'account' && renderAccount()}
           {step === 'mode'    && renderMode()}
+          {step === 'music'   && renderMusic()}
           <WizardDots count={WIZ_STEPS.length} active={stepIndex} c={c} />
         </div>
       </div>
