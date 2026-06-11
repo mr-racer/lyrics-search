@@ -1907,13 +1907,16 @@ function getSessionId() {
   return id;
 }
 
-async function postPlaybackEvent({ trackId, collectionName, playedSec, totalDur }) {
+async function postPlaybackEvent({ trackId, collectionName, playedSec, totalDur, interacted }) {
   if (!trackId || !collectionName || playedSec == null) return;
   const body = JSON.stringify({
     session_id: getSessionId(),
     track_id: trackId,
     played_sec: playedSec,
     total_dur: totalDur ?? null,
+    // Stream RecSys idle rule: did the user touch any control during this
+    // listen (like/dislike/skip/pause/seek)? null = unknown (legacy semantics).
+    interacted: interacted ?? null,
   });
   // Send the JSON payload with a CORS-safelisted content-type (text/plain) so
   // the request stays "simple" and skips the preflight. An application/json
@@ -1969,6 +1972,14 @@ function resetPlaySession(el) {
   el.dataset.playAcc = '0';
   el.dataset.playEmitted = '0';
   el.dataset.playLastPos = String(el.currentTime || 0);
+  el.dataset.playInteracted = '0';
+}
+
+// Mark the CURRENT listen as user-touched (like/dislike/skip/pause/seek).
+// Feeds the stream's idle rule: 5 untouched tracks in a row → subsequent
+// events stop moving the taste profile until the user acts again.
+function markPlaybackInteracted(el) {
+  if (el) el.dataset.playInteracted = '1';
 }
 
 // Emit the accumulated listen for `el` exactly once. Safe to call from every
@@ -1986,6 +1997,7 @@ function flushAccumulatedListen(el) {
     trackId, collectionName,
     playedSec: acc,
     totalDur: el.duration || null,
+    interacted: el.dataset.playInteracted === '1',
   });
 }
 
@@ -2076,6 +2088,13 @@ function useAudioPlayer() {
   // to the audio element via dataset for the next 'ended' to pick up.
   const setSrc = useCallback((src, meta) => {
     const el = audioRef.current;
+    // Same track re-pointed (section remount, playlist re-sync after a stream
+    // buffer trim): do NOT reset the in-flight listen accumulator — that would
+    // silently drop the seconds heard (and the interacted mark) mid-listen.
+    if (el && meta && el.dataset.playbackTrackId === String(meta.trackId || '')) {
+      setCurrentSrc(src);
+      return;
+    }
     // Switching to a different track ends the previous listen — flush it.
     if (el && el.dataset.playbackTrackId && meta && el.dataset.playbackTrackId !== meta.trackId) {
       flushAccumulatedListen(el);
@@ -2102,6 +2121,10 @@ function useAudioPlayer() {
 
   const pause = useCallback(() => {
     if (!audioRef.current) return;
+    // Public pause/togglePlay/seek are only reachable from user-initiated UI
+    // paths (auto-advance drives the element directly) — mark the listen as
+    // interacted for the stream's idle rule.
+    markPlaybackInteracted(audioRef.current);
     audioRef.current.pause();
     setIsPlaying(false);
   }, []);
@@ -2109,6 +2132,7 @@ function useAudioPlayer() {
   const togglePlay = useCallback(() => {
     const el = audioRef.current;
     if (!el) return;
+    markPlaybackInteracted(el);
     if (el.paused) {
       el.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
     } else {
@@ -2119,6 +2143,7 @@ function useAudioPlayer() {
 
   const seek = useCallback((time) => {
     if (!audioRef.current) return;
+    markPlaybackInteracted(audioRef.current);
     audioRef.current.currentTime = time;
     timeStore.setTime(time);
   }, []);
@@ -3087,26 +3112,34 @@ function ShelfSkeleton({ isDark, count }) {
   );
 }
 
-function ForYouHero({ isDark, lang, onPlayTrack, navigateToArtist }) {
+function ForYouHero({ isDark, lang, onStartStream, navigateToArtist }) {
   const c = useColors(isDark);
-  const [lead, setLead] = useState(null);
-  const [queue, setQueue] = useState([]);
+  const [profile, setProfile] = useState(null);
   const [vibe, setVibe] = useState(null);
   const [hoverCtl, setHoverCtl] = useState(false);
   const [hoverDeck, setHoverDeck] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [likedShare, setLikedShare] = useState(0.3);
+  const shareTimer = useRef(null);
+
+  // Derived BEFORE the hooks that depend on them — @babel/standalone hoists
+  // const→var, so a later declaration would silently read as undefined in deps.
+  const islands = (profile && profile.islands) || [];
+  const lead = islands.length ? islands[0].tracks[0] : null;
+  const anchorCovers = islands
+    .map(isl => (isl.tracks && isl.tracks[0]) || null)
+    .filter(t => t && t.track_id !== (lead && lead.track_id));
   const leadCoverUrl = homeCoverUrl(lead && lead.cover_art_path);
   const color = useCoverColor(leadCoverUrl);
 
   useEffect(() => {
     let alive = true;
-    apiFetch(`/recommend/for-you-seed`)
+    apiFetch(`/recommend/profile?lang=${encodeURIComponent(lang)}`)
       .then(r => {
-        if (!alive || !r || !r.track) { setLead(null); return null; }
-        setLead(r.track);
-        return apiFetch(`/recommend/autoplay-queue?seed_track_id=${encodeURIComponent(r.seed_track_id)}&limit=20`);
+        if (!alive || !r) return;
+        setProfile(r);
+        if (typeof r.liked_share === 'number') setLikedShare(r.liked_share);
       })
-      .then(q => { if (alive && q) setQueue(q.tracks || []); })
       .catch(() => {})
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
@@ -3121,7 +3154,19 @@ function ForYouHero({ isDark, lang, onPlayTrack, navigateToArtist }) {
     return () => { alive = false; };
   }, [lead && lead.track_id]);
 
-  if (!lead) return loading ? (
+  // Persist the liked/new slider (debounced) — the stream reads it server-side
+  // on every chunk, so moving it mid-stream takes effect on the next chunk.
+  const setShare = (v) => {
+    setLikedShare(v);
+    if (shareTimer.current) clearTimeout(shareTimer.current);
+    shareTimer.current = setTimeout(() => {
+      apiFetch('/recommend/stream/settings', {
+        method: 'PUT', body: JSON.stringify({ liked_share: v }),
+      }).catch(() => {});
+    }, 350);
+  };
+
+  if (!profile) return loading ? (
     <div style={{ padding:'40px 40px 26px' }}>
       <div className={ske('panel', isDark)} style={{ maxWidth:920, margin:'0 auto', borderRadius:24, padding:'40px 48px 38px' }}>
         <div style={{ display:'flex', gap:52, alignItems:'center' }}>
@@ -3149,13 +3194,12 @@ function ForYouHero({ isDark, lang, onPlayTrack, navigateToArtist }) {
     ? `radial-gradient(circle at 38% 32%, hsla(${color.h},${color.s}%,${Math.min(color.l + 18, 82)}%,.95), hsla(${color.h},${color.s}%,${color.l}%,1) 70%)`
     : 'radial-gradient(circle at 38% 32%, #b06bff, #6a44d6 70%)';
 
-  const startStream = () => {
-    if (!onPlayTrack) return;
-    const hits = [{ track: lead }, ...queue.map(t => ({ track: t }))];
-    onPlayTrack({ track: lead }, hits);
-  };
+  const startStream = () => { if (onStartStream) onStartStream(); };
 
-  const upNext = queue.slice(0, 4);
+  // Profile formed = at least one taste island; otherwise the stream starts
+  // in exploration mode and the hero says so honestly.
+  const hasProfile = islands.length > 0;
+  const anchorStrip = anchorCovers.slice(0, 4);
   const deckEase = 'cubic-bezier(.22,.9,.3,1)';
 
   return (
@@ -3187,29 +3231,55 @@ function ForYouHero({ isDark, lang, onPlayTrack, navigateToArtist }) {
           <div className="stagger" style={{ flex:1, minWidth:0 }}>
             <div className="mono" style={{ display:'flex', alignItems:'center', fontSize:11, letterSpacing:'.28em', color: isDark ? '#c9b8ff' : 'oklch(46% 0.19 280)' }}>
               <span className="hero-eq" aria-hidden="true"><span /><span /><span /><span /><span /></span>
-              {lang==='ru'?'ВАШ СТРИМ':'YOUR STREAM'}
+              {lang==='ru'?'ВАШ ПОТОК':'YOUR STREAM'}
             </div>
-            <div className="serif" style={{ fontSize:32, fontWeight:300, letterSpacing:'-.01em', marginTop:12, color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{lead.title}</div>
+            <div className="serif" style={{ fontSize:32, fontWeight:300, letterSpacing:'-.01em', marginTop:12, color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+              {hasProfile ? (lead.title) : (lang==='ru'?'Начнём с разведки':'Start exploring')}
+            </div>
             <div style={{ fontSize:13, color:c.textMuted, marginTop:4 }}>
-              <span style={{ cursor:'pointer' }} onClick={() => navigateToArtist && navigateToArtist(slugifyArtistName(lead.artist))}>{lead.artist}</span>
-              {lead.year ? ` · ${lead.year}` : ''}
+              {hasProfile ? (
+                <Fragment>
+                  <span style={{ cursor:'pointer' }} onClick={() => navigateToArtist && navigateToArtist(slugifyArtistName(lead.artist))}>{lead.artist}</span>
+                  {islands.length > 1
+                    ? ` · ${lang==='ru' ? `и ещё ${islands.length - 1} ${islands.length - 1 === 1 ? 'остров вкуса' : 'острова вкуса'}` : `+ ${islands.length - 1} more taste island${islands.length - 1 === 1 ? '' : 's'}`}`
+                    : ''}
+                </Fragment>
+              ) : (
+                lang==='ru'
+                  ? 'Истории пока мало — поток начнёт с неизученных уголков библиотеки и подстроится под реакции'
+                  : 'Not much history yet — the stream starts from unexplored corners and adapts to your reactions'
+              )}
             </div>
             {vibe && <div className="serif" style={{ fontStyle:'italic', fontSize:15.5, color: isDark ? '#f3ecff' : '#2c2440', opacity:.88, lineHeight:1.45, marginTop:13, display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden' }}>❝ {vibe} ❞</div>}
             <div style={{ display:'flex', alignItems:'center', gap:14, marginTop:22 }}>
-              <div className="fy-hybrid tint-irid" onMouseEnter={() => setHoverCtl(true)} onMouseLeave={() => setHoverCtl(false)} onClick={startStream} role="button" aria-label={lang==='ru'?'Включить ваш стрим':'Start your stream'}>
+              <div className="fy-hybrid tint-irid" onMouseEnter={() => setHoverCtl(true)} onMouseLeave={() => setHoverCtl(false)} onClick={startStream} role="button" aria-label={lang==='ru'?'Включить ваш поток':'Start your stream'}>
                 <span className="fy-ring" />
                 <span className="fy-clip"><span className="fy-blob fy-bg1" /><span className="fy-blob fy-bg2" /><span className="fy-blob fy-bg3" /><span className="fy-blob fy-bg4" /></span>
                 <span className="fy-glasscap" />
                 <span className="fy-glyph">▶</span>
                 <span className="fy-halo" />
               </div>
-              <span className="mono" style={{ fontSize:11, letterSpacing:'.2em', color:(hoverCtl||hoverDeck)?(isDark?'#f3ecff':'#2c2440'):c.textMuted, transition:'color .3s' }}>{lang==='ru'?'ВКЛЮЧИТЬ ВАШ СТРИМ':'START YOUR STREAM'}</span>
+              <span className="mono" style={{ fontSize:11, letterSpacing:'.2em', color:(hoverCtl||hoverDeck)?(isDark?'#f3ecff':'#2c2440'):c.textMuted, transition:'color .3s' }}>{lang==='ru'?'ВКЛЮЧИТЬ ВАШ ПОТОК':'START YOUR STREAM'}</span>
             </div>
-            {upNext.length > 0 && (
-              <div style={{ display:'flex', alignItems:'center', gap:11, marginTop:20 }}>
-                <span className="mono" style={{ fontSize:10, letterSpacing:'.2em', color:c.textSubtle }}>{lang==='ru'?'ДАЛЕЕ':'UP NEXT'}</span>
+            {/* Liked/new slider — persisted server-side; the stream reads it on
+                every chunk, so changes apply within a track or two. */}
+            <div style={{ display:'flex', alignItems:'center', gap:12, marginTop:18, maxWidth:340 }}>
+              <span className="mono" style={{ fontSize:10, letterSpacing:'.18em', color:c.textSubtle, flex:'none' }}>
+                {lang==='ru'?'ЛЮБИМЫЕ':'LIKED'} {Math.round(likedShare*100)}%
+              </span>
+              <input type="range" min="0" max="100" step="10" value={Math.round(likedShare*100)}
+                     onChange={e => setShare(Number(e.target.value) / 100)}
+                     style={{ flex:1, accentColor:'oklch(62% 0.2 275)', height:3, cursor:'pointer' }}
+                     aria-label={lang==='ru'?'Доля любимых треков в потоке':'Share of liked tracks in the stream'} />
+              <span className="mono" style={{ fontSize:10, letterSpacing:'.18em', color:c.textSubtle, flex:'none' }}>
+                {lang==='ru'?'НОВОЕ':'NEW'}
+              </span>
+            </div>
+            {hasProfile && anchorStrip.length > 0 && (
+              <div style={{ display:'flex', alignItems:'center', gap:11, marginTop:18 }}>
+                <span className="mono" style={{ fontSize:10, letterSpacing:'.2em', color:c.textSubtle }}>{lang==='ru'?'ЯКОРЯ ВКУСА':'TASTE ANCHORS'}</span>
                 <div style={{ display:'flex' }}>
-                  {upNext.map((t, i) => {
+                  {anchorStrip.map((t, i) => {
                     const src = homeCoverUrl(t.cover_art_path);
                     return (
                       <div key={t.track_id || i} title={`${t.title || ''}${t.artist ? ' — ' + t.artist : ''}`}
@@ -3221,8 +3291,8 @@ function ForYouHero({ isDark, lang, onPlayTrack, navigateToArtist }) {
                     );
                   })}
                 </div>
-                {queue.length > upNext.length && (
-                  <span className="mono" style={{ fontSize:10, color:c.textSubtle }}>+{queue.length - upNext.length}</span>
+                {islands.length > anchorStrip.length + 1 && (
+                  <span className="mono" style={{ fontSize:10, color:c.textSubtle }}>+{islands.length - anchorStrip.length - 1}</span>
                 )}
               </div>
             )}
@@ -3607,7 +3677,7 @@ function NowPlayingStrip({ track, audio, isDark, lang, onOpenPlayer }) {
   );
 }
 
-function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLibrary, stats, playerTrack, playerPlaylist, onTrackChange, onPlayTrack, audio, navigateToArtist }) {
+function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLibrary, stats, playerTrack, playerPlaylist, onTrackChange, onPlayTrack, onStartStream, audio, navigateToArtist }) {
   const c = useColors(isDark);
   const [recent, setRecent] = useState([]);
   const [liked, setLiked] = useState([]);
@@ -3677,7 +3747,7 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLi
         <NowPlayingStrip track={playerTrack} audio={audio} isDark={isDark} lang={lang}
                          onOpenPlayer={() => onNav('player')} />
         <ForYouHero isDark={isDark} lang={lang}
-                    onPlayTrack={onPlayTrack} navigateToArtist={navigateToArtist} />
+                    onStartStream={onStartStream} navigateToArtist={navigateToArtist} />
         <FeaturedArtistCard isDark={isDark} lang={lang}
                             navigateToArtist={navigateToArtist} />
         <RediscoveryBand isDark={isDark} lang={lang}
@@ -9656,7 +9726,7 @@ function VolumeControl({ volume, onChange, isDark, lang }) {
   );
 }
 
-function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, audio, visible, lyricsMode, onToggleLyrics, onCloseLyrics, showToast, navigateToArtist, aiStatus, onAddToPlaylist }) {
+function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, onStreamSignal, audio, visible, lyricsMode, onToggleLyrics, onCloseLyrics, showToast, navigateToArtist, aiStatus, onAddToPlaylist }) {
   const [playlist, setPlaylist] = useState(initialPlaylist || []);
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [liked, setLiked] = useState(null);
@@ -10042,12 +10112,18 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
     flashPlayFeedback(willPause ? 'pause' : 'play');
   };
   const nextTrack = () => {
+    // Manual skip = strong stream signal: mark the abandoned listen as
+    // interacted BEFORE playTrackAt flushes it via setSrc, then let App drop
+    // the prefetched stream buffer and refetch with the fresh profile.
+    markPlaybackInteracted(audio?.audioRef?.current);
     if (currentIndex < playlist.length - 1) {
       triggerVinyl('next');
       playTrackAt(currentIndex + 1);
     }
+    if (onStreamSignal && currentTrack) onStreamSignal('skip', currentTrack);
   };
   const prevTrack = () => {
+    markPlaybackInteracted(audio?.audioRef?.current);
     if (currentIndex > 0) {
       triggerVinyl('prev');
       playTrackAt(currentIndex - 1);
@@ -10057,6 +10133,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
 
   const setReaction = async (val) => {
     if (!currentTrack) return;
+    markPlaybackInteracted(audio?.audioRef?.current);
     triggerBurst(val);  // visual feedback fires immediately, even if API is slow
     try {
       await apiFetch(`/search/tracks/${currentTrack.track_id}/reaction`, {
@@ -10064,6 +10141,9 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
         body: JSON.stringify({ reaction: val }),
       });
       setLiked(val === liked ? null : val);
+      // Like/dislike = strong stream signal — the prefetched tail was picked
+      // by the pre-reaction profile, let App rebuild it.
+      if (onStreamSignal) onStreamSignal('reaction', currentTrack);
     } catch (e) { console.error('Failed to set reaction:', e); }
   };
 
@@ -10596,7 +10676,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                       )}
                       <div
                         className={`player-playlist-item${active ? ' player-active' : ''}`}
-                        onClick={() => playTrackAt(i)}
+                        onClick={() => { markPlaybackInteracted(audio?.audioRef?.current); playTrackAt(i); }}
                         onMouseEnter={() => setHoveredQueueIdx(i)}
                         onMouseLeave={() => setHoveredQueueIdx(-1)}
                         style={{
@@ -11219,6 +11299,8 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     }).catch(() => {}), []);
 
   const handlePlayTrack = (track, results) => {
+    // Any manual play exits stream mode — the user took the wheel.
+    streamActiveRef.current = false;
     // Search/Recommend pass HIT shape ({ track:{track_id,title,...}, score, matched_on }).
     // playerTrack must be FLAT so LandingPlayer / NowPlayingPebble / MiniPlaybackPopout /
     // PlayerSection.findIndex (which compares h.track.track_id === initialTrack.track_id)
@@ -11280,12 +11362,96 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     if (!playedTrackIdsRef.current.has(track.track_id)) {
       playedTrackIdsRef.current.add(track.track_id);
     }
+    // Stream prefetch: keep 1-2 tracks of runway. The buffer is deliberately
+    // SMALL — it is the only adaptation lag the stateless backend has.
+    if (streamActiveRef.current) {
+      const idx = playerPlaylist.findIndex(h => ((h && h.track) ? h.track : h).track_id === track.track_id);
+      if (idx >= 0 && playerPlaylist.length - idx <= 2) {
+        fetchStreamChunk().then(fresh => {
+          if (fresh.length && streamActiveRef.current) setPlayerPlaylist(prev => [...prev, ...fresh]);
+        });
+      }
+    }
+  };
+
+  // ── Stream mode («Поток») ──────────────────────────────────────────────
+  // Stateless personalized radio: GET /recommend/stream/next rebuilds the
+  // taste profile from playback_events + reactions on every call. The
+  // frontend keeps a 1-2 track prefetch and DROPS the unplayed tail after a
+  // strong signal (like/dislike/skip) so adaptation is felt immediately.
+  const streamActiveRef = useRef(false);
+  const streamFetchingRef = useRef(false);
+
+  const fetchStreamChunk = async ({ excludeQueue = true } = {}) => {
+    if (streamFetchingRef.current) return [];
+    streamFetchingRef.current = true;
+    try {
+      const exclude = new Set();
+      if (excludeQueue) {
+        playerPlaylist.forEach(h => {
+          const t = (h && h.track) ? h.track : h;
+          if (t && t.track_id) exclude.add(t.track_id);
+        });
+      }
+      Array.from(playedTrackIdsRef.current).slice(-40).forEach(id => exclude.add(id));
+      const ex = Array.from(exclude).slice(0, 50).join(',');
+      const data = await apiFetch(
+        `/recommend/stream/next?session_id=${encodeURIComponent(getSessionId())}&n=3` +
+        (ex ? `&exclude_ids=${encodeURIComponent(ex)}` : '')
+      );
+      return (data.tracks || []).map(t => ({
+        track: t, score: t.score || 0, matched_on: 'stream', _stream: true, _pool: t.pool,
+      }));
+    } catch (e) {
+      console.warn('[stream] chunk fetch failed', e);
+      return [];
+    } finally {
+      streamFetchingRef.current = false;
+    }
+  };
+
+  const startStream = async () => {
+    streamActiveRef.current = true;
+    const hits = await fetchStreamChunk({ excludeQueue: false });
+    if (!hits.length) {
+      streamActiveRef.current = false;
+      showToast(lang === 'ru' ? 'Поток пуст — в библиотеке нет кандидатов' : 'Stream is empty — no candidates in the library');
+      return;
+    }
+    setPlayerPlaylist(hits);
+    setPlayerTrack(hits[0].track);
+    setSection('player');
+  };
+
+  // Strong signal during stream playback: the prefetched tail was chosen by
+  // the PRE-signal profile — drop it (keeping one runway track on skip so the
+  // jump is instant) and refetch with the updated profile.
+  const handleStreamSignal = async (kind, track) => {
+    if (!streamActiveRef.current || !track) return;
+    setPlayerPlaylist(prev => {
+      const idx = prev.findIndex(h => ((h && h.track) ? h.track : h).track_id === track.track_id);
+      if (idx < 0) return prev;
+      return prev.slice(0, kind === 'skip' ? idx + 2 : idx + 1);
+    });
+    const fresh = await fetchStreamChunk();
+    if (fresh.length && streamActiveRef.current) {
+      setPlayerPlaylist(prev => [...prev, ...fresh]);
+    }
   };
 
   // When the current playlist runs out, this fetches similar tracks from the
   // backend and appends them. Called by PlayerSection's 'ended' handler when
   // there is no next track left in playerPlaylist.
   const ensureAutoplayQueue = async (seedTrack) => {
+    // Stream mode owns the queue: exhaustion means the prefetch missed (e.g.
+    // a failed fetch) — top up from the stream, not from CLAP-autoplay.
+    if (streamActiveRef.current) {
+      const fresh = await fetchStreamChunk();
+      if (fresh.length && streamActiveRef.current) {
+        setPlayerPlaylist(prev => [...prev, ...fresh]);
+      }
+      return;
+    }
     if (!seedTrack?.track_id) return;
     const excluded = Array.from(playedTrackIdsRef.current).slice(-200).join(',');
     try {
@@ -11364,6 +11530,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
           playerPlaylist={playerPlaylist}
           onTrackChange={handleTrackChange}
           onPlayTrack={handlePlayTrack}
+          onStartStream={startStream}
           audio={audio}
           navigateToArtist={navigateToArtist}
         />
@@ -11399,6 +11566,8 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
                 playerTrack={playerTrack}
                 onTrackChange={id === 'player' ? handleTrackChange : undefined}
                 onRequestAutoplay={id === 'player' ? ensureAutoplayQueue : undefined}
+                onStreamSignal={id === 'player' ? handleStreamSignal : undefined}
+                onStartStream={id === 'recommend' ? startStream : undefined}
                 audio={id === 'player' ? audio : undefined}
                 initialPlaylist={id === 'player' ? playerPlaylist : undefined}
                 initialTrack={id === 'player' ? playerTrack : undefined}

@@ -571,6 +571,7 @@ class StreamProfileResponse(BaseModel):
     islands: List[ProfileIsland]
     portrait: Optional[str] = None     # cached LLM listener portrait (AI mode)
     axis_stats_source: Optional[str] = None
+    liked_share: float = 0.3           # persisted slider position (default 30%)
 
 
 class AxisPlaylistIn(BaseModel):

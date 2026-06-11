@@ -169,6 +169,7 @@ def stream_profile(
         )
         for i in result["islands"]
     ]
+    stored_share = MetadataDB.get_stream_liked_share(derived)
     return StreamProfileResponse(
         axes=result["axes"],
         confidence=result["confidence"],
@@ -176,6 +177,7 @@ def stream_profile(
         islands=islands,
         portrait=enrich.get("portrait"),
         axis_stats_source=result["axis_stats_source"],
+        liked_share=stored_share if stored_share is not None else 0.3,
     )
 
 
