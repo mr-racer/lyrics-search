@@ -10967,12 +10967,266 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
   );
 }
 
+// ─── First-Run Setup Wizard ──────────────────────────────────────────────────
+// Spec: docs/superpowers/specs/2026-06-10-first-run-setup-wizard-design.md
+// Rendered by Root when GET /instance/config → 404 (no owner yet). The mode
+// step is the single point that calls POST /instance/setup; success stores the
+// returned JWT and the wizard continues authenticated.
+
+// Slider tiers — must mirror TEXT_MODELS in app/resources/model_registry.py.
+// model:null = omit text_model (backend default jina-small).
+const WIZ_TIERS = [
+  { model: null,                            dim: 512,
+    ru: 'Быстро',   en: 'Fast',
+    noteRu: 'только английский',         noteEn: 'English only' },
+  { model: 'intfloat/multilingual-e5-base', dim: 768,
+    ru: 'Баланс',   en: 'Balanced',
+    noteRu: 'мультиязычный',             noteEn: 'multilingual' },
+  { model: 'Qwen/Qwen3-Embedding-0.6B',     dim: 1024,
+    ru: 'Качество', en: 'Quality',
+    noteRu: 'мультиязычный · медленнее', noteEn: 'multilingual · slower' },
+];
+
+const WIZ_STEPS = ['welcome', 'account', 'mode'];
+
+function WizardDots({ count, active, c }) {
+  return (
+    <div style={{ display:'flex', gap:'8px', justifyContent:'center', marginTop:'28px' }}>
+      {Array.from({ length: count }, (_, i) => (
+        <span key={i} style={{
+          width:'8px', height:'8px', borderRadius:'50%',
+          background: i <= active ? 'oklch(62% 0.2 275)' : c.border,
+          transition:'background 0.25s',
+        }} />
+      ))}
+    </div>
+  );
+}
+
+function SetupWizard({ onComplete }) {
+  const [isDark, setDark] = useState(() => (localStorage.getItem('musix_theme') || 'dark') === 'dark');
+  const [lang, setLang]   = useState(() => localStorage.getItem('musix_lang') || 'ru');
+  const c = useColors(isDark);
+  const ru = lang === 'ru';
+
+  const [step, setStep] = useState('welcome');
+
+  // account
+  const [email, setEmail]       = useState('');
+  const [password, setPassword] = useState('');
+  const [accError, setAccError] = useState('');
+
+  // mode + the /instance/setup call
+  const [mode, setMode]               = useState(null);   // 'sharing' | 'server'
+  const [setupBusy, setSetupBusy]     = useState(false);
+  const [setupError, setSetupError]   = useState('');
+  const [alreadyInit, setAlreadyInit] = useState(false);
+
+  const handleTheme = () => setDark(d => {
+    const next = !d; localStorage.setItem('musix_theme', next ? 'dark' : 'light'); return next;
+  });
+  const handleLang = (l) => { setLang(l); localStorage.setItem('musix_lang', l); };
+
+  const stepIndex = WIZ_STEPS.indexOf(step);
+
+  // Task 7 re-points this at the music step; for now setup drops into the app.
+  const advanceFromSetup = () => onComplete({ mode });
+
+  const emailOk = /\S+@\S+\.\S+/.test(email.trim());
+  const passOk  = password.length >= 6;
+
+  const submitAccount = (e) => {
+    e.preventDefault();
+    if (!emailOk) { setAccError(ru ? 'Похоже, это не email' : 'That does not look like an email'); return; }
+    if (!passOk)  { setAccError(ru ? 'Пароль — минимум 6 символов' : 'Password must be at least 6 characters'); return; }
+    setAccError('');
+    setStep('mode');
+  };
+
+  const submitSetup = async () => {
+    if (!mode || setupBusy) return;
+    setSetupBusy(true); setSetupError('');
+    try {
+      const res = await fetch(API + '/instance/setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim(), password, mode }),
+      });
+      if (res.status === 409) { setAlreadyInit(true); return; }
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail || `HTTP ${res.status}`);
+      }
+      const data = await res.json();   // { token, user }
+      setStoredAuth(data);
+      advanceFromSetup();
+    } catch (err) {
+      setSetupError(String(err.message || err));
+    } finally {
+      setSetupBusy(false);
+    }
+  };
+
+  const renderWelcome = () => (
+    <div style={{ textAlign:'center' }}>
+      <div className="mono" style={{ fontSize:'13px', color:c.textSubtle, letterSpacing:'0.32em', marginBottom:'14px' }}>
+        — {ru ? 'ПЕРВЫЙ ЗАПУСК' : 'FIRST RUN'}
+      </div>
+      <h1 className="serif" style={{ fontSize:'54px', lineHeight:'1.04', letterSpacing:'-0.025em', marginBottom:'16px' }}>
+        {ru ? <>Добро <i style={{ color:'oklch(62% 0.2 275)' }}>пожаловать</i>.</> : <>Welcome <i style={{ color:'oklch(62% 0.2 275)' }}>aboard</i>.</>}
+      </h1>
+      <p style={{ fontSize:'15px', color:c.textMuted, lineHeight:'1.6', marginBottom:'30px', maxWidth:'460px', marginLeft:'auto', marginRight:'auto' }}>
+        {ru
+          ? 'MusiX — семантический поиск по вашей музыке. Инстанс ещё не настроен: создадим аккаунт владельца, добавим музыку и, по желанию, AI. Пара минут.'
+          : 'MusiX is semantic search over your music. This instance is not set up yet: we will create the owner account, add music and (optionally) AI. A couple of minutes.'}
+      </p>
+      <button onClick={() => setStep('account')} className="ske-accent"
+        style={{ padding:'13px 34px', borderRadius:'12px', fontSize:'15px', fontWeight:'600', letterSpacing:'0.08em', cursor:'pointer' }}>
+        {ru ? '▶ НАЧАТЬ НАСТРОЙКУ' : '▶ START SETUP'}
+      </button>
+    </div>
+  );
+
+  const renderAccount = () => (
+    <form onSubmit={submitAccount} className={ske('panel', isDark)} style={{ padding:'30px 32px', borderRadius:'18px' }}>
+      <h2 className="serif" style={{ fontSize:'30px', letterSpacing:'-0.02em', marginBottom:'6px' }}>
+        {ru ? 'Аккаунт владельца' : 'Owner account'}
+      </h2>
+      <p style={{ fontSize:'13px', color:c.textMuted, lineHeight:'1.5', marginBottom:'22px' }}>
+        {ru ? 'Этот аккаунт станет владельцем инстанса.' : 'This account becomes the instance owner.'}
+      </p>
+      <div className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'8px' }}>EMAIL</div>
+      <input type="email" required autoFocus value={email} onChange={e => setEmail(e.target.value)}
+        className={ske('inset', isDark)}
+        style={{ width:'100%', padding:'11px 13px', borderRadius:'10px', border:'none', color:c.text, fontSize:'15px', outline:'none', marginBottom:'16px' }} />
+      <div className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'8px' }}>
+        {ru ? 'ПАРОЛЬ · МИН. 6 СИМВОЛОВ' : 'PASSWORD · MIN 6 CHARS'}
+      </div>
+      <input type="password" required value={password} onChange={e => setPassword(e.target.value)}
+        className={ske('inset', isDark)}
+        style={{ width:'100%', padding:'11px 13px', borderRadius:'10px', border:'none', color:c.text, fontSize:'15px', outline:'none', marginBottom:'18px' }} />
+      {accError && (
+        <div style={{ padding:'9px 13px', marginBottom:'14px', borderRadius:'10px', background:c.redBg, color:c.red, fontSize:'13px' }}>{accError}</div>
+      )}
+      <button type="submit" className="ske-accent"
+        style={{ width:'100%', padding:'13px 20px', borderRadius:'12px', fontSize:'15px', fontWeight:'600', letterSpacing:'0.08em', cursor:'pointer' }}>
+        {ru ? 'ПРОДОЛЖИТЬ →' : 'CONTINUE →'}
+      </button>
+    </form>
+  );
+
+  const renderMode = () => (
+    <div>
+      <h2 className="serif" style={{ fontSize:'30px', letterSpacing:'-0.02em', marginBottom:'6px', textAlign:'center' }}>
+        {ru ? 'Где живёт ваша музыка?' : 'Where does your music live?'}
+      </h2>
+      <p style={{ fontSize:'13px', color:c.textMuted, textAlign:'center', marginBottom:'22px' }}>
+        {ru ? 'Это определяет режим инстанса.' : 'This sets the instance mode.'}
+      </p>
+      <div style={{ display:'flex', gap:'14px', marginBottom:'14px' }}>
+        {[
+          { value:'sharing', icon:'📁',
+            title: ru ? 'Локальная папка' : 'Local folder',
+            desc: ru ? 'Музыка уже на этом компьютере. Указываете папку — индексируем на месте.'
+                     : 'Music is already on this machine. Point at a folder — we index it in place.',
+            sub: ru ? 'режим «sharing» · один пользователь' : '"sharing" mode · single user' },
+          { value:'server', icon:'🌐',
+            title: ru ? 'Сервер' : 'Server',
+            desc: ru ? 'Загружаете файлы через браузер. Можно пригласить друзей по инвайтам.'
+                     : 'Upload files via the browser. Invite friends with invite codes.',
+            sub: ru ? 'режим «server» · мультиаккаунт' : '"server" mode · multi-account' },
+        ].map(opt => (
+          <div key={opt.value} onClick={() => setMode(opt.value)}
+            className={ske('panel', isDark)}
+            style={{
+              flex:1, padding:'20px 18px', borderRadius:'16px', cursor:'pointer',
+              outline: mode === opt.value ? '2px solid oklch(62% 0.2 275)' : '2px solid transparent',
+              transition:'outline 0.15s',
+            }}>
+            <div style={{ fontSize:'26px', marginBottom:'8px' }}>{opt.icon}</div>
+            <div style={{ fontSize:'16px', fontWeight:'600', marginBottom:'6px' }}>{opt.title}</div>
+            <div style={{ fontSize:'13px', color:c.textMuted, lineHeight:'1.5', marginBottom:'8px' }}>{opt.desc}</div>
+            <div className="mono" style={{ fontSize:'11px', color:c.textSubtle }}>{opt.sub}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{ fontSize:'12px', color:'#b08950', textAlign:'center', marginBottom:'16px' }}>
+        ⚠ {ru ? 'Выбор фиксируется. Поменять потом можно только скриптом миграции.'
+              : 'This choice is locked in. Changing it later requires a migration script.'}
+      </div>
+      {setupError && (
+        <div style={{ padding:'9px 13px', marginBottom:'14px', borderRadius:'10px', background:c.redBg, color:c.red, fontSize:'13px' }}>{setupError}</div>
+      )}
+      <button onClick={submitSetup} disabled={!mode || setupBusy} className="ske-accent"
+        style={{ width:'100%', padding:'13px 20px', borderRadius:'12px', fontSize:'15px', fontWeight:'600', letterSpacing:'0.08em',
+          opacity: !mode || setupBusy ? 0.5 : 1, cursor: !mode || setupBusy ? 'not-allowed' : 'pointer',
+          display:'flex', alignItems:'center', justifyContent:'center', gap:'8px' }}>
+        {setupBusy
+          ? <><Spinner size={14} color="white" /> {ru ? 'СОЗДАЁМ…' : 'CREATING…'}</>
+          : (ru ? 'СОЗДАТЬ И ПРОДОЛЖИТЬ →' : 'CREATE & CONTINUE →')}
+      </button>
+    </div>
+  );
+
+  if (alreadyInit) {
+    return (
+      <div className="grain" style={{
+        width:'100vw', height:'100vh', display:'flex', alignItems:'center', justifyContent:'center',
+        background: isDark
+          ? 'radial-gradient(ellipse at top, #15151b 0%, #07070a 100%)'
+          : 'radial-gradient(ellipse at top, #fafaff 0%, #e3e2e8 100%)',
+        color:c.text, padding:'24px' }}>
+        <div className={ske('panel', isDark)} style={{ maxWidth:'440px', padding:'36px 32px', borderRadius:'20px', textAlign:'center' }}>
+          <h2 className="serif" style={{ fontSize:'28px', marginBottom:'12px' }}>
+            {ru ? 'Инстанс уже настроен' : 'Instance already set up'}
+          </h2>
+          <p style={{ fontSize:'14px', color:c.textMuted, lineHeight:'1.6', marginBottom:'20px' }}>
+            {ru ? 'Кто-то уже создал владельца на этом сервере. Перейдите ко входу.'
+                : 'Someone already created the owner on this server. Proceed to login.'}
+          </p>
+          <button onClick={() => window.location.reload()} className="ske-accent"
+            style={{ width:'100%', padding:'12px 20px', borderRadius:'12px', fontSize:'15px', fontWeight:'600', cursor:'pointer' }}>
+            {ru ? 'ПЕРЕЙТИ КО ВХОДУ' : 'GO TO LOGIN'}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="grain" style={{
+      width:'100vw', minHeight:'100vh', overflow:'auto', position:'relative',
+      background: isDark
+        ? 'radial-gradient(ellipse at top, #15151b 0%, #0a0a0e 60%, #07070a 100%)'
+        : 'radial-gradient(ellipse at top, #fafaff 0%, #ececf3 60%, #e3e2e8 100%)',
+      color: c.text, display:'flex', flexDirection:'column',
+    }}>
+      <div style={{ display:'flex', justifyContent:'space-between', padding:'24px 32px' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
+          <BrandMark size={36} isDark={isDark} />
+          <span className="serif" style={{ fontSize:'28px', letterSpacing:'-0.02em' }}>Musi<i style={{ color:'oklch(62% 0.2 275)' }}>X</i></span>
+        </div>
+        <TopRightControls isDark={isDark} lang={lang} onLang={handleLang} onTheme={handleTheme} onSettings={() => {}} />
+      </div>
+      <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', padding:'24px 32px 48px' }}>
+        <div style={{ width:'100%', maxWidth:'560px' }}>
+          {step === 'welcome' && renderWelcome()}
+          {step === 'account' && renderAccount()}
+          {step === 'mode'    && renderMode()}
+          <WizardDots count={WIZ_STEPS.length} active={stepIndex} c={c} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Phase A: Root — handles auth gating before mounting App ──────────────
 function Root() {
   const [token, setToken] = useState(() => getStoredToken());
   const [instanceMode, setInstanceMode] = useState(null);     // 'sharing' | 'server' | null
   const [instanceLoaded, setInstanceLoaded] = useState(false);
   const [bootError, setBootError] = useState('');
+  const [needsSetup, setNeedsSetup] = useState(false);
 
   // Boot: fetch /instance/config (no auth required) to learn the mode.
   // BEFORE rendering anything else — this drives both the LoginScreen UX
@@ -10982,10 +11236,8 @@ function Root() {
     fetch(API + '/instance/config')
       .then(r => {
         if (r.status === 404) {
-          // Instance not initialized yet — instruct the user.
-          setBootError(
-            'Instance not initialized. Run: python -m scripts.create_owner --email <you> --password <pw> --mode sharing|server',
-          );
+          // Instance not initialized — first visitor runs the setup wizard.
+          setNeedsSetup(true);
           setInstanceLoaded(true);
           return null;
         }
@@ -11015,6 +11267,18 @@ function Root() {
       }}>
         Loading…
       </div>
+    );
+  }
+
+  if (needsSetup) {
+    return (
+      <SetupWizard onComplete={({ mode }) => {
+        // Owner created + JWT already in localStorage (setStoredAuth ran
+        // inside the wizard). Flip state so App mounts without a reload.
+        setInstanceMode(mode);
+        setNeedsSetup(false);
+        setToken(getStoredToken());
+      }} />
     );
   }
 
