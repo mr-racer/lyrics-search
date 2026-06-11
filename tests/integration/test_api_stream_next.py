@@ -237,6 +237,53 @@ class TestStreamSettings:
                           json={"liked_share": 1.5}).status_code == 422
 
 
+class TestProfileAndAxisPlaylist:
+    def test_profile_returns_axes_islands_confidence(self, client):
+        coll = _owner_collection(client)
+        MetadataDB.set_axis_norm_stats(coll, {
+            "version": __import__("app.resources.clap_features", fromlist=["axis_version"]).axis_version(),
+            "n": 100,
+            "mean": {a: 0.0 for a in AXIS_NAMES},
+            "std": {a: 1.0 for a in AXIS_NAMES},
+        })
+        for i in range(3):
+            _post_event(client, f"a{i}")
+        _like(client, coll, "a0")
+
+        resp = client.get("/api/v1/recommend/profile")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["n_signals"] == 4
+        assert body["islands"], "expected at least one island"
+        assert body["islands"][0]["tracks"][0]["title"]
+        assert set(body["axes"]) == set(AXIS_NAMES)
+        assert body["portrait"] is None  # LLM enrichment not generated yet
+
+    def test_axis_playlist_endpoint(self, client):
+        coll = _owner_collection(client)
+        MetadataDB.set_axis_norm_stats(coll, {
+            "version": __import__("app.resources.clap_features", fromlist=["axis_version"]).axis_version(),
+            "n": 100,
+            "mean": {a: 0.0 for a in AXIS_NAMES},
+            "std": {a: 1.0 for a in AXIS_NAMES},
+        })
+        resp = client.post("/api/v1/recommend/axis-playlist",
+                           json={"targets": {"energy": 0.5}, "limit": 5})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["tracks"]) == 5
+        assert all(t["pool"] == "axis" for t in body["tracks"])
+        # cluster a payloads sit at +0.5 on every axis → they match the target
+        assert all(t["track_id"].startswith("a") for t in body["tracks"])
+
+    def test_axis_playlist_without_stats_is_empty(self, client):
+        resp = client.post("/api/v1/recommend/axis-playlist",
+                           json={"targets": {}, "limit": 5})
+        assert resp.status_code == 200
+        assert resp.json()["tracks"] == []
+        assert resp.json()["diagnostics"]["reason"] == "no_axis_stats"
+
+
 class TestSimilar:
     def test_returns_neighbors_with_seed_excluded(self, client):
         resp = client.get("/api/v1/recommend/similar",

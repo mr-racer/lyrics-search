@@ -6,8 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.domain.models import (
     AutoplayQueueResponse,
+    AxisPlaylistIn,
+    AxisPlaylistResponse,
+    ProfileIsland,
+    ProfileIslandTrack,
     SimilarTracksResponse,
     StreamNextResponse,
+    StreamProfileResponse,
     StreamSettingsIn,
     StreamTrack,
     User,
@@ -125,6 +130,68 @@ def stream_settings(
     derived = derive_collection_for_user(current_user)
     MetadataDB.set_stream_liked_share(derived, body.liked_share)
     return {"liked_share": body.liked_share}
+
+
+@router.get("/profile", response_model=StreamProfileResponse)
+def stream_profile(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> StreamProfileResponse:
+    """Explainable long-term taste: 6 axes (z + level), confidence, islands.
+
+    Pure long-term (no session blending) — the stable «кто я как слушатель»
+    view. LLM enrichment (portrait + island names) is attached from cache when
+    present (populated by POST /recommend/profile/ai-enrich).
+    """
+    db_client = request.app.state.db_client
+    if db_client is None or db_client.qdrant is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    derived = derive_collection_for_user(current_user)
+    result = stream_service.long_term_profile(
+        qdrant_client=db_client.qdrant, collection_name=derived,
+    )
+    islands = [
+        ProfileIsland(
+            track_id=i["track_id"], weight=i["weight"],
+            tracks=[ProfileIslandTrack(**t) for t in i["tracks"]],
+        )
+        for i in result["islands"]
+    ]
+    return StreamProfileResponse(
+        axes=result["axes"],
+        confidence=result["confidence"],
+        n_signals=result["n_signals"],
+        islands=islands,
+        axis_stats_source=result["axis_stats_source"],
+    )
+
+
+@router.post("/axis-playlist", response_model=AxisPlaylistResponse)
+def axis_playlist(
+    body: AxisPlaylistIn,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> AxisPlaylistResponse:
+    """Rank the collection against target z-values from the radar knobs."""
+    db_client = request.app.state.db_client
+    if db_client is None or db_client.qdrant is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    derived = derive_collection_for_user(current_user)
+    # Clamp targets to a sane z-range; unknown axis names are ignored by the
+    # service (it iterates AXIS_NAMES), so no need to 422 on extras.
+    targets = {k: max(-3.0, min(3.0, v)) for k, v in body.targets.items()}
+    result = stream_service.axis_playlist(
+        qdrant_client=db_client.qdrant,
+        collection_name=derived,
+        axis_targets=targets,
+        limit=body.limit,
+    )
+    return AxisPlaylistResponse(
+        tracks=[_candidate_to_stream_track(c) for c in result["tracks"]],
+        diagnostics=result["diagnostics"],
+    )
 
 
 @router.get("/similar", response_model=SimilarTracksResponse)

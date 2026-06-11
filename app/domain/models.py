@@ -510,9 +510,10 @@ class StreamTrack(TrackMetadata):
     """One track in the personalized stream + per-track diagnostics.
 
     The diagnostics double as raw material for a future rationale chip
-    («почему этот трек») — design §7.
+    («почему этот трек») — design §7. ``pool="axis"`` marks tracks picked by
+    the axis-playlist knobs rather than the stream pools.
     """
-    pool: Literal["anchor", "explore", "liked"]
+    pool: Literal["anchor", "explore", "liked", "axis"]
     anchor_track_id: Optional[str] = None   # closest anchor (pool=anchor only)
     axis_match: Optional[float] = None
     score: Optional[float] = None
@@ -538,6 +539,53 @@ class SimilarTracksResponse(BaseModel):
     """
     seed_track_id: str
     tracks: List[StreamTrack]
+
+
+class ProfileAxis(BaseModel):
+    """One axis of the taste profile: z-score + discrete level label."""
+    z: float
+    level: Literal["very_low", "low", "medium", "high", "very_high"]
+
+
+class ProfileIslandTrack(BaseModel):
+    """Lightweight member of a taste island (cover wall)."""
+    track_id: str
+    title: str
+    artist: str
+    cover_art_path: Optional[str] = None
+
+
+class ProfileIsland(BaseModel):
+    """One «музыкальная личность»: a merged anchor group from the stream model."""
+    track_id: str                      # representative (strongest member)
+    weight: float
+    tracks: List[ProfileIslandTrack]   # representative first
+    name: Optional[str] = None         # LLM-given name (cached, AI mode)
+
+
+class StreamProfileResponse(BaseModel):
+    """Result of GET /recommend/profile — the explainable long-term taste."""
+    axes: Optional[Dict[str, ProfileAxis]] = None  # None until axis data exists
+    confidence: float
+    n_signals: int
+    islands: List[ProfileIsland]
+    portrait: Optional[str] = None     # cached LLM listener portrait (AI mode)
+    axis_stats_source: Optional[str] = None
+
+
+class AxisPlaylistIn(BaseModel):
+    """Body for POST /recommend/axis-playlist — the radar-knob targets.
+
+    ``targets`` maps axis name → desired z-score (clamped server-side to ±3);
+    omitted axes default to 0 (neutral).
+    """
+    targets: Dict[str, float] = Field(default_factory=dict)
+    limit: int = Field(20, ge=1, le=100)
+
+
+class AxisPlaylistResponse(BaseModel):
+    tracks: List[StreamTrack]
+    diagnostics: dict
 
 
 class TopTrackBrief(BaseModel):

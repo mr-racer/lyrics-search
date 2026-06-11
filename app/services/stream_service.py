@@ -170,6 +170,13 @@ class Anchor:
     track_id: str           # representative track (highest-weight in its merge group)
     weight: float
     vector: list[float] | None = None   # raw CLAP, attached from Qdrant
+    # Track ids absorbed by the cos>0.85 merge (representative included, first).
+    # Powers the «вкусовые острова» view — each island shows its member covers.
+    members: list[str] = None  # type: ignore[assignment]
+
+    def __post_init__(self):
+        if self.members is None:
+            self.members = [self.track_id]
 
 
 def _age_days(ts: datetime, now: datetime) -> float:
@@ -275,6 +282,7 @@ def merge_anchors(
         for i, kv in enumerate(kept_vecs):
             if float(v @ kv) > threshold:
                 kept[i].weight += a.weight
+                kept[i].members.append(a.track_id)
                 merged = True
                 break
         if not merged:
@@ -1072,3 +1080,170 @@ def similar_tracks(
         ))
     out.sort(key=lambda c: c.score, reverse=True)
     return {"seed_track_id": seed_track_id, "tracks": out[:limit]}
+
+
+# ── Long-term taste profile surface (Recommend tab «центр вкуса») ──────────
+
+ISLANDS_MAX = 6           # taste islands shown in the profile
+ISLAND_MEMBERS_MAX = 8    # covers per island (representative first)
+
+
+def long_term_profile(*, qdrant_client, collection_name: str, now: datetime | None = None) -> dict:
+    """Explainable long-term profile: 6 axes (z + level), confidence, islands.
+
+    Pure long-term — no session blending: this is the «кто я как слушатель»
+    view, it must be stable across a listening session. Reuses the exact same
+    aggregation the stream runs, so what the user sees IS what the stream uses.
+    """
+    from app.resources.clap_features import (
+        AXIS_NAMES, blend_axis_stats, load_axis_norm_reference, z_to_level,
+    )
+
+    now = now or datetime.utcnow()
+
+    raw_signals = MetadataDB.get_playback_signals(collection_name, LONG_TERM_EVENT_CAP)
+    signals = [PlaybackSignal(**r) for r in raw_signals]
+    reactions = []
+    for tid, reaction, ts in MetadataDB.get_reactions_with_updated_at(collection_name):
+        dt = _parse_iso(ts)
+        if dt is not None:
+            reactions.append(ReactionSignal(track_id=tid, reaction=reaction, updated_at=dt))
+
+    long_weights = combine_weights(
+        aggregate_event_weights(signals, now),
+        aggregate_reaction_weights(reactions, now),
+    )
+    n_signals = len(signals) + len(reactions)
+
+    # Anchors → islands (merge groups carry their member track ids).
+    anchor_cands = select_positive_anchors(long_weights)
+    member_pool = [a.track_id for a in anchor_cands]
+    vectors, payloads = _retrieve_track_data(qdrant_client, collection_name, member_pool)
+    merged = merge_anchors(anchor_cands, vectors)
+    merged.sort(key=lambda a: a.weight, reverse=True)
+    islands = []
+    for a in merged[:ISLANDS_MAX]:
+        members = []
+        for tid in a.members[:ISLAND_MEMBERS_MAX]:
+            p = payloads.get(tid) or {}
+            members.append({
+                "track_id": tid,
+                "title": p.get("title") or "—",
+                "artist": p.get("artist") or "—",
+                "cover_art_path": p.get("cover_art_path"),
+            })
+        islands.append({
+            "track_id": a.track_id,
+            "weight": round(a.weight, 3),
+            "tracks": members,
+        })
+
+    # Axis preferences in z-space + discrete levels.
+    axis_stats = blend_axis_stats(
+        MetadataDB.get_axis_norm_stats(collection_name),
+        load_axis_norm_reference(),
+    )
+    z_by_track = {
+        tid: z for tid, pl in payloads.items()
+        if (z := z_scores_for_axes(pl.get("sonic_axes"), axis_stats, AXIS_NAMES))
+    }
+    p_long, confidence = axis_preferences(long_weights, z_by_track, AXIS_NAMES)
+    axes = (
+        {a: {"z": round(p_long[a], 3), "level": z_to_level(p_long[a])} for a in AXIS_NAMES}
+        if p_long is not None else None
+    )
+
+    return {
+        "axes": axes,
+        "confidence": round(confidence, 3),
+        "n_signals": n_signals,
+        "islands": islands,
+        "axis_stats_source": (axis_stats or {}).get("source"),
+    }
+
+
+# ── Axis playlist: «как обычно, но поспокойнее» (управляемые ручки) ────────
+
+AXIS_PLAYLIST_W_MATCH = 0.85
+AXIS_PLAYLIST_W_NOVELTY = 0.15
+AXIS_PLAYLIST_SCROLL_CAP = 5000
+
+
+def axis_playlist(
+    *,
+    qdrant_client,
+    collection_name: str,
+    axis_targets: dict[str, float],
+    limit: int = 20,
+) -> dict:
+    """Rank the whole collection against a target z-profile (the radar knobs).
+
+    score = 0.85·closeness(z, target) + 0.15·novelty. Tracks without axis data
+    are skipped (nothing to match on); dislikes are hard-filtered. Returns
+    empty + a reason when axis stats are unusable — the frontend should hide
+    the knobs in that state rather than show a fake ranking.
+    """
+    from app.resources.clap_features import (
+        AXIS_NAMES, blend_axis_stats, load_axis_norm_reference,
+    )
+
+    axis_stats = blend_axis_stats(
+        MetadataDB.get_axis_norm_stats(collection_name),
+        load_axis_norm_reference(),
+    )
+    if not axis_stats:
+        return {"tracks": [], "diagnostics": {"reason": "no_axis_stats", "scanned": 0}}
+
+    targets = {a: float(axis_targets.get(a, 0.0)) for a in AXIS_NAMES}
+
+    points: list = []
+    offset = None
+    try:
+        while len(points) < AXIS_PLAYLIST_SCROLL_CAP:
+            batch, offset = qdrant_client.scroll(
+                collection_name=collection_name,
+                limit=min(512, AXIS_PLAYLIST_SCROLL_CAP - len(points)),
+                with_payload=True,
+                with_vectors=False,
+                offset=offset,
+            )
+            points.extend(batch)
+            if offset is None or not batch:
+                break
+    except Exception:
+        logger.exception("[axis-playlist] scroll failed")
+        return {"tracks": [], "diagnostics": {"reason": "scroll_failed", "scanned": 0}}
+
+    candidate_ids = [str(p.id) for p in points]
+    reactions = MetadataDB.get_reactions_for_tracks(collection_name, candidate_ids)
+    dislikes = {tid for tid, r in reactions.items() if r == "dislike"}
+    play_counts = MetadataDB.get_play_counts_by_track(collection_name)
+
+    out: list[StreamCandidate] = []
+    skipped_no_axes = 0
+    for p in points:
+        tid = str(p.id)
+        if tid in dislikes:
+            continue
+        payload = p.payload or {}
+        z = z_scores_for_axes(payload.get("sonic_axes"), axis_stats, AXIS_NAMES)
+        if z is None:
+            skipped_no_axes += 1
+            continue
+        closeness = axis_match_score(z, targets, 1.0, AXIS_NAMES)
+        novelty = 1.0 / (1.0 + play_counts.get(tid, 0))
+        out.append(StreamCandidate(
+            track_id=tid, payload=payload, pool="axis",
+            axis_match=closeness,
+            score=AXIS_PLAYLIST_W_MATCH * closeness + AXIS_PLAYLIST_W_NOVELTY * novelty,
+        ))
+    out.sort(key=lambda c: c.score, reverse=True)
+    return {
+        "tracks": out[:limit],
+        "diagnostics": {
+            "scanned": len(points),
+            "skipped_no_axes": skipped_no_axes,
+            "targets": targets,
+            "axis_stats_source": axis_stats.get("source"),
+        },
+    }

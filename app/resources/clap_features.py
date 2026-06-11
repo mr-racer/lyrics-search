@@ -125,6 +125,23 @@ def make_axes(scores: np.ndarray) -> np.ndarray:
     return np.stack(cols, axis=1)
 
 
+def z_to_level(z: float) -> str:
+    """Discrete level label for a z-score (notebook cell 67 thresholds).
+
+    Universal across axes because z is already normalised; ±1σ ≈ the
+    distribution tails (~16% each side), ±0.3σ ≈ the middle bulk.
+    """
+    if z >= 1.0:
+        return "very_high"
+    if z >= 0.3:
+        return "high"
+    if z > -0.3:
+        return "medium"
+    if z > -1.0:
+        return "low"
+    return "very_low"
+
+
 def axes_for_clap_vectors(clap_vectors: np.ndarray, text_emb: np.ndarray) -> list[dict[str, float]]:
     """Project unit-norm CLAP audio vectors onto the axis space.
 
