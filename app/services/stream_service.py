@@ -981,3 +981,94 @@ def next_chunk(
         "explore_slots": len(explore_picks),
     }
     return {"tracks": chunk, "diagnostics": diagnostics}
+
+
+# ── Similar tracks: CLAP neighbors re-ranked by sonic axes ──────────────────
+# Powers GET /recommend/similar (Recommend tab «похожие» + ai-playlist agent
+# tool). Unlike autoplay (pure CLAP order), candidates are re-ranked by a
+# blend of CLAP cosine and axis-space closeness to the seed.
+
+SIMILAR_W_CLAP = 0.7
+SIMILAR_W_AXES = 0.3
+SIMILAR_FETCH_MULT = 3   # fetch limit×3 neighbors before re-ranking
+
+
+def similar_tracks(
+    *,
+    qdrant_client,
+    collection_name: str,
+    seed_track_id: str,
+    limit: int = 10,
+    exclude_ids: list[str] | None = None,
+) -> dict:
+    """CLAP top-K of the seed, re-ranked by axis closeness.
+
+    score = 0.7·cos + 0.3·axis_closeness, where axis_closeness maps the RMS
+    z-distance between seed and candidate onto [−1, 1] (same scale as the
+    stream's axis_match). Without usable axis stats the axis term is 0 for
+    everyone — the order gracefully degrades to pure CLAP cosine.
+
+    Returns ``{"seed_track_id", "tracks": [StreamCandidate]}`` with
+    ``max_anchor_cos`` = CLAP cosine and ``axis_match`` = axis closeness;
+    ``score`` is the blend. Dislikes are hard-filtered.
+    """
+    from app.resources.clap_features import (
+        AXIS_NAMES, blend_axis_stats, load_axis_norm_reference,
+    )
+
+    excluded = set(exclude_ids or [])
+    excluded.add(seed_track_id)
+
+    # 1. Seed vector + axes.
+    seed_vectors, seed_payloads = _retrieve_track_data(
+        qdrant_client, collection_name, [seed_track_id],
+    )
+    seed_vec = seed_vectors.get(seed_track_id)
+    if seed_vec is None:
+        return {"seed_track_id": seed_track_id, "tracks": []}
+
+    axis_stats = blend_axis_stats(
+        MetadataDB.get_axis_norm_stats(collection_name),
+        load_axis_norm_reference(),
+    )
+    seed_z = z_scores_for_axes(
+        (seed_payloads.get(seed_track_id) or {}).get("sonic_axes"),
+        axis_stats, AXIS_NAMES,
+    )
+
+    # 2. CLAP neighbors.
+    k = max(limit * SIMILAR_FETCH_MULT, 30)
+    try:
+        hits = qdrant_client.search(
+            collection_name=collection_name,
+            query_vector=("clap", list(seed_vec)),
+            limit=k,
+            with_payload=True,
+        )
+    except Exception:
+        logger.exception("[similar] CLAP search failed for %s", seed_track_id)
+        return {"seed_track_id": seed_track_id, "tracks": []}
+
+    # 3. Dislike filter (single batched lookup).
+    candidate_ids = [str(h.id) for h in hits]
+    reactions = MetadataDB.get_reactions_for_tracks(collection_name, candidate_ids)
+    dislikes = {tid for tid, r in reactions.items() if r == "dislike"}
+
+    # 4. Re-rank by cos + axis closeness to the SEED (not the user profile).
+    out: list[StreamCandidate] = []
+    for h in hits:
+        tid = str(h.id)
+        if tid in excluded or tid in dislikes:
+            continue
+        payload = h.payload or {}
+        cos = float(h.score or 0.0)
+        cand_z = z_scores_for_axes(payload.get("sonic_axes"), axis_stats, AXIS_NAMES)
+        axis_closeness = axis_match_score(cand_z, seed_z, 1.0, AXIS_NAMES)
+        out.append(StreamCandidate(
+            track_id=tid, payload=payload, pool="anchor",
+            anchor_track_id=seed_track_id,
+            max_anchor_cos=cos, axis_match=axis_closeness,
+            score=SIMILAR_W_CLAP * cos + SIMILAR_W_AXES * axis_closeness,
+        ))
+    out.sort(key=lambda c: c.score, reverse=True)
+    return {"seed_track_id": seed_track_id, "tracks": out[:limit]}

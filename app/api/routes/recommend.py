@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.domain.models import (
     AutoplayQueueResponse,
+    SimilarTracksResponse,
     StreamNextResponse,
     StreamSettingsIn,
     StreamTrack,
@@ -124,6 +125,40 @@ def stream_settings(
     derived = derive_collection_for_user(current_user)
     MetadataDB.set_stream_liked_share(derived, body.liked_share)
     return {"liked_share": body.liked_share}
+
+
+@router.get("/similar", response_model=SimilarTracksResponse)
+def similar(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    track_id: str = Query(..., min_length=1),
+    limit: int = Query(10, ge=1, le=50),
+    exclude_ids: str | None = Query(
+        None, description="Comma-separated track ids to suppress. Capped at 100.",
+    ),
+) -> SimilarTracksResponse:
+    """Tracks similar to a seed: CLAP neighbors re-ranked by sonic-axis closeness.
+
+    Replaces the old frontend hack (text search for «artist title» in audio
+    mode) and doubles as the ai-playlist agent's similar_tracks tool.
+    """
+    db_client = request.app.state.db_client
+    if db_client is None or db_client.qdrant is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    derived = derive_collection_for_user(current_user)
+    excluded = [x.strip() for x in (exclude_ids or "").split(",") if x.strip()][:100]
+    result = stream_service.similar_tracks(
+        qdrant_client=db_client.qdrant,
+        collection_name=derived,
+        seed_track_id=track_id,
+        limit=limit,
+        exclude_ids=excluded,
+    )
+    return SimilarTracksResponse(
+        seed_track_id=result["seed_track_id"],
+        tracks=[_candidate_to_stream_track(c) for c in result["tracks"]],
+    )
 
 
 @router.get("/sonic-sibling")

@@ -530,6 +530,16 @@ class StreamSettingsIn(BaseModel):
     liked_share: float = Field(ge=0.0, le=1.0)
 
 
+class SimilarTracksResponse(BaseModel):
+    """Result of GET /recommend/similar — CLAP neighbors re-ranked by axes.
+
+    Tracks reuse StreamTrack: ``anchor_track_id`` = the seed, ``axis_match`` =
+    axis closeness to the seed, ``score`` = 0.7·cos + 0.3·axes blend.
+    """
+    seed_track_id: str
+    tracks: List[StreamTrack]
+
+
 class TopTrackBrief(BaseModel):
     track_id: str
     title: str

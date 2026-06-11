@@ -235,3 +235,31 @@ class TestStreamSettings:
     def test_put_validates_range(self, client):
         assert client.put("/api/v1/recommend/stream/settings",
                           json={"liked_share": 1.5}).status_code == 422
+
+
+class TestSimilar:
+    def test_returns_neighbors_with_seed_excluded(self, client):
+        resp = client.get("/api/v1/recommend/similar",
+                          params={"track_id": "a0", "limit": 5})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["seed_track_id"] == "a0"
+        ids = [t["track_id"] for t in body["tracks"]]
+        assert len(ids) == 5
+        assert "a0" not in ids
+        # same-cluster tracks dominate (cosine-faithful fake)
+        assert sum(1 for t in ids if t.startswith("a")) >= 4
+        assert all(t["anchor_track_id"] == "a0" for t in body["tracks"])
+
+    def test_disliked_neighbor_filtered(self, client):
+        coll = _owner_collection(client)
+        MetadataDB.set_reaction("a1", coll, "dislike")
+        resp = client.get("/api/v1/recommend/similar",
+                          params={"track_id": "a0", "limit": 10})
+        assert "a1" not in {t["track_id"] for t in resp.json()["tracks"]}
+
+    def test_unknown_seed_returns_empty(self, client):
+        resp = client.get("/api/v1/recommend/similar",
+                          params={"track_id": "ghost", "limit": 5})
+        assert resp.status_code == 200
+        assert resp.json()["tracks"] == []
