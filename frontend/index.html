@@ -10987,7 +10987,18 @@ const WIZ_TIERS = [
     noteRu: 'мультиязычный · медленнее', noteEn: 'multilingual · slower' },
 ];
 
-const WIZ_STEPS = ['welcome', 'account', 'mode', 'music'];
+const WIZ_STEPS = ['welcome', 'account', 'mode', 'music', 'ai', 'indexing'];
+
+// Stage keys come from the shared JobTracker (same SSE stream the existing
+// IndexingModal/UploadIndexingWizard consume).
+const WIZ_STAGE_LABELS = {
+  lyrics:   { ru: 'Тексты песен',  en: 'Lyrics' },
+  facts:    { ru: 'Факты',         en: 'Facts' },
+  metadata: { ru: 'Метаданные',    en: 'Metadata' },
+  dense:    { ru: 'Эмбеддинги',    en: 'Embeddings' },
+  audio:    { ru: 'Аудио-анализ',  en: 'Audio analysis' },
+  analysis: { ru: 'Анализ связей', en: 'Similarity analysis' },
+};
 
 function WizardDots({ count, active, c }) {
   return (
@@ -11035,6 +11046,21 @@ function SetupWizard({ onComplete }) {
   const [jobId, setJobId]                   = useState(null);
   const [syncDoneCount, setSyncDoneCount]   = useState(null);
 
+  // ai — OpenAI-compatible endpoint, probed via existing POST /system/llm-status.
+  const [llmUrl, setLlmUrl]           = useState(() => localStorage.getItem('llm_base_url') || '');
+  const [llmModel, setLlmModel]       = useState(() => localStorage.getItem('llm_model') || '');
+  const [probe, setProbe]             = useState(null);   // null | {available, error}
+  const [probing, setProbing]         = useState(false);
+  const [aiBusy, setAiBusy]           = useState(false);
+  const [aiConnected, setAiConnected] = useState(false);
+
+  // indexing — mirrors UploadIndexingWizard's SSE consumption.
+  const [stepStatus, setStepStatus]       = useState({});
+  const [stageProgress, setStageProgress] = useState({});
+  const [indexError, setIndexError]       = useState(null);
+  const [indexDone, setIndexDone]         = useState(false);
+  const [aiKickoff, setAiKickoff]         = useState(false);
+
   const handleTheme = () => setDark(d => {
     const next = !d; localStorage.setItem('musix_theme', next ? 'dark' : 'light'); return next;
   });
@@ -11043,8 +11069,99 @@ function SetupWizard({ onComplete }) {
   const stepIndex = WIZ_STEPS.indexOf(step);
 
   const advanceFromSetup = () => setStep('music');
-  // Task 8 re-points this at the AI step; for now music drops into the app.
-  const advanceFromMusic = () => onComplete({ mode });
+  const advanceFromMusic = () => setStep('ai');
+  const advanceFromAi = () => {
+    // Something to watch? → progress screen. Music skipped? → done.
+    if (jobId || syncDoneCount !== null) setStep('indexing');
+    else onComplete({ mode });
+  };
+
+  const probeLlm = async () => {
+    setProbing(true); setProbe(null);
+    try {
+      const res = await fetch(API + '/system/llm-status', {
+        method:'POST', headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify({ base_url: llmUrl.trim() || null, model: llmModel.trim() || null }),
+      });
+      setProbe(await res.json());
+    } catch (e) {
+      setProbe({ available:false, error:String(e.message || e) });
+    } finally { setProbing(false); }
+  };
+
+  const connectAi = async () => {
+    if (aiBusy) return;
+    setAiBusy(true);
+    try {
+      localStorage.setItem('llm_base_url', llmUrl.trim());
+      localStorage.setItem('llm_model', llmModel.trim());
+      await apiFetch('/library/ai-enabled', { method:'PATCH', body: JSON.stringify({ enabled:true }) });
+      setAiConnected(true);
+      advanceFromAi();
+    } catch (e) {
+      setProbe({ available:false, error:String(e.message || e) });
+    } finally { setAiBusy(false); }
+  };
+
+  const runAiBootstrap = async () => {
+    // Fire the three cache-building jobs; they run server-side and their
+    // status is visible in Settings → AI. Failures are non-fatal here.
+    setAiKickoff(true);
+    for (const task of ['sonic_vibe', 'refined_facts', 'artist_bio']) {
+      try {
+        await apiFetch(`/library/ai-index/${task}`, { method:'POST', body: JSON.stringify({
+          lang,
+          llm_base_url: localStorage.getItem('llm_base_url') || undefined,
+          llm_model: localStorage.getItem('llm_model') || undefined,
+        }) });
+      } catch (e) { /* runnable later from Settings */ }
+    }
+    onComplete({ mode });
+  };
+
+  const retryMusic = () => {
+    setIndexError(null); setIndexDone(false);
+    setStepStatus({}); setStageProgress({});
+    setJobId(null); setSyncDoneCount(null);
+    setStep('music');
+  };
+
+  useEffect(() => {
+    if (step !== 'indexing') return;
+    if (!jobId) {
+      // Sharing-mode small library finished inline — nothing to stream.
+      if (syncDoneCount !== null) setIndexDone(true);
+      return;
+    }
+    const evt = new EventSource(`${API}/index/progress/${jobId}`);
+    evt.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.stages) {
+          const statusMap = { completed:'done', failed:'failed', running:'running', pending:'pending' };
+          setStepStatus(prev => {
+            const next = { ...prev };
+            for (const [k, v] of Object.entries(data.stages)) next[k] = statusMap[v.status] || v.status || 'pending';
+            return next;
+          });
+          setStageProgress(prev => {
+            const next = { ...prev };
+            for (const [k, v] of Object.entries(data.stages)) {
+              next[k] = {
+                current: v.current ?? prev[k]?.current ?? 0,
+                total:   v.total   ?? prev[k]?.total   ?? 0,
+              };
+            }
+            return next;
+          });
+        }
+        if (data.overall_status === 'completed') { evt.close(); setIndexDone(true); }
+        else if (data.overall_status === 'failed') { evt.close(); setIndexError(data.error || data.message || 'failed'); }
+      } catch {}
+    };
+    // No evt.close() in onerror: EventSource auto-reconnects (spec §5).
+    return () => evt.close();
+  }, [step, jobId, syncDoneCount]);
 
   const applyTierToLocalStorage = () => {
     // Mirror the Settings panel behavior: search must use the same model the
@@ -11380,6 +11497,144 @@ function SetupWizard({ onComplete }) {
     </div>
   );
 
+  const renderAi = () => (
+    <div className={ske('panel', isDark)} style={{ padding:'30px 32px', borderRadius:'18px' }}>
+      <h2 className="serif" style={{ fontSize:'30px', letterSpacing:'-0.02em', marginBottom:'6px' }}>
+        {ru ? 'Подключить AI?' : 'Connect AI?'}
+      </h2>
+      <p style={{ fontSize:'13px', color:c.textMuted, lineHeight:'1.5', marginBottom:'20px' }}>
+        {ru ? 'Чат о треках, «звуковые вайбы», биографии артистов. Нужен OpenAI-совместимый сервер (LM Studio, Ollama…). Можно настроить позже в настройках.'
+            : 'Track chat, sonic vibes, artist bios. Needs an OpenAI-compatible server (LM Studio, Ollama…). You can set this up later in Settings.'}
+      </p>
+      <div className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'8px' }}>BASE URL</div>
+      <input value={llmUrl} onChange={e => { setLlmUrl(e.target.value); setProbe(null); }}
+        placeholder="http://localhost:1234/v1" disabled={aiBusy}
+        className={ske('inset', isDark)} style={{ width:'100%', padding:'11px 13px', borderRadius:'10px', border:'none',
+          color:c.text, fontSize:'14px', outline:'none', fontFamily:"'JetBrains Mono', monospace", marginBottom:'14px' }} />
+      <div className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'8px' }}>
+        {ru ? 'МОДЕЛЬ' : 'MODEL'}
+      </div>
+      <input value={llmModel} onChange={e => { setLlmModel(e.target.value); setProbe(null); }}
+        placeholder="qwen2.5-14b-instruct" disabled={aiBusy}
+        className={ske('inset', isDark)} style={{ width:'100%', padding:'11px 13px', borderRadius:'10px', border:'none',
+          color:c.text, fontSize:'14px', outline:'none', fontFamily:"'JetBrains Mono', monospace", marginBottom:'14px' }} />
+      <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'18px' }}>
+        <button onClick={probeLlm} disabled={probing || !llmUrl.trim()}
+          className={ske('btn', isDark)} style={{ padding:'9px 16px', borderRadius:'10px', fontSize:'13px',
+            color:c.textMuted, cursor: probing || !llmUrl.trim() ? 'not-allowed' : 'pointer',
+            display:'flex', alignItems:'center', gap:'6px' }}>
+          {probing ? <Spinner size={12} /> : '⚡'}
+          {ru ? 'Проверить соединение' : 'Test connection'}
+        </button>
+        {probe && (
+          <span style={{ fontSize:'12px', color: probe.available ? 'oklch(70% 0.18 145)' : c.red }}>
+            {probe.available
+              ? (ru ? '✓ модель найдена' : '✓ model found')
+              : `✗ ${probe.error || (ru ? 'недоступно' : 'unavailable')}`}
+          </span>
+        )}
+      </div>
+      <div style={{ display:'flex', gap:'10px' }}>
+        <button onClick={() => { setAiConnected(false); advanceFromAi(); }} disabled={aiBusy}
+          style={{ flex:1, padding:'12px', borderRadius:'10px', background:'transparent',
+            border:`1px solid ${c.border}`, color:c.textMuted, fontSize:'14px', cursor:'pointer' }}>
+          {ru ? 'Пропустить' : 'Skip'}
+        </button>
+        <button onClick={connectAi} disabled={aiBusy || !llmUrl.trim() || !llmModel.trim()}
+          className="ske-accent" style={{ flex:1, padding:'12px', borderRadius:'10px', fontSize:'14px', fontWeight:'600',
+            opacity: aiBusy || !llmUrl.trim() || !llmModel.trim() ? 0.5 : 1,
+            cursor: aiBusy ? 'wait' : 'pointer',
+            display:'flex', alignItems:'center', justifyContent:'center', gap:'8px' }}>
+          {aiBusy ? <Spinner size={14} color="white" /> : null}
+          {ru ? 'ПОДКЛЮЧИТЬ →' : 'CONNECT →'}
+        </button>
+      </div>
+    </div>
+  );
+
+  const renderIndexing = () => (
+    <div className={ske('panel', isDark)} style={{ padding:'30px 32px', borderRadius:'18px' }}>
+      <h2 className="serif" style={{ fontSize:'30px', letterSpacing:'-0.02em', marginBottom:'18px' }}>
+        {indexError
+          ? (ru ? 'Что-то пошло не так' : 'Something went wrong')
+          : indexDone
+            ? (ru ? 'Готово!' : 'Done!')
+            : (ru ? 'Индексируем библиотеку…' : 'Indexing your library…')}
+      </h2>
+
+      {!indexDone && !indexError && Object.keys(WIZ_STAGE_LABELS).map(k => {
+        const st = stepStatus[k] || 'pending';
+        const pr = stageProgress[k] || { current: 0, total: 0 };
+        const pct = st === 'done' ? 100 : pr.total > 0 ? Math.round(100 * pr.current / pr.total) : 0;
+        return (
+          <div key={k} style={{ marginBottom:'12px' }}>
+            <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'4px' }}>
+              <span className="mono" style={{ fontSize:'12px', letterSpacing:'0.12em',
+                color: st === 'running' ? c.text : c.textSubtle }}>
+                {ru ? WIZ_STAGE_LABELS[k].ru : WIZ_STAGE_LABELS[k].en}
+              </span>
+              <span style={{ fontSize:'11px', color: st === 'failed' ? c.red : c.textSubtle }}>
+                {st === 'done' ? '✓' : st === 'failed' ? '✗' : pr.total > 0 ? `${pr.current}/${pr.total}` : st === 'running' ? '…' : '·'}
+              </span>
+            </div>
+            <div style={{ height:'5px', borderRadius:'3px', background:c.border, overflow:'hidden' }}>
+              <div style={{ height:'100%', width:`${pct}%`, transition:'width 0.4s',
+                background:'linear-gradient(90deg, oklch(65% 0.18 270), oklch(75% 0.17 280))' }} />
+            </div>
+          </div>
+        );
+      })}
+
+      {indexError && (
+        <div>
+          <div style={{ padding:'10px 14px', borderRadius:'10px', background:c.redBg, color:c.red, fontSize:'13px', marginBottom:'16px' }}>
+            {indexError}
+          </div>
+          <div style={{ display:'flex', gap:'10px' }}>
+            <button onClick={retryMusic}
+              className="ske-accent" style={{ flex:1, padding:'12px', borderRadius:'10px', fontSize:'14px', fontWeight:'600', cursor:'pointer' }}>
+              {ru ? '↻ ПОВТОРИТЬ' : '↻ RETRY'}
+            </button>
+            <button onClick={() => onComplete({ mode })}
+              style={{ flex:1, padding:'12px', borderRadius:'10px', background:'transparent',
+                border:`1px solid ${c.border}`, color:c.textMuted, fontSize:'14px', cursor:'pointer' }}>
+              {ru ? 'В приложение' : 'Into the app'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {indexDone && (
+        <div>
+          <p style={{ fontSize:'14px', color:c.textMuted, lineHeight:'1.6', marginBottom:'18px' }}>
+            {ru ? 'Библиотека проиндексирована.' : 'Your library is indexed.'}
+            {aiConnected && (ru
+              ? ' Можно сразу запустить AI-обработку (вайбы, факты, биографии) — она пойдёт в фоне.'
+              : ' You can kick off AI processing (vibes, facts, bios) — it runs in the background.')}
+          </p>
+          {aiConnected && (
+            <button onClick={runAiBootstrap} disabled={aiKickoff}
+              className="ske-accent" style={{ width:'100%', padding:'12px', borderRadius:'10px', fontSize:'14px',
+                fontWeight:'600', marginBottom:'10px', opacity: aiKickoff ? 0.5 : 1, cursor: aiKickoff ? 'wait' : 'pointer',
+                display:'flex', alignItems:'center', justifyContent:'center', gap:'8px' }}>
+              {aiKickoff ? <Spinner size={14} color="white" /> : '✨'}
+              {ru ? 'ЗАПУСТИТЬ AI-ОБРАБОТКУ И ВОЙТИ' : 'RUN AI PROCESSING & ENTER'}
+            </button>
+          )}
+          <button onClick={() => onComplete({ mode })} disabled={aiKickoff}
+            className={aiConnected ? undefined : 'ske-accent'}
+            style={aiConnected
+              ? { width:'100%', padding:'12px', borderRadius:'10px', background:'transparent',
+                  border:`1px solid ${c.border}`, color:c.textMuted, fontSize:'14px', cursor:'pointer' }
+              : { width:'100%', padding:'13px 20px', borderRadius:'12px', fontSize:'15px', fontWeight:'600',
+                  letterSpacing:'0.08em', cursor:'pointer' }}>
+            {ru ? '▶ ОТКРЫТЬ MUSIX' : '▶ OPEN MUSIX'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+
   if (alreadyInit) {
     return (
       <div className="grain" style={{
@@ -11426,6 +11681,8 @@ function SetupWizard({ onComplete }) {
           {step === 'account' && renderAccount()}
           {step === 'mode'    && renderMode()}
           {step === 'music'   && renderMusic()}
+          {step === 'ai'      && renderAi()}
+          {step === 'indexing' && renderIndexing()}
           <WizardDots count={WIZ_STEPS.length} active={stepIndex} c={c} />
         </div>
       </div>
