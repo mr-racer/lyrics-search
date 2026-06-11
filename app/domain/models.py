@@ -588,6 +588,46 @@ class AxisPlaylistResponse(BaseModel):
     diagnostics: dict
 
 
+class ProfileEnrichIn(BaseModel):
+    """Body for POST /recommend/profile/ai-enrich (AI mode)."""
+    lang: str = "en"
+    llm_base_url: Optional[str] = None
+    llm_model: Optional[str] = None
+
+
+class ProfileEnrichResponse(BaseModel):
+    """LLM listener portrait + island names (also persisted server-side)."""
+    portrait: Optional[str] = None
+    island_names: Dict[str, str] = Field(default_factory=dict)
+
+
+class AIPlaylistIn(BaseModel):
+    """Body for POST /recommend/ai-playlist — one wish → curated playlist."""
+    prompt: str = Field(min_length=3, max_length=500)
+    limit: int = Field(15, ge=1, le=40)
+    lang: str = "en"
+    llm_base_url: Optional[str] = None
+    llm_model: Optional[str] = None
+
+
+class AIPlaylistStep(BaseModel):
+    """One executed plan action — the frontend animates these."""
+    tool: str
+    query: str
+    found: int
+
+
+class AIPlaylistTrack(TrackMetadata):
+    reason: Optional[str] = None       # why this track fits the wish (LLM, short)
+    source_tool: Optional[str] = None  # which tool surfaced it
+
+
+class AIPlaylistResponse(BaseModel):
+    title: str
+    steps: List[AIPlaylistStep]
+    tracks: List[AIPlaylistTrack]
+
+
 class TopTrackBrief(BaseModel):
     track_id: str
     title: str

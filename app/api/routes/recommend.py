@@ -5,9 +5,15 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.domain.models import (
+    AIPlaylistIn,
+    AIPlaylistResponse,
+    AIPlaylistStep,
+    AIPlaylistTrack,
     AutoplayQueueResponse,
     AxisPlaylistIn,
     AxisPlaylistResponse,
+    ProfileEnrichIn,
+    ProfileEnrichResponse,
     ProfileIsland,
     ProfileIslandTrack,
     SimilarTracksResponse,
@@ -20,7 +26,7 @@ from app.domain.models import (
 from app.api.dependencies import get_current_user
 from app.api.helpers import derive_collection_for_user
 from app.resources.metadata_db import MetadataDB
-from app.services import autoplay_service, stream_service
+from app.services import autoplay_service, recsys_ai_service, stream_service
 from app.services._payload_coerce import coerce_float, coerce_year
 
 router = APIRouter(prefix="/recommend", tags=["Recommend"])
@@ -136,12 +142,14 @@ def stream_settings(
 def stream_profile(
     request: Request,
     current_user: User = Depends(get_current_user),
+    lang: str = Query("en", min_length=2, max_length=5),
 ) -> StreamProfileResponse:
     """Explainable long-term taste: 6 axes (z + level), confidence, islands.
 
     Pure long-term (no session blending) — the stable «кто я как слушатель»
     view. LLM enrichment (portrait + island names) is attached from cache when
-    present (populated by POST /recommend/profile/ai-enrich).
+    fresh (populated by POST /recommend/profile/ai-enrich; a stale hash means
+    the taste drifted and the frontend should offer a regenerate button).
     """
     db_client = request.app.state.db_client
     if db_client is None or db_client.qdrant is None:
@@ -151,10 +159,13 @@ def stream_profile(
     result = stream_service.long_term_profile(
         qdrant_client=db_client.qdrant, collection_name=derived,
     )
+    enrich = recsys_ai_service.get_cached_enrichment(derived, lang, result["islands"]) or {}
+    island_names = enrich.get("island_names") or {}
     islands = [
         ProfileIsland(
             track_id=i["track_id"], weight=i["weight"],
             tracks=[ProfileIslandTrack(**t) for t in i["tracks"]],
+            name=island_names.get(i["track_id"]),
         )
         for i in result["islands"]
     ]
@@ -163,7 +174,84 @@ def stream_profile(
         confidence=result["confidence"],
         n_signals=result["n_signals"],
         islands=islands,
+        portrait=enrich.get("portrait"),
         axis_stats_source=result["axis_stats_source"],
+    )
+
+
+@router.post("/profile/ai-enrich", response_model=ProfileEnrichResponse)
+async def profile_ai_enrich(
+    body: ProfileEnrichIn,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> ProfileEnrichResponse:
+    """Generate (and cache) the LLM listener portrait + island names (AI mode)."""
+    db_client = request.app.state.db_client
+    if db_client is None or db_client.qdrant is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    derived = derive_collection_for_user(current_user)
+    try:
+        result = await recsys_ai_service.enrich_profile(
+            qdrant_client=db_client.qdrant,
+            collection_name=derived,
+            lang=body.lang,
+            llm_base_url=body.llm_base_url,
+            llm_model=body.llm_model,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"LLM enrichment failed: {e}")
+    return ProfileEnrichResponse(
+        portrait=result["portrait"], island_names=result["island_names"],
+    )
+
+
+@router.post("/ai-playlist", response_model=AIPlaylistResponse)
+async def ai_playlist_route(
+    body: AIPlaylistIn,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> AIPlaylistResponse:
+    """One wish → curated playlist (AI mode): plan → execute → select."""
+    db_client = request.app.state.db_client
+    search_service = getattr(request.app.state, "search_service", None)
+    if db_client is None or db_client.qdrant is None or search_service is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    derived = derive_collection_for_user(current_user)
+    try:
+        result = await recsys_ai_service.ai_playlist(
+            search_service=search_service,
+            qdrant_client=db_client.qdrant,
+            collection_name=derived,
+            prompt=body.prompt,
+            lang=body.lang,
+            limit=body.limit,
+            llm_base_url=body.llm_base_url,
+            llm_model=body.llm_model,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"AI playlist failed: {e}")
+    tracks = [
+        AIPlaylistTrack(
+            track_id=t["track_id"],
+            title=t["title"],
+            artist=t["artist"],
+            album=t.get("album"),
+            year=coerce_year(t.get("year")),
+            genre=t.get("genre"),
+            duration_sec=coerce_float(t.get("duration")) or 0.0,
+            file_path=t.get("file_path") or "",
+            cover_art_path=t.get("cover_art_path"),
+            reason=t.get("reason"),
+            source_tool=t.get("tool"),
+        )
+        for t in result["tracks"]
+    ]
+    return AIPlaylistResponse(
+        title=result["title"],
+        steps=[AIPlaylistStep(**s) for s in result["steps"]],
+        tracks=tracks,
     )
 
 

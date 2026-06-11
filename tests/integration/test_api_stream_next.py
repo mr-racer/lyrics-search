@@ -283,6 +283,31 @@ class TestProfileAndAxisPlaylist:
         assert resp.json()["tracks"] == []
         assert resp.json()["diagnostics"]["reason"] == "no_axis_stats"
 
+    def test_profile_attaches_fresh_llm_enrichment(self, client):
+        """A cached enrichment matching the current islands hash is served;
+        islands get their LLM names attached by representative track_id."""
+        from app.services.recsys_ai_service import PROFILE_ENRICH_KIND, profile_source_hash
+
+        coll = _owner_collection(client)
+        for i in range(3):
+            _post_event(client, f"a{i}")
+        _like(client, coll, "a0")
+
+        islands = client.get("/api/v1/recommend/profile").json()["islands"]
+        assert islands
+        rep = islands[0]["track_id"]
+        MetadataDB.set_recsys_llm_text(
+            coll, PROFILE_ENRICH_KIND, "ru", profile_source_hash(islands),
+            {"portrait": "Портрет.", "island_names": {rep: "Ночной синтвейв"}},
+        )
+
+        body = client.get("/api/v1/recommend/profile", params={"lang": "ru"}).json()
+        assert body["portrait"] == "Портрет."
+        assert body["islands"][0]["name"] == "Ночной синтвейв"
+        # other language has no cache → no portrait
+        assert client.get("/api/v1/recommend/profile",
+                          params={"lang": "en"}).json()["portrait"] is None
+
 
 class TestSimilar:
     def test_returns_neighbors_with_seed_excluded(self, client):

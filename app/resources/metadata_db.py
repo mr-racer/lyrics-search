@@ -170,6 +170,18 @@ _SCHEMA_SQL: Tuple[str, ...] = (
     )""",
     "CREATE INDEX IF NOT EXISTS idx_playlist_tracks_position ON playlist_tracks(playlist_id, position)",
     "CREATE INDEX IF NOT EXISTS idx_playlists_collection ON playlists(collection_name)",
+    # Stream RecSys: cached LLM texts (listener portrait + island names).
+    # source_hash fingerprints the profile inputs (island members) — when the
+    # taste drifts the hash changes and readers treat the row as stale.
+    """CREATE TABLE IF NOT EXISTS recsys_llm_texts (
+        collection_name TEXT NOT NULL,
+        kind            TEXT NOT NULL,
+        lang            TEXT NOT NULL,
+        source_hash     TEXT NOT NULL,
+        content_json    TEXT NOT NULL,
+        created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (collection_name, kind, lang)
+    )""",
     # Phase A: Auth Foundation — users + invites + instance_config
     """CREATE TABLE IF NOT EXISTS users (
         id            TEXT PRIMARY KEY,
@@ -1030,6 +1042,51 @@ class MetadataDB:
             (collection_name, json.dumps(stats)),
         )
         conn.commit()
+
+    @classmethod
+    def set_recsys_llm_text(
+        cls, collection_name: str, kind: str, lang: str,
+        source_hash: str, content: Dict,
+    ) -> None:
+        """Upsert a cached LLM text (one row per collection+kind+lang)."""
+        conn = cls._connect()
+        conn.execute(
+            """INSERT INTO recsys_llm_texts
+                 (collection_name, kind, lang, source_hash, content_json, created_at)
+               VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(collection_name, kind, lang) DO UPDATE SET
+                 source_hash = excluded.source_hash,
+                 content_json = excluded.content_json,
+                 created_at = CURRENT_TIMESTAMP""",
+            (collection_name, kind, lang, source_hash, json.dumps(content)),
+        )
+        conn.commit()
+
+    @classmethod
+    def get_recsys_llm_text(
+        cls, collection_name: str, kind: str, lang: str,
+        source_hash: Optional[str] = None,
+    ) -> Optional[Dict]:
+        """Return cached content, or None when absent / corrupt / stale.
+
+        When ``source_hash`` is provided, a stored row with a different hash is
+        treated as stale (the taste profile moved on) and None is returned.
+        """
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT source_hash, content_json FROM recsys_llm_texts "
+            "WHERE collection_name = ? AND kind = ? AND lang = ?",
+            (collection_name, kind, lang),
+        ).fetchone()
+        if row is None:
+            return None
+        if source_hash is not None and row[0] != source_hash:
+            return None
+        try:
+            return json.loads(row[1])
+        except (TypeError, ValueError):
+            logger.warning("[MetadataDB] corrupt recsys_llm_texts row for %s/%s", collection_name, kind)
+            return None
 
     @classmethod
     def set_stream_liked_share(cls, collection_name: str, share: float) -> None:
