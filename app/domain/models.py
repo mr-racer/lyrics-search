@@ -666,6 +666,14 @@ class InstanceConfigResponse(BaseModel):
     mode: Literal["sharing", "server"]
 
 
+class SetupRequest(BaseModel):
+    """Body of POST /instance/setup — first-run bootstrap. Public while the
+    instance is uninitialized; 409 forever after the first success."""
+    email: str
+    password: str
+    mode: Literal["sharing", "server"]
+
+
 class LoginRequest(BaseModel):
     email: str
     password: str
