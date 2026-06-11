@@ -567,36 +567,33 @@ Endpoints:
 - Слишком узкий prompt (single match) → still returns 1 track + "we only found one — try broadening"
 - Слишком широкий prompt → fallback к top-genre + recency
 
-### 5.4 For You — Personalized Stream
+### 5.4 Stream RecSys — session-aware personalized radio («Поток»)
+
+> **Заменяет** прежний «For You (user_vector над dense-векторами)» целиком — усреднённый
+> центроид разнородных лайков давал бессмысленную середину. Полная спека:
+> `docs/2026-06-09-stream-recsys-design.md`. **Бэкенд shipped 2026-06-11 (RS-1 в §9),
+> фронт (UI стрима, слайдер, prefetch, флаг interacted) — отдельная итерация.**
 
 **Где**: Recommendations → Mode 1. Также CTA strip на Home bottom.
-**Что делает**: one-click → играет всю библиотеку, отсортированную по personalized score from listening history + reactions.
+**Что делает**: бесконечный поток из проиндексированной библиотеки, адаптирующийся к
+сигналам текущей сессии (~10 сигналов → сессионный вкус доминирует) поверх long-term
+истории с time-decay.
 
-**Algorithm**:
-```python
-liked_vectors    = qdrant.retrieve(track_ids=liked_track_ids, with_vectors=["dense"])
-skipped_vectors  = qdrant.retrieve(track_ids=skipped_track_ids, with_vectors=["dense"])
-user_vector      = normalize(mean(liked_vectors) − 0.3 * mean(skipped_vectors))
+**Архитектура — stateless re-rank**: состояние сессии не хранится; каждый
+`GET /recommend/stream/next` читает `playback_events` + `track_reactions`,
+восстанавливает профили (мульти-якорь + 6 осевых предпочтений), генерирует кандидатов
+(пул A: CLAP-соседи якорей; пул B: эксплорация по стратам осей; пул C: лайки со
+слайдером `liked_share`), скорит и собирает чанк. Гибрид: retrieval по CLAP,
+re-ranking по интерпретируемым осям (`sonic_axes` payload + z-score из
+`axis_norm_stats` с shrinkage-эталоном).
 
-for track in library:
-    base_score    = cosine(track.dense_vector, user_vector)
-    recency_pen   = 0.5 * exp(-hours_since_played(track) / 24)
-    score         = base_score − recency_pen
-
-queue = sorted(library, by=-score)
-queue = filter(queue, not_played_within(window=1h))
-```
-
-**Backend**:
-- `GET /recommend/for-you?collection=...&limit=50&offset=0` — paginated ordered list
-- `GET /recommend/for-you/rationale?track_id=...&collection=...` — lazy LLM call. **Inputs to LLM**: top-3 пересекающихся descriptor tags между current track и aggregated user-profile descriptors (computed как top tags по liked-треках). Plus shared sonic_class между current track и user's most-liked sonic_class. Из этого LLM пишет фразу: *"matches your usual lush + warm + acoustic palette; same Lo-fi indie cluster as 12 of your liked tracks."*
-- `user_vector` cached in-memory per collection с TTL 1h. Invalidated на каждый `track_reactions` insert/update + каждый `playback_history` insert.
-- `app/services/personalization_service.py` (new) — handles user_vector compute + cache + queue generation + aggregate descriptor profile.
-
-**Skip behavior**: Если юзер skip-ает трек в For You queue:
-- Track marked as `skipped` in current session
-- Triggers user_vector recompute (если набралось >5 skips since last recompute)
-- Downstream queue resorted
+**Backend (shipped)**:
+- `GET /recommend/stream/next?session_id=...&n=3&liked_share=0.3&exclude_ids=...` →
+  `StreamTrack{pool: anchor|explore|liked, anchor_track_id?, axis_match?, score?}` +
+  diagnostics (сырьё для будущего rationale-чипа).
+- `PUT /recommend/stream/settings` — персист слайдера (`collection_settings.stream_liked_share`).
+- `app/services/stream_service.py` — reward model / профили / пулы / скоринг / сборка.
+- Rationale-чип через LLM на базе diagnostics — будущая итерация (§11 спеки).
 
 ### 5.5 Quick-Rate Session (cold start)
 
@@ -1101,7 +1098,8 @@ CREATE TABLE recommendation_snapshots (
 > | **1**  Backend foundations            | ✅ Shipped (Plan 3)                       | `docs/superpowers/plans/2026-05-14-plan-3-backend-foundations.md` |
 > | **2b** Liquid-glass nav rail (v4)     | ✅ **Shipped (2026-06-10)** — `FloatingIconNav` v4: «парящие» стеклянные острова (letterpress-лого → tab capsule → pebble dock) вместо сплошной 64px-колонки. Tab order: Player → Library → Recommend → Search; 'home' убран из вкладок (лого с теснением ведёт на лендинг). Активный индикатор — стеклянный блоб с overshoot-spring перетеканием между вкладками (`.lg-blob`). На вкладке Player галька NowPlayingPebble скрывается (slot collapse + fly-up) — рейл там чистый, обложку показывает сам плеер. CSS: `.lg-island`/`.lg-blob`/`.lg-tab`/`.lg-pebble-slot` + `.lg-light` тема. | inline in `frontend/index.html` |
 > | **2c** SettingsPanel refactor (v3)    | ✅ **Shipped (2026-06-10)** — панель приведена к Hybrid v3 (panel-v3/pill-v3/cta-v3, ske-* убраны): три воздушные секции АККАУНТ (account-shaped карточка активной коллекции: аватар + имя + счётчик + ИИ-тоггл; смена/удаление под раскрывашкой «Сменить»; задел под будущие аккаунты) → ИНТЕЛЛЕКТ (LLM статус-строка + поля URL/model под «Настроить»; «Сохранить и проверить» одной кнопкой; ИИ-обогащение **одной кнопкой**-пайплайном: sonic_vibe → refined_facts → artist_bio последовательно с polling до завершения каждой — чинит висевшие статусы кнопок; детали трёх задач под раскрывашкой) → ВНЕШНИЙ ВИД. Форма «Новая коллекция» вынесена в модалку; выбор embedding-модели — двухпозиционный слайдер Лёгкая/Тяжёлая (`.tier-slider`; heavy = Qwen3-Embedding-0.6B с подсказкой про GPU, light = backend default). `MusixSelect` удалён как мёртвый код. | inline in `frontend/index.html` |
-> | **1b** Additional backend services    | 🛠 **1b.2 partial** — `/library/rediscover` + `/library/featured-artist` shipped (Home plan); For-You uses placeholder `/recommend/for-you-seed` (full personalization 1b.3 still pending). 1b.1/1b.4/1b.5/1b.6 not started | `docs/superpowers/plans/2026-05-24-home-discovery-magazine.md` |
+> | **1b** Additional backend services    | 🛠 **1b.2 partial** — `/library/rediscover` + `/library/featured-artist` shipped (Home plan); **1b.3 personalization replaced by RS-1 Stream RecSys (below); placeholder `/recommend/for-you-seed` + `personalization_service.py` deleted (frontend ForYouHero degrades gracefully until its stream iteration)**. 1b.1/1b.4/1b.5/1b.6 not started | `docs/superpowers/plans/2026-05-24-home-discovery-magazine.md` |
+> | **RS-1** Stream RecSys backend («Поток») | ✅ **Shipped (2026-06-11)** on `feat/stream-recsys` — session-aware personalized radio, stateless re-rank (профили пересобираются из SQLite на каждый запрос, переживает рестарт/reload). **Sonic axes**: 12 CLAP-промптов → 6 разностных осей (energy/vocal_lead/spacious/experimental/brightness/acousticness; `dense` — заглушка) в `clap_features.py`; сырые скоры пишутся в Qdrant payload `sonic_axes` на Stage 4 индексации, mean/std → `collection_settings.axis_norm_stats` (z-score на лету; shrinkage λ=n/(n+100) к эталону `app/resources/data/axis_norm_reference.json`, генерится `scripts/build_axis_norm_reference.py` из Qdrant-коллекции; backfill не делается — переиндексация). **Reward model** (§3 дизайна): скип −0.6 (30с абс / 25% для коротких), 65%/85% зоны → +0.25/+0.4, мгновенный реплей +0.9 (гейт: первое ≥85%, та же сессия), лайк/дизлайк ±1.0; decay exp(−Δд/H), H=90д/30д; idle rule (5 пассивных → вес 0 до действия; `playback_events.interacted INTEGER NULL`). **Профили**: мульти-якорь (top-20 по decayed-весу, слияние cos>0.85, top-5 эффективных), негатив = дизлайки (жёсткий фильтр) + decayed-мультискип ≥1.5, осевые предпочтения p∈R⁶ + уверенность; блендинг w_s=min(1,n/10), сессионные якоря ×(1+2·w_s) через max. **Пулы**: A — CLAP top-30 на якорь (max_cos дедуп); B — эксплорация по стратам energy×experimental (12% не-liked слотов, проверка близости к негативу); C — лайки (decayed-вес, cooldown 8ч, анти-повтор). **score** = 0.5·max_cos + 0.25·axis_match·conf + 0.1·novelty − 0.15·recent − artist-penalty (окно 3). Сборка: квота слотов round(n·liked_share), ≤2 liked/≤2 артиста подряд, ступенчатый topup. **API**: `GET /recommend/stream/next?session_id&n&liked_share&exclude_ids` (D-hard, коллекция из JWT) → StreamTrack{pool, anchor_track_id, axis_match, score} + diagnostics; `PUT /recommend/stream/settings` персистит `stream_liked_share`. Холодный старт = чистая эксплорация. Тесты: ~120 unit + integration + replay-сессия (инварианты: без повторов, доля любимых ±1 слот, ноль дизлайкнутых). | spec `docs/2026-06-09-stream-recsys-design.md` |
 > | **1c** Sonic Descriptor Layer         | ✅ Shipped (merged from `feature/sonic-descriptor-layer`) — unblocks Sonic Sibling, Sonic Map cluster overlay, For You rationale | `app/services/sonic_descriptor_service.py`, `scripts/cluster_curator.py` |
 > | **2**  Frontend foundation            | ✅ Shipped (out-of-band — landed alongside Plan 4 timeframe) | inline in `frontend/index.html` |
 > | **3**  Artist Atlas                   | ✅ Shipped (Plan 5) + **artist canonicalization** (2026-05-24): a track's `artist` tag is split into participants at index time into multi-valued payload `artists[]`/`artist_slugs[]`/`primary_artist_slug` (curated splitter `app/services/artist_split.py` + `artist_split_rules.json`, whole-slug matching so "ye" never matches inside "kanye"). Artist page now filters by participant slug server-side (keyword index) → collaborations surface mixed-in and marked `feat.`; distinct-artist list explodes collabs into individuals. Backfill: `scripts/backfill_artist_slugs.py` (no vector re-encode). | `docs/superpowers/plans/2026-05-16-plan-5-artist-atlas.md`, `docs/superpowers/plans/2026-05-24-artist-canonicalization.md` |
