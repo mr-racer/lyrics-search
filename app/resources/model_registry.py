@@ -37,9 +37,14 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 CLAP_WEIGHTS_PATH = Path(__file__).parent.parent.parent / "weights" / "music_audioset_epoch_15_esc_90.14.pt"
 CLAP_WEIGHTS_URL = "https://huggingface.co/lukewys/laion_clap/resolve/main/music_audioset_epoch_15_esc_90.14.pt"
 
-# Available text embedding models
+# Available text embedding models. Vector storage in Qdrant is keyed per
+# model (vector_name/dim come from get_text_model), so adding an entry here
+# needs no migration. NOTE: e5 models nominally want "query:"/"passage:"
+# prefixes; we skip them (accepted simplification, wizard spec §3.2 —
+# consistent with how Qwen is used without instruction prefixes).
 TEXT_MODELS = {
     "jinaai/jina-embeddings-v2-small-en": {"dim": 512, "desc": "Lightweight model with CPU optimisation"},
+    "intfloat/multilingual-e5-base": {"dim": 768, "desc": "Balanced, multilingual"},
     "Qwen/Qwen3-Embedding-0.6B": {"dim": 1024, "desc": "Higher quality, slower"},
 }
 
