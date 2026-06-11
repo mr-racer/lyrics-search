@@ -357,3 +357,410 @@ def union_anchor_weights(
         if boosted > out.get(tid, float("-inf")):
             out[tid] = boosted
     return out
+
+
+# ── Candidate pools + scoring + chunk assembly (design §5–6) ───────────────
+
+# score(t) weights — tuned later against live sessions; keep them named.
+SCORE_W_ANCHOR = 0.50     # max_cos to the CLOSEST anchor (not the mean)
+SCORE_W_AXIS = 0.25       # axis match × profile confidence
+SCORE_W_NOVELTY = 0.10    # low play_count boost
+SCORE_W_RECENT = 0.15     # exp(−hours_since_played / 24) penalty
+ARTIST_REPEAT_PENALTY = 0.05      # SMALL nudge, window = last 3 tracks
+ARTIST_REPEAT_WINDOW = 3
+RECENT_PENALTY_HALFLIFE_H = 24.0
+# Axis match: RMS z-distance mapped to [−1, 1]; dist 0 → 1, dist=SCALE → 0.
+AXIS_MATCH_DIST_SCALE = 2.0
+
+ANCHOR_TOP_K = 30          # Qdrant neighbors fetched per effective anchor
+
+EXPLORE_SHARE = 0.12       # ≈10–15% of non-liked slots — filter-bubble insurance
+EXPLORE_MAX_PLAY_COUNT = 1  # «низкий play_count»: 0 or 1 plays
+EXPLORE_POOL_SIZE = 12
+EXPLORE_BIN_EDGE = 0.5     # z-bins: < −0.5 | −0.5..0.5 | > 0.5 (energy × experimental)
+NEG_PROXIMITY_THRESHOLD = 0.80  # explore candidate too close to a negative anchor
+
+LIKED_COOLDOWN_H = 8.0     # hard «не чаще раза в 8 часов»
+MAX_CONSECUTIVE_LIKED = 2
+MAX_CONSECUTIVE_ARTIST = 2  # autoplay_service rule, reused
+
+DEFAULT_CHUNK_N = 3
+DEFAULT_LIKED_SHARE = 0.30
+LONG_TERM_EVENT_CAP = 2000  # newest events fed into profile building
+
+
+@dataclass
+class StreamCandidate:
+    """One candidate track flowing through scoring/assembly.
+
+    ``payload`` is the raw Qdrant payload (title/artist/…/sonic_axes) — the
+    route layer converts it to TrackMetadata at the very end.
+    """
+    track_id: str
+    payload: dict
+    pool: str                          # 'anchor' | 'explore' | 'liked'
+    anchor_track_id: str | None = None
+    max_anchor_cos: float = 0.0
+    axis_match: float | None = None
+    score: float = 0.0
+
+
+def z_scores_for_axes(
+    raw_axes: dict | None,
+    stats: dict | None,
+    axis_names: tuple[str, ...],
+) -> dict[str, float] | None:
+    """Raw payload scores → z-scores via blended stats. None when unusable.
+
+    A zero/missing std yields z=0 for that axis (axis carries no signal in
+    this collection rather than exploding to ±inf).
+    """
+    if not raw_axes or not stats:
+        return None
+    mean, std = stats.get("mean") or {}, stats.get("std") or {}
+    out: dict[str, float] = {}
+    for a in axis_names:
+        if a not in raw_axes:
+            return None  # malformed payload — treat the whole dict as unusable
+        s = std.get(a, 0.0)
+        out[a] = (raw_axes[a] - mean.get(a, 0.0)) / s if s > 1e-9 else 0.0
+    return out
+
+
+def axis_match_score(
+    z: dict[str, float] | None,
+    p: dict[str, float] | None,
+    confidence: float,
+    axis_names: tuple[str, ...],
+) -> float:
+    """−‖z − p‖₂ normalised: RMS distance mapped to [−1, 1], × confidence.
+
+    No axis data or no profile → 0 (the term drops out of the score).
+    """
+    if not z or not p or confidence <= 0.0:
+        return 0.0
+    sq = sum((z.get(a, 0.0) - p.get(a, 0.0)) ** 2 for a in axis_names)
+    rms = math.sqrt(sq / len(axis_names))
+    match = max(-1.0, min(1.0, 1.0 - rms / AXIS_MATCH_DIST_SCALE))
+    return match * confidence
+
+
+def pool_anchor_candidates(
+    qdrant_client,
+    collection_name: str,
+    anchors: list[Anchor],
+    excluded: set[str],
+    k: int = ANCHOR_TOP_K,
+) -> dict[str, StreamCandidate]:
+    """Pool A: Qdrant CLAP top-K per effective anchor, deduped by track_id.
+
+    A track found by several anchors keeps its best (max) cosine — design §6
+    scores against the closest anchor, not the average.
+    """
+    out: dict[str, StreamCandidate] = {}
+    for anchor in anchors:
+        if anchor.vector is None:
+            continue
+        try:
+            hits = qdrant_client.search(
+                collection_name=collection_name,
+                query_vector=("clap", list(anchor.vector)),
+                limit=k,
+                with_payload=True,
+            )
+        except Exception:
+            logger.exception("[stream] anchor search failed for %s", anchor.track_id)
+            continue
+        for h in hits:
+            tid = str(h.id)
+            if tid in excluded:
+                continue
+            cos = float(h.score or 0.0)
+            existing = out.get(tid)
+            if existing is None:
+                out[tid] = StreamCandidate(
+                    track_id=tid, payload=h.payload or {}, pool="anchor",
+                    anchor_track_id=anchor.track_id, max_anchor_cos=cos,
+                )
+            elif cos > existing.max_anchor_cos:
+                existing.max_anchor_cos = cos
+                existing.anchor_track_id = anchor.track_id
+    return out
+
+
+def _explore_bin(z_energy: float, z_experimental: float) -> tuple[int, int]:
+    def bucket(z: float) -> int:
+        if z < -EXPLORE_BIN_EDGE:
+            return 0
+        if z > EXPLORE_BIN_EDGE:
+            return 2
+        return 1
+    return bucket(z_energy), bucket(z_experimental)
+
+
+def stratify_explore(
+    eligible: list[tuple[str, dict[str, float] | None]],
+    pool_size: int,
+    rng,
+) -> list[str]:
+    """Round-robin sample across energy×experimental z-bins.
+
+    ``eligible`` is ``[(track_id, z_axes | None)]``; tracks without axis data
+    fall into one shared bin. Stratification keeps exploration spread across
+    the sonic space instead of clustering around the collection's bulk.
+    """
+    bins: dict[tuple, list[str]] = {}
+    for tid, z in eligible:
+        key = _explore_bin(z["energy"], z["experimental"]) if z else ("nz",)
+        bins.setdefault(key, []).append(tid)
+
+    for members in bins.values():
+        rng.shuffle(members)
+
+    out: list[str] = []
+    bin_lists = list(bins.values())
+    i = 0
+    while len(out) < pool_size and any(bin_lists):
+        lst = bin_lists[i % len(bin_lists)]
+        if lst:
+            out.append(lst.pop())
+        i += 1
+        if i > 10_000:  # all bins drained
+            break
+        if all(not lst for lst in bin_lists):
+            break
+    return out
+
+
+def pool_explore_candidates(
+    qdrant_client,
+    collection_name: str,
+    *,
+    excluded: set[str],
+    reacted_ids: set[str],
+    play_counts: dict[str, int],
+    axis_stats: dict | None,
+    negative_vectors: list[np.ndarray],
+    axis_names: tuple[str, ...],
+    rng,
+    pool_size: int = EXPLORE_POOL_SIZE,
+    scroll_cap: int = 5000,
+) -> list[StreamCandidate]:
+    """Pool B: low-play-count unreacted tracks, stratified over axis bins,
+    not too close to negative anchors. Sonic Descriptor clusters are NOT used."""
+    # 1. Scroll payloads (no vectors — cheap even for thousands of tracks).
+    points: list = []
+    offset = None
+    try:
+        while len(points) < scroll_cap:
+            batch, offset = qdrant_client.scroll(
+                collection_name=collection_name,
+                limit=min(512, scroll_cap - len(points)),
+                with_payload=True,
+                with_vectors=False,
+                offset=offset,
+            )
+            points.extend(batch)
+            if offset is None or not batch:
+                break
+    except Exception:
+        logger.exception("[stream] explore scroll failed")
+        return []
+
+    payload_by_id: dict[str, dict] = {}
+    eligible: list[tuple[str, dict[str, float] | None]] = []
+    for p in points:
+        tid = str(p.id)
+        if tid in excluded or tid in reacted_ids:
+            continue
+        if play_counts.get(tid, 0) > EXPLORE_MAX_PLAY_COUNT:
+            continue
+        payload = p.payload or {}
+        payload_by_id[tid] = payload
+        z = z_scores_for_axes(payload.get("sonic_axes"), axis_stats, axis_names)
+        eligible.append((tid, z))
+
+    # 2. Stratified sample.
+    sampled = stratify_explore(eligible, pool_size, rng)
+    if not sampled or not negative_vectors:
+        return [StreamCandidate(track_id=t, payload=payload_by_id[t], pool="explore")
+                for t in sampled]
+
+    # 3. Negative-proximity check — only for the small sampled set.
+    neg = np.stack([v / (np.linalg.norm(v) or 1.0) for v in negative_vectors])
+    kept: list[StreamCandidate] = []
+    try:
+        pts = qdrant_client.retrieve(
+            collection_name=collection_name, ids=sampled,
+            with_payload=False, with_vectors=["clap"],
+        )
+    except Exception:
+        logger.exception("[stream] explore vector retrieve failed — skipping negativity check")
+        pts = []
+    vec_by_id = {}
+    for p in pts:
+        v = p.vector.get("clap") if isinstance(p.vector, dict) else p.vector
+        if v:
+            vec_by_id[str(p.id)] = np.asarray(v, dtype=np.float32)
+    for tid in sampled:
+        v = vec_by_id.get(tid)
+        if v is not None:
+            v = v / (np.linalg.norm(v) or 1.0)
+            if float(np.max(neg @ v)) > NEG_PROXIMITY_THRESHOLD:
+                continue  # too close to something the user actively rejects
+        kept.append(StreamCandidate(track_id=tid, payload=payload_by_id[tid], pool="explore"))
+    return kept
+
+
+def sample_liked_tracks(
+    liked_weights: dict[str, float],
+    recency_hours: dict[str, float],
+    n_needed: int,
+    rng,
+    *,
+    cooldown_h: float = LIKED_COOLDOWN_H,
+    excluded: set[str] | frozenset = frozenset(),
+) -> list[str]:
+    """Pool C sampler: weight-proportional, anti-repeat, honest rotation.
+
+    Two-pass topup (design §6.3): first pass respects the hard cooldown;
+    if the quota is still unfilled (tiny liked list / slider at 100%), the
+    cooldown is relaxed rather than under-filling the chunk.
+    """
+    def _weighted_draw(pool: dict[str, float], k: int) -> list[str]:
+        chosen: list[str] = []
+        pool = dict(pool)
+        while pool and len(chosen) < k:
+            ids = list(pool)
+            weights = [max(pool[t], 1e-6) for t in ids]
+            pick = rng.choices(ids, weights=weights, k=1)[0]
+            chosen.append(pick)
+            del pool[pick]
+        return chosen
+
+    def _adjusted(ids) -> dict[str, float]:
+        out = {}
+        for tid in ids:
+            h = recency_hours.get(tid)
+            anti_repeat = math.exp(-h / RECENT_PENALTY_HALFLIFE_H) if h is not None else 0.0
+            out[tid] = liked_weights[tid] * (1.0 - 0.9 * anti_repeat)
+        return out
+
+    available = [t for t in liked_weights if t not in excluded]
+    fresh = [t for t in available
+             if recency_hours.get(t) is None or recency_hours[t] >= cooldown_h]
+
+    chosen = _weighted_draw(_adjusted(fresh), n_needed)
+    if len(chosen) < n_needed:  # topup: relax the cooldown, keep anti-repeat weighting
+        rest = [t for t in available if t not in chosen]
+        chosen += _weighted_draw(_adjusted(rest), n_needed - len(chosen))
+    return chosen
+
+
+def score_candidates(
+    candidates: list[StreamCandidate],
+    *,
+    p_final: dict[str, float] | None,
+    confidence: float,
+    play_counts: dict[str, int],
+    recency_hours: dict[str, float],
+    axis_stats: dict | None,
+    axis_names: tuple[str, ...],
+) -> None:
+    """Fill ``score`` + ``axis_match`` in place (design §6 formula, minus the
+    artist-repeat term — that one is positional and applied during assembly)."""
+    for c in candidates:
+        z = z_scores_for_axes(c.payload.get("sonic_axes"), axis_stats, axis_names)
+        c.axis_match = axis_match_score(z, p_final, confidence, axis_names)
+
+        novelty = 1.0 / (1.0 + play_counts.get(c.track_id, 0))
+        h = recency_hours.get(c.track_id)
+        recent_pen = math.exp(-h / RECENT_PENALTY_HALFLIFE_H) if h is not None else 0.0
+
+        c.score = (
+            SCORE_W_ANCHOR * c.max_anchor_cos
+            + SCORE_W_AXIS * c.axis_match
+            + SCORE_W_NOVELTY * novelty
+            - SCORE_W_RECENT * recent_pen
+        )
+
+
+def assemble_chunk(
+    main: list[StreamCandidate],
+    liked: list[StreamCandidate],
+    *,
+    n: int,
+    liked_share: float,
+    recent_artists: list[str],
+) -> list[StreamCandidate]:
+    """Slot-quota assembly: ``round(n · liked_share)`` slots go to pool C, the
+    rest to the best-scored A∪B candidates.
+
+    Interleaving rules: ≤2 liked подряд, ≤2 одного артиста подряд (the artist
+    window seeds from the session's last plays). Artist-repeat soft penalty
+    (last ARTIST_REPEAT_WINDOW tracks) is applied positionally here. When one
+    side runs dry the other tops up — недобор хуже мягкого нарушения квоты.
+    """
+    liked_quota = max(0, min(n, round(n * liked_share)))
+    main_sorted = sorted(main, key=lambda c: c.score, reverse=True)
+    liked_queue = list(liked)
+
+    out: list[StreamCandidate] = []
+    artist_tail: list[str] = list(recent_artists)[-ARTIST_REPEAT_WINDOW:]
+    consecutive_liked = 0
+
+    def _artist(c: StreamCandidate) -> str:
+        return (c.payload.get("artist") or "").strip().lower()
+
+    def _violates_artist_rule(c: StreamCandidate) -> bool:
+        a = _artist(c)
+        return (len(artist_tail) >= MAX_CONSECUTIVE_ARTIST
+                and a != ""
+                and all(t == a for t in artist_tail[-MAX_CONSECUTIVE_ARTIST:]))
+
+    def _pick(pool: list[StreamCandidate], dynamic_score: bool) -> StreamCandidate | None:
+        # First pass honors the artist rule; second pass (topup) bends it —
+        # same rationale as autoplay_service: undersupply is the worse UX.
+        for bend_rules in (False, True):
+            best, best_idx, best_val = None, -1, float("-inf")
+            for i, c in enumerate(pool):
+                if not bend_rules and _violates_artist_rule(c):
+                    continue
+                val = c.score if dynamic_score else -i  # liked queue keeps sample order
+                if dynamic_score and _artist(c) in artist_tail:
+                    val -= ARTIST_REPEAT_PENALTY
+                if val > best_val:
+                    best, best_idx, best_val = c, i, val
+            if best is not None:
+                pool.pop(best_idx)
+                return best
+        return None
+
+    for _ in range(n):
+        # When every remaining slot is owed to the quota (slider near 100%),
+        # the quota wins over the ≤2-consecutive rule — the slider promised
+        # a share, and alternation is impossible in an all-liked chunk.
+        slots_left = n - len(out)
+        must_liked = liked_quota >= slots_left
+        want_liked = (liked_quota > 0 and liked_queue
+                      and (consecutive_liked < MAX_CONSECUTIVE_LIKED or must_liked))
+        c = None
+        if want_liked:
+            c = _pick(liked_queue, dynamic_score=False)
+            if c is not None:
+                liked_quota -= 1
+                consecutive_liked += 1
+        if c is None:
+            c = _pick(main_sorted, dynamic_score=True)
+            if c is not None:
+                consecutive_liked = 0
+        if c is None and liked_queue:  # main dry — topup from liked beyond quota
+            c = _pick(liked_queue, dynamic_score=False)
+            if c is not None:
+                consecutive_liked += 1
+        if c is None:
+            break  # both pools dry — return a short chunk
+        out.append(c)
+        artist_tail.append(_artist(c))
+        artist_tail = artist_tail[-ARTIST_REPEAT_WINDOW:]
+    return out
