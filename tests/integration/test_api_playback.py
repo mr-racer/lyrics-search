@@ -63,7 +63,8 @@ def test_playback_events_ignores_supplied_collection():
     derives the real collection from the JWT user and ignores the supplied value."""
     captured = {}
 
-    def fake_record(*, session_id, collection_name, track_id, played_sec, total_dur):
+    def fake_record(*, session_id, collection_name, track_id, played_sec, total_dur,
+                    interacted=None):
         captured["collection_name"] = collection_name
         return 1
 

@@ -241,6 +241,7 @@ class SonicDescriptorService:
             logger.warning("[SonicDescriptor] cluster_library: collection %s is empty", collection)
             return {"n_tracks": 0, "n_clusters": 0}
 
+        X = np.vstack(vectors).astype(np.float32)
         X = X / (np.linalg.norm(X, axis=1, keepdims=True) + 1e-12)
         clusterer = hdbscan.HDBSCAN(
               min_cluster_size=max(20, len(X) // 200),
