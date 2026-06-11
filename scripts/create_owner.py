@@ -21,7 +21,6 @@ import argparse
 import logging
 import os
 import sys
-import time
 
 # Importing app.services pulls in heavy modules whose constructors parse
 # sys.argv (e.g. CLAP). Neutralize argv across just those imports so our
@@ -32,7 +31,7 @@ sys.argv = sys.argv[:1]
 try:
     from app.resources.metadata_db import MetadataDB
     from app.services.auth_service import (
-        AuthService, EmailAlreadyTakenError, OwnerAlreadyExistsError,
+        AuthService, EmailAlreadyTakenError, InstanceAlreadyInitializedError,
         WeakPasswordError,
     )
 finally:
@@ -63,9 +62,8 @@ def main(argv: list[str] | None = None) -> int:
     MetadataDB.init()
     auth = AuthService(jwt_secret=jwt_secret)
 
-    # Reject if instance_config OR an owner already exists — surface a single
-    # error message that covers both conditions, since the recovery is the
-    # same (use scripts/change_instance_mode if you really want to switch).
+    # Friendly fast-path message with the current mode; bootstrap_instance
+    # re-checks atomically and owns the rollback logic.
     cfg = MetadataDB.get_instance_config()
     if cfg is not None:
         print(
@@ -76,9 +74,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
-        uid = auth.create_owner(email=args.email, password=args.password)
-    except OwnerAlreadyExistsError as e:
-        print(f"[ERROR] owner already exists: {e}", file=sys.stderr)
+        user = auth.bootstrap_instance(
+            email=args.email, password=args.password, mode=args.mode,
+        )
+    except InstanceAlreadyInitializedError as e:
+        print(f"[ERROR] {e}", file=sys.stderr)
         return 1
     except EmailAlreadyTakenError as e:
         print(f"[ERROR] email already taken: {e}", file=sys.stderr)
@@ -86,20 +86,11 @@ def main(argv: list[str] | None = None) -> int:
     except WeakPasswordError as e:
         print(f"[ERROR] {e}", file=sys.stderr)
         return 1
-
-    # Atomicity: create_owner succeeded → write instance_config in the same
-    # process. If this fails (which it shouldn't — schema constraints already
-    # validated), roll back the user insert to keep the DB consistent.
-    try:
-        MetadataDB.set_instance_config(mode=args.mode, created_at=time.time())
     except Exception as e:
-        MetadataDB.get().execute("DELETE FROM users WHERE id = ?", (uid,))
-        MetadataDB.get().commit()
-        print(f"[ERROR] failed to set instance_config: {e} (rolled back owner)",
-              file=sys.stderr)
+        print(f"[ERROR] failed to bootstrap: {e} (owner rolled back)", file=sys.stderr)
         return 1
 
-    print(f"[OK] owner created: id={uid} email={args.email} mode={args.mode}")
+    print(f"[OK] owner created: id={user.id} email={user.email} mode={args.mode}")
     return 0
 
 

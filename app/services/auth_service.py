@@ -85,6 +85,11 @@ class OwnerAlreadyExistsError(AuthError):
     """create_owner refused because an owner row is already present."""
 
 
+class InstanceAlreadyInitializedError(AuthError):
+    """bootstrap_instance refused: instance_config or an owner already exists.
+    Web setup is first-come-first-served, exactly once."""
+
+
 def _now() -> float:
     return time.time()
 
@@ -195,6 +200,33 @@ class AuthService:
             "[AuthService] member registered: id=%s via invite=%s",
             uid, invite_code[:4] + "…",
         )
+        return _row_to_user(self.db.get_user_by_id(uid))
+
+    # ── First-run bootstrap (CLI + web wizard) ───────────────────────────
+    def bootstrap_instance(self, *, email: str, password: str, mode: str) -> User:
+        """Atomic first-run bootstrap: create the owner AND lock the instance
+        mode in one call. Shared by scripts/create_owner.py and
+        POST /instance/setup.
+
+        The pre-check below is a fast path; the real race guard is the
+        PRIMARY KEY on instance_config.id=1 — a concurrent winner makes our
+        set_instance_config raise IntegrityError, and we roll back the owner
+        row we just created so the DB never ends half-initialized."""
+        if self.db.get_instance_config() is not None:
+            raise InstanceAlreadyInitializedError("instance already initialized")
+        try:
+            uid = self.create_owner(email=email, password=password)
+        except OwnerAlreadyExistsError as exc:
+            raise InstanceAlreadyInitializedError("instance already initialized") from exc
+        try:
+            self.db.set_instance_config(mode=mode, created_at=_now())
+        except sqlite3.IntegrityError as exc:
+            self.db.delete_user(uid)
+            raise InstanceAlreadyInitializedError("instance already initialized") from exc
+        except Exception:
+            self.db.delete_user(uid)
+            raise
+        logger.info("[AuthService] instance bootstrapped: owner=%s mode=%s", uid, mode)
         return _row_to_user(self.db.get_user_by_id(uid))
 
     # ── Invite admin (owner-only) ────────────────────────────────────────
