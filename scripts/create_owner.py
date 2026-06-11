@@ -47,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Bootstrap the first MusiX account and lock the instance mode.",
     )
     ap.add_argument("--email", required=True, help="owner email (lower-cased)")
-    ap.add_argument("--password", required=True, help="owner password (>= 10 chars)")
+    ap.add_argument("--password", required=True, help="owner password (>= 6 chars)")
     ap.add_argument(
         "--mode", required=True, choices=("sharing", "server"),
         help="instance mode — LOCKED after this call",

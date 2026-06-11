@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 TOKEN_TTL_SECONDS = 30 * 24 * 3600        # 30 days
 INVITE_TTL_SECONDS = 7 * 24 * 3600         # 7 days
 INVITE_CODE_LENGTH = 12
-MIN_PASSWORD_LENGTH = 10
+MIN_PASSWORD_LENGTH = 6
 
 
 class AuthError(Exception):

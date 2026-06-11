@@ -290,3 +290,14 @@ def test_revoke_invite_owner_only(auth):
     )
     with pytest.raises(OwnerOnlyError):
         auth.revoke_invite(code=code, owner_id=member.id)
+
+
+def test_password_policy_accepts_6_chars(auth):
+    """Spec 2026-06-10 first-run wizard: policy relaxed 10 → 6 chars."""
+    uid = auth.create_owner(email="o6@x.y", password="abc123")
+    assert uid
+
+
+def test_password_policy_rejects_5_chars(auth):
+    with pytest.raises(WeakPasswordError):
+        auth.create_owner(email="o5@x.y", password="abc12")
