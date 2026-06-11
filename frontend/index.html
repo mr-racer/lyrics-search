@@ -5163,73 +5163,113 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
 }
 
 // ─── RECOMMEND SECTION ────────────────────────────────────────────────────────
-function RecommendSection({ isDark, lang, onPlayTrack }) {
-  const c = useColors(isDark);
+// Rebuilt for Stream RecSys: zone A — one wish → AI-curated playlist (plan →
+// execute → select, gated on aiStatus; quick-mix presets when AI is off);
+// zone B — taste center: steerable 6-axis radar (knobs → /axis-playlist),
+// LLM listener portrait, taste islands → anchor radio; zone C — similar
+// tracks via /recommend/similar (CLAP + axes, replaces the old text hack).
 
-  // Preset results
+const RECSYS_AXES = ['energy', 'vocal_lead', 'spacious', 'experimental', 'brightness', 'acousticness'];
+const RECSYS_AXIS_LABELS = {
+  energy:       { ru: 'ЭНЕРГИЯ',      en: 'ENERGY' },
+  vocal_lead:   { ru: 'ВОКАЛ',        en: 'VOCALS' },
+  spacious:     { ru: 'ПРОСТРАНСТВО', en: 'SPACE' },
+  experimental: { ru: 'ЭКСПЕРИМЕНТ',  en: 'EXPERIMENTAL' },
+  brightness:   { ru: 'ЯРКОСТЬ',      en: 'BRIGHTNESS' },
+  acousticness: { ru: 'АКУСТИКА',     en: 'ACOUSTIC' },
+};
+const RECSYS_TOOL_LABELS = {
+  clap_search:    { ru: 'поиск по звучанию', en: 'sound search' },
+  library_search: { ru: 'поиск по смыслу',   en: 'meaning search' },
+  similar_tracks: { ru: 'похожие на трек',   en: 'similar to a track' },
+};
+
+// Hexagonal taste radar: filled polygon = the listener's profile, dashed
+// amber polygon = the current knob targets (shown once they diverge).
+// z is clamped to ±2σ → radius; the solid middle ring marks z=0.
+function AxisRadar({ values, targets, isDark, lang, size }) {
+  const s = size || 240;
+  const cx = s / 2, cy = s / 2, R = s * 0.34;
+  const pt = (i, z) => {
+    const ang = -Math.PI / 2 + (i * 2 * Math.PI) / RECSYS_AXES.length;
+    const r = R * (Math.max(-2, Math.min(2, z || 0)) + 2) / 4;
+    return `${cx + r * Math.cos(ang)},${cy + r * Math.sin(ang)}`;
+  };
+  const ringPts = (z) => RECSYS_AXES.map((_, i) => pt(i, z)).join(' ');
+  const polyPts = (vals) => RECSYS_AXES.map((a, i) => pt(i, vals[a] || 0)).join(' ');
+  const grid = isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.12)';
+  return (
+    <svg width={s} height={s} viewBox={`0 0 ${s} ${s}`} style={{ flex: 'none' }}>
+      {[-1, 0, 1, 2].map(z => (
+        <polygon key={z} points={ringPts(z)} fill="none" stroke={grid}
+                 strokeWidth={z === 0 ? 1.2 : 0.6} strokeDasharray={z === 0 ? undefined : '3 3'} />
+      ))}
+      {RECSYS_AXES.map((a, i) => {
+        const ang = -Math.PI / 2 + (i * 2 * Math.PI) / RECSYS_AXES.length;
+        return <line key={a} x1={cx} y1={cy}
+                     x2={cx + R * Math.cos(ang)} y2={cy + R * Math.sin(ang)}
+                     stroke={grid} strokeWidth="0.6" />;
+      })}
+      {values && <polygon points={polyPts(values)} fill="oklch(60% 0.18 270 / 0.22)"
+                          stroke="oklch(62% 0.2 275)" strokeWidth="1.6" />}
+      {targets && <polygon points={polyPts(targets)} fill="none"
+                           stroke="oklch(72% 0.13 75)" strokeWidth="1.4" strokeDasharray="5 4" />}
+      {RECSYS_AXES.map((a, i) => {
+        const ang = -Math.PI / 2 + (i * 2 * Math.PI) / RECSYS_AXES.length;
+        const lx = cx + (R + 22) * Math.cos(ang);
+        const ly = cy + (R + 16) * Math.sin(ang);
+        return (
+          <text key={a} x={lx} y={ly} textAnchor="middle" dominantBaseline="middle"
+                style={{ fontSize: 9, letterSpacing: '0.12em', fontFamily: 'inherit',
+                         fill: isDark ? 'rgba(255,255,255,0.45)' : 'rgba(0,0,0,0.45)' }}>
+            {RECSYS_AXIS_LABELS[a][lang === 'ru' ? 'ru' : 'en']}
+          </text>
+        );
+      })}
+    </svg>
+  );
+}
+
+function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream }) {
+  const c = useColors(isDark);
+  const aiOn = !!(aiStatus && aiStatus.aiActive);
+  const llmKw = () => ({
+    llm_base_url: localStorage.getItem('llm_base_url') || undefined,
+    llm_model: localStorage.getItem('llm_model') || undefined,
+  });
+
+  // ── Zone A: one wish → AI playlist ──
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiResult, setAiResult] = useState(null);   // {title, steps, tracks}
+  const [aiError, setAiError] = useState(false);
+  const [aiStepsShown, setAiStepsShown] = useState(0);
+
+  // Derived BEFORE any hook that might depend on it (Babel const→var hoisting).
+  const aiHits = (aiResult && aiResult.tracks ? aiResult.tracks : [])
+    .map(t => ({ track: t, score: t.score || 0, matched_on: 'ai' }));
+
+  const runAiPlaylist = async () => {
+    const prompt = aiPrompt.trim();
+    if (!prompt || aiBusy) return;
+    setAiBusy(true); setAiResult(null); setAiError(false); setAiStepsShown(0);
+    try {
+      const res = await apiFetch('/recommend/ai-playlist', {
+        method: 'POST',
+        body: JSON.stringify({ prompt, lang, limit: 15, ...llmKw() }),
+      });
+      setAiResult(res);
+      (res.steps || []).forEach((_, i) =>
+        setTimeout(() => setAiStepsShown(s => Math.max(s, i + 1)), 220 * (i + 1)));
+      setTimeout(() => setAiStepsShown(99), 220 * ((res.steps || []).length + 1));
+    } catch (e) { setAiError(true); }
+    finally { setAiBusy(false); }
+  };
+
+  // ── Zone A fallback (AI off): quick-mix presets over plain CLAP search ──
   const [presetLoading, setPresetLoading] = useState(false);
   const [presetResults, setPresetResults] = useState([]);
   const [activePreset, setActivePreset] = useState(null);
-  const [presetLimit, setPresetLimit] = useState(10);
-
-  // Track-similarity — picks a track from search results, then queries similar
-  const [trackQuery, setTrackQuery] = useState('');
-  const [trackOptions, setTrackOptions] = useState([]);
-  const [trackPicker, setTrackPicker] = useState(false);
-  const [pickedTrack, setPickedTrack] = useState(null);
-  const [similarLoading, setSimilarLoading] = useState(false);
-  const [similar, setSimilar] = useState([]);
-  const lookupTimer = useRef(null);
-
-  // Quick mixes — derived from /library/stats
-  const [stats, setStats] = useState(null);
-
-  useEffect(() => {
-    const col = '';
-    apiFetch(`/library/stats${col}`).then(setStats).catch(()=>{});
-  }, []);
-
-  const lookupTracks = async (q) => {
-    if (!q.trim()) { setTrackOptions([]); setTrackPicker(false); return; }
-    const col = '';
-    try {
-      const res = await apiFetch(`/library/browse?q=${encodeURIComponent(q)}&limit=6${col}`);
-      const hits = (res || []).map(item => ({
-        track: {
-          track_id: item.track_id,
-          title: item.title,
-          artist: item.artist,
-          album: item.album,
-          cover_art_path: item.cover_art_path,
-          duration_sec: 0,
-          genre: null,
-          year: null,
-          file_path: '',
-        },
-        score: item.score || 0,
-      }));
-      setTrackOptions(hits);
-      setTrackPicker(true);
-    } catch(e) { setTrackOptions([]); }
-  };
-
-  const findSimilar = async (hit) => {
-    setPickedTrack(hit); setTrackPicker(false); setSimilarLoading(true); setSimilar([]);
-    const seedTitle = hit.track?.title || '';
-    const seedArtist = hit.track?.artist || '';
-    try {
-      // Use audio mode with title+artist as a CLAP-friendly query
-      const q = `${seedArtist} ${seedTitle}`.trim();
-      const res = await apiFetch('/search/', { method:'POST', body: JSON.stringify({
-        query: q, mode:'audio', limit: 12
-      })});
-      const filtered = (res.hits || []).filter(h => !(h.track?.title === seedTitle && h.track?.artist === seedArtist));
-      setSimilar(filtered.slice(0, 10));
-    } catch(e) {}
-    finally { setSimilarLoading(false); }
-  };
-
-  // Quick mix presets — hardcoded query + mode per preset
   const moodPresets = [
     { id:'late', label: lang==='ru'?'Под поздний вечер':'Late night',
       q:'Song with a smooth late-night jazz with velvet female vocals and soft piano', mode:'audio', hue:265, icon:'🌙' },
@@ -5248,10 +5288,131 @@ function RecommendSection({ isDark, lang, onPlayTrack }) {
     setActivePreset(p.id); setPresetLoading(true);
     try {
       const res = await apiFetch('/search/', { method:'POST', body: JSON.stringify({
-        query: p.q, mode: p.mode, limit: presetLimit, })});
+        query: p.q, mode: p.mode, limit: 12 })});
       setPresetResults(res.hits || []);
-    } catch(e) { setPresetResults([]); }
+    } catch (e) { setPresetResults([]); }
     finally { setPresetLoading(false); }
+  };
+
+  // ── Zone B: taste center (profile + knobs + portrait + islands) ──
+  const [profile, setProfile] = useState(null);
+  const [profileLoading, setProfileLoading] = useState(true);
+  const [targets, setTargets] = useState({});
+  const [knobsDirty, setKnobsDirty] = useState(false);
+  const [axisBusy, setAxisBusy] = useState(false);
+  const [axisTracks, setAxisTracks] = useState(null);   // hits | null
+  const [portraitBusy, setPortraitBusy] = useState(false);
+
+  const profileAxisValues = profile && profile.axes
+    ? Object.fromEntries(RECSYS_AXES.map(a => [a, (profile.axes[a] && profile.axes[a].z) || 0]))
+    : null;
+  const islands = (profile && profile.islands) || [];
+
+  useEffect(() => {
+    let alive = true;
+    apiFetch(`/recommend/profile?lang=${encodeURIComponent(lang)}`)
+      .then(r => {
+        if (!alive || !r) return;
+        setProfile(r);
+        if (r.axes) {
+          setTargets(Object.fromEntries(RECSYS_AXES.map(a => [a, (r.axes[a] && r.axes[a].z) || 0])));
+        }
+      })
+      .catch(() => {})
+      .finally(() => { if (alive) setProfileLoading(false); });
+    return () => { alive = false; };
+  }, []);
+
+  const setKnob = (axis, v) => {
+    setTargets(prev => ({ ...prev, [axis]: v }));
+    setKnobsDirty(true);
+  };
+  const resetKnobs = () => {
+    if (profileAxisValues) setTargets({ ...profileAxisValues });
+    setKnobsDirty(false);
+    setAxisTracks(null);
+  };
+  const buildAxisPlaylist = async () => {
+    if (axisBusy) return;
+    setAxisBusy(true); setAxisTracks(null);
+    try {
+      const res = await apiFetch('/recommend/axis-playlist', {
+        method: 'POST',
+        body: JSON.stringify({ targets, limit: 15 }),
+      });
+      setAxisTracks((res.tracks || []).map(t => ({ track: t, score: t.score || 0, matched_on: 'audio' })));
+    } catch (e) { setAxisTracks([]); }
+    finally { setAxisBusy(false); }
+  };
+
+  const regenPortrait = async () => {
+    if (portraitBusy) return;
+    setPortraitBusy(true);
+    try {
+      const res = await apiFetch('/recommend/profile/ai-enrich', {
+        method: 'POST',
+        body: JSON.stringify({ lang, ...llmKw() }),
+      });
+      setProfile(prev => prev ? {
+        ...prev,
+        portrait: res.portrait || prev.portrait,
+        islands: (prev.islands || []).map(i => ({
+          ...i, name: (res.island_names && res.island_names[i.track_id]) || i.name,
+        })),
+      } : prev);
+    } catch (e) { /* LLM down — keep whatever we had */ }
+    finally { setPortraitBusy(false); }
+  };
+
+  const islandRadio = async (isl) => {
+    try {
+      const data = await apiFetch(
+        `/recommend/autoplay-queue?seed_track_id=${encodeURIComponent(isl.track_id)}&limit=20`);
+      const lead = isl.tracks && isl.tracks[0];
+      const hits = [
+        ...(lead ? [{ track: lead, score: 0, matched_on: 'audio' }] : []),
+        ...((data.tracks || []).map(t => ({ track: t, score: 0, matched_on: 'audio' }))),
+      ];
+      if (hits.length && onPlayTrack) onPlayTrack(hits[0], hits);
+    } catch (e) {}
+  };
+
+  // ── Zone C: similar by track ──
+  const [trackQuery, setTrackQuery] = useState('');
+  const [trackOptions, setTrackOptions] = useState([]);
+  const [trackPicker, setTrackPicker] = useState(false);
+  const [pickedTrack, setPickedTrack] = useState(null);
+  const [similarLoading, setSimilarLoading] = useState(false);
+  const [similar, setSimilar] = useState([]);
+  const lookupTimer = useRef(null);
+
+  const lookupTracks = async (q) => {
+    if (!q.trim()) { setTrackOptions([]); setTrackPicker(false); return; }
+    try {
+      const res = await apiFetch(`/library/browse?q=${encodeURIComponent(q)}&limit=6`);
+      const hits = (res || []).map(item => ({
+        track: {
+          track_id: item.track_id, title: item.title, artist: item.artist,
+          album: item.album, cover_art_path: item.cover_art_path,
+          duration_sec: 0, genre: null, year: null, file_path: '',
+        },
+        score: item.score || 0,
+      }));
+      setTrackOptions(hits);
+      setTrackPicker(true);
+    } catch (e) { setTrackOptions([]); }
+  };
+
+  // CLAP neighbors re-ranked by sonic axes — a real similarity endpoint, not
+  // the old «text-search the artist+title» approximation.
+  const findSimilar = async (hit) => {
+    setPickedTrack(hit); setTrackPicker(false); setSimilarLoading(true); setSimilar([]);
+    try {
+      const res = await apiFetch(
+        `/recommend/similar?track_id=${encodeURIComponent(hit.track.track_id)}&limit=10`);
+      setSimilar((res.tracks || []).map(t => ({ track: t, score: t.score || 0, matched_on: 'audio' })));
+    } catch (e) {}
+    finally { setSimilarLoading(false); }
   };
 
   const card = (children, extra={}) => (
@@ -5267,6 +5428,32 @@ function RecommendSection({ isDark, lang, onPlayTrack }) {
       </div>
     </div>
   );
+  const skeletonRows = (n) => (
+    <div style={{ display:'flex', flexDirection:'column', gap:'8px', animation:'fadeIn 0.3s ease' }}>
+      {Array.from({ length: n }).map((_, i) => (
+        <div key={i} style={{ height:'62px', borderRadius:'12px',
+          background: isDark?'rgba(255,255,255,0.03)':'rgba(0,0,0,0.025)',
+          boxShadow: isDark?'inset 0 1px 2px rgba(0,0,0,0.4)':'inset 0 1px 2px rgba(40,30,60,0.06)',
+          animation:`pulse 1.4s ${i*0.1}s ease-in-out infinite` }} />
+      ))}
+    </div>
+  );
+  const hitList = (hits, withReasons) => (
+    <div style={{ display:'flex', flexDirection:'column', gap:'2px', animation:'fadeIn 0.4s ease' }}>
+      {hits.map((h, i) => (
+        <div key={(h.track && h.track.track_id) || i}>
+          <ResultCard hit={h} isDark={isDark} c={c} compact
+                      onPlay={() => onPlayTrack && onPlayTrack(h, hits)} />
+          {withReasons && h.track && h.track.reason && (
+            <div className="serif" style={{ fontSize:'13px', fontStyle:'italic', color:c.textMuted,
+                                            margin:'-2px 0 8px 64px', lineHeight:1.35 }}>
+              ↳ {h.track.reason}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
 
   return (
     <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:c.bg }}>
@@ -5280,94 +5467,269 @@ function RecommendSection({ isDark, lang, onPlayTrack }) {
       <div style={{ flex:1, overflowY:'auto', padding:'30px 36px 60px' }}>
         <div style={{ maxWidth:'1180px', margin:'0 auto', display:'flex', flexDirection:'column', gap:'28px' }}>
 
-          {/* ── 1. QUICK MIXES — preset buttons + slider + results ── */}
+          {/* ── 01 · AI WISH → PLAYLIST (or quick mixes when AI is off) ── */}
           {card(<>
             {blockTitle(
-              lang==='ru'?'01 · БЫСТРЫЕ МИКСЫ':'01 · QUICK MIXES',
-              lang==='ru'?'Подбери':'Pick',
-              lang==='ru'?'настроение':'a mood',
+              lang==='ru'?'01 · ИИ-ПОДБОР':'01 · AI PICKER',
+              lang==='ru'?'Опиши':'Describe',
+              lang==='ru'?'желание':'a wish',
             )}
-            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(180px, 1fr))', gap:'12px', marginBottom:'20px' }}>
-              {moodPresets.map(p => {
-                const active = activePreset === p.id;
-                const accent = `oklch(62% 0.18 ${p.hue})`;
-                return (
-                  <button key={p.id} onClick={() => runPreset(p)}
-                    className={active ? '' : ske('btn', isDark)}
-                    style={{
-                      padding:'18px 18px', borderRadius:'14px',
-                      display:'flex', flexDirection:'column', alignItems:'flex-start', gap:'10px',
-                      cursor:'pointer', textAlign:'left', position:'relative', overflow:'hidden',
-                      background: active
-                        ? `linear-gradient(180deg, ${accent.replace(')', ' / 0.18)')} 0%, ${accent.replace(')', ' / 0.07)')} 100%)`
-                        : undefined,
-                      boxShadow: active
-                        ? `inset 0 0 0 1.5px ${accent.replace(')', ' / 0.5)')}, 0 0 30px ${accent.replace(')', ' / 0.3)')}`
-                        : undefined,
-                      transition:'all 0.25s',
-                    }}>
-                    <div style={{
-                      width:'40px', height:'40px', borderRadius:'10px',
-                      display:'flex', alignItems:'center', justifyContent:'center',
-                      fontSize:'18px',
-                      background: `${accent.replace(')', ' / 0.16)')}`,
-                      color: accent,
-                      boxShadow: isDark ? 'inset 0 1px 0 rgba(255,255,255,0.08)' : 'inset 0 1px 0 rgba(255,255,255,0.85)',
-                    }}>{p.icon}</div>
-                    <div className="serif" style={{ fontSize:'20px', lineHeight:'1.05', letterSpacing:'-0.01em', color:c.text }}>
-                      {p.label}
-                    </div>
-                    <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.16em' }}>
-                      {active ? (presetLoading ? (lang==='ru'?'ПОДБОР…':'MIXING…') : (lang==='ru'?'АКТИВНО':'ACTIVE')) : (lang==='ru'?'НАЖАТЬ':'TAP')}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Slider — track count */}
-            <div style={{ display:'flex', alignItems:'center', gap:'16px', marginBottom:'18px' }}>
-              <span className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.16em', minWidth:'100px' }}>
-                {lang==='ru'?'КОЛИЧЕСТВО':'TRACK COUNT'}
-              </span>
-              <input type="range" min={5} max={20} value={presetLimit}
-                onChange={e => setPresetLimit(parseInt(e.target.value))}
-                style={{ flex:1, accentColor: 'oklch(60% 0.18 270)' }} />
-              <span className="mono" style={{ fontSize:'14px', color:c.amber, minWidth:'30px', textAlign:'right' }}>
-                {presetLimit}
-              </span>
-            </div>
-
-            {/* Results */}
-            {presetLoading && (
-              <div style={{ display:'flex', flexDirection:'column', gap:'8px', animation:'fadeIn 0.3s ease' }}>
-                {[1,2,3].map(i => (
-                  <div key={i} style={{ height:'62px', borderRadius:'12px',
-                    background: isDark?'rgba(255,255,255,0.03)':'rgba(0,0,0,0.025)',
-                    boxShadow: isDark?'inset 0 1px 2px rgba(0,0,0,0.4)':'inset 0 1px 2px rgba(40,30,60,0.06)',
-                    animation:`pulse 1.4s ${i*0.1}s ease-in-out infinite` }} />
-                ))}
+            {aiOn ? (<>
+              <div className={ske('inset', isDark)} style={{ padding:'12px 16px', borderRadius:'14px', display:'flex', gap:'12px', alignItems:'center' }}>
+                <span style={{ fontSize:'16px' }}>✨</span>
+                <input value={aiPrompt}
+                  onChange={e => setAiPrompt(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') runAiPlaylist(); }}
+                  placeholder={lang==='ru'
+                    ? 'например: «энергичный рок про дорогу» или «похожее на Bohemian Rhapsody»…'
+                    : 'e.g. "energetic road-trip rock" or "something like Bohemian Rhapsody"…'}
+                  style={{ flex:1, padding:'6px 0', border:'none', background:'transparent', color:c.text, fontSize:'15px', outline:'none' }} />
+                <button onClick={runAiPlaylist} disabled={aiBusy || !aiPrompt.trim()}
+                  className={ske('btn', isDark)}
+                  style={{ padding:'9px 18px', borderRadius:'11px', cursor: aiBusy?'wait':'pointer',
+                           opacity: (aiBusy || !aiPrompt.trim()) ? 0.55 : 1 }}>
+                  <span className="mono" style={{ fontSize:'13px', letterSpacing:'0.18em', color:c.text }}>
+                    {aiBusy ? (lang==='ru'?'ДУМАЮ…':'THINKING…') : (lang==='ru'?'СОБРАТЬ':'BUILD')}
+                  </span>
+                </button>
               </div>
-            )}
-            {!presetLoading && presetResults.length > 0 && (
-              <div style={{ display:'flex', flexDirection:'column', gap:'2px', animation:'fadeIn 0.4s ease' }}>
-                <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em', padding:'4px 0 8px' }}>
-                  {presetResults.length} {lang==='ru'?'ТРЕКОВ В МИКСЕ':'TRACKS IN THE MIX'}
+
+              {aiBusy && (
+                <div className="serif" style={{ fontStyle:'italic', fontSize:'14px', color:c.textMuted, padding:'18px 4px', animation:'pulse 1.4s ease-in-out infinite' }}>
+                  {lang==='ru'?'Агент разбирает желание и ищет по библиотеке…':'The agent is parsing the wish and searching the library…'}
                 </div>
-                {presetResults.map((h, i) => <ResultCard key={i} hit={h} isDark={isDark} c={c} compact onPlay={() => onPlayTrack && onPlayTrack(h, presetResults)} />)}
+              )}
+              {aiError && !aiBusy && (
+                <div className="serif" style={{ fontSize:'14px', color:c.textSubtle, fontStyle:'italic', padding:'16px 4px' }}>
+                  {lang==='ru'?'ИИ не ответил — проверьте LLM в настройках и попробуйте ещё раз':'The AI did not respond — check the LLM in settings and retry'}
+                </div>
+              )}
+              {aiResult && !aiBusy && (
+                <div style={{ marginTop:'18px', animation:'fadeIn 0.3s ease' }}>
+                  {/* executed plan steps, animated in */}
+                  <div style={{ display:'flex', flexDirection:'column', gap:'5px', marginBottom:'14px' }}>
+                    {(aiResult.steps || []).map((s, i) => (
+                      <div key={i} className="mono" style={{
+                        fontSize:'12.5px', letterSpacing:'0.08em', color:c.textMuted,
+                        opacity: aiStepsShown > i ? 1 : 0, transform: aiStepsShown > i ? 'none' : 'translateY(4px)',
+                        transition:'opacity .35s ease, transform .35s ease' }}>
+                        <span style={{ color:'oklch(62% 0.2 275)' }}>✓</span>{' '}
+                        {(RECSYS_TOOL_LABELS[s.tool] ? RECSYS_TOOL_LABELS[s.tool][lang==='ru'?'ru':'en'] : s.tool)}
+                        {' · «'}{s.query}{'» · '}{s.found} {lang==='ru'?'найдено':'found'}
+                      </div>
+                    ))}
+                  </div>
+                  <div className="serif" style={{ fontSize:'22px', letterSpacing:'-0.01em', color:c.text, marginBottom:'10px' }}>
+                    {aiResult.title}
+                    <span className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.18em', marginLeft:'12px' }}>
+                      {aiHits.length} {lang==='ru'?'ТРЕКОВ':'TRACKS'}
+                    </span>
+                  </div>
+                  {aiHits.length ? hitList(aiHits, true) : (
+                    <div className="serif" style={{ fontSize:'14px', color:c.textSubtle, fontStyle:'italic', textAlign:'center', padding:'20px' }}>
+                      {lang==='ru'?'Ничего не нашлось — попробуйте переформулировать':'Nothing found — try rephrasing'}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>) : (<>
+              <div className="serif" style={{ fontSize:'13.5px', fontStyle:'italic', color:c.textSubtle, marginBottom:'16px' }}>
+                {lang==='ru'?'ИИ-режим выключен — быстрые миксы ищут по звучанию без LLM':'AI mode is off — quick mixes search by sound, no LLM needed'}
               </div>
-            )}
-            {!presetLoading && !presetResults.length && activePreset && (
-              <div className="serif" style={{ fontSize:'14px', color:c.textSubtle, fontStyle:'italic', textAlign:'center', padding:'24px' }}>
-                {lang==='ru'?'Ничего не нашлось':'No tracks found'}
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(180px, 1fr))', gap:'12px', marginBottom:'18px' }}>
+                {moodPresets.map(p => {
+                  const active = activePreset === p.id;
+                  const accent = `oklch(62% 0.18 ${p.hue})`;
+                  return (
+                    <button key={p.id} onClick={() => runPreset(p)}
+                      className={active ? '' : ske('btn', isDark)}
+                      style={{
+                        padding:'16px 16px', borderRadius:'14px',
+                        display:'flex', flexDirection:'column', alignItems:'flex-start', gap:'8px',
+                        cursor:'pointer', textAlign:'left', position:'relative', overflow:'hidden',
+                        background: active
+                          ? `linear-gradient(180deg, ${accent.replace(')', ' / 0.18)')} 0%, ${accent.replace(')', ' / 0.07)')} 100%)`
+                          : undefined,
+                        boxShadow: active
+                          ? `inset 0 0 0 1.5px ${accent.replace(')', ' / 0.5)')}, 0 0 30px ${accent.replace(')', ' / 0.3)')}`
+                          : undefined,
+                        transition:'all 0.25s',
+                      }}>
+                      <div style={{ width:'36px', height:'36px', borderRadius:'10px',
+                        display:'flex', alignItems:'center', justifyContent:'center', fontSize:'17px',
+                        background: `${accent.replace(')', ' / 0.16)')}`, color: accent }}>{p.icon}</div>
+                      <div className="serif" style={{ fontSize:'18px', lineHeight:'1.05', color:c.text }}>{p.label}</div>
+                    </button>
+                  );
+                })}
               </div>
-            )}
+              {presetLoading && skeletonRows(3)}
+              {!presetLoading && presetResults.length > 0 && hitList(presetResults, false)}
+            </>)}
           </>)}
 
-          {/* ── 3. TRACK PICKER → SIMILAR ── */}
+          {/* ── 02 · TASTE CENTER ── */}
+          {card(<>
+            <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between' }}>
+              {blockTitle(
+                lang==='ru'?'02 · ЦЕНТР ВКУСА':'02 · TASTE CENTER',
+                lang==='ru'?'Ваш':'Your',
+                lang==='ru'?'звуковой паспорт':'sound passport',
+              )}
+              {onStartStream && (
+                <button onClick={onStartStream} className={ske('btn', isDark)}
+                  style={{ padding:'10px 18px', borderRadius:'12px', cursor:'pointer', flex:'none' }}>
+                  <span className="mono" style={{ fontSize:'12px', letterSpacing:'0.18em', color:c.text }}>
+                    ▶ {lang==='ru'?'ВКЛЮЧИТЬ ПОТОК':'START STREAM'}
+                  </span>
+                </button>
+              )}
+            </div>
+
+            {profileLoading && skeletonRows(2)}
+            {!profileLoading && !profileAxisValues && (
+              <div className="serif" style={{ fontSize:'14px', color:c.textSubtle, fontStyle:'italic', padding:'10px 0 4px' }}>
+                {lang==='ru'
+                  ? 'Осевой профиль появится после переиндексации коллекции и первых прослушиваний'
+                  : 'The axis profile appears after re-indexing the collection and some listening'}
+              </div>
+            )}
+
+            {profileAxisValues && (
+              <div style={{ display:'flex', gap:'30px', alignItems:'flex-start', flexWrap:'wrap' }}>
+                <AxisRadar values={profileAxisValues} targets={knobsDirty ? targets : null}
+                           isDark={isDark} lang={lang} size={250} />
+                <div style={{ flex:1, minWidth:'280px' }}>
+                  <div className="mono" style={{ fontSize:'11px', letterSpacing:'0.2em', color:c.textSubtle, marginBottom:'10px' }}>
+                    {lang==='ru'?'РУЧКИ: «КАК ОБЫЧНО, НО…»':'KNOBS: "AS USUAL, BUT…"'}
+                  </div>
+                  {RECSYS_AXES.map(a => (
+                    <div key={a} style={{ display:'flex', alignItems:'center', gap:'12px', marginBottom:'7px' }}>
+                      <span className="mono" style={{ fontSize:'10px', letterSpacing:'0.14em', color:c.textMuted, width:'104px', flex:'none' }}>
+                        {RECSYS_AXIS_LABELS[a][lang==='ru'?'ru':'en']}
+                      </span>
+                      <input type="range" min={-200} max={200} step={10}
+                        value={Math.round((targets[a] || 0) * 100)}
+                        onChange={e => setKnob(a, Number(e.target.value) / 100)}
+                        style={{ flex:1, accentColor:'oklch(72% 0.13 75)', height:3, cursor:'pointer' }} />
+                      <span className="mono" style={{ fontSize:'11px', color: knobsDirty ? c.amber : c.textSubtle, width:'38px', textAlign:'right' }}>
+                        {(targets[a] || 0).toFixed(1)}
+                      </span>
+                    </div>
+                  ))}
+                  <div style={{ display:'flex', gap:'10px', marginTop:'14px' }}>
+                    <button onClick={buildAxisPlaylist} disabled={axisBusy}
+                      className={ske('btn', isDark)}
+                      style={{ padding:'10px 18px', borderRadius:'11px', cursor: axisBusy?'wait':'pointer', opacity: axisBusy?0.6:1 }}>
+                      <span className="mono" style={{ fontSize:'12px', letterSpacing:'0.16em', color:c.text }}>
+                        {axisBusy ? (lang==='ru'?'ПОДБОР…':'MIXING…') : (lang==='ru'?'СОБРАТЬ ПЛЕЙЛИСТ':'BUILD PLAYLIST')}
+                      </span>
+                    </button>
+                    {knobsDirty && (
+                      <button onClick={resetKnobs} className={ske('btn', isDark)}
+                        style={{ padding:'10px 14px', borderRadius:'11px', cursor:'pointer' }}>
+                        <span className="mono" style={{ fontSize:'12px', letterSpacing:'0.16em', color:c.textMuted }}>
+                          ↺ {lang==='ru'?'К МОЕМУ ПРОФИЛЮ':'BACK TO MY PROFILE'}
+                        </span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {axisBusy && <div style={{ marginTop:'16px' }}>{skeletonRows(3)}</div>}
+            {axisTracks && !axisBusy && (
+              <div style={{ marginTop:'16px' }}>
+                <div className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.2em', marginBottom:'10px' }}>
+                  {axisTracks.length} {lang==='ru'?'ТРЕКОВ ПОД ЭТИ РУЧКИ':'TRACKS FOR THESE KNOBS'}
+                </div>
+                {axisTracks.length ? hitList(axisTracks, false) : (
+                  <div className="serif" style={{ fontSize:'13.5px', color:c.textSubtle, fontStyle:'italic' }}>
+                    {lang==='ru'?'Пока пусто — оси появятся после переиндексации':'Empty for now — axes appear after re-indexing'}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Listener portrait (LLM) */}
+            <div style={{ marginTop:'22px', paddingTop:'18px', borderTop:`1px solid ${c.border}` }}>
+              <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'8px' }}>
+                <span className="mono" style={{ fontSize:'11px', letterSpacing:'0.2em', color:c.textSubtle }}>
+                  {lang==='ru'?'ПОРТРЕТ СЛУШАТЕЛЯ':'LISTENER PORTRAIT'}
+                </span>
+                {aiOn && (
+                  <button onClick={regenPortrait} disabled={portraitBusy} title={lang==='ru'?'Перегенерировать':'Regenerate'}
+                    style={{ border:'none', background:'transparent', cursor: portraitBusy?'wait':'pointer',
+                             color:c.textMuted, fontSize:'14px', padding:'2px 6px' }}>
+                    {portraitBusy ? '…' : '↺'}
+                  </button>
+                )}
+              </div>
+              {profile && profile.portrait ? (
+                <div className="serif" style={{ fontSize:'16px', fontStyle:'italic', lineHeight:1.5, color: isDark ? '#e8e2f6' : '#2c2440' }}>
+                  ❝ {profile.portrait} ❞
+                </div>
+              ) : (
+                <div className="serif" style={{ fontSize:'13.5px', fontStyle:'italic', color:c.textSubtle }}>
+                  {aiOn
+                    ? (lang==='ru'?'Нажмите ↺ — ИИ опишет, что вы любите в музыке':'Hit ↺ — the AI will describe what you love in music')
+                    : (lang==='ru'?'Включите ИИ-режим, чтобы получить словесный портрет вкуса':'Enable AI mode to get a verbal taste portrait')}
+                </div>
+              )}
+            </div>
+
+            {/* Taste islands */}
+            <div style={{ marginTop:'20px' }}>
+              <div className="mono" style={{ fontSize:'11px', letterSpacing:'0.2em', color:c.textSubtle, marginBottom:'10px' }}>
+                {lang==='ru'?'ОСТРОВА ВКУСА · НАЖМИТЕ ДЛЯ РАДИО':'TASTE ISLANDS · TAP FOR RADIO'}
+              </div>
+              {islands.length === 0 ? (
+                <div className="serif" style={{ fontSize:'13.5px', fontStyle:'italic', color:c.textSubtle }}>
+                  {lang==='ru'?'Лайкайте и дослушивайте треки — здесь проявятся ваши «музыкальные личности»':'Like and finish tracks — your musical personalities will surface here'}
+                </div>
+              ) : (
+                <div style={{ display:'flex', gap:'14px', overflowX:'auto', paddingBottom:'6px' }}>
+                  {islands.map((isl, idx) => {
+                    const covers = (isl.tracks || []).slice(0, 3);
+                    return (
+                      <div key={isl.track_id} onClick={() => islandRadio(isl)} role="button"
+                        className={ske('btn', isDark)}
+                        style={{ flex:'none', width:'190px', padding:'14px', borderRadius:'14px', cursor:'pointer' }}>
+                        <div style={{ display:'flex', marginBottom:'10px', height:'56px', alignItems:'center' }}>
+                          {covers.map((t, i) => {
+                            const src = homeCoverUrl(t.cover_art_path);
+                            return (
+                              <div key={t.track_id || i} style={{
+                                width:'52px', height:'52px', borderRadius:'10px', overflow:'hidden',
+                                marginLeft: i ? '-14px' : 0, position:'relative', zIndex: 5 - i,
+                                transform:`rotate(${(i - 1) * 4}deg)`,
+                                background:'#241d38', border:`1.5px solid ${isDark ? '#26262d' : '#fff'}`,
+                                boxShadow:'0 5px 12px rgba(0,0,0,.3)' }}>
+                                {src && <img src={src} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="serif" style={{ fontSize:'15px', lineHeight:1.15, color:c.text,
+                          display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden' }}>
+                          {isl.name || ((isl.tracks && isl.tracks[0]) ? `${isl.tracks[0].artist}` : (lang==='ru'?`Остров ${idx+1}`:`Island ${idx+1}`))}
+                        </div>
+                        <div className="mono" style={{ fontSize:'10px', letterSpacing:'0.14em', color:c.textSubtle, marginTop:'5px' }}>
+                          {(isl.tracks || []).length} {lang==='ru'?'ЯКОРЕЙ':'ANCHORS'} · ▶
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </>)}
+
+          {/* ── 03 · SIMILAR TO A TRACK ── */}
           {card(<>
             {blockTitle(
-              lang==='ru'?'02 · ПОХОЖЕЕ ПО ТРЕКУ':'02 · SIMILAR TO A TRACK',
+              lang==='ru'?'03 · ПОХОЖЕЕ ПО ТРЕКУ':'03 · SIMILAR TO A TRACK',
               lang==='ru'?'Выбери':'Pick',
               lang==='ru'?'трек':'a track',
             )}
@@ -5387,7 +5749,7 @@ function RecommendSection({ isDark, lang, onPlayTrack }) {
                 }}>
                   {trackOptions.map((h,i) => (
                     <div key={i} onClick={() => findSimilar(h)} style={{ cursor:'pointer' }}>
-                      <ResultCard hit={h} isDark={isDark} c={c} compact onPlay={() => onPlayTrack && onPlayTrack(h, similar)} />
+                      <ResultCard hit={h} isDark={isDark} c={c} compact onPlay={() => findSimilar(h)} />
                     </div>
                   ))}
                 </div>
@@ -5416,22 +5778,11 @@ function RecommendSection({ isDark, lang, onPlayTrack }) {
                 <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'12px' }}>
                   {similarLoading
                     ? (lang==='ru'?'ПОДБОР ПОХОЖИХ…':'FINDING SIMILAR…')
-                    : (lang==='ru'?`ТОП-${similar.length} ПОХОЖИХ`:`TOP ${similar.length} SIMILAR`)}
+                    : (lang==='ru'?`ТОП-${similar.length} ПОХОЖИХ · CLAP + ОСИ`:`TOP ${similar.length} SIMILAR · CLAP + AXES`)}
                 </div>
-                {similarLoading ? (
-                  <div style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
-                    {[1,2,3,4,5].map(i => (
-                      <div key={i} style={{ height:'62px', borderRadius:'12px',
-                        background: isDark?'rgba(255,255,255,0.03)':'rgba(0,0,0,0.025)',
-                        boxShadow: isDark?'inset 0 1px 2px rgba(0,0,0,0.4)':'inset 0 1px 2px rgba(40,30,60,0.06)',
-                        animation:`pulse 1.4s ${i*0.1}s ease-in-out infinite` }} />
-                    ))}
-                  </div>
-                ) : similar.length > 0 ? (
-                  <div style={{ display:'flex', flexDirection:'column', gap:'2px' }}>
-                    {similar.map((h,i) => <ResultCard key={i} hit={h} isDark={isDark} c={c} compact onPlay={() => onPlayTrack && onPlayTrack(h, similar)} />)}
-                  </div>
-                ) : (
+                {similarLoading ? skeletonRows(5)
+                 : similar.length > 0 ? hitList(similar, false)
+                 : (
                   <div className="serif" style={{ fontSize:'14px', color:c.textSubtle, fontStyle:'italic', textAlign:'center', padding:'24px' }}>
                     {lang==='ru'?'Ничего похожего не нашлось':'No similar tracks found'}
                   </div>
@@ -5441,71 +5792,6 @@ function RecommendSection({ isDark, lang, onPlayTrack }) {
           </>)}
 
         </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── VU Meter (semicircle gauge) ──────────────────────────────────────────────
-function VUMeter({ value, max=100, label, sub, isDark, hue=265, size=180 }) {
-  const c = useColors(isDark);
-  const pct = Math.max(0, Math.min(1, (value || 0) / (max || 1)));
-  const angle = -90 + pct * 180; // -90deg → +90deg
-  const accent = `oklch(62% 0.18 ${hue})`;
-  return (
-    <div style={{ width:size, position:'relative', display:'flex', flexDirection:'column', alignItems:'center', gap:'10px' }}>
-      <div className={ske('display', isDark)} style={{
-        width: size, height: size * 0.65, borderRadius:`${size*0.6}px ${size*0.6}px 12px 12px`,
-        position:'relative', overflow:'hidden',
-        display:'flex', alignItems:'flex-end', justifyContent:'center',
-        padding:'0 0 8px',
-      }}>
-        {/* tick marks */}
-        <svg width={size-16} height={size*0.55} viewBox={`-50 -50 100 55`} style={{ position:'absolute', bottom:'8px', left:'8px' }}>
-          {[...Array(11)].map((_,i) => {
-            const a = -90 + (i / 10) * 180;
-            const r1 = 38, r2 = i % 5 === 0 ? 44 : 41;
-            const x1 = r1 * Math.cos(a * Math.PI / 180);
-            const y1 = r1 * Math.sin(a * Math.PI / 180);
-            const x2 = r2 * Math.cos(a * Math.PI / 180);
-            const y2 = r2 * Math.sin(a * Math.PI / 180);
-            return <line key={i} x1={x1} y1={y1} x2={x2} y2={y2}
-              stroke={i >= 7 ? c.amber : (i >= 9 ? 'oklch(58% 0.21 25)' : (isDark?'rgba(255,255,255,0.18)':'rgba(0,0,0,0.18)'))}
-              strokeWidth={i % 5 === 0 ? 1.4 : 0.8} />;
-          })}
-          {/* arc gradient */}
-          <path d={`M -42 0 A 42 42 0 0 1 42 0`} fill="none"
-            stroke={`${accent.replace(')', ' / 0.18)')}`} strokeWidth="1.5" />
-        </svg>
-        {/* needle */}
-        <div className="needle" style={{
-          position:'absolute', left:'50%', bottom:'8px',
-          width:'2px', height: size*0.42, marginLeft:'-1px',
-          background: `linear-gradient(180deg, ${accent}, ${accent.replace(')', ' / 0.6)')})`,
-          borderRadius:'2px',
-          transform:`rotate(${angle}deg)`,
-          transformOrigin: '50% 100%',
-          boxShadow: `0 0 8px ${accent.replace(')', ' / 0.6)')}`,
-        }} />
-        {/* needle pivot */}
-        <div style={{
-          position:'absolute', left:'50%', bottom:'4px', width:'12px', height:'12px',
-          marginLeft:'-6px', borderRadius:'50%',
-          background: 'radial-gradient(circle at 30% 30%, #555, #1a1a1a)',
-          boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.2), 0 1px 3px rgba(0,0,0,0.6)',
-        }} />
-        {/* numeric readout */}
-        <div className="mono" style={{
-          position:'absolute', top:'18px', left:0, right:0, textAlign:'center',
-          fontSize:'24px', color: c.amber, letterSpacing:'0.05em',
-          textShadow: `0 0 12px ${c.amberGlow}`,
-        }}>
-          {value != null ? value.toLocaleString('ru') : '—'}
-        </div>
-      </div>
-      <div style={{ textAlign:'center' }}>
-        <div className="mono" style={{ fontSize:'14px', letterSpacing:'0.22em', color:c.textSubtle }}>{label}</div>
-        {sub && <div className="serif" style={{ fontSize:'14px', color:c.textMuted, fontStyle:'italic', marginTop:'2px' }}>{sub}</div>}
       </div>
     </div>
   );
