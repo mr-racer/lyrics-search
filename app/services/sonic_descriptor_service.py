@@ -241,8 +241,13 @@ class SonicDescriptorService:
             logger.warning("[SonicDescriptor] cluster_library: collection %s is empty", collection)
             return {"n_tracks": 0, "n_clusters": 0}
 
-        X = np.vstack(vectors).astype(np.float32)
-        clusterer = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size, metric="euclidean")
+        X = X / (np.linalg.norm(X, axis=1, keepdims=True) + 1e-12)
+        clusterer = hdbscan.HDBSCAN(
+              min_cluster_size=max(20, len(X) // 200),
+              min_samples=5,
+              metric="euclidean",
+              cluster_selection_method="leaf",
+        )
         labels = clusterer.fit_predict(X)
 
         # 2. Persist assignments {slug: cluster_id}. Noise (label=-1) preserved but
@@ -270,16 +275,20 @@ class SonicDescriptorService:
         labels: np.ndarray,
         payloads: list[dict],
         top_n: int = 5,
-    ) -> list[dict]:
-        """For each non-noise cluster, return top-N tracks closest to its centroid."""
+        ) -> list[dict]:
+        """For each non-noise cluster, return top-N tracks closest to its centroid by cosine.
+        
+        Assumes X is L2-normalized (rows are unit vectors).
+        """
         out: list[dict] = []
         for cid in sorted({int(l) for l in labels} - {-1}):
             idxs = np.where(labels == cid)[0]
             if len(idxs) == 0:
-                continue
+              continue
             centroid = X[idxs].mean(axis=0)
-            dists = np.linalg.norm(X[idxs] - centroid, axis=1)
-            order = np.argsort(dists)[:top_n]
+            centroid /= np.linalg.norm(centroid) + 1e-12          # unit direction
+            sims = X[idxs] @ centroid                              # cosine since rows are unit
+            order = np.argsort(-sims)[:top_n]                      # descending: largest cos first
             reps = [payloads[idxs[k]] for k in order]
             out.append({"cluster_id": cid, "size": int(len(idxs)), "representative_tracks": reps})
         return out

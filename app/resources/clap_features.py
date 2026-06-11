@@ -1,13 +1,18 @@
-"""CLAP audio feature extraction.
+"""CLAP audio feature extraction + sonic axes (Stream RecSys).
 
 Extracted from legacy search_engine/utils.py during Refactor 2.
+Sonic axes ported from notebooks/similar_music.ipynb (cell 67) for the
+stream recsys design (docs/2026-06-09-stream-recsys-design.md §8).
 """
 
 from __future__ import annotations
 
 import gc
+import hashlib
+import json
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -29,6 +34,198 @@ class TrackFeatures:
     title: str
     artist: str
     vector_clap: list
+
+
+# --------------------------------------------------------------------------
+# Sonic axes — CLAP text prompts → interpretable per-track axes.
+#
+# Antonym pairs become differential axes (energetic − calm, …) because the
+# difference of two cosines cancels the shared "music-ness" component and
+# isolates the contrast; single prompts stay absolute.
+# Prompt wording is tuned against listening tests in similar_music.ipynb —
+# do not edit casually: any change bumps AXIS_VERSION and invalidates the
+# reference norm file.
+# --------------------------------------------------------------------------
+
+AXIS_PROMPTS: dict[str, str] = {
+    'calm': 'a calm, relaxing, peaceful and quiet song with soft, gentle, airy sound',
+    'energetic': 'an energetic, powerful track — either intense and driving or heavy '
+                 'and bass-driven with deep low-end and hard-hitting groovy drums',
+    'vocal': 'a vocal-led song where singing or rap is the main focus, with strong '
+             'prominent lead vocals carrying the track',
+    'instrumental': 'an instrument-led track where music and instruments are the main '
+                    'focus, with little or no singing, vocals in the background or absent',
+    'spacious': 'a song with a spacious, wide, open sound — lush reverb, echo and delay '
+                'effects, a deep sense of space and a broad immersive stereo image',
+    'experimental': 'experimental track with erratic shifting rhythm, abrupt beat changes, '
+                    'distorted gritty texture, chaotic and unpredictable',
+    'stable': 'conventional track with steady predictable beat, smooth transitions, '
+              'clean polished texture, orderly and consistent',
+    'bright': 'a bright track with sparkling, crisp, airy high frequencies and lots of treble',
+    'dark': 'a dark track with dull, muffled, subdued tone and rolled-off, recessed '
+            'high frequencies',
+    'acoustic': 'a track played on real live acoustic instruments: piano, acoustic guitar, '
+                'strings, drums, brass and woodwinds',
+    'synthetic': 'an electronic track built from synthesizers, drum machines, samplers '
+                 'and digital programmed sounds',
+}
+
+# Stubs — prompts that do NOT form an axis yet. 'dense' is unoptimized; future
+# iterations may add text-derived axes here (see design doc §11).
+AXIS_PROMPT_STUBS: dict[str, str] = {
+    'dense': 'a dense, rich, layered, busy and saturated production',
+}
+
+AXIS_NAMES: tuple[str, ...] = (
+    'energy', 'vocal_lead', 'spacious', 'experimental', 'brightness', 'acousticness',
+)
+
+_PROMPT_IDX = {name: i for i, name in enumerate(AXIS_PROMPTS)}
+
+
+def axis_version() -> str:
+    """Hash of (active prompts + checkpoint name) — versions the axis space.
+
+    Stored alongside norm stats so a prompt/checkpoint change invalidates
+    stale reference files instead of silently mixing incompatible scales.
+    """
+    from app.resources.model_registry import CLAP_WEIGHTS_PATH
+    blob = json.dumps(AXIS_PROMPTS, sort_keys=True) + CLAP_WEIGHTS_PATH.name
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:12]
+
+
+def compute_axis_text_embeddings(clap_model) -> np.ndarray:
+    """Encode AXIS_PROMPTS with the CLAP text tower → (n_prompts, 512), L2-normalised rows."""
+    emb = clap_model.get_text_embedding(list(AXIS_PROMPTS.values()), use_tensor=False)
+    emb = np.asarray(emb, dtype=np.float32)
+    norms = np.linalg.norm(emb, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    return emb / norms
+
+
+def make_axes(scores: np.ndarray) -> np.ndarray:
+    """Raw prompt cosines (N, len(AXIS_PROMPTS)) → axis values (N, len(AXIS_NAMES)).
+
+    Column order follows AXIS_NAMES.
+    """
+    scores = np.atleast_2d(np.asarray(scores))
+    if scores.shape[1] != len(AXIS_PROMPTS):
+        raise ValueError(
+            f"expected {len(AXIS_PROMPTS)} prompt scores per row, got {scores.shape[1]}"
+        )
+    i = _PROMPT_IDX
+    cols = [
+        scores[:, i['energetic']] - scores[:, i['calm']],        # energy
+        scores[:, i['vocal']] - scores[:, i['instrumental']],    # vocal_lead
+        scores[:, i['spacious']],                                # spacious
+        scores[:, i['experimental']] - scores[:, i['stable']],   # experimental
+        scores[:, i['bright']] - scores[:, i['dark']],           # brightness
+        scores[:, i['acoustic']] - scores[:, i['synthetic']],    # acousticness
+    ]
+    return np.stack(cols, axis=1)
+
+
+def z_to_level(z: float) -> str:
+    """Discrete level label for a z-score (notebook cell 67 thresholds).
+
+    Universal across axes because z is already normalised; ±1σ ≈ the
+    distribution tails (~16% each side), ±0.3σ ≈ the middle bulk.
+    """
+    if z >= 1.0:
+        return "very_high"
+    if z >= 0.3:
+        return "high"
+    if z > -0.3:
+        return "medium"
+    if z > -1.0:
+        return "low"
+    return "very_low"
+
+
+def axes_for_clap_vectors(clap_vectors: np.ndarray, text_emb: np.ndarray) -> list[dict[str, float]]:
+    """Project unit-norm CLAP audio vectors onto the axis space.
+
+    Returns one ``{axis_name: raw_score}`` dict per input vector — the exact
+    shape stored in the Qdrant ``sonic_axes`` payload field (raw scores, NOT
+    z-scores: normalisation happens at read time from collection stats).
+    """
+    clap_vectors = np.atleast_2d(np.asarray(clap_vectors, dtype=np.float32))
+    scores = clap_vectors @ text_emb.T                # (N, n_prompts)
+    axes = make_axes(scores)                          # (N, n_axes)
+    return [
+        {name: float(row[j]) for j, name in enumerate(AXIS_NAMES)}
+        for row in axes
+    ]
+
+
+# --------------------------------------------------------------------------
+# Axis normalisation: reference stats + shrinkage blending (design §8).
+#
+# A 5-track collection produces garbage mean/std → dead axes. Shrinkage pulls
+# small collections toward a reference built from a large diverse library
+# (scripts/build_axis_norm_reference.py); big collections trust themselves.
+# --------------------------------------------------------------------------
+
+AXIS_NORM_REFERENCE_PATH = Path(__file__).parent / "data" / "axis_norm_reference.json"
+AXIS_SHRINKAGE_PSEUDO_N = 100   # λ = n / (n + PSEUDO_N): n=100 → 50/50 blend
+
+
+def _usable_axis_stats(stats: dict | None) -> bool:
+    """A stats dict counts only with mean+std AND a version matching the
+    current axis space — stats from old prompts must not leak into z-scores."""
+    return bool(
+        stats
+        and stats.get("mean")
+        and stats.get("std")
+        and stats.get("version") == axis_version()
+    )
+
+
+def load_axis_norm_reference(path: Path | None = None) -> dict | None:
+    """Load the reference stats file; None when missing, corrupt, or stale."""
+    p = path or AXIS_NORM_REFERENCE_PATH
+    if not p.exists():
+        return None
+    try:
+        ref = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        logger.warning("[axes] unreadable axis_norm_reference at %s — ignoring", p)
+        return None
+    if not _usable_axis_stats(ref):
+        logger.warning(
+            "[axes] axis_norm_reference at %s is stale or malformed (version %r != %r) — "
+            "rebuild via scripts/build_axis_norm_reference.py",
+            p, ref.get("version"), axis_version(),
+        )
+        return None
+    return ref
+
+
+def blend_axis_stats(collection_stats: dict | None, reference: dict | None) -> dict | None:
+    """Shrinkage blend: ``λ = n/(n+100)``, ``stats = λ·collection + (1−λ)·reference``.
+
+    Either source may be missing or version-stale — it is then dropped. Returns
+    None when nothing usable remains (callers must disable axis z-scoring).
+    """
+    coll_ok = _usable_axis_stats(collection_stats)
+    ref_ok = _usable_axis_stats(reference)
+    if not coll_ok and not ref_ok:
+        return None
+    if not coll_ok:
+        return {"mean": dict(reference["mean"]), "std": dict(reference["std"]),
+                "n": 0, "source": "reference"}
+    if not ref_ok:
+        return {"mean": dict(collection_stats["mean"]), "std": dict(collection_stats["std"]),
+                "n": collection_stats.get("n", 0), "source": "collection"}
+
+    n = collection_stats.get("n", 0)
+    lam = n / (n + AXIS_SHRINKAGE_PSEUDO_N)
+    mean: dict[str, float] = {}
+    std: dict[str, float] = {}
+    for a in AXIS_NAMES:
+        mean[a] = lam * collection_stats["mean"].get(a, 0.0) + (1 - lam) * reference["mean"].get(a, 0.0)
+        std[a] = lam * collection_stats["std"].get(a, 0.0) + (1 - lam) * reference["std"].get(a, 0.0)
+    return {"mean": mean, "std": std, "n": n, "source": "blend", "lambda": lam}
 
 
 def unit_norm(v):

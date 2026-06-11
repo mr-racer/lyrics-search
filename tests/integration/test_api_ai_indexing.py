@@ -1,14 +1,20 @@
 """Integration tests for /library/ai-index routes."""
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.api.main import app
+from app.api.routes import ai_indexing as ai_route
 from app.resources.metadata_db import MetadataDB
 from app.services import ai_indexing_service
 from ._auth_helper import authenticate_test_client
+
+# Fixed user used for tests that need to verify collection-name derivation.
+_FIXED_USER = SimpleNamespace(id="user-A", email="a@x", role="owner", created_at=0.0)
+_FIXED_COLLECTION = "acct_user-A"
 
 
 @pytest.fixture(autouse=True)
@@ -44,22 +50,28 @@ def client(tmp_path, monkeypatch):
     db_stub.qdrant = qdrant
     app.state.db_client = db_stub
 
+    # Override get_current_user so collection derivation is deterministic.
+    app.dependency_overrides[ai_route.get_current_user] = lambda: _FIXED_USER
+
     c = TestClient(app)
     authenticate_test_client(c, app)
     yield c
+
+    app.dependency_overrides.pop(ai_route.get_current_user, None)
     MetadataDB._reset_for_tests()
 
 
 def test_post_ai_index_starts_job(client):
     resp = client.post(
         "/api/v1/library/ai-index/sonic_vibe",
-        json={"collection_name": "music", "lang": "en"},
+        json={"collection_name": "acct_BAD", "lang": "en"},
     )
     assert resp.status_code == 200
     body = resp.json()
     assert "job_id" in body
+    # Server derives collection from JWT user → _FIXED_COLLECTION, ignores supplied value.
     # The seeded n_total comes from qdrant.count → 42.
-    row = MetadataDB.get_latest_ai_job("music", "sonic_vibe")
+    row = MetadataDB.get_latest_ai_job(_FIXED_COLLECTION, "sonic_vibe")
     assert row["n_total"] == 42
 
 
@@ -92,12 +104,13 @@ def test_status_returns_nulls_when_no_jobs(client):
 
 
 def test_status_returns_latest_job_per_task(client):
-    # Seed a manual job row for sonic_vibe.
-    MetadataDB.record_ai_job("seeded-job", "sonic_vibe", "music", "en", 100)
+    # Seed a manual job row using the derived collection (_FIXED_COLLECTION).
+    # Server ignores the ?collection= param and always reads from _FIXED_COLLECTION.
+    MetadataDB.record_ai_job("seeded-job", "sonic_vibe", _FIXED_COLLECTION, "en", 100)
     MetadataDB.update_ai_job(job_id="seeded-job", status="done", n_done=100, finished=True)
     resp = client.get(
         "/api/v1/library/ai-index/status",
-        params={"collection": "music"},
+        params={"collection": "music"},  # ignored by server
     )
     body = resp.json()
     assert body["sonic_vibe"] is not None
@@ -137,3 +150,24 @@ def test_artist_bio_cache_reset_works(client):
     )
     assert r.status_code == 200
     assert "deleted_rows" in r.json()
+
+
+def test_start_job_ignores_supplied_collection():
+    """D-soft: server derives collection from JWT even when client sends a different one."""
+    from app.services import ai_indexing_service
+    from unittest.mock import patch, MagicMock
+    from fastapi.testclient import TestClient
+    from app.api.main import create_app
+
+    fixed = SimpleNamespace(id="user-A", email="a@x", role="owner", created_at=0.0)
+    app_under_test = create_app()
+    app_under_test.dependency_overrides[ai_route.get_current_user] = lambda: fixed
+    with patch.object(ai_indexing_service, "start_job", return_value="job-1") as s:
+        with TestClient(app_under_test) as c:
+            c.app.state.db_client = MagicMock()
+            c.app.state.db_client.qdrant.count.return_value = MagicMock(count=0)
+            c.post(
+                "/api/v1/library/ai-index/sonic_vibe",
+                json={"collection_name": "acct_BAD", "lang": "en"},
+            )
+        assert s.call_args.kwargs["collection_name"] == "acct_user-A"

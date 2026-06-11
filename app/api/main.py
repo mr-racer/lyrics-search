@@ -36,7 +36,7 @@ from ..services.auth_service import AuthService
 # because the routes find the type in _TASK_TYPES but the service registry
 # is empty.
 from ..services import ai_tasks  # noqa: F401
-from .routes import search_router, library_router, chat_router, metadata_router, playback_router, recommend_router, ai_indexing_router, artists_router, system_router, playlists_router, instance_router, auth_router
+from .routes import search_router, library_router, chat_router, metadata_router, playback_router, recommend_router, ai_indexing_router, artists_router, system_router, playlists_router, instance_router, auth_router, admin_router
 from .dependencies import get_current_user
 from .sse_utils import event_stream
 
@@ -287,6 +287,9 @@ def create_app() -> FastAPI:
     app.include_router(artists_router,      prefix="/api/v1", dependencies=auth_gate)
     app.include_router(system_router,       prefix="/api/v1", dependencies=auth_gate)
     app.include_router(playlists_router,    prefix="/api/v1", dependencies=auth_gate)
+    # Admin routes carry their own stricter gate (get_owner = JWT + role=owner),
+    # so they don't need the blanket get_current_user dependency.
+    app.include_router(admin_router,        prefix="/api/v1")
     # Public routes — NO auth gate (login / mode probe happen pre-token).
     app.include_router(instance_router,     prefix="/api/v1")
     app.include_router(auth_router,         prefix="/api/v1")

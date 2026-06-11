@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from app.domain.models import (
     PlaylistCreate, PlaylistDetail, PlaylistReorderRequest, PlaylistSummary,
-    PlaylistTrackAdd, PlaylistUpdate, PlaylistsResponse,
+    PlaylistTrackAdd, PlaylistUpdate, PlaylistsResponse, User,
 )
+from app.api.dependencies import get_current_user
+from app.api.helpers import derive_collection_for_user
 from app.services import playlists_service
 from app.services.playlists_service import (
     PlaylistNameCollision, PlaylistNotFound, TrackAlreadyInPlaylist, TrackNotInPlaylist,
@@ -25,10 +27,16 @@ def _qdrant(request: Request):
 
 
 @router.post("", response_model=PlaylistSummary, status_code=201)
-def create_playlist(req: PlaylistCreate, request: Request) -> PlaylistSummary:
+def create_playlist(
+    req: PlaylistCreate,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> PlaylistSummary:
+    # Phase D-soft: derive collection from JWT user; ignore client-supplied value.
+    derived = derive_collection_for_user(current_user)
     try:
         return playlists_service.create(
-            req.collection_name, req.name, req.description, qdrant=_qdrant(request)
+            derived, req.name, req.description, qdrant=_qdrant(request)
         )
     except PlaylistNameCollision as e:
         raise HTTPException(409, str(e))
@@ -37,15 +45,17 @@ def create_playlist(req: PlaylistCreate, request: Request) -> PlaylistSummary:
 @router.get("", response_model=PlaylistsResponse)
 def list_playlists(
     request: Request,
-    collection_name: str = Query(..., min_length=1),
+    current_user: User = Depends(get_current_user),
     include_track_id: Optional[str] = Query(None),
 ) -> PlaylistsResponse:
+    # Phase D-soft: derive collection from JWT user; ignore client-supplied value.
+    derived = derive_collection_for_user(current_user)
     summaries = playlists_service.list_playlists(
-        collection_name,
+        derived,
         include_track_id=include_track_id,
         qdrant=_qdrant(request),
     )
-    return PlaylistsResponse(playlists=summaries, collection_name=collection_name)
+    return PlaylistsResponse(playlists=summaries, collection_name=derived)
 
 
 @router.get("/{playlist_id}", response_model=PlaylistDetail)

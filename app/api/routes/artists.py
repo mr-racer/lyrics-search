@@ -6,10 +6,12 @@ import logging
 from collections import defaultdict
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from qdrant_client import models
 
-from app.domain.models import ArtistAggregate, ArtistAlbum, TrackMetadata
+from app.api.dependencies import get_current_user
+from app.api.helpers import derive_collection_for_user
+from app.domain.models import ArtistAggregate, ArtistAlbum, TrackMetadata, User
 from app.resources.metadata_db import MetadataDB
 from app.services.artist_facts_service import _slugify as _slugify_artist
 from app.services.artist_split import split_artists, artist_slugs
@@ -217,12 +219,15 @@ def build_artist_aggregate(db, collection: str, canonical_slug: str, lang: str) 
 @router.get("/{slug}", response_model=ArtistAggregate)
 def get_artist(
     slug: str,
-    collection: str = Query(..., description="Target collection name"),
+    request: Request,
+    current_user: User = Depends(get_current_user),
     lang: str = Query("en", description="Bio language"),
-    request: Request = None,
 ) -> ArtistAggregate:
     """Aggregate an artist's universe — used by the Atlas screen."""
-    if request is None or request.app.state.db_client is None:
+    # Phase D-soft: derive collection from JWT user; ignore client-supplied value.
+    derived = derive_collection_for_user(current_user)
+
+    if request.app.state.db_client is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
     canonical_slug = _slugify_artist(slug.replace("-", " "))
-    return build_artist_aggregate(request.app.state.db_client, collection, canonical_slug, lang)
+    return build_artist_aggregate(request.app.state.db_client, derived, canonical_slug, lang)

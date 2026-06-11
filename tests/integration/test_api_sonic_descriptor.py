@@ -163,10 +163,12 @@ def test_post_cluster_labels_persists(client, monkeypatch):
 
     r = client.post(
         "/api/v1/library/clusters/labels",
-        json={"collection": "test_col", "labels": {"0": "Lo-fi indie", "1": "Cinematic drone"}},
+        json={"labels": {"0": "Lo-fi indie", "1": "Cinematic drone"}},
     )
     assert r.status_code == 200
-    assert captured["collection"] == "test_col"
+    # Phase D: the server derives the collection from the JWT (acct_<user.id>);
+    # the client no longer supplies one (a stale body field would be ignored).
+    assert captured["collection"].startswith("acct_")
     assert captured["labels"] == {0: "Lo-fi indie", 1: "Cinematic drone"}
 
 

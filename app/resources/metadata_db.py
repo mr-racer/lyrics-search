@@ -13,6 +13,7 @@ translations.
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from pathlib import Path
@@ -169,6 +170,18 @@ _SCHEMA_SQL: Tuple[str, ...] = (
     )""",
     "CREATE INDEX IF NOT EXISTS idx_playlist_tracks_position ON playlist_tracks(playlist_id, position)",
     "CREATE INDEX IF NOT EXISTS idx_playlists_collection ON playlists(collection_name)",
+    # Stream RecSys: cached LLM texts (listener portrait + island names).
+    # source_hash fingerprints the profile inputs (island members) — when the
+    # taste drifts the hash changes and readers treat the row as stale.
+    """CREATE TABLE IF NOT EXISTS recsys_llm_texts (
+        collection_name TEXT NOT NULL,
+        kind            TEXT NOT NULL,
+        lang            TEXT NOT NULL,
+        source_hash     TEXT NOT NULL,
+        content_json    TEXT NOT NULL,
+        created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (collection_name, kind, lang)
+    )""",
     # Phase A: Auth Foundation — users + invites + instance_config
     """CREATE TABLE IF NOT EXISTS users (
         id            TEXT PRIMARY KEY,
@@ -307,8 +320,13 @@ class MetadataDB:
         # AI Mode infrastructure (Plan 6) — per-collection opt-in for live-LLM
         # features. DEFAULT 1 means existing rows immediately report on,
         # matching the pre-flag world where AI features were always available.
+        # ai_enabled — AI Mode (Plan 6). axis_norm_stats + stream_liked_share —
+        # Stream RecSys: per-collection sonic-axis mean/std (JSON, recomputed on
+        # each indexing run) and the liked/new slider default.
         cls._ensure_columns(conn, "collection_settings", {
             "ai_enabled": "INTEGER NOT NULL DEFAULT 1",
+            "axis_norm_stats": "TEXT",
+            "stream_liked_share": "REAL",
         })
 
         # AI indexing — distinguish "processed" from "silently skipped" so the
@@ -317,6 +335,13 @@ class MetadataDB:
         # status payload reports n_done = n_total and looks like a real run.
         cls._ensure_columns(conn, "ai_indexing_jobs", {
             "n_skipped": "INTEGER NOT NULL DEFAULT 0",
+        })
+
+        # Stream RecSys idle rule: did the user touch ANY control during this
+        # track (like/skip/pause/seek)? NULL = legacy events, treated as
+        # interacted so old history keeps moving the taste profile.
+        cls._ensure_columns(conn, "playback_events", {
+            "interacted": "INTEGER",
         })
 
         # Phase B: per-user settings live as columns on the (Phase A) users
@@ -998,6 +1023,109 @@ class MetadataDB:
         )
         conn.commit()
 
+    # ── Stream RecSys: sonic-axis normalisation stats ──
+
+    @classmethod
+    def set_axis_norm_stats(cls, collection_name: str, stats: Dict) -> None:
+        """Persist per-collection axis mean/std as JSON.
+
+        ``stats`` shape: ``{"version": str, "n": int,
+        "mean": {axis: float}, "std": {axis: float}}`` — recomputed after every
+        indexing run so z-scores stay honest as the collection grows.
+        """
+        conn = cls._connect()
+        conn.execute(
+            """INSERT INTO collection_settings (collection_name, axis_norm_stats)
+               VALUES (?, ?)
+               ON CONFLICT(collection_name) DO UPDATE SET
+                 axis_norm_stats = excluded.axis_norm_stats""",
+            (collection_name, json.dumps(stats)),
+        )
+        conn.commit()
+
+    @classmethod
+    def set_recsys_llm_text(
+        cls, collection_name: str, kind: str, lang: str,
+        source_hash: str, content: Dict,
+    ) -> None:
+        """Upsert a cached LLM text (one row per collection+kind+lang)."""
+        conn = cls._connect()
+        conn.execute(
+            """INSERT INTO recsys_llm_texts
+                 (collection_name, kind, lang, source_hash, content_json, created_at)
+               VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+               ON CONFLICT(collection_name, kind, lang) DO UPDATE SET
+                 source_hash = excluded.source_hash,
+                 content_json = excluded.content_json,
+                 created_at = CURRENT_TIMESTAMP""",
+            (collection_name, kind, lang, source_hash, json.dumps(content)),
+        )
+        conn.commit()
+
+    @classmethod
+    def get_recsys_llm_text(
+        cls, collection_name: str, kind: str, lang: str,
+        source_hash: Optional[str] = None,
+    ) -> Optional[Dict]:
+        """Return cached content, or None when absent / corrupt / stale.
+
+        When ``source_hash`` is provided, a stored row with a different hash is
+        treated as stale (the taste profile moved on) and None is returned.
+        """
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT source_hash, content_json FROM recsys_llm_texts "
+            "WHERE collection_name = ? AND kind = ? AND lang = ?",
+            (collection_name, kind, lang),
+        ).fetchone()
+        if row is None:
+            return None
+        if source_hash is not None and row[0] != source_hash:
+            return None
+        try:
+            return json.loads(row[1])
+        except (TypeError, ValueError):
+            logger.warning("[MetadataDB] corrupt recsys_llm_texts row for %s/%s", collection_name, kind)
+            return None
+
+    @classmethod
+    def set_stream_liked_share(cls, collection_name: str, share: float) -> None:
+        """Persist the liked/new slider position (0.0–1.0) for the stream."""
+        conn = cls._connect()
+        conn.execute(
+            """INSERT INTO collection_settings (collection_name, stream_liked_share)
+               VALUES (?, ?)
+               ON CONFLICT(collection_name) DO UPDATE SET
+                 stream_liked_share = excluded.stream_liked_share""",
+            (collection_name, float(share)),
+        )
+        conn.commit()
+
+    @classmethod
+    def get_stream_liked_share(cls, collection_name: str) -> Optional[float]:
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT stream_liked_share FROM collection_settings WHERE collection_name = ?",
+            (collection_name,),
+        ).fetchone()
+        return float(row[0]) if row and row[0] is not None else None
+
+    @classmethod
+    def get_axis_norm_stats(cls, collection_name: str) -> Optional[Dict]:
+        """Return the stored axis stats dict, or None when absent/corrupt."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT axis_norm_stats FROM collection_settings WHERE collection_name = ?",
+            (collection_name,),
+        ).fetchone()
+        if not row or not row[0]:
+            return None
+        try:
+            return json.loads(row[0])
+        except (TypeError, ValueError):
+            logger.warning("[MetadataDB] corrupt axis_norm_stats for %s — ignoring", collection_name)
+            return None
+
     # ── Playback history ──
 
     @classmethod
@@ -1009,6 +1137,7 @@ class MetadataDB:
         track_id: str,
         played_sec: float,
         total_dur: float | None,
+        interacted: bool | None = None,
     ) -> int:
         """Insert a playback event. Returns the new row id.
 
@@ -1027,13 +1156,68 @@ class MetadataDB:
         conn = cls._connect()
         cur = conn.execute(
             "INSERT INTO playback_events "
-            "(session_id, collection_name, track_id, played_sec, total_dur, skipped_early) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "(session_id, collection_name, track_id, played_sec, total_dur, skipped_early, interacted) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (session_id, collection_name, track_id, played_sec, total_dur,
-             1 if skipped_early else 0),
+             1 if skipped_early else 0,
+             None if interacted is None else (1 if interacted else 0)),
         )
         conn.commit()
         return int(cur.lastrowid)
+
+    @classmethod
+    def get_playback_signals(
+        cls, collection_name: str, limit: int = 2000,
+    ) -> list[Dict]:
+        """Last ``limit`` playback events in CHRONOLOGICAL order (Stream RecSys).
+
+        Chronology matters: replay detection and the idle rule scan a session's
+        events in play order. ``played_at`` is normalised to ``datetime``;
+        ``interacted`` to ``bool | None`` (NULL = legacy = treated as action).
+        """
+        from datetime import datetime as _dt
+        conn = cls._connect()
+        rows = conn.execute(
+            """SELECT track_id, played_sec, total_dur, played_at, session_id, interacted
+               FROM playback_events
+               WHERE collection_name = ?
+               ORDER BY id DESC LIMIT ?""",
+            (collection_name, limit),
+        ).fetchall()
+        out: List[Dict] = []
+        for r in reversed(rows):
+            played_at = r[3]
+            if not hasattr(played_at, "isoformat"):
+                try:
+                    played_at = _dt.fromisoformat(str(played_at))
+                except ValueError:
+                    continue  # unparseable timestamp — drop the row, not the request
+            out.append({
+                "track_id": r[0],
+                "played_sec": float(r[1] or 0.0),
+                "total_dur": float(r[2]) if r[2] is not None else None,
+                "played_at": played_at,
+                "session_id": r[4],
+                "interacted": None if r[5] is None else bool(r[5]),
+            })
+        return out
+
+    @classmethod
+    def get_reactions_with_updated_at(
+        cls, collection_name: str,
+    ) -> list[Tuple[str, str, str]]:
+        """All reactions as ``(track_id, reaction, updated_at_iso)`` (Stream RecSys)."""
+        conn = cls._connect()
+        rows = conn.execute(
+            "SELECT track_id, reaction, updated_at FROM track_reactions "
+            "WHERE collection_name = ?",
+            (collection_name,),
+        ).fetchall()
+        return [
+            (r[0], r[1],
+             r[2].isoformat() if hasattr(r[2], "isoformat") else str(r[2]))
+            for r in rows
+        ]
 
     @classmethod
     def get_recent_tracks(

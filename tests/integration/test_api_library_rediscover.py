@@ -1,11 +1,21 @@
+"""Integration tests for GET /library/rediscover.
+
+Phase D (D-soft): the collection is derived from the JWT (``acct_<user.id>``),
+not from the supplied ``collection_name`` param. Tests that need recency data to
+line up with the queried collection pin a fixed user via dependency_overrides so
+the derived collection name (``acct_user-A``) is known and can be seeded.
+"""
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.api.main import app
+from app.api.routes import library as lib_route
 from app.resources.metadata_db import MetadataDB
-from ._auth_helper import authenticate_test_client
+
+_DERIVED = "acct_user-A"
 
 
 def _pt(tid, title="T", artist="A"):
@@ -27,16 +37,21 @@ def client(tmp_path, monkeypatch):
     qdrant.retrieve.side_effect = lambda **kw: [_pt(kw["ids"][0])]
     db = MagicMock(); db.qdrant = qdrant
     app.state.db_client = db
+    fixed = SimpleNamespace(id="user-A", email="a@x")
+    app.dependency_overrides[lib_route.get_current_user] = lambda: fixed
     c = TestClient(app)
-    authenticate_test_client(c, app)
     yield c
+    app.dependency_overrides.clear()
     MetadataDB._reset_for_tests()
     app.state.db_client = None
 
 
 def test_rediscover_prefers_never_played(client):
-    MetadataDB.record_playback_event(session_id="s", collection_name="c",
+    # Record the play under the DERIVED collection so recency lines up with the
+    # collection the endpoint actually queries (D-soft ignores the param).
+    MetadataDB.record_playback_event(session_id="s", collection_name=_DERIVED,
                                      track_id="t1", played_sec=150.0, total_dur=200.0)
+    # Supplied collection_name is bogus on purpose — it must be ignored.
     resp = client.get("/api/v1/library/rediscover", params={"collection_name": "c"})
     assert resp.status_code == 200
     body = resp.json()
@@ -51,6 +66,8 @@ def test_rediscover_qdrant_down_returns_empty(client):
     assert resp.json()["track"] is None
 
 
-def test_rediscover_missing_collection_returns_422(client):
+def test_rediscover_missing_collection_now_optional(client):
+    """D-soft relaxed the previously-required collection_name param: omitting it
+    no longer 422s — the collection is derived from the JWT."""
     resp = client.get("/api/v1/library/rediscover")
-    assert resp.status_code == 422
+    assert resp.status_code == 200

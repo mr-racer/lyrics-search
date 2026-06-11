@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 from app.domain.models import ArtistAggregate, IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RediscoverResponse, User
 from app.api.dependencies import get_current_user, require_mode
+from app.api.helpers import derive_collection_for_user
 from app.services.library_service import LibraryService
 from app.services import uploads_service
 from app.services._magic_sniff import sniff_audio_mime
@@ -48,10 +49,10 @@ def _score_query(q_words: list[str], q_full: str, value: str) -> float:
 
 @router.get("/browse")
 async def browse_tracks(
+    request: Request = None,
+    current_user: User = Depends(get_current_user),
     q: Optional[str] = Query(None, min_length=2, description="Search query (title / artist / album). Omit to return all tracks."),
     limit: int = Query(6, ge=1, le=50, description="Max results"),
-    collection_name: Optional[str] = Query(None, description="Collection to browse"),
-    request: Request = None,
 ) -> list[dict]:
     """Payload-only search across title, artist, album with relevance scoring.
 
@@ -63,12 +64,13 @@ async def browse_tracks(
     if db_client is None:
         return []
 
+    derived = derive_collection_for_user(current_user)
+
     has_query = q is not None and len(q.strip()) >= 2
     q_full = q.strip().lower() if has_query else ""
     q_words = list(set(q_full.split())) if has_query else []
 
-    # Resolve target collection (same logic as /stats)
-    DEFAULT_COLLECTION = "music_explorer"
+    # Collection is ALWAYS the caller's derived account collection.
     try:
         qdrant = db_client.qdrant
         cols = qdrant.get_collections().collections
@@ -76,21 +78,7 @@ async def browse_tracks(
         return []
 
     existing = {c.name for c in cols}
-    pick = collection_name if collection_name else DEFAULT_COLLECTION
-    target_col: str | None = pick if pick in existing else None
-
-    if not target_col:
-        # fall back to collection with most points
-        best_count = 0
-        for col in cols:
-            try:
-                info = qdrant.get_collection(col.name)
-                cnt = info.points_count or 0
-                if cnt > best_count:
-                    best_count = cnt
-                    target_col = col.name
-            except Exception:
-                pass
+    target_col: str | None = derived if derived in existing else None
 
     if not target_col:
         return []
@@ -197,10 +185,10 @@ async def browse_tracks(
 
 @router.get("/random")
 async def get_random_tracks(
-    collection_name: Optional[str] = Query(None, description="Collection to sample from"),
+    request: Request = None,
+    current_user: User = Depends(get_current_user),
     limit: int = Query(1, ge=1, le=20, description="Number of random tracks"),
     pool: int = Query(1000, ge=50, le=5000, description="Upper bound of sampling pool"),
-    request: Request = None,
 ) -> list[dict]:
     """Return ``limit`` random tracks from the collection.
 
@@ -215,8 +203,9 @@ async def get_random_tracks(
     if db_client is None:
         return []
 
-    # Resolve target collection (same logic as /browse)
-    DEFAULT_COLLECTION = "music_explorer"
+    derived = derive_collection_for_user(current_user)
+
+    # Collection is ALWAYS the caller's derived account collection.
     try:
         qdrant = db_client.qdrant
         cols = qdrant.get_collections().collections
@@ -224,20 +213,7 @@ async def get_random_tracks(
         return []
 
     existing = {c.name for c in cols}
-    pick = collection_name if collection_name else DEFAULT_COLLECTION
-    target_col: str | None = pick if pick in existing else None
-
-    if not target_col:
-        best_count = 0
-        for col in cols:
-            try:
-                info = qdrant.get_collection(col.name)
-                cnt = info.points_count or 0
-                if cnt > best_count:
-                    best_count = cnt
-                    target_col = col.name
-            except Exception:
-                pass
+    target_col: str | None = derived if derived in existing else None
 
     if not target_col:
         return []
@@ -333,38 +309,67 @@ async def get_collections(request: Request) -> dict:
     }
 
 
-@router.get("/collections/{collection_name}/settings")
-async def get_collection_settings(collection_name: str) -> dict:
-    """Return persisted per-collection settings.
+@router.get("/settings")
+async def get_collection_settings(
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Return persisted per-collection settings for the caller's account.
 
     Returns {"collection_name": str, "text_model": str|null, "indexed_at": ts|null, "ai_enabled": bool}.
     ai_enabled defaults to True when no row exists (legacy collections stay AI-on).
+    The collection is derived from the JWT — clients no longer pass a name.
     """
     from app.resources.metadata_db import MetadataDB
+    derived = derive_collection_for_user(current_user)
     try:
         MetadataDB.init()
-        settings = MetadataDB.get_collection_settings(collection_name)
-        ai_enabled = MetadataDB.get_collection_ai_enabled(collection_name)
+        settings = MetadataDB.get_collection_settings(derived)
+        ai_enabled = MetadataDB.get_collection_ai_enabled(derived)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read settings: {e}")
 
-    base = {"collection_name": collection_name, "text_model": None, "indexed_at": None}
+    base = {"collection_name": derived, "text_model": None, "indexed_at": None}
     if settings is not None:
         base.update(settings)
     base["ai_enabled"] = ai_enabled
     return base
 
 
-@router.patch("/collections/{collection_name}/ai-enabled")
-async def set_collection_ai_enabled(collection_name: str, req: AIEnabledRequest) -> dict:
-    """Toggle the per-collection AI features opt-in. Used by Settings panel."""
+@router.get("/collections/{collection_name}/settings", deprecated=True)
+async def get_collection_settings_legacy(collection_name: str) -> dict:
+    """Deprecated alias — collection is now inferred from the JWT."""
+    raise HTTPException(
+        status_code=410,
+        detail="Use GET /library/settings — collection inferred from JWT",
+    )
+
+
+@router.patch("/ai-enabled")
+async def set_collection_ai_enabled(
+    req: AIEnabledRequest,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Toggle the per-collection AI features opt-in. Used by Settings panel.
+
+    The collection is derived from the JWT — clients no longer pass a name.
+    """
     from app.resources.metadata_db import MetadataDB
+    derived = derive_collection_for_user(current_user)
     try:
         MetadataDB.init()
-        MetadataDB.set_collection_ai_enabled(collection_name, req.enabled)
+        MetadataDB.set_collection_ai_enabled(derived, req.enabled)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to set ai_enabled: {e}")
-    return {"collection_name": collection_name, "ai_enabled": req.enabled}
+    return {"collection_name": derived, "ai_enabled": req.enabled}
+
+
+@router.patch("/collections/{collection_name}/ai-enabled", deprecated=True)
+async def set_collection_ai_enabled_legacy(collection_name: str, req: AIEnabledRequest) -> dict:
+    """Deprecated alias — collection is now inferred from the JWT."""
+    raise HTTPException(
+        status_code=410,
+        detail="Use PATCH /library/ai-enabled — collection inferred from JWT",
+    )
 
 
 # ── Albums overview ───────────────────────────────────────────────────────────
@@ -372,17 +377,18 @@ async def set_collection_ai_enabled(collection_name: str, req: AIEnabledRequest)
 @router.get("/albums", response_model=LibraryAlbumsResponse)
 async def get_library_albums(
     request: Request,
-    collection_name: str = Query(..., description="Collection name (required)"),
+    current_user: User = Depends(get_current_user),
     sort: str = Query("alphabetical", description="alphabetical | year_desc | year_asc | track_count_desc"),
 ) -> LibraryAlbumsResponse:
+    derived = derive_collection_for_user(current_user)
     db_client = request.app.state.db_client
     if db_client is None or db_client.qdrant is None:
         return LibraryAlbumsResponse(
-            albums=[], collection_name=collection_name, qdrant_available=False,
+            albums=[], collection_name=derived, qdrant_available=False,
         )
     return LibraryService.get_albums(
         qdrant_client=db_client.qdrant,
-        collection_name=collection_name,
+        collection_name=derived,
         sort=sort,
     )
 
@@ -392,14 +398,15 @@ async def get_library_albums(
 @router.get("/liked-songs", response_model=LikedSongsResponse)
 async def get_library_liked_songs(
     request: Request,
-    collection_name: str = Query(..., description="Collection name (required)"),
+    current_user: User = Depends(get_current_user),
 ) -> LikedSongsResponse:
+    derived = derive_collection_for_user(current_user)
     db_client = request.app.state.db_client
     if db_client is None or db_client.qdrant is None:
-        return LikedSongsResponse(tracks=[], collection_name=collection_name)
+        return LikedSongsResponse(tracks=[], collection_name=derived)
     return LibraryService.get_liked_songs(
         qdrant_client=db_client.qdrant,
-        collection_name=collection_name,
+        collection_name=derived,
     )
 
 
@@ -408,14 +415,15 @@ async def get_library_liked_songs(
 @router.get("/rediscover", response_model=RediscoverResponse)
 async def get_library_rediscover(
     request: Request,
-    collection_name: str = Query(..., description="Collection name (required)"),
+    current_user: User = Depends(get_current_user),
 ) -> RediscoverResponse:
+    derived = derive_collection_for_user(current_user)
     db_client = request.app.state.db_client
     if db_client is None or db_client.qdrant is None:
-        return RediscoverResponse(collection_name=collection_name)
+        return RediscoverResponse(collection_name=derived)
     return LibraryService.get_rediscover(
         qdrant_client=db_client.qdrant,
-        collection_name=collection_name,
+        collection_name=derived,
     )
 
 
@@ -424,23 +432,24 @@ async def get_library_rediscover(
 @router.get("/featured-artist", response_model=ArtistAggregate)
 async def get_library_featured_artist(
     request: Request,
-    collection_name: str = Query(..., description="Collection name (required)"),
+    current_user: User = Depends(get_current_user),
     date: str | None = Query(None, description="YYYY-MM-DD; defaults to today"),
     lang: str = Query("en"),
 ) -> ArtistAggregate:
     from app.api.routes.artists import build_artist_aggregate
+    derived = derive_collection_for_user(current_user)
     db_client = request.app.state.db_client
     if db_client is None or db_client.qdrant is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
     artists = LibraryService.list_distinct_artist_slugs(
-        qdrant_client=db_client.qdrant, collection_name=collection_name,
+        qdrant_client=db_client.qdrant, collection_name=derived,
     )
     if not artists:
         raise HTTPException(status_code=404, detail="no artists in collection")
     day = date or _date.today().isoformat()
     idx = int(hashlib.sha1(day.encode()).hexdigest(), 16) % len(artists)
     slug, _name = artists[idx]
-    return build_artist_aggregate(db_client, collection_name, slug, lang)
+    return build_artist_aggregate(db_client, derived, slug, lang)
 
 
 # ── Listening stats ───────────────────────────────────────────────────────────
@@ -448,19 +457,20 @@ async def get_library_featured_artist(
 @router.get("/listening-stats", response_model=ListeningStatsResponse)
 async def get_library_listening_stats(
     request: Request,
-    collection_name: str = Query(..., description="Collection name"),
+    current_user: User = Depends(get_current_user),
     lang: str = Query("en", pattern="^(en|ru)$"),
     tz_offset_minutes: int = Query(
         0, ge=-840, le=840,
         description="Client UTC offset in minutes (e.g. UTC+3 → 180) for local peak-hour bucketing",
     ),
 ) -> ListeningStatsResponse:
+    derived = derive_collection_for_user(current_user)
     db_client = request.app.state.db_client
     if db_client is None or db_client.qdrant is None:
         return ListeningStatsResponse()
     return LibraryService.get_listening_stats(
         qdrant_client=db_client.qdrant,
-        collection_name=collection_name,
+        collection_name=derived,
         lang=lang,
         tz_offset_minutes=tz_offset_minutes,
     )
@@ -471,12 +481,11 @@ async def get_library_listening_stats(
 @router.get("/stats")
 async def get_stats(
     request: Request,
-    collection_name: Optional[str] = Query(None, description="Collection to get stats for"),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     """Library statistics: total tracks, top genres (from Qdrant payload).
 
-    If collection_name is provided, stats are for that specific collection.
-    Otherwise, picks the collection with the most points.
+    Stats are always for the caller's derived account collection.
 
     Returns:
         {
@@ -487,6 +496,7 @@ async def get_stats(
         }
     """
     db_client = request.app.state.db_client
+    derived = derive_collection_for_user(current_user)
     empty_payload = {
         "total_tracks": 0,
         "collection_name": None,
@@ -511,38 +521,22 @@ async def get_stats(
     if not cols:
         return {**empty_payload, "qdrant_available": True}
 
-    # Use the requested collection; fall back to the default collection name
-    # (same default as DbClient / LyricsDB) so that stats and search always
-    # target the same collection when the frontend does not specify one.
-    DEFAULT_COLLECTION = "music_explorer"
+    # Stats always target the caller's derived account collection.
     existing = {c.name for c in cols}
 
     target_col: str | None = None
     target_count: int = 0
 
-    pick = collection_name if collection_name else DEFAULT_COLLECTION
-    if pick in existing:
+    if derived in existing:
         try:
-            info = qdrant.get_collection(pick)
-            target_col = pick
+            info = qdrant.get_collection(derived)
+            target_col = derived
             target_count = info.points_count or 0
         except Exception:
             pass
 
-    # If the default doesn't exist, fall back to any collection with points
     if not target_col:
-        for col in cols:
-            try:
-                info = qdrant.get_collection(col.name)
-                cnt = info.points_count or 0
-                if cnt > target_count:
-                    target_count = cnt
-                    target_col = col.name
-            except Exception:
-                pass
-
-    if not target_col:
-        return {**empty_payload, "collection_name": collection_name, "qdrant_available": True}
+        return {**empty_payload, "collection_name": derived, "qdrant_available": True}
 
     # Scroll through ALL points (payload only, no vectors — fast even on large collections)
     genre_counter: Counter = Counter()
@@ -645,7 +639,7 @@ async def get_stats(
 @router.get("/top-pairs")
 async def get_top_pairs(
     request: Request,
-    collection_name: Optional[str] = Query(None, description="Collection to get top pairs for"),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     """Get cached top-similar and top-dissimilar track pairs.
 
@@ -659,6 +653,7 @@ async def get_top_pairs(
           "computed_at": float | None,
         }
     """
+    derived = derive_collection_for_user(current_user)
     db_client = request.app.state.db_client
     if db_client is None:
         return {
@@ -690,27 +685,9 @@ async def get_top_pairs(
             "qdrant_available": True,
         }
 
-    # Resolve target collection (same logic as /stats)
-    DEFAULT_COLLECTION = "music_explorer"
+    # Top pairs always target the caller's derived account collection.
     existing = {c.name for c in cols}
-
-    target_col: str | None = None
-    pick = collection_name if collection_name else DEFAULT_COLLECTION
-    if pick in existing:
-        target_col = pick
-
-    if not target_col:
-        # Fall back to collection with most points
-        target_count = 0
-        for col in cols:
-            try:
-                info = qdrant.get_collection(col.name)
-                cnt = info.points_count or 0
-                if cnt > target_count:
-                    target_count = cnt
-                    target_col = col.name
-            except Exception:
-                pass
+    target_col: str | None = derived if derived in existing else None
 
     if not target_col:
         return {
@@ -791,6 +768,8 @@ async def index_folder(
     if service is None:
         raise HTTPException(status_code=503, detail="Library service unavailable — is Qdrant running?")
 
+    derived = derive_collection_for_user(current_user)
+
     # Sanity check: folder must exist on the host. Done BEFORE delegating so a
     # typo gives a clean 400 instead of a confusing mid-pipeline failure.
     if not Path(req.folder_path).is_dir():
@@ -802,7 +781,7 @@ async def index_folder(
     # two accounts can index concurrently while one account can't double-start.
     result = await service.index_folder(
         folder_path=req.folder_path,
-        collection_name=req.collection_name,
+        collection_name=derived,
         better_lyrics_quality=req.better_lyrics_quality,
         text_model=req.text_model,
         enhance_by_musicbrainz=req.enhance_by_musicbrainz,
@@ -978,7 +957,7 @@ async def delete_track(
     import os as _os
     from app.services.audio_streaming import drop_transcoded_for_tracks
 
-    collection_name = f"acct_{current_user.id}"
+    collection_name = derive_collection_for_user(current_user)
     db_client = request.app.state.db_client
     if db_client is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
@@ -1042,58 +1021,16 @@ async def get_progress(job_id: str) -> IndexProgress:
 
 # ── Delete collection ─────────────────────────────────────────────────────────
 
-@router.delete("/collection/{collection_name}")
+@router.delete("/collection/{collection_name}", deprecated=True)
 async def delete_collection(collection_name: str, request: Request):
-    """Delete a Qdrant collection by name and clean up related cache files."""
-    db_client = request.app.state.db_client
-    if db_client is None:
-        raise HTTPException(status_code=503, detail="Qdrant unavailable")
+    """Removed in Phase D — self-serve collection delete is no longer exposed.
 
-    # Collect track ids BEFORE dropping the collection so we can purge their
-    # transcoded audio cache after the Qdrant delete succeeds.
-    track_ids: list[str] = []
-    try:
-        qdrant = db_client.qdrant
-        offset = None
-        while True:
-            points, offset = qdrant.scroll(
-                collection_name=collection_name,
-                limit=512,
-                offset=offset,
-                with_payload=False,
-                with_vectors=False,
-            )
-            track_ids.extend(str(p.id) for p in points)
-            if offset is None:
-                break
-    except Exception:
-        # Collection might be missing or unreadable — non-fatal, just skip cache purge.
-        track_ids = []
-
-    try:
-        qdrant.delete_collection(collection_name)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to delete collection: {e}")
-
-    # Clean up cached top-pairs if exists
-    try:
-        cache_file = Path(__file__).parent.parent.parent / "cache" / "top_pairs" / f"{collection_name}.json"
-        if cache_file.exists():
-            cache_file.unlink()
-    except Exception:
-        pass
-
-    # Drop transcoded ALAC→FLAC cache for the deleted tracks. Phase B §6.6:
-    # keyed by collection_name — the same namespace /stream writes under — so the
-    # purge hits this account's cache only and never another account's.
-    if track_ids:
-        try:
-            from app.services.audio_streaming import drop_transcoded_for_tracks
-            drop_transcoded_for_tracks(account_id=collection_name, track_ids=track_ids)
-        except Exception:
-            pass
-
-    return {"deleted": True, "collection_name": collection_name}
+    Account owners wipe an account via the admin endpoint instead.
+    """
+    raise HTTPException(
+        status_code=410,
+        detail="Self-serve collection delete removed — owners use POST /admin/accounts/{user_id}/wipe",
+    )
 
 
 # ── Sonic Descriptor ──────────────────────────────────────────────────────────
@@ -1242,16 +1179,17 @@ async def _run_cluster_discovery_job(collection: str) -> dict:
 @router.post("/cluster-discovery", status_code=202)
 async def post_cluster_discovery(
     request: Request,
-    collection: str = Query(..., description="Collection to cluster"),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     """Trigger HDBSCAN clustering. Returns immediately with a job_id."""
+    derived = derive_collection_for_user(current_user)
     job_id = uuid.uuid4().hex[:12]
     _CLUSTER_JOBS[job_id] = {"status": "running", "result": None, "error": None}
 
     async def _runner():
         try:
             from app.api.routes import library as _self_mod
-            result = await _self_mod._run_cluster_discovery_job(collection)
+            result = await _self_mod._run_cluster_discovery_job(derived)
             _CLUSTER_JOBS[job_id] = {"status": "completed", "result": result, "error": None}
         except Exception as e:
             logger.exception("[Cluster Discovery] job %s failed", job_id)
@@ -1273,47 +1211,55 @@ async def get_cluster_job(job_id: str) -> dict:
 @router.get("/clusters/representatives")
 async def get_cluster_representatives(
     request: Request,
-    collection: str = Query(..., description="Collection name"),
+    current_user: User = Depends(get_current_user),
 ) -> list[dict]:
     """Return the cluster grid for the curator UI: id, size, representatives, current label."""
+    derived = derive_collection_for_user(current_user)
     svc = request.app.state.sonic_descriptor_service
     if svc is None:
         raise HTTPException(status_code=503, detail="Sonic Descriptor Service unavailable")
-    return svc.get_cluster_representatives(collection=collection)
+    return svc.get_cluster_representatives(collection=derived)
 
 
 @router.post("/clusters/labels")
-async def post_cluster_labels(payload: dict, request: Request) -> dict:
+async def post_cluster_labels(
+    payload: dict,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> dict:
     """Persist user-assigned cluster labels.
 
-    Body: ``{"collection": str, "labels": {"<cluster_id_int>": "Label name", ...}}``.
+    Body: ``{"labels": {"<cluster_id_int>": "Label name", ...}}``. A ``collection``
+    key is accepted for backward compat (D-soft) but ignored — the collection is
+    derived from the JWT.
     """
     svc = request.app.state.sonic_descriptor_service
     if svc is None:
         raise HTTPException(status_code=503, detail="Sonic Descriptor Service unavailable")
-    collection = payload.get("collection")
+    derived = derive_collection_for_user(current_user)
     raw_labels = payload.get("labels", {})
-    if not collection or not isinstance(raw_labels, dict):
-        raise HTTPException(status_code=400, detail="Body must include 'collection' and 'labels' dict")
+    if not isinstance(raw_labels, dict):
+        raise HTTPException(status_code=400, detail="Body must include a 'labels' dict")
     try:
         labels = {int(k): v for k, v in raw_labels.items()}
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="Label keys must be integer cluster ids")
-    svc.save_cluster_labels(collection=collection, labels=labels)
+    svc.save_cluster_labels(collection=derived, labels=labels)
     return {"ok": True, "n_labels": len(labels)}
 
 
 @router.get("/sonic-clusters")
 async def get_sonic_clusters(
     request: Request,
-    collection: str = Query(..., description="Collection name"),
+    current_user: User = Depends(get_current_user),
 ) -> list[dict]:
     """Return labeled clusters for Sonic Map overlay. Empty list if curator not run yet."""
+    derived = derive_collection_for_user(current_user)
     svc = request.app.state.sonic_descriptor_service
     if svc is None:
         raise HTTPException(status_code=503, detail="Sonic Descriptor Service unavailable")
-    labels = svc.load_cluster_labels(collection=collection)
-    assignments = svc.load_cluster_assignments(collection=collection)
+    labels = svc.load_cluster_labels(collection=derived)
+    assignments = svc.load_cluster_assignments(collection=derived)
     if not labels or not assignments:
         return []
 
@@ -1353,16 +1299,17 @@ async def _run_classifier_training_job(collection: str) -> dict:
 @router.post("/sonic-classifier/train", status_code=202)
 async def post_train_classifier(
     request: Request,
-    collection: str = Query(..., description="Collection to train classifier on"),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     """Train MLP classifier on labeled clusters. Returns job_id immediately."""
+    derived = derive_collection_for_user(current_user)
     job_id = uuid.uuid4().hex[:12]
     _TRAINING_JOBS[job_id] = {"status": "running", "result": None, "error": None}
 
     async def _runner():
         try:
             from app.api.routes import library as _self_mod
-            result = await _self_mod._run_classifier_training_job(collection)
+            result = await _self_mod._run_classifier_training_job(derived)
             _TRAINING_JOBS[job_id] = {"status": "completed", "result": result, "error": None}
         except Exception as e:
             logger.exception("[Classifier Training] job %s failed", job_id)
@@ -1375,13 +1322,14 @@ async def post_train_classifier(
 @router.get("/sonic-classifier/status")
 async def get_sonic_classifier_status(
     request: Request,
-    collection: str = Query(..., description="Collection name"),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     """Return readiness of the classifier."""
+    derived = derive_collection_for_user(current_user)
     svc = request.app.state.sonic_descriptor_service
     if svc is None:
         raise HTTPException(status_code=503, detail="Sonic Descriptor Service unavailable")
-    return svc.get_classifier_status(collection=collection)
+    return svc.get_classifier_status(collection=derived)
 
 
 @router.get("/sonic-classifier/jobs/{job_id}")

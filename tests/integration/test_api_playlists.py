@@ -1,4 +1,21 @@
-"""Integration tests for /api/v1/playlists (Plan 19)."""
+"""Integration tests for /api/v1/playlists (Plan 19).
+
+Phase D (D-soft) adaptations
+------------------------------
+POST "" and GET "" now derive the collection from the JWT user (acct_<uid>).
+Client-supplied ``collection_name`` is accepted but silently ignored.
+
+Implications for the integration suite:
+- Every playlist created via this client lands in the SAME derived collection
+  (acct_<test-owner-uid>), regardless of the ``collection_name`` sent in the
+  body / query-param.
+- Tests that previously relied on separate client-supplied collection names to
+  achieve isolation (test_cross_collection_list_isolation,
+  test_create_same_name_different_collection_ok) are updated to reflect the
+  new reality: isolation is now per-account, not per-client-supplied string.
+- Assertions on the echoed ``collection_name`` now match the derived value
+  (starts with "acct_") rather than the old client-supplied literals.
+"""
 import pytest
 from fastapi.testclient import TestClient
 
@@ -37,9 +54,14 @@ def test_create_returns_201_and_summary(client):
 
 
 def test_list_empty_collection(client):
+    # Phase D-soft: collection_name query param is ignored; server derives from JWT.
+    # The echoed collection_name in the response is the derived "acct_<uid>".
     r = client.get("/api/v1/playlists", params={"collection_name": "fresh"})
     assert r.status_code == 200
-    assert r.json() == {"playlists": [], "collection_name": "fresh"}
+    body = r.json()
+    assert body["playlists"] == []
+    # collection_name is now the derived acct_ value, not the client-supplied "fresh"
+    assert body["collection_name"].startswith("acct_")
 
 
 def test_list_sorted_by_updated_desc(client):
@@ -59,7 +81,8 @@ def test_get_detail_empty_playlist(client):
     body = r.json()
     assert body["tracks"] == []
     assert body["missing_track_ids"] == []
-    assert body["collection_name"] == "c"
+    # Phase D-soft: collection stored in DB is now the derived "acct_<uid>", not "c"
+    assert body["collection_name"].startswith("acct_")
 
 
 def test_rename_updates_summary(client):
@@ -120,15 +143,20 @@ def test_create_empty_name_returns_422(client):
 
 
 def test_create_duplicate_name_in_same_collection_returns_409(client):
+    # Phase D-soft: both requests go to the same derived collection — collision expected
     client.post("/api/v1/playlists", json={"collection_name": "c", "name": "Mix"})
     r = client.post("/api/v1/playlists", json={"collection_name": "c", "name": "Mix"})
     assert r.status_code == 409
 
 
-def test_create_same_name_different_collection_ok(client):
+def test_create_same_name_in_different_supplied_collections_collides(client):
+    """Phase D-soft: client-supplied collection_name is IGNORED; both requests
+    land in the same derived collection → second create is a name collision (409)."""
     r1 = client.post("/api/v1/playlists", json={"collection_name": "a", "name": "Mix"})
     r2 = client.post("/api/v1/playlists", json={"collection_name": "b", "name": "Mix"})
-    assert r1.status_code == 201 and r2.status_code == 201
+    assert r1.status_code == 201
+    # "b" is ignored — server uses the same acct_ collection — same name → conflict
+    assert r2.status_code == 409
 
 
 def test_get_missing_returns_404(client):
@@ -184,11 +212,15 @@ def test_reorder_missing_playlist_returns_404(client):
     assert r.status_code == 404
 
 
-def test_cross_collection_list_isolation(client):
+def test_list_contains_all_playlists_regardless_of_supplied_collection(client):
+    """Phase D-soft: supplied collection_name is ignored → both playlists land in
+    the same derived collection → both appear in any list request."""
     client.post("/api/v1/playlists", json={"collection_name": "a", "name": "X"})
     client.post("/api/v1/playlists", json={"collection_name": "b", "name": "Y"})
+    # Even requesting "a" returns everything in the derived collection
     r = client.get("/api/v1/playlists", params={"collection_name": "a"}).json()
-    assert [p["name"] for p in r["playlists"]] == ["X"]
+    names = {p["name"] for p in r["playlists"]}
+    assert names == {"X", "Y"}
 
 
 def test_orphan_tracks_partitioned_in_detail(client, monkeypatch):
@@ -223,3 +255,81 @@ def test_without_include_track_id_contains_track_is_null(client):
     client.post("/api/v1/playlists", json={"collection_name": "c", "name": "X"})
     r = client.get("/api/v1/playlists", params={"collection_name": "c"}).json()
     assert r["playlists"][0]["contains_track"] is None
+
+
+# ── Phase D-soft unit tests ────────────────────────────────────────────────────
+
+
+def test_create_playlist_ignores_supplied_collection():
+    """POST /playlists: server MUST pass derived acct_<uid> to the service,
+    not the client-supplied collection_name."""
+    from app.api.routes import playlists as pl_route
+    from app.services import playlists_service
+    from app.domain.models import PlaylistSummary
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from fastapi.testclient import TestClient
+    from app.api.main import create_app
+    import datetime
+
+    _fake_summary = PlaylistSummary(
+        id=1, name="X", description=None, track_count=0,
+        cover_track_ids=[], cover_art_paths=[],
+        created_at=datetime.datetime.now().isoformat(),
+        updated_at=datetime.datetime.now().isoformat(),
+    )
+
+    fixed = SimpleNamespace(id="user-A", email="a@x")
+    app = create_app()
+    app.dependency_overrides[pl_route.get_current_user] = lambda: fixed
+    with patch.object(playlists_service, "create", return_value=_fake_summary) as p_create:
+        with TestClient(app) as c:
+            c.post("/api/v1/playlists", json={"collection_name": "acct_BAD", "name": "X"})
+        assert p_create.call_args.args[0] == "acct_user-A"
+
+
+def test_list_playlists_ignores_supplied_collection():
+    """GET /playlists: server MUST scope to acct_<uid>, not the client query param."""
+    from app.api.routes import playlists as pl_route
+    from app.services import playlists_service
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from fastapi.testclient import TestClient
+    from app.api.main import create_app
+
+    fixed = SimpleNamespace(id="user-A", email="a@x")
+    app = create_app()
+    app.dependency_overrides[pl_route.get_current_user] = lambda: fixed
+    with patch.object(playlists_service, "list_playlists", return_value=[]) as p_list:
+        with TestClient(app) as c:
+            c.get("/api/v1/playlists", params={"collection_name": "acct_BAD"})
+        assert p_list.call_args.args[0] == "acct_user-A"
+
+
+def test_create_without_collection_name_accepted():
+    """POST /playlists: omitting collection_name in body must NOT return 422
+    (field is Optional after Phase D model relaxation)."""
+    from app.api.routes import playlists as pl_route
+    from app.services import playlists_service
+    from app.domain.models import PlaylistSummary
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from fastapi.testclient import TestClient
+    from app.api.main import create_app
+    import datetime
+
+    _fake_summary = PlaylistSummary(
+        id=2, name="No Collection Field", description=None, track_count=0,
+        cover_track_ids=[], cover_art_paths=[],
+        created_at=datetime.datetime.now().isoformat(),
+        updated_at=datetime.datetime.now().isoformat(),
+    )
+
+    fixed = SimpleNamespace(id="user-B", email="b@x")
+    app = create_app()
+    app.dependency_overrides[pl_route.get_current_user] = lambda: fixed
+    with patch.object(playlists_service, "create", return_value=_fake_summary):
+        with TestClient(app) as c:
+            r = c.post("/api/v1/playlists", json={"name": "No Collection Field"})
+        # Must not 422 — collection_name is optional
+        assert r.status_code == 201

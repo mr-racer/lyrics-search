@@ -79,7 +79,6 @@ class SearchRequest(BaseModel):
     text_model: Optional[str] = Field(None, description="Text embedding model to use")
     filters: SearchFilters | None = None
     limit: int = 10
-    collection_name: Optional[str] = Field(None, description="Qdrant collection to search in")
 
 
 class SearchResponse(BaseModel):
@@ -92,7 +91,6 @@ class SearchResponse(BaseModel):
 class IndexRequest(BaseModel):
     """Запрос на индексацию папки с музыкой."""
     folder_path: str
-    collection_name: str = "music_explorer"
     better_lyrics_quality: bool = False
     text_model: Optional[str] = None
     enhance_by_musicbrainz: bool = False
@@ -122,7 +120,6 @@ class ChatRequest(BaseModel):
     # LLM connection — overrides env vars LLM_BASE_URL / LLM_MODEL if set
     llm_base_url: Optional[str] = Field(None, description="e.g. http://localhost:8000/v1")
     llm_model: Optional[str] = Field(None, description="e.g. openai/gpt-oss-20b")
-    collection_name: Optional[str] = Field(None, description="Qdrant collection to search in")
 
 
 class ChatResponse(BaseModel):
@@ -135,7 +132,6 @@ class ChatResponse(BaseModel):
 
 class TrackReactionRequest(BaseModel):
     """Запрос на установку реакции на трек."""
-    collection_name: str
     reaction: Literal["like", "dislike"] | None = None  # None = remove reaction
 
 
@@ -166,7 +162,6 @@ class TrackChatRequest(BaseModel):
     message: str
     llm_base_url: Optional[str] = None
     llm_model: Optional[str] = None
-    collection_name: Optional[str] = None
 
 
 class TrackChatResponse(BaseModel):
@@ -314,18 +309,23 @@ class ClusterRepresentative(BaseModel):
 
 
 class ClusterLabelsRequest(BaseModel):
-    """Body for POST /library/clusters/labels — user-assigned cluster names."""
-    collection: str
+    """Body for POST /library/clusters/labels — user-assigned cluster names.
+
+    Phase D (D-hard): the server derives the collection from the JWT; the
+    client no longer supplies it.
+    """
     labels: dict[int, str]  # {0: "Lo-fi indie", 1: "Cinematic drone", ...}
 
 
 class PlaybackEventIn(BaseModel):
     """Request body for POST /playback/events."""
     session_id: str
-    collection_name: str
     track_id: str
     played_sec: float
     total_dur: float | None = None
+    # Stream RecSys idle rule: did the user touch any control during this track
+    # (like/skip/pause/seek)? None = client doesn't report it (legacy frontend).
+    interacted: bool | None = None
 
 
 class PlaybackEventOut(BaseModel):
@@ -506,13 +506,127 @@ class RediscoverResponse(BaseModel):
     collection_name: Optional[str] = None
 
 
-class ForYouSeedResponse(BaseModel):
-    """Result of GET /recommend/for-you-seed — the seed that anchors the
-    For-You autoplay stream. Placeholder for future personalization ranking."""
-    seed_track_id: Optional[str] = None
-    track: Optional[HomeTrack] = None
-    source: str = "random"  # "liked" | "recent" | "random" (diagnostic)
-    collection_name: Optional[str] = None
+class StreamTrack(TrackMetadata):
+    """One track in the personalized stream + per-track diagnostics.
+
+    The diagnostics double as raw material for a future rationale chip
+    («почему этот трек») — design §7. ``pool="axis"`` marks tracks picked by
+    the axis-playlist knobs rather than the stream pools.
+    """
+    pool: Literal["anchor", "explore", "liked", "axis"]
+    anchor_track_id: Optional[str] = None   # closest anchor (pool=anchor only)
+    axis_match: Optional[float] = None
+    score: Optional[float] = None
+
+
+class StreamNextResponse(BaseModel):
+    """Result of GET /recommend/stream/next."""
+    session_id: str
+    tracks: List[StreamTrack]
+    diagnostics: dict
+
+
+class StreamSettingsIn(BaseModel):
+    """Body for PUT /recommend/stream/settings — persists the slider."""
+    liked_share: float = Field(ge=0.0, le=1.0)
+
+
+class SimilarTracksResponse(BaseModel):
+    """Result of GET /recommend/similar — CLAP neighbors re-ranked by axes.
+
+    Tracks reuse StreamTrack: ``anchor_track_id`` = the seed, ``axis_match`` =
+    axis closeness to the seed, ``score`` = 0.7·cos + 0.3·axes blend.
+    """
+    seed_track_id: str
+    tracks: List[StreamTrack]
+
+
+class ProfileAxis(BaseModel):
+    """One axis of the taste profile: z-score + discrete level label."""
+    z: float
+    level: Literal["very_low", "low", "medium", "high", "very_high"]
+
+
+class ProfileIslandTrack(BaseModel):
+    """Lightweight member of a taste island (cover wall)."""
+    track_id: str
+    title: str
+    artist: str
+    cover_art_path: Optional[str] = None
+
+
+class ProfileIsland(BaseModel):
+    """One «музыкальная личность»: a merged anchor group from the stream model."""
+    track_id: str                      # representative (strongest member)
+    weight: float
+    tracks: List[ProfileIslandTrack]   # representative first
+    name: Optional[str] = None         # LLM-given name (cached, AI mode)
+
+
+class StreamProfileResponse(BaseModel):
+    """Result of GET /recommend/profile — the explainable long-term taste."""
+    axes: Optional[Dict[str, ProfileAxis]] = None  # None until axis data exists
+    confidence: float
+    n_signals: int
+    islands: List[ProfileIsland]
+    portrait: Optional[str] = None     # cached LLM listener portrait (AI mode)
+    axis_stats_source: Optional[str] = None
+    liked_share: float = 0.3           # persisted slider position (default 30%)
+
+
+class AxisPlaylistIn(BaseModel):
+    """Body for POST /recommend/axis-playlist — the radar-knob targets.
+
+    ``targets`` maps axis name → desired z-score (clamped server-side to ±3);
+    omitted axes default to 0 (neutral).
+    """
+    targets: Dict[str, float] = Field(default_factory=dict)
+    limit: int = Field(20, ge=1, le=100)
+
+
+class AxisPlaylistResponse(BaseModel):
+    tracks: List[StreamTrack]
+    diagnostics: dict
+
+
+class ProfileEnrichIn(BaseModel):
+    """Body for POST /recommend/profile/ai-enrich (AI mode)."""
+    lang: str = "en"
+    llm_base_url: Optional[str] = None
+    llm_model: Optional[str] = None
+
+
+class ProfileEnrichResponse(BaseModel):
+    """LLM listener portrait + island names (also persisted server-side)."""
+    portrait: Optional[str] = None
+    island_names: Dict[str, str] = Field(default_factory=dict)
+
+
+class AIPlaylistIn(BaseModel):
+    """Body for POST /recommend/ai-playlist — one wish → curated playlist."""
+    prompt: str = Field(min_length=3, max_length=500)
+    limit: int = Field(15, ge=1, le=40)
+    lang: str = "en"
+    llm_base_url: Optional[str] = None
+    llm_model: Optional[str] = None
+
+
+class AIPlaylistStep(BaseModel):
+    """One executed plan action — the frontend animates these."""
+    tool: str
+    query: str
+    found: int
+
+
+class AIPlaylistTrack(TrackMetadata):
+    reason: Optional[str] = None       # why this track fits the wish (LLM, short)
+    source_tool: Optional[str] = None  # which tool surfaced it
+
+
+class AIPlaylistResponse(BaseModel):
+    title: str
+    steps: List[AIPlaylistStep]
+    tracks: List[AIPlaylistTrack]
 
 
 class TopTrackBrief(BaseModel):
@@ -583,7 +697,6 @@ class PlaylistDetail(BaseModel):
 
 
 class PlaylistCreate(BaseModel):
-    collection_name: str
     name: str
     description: Optional[str] = None
 

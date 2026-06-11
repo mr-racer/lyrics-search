@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
 from app.domain.models import (
@@ -10,6 +10,7 @@ from app.domain.models import (
     TrackReactionRequest, TrackReactionResponse,
 )
 from app.api.dependencies import get_current_user
+from app.api.helpers import derive_collection_for_user
 from app.resources.model_registry import ModelRegistry
 from app.services.audio_streaming import get_streamable_path
 
@@ -51,6 +52,9 @@ async def search_tracks(
     if requested_model in ("", "null", "undefined", "None"):
         requested_model = None
 
+    # Phase D-soft: derive collection from JWT user; ignore client-supplied value.
+    derived = derive_collection_for_user(current_user)
+
     # Phase B: no more db.lyrics_db.* mutation. The stateless engine resolves the
     # model per call — SearchService._resolve_model_name reads collection_settings
     # (the indexed model) → user.text_model_name → default. An explicit
@@ -61,7 +65,7 @@ async def search_tracks(
         text_model=requested_model,
         filters=req.filters,
         limit=req.limit,
-        collection_name=req.collection_name,
+        collection_name=derived,
         account_id=current_user.id,
     )
 
@@ -88,12 +92,15 @@ async def get_loaded_models():
 @router.get("/tracks/{track_id}/stream")
 async def stream_track(
     track_id: str,
-    collection_name: str,
     request: Request,
+    current_user: User = Depends(get_current_user),
 ):
     """
     Serve a music file by its Qdrant track_id using FastAPI's FileResponse.
     """
+    # Phase D-soft: derive collection from JWT user; ignore client-supplied value.
+    derived = derive_collection_for_user(current_user)
+
     db = request.app.state.db_client
     if db is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
@@ -101,7 +108,7 @@ async def stream_track(
     # 1. Look up file_path from Qdrant payload
     try:
         result = db.qdrant.retrieve(
-            collection_name=collection_name,
+            collection_name=derived,
             ids=[track_id],
             with_payload=True,
         )
@@ -109,7 +116,7 @@ async def stream_track(
         raise HTTPException(status_code=404, detail=f"Track not found: {e}")
 
     if not result:
-        raise HTTPException(status_code=404, detail=f"Track {track_id} not found in collection {collection_name}")
+        raise HTTPException(status_code=404, detail=f"Track {track_id} not found in collection {derived}")
 
     payload = result[0].payload or {}
     file_path = payload.get("file_path")
@@ -127,10 +134,9 @@ async def stream_track(
     # other formats served as-is. FileResponse handles Range internally.
     # Phase B §6.6: scope the transcoded-cache namespace by collection_name so
     # two accounts sharing a track_id don't serve each other's cached blob.
-    # collection_name is the stable per-tenant key here (Phase D makes it
-    # acct_<id>); delete_collection purges under the same key.
+    # Phase D: derived is acct_<id>; delete_collection purges under the same key.
     serve_path, content_type = await get_streamable_path(
-        account_id=collection_name, track_id=track_id, file_path=audio_path,
+        account_id=derived, track_id=track_id, file_path=audio_path,
     )
 
     return FileResponse(
@@ -147,16 +153,20 @@ async def set_track_reaction(
     track_id: str,
     req: TrackReactionRequest,
     request: Request,
+    current_user: User = Depends(get_current_user),
 ) -> TrackReactionResponse:
     """Set or remove a like/dislike reaction on a track (scoped by collection)."""
     from app.resources.metadata_db import MetadataDB
 
+    # Phase D-soft: derive collection from JWT user; ignore client-supplied value.
+    derived = derive_collection_for_user(current_user)
+
     MetadataDB.init()
-    MetadataDB.set_reaction(track_id, req.collection_name, req.reaction)
+    MetadataDB.set_reaction(track_id, derived, req.reaction)
 
     return TrackReactionResponse(
         track_id=track_id,
-        collection_name=req.collection_name,
+        collection_name=derived,
         reaction=req.reaction,
     )
 
@@ -164,18 +174,21 @@ async def set_track_reaction(
 @router.get("/tracks/{track_id}/reaction", response_model=TrackReactionResponse)
 async def get_track_reaction(
     track_id: str,
-    collection_name: str,
     request: Request,
+    current_user: User = Depends(get_current_user),
 ) -> TrackReactionResponse:
     """Get the current reaction for a track in a collection."""
     from app.resources.metadata_db import MetadataDB
 
+    # Phase D-soft: derive collection from JWT user; ignore client-supplied value.
+    derived = derive_collection_for_user(current_user)
+
     MetadataDB.init()
-    reaction = MetadataDB.get_reaction(track_id, collection_name)
+    reaction = MetadataDB.get_reaction(track_id, derived)
 
     return TrackReactionResponse(
         track_id=track_id,
-        collection_name=collection_name,
+        collection_name=derived,
         reaction=reaction,
     )
 

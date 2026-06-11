@@ -1,21 +1,23 @@
 """Metadata routes — CRUD for artist/song facts stored in SQLite.
 
-All endpoints require a ``collection`` query parameter so that facts are
-scoped to the currently selected Qdrant collection.
+The collection is derived from the JWT user as ``acct_<user.id>``; clients no
+longer pass a collection (Phase D-hard removed the parameter).
 """
 
 from __future__ import annotations
 
 from typing import List, Literal, Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
-from ...domain.models import TrackMetadata
-from ...resources.metadata_db import MetadataDB
-from ...services._payload_coerce import coerce_float, coerce_year
-from ...services.artist_facts_service import _slugify as _slugify_artist
-from ...services.song_facts_service import get_song_facts_key
+from app.api.dependencies import get_current_user
+from app.api.helpers import derive_collection_for_user
+from app.domain.models import TrackMetadata, User
+from app.resources.metadata_db import MetadataDB
+from app.services._payload_coerce import coerce_float, coerce_year
+from app.services.artist_facts_service import _slugify as _slugify_artist
+from app.services.song_facts_service import get_song_facts_key
 
 router = APIRouter(tags=["Metadata"])
 
@@ -25,7 +27,6 @@ router = APIRouter(tags=["Metadata"])
 class FactIn(BaseModel):
     """Payload for adding a fact."""
     fact: str
-    collection: str
 
 
 class FactOut(BaseModel):
@@ -46,21 +47,24 @@ class RandomFact(BaseModel):
 @router.get("/metadata/artists/{slug}/facts")
 def get_artist_facts(
     slug: str,
-    collection: str = Query(..., description="Qdrant collection name"),
+    current_user: User = Depends(get_current_user),
 ) -> List[str]:
     """Return all cached facts for an artist in a collection."""
-    return MetadataDB.get_artist_facts(slug, collection)
+    derived = derive_collection_for_user(current_user)
+    return MetadataDB.get_artist_facts(slug, derived)
 
 
 @router.post("/metadata/artists/{slug}/facts", status_code=201)
 def add_artist_fact(
     slug: str,
     body: FactIn,
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     """Add a new fact for an artist."""
+    derived = derive_collection_for_user(current_user)
     MetadataDB.add_artist_fact(
         slug=slug,
-        collection_name=body.collection,
+        collection_name=derived,
         fact_text=body.fact,
         source="manual",
     )
@@ -72,21 +76,24 @@ def add_artist_fact(
 @router.get("/metadata/songs/{slug}/facts")
 def get_song_facts(
     slug: str,
-    collection: str = Query(..., description="Qdrant collection name"),
+    current_user: User = Depends(get_current_user),
 ) -> List[str]:
     """Return all cached facts for a song in a collection."""
-    return MetadataDB.get_song_facts(slug, collection)
+    derived = derive_collection_for_user(current_user)
+    return MetadataDB.get_song_facts(slug, derived)
 
 
 @router.post("/metadata/songs/{slug}/facts", status_code=201)
 def add_song_fact(
     slug: str,
     body: FactIn,
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     """Add a new fact for a song."""
+    derived = derive_collection_for_user(current_user)
     MetadataDB.add_song_fact(
         slug=slug,
-        collection_name=body.collection,
+        collection_name=derived,
         fact_text=body.fact,
         source="manual",
     )
@@ -97,11 +104,12 @@ def add_song_fact(
 
 @router.get("/metadata/random-facts")
 def get_random_facts(
-    collection: str = Query(..., description="Qdrant collection name"),
+    current_user: User = Depends(get_current_user),
     limit: int = Query(5, ge=1, le=20, description="Number of random facts"),
 ) -> List[RandomFact]:
     """Return random facts from the collection's fact pool."""
-    raw = MetadataDB.get_random_facts(collection_name=collection, limit=limit)
+    derived = derive_collection_for_user(current_user)
+    raw = MetadataDB.get_random_facts(collection_name=derived, limit=limit)
     return [RandomFact(**r) for r in raw]
 
 
@@ -118,7 +126,7 @@ class TrackFacts(BaseModel):
 @router.get("/metadata/tracks/{track_id}/facts")
 def get_track_facts(
     track_id: str,
-    collection: str = Query(..., description="Qdrant collection name"),
+    current_user: User = Depends(get_current_user),
     lang: str = Query("en"),
     request: Request = None,
 ) -> TrackFacts:
@@ -128,6 +136,7 @@ def get_track_facts(
     An EXPLICIT empty refined list (AI ran but kept nothing) returns [],
     not a fallback to originals.
     """
+    derived = derive_collection_for_user(current_user)
     empty = TrackFacts(artist_name="", title="", song_facts=[], artist_facts=[])
     if request is None:
         return empty
@@ -137,7 +146,7 @@ def get_track_facts(
 
     try:
         points = db_client.qdrant.retrieve(
-            collection_name=collection,
+            collection_name=derived,
             ids=[track_id],
             with_payload=["title", "artist"],
             with_vectors=False,
@@ -162,19 +171,19 @@ def get_track_facts(
     # Refined facts are keyed by song_slug (not track_id) for consistency
     # with search_service caching.
     refined_song = MetadataDB.get_refined_facts(
-        scope="song", scope_key=song_key, collection_name=collection, lang=lang,
+        scope="song", scope_key=song_key, collection_name=derived, lang=lang,
     )
     refined_artist = MetadataDB.get_refined_facts(
-        scope="artist", scope_key=artist_slug, collection_name=collection, lang=lang,
+        scope="artist", scope_key=artist_slug, collection_name=derived, lang=lang,
     )
 
     song_facts = (
         refined_song if refined_song is not None
-        else MetadataDB.get_song_facts(song_key, collection)
+        else MetadataDB.get_song_facts(song_key, derived)
     )
     artist_facts = (
         refined_artist if refined_artist is not None
-        else MetadataDB.get_artist_facts(artist_slug, collection)
+        else MetadataDB.get_artist_facts(artist_slug, derived)
     )
 
     return TrackFacts(
@@ -189,7 +198,7 @@ def get_track_facts(
 @router.get("/metadata/tracks", response_model=List[TrackMetadata])
 def get_tracks_metadata_batch(
     ids: str = Query(..., description="Comma-separated track_ids"),
-    collection: str = Query(..., description="Qdrant collection name"),
+    current_user: User = Depends(get_current_user),
     request: Request = None,
 ) -> List[TrackMetadata]:
     """Batch-resolve full TrackMetadata for many track_ids in one Qdrant retrieve.
@@ -199,6 +208,7 @@ def get_tracks_metadata_batch(
     everything single-call avoids fan-out of N /metadata/tracks/{id} requests.
     Missing ids are silently dropped — caller can detect by comparing lengths.
     """
+    derived = derive_collection_for_user(current_user)
     if request is None or request.app.state.db_client is None:
         raise HTTPException(status_code=503, detail="Qdrant unavailable")
     track_ids = [s for s in (ids.split(",") if ids else []) if s]
@@ -207,7 +217,7 @@ def get_tracks_metadata_batch(
     qdrant = request.app.state.db_client.qdrant
     try:
         points = qdrant.retrieve(
-            collection_name=collection, ids=track_ids,
+            collection_name=derived, ids=track_ids,
             with_payload=True, with_vectors=False,
         )
     except Exception:
@@ -238,7 +248,7 @@ def get_tracks_metadata_batch(
 @router.get("/metadata/tracks/{track_id}", response_model=TrackMetadata)
 def get_track_metadata(
     track_id: str,
-    collection: str = Query(..., description="Qdrant collection name"),
+    current_user: User = Depends(get_current_user),
     request: Request = None,
 ) -> TrackMetadata:
     """Return the full TrackMetadata for one track from Qdrant payload.
@@ -249,12 +259,13 @@ def get_track_metadata(
     backfills the missing fields so the player UI (lyrics back-face, info
     pills) is fully populated regardless of origin.
     """
+    derived = derive_collection_for_user(current_user)
     if request is None or request.app.state.db_client is None:
         raise HTTPException(status_code=503, detail="Qdrant unavailable")
     qdrant = request.app.state.db_client.qdrant
     try:
         points = qdrant.retrieve(
-            collection_name=collection, ids=[track_id],
+            collection_name=derived, ids=[track_id],
             with_payload=True, with_vectors=False,
         )
     except Exception:
@@ -294,12 +305,13 @@ class SonicVibeOut(BaseModel):
 @router.get("/metadata/tracks/{track_id}/sonic-vibe", response_model=SonicVibeOut)
 def get_sonic_vibe_endpoint(
     track_id: str,
-    collection: str = Query(...),
+    current_user: User = Depends(get_current_user),
     lang: str = Query("en"),
 ) -> SonicVibeOut:
     """Return the cached Sonic Vibe phrase. Does NOT lazy-generate — population
     happens through the AI Indexing batch job."""
-    cached = MetadataDB.get_sonic_vibe(track_id, collection, lang)
+    derived = derive_collection_for_user(current_user)
+    cached = MetadataDB.get_sonic_vibe(track_id, derived, lang)
     if cached:
         return SonicVibeOut(track_id=track_id, lang=lang, **cached)
     return SonicVibeOut(track_id=track_id, lang=lang)

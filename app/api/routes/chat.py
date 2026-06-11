@@ -24,9 +24,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.domain.models import ChatRequest, SearchFilters, TrackChatRequest, TrackChatResponse, TrackHit
+from app.domain.models import ChatRequest, SearchFilters, TrackChatRequest, TrackChatResponse, TrackHit, User
+from app.api.dependencies import get_current_user
+from app.api.helpers import derive_collection_for_user
 from app.services.agents import (
     PLANNER_PROMPT,
     SCORER_PROMPT,
@@ -267,7 +269,11 @@ def _rrf_merge(ranked_lists: list[list[TrackHit]], k: int = 60) -> list[TrackHit
 
 
 @router.post("/")
-async def chat(req: ChatRequest, request: Request) -> dict:
+async def chat(
+    req: ChatRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> dict:
     """Agentic LLM-driven music search.
 
     Response shape
@@ -294,6 +300,9 @@ async def chat(req: ChatRequest, request: Request) -> dict:
             "classification": {},
         }
 
+    # Phase D-soft: derive collection from JWT user; ignore client-supplied value.
+    derived = derive_collection_for_user(current_user)
+
     # Resolve which text model this collection was indexed with, so chat's
     # searches hit the matching Qdrant vector_name (a collection indexed with
     # qwen must not be queried with the default jina vectors).
@@ -306,11 +315,11 @@ async def chat(req: ChatRequest, request: Request) -> dict:
     # SearchService._resolve_model_name falls back to the collection's pinned
     # model when text_model is None, so they resolve correctly without mutation.
     resolved_text_model: str | None = None
-    if req.collection_name:
+    if derived:
         from app.resources.metadata_db import MetadataDB
         try:
             MetadataDB.init()
-            persisted = MetadataDB.get_collection_text_model(req.collection_name)
+            persisted = MetadataDB.get_collection_text_model(derived)
             if persisted:
                 resolved_text_model = persisted
                 logger.info("[chat] text model resolved: %s", persisted)
@@ -340,7 +349,7 @@ async def chat(req: ChatRequest, request: Request) -> dict:
 
             deps = SearchDeps(
                 service=service,
-                collection_name=req.collection_name,
+                collection_name=derived,
                 llm_base_url=llm_kw.get("base_url"),
                 llm_model=llm_kw.get("model"),
             )
@@ -491,7 +500,7 @@ async def chat(req: ChatRequest, request: Request) -> dict:
             try:
                 round_hits = await service.search(
                     query=rq, mode="audio", limit=10,
-                    collection_name=req.collection_name,
+                    collection_name=derived,
                     filters=audio_filters,
                     text_model=resolved_text_model,
                 )
@@ -578,7 +587,7 @@ async def chat(req: ChatRequest, request: Request) -> dict:
     if req.planner_enabled:
         scorer_deps = SearchDeps(
             service=service,
-            collection_name=req.collection_name,
+            collection_name=derived,
             llm_base_url=llm_kw.get("base_url"),
             llm_model=llm_kw.get("model"),
         )
@@ -676,7 +685,7 @@ async def chat(req: ChatRequest, request: Request) -> dict:
             filters_obj = SearchFilters(**planner_filters) if planner_filters else None
             new_pq, new_ctx, new_hits = await _run_searches(
                 queries, service,
-                collection_name=req.collection_name,
+                collection_name=derived,
                 forced_mode=forced_mode,
                 filters=filters_obj,
                 text_model=resolved_text_model,
@@ -782,8 +791,14 @@ async def chat(req: ChatRequest, request: Request) -> dict:
 
 
 @router.post("/track-chat", response_model=TrackChatResponse)
-async def track_chat(req: TrackChatRequest) -> TrackChatResponse:
+async def track_chat(
+    req: TrackChatRequest,
+    current_user: User = Depends(get_current_user),
+) -> TrackChatResponse:
     """Single-track conversational chat (drawer or per-line explain)."""
+    derived = derive_collection_for_user(current_user)
+    req = req.model_copy(update={"collection_name": derived})
+
     if req.mode == "lyric_explain" and not req.selected_line:
         raise HTTPException(
             status_code=400,
