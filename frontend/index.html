@@ -9701,11 +9701,20 @@ function useCoverColor(coverUrl) {
     // later crossOrigin='anonymous' request for that URL can't reuse the cached
     // no-cors response — the browser raises a CORS error, the canvas is tainted,
     // getImageData throws, and the hook falls back to null → the purple default
-    // (hsl(270,...)). Opt into CORS only for genuinely remote covers, which need
-    // it (and degrade gracefully to the purple fallback if the host omits ACAO).
+    // (hsl(270,...)). Opt into CORS only for remote covers (incl. our own API
+    // when the page runs from file:// — every cover URL is absolute then).
     const isRemote = /^https?:\/\//i.test(coverUrl) &&
       !coverUrl.startsWith(window.location.origin);
     if (isRemote) img.crossOrigin = 'anonymous';
+    // Remote sampling gets its OWN cache key (?cors=1): cover responses are
+    // cached immutable for a year, and a copy cached by a no-cors <img> before
+    // the server started sending unconditional ACAO (or by a host that omits
+    // it on no-cors requests) would be reused here and rejected as a CORS
+    // error. The param never reaches the display path — only this hidden
+    // sampling image. Color cache below stays keyed on the original URL.
+    const fetchUrl = isRemote
+      ? coverUrl + (coverUrl.includes('?') ? '&' : '?') + 'cors=1'
+      : coverUrl;
     img.onload = () => {
       if (cancelled) return;
       try {
@@ -9744,7 +9753,7 @@ function useCoverColor(coverUrl) {
       }
     };
     img.onerror = () => { if (!cancelled) setColor(null); };
-    img.src = coverUrl;
+    img.src = fetchUrl;
     return () => { cancelled = true; };
   }, [coverUrl]);
   return color;

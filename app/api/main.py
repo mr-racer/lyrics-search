@@ -268,6 +268,14 @@ def create_app() -> FastAPI:
             media_type=content_type,
             headers={
                 "Cache-Control": "public, max-age=31536000, immutable",  # 1 year
+                # Unconditional, NOT left to CORSMiddleware: the middleware
+                # skips requests without an Origin header (plain <img> /
+                # background-image), and that ACAO-less response gets cached
+                # immutable for a year under the same key a later
+                # crossOrigin='anonymous' canvas read will hit. The cached
+                # copy must already be CORS-readable or useCoverColor falls
+                # back to the purple default.
+                "Access-Control-Allow-Origin": "*",
             },
         )
 
