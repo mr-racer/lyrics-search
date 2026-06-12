@@ -949,7 +949,8 @@ class LibraryService:
     async def _on_index_progress(self, job, stage: str, current: int, total: int, message: str):
         """Callback from SearchService for indexing progress.
 
-        Maps internal stage keys ("lyrics" → DENSE, "audio" → AUDIO) and marks
+        Maps internal stage keys ("scan" → LYRICS for the upload flow's
+        metadata+lyrics pass, "lyrics" → DENSE, "audio" → AUDIO) and marks
         stages COMPLETED as soon as their encoding finishes. Phase B: the active
         ``job`` is passed in explicitly (was looked up via the now-removed global
         ``_current_job_id``) so concurrent per-account jobs don't cross wires.
@@ -958,7 +959,9 @@ class LibraryService:
             return
 
         # Map callback stage keys to IndexStage enum
-        if stage == "lyrics":
+        if stage == "scan":
+            index_stage = IndexStage.LYRICS
+        elif stage == "lyrics":
             index_stage = IndexStage.DENSE
         elif stage == "audio":
             index_stage = IndexStage.AUDIO
@@ -966,6 +969,12 @@ class LibraryService:
             return
 
         sp = job.stages[index_stage]
+        # The upload flow has no explicit stage bootstrap (the folder flow sets
+        # RUNNING/started_at before scanning) — promote on first event so the
+        # wizard renders the stage as active and ETA math has a start time.
+        if sp.status == IndexStatus.PENDING:
+            sp.status = IndexStatus.RUNNING
+            sp.started_at = sp.started_at or time.time()
         sp.current = current
         sp.total = total
         sp.message = message

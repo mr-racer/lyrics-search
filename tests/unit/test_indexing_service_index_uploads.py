@@ -58,6 +58,68 @@ class TestIndexUploadsAssemblesData:
             assert entry["artist"] == "Tiny Test Artist"
 
 
+class TestIndexUploadsProgressAndCovers:
+    """The metadata+lyrics loop is the SLOW pre-embedding part of an upload
+    job (network lyrics fetch per file). It must report progress — without it
+    the wizard's SSE stream is silent until embeddings — and extract embedded
+    cover art the same way the folder flow does in _metadata_to_tracks."""
+
+    def _one_row(self, tmp_path, audio_path):
+        flac = tmp_path / "song.flac"
+        flac.write_bytes(audio_path("tiny.flac").read_bytes())
+        return {
+            "upload_id": "u1",
+            "account_id": "acct_x",
+            "sha256": "deadbeef",
+            "original_filename": "song.flac",
+            "storage_path": str(flac),
+            "size_bytes": flac.stat().st_size,
+            "status": "uploaded",
+            "track_id": None,
+            "error": None,
+            "created_at": 1.0,
+        }
+
+    def test_scan_stage_reports_progress(self, tmp_path, audio_path):
+        from app.services.indexing_service import IndexingService
+
+        svc = IndexingService(MagicMock())
+        events = []
+
+        with patch.object(svc, "_fit_impl"), \
+             patch("app.indexing.folder_scanner.get_lyrics", return_value=""), \
+             patch("app.resources.metadata_db.MetadataDB.update_pending_upload_status"):
+            svc.index_uploads(
+                account_id="acct_x",
+                upload_rows=[self._one_row(tmp_path, audio_path)],
+                progress_callback=lambda *a: events.append(a),
+            )
+
+        scan_events = [e for e in events if e[0] == "scan"]
+        assert scan_events, f"no 'scan' progress events emitted; got: {events}"
+        # First event announces the stage (0/total), last one closes it (total/total).
+        assert scan_events[0][1] == 0 and scan_events[0][2] == 1
+        assert scan_events[-1][1] == 1 and scan_events[-1][2] == 1
+
+    def test_cover_art_extracted_into_payload_data(self, tmp_path, audio_path):
+        from app.services.indexing_service import IndexingService
+
+        svc = IndexingService(MagicMock())
+
+        with patch.object(svc, "_fit_impl") as fit_mock, \
+             patch("app.indexing.folder_scanner.get_lyrics", return_value=""), \
+             patch("app.indexing.cover_art.save_cover_art", return_value="/covers/abc.jpg"), \
+             patch("app.resources.metadata_db.MetadataDB.update_pending_upload_status"):
+            svc.index_uploads(
+                account_id="acct_x",
+                upload_rows=[self._one_row(tmp_path, audio_path)],
+            )
+            args, kwargs = fit_mock.call_args
+            data = args[0] if args else kwargs.get("data")
+            entry = data[next(iter(data))]
+            assert entry["cover_art_path"] == "/covers/abc.jpg"
+
+
 class TestIndexUploadsUpdatesStatus:
     def test_status_marked_done_with_track_id(self, tmp_path, audio_path, monkeypatch):
         from app.resources.metadata_db import MetadataDB

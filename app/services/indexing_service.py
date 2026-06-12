@@ -322,6 +322,7 @@ class IndexingService:
         for every row that landed in Qdrant; updates ``pending_uploads.status``
         per row (indexing → done/failed).
         """
+        from app.indexing.cover_art import save_cover_art
         from app.indexing.folder_scanner import process_file
         from app.resources.metadata_db import MetadataDB
 
@@ -334,33 +335,63 @@ class IndexingService:
         data: dict[str, dict] = {}
         upload_by_key: dict[str, str] = {}   # "Artist — Title" -> upload_id
 
-        for row in upload_rows:
+        # This loop is the slow pre-embedding part of an upload job (per-file
+        # tag read + ONLINE lyrics fetch), so it must report progress — "scan"
+        # maps to the LYRICS stage in LibraryService._on_index_progress.
+        # Without these calls the wizard's SSE stream (and tqdm) stays silent
+        # until embedding starts.
+        total_rows = len(upload_rows)
+        if progress_callback:
+            progress_callback("scan", 0, total_rows, "Чтение метаданных и поиск текстов...")
+
+        for i, row in enumerate(
+            tqdm(upload_rows, desc="[index_uploads] metadata+lyrics"), start=1,
+        ):
             file_path = Path(row["storage_path"])
+            label = row.get("original_filename") or file_path.name
             if not file_path.exists():
                 MetadataDB.update_pending_upload_status(
                     row["upload_id"], status="failed",
                     error=f"file missing on disk: {file_path}",
                 )
-                continue
-            try:
-                info = process_file(file_path, False)
-                if not info or not info.get("title") or not info.get("artist"):
+            else:
+                try:
+                    info = process_file(file_path, False)
+                    if not info or not info.get("title") or not info.get("artist"):
+                        MetadataDB.update_pending_upload_status(
+                            row["upload_id"], status="failed",
+                            error="missing title/artist in metadata tags",
+                        )
+                        info = None
+                    else:
+                        if not info.get("lyrics"):
+                            info["lyrics"] = "No lyrics were found :("
+                        info["file_path"] = str(file_path)
+                        # The folder flow extracts embedded art in
+                        # _metadata_to_tracks; uploads skipped that step, so
+                        # every server-mode track rendered the no-cover
+                        # equalizer fallback.
+                        try:
+                            info["cover_art_path"] = save_cover_art(
+                                str(file_path), row["sha256"][:16],
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                "[index_uploads] cover extraction failed for %s: %s",
+                                file_path, e,
+                            )
+                            info["cover_art_path"] = None
+                        key = f"{info['artist']} — {info['title']}"
+                        data[key] = info
+                        upload_by_key[key] = row["upload_id"]
+                        label = key
+                except Exception as e:
+                    logger.exception("[index_uploads] metadata read failed for %s", file_path)
                     MetadataDB.update_pending_upload_status(
-                        row["upload_id"], status="failed",
-                        error="missing title/artist in metadata tags",
+                        row["upload_id"], status="failed", error=str(e),
                     )
-                    continue
-                if not info.get("lyrics"):
-                    info["lyrics"] = "No lyrics were found :("
-                info["file_path"] = str(file_path)
-                key = f"{info['artist']} — {info['title']}"
-                data[key] = info
-                upload_by_key[key] = row["upload_id"]
-            except Exception as e:
-                logger.exception("[index_uploads] metadata read failed for %s", file_path)
-                MetadataDB.update_pending_upload_status(
-                    row["upload_id"], status="failed", error=str(e),
-                )
+            if progress_callback:
+                progress_callback("scan", i, total_rows, f"[{i}/{total_rows}] {label}")
 
         if not data:
             logger.info("[index_uploads] nothing to index for account=%s", account_id)

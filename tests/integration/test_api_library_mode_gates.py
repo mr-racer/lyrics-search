@@ -13,9 +13,9 @@ def _setup_mode(mode: str) -> None:
     MetadataDB.set_instance_config(mode=mode, created_at=1700000000.0)
 
 
-def _login(app, uid: str = "acct_alice") -> None:
+def _login(app, uid: str = "acct_alice", role: str = "member") -> None:
     app.dependency_overrides[get_current_user] = lambda: User(
-        id=uid, email=f"{uid}@x.y", role="member", created_at=0.0,
+        id=uid, email=f"{uid}@x.y", role=role, created_at=0.0,
     )
 
 
@@ -39,16 +39,31 @@ class TestIndexModeGate:
             )
             assert resp.status_code in (200, 503), resp.text
 
-    def test_index_404s_in_server_mode(self, tmp_path):
+    def test_index_member_403_in_server_mode(self, tmp_path):
+        """Members must not point the indexer at arbitrary host folders —
+        they upload via POST /library/upload instead."""
         _setup_mode("server")
         app = create_app()
-        _login(app)
+        _login(app, role="member")
         with TestClient(app) as c:
             resp = c.post(
                 "/api/v1/library/index",
                 json={"folder_path": str(tmp_path), "collection_name": "test"},
             )
-            assert resp.status_code == 404
+            assert resp.status_code == 403
+
+    def test_index_owner_allowed_in_server_mode(self, tmp_path):
+        """The owner runs the instance host, so folder indexing (wizard +
+        settings) must work in server mode too — not only via uploads."""
+        _setup_mode("server")
+        app = create_app()
+        _login(app, uid="acct_owner", role="owner")
+        with TestClient(app) as c:
+            resp = c.post(
+                "/api/v1/library/index",
+                json={"folder_path": str(tmp_path), "collection_name": "test"},
+            )
+            assert resp.status_code in (200, 503), resp.text
 
     def test_upload_404s_in_sharing_mode(self):
         _setup_mode("sharing")
@@ -96,9 +111,8 @@ class TestModeGateMatrix:
         ("POST", "/api/v1/library/upload/batch-commit", {"upload_ids": ["x"]}),
         ("DELETE", "/api/v1/library/tracks/some-track", None),
     ]
-    SHARING_ONLY = [
-        ("POST", "/api/v1/library/index", {"folder_path": "/tmp", "collection_name": "x"}),
-    ]
+    # NOTE: /library/index is no longer sharing-only — in server mode it is
+    # owner-only (see TestIndexModeGate) so the wizard can index a host folder.
 
     @pytest.mark.parametrize("method,path,body", SERVER_ONLY)
     def test_server_only_404s_in_sharing(self, method, path, body):
@@ -113,12 +127,3 @@ class TestModeGateMatrix:
                 kwargs["json"] = body
             resp = c.request(method, path, **kwargs)
             assert resp.status_code == 404, f"{method} {path}: {resp.status_code} {resp.text}"
-
-    @pytest.mark.parametrize("method,path,body", SHARING_ONLY)
-    def test_sharing_only_404s_in_server(self, method, path, body):
-        _setup_mode("server")
-        app = create_app()
-        _login(app)
-        with TestClient(app) as c:
-            resp = c.request(method, path, json=body)
-            assert resp.status_code == 404

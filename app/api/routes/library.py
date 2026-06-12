@@ -748,20 +748,33 @@ async def pick_folder() -> dict:
 
 # ── Index folder ──────────────────────────────────────────────────────────────
 
-@router.post("/index", dependencies=[Depends(require_mode("sharing"))])
+@router.post("/index")
 async def index_folder(
     req: IndexRequest,
     request: Request,
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """Index a folder with music files (sharing mode only).
+    """Index a folder of music files that already live on this host.
 
-    In server mode this endpoint 404s — members upload via POST /library/upload
-    and the owner bulk-imports via `python -m scripts.hardlink_owner_library`.
+    Sharing mode: any authenticated user (single-tenant instance). Server
+    mode: OWNER ONLY — the owner runs the host machine, so the setup wizard
+    and settings can index a local folder directly; members must not be able
+    to point the indexer (and the streamer) at arbitrary host paths, they
+    upload via POST /library/upload instead.
 
     Returns {"status": "completed", "count": N, "message": "..."}
     """
-    # Service availability first — if Qdrant/the whole library service is down,
+    # Authorization before service availability: a member must see 403 even
+    # while Qdrant is down (don't leak service state to unauthorized callers).
+    from app.resources.metadata_db import MetadataDB
+    cfg = MetadataDB.get_instance_config()
+    if cfg is not None and cfg.get("mode") == "server" and current_user.role != "owner":
+        raise HTTPException(
+            status_code=403,
+            detail="folder indexing is owner-only in server mode — upload files instead",
+        )
+
+    # Service availability next — if Qdrant/the whole library service is down,
     # 503 takes precedence over a bad folder (and preserves the pre-Phase-C
     # /index contract).
     service: LibraryService = request.app.state.library_service

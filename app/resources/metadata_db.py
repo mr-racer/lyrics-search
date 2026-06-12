@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import threading
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Tuple
 
@@ -236,7 +237,22 @@ class MetadataDB:
     the schema exists.
     """
 
+    # Legacy/test hook: integration conftest patches _connect to store a single
+    # shared connection here; close() still honors it. Production code paths
+    # use the per-thread map below and leave _instance as None.
     _instance: Optional[sqlite3.Connection] = None
+
+    # One connection PER THREAD, keyed by thread ident. CPython's sqlite3
+    # connections are NOT safe for concurrent use from multiple threads even
+    # with check_same_thread=False: parallel requests through FastAPI's
+    # threadpool raced on the shared connection and produced
+    # sqlite3.InterfaceError ("bad parameter or other API misuse") plus
+    # silently wrong/None rows — get_current_user then 401'd valid tokens and
+    # the frontend logged users out in a loop. Each entry stores the DB path
+    # it was opened against so tests that repoint DB_PATH get a fresh
+    # connection instead of a stale one aimed at the previous file.
+    _connections: Dict[int, Tuple[str, sqlite3.Connection]] = {}
+    _connections_lock = threading.Lock()
 
     # AudioDB enrichment columns (Plan: audiodb-enrichment Task 2).
     # Idempotent ALTER TABLE migration adds these to ``artists`` if missing.
@@ -266,23 +282,47 @@ class MetadataDB:
 
     @classmethod
     def _connect(cls) -> sqlite3.Connection:
-        if cls._instance is None:
-            DB_DIR.mkdir(parents=True, exist_ok=True)
-            conn = sqlite3.connect(str(DB_PATH), detect_types=sqlite3.PARSE_DECLTYPES, check_same_thread=False)
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA foreign_keys=ON")
-            # The connection is shared across FastAPI's request threads. Without a
-            # busy timeout, two concurrent writes (e.g. parallel /library/upload
-            # from two accounts) can hit "database is locked" immediately; this
-            # makes the loser wait for the lock instead (Phase C concurrency).
-            conn.execute("PRAGMA busy_timeout=5000")
-            cls._instance = conn
-            logger.info("[MetadataDB] Connected to %s", DB_PATH)
-        return cls._instance
+        """Return the CALLING THREAD's connection, opening it lazily.
+
+        WAL journal mode makes concurrent per-thread connections safe:
+        readers don't block the writer, and busy_timeout serializes
+        competing writers instead of failing fast.
+        """
+        tid = threading.get_ident()
+        path = str(DB_PATH)
+        with cls._connections_lock:
+            entry = cls._connections.get(tid)
+            if entry is not None and entry[0] == path:
+                return entry[1]
+
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        # check_same_thread=False not for sharing (each thread has its own
+        # connection) but so close() can close worker-thread connections at
+        # shutdown/test teardown from a different thread.
+        conn = sqlite3.connect(path, detect_types=sqlite3.PARSE_DECLTYPES, check_same_thread=False)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        # Without a busy timeout, two concurrent writes (e.g. parallel
+        # /library/upload from two accounts) can hit "database is locked"
+        # immediately; this makes the loser wait for the lock instead
+        # (Phase C concurrency).
+        conn.execute("PRAGMA busy_timeout=5000")
+
+        with cls._connections_lock:
+            stale = cls._connections.get(tid)
+            cls._connections[tid] = (path, conn)
+        if stale is not None:
+            # Same thread, different DB_PATH (test repointed it) — drop the old one.
+            try:
+                stale[1].close()
+            except Exception:
+                pass
+        logger.info("[MetadataDB] Connected to %s (thread %s)", path, tid)
+        return conn
 
     @classmethod
     def get(cls) -> sqlite3.Connection:
-        """Return the shared connection (creates it lazily)."""
+        """Return this thread's connection (creates it lazily)."""
         return cls._connect()
 
     @classmethod
@@ -454,13 +494,8 @@ class MetadataDB:
 
     @classmethod
     def _reset_for_tests(cls) -> None:
-        """Drop any cached connection and clear the init flag — test only."""
-        if cls._instance is not None:
-            try:
-                cls._instance.close()
-            except Exception:
-                pass
-        cls._instance = None
+        """Drop any cached connections and clear the init flag — test only."""
+        cls.close()
 
     # ── Artists ──
 
@@ -858,11 +893,23 @@ class MetadataDB:
 
     @classmethod
     def close(cls) -> None:
-        """Close the shared connection (mainly for tests)."""
-        conn = cls._instance
-        if conn:
-            conn.close()
+        """Close every cached connection (shutdown + test teardown).
+
+        Closes both the per-thread map and the legacy _instance slot (the
+        integration conftest's patched _connect still stores there).
+        Worker-thread connections are closed from the calling thread —
+        allowed because they are opened with check_same_thread=False."""
+        with cls._connections_lock:
+            conns = [conn for (_path, conn) in cls._connections.values()]
+            cls._connections.clear()
+        if cls._instance is not None:
+            conns.append(cls._instance)
             cls._instance = None
+        for conn in conns:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     # ── Track reactions ──
 
