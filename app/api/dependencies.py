@@ -76,6 +76,40 @@ def get_current_user(
         )
 
 
+def get_user_for_stream(
+    request: Request,
+    st: str | None = None,
+    auth: AuthService = Depends(get_auth_service),
+) -> User:
+    """Auth for the audio stream endpoint ONLY.
+
+    <audio src=...> cannot send an Authorization header, so this dependency
+    accepts EITHER the normal Bearer header (curl, tests, future native
+    clients) OR a short-lived scope-limited stream token in the ?st= query
+    parameter (issued by POST /auth/stream-token). Full login tokens in ?st=
+    are rejected — see AuthService.verify_stream_token."""
+    if request.headers.get("Authorization", "").startswith("Bearer "):
+        return get_current_user(request, auth)
+    if not st:
+        raise HTTPException(
+            status_code=401,
+            detail="missing or invalid Authorization header",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    try:
+        return auth.verify_stream_token(st)
+    except TokenExpiredError:
+        raise HTTPException(
+            status_code=401, detail="stream token expired",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    except InvalidTokenError:
+        raise HTTPException(
+            status_code=401, detail="invalid stream token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
 def get_owner(user: User = Depends(get_current_user)) -> User:
     """Same as get_current_user but adds a role gate. Returns 403 (not 401) so
     the frontend doesn't redirect to login — the user IS logged in, just not

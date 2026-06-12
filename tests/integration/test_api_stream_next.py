@@ -55,8 +55,11 @@ class FakeQdrant:
     def retrieve(self, collection_name, ids, with_payload=True, with_vectors=False):
         return [self.points[t] for t in ids if t in self.points]
 
-    def search(self, collection_name, query_vector, limit, with_payload=True):
-        q = np.asarray(query_vector[1], dtype=np.float32)
+    def query_points(self, collection_name, query, using, limit, with_payload=True):
+        # Modern qdrant-client: vector goes in `query`, named vector in `using`,
+        # result wraps hits in .points (legacy .search() was removed upstream).
+        from types import SimpleNamespace
+        q = np.asarray(query, dtype=np.float32)
         q = q / np.linalg.norm(q)
         scored = []
         for p in self.points.values():
@@ -66,7 +69,7 @@ class FakeQdrant:
             hit.score = cos
             scored.append(hit)
         scored.sort(key=lambda h: h.score, reverse=True)
-        return scored[:limit]
+        return SimpleNamespace(points=scored[:limit])
 
     def scroll(self, collection_name, limit, with_payload=True, with_vectors=False, offset=None):
         pts = list(self.points.values())

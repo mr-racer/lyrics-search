@@ -17,6 +17,7 @@ from app.domain.models import (
     AuthResponse, InviteResponse, LoginRequest, RegisterRequest, User,
 )
 from app.services.auth_service import (
+    STREAM_TOKEN_TTL_SECONDS,
     AuthError, AuthService, EmailAlreadyTakenError, InvalidCredentialsError,
     InvalidInviteError, WeakPasswordError,
 )
@@ -79,6 +80,21 @@ def register(
 @router.get("/me", response_model=User)
 def me(user: User = Depends(get_current_user)) -> User:
     return user
+
+
+# ── /auth/stream-token ──────────────────────────────────────────────────────
+@router.post("/stream-token")
+def stream_token(
+    user: User = Depends(get_current_user),
+    auth: AuthService = Depends(get_auth_service),
+) -> dict:
+    """Mint a short-lived scope='stream' JWT for <audio> URLs (?st=...).
+    Media elements can't send Authorization headers, so the frontend appends
+    this token to /tracks/{id}/stream URLs and refreshes it periodically."""
+    return {
+        "token": auth.issue_stream_token(user),
+        "expires_in": STREAM_TOKEN_TTL_SECONDS,
+    }
 
 
 # ── /auth/logout ───────────────────────────────────────────────────────────

@@ -482,12 +482,14 @@ def pool_anchor_candidates(
         if anchor.vector is None:
             continue
         try:
-            hits = qdrant_client.search(
+            # qdrant-client >= 1.10: query_points replaced the removed .search()
+            hits = qdrant_client.query_points(
                 collection_name=collection_name,
-                query_vector=("clap", list(anchor.vector)),
+                query=list(anchor.vector),
+                using="clap",
                 limit=k,
                 with_payload=True,
-            )
+            ).points
         except Exception:
             logger.exception("[stream] anchor search failed for %s", anchor.track_id)
             continue
@@ -1047,12 +1049,14 @@ def similar_tracks(
     # 2. CLAP neighbors.
     k = max(limit * SIMILAR_FETCH_MULT, 30)
     try:
-        hits = qdrant_client.search(
+        # qdrant-client >= 1.10: query_points replaced the removed .search()
+        hits = qdrant_client.query_points(
             collection_name=collection_name,
-            query_vector=("clap", list(seed_vec)),
+            query=list(seed_vec),
+            using="clap",
             limit=k,
             with_payload=True,
-        )
+        ).points
     except Exception:
         logger.exception("[similar] CLAP search failed for %s", seed_track_id)
         return {"seed_track_id": seed_track_id, "tracks": []}

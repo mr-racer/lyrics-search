@@ -188,7 +188,9 @@ class TestPhaseDSoft:
         fake_db = MagicMock()
         fake_db.qdrant.retrieve.return_value = []
         fixed_user = SimpleNamespace(id="user-A", email="a@x")
-        app.dependency_overrides[search_route.get_current_user] = lambda: fixed_user
+        # The stream endpoint authenticates via get_user_for_stream (Bearer OR
+        # ?st= stream token), not the blanket get_current_user gate.
+        app.dependency_overrides[search_route.get_user_for_stream] = lambda: fixed_user
 
         with TestClient(app) as c:
             c.app.state.db_client = fake_db

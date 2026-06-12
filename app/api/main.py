@@ -36,7 +36,7 @@ from ..services.auth_service import AuthService
 # because the routes find the type in _TASK_TYPES but the service registry
 # is empty.
 from ..services import ai_tasks  # noqa: F401
-from .routes import search_router, library_router, chat_router, metadata_router, playback_router, recommend_router, ai_indexing_router, artists_router, system_router, playlists_router, instance_router, auth_router, admin_router
+from .routes import search_router, stream_router, library_router, chat_router, metadata_router, playback_router, recommend_router, ai_indexing_router, artists_router, system_router, playlists_router, instance_router, auth_router, admin_router
 from .dependencies import get_current_user
 from .sse_utils import event_stream
 
@@ -278,6 +278,9 @@ def create_app() -> FastAPI:
     # frontend can log in / probe the mode before it holds a token.
     auth_gate = [Depends(get_current_user)]
     app.include_router(search_router,       prefix="/api/v1", dependencies=auth_gate)
+    # Stream router carries its OWN auth (get_user_for_stream: Bearer or ?st=
+    # stream token) because <audio> elements can't send Authorization headers.
+    app.include_router(stream_router,       prefix="/api/v1")
     app.include_router(library_router,      prefix="/api/v1", dependencies=auth_gate)
     app.include_router(chat_router,         prefix="/api/v1", dependencies=auth_gate)
     app.include_router(metadata_router,     prefix="/api/v1", dependencies=auth_gate)

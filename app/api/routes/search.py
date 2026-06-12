@@ -9,12 +9,18 @@ from app.domain.models import (
     SearchRequest, SearchResponse, TrackHit, User,
     TrackReactionRequest, TrackReactionResponse,
 )
-from app.api.dependencies import get_current_user
+from app.api.dependencies import get_current_user, get_user_for_stream
 from app.api.helpers import derive_collection_for_user
 from app.resources.model_registry import ModelRegistry
 from app.services.audio_streaming import get_streamable_path
 
 router = APIRouter(prefix="/search", tags=["Search"])
+
+# Separate router for the audio stream endpoint: it must NOT sit behind the
+# blanket get_current_user gate (main.py auth_gate) because <audio> elements
+# can't send an Authorization header. Its own get_user_for_stream dependency
+# accepts Bearer OR a short-lived ?st= stream token — auth is still mandatory.
+stream_router = APIRouter(prefix="/search", tags=["Search"])
 
 
 # ── Dependencies ───────────────────────────────────────────────────────────────
@@ -89,11 +95,11 @@ async def get_loaded_models():
 
 # ── Audio streaming ──────────────────────────────────────────────────────────
 
-@router.get("/tracks/{track_id}/stream")
+@stream_router.get("/tracks/{track_id}/stream")
 async def stream_track(
     track_id: str,
     request: Request,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_user_for_stream),
 ):
     """
     Serve a music file by its Qdrant track_id using FastAPI's FileResponse.

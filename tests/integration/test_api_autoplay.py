@@ -31,10 +31,12 @@ def client(tmp_path, monkeypatch):
     MetadataDB._reset_for_tests()
     MetadataDB.init()
 
-    # Inject a stub Qdrant client into app state.
+    # Inject a stub Qdrant client into app state. spec=[] would be cleaner but
+    # the stub needs ad-hoc attrs; what matters is mirroring the MODERN client:
+    # query_points(...).points, not the removed legacy .search().
     qdrant = MagicMock()
     qdrant.retrieve.return_value = [_mk_point("seed", 1.0)]
-    qdrant.search.return_value = [
+    qdrant.query_points.return_value.points = [
         _mk_point("t1", 0.9, artist="A"),
         _mk_point("t2", 0.85, artist="B"),
         _mk_point("t3", 0.8, artist="C"),

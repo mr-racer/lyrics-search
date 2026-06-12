@@ -148,7 +148,7 @@ def test_next_queue_handles_seed_without_clap_vector():
     assert result.seed_track_id == "seed"
     assert result.tracks == []
     assert result.diagnostics.returned == 0
-    qdrant.search.assert_not_called()  # crucial: we must not have tried to search
+    qdrant.query_points.assert_not_called()  # crucial: we must not have tried to search
 
 
 def test_next_queue_handles_seed_not_found():
@@ -164,4 +164,4 @@ def test_next_queue_handles_seed_not_found():
         limit=20,
     )
     assert result.tracks == []
-    qdrant.search.assert_not_called()
+    qdrant.query_points.assert_not_called()

@@ -85,14 +85,18 @@ class _Hit:
 
 
 class _FakeQdrantSearch:
-    """search() returns canned hits per anchor track_id (keyed by vector[0])."""
+    """query_points() returns canned hits per anchor track_id (keyed by query[0]).
+
+    Mirrors qdrant-client >= 1.10 — the legacy .search() method was REMOVED
+    upstream, so fakes must not offer it (that's how the breakage slipped by)."""
 
     def __init__(self, hits_by_marker):
         self.hits_by_marker = hits_by_marker
 
-    def search(self, collection_name, query_vector, limit, with_payload):
-        marker = query_vector[1][0]  # first vector component identifies the anchor
-        return self.hits_by_marker[marker]
+    def query_points(self, collection_name, query, using, limit, with_payload):
+        from types import SimpleNamespace
+        marker = query[0]  # first vector component identifies the anchor
+        return SimpleNamespace(points=self.hits_by_marker[marker])
 
 
 class TestPoolAnchor:

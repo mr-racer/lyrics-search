@@ -44,6 +44,7 @@ from app.resources.metadata_db import MetadataDB
 logger = logging.getLogger(__name__)
 
 TOKEN_TTL_SECONDS = 30 * 24 * 3600        # 30 days
+STREAM_TOKEN_TTL_SECONDS = 3600            # 1 hour — travels in ?st= URLs
 INVITE_TTL_SECONDS = 7 * 24 * 3600         # 7 days
 INVITE_CODE_LENGTH = 12
 MIN_PASSWORD_LENGTH = 6
@@ -277,10 +278,9 @@ class AuthService:
         }
         return jwt.encode(payload, self.jwt_secret, algorithm="HS256")
 
-    def verify_token(self, token: str) -> User:
-        """Decode + signature-check + lookup. Raises TokenExpiredError /
-        InvalidTokenError. Returns the canonical User from DB (so role/email
-        changes since issuance are reflected; user-row deletion → 401)."""
+    def _decode_and_resolve(self, token: str) -> tuple[dict, User]:
+        """Shared decode → exp check → sub lookup. Raises TokenExpiredError /
+        InvalidTokenError. Scope enforcement is the CALLER's job."""
         try:
             # PyJWT's built-in exp check uses its own clock; we disable it
             # and re-check manually below using `_now` so monkeypatching
@@ -302,7 +302,42 @@ class AuthService:
         row = self.db.get_user_by_id(uid)
         if row is None:
             raise InvalidTokenError(f"unknown user id {uid}")
-        return _row_to_user(row)
+        return claims, _row_to_user(row)
+
+    def verify_token(self, token: str) -> User:
+        """Decode + signature-check + lookup. Raises TokenExpiredError /
+        InvalidTokenError. Returns the canonical User from DB (so role/email
+        changes since issuance are reflected; user-row deletion → 401).
+
+        Scoped tokens (e.g. scope='stream') are REJECTED here: they travel
+        in URLs and must never grant general API access."""
+        claims, user = self._decode_and_resolve(token)
+        if claims.get("scope"):
+            raise InvalidTokenError("scoped token not valid for API access")
+        return user
+
+    # ── Stream tokens ────────────────────────────────────────────────────
+    # <audio> elements cannot send an Authorization header, so the stream
+    # endpoint accepts a short-lived scope-limited JWT via ?st=. The narrow
+    # scope + 1h TTL bound the damage if the URL leaks (logs, referrers).
+    def issue_stream_token(self, user: User) -> str:
+        now_int = int(_now())
+        payload = {
+            "sub": user.id,
+            "scope": "stream",
+            "iat": now_int,
+            "exp": now_int + STREAM_TOKEN_TTL_SECONDS,
+        }
+        return jwt.encode(payload, self.jwt_secret, algorithm="HS256")
+
+    def verify_stream_token(self, token: str) -> User:
+        """Counterpart of issue_stream_token. Raises InvalidTokenError for
+        any token whose scope is not exactly 'stream' — including full login
+        tokens, which must never be encouraged to travel in URLs."""
+        claims, user = self._decode_and_resolve(token)
+        if claims.get("scope") != "stream":
+            raise InvalidTokenError("not a stream token")
+        return user
 
     # ── Login ───────────────────────────────────────────────────────────
     def login(self, *, email: str, password: str) -> tuple[User, str]:

@@ -46,7 +46,8 @@ def _axes(value):
 
 
 class FakeQdrant:
-    """retrieve() returns the seed; search() returns canned hits."""
+    """retrieve() returns the seed; query_points() returns canned hits
+    (modern qdrant-client interface — legacy .search() no longer exists)."""
 
     def __init__(self, seed_point, hits):
         self.seed_point = seed_point
@@ -55,8 +56,9 @@ class FakeQdrant:
     def retrieve(self, collection_name, ids, with_payload=True, with_vectors=False):
         return [self.seed_point] if self.seed_point and self.seed_point.id in ids else []
 
-    def search(self, collection_name, query_vector, limit, with_payload=True):
-        return self.hits[:limit]
+    def query_points(self, collection_name, query, using, limit, with_payload=True):
+        from types import SimpleNamespace
+        return SimpleNamespace(points=self.hits[:limit])
 
 
 def _seed(axes_value=1.0):

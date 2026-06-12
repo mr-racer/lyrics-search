@@ -154,7 +154,7 @@ def next_queue(
     # A track may exist in Qdrant without a 'clap' named vector (legacy points
     # indexed before CLAP support). In that case we can't form a neighbor
     # query — return an empty queue gracefully instead of crashing in
-    # qdrant_client.search().
+    # qdrant_client.query_points().
     if not seed_vec:
         return AutoplayQueueResponse(
             seed_track_id=seed_track_id,
@@ -166,13 +166,15 @@ def next_queue(
         )
 
     # 2. Query top-K neighbors.
+    # qdrant-client >= 1.10: query_points replaced the removed .search()
     k = max(limit * 3, 30)
-    candidates = qdrant_client.search(
+    candidates = qdrant_client.query_points(
         collection_name=collection_name,
-        query_vector=("clap", seed_vec),
+        query=seed_vec,
+        using="clap",
         limit=k,
         with_payload=True,
-    )
+    ).points
 
     # 3. Reactions lookup (single batched query).
     candidate_ids = [str(c.id) for c in candidates]
