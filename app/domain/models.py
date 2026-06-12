@@ -371,6 +371,7 @@ class ArtistAlbum(BaseModel):
     year: Optional[int] = None
     cover_art_path: Optional[str] = None  # representative track's cover
     tracks: list[TrackMetadata] = Field(default_factory=list)
+    liked_track_count: int = 0  # likes among this album's tracks (gold-star marker)
 
 
 class ArtistAggregate(BaseModel):

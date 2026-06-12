@@ -177,6 +177,12 @@ def build_artist_aggregate(db, collection: str, canonical_slug: str, lang: str) 
     by_album: dict[str, list[TrackMetadata]] = defaultdict(list)
     for t in artist_tracks:
         by_album[t.album or "—"].append(t)
+    # One reactions lookup for all of the artist's tracks (no per-album N+1);
+    # drives the gold-star marker (3+ liked tracks) on the Atlas screen.
+    reactions = MetadataDB.get_reactions_for_tracks(
+        collection, [t.track_id for t in artist_tracks],
+    )
+    liked_ids = {tid for tid, r in reactions.items() if r == "like"}
     albums: list[ArtistAlbum] = []
     for album_title, tracks in by_album.items():
         years = [t.year for t in tracks if t.year]
@@ -187,6 +193,7 @@ def build_artist_aggregate(db, collection: str, canonical_slug: str, lang: str) 
             year=min(years) if years else None,
             cover_art_path=cover,
             tracks=tracks,
+            liked_track_count=sum(1 for t in tracks if t.track_id in liked_ids),
         ))
     albums.sort(key=lambda a: (a.year or 9999, a.title))
 

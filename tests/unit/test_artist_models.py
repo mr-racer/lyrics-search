@@ -16,6 +16,14 @@ def test_artist_album_minimal():
     album = ArtistAlbum(title="Future Nostalgia", year=2020, tracks=[])
     assert album.title == "Future Nostalgia"
     assert album.cover_art_path is None  # optional
+    assert album.liked_track_count == 0  # default when no reactions
+
+
+def test_artist_album_liked_track_count_set():
+    album = ArtistAlbum(title="Future Nostalgia", year=2020, tracks=[],
+                        liked_track_count=3)
+    assert album.liked_track_count == 3
+    assert album.model_dump()["liked_track_count"] == 3
 
 
 def test_artist_aggregate_with_bio():

@@ -133,6 +133,32 @@ def test_track_coercion_handles_messy_payload_values():
     assert _coerce_year("garbage") is None
 
 
+def test_get_artist_album_liked_track_count(client):
+    """Albums carry the number of liked tracks (drives the gold-star marker)."""
+    conn = MetadataDB.get()
+    conn.execute("INSERT INTO artists (slug, name, collection_name) VALUES (?, ?, ?)",
+                  ("dua-lipa", "Dua Lipa", _DERIVED))
+    conn.commit()
+    # Like both album tracks under the derived collection; a like on the other
+    # artist's track (t3) must not bleed into Dua Lipa's count.
+    MetadataDB.set_reaction("t1", _DERIVED, "like")
+    MetadataDB.set_reaction("t2", _DERIVED, "like")
+    MetadataDB.set_reaction("t3", _DERIVED, "like")
+    r = client.get("/api/v1/artists/dua-lipa?collection=col_a")
+    assert r.status_code == 200
+    album = r.json()["albums"][0]
+    assert album["liked_track_count"] == 2
+
+
+def test_get_artist_liked_track_count_zero_without_reactions(client):
+    conn = MetadataDB.get()
+    conn.execute("INSERT INTO artists (slug, name, collection_name) VALUES (?, ?, ?)",
+                  ("dua-lipa", "Dua Lipa", _DERIVED))
+    conn.commit()
+    r = client.get("/api/v1/artists/dua-lipa?collection=col_a")
+    assert r.json()["albums"][0]["liked_track_count"] == 0
+
+
 def test_get_artist_ignores_supplied_collection(client):
     """D-soft: even when the client passes ?collection=acct_BAD, the server uses
     the JWT-derived collection (acct_user-A) when building the aggregate."""

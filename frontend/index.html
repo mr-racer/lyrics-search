@@ -626,6 +626,19 @@
       .lib-album-card:hover, .lib-album-card:hover .lib-album-cover { transform: none; }
     }
 
+    /* ── Artist Atlas v2 ──────────────────────────────────────── */
+    /* Hidden scrollbars for the facts shelf + albums timeline strip */
+    .atlas-shelf { scrollbar-width: none; -ms-overflow-style: none; }
+    .atlas-shelf::-webkit-scrollbar { display: none; }
+    /* AudioDB cutout/monogram rises in with the hero; hides on narrow
+       viewports where the name needs the room */
+    @keyframes atlasCutoutIn { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: translateY(0); } }
+    .atlas-cutout { animation: atlasCutoutIn 0.8s cubic-bezier(.22,.9,.3,1) 0.15s both; }
+    @media (max-width: 880px) { .atlas-cutout { display: none; } }
+    @media (prefers-reduced-motion: reduce) {
+      .atlas-cutout { animation: none !important; opacity: 1 !important; }
+    }
+
     /* ── Album gatefold modal (vinyl flip) ────────────────────── */
     @keyframes albumFlipIn  { from { transform: rotateY(0deg); }   to { transform: rotateY(180deg); } }
     @keyframes albumFlipOut { from { transform: rotateY(180deg); } to { transform: rotateY(360deg); } }
@@ -11285,56 +11298,522 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
   );
 }
 
-// ─── ARTIST ATLAS SECTION ───────────────────────────────────────────────────
+// ─── ARTIST ATLAS SECTION (v2 — immersive hero + glass dock) ─────────────────
+// Single-scroll page: hero (AudioDB artist photo) → liquid-glass anchor dock →
+// bio → facts shelf → albums timeline. Tracks never spill onto the page —
+// album covers open the shared AlbumModal gatefold (same as Library).
+
+const atlasImgUrl = (p) => (p ? (p.startsWith('http') ? p : `${API}${p}`) : null);
+
+// "GB" → 🇬🇧 via regional-indicator pair; null for anything not 2 ASCII letters.
+const atlasFlag = (cc) => {
+  if (!cc || !/^[A-Za-z]{2}$/.test(cc)) return null;
+  return String.fromCodePoint(...[...cc.toUpperCase()].map(ch => 0x1F1E6 + ch.charCodeAt(0) - 65));
+};
+
+const atlasRuPlural = (n, one, few, many) => {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+  return many;
+};
+
+// Same hue-from-text family as the AlbumCover / AlbumModal fallbacks.
+const atlasHue = (a, b) => ((((a || '?').charCodeAt(0) || 65) * 37 + ((b || a || '?').charCodeAt(0) || 65) * 17) % 360);
+
+const atlasGlass = (isDark) => ({
+  background: isDark ? 'rgba(21,18,33,0.55)' : 'rgba(255,255,255,0.62)',
+  backdropFilter: 'blur(18px) saturate(1.35)',
+  WebkitBackdropFilter: 'blur(18px) saturate(1.35)',
+  border: `1px solid ${isDark ? 'rgba(255,255,255,0.13)' : 'rgba(255,255,255,0.7)'}`,
+  boxShadow: isDark
+    ? 'inset 0 1px 0 rgba(255,255,255,0.16), inset 0 -1px 0 rgba(0,0,0,0.25), 0 14px 38px rgba(0,0,0,0.42)'
+    : 'inset 0 1px 0 rgba(255,255,255,0.95), inset 0 -1px 0 rgba(0,0,0,0.05), 0 14px 30px rgba(40,30,70,0.14)',
+});
+
+function AtlasAnchorPills({ sections, activeId, onAnchor, isDark, compact }) {
+  const c = useColors(isDark);
+  return (
+    <div style={{ display:'flex', gap:6, minWidth:0 }}>
+      {sections.map(s => {
+        const active = activeId === s.id;
+        return (
+          <button key={s.id} onClick={() => onAnchor(s.id)} className="mono"
+            style={{
+              padding: compact ? '4px 11px' : '6px 14px', borderRadius:99,
+              fontSize: compact ? 9 : 10, letterSpacing:'0.18em', cursor:'pointer',
+              border:`1px solid ${active ? 'oklch(60% 0.18 270 / 0.55)' : (isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)')}`,
+              background: active ? 'oklch(60% 0.18 270 / 0.16)' : 'transparent',
+              color: active ? c.text : c.textMuted,
+              transition:'all 180ms ease', whiteSpace:'nowrap',
+            }}>{s.label}</button>
+        );
+      })}
+    </div>
+  );
+}
+
+function AtlasSpinButton({ onSpin, lang, compact }) {
+  return (
+    <button onClick={onSpin}
+      title={lang==='ru'?'Запустить отсюда':'Spin from here'}
+      style={{
+        padding: compact ? '7px 13px' : '9px 18px', borderRadius:99, flexShrink:0,
+        background:'linear-gradient(135deg, oklch(67% 0.18 270), oklch(52% 0.22 285))',
+        color:'#fff', fontSize: compact ? 11 : 13, fontWeight:600, letterSpacing:'0.04em',
+        border:'1px solid oklch(50% 0.2 275 / 0.4)', cursor:'pointer',
+        boxShadow:'inset 0 1px 0 rgba(255,255,255,0.32), 0 4px 16px rgba(124,91,255,0.35)',
+      }}>
+      ▶{compact ? '' : ` ${lang==='ru'?'Запустить отсюда':'Spin from here'}`}
+    </button>
+  );
+}
+
+function AtlasHero({ data, isDark, lang, onNav, heroRef }) {
+  const c = useColors(isDark);
+  const hue = atlasHue(data.name, data.name.slice(1));
+  const backdrop = atlasImgUrl(data.thumb_path) || atlasImgUrl(data.albums?.[0]?.cover_art_path);
+  const cutout = atlasImgUrl(data.cutout_path);
+  const flag = atlasFlag(data.country_code);
+  const bits = [
+    data.genre,
+    data.album_count ? `${data.album_count} ${lang==='ru' ? atlasRuPlural(data.album_count,'АЛЬБОМ','АЛЬБОМА','АЛЬБОМОВ') : (data.album_count===1?'ALBUM':'ALBUMS')}` : null,
+    data.track_count ? `${data.track_count} ${lang==='ru' ? atlasRuPlural(data.track_count,'ТРЕК','ТРЕКА','ТРЕКОВ') : (data.track_count===1?'TRACK':'TRACKS')}` : null,
+    data.decade_range,
+    flag ? `${flag} ${(data.country || data.country_code || '').toUpperCase()}` : (data.country || null),
+  ].filter(Boolean);
+
+  return (
+    <div ref={heroRef} style={{ position:'relative', height:'clamp(300px, 40vh, 430px)', overflow:'hidden' }}>
+      {backdrop ? (
+        <img src={backdrop} alt="" aria-hidden="true" style={{
+          position:'absolute', top:'-8%', left:'-8%', width:'116%', height:'116%',
+          objectFit:'cover',
+          filter:`blur(46px) saturate(1.3) brightness(${isDark ? 0.52 : 1.02})`,
+        }} />
+      ) : (
+        <div aria-hidden="true" style={{
+          position:'absolute', inset:0,
+          background:`linear-gradient(135deg, oklch(${isDark?'30%':'80%'} 0.1 ${hue}), oklch(${isDark?'19%':'88%'} 0.07 ${(hue+45)%360}))`,
+        }} />
+      )}
+      {/* depth accent + readability wash toward the page bg */}
+      <div aria-hidden="true" style={{
+        position:'absolute', inset:0,
+        background:`radial-gradient(ellipse 90% 130% at 18% 0%, ${isDark?'rgba(124,91,255,0.16)':'rgba(124,91,255,0.10)'}, transparent 55%)`,
+      }} />
+      <div aria-hidden="true" style={{
+        position:'absolute', inset:0,
+        background:`linear-gradient(180deg, ${isDark?'rgba(13,13,16,0.2)':'rgba(242,241,246,0.14)'} 0%, transparent 38%, ${c.bg} 99%)`,
+      }} />
+
+      <div style={{ position:'relative', maxWidth:1120, margin:'0 auto', height:'100%', padding:'0 32px' }}>
+        {/* Breadcrumb */}
+        <div className="mono" style={{
+          position:'absolute', top:20, left:32, zIndex:3, fontSize:10,
+          letterSpacing:'0.22em', textTransform:'uppercase',
+          color: isDark ? 'rgba(255,255,255,0.5)' : 'rgba(20,18,32,0.55)',
+          textShadow: isDark ? '0 1px 8px rgba(0,0,0,0.5)' : 'none',
+        }}>
+          <span style={{ cursor:'pointer' }} onClick={() => onNav?.('library')}>{lang==='ru'?'БИБЛИОТЕКА':'LIBRARY'}</span>
+          {' / '}
+          <span>{lang==='ru'?'АРТИСТЫ':'ARTISTS'}</span>
+          {' / '}
+          <span style={{ color: isDark ? '#fff' : '#161620' }}>{data.name.toUpperCase()}</span>
+        </div>
+
+        {/* Cutout photo, or monogram square fallback */}
+        {cutout ? (
+          <img src={cutout} alt="" className="atlas-cutout" style={{
+            position:'absolute', right:36, bottom:0, height:'88%', maxWidth:'44%',
+            objectFit:'contain', objectPosition:'bottom right', zIndex:1,
+            filter:'drop-shadow(0 16px 38px rgba(0,0,0,0.5))',
+          }} />
+        ) : (
+          <div className="atlas-cutout" style={{
+            position:'absolute', right:40, bottom:38, width:148, height:148,
+            borderRadius:20, zIndex:1, display:'grid', placeItems:'center',
+            background:`linear-gradient(135deg, oklch(38% 0.13 ${hue}), oklch(52% 0.18 ${(hue+45)%360}))`,
+            boxShadow:'inset 0 1px 0 rgba(255,255,255,0.2), 0 18px 40px rgba(0,0,0,0.35)',
+          }}>
+            <span className="serif" style={{ fontSize:52, fontWeight:300, color:'rgba(255,255,255,0.78)', letterSpacing:'0.02em' }}>
+              {data.name.split(/\s+/).slice(0,2).map(w => (w[0]||'').toUpperCase()).join('')}
+            </span>
+          </div>
+        )}
+
+        {/* Name + context line */}
+        <div style={{ position:'absolute', left:32, right:'44%', bottom:58, zIndex:2, minWidth:0 }}>
+          <h1 className="serif" style={{
+            fontSize:'clamp(38px, 4.6vw, 60px)', fontWeight:300, lineHeight:1.02,
+            color:c.text, letterSpacing:'-0.025em', margin:0,
+            textShadow: isDark ? '0 2px 26px rgba(0,0,0,0.6)' : '0 2px 22px rgba(255,255,255,0.8)',
+          }}>{data.name}</h1>
+          {bits.length > 0 && (
+            <div className="mono" style={{
+              marginTop:12, fontSize:11, letterSpacing:'0.2em', textTransform:'uppercase',
+              color: isDark ? 'rgba(213,200,255,0.78)' : 'oklch(42% 0.13 282)',
+              textShadow: isDark ? '0 1px 10px rgba(0,0,0,0.55)' : 'none',
+              whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+            }}>{bits.join(' · ')}</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AtlasBio({ bio, isDark, lang }) {
+  const c = useColors(isDark);
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const boxRef = useRef(null);
+  const COLLAPSED_PX = 178;
+  useEffect(() => {
+    const el = boxRef.current;
+    if (el) setOverflowing(el.scrollHeight > COLLAPSED_PX + 24);
+  }, [bio]);
+  const clamped = overflowing && !expanded;
+  return (
+    <div>
+      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:14 }}>
+        <span className="mono" style={{ fontSize:10, letterSpacing:'0.24em', color:c.textSubtle, textTransform:'uppercase' }}>
+          {lang==='ru'?'БИОГРАФИЯ':'BIOGRAPHY'}
+        </span>
+        <span className="mono" style={{
+          fontSize:8.5, letterSpacing:'0.18em', padding:'2px 7px', borderRadius:8,
+          color:c.accentLight, border:`1px solid ${isDark?'rgba(160,130,255,0.4)':'rgba(110,80,220,0.35)'}`,
+          background: isDark?'rgba(124,91,255,0.12)':'rgba(124,91,255,0.08)',
+        }}>AI</span>
+      </div>
+      <div ref={boxRef} className="serif" style={{
+        maxWidth:720, fontSize:16, lineHeight:1.7, color:c.text, letterSpacing:'-0.005em',
+        maxHeight: clamped ? COLLAPSED_PX : 'none', overflow:'hidden',
+        WebkitMaskImage: clamped ? 'linear-gradient(180deg, #000 58%, transparent 100%)' : 'none',
+        maskImage: clamped ? 'linear-gradient(180deg, #000 58%, transparent 100%)' : 'none',
+      }}>
+        <MarkdownText text={bio} />
+      </div>
+      {overflowing && (
+        <button onClick={() => setExpanded(e => !e)} style={{
+          marginTop:10, background:'transparent', border:'none', cursor:'pointer',
+          color:c.accentLight, fontSize:12.5, fontFamily:'inherit', padding:0, letterSpacing:'0.02em',
+        }}>
+          {expanded ? (lang==='ru'?'свернуть ↑':'collapse ↑') : (lang==='ru'?'читать дальше ↓':'read more ↓')}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function AtlasFactsShelf({ facts, isDark, lang }) {
+  const c = useColors(isDark);
+  const shelfRef = useRef(null);
+  const [pos, setPos] = useState({ idx:0, atStart:true, atEnd:false });
+  const CARD_W = 300, GAP = 14;
+  const recompute = () => {
+    const el = shelfRef.current; if (!el) return;
+    const idx = Math.round(el.scrollLeft / (CARD_W + GAP));
+    setPos({
+      idx: Math.max(0, Math.min(idx, facts.length - 1)),
+      atStart: el.scrollLeft <= 4,
+      atEnd: el.scrollLeft + el.clientWidth >= el.scrollWidth - 6,
+    });
+  };
+  const nudge = (dir) => {
+    const el = shelfRef.current; if (!el) return;
+    el.scrollBy({ left: dir * (CARD_W + GAP) * 2, behavior:'smooth' });
+  };
+  const showNav = facts.length > 3;
+  const arrowStyle = (off) => ({
+    width:30, height:30, borderRadius:'50%', display:'grid', placeItems:'center',
+    cursor: off ? 'default' : 'pointer', fontSize:14, color:c.textMuted,
+    opacity: off ? 0.35 : 1, ...atlasGlass(isDark),
+  });
+  return (
+    <div>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:14 }}>
+        <span className="mono" style={{ fontSize:10, letterSpacing:'0.24em', color:c.textSubtle, textTransform:'uppercase' }}>
+          {lang==='ru'?'ФАКТЫ':'FACTS'} · {facts.length}
+        </span>
+        {showNav && (
+          <div style={{ display:'flex', gap:6 }}>
+            <button onClick={() => nudge(-1)} disabled={pos.atStart} style={arrowStyle(pos.atStart)}>‹</button>
+            <button onClick={() => nudge(1)} disabled={pos.atEnd} style={arrowStyle(pos.atEnd)}>›</button>
+          </div>
+        )}
+      </div>
+      <div style={{ position:'relative' }}>
+        <div ref={shelfRef} className="atlas-shelf" onScroll={recompute} style={{
+          display:'flex', gap:GAP, overflowX:'auto', scrollSnapType:'x mandatory',
+          padding:'4px 2px 6px',
+        }}>
+          {facts.map((f, i) => (
+            <div key={i} style={{
+              flex:`0 0 ${CARD_W}px`, scrollSnapAlign:'start',
+              borderRadius:14, padding:'16px 18px',
+              background: isDark
+                ? 'linear-gradient(180deg, rgba(255,255,255,0.055) 0%, rgba(255,255,255,0.015) 100%)'
+                : 'linear-gradient(180deg, rgba(255,255,255,0.85) 0%, rgba(255,255,255,0.55) 100%)',
+              border:`1px solid ${c.border}`,
+              boxShadow: isDark
+                ? 'inset 0 1px 0 rgba(255,255,255,0.08), 0 4px 14px rgba(0,0,0,0.28)'
+                : 'inset 0 1px 0 rgba(255,255,255,0.9), 0 4px 12px rgba(40,30,70,0.08)',
+            }}>
+              <div className="mono" style={{ fontSize:10, letterSpacing:'0.16em', color:c.accentLight }}>
+                {String(i+1).padStart(2,'0')} / {String(facts.length).padStart(2,'0')}
+              </div>
+              <div className="serif" style={{ marginTop:8, fontSize:14.5, lineHeight:1.65, color:c.text }}>{f}</div>
+            </div>
+          ))}
+        </div>
+        {showNav && !pos.atEnd && (
+          <div aria-hidden="true" style={{
+            position:'absolute', right:0, top:0, bottom:6, width:64, pointerEvents:'none',
+            background:`linear-gradient(90deg, transparent, ${c.bg})`,
+          }} />
+        )}
+      </div>
+      {showNav && (
+        <div style={{ display:'flex', gap:4, justifyContent:'center', marginTop:12 }}>
+          {facts.map((_, i) => (
+            <span key={i} style={{
+              width: i === pos.idx ? 16 : 7, height:2.5, borderRadius:2,
+              background: i === pos.idx ? c.accentLight : (isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.15)'),
+              transition:'all .25s ease',
+            }} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AtlasAlbumCard({ album, artistName, isDark, lang, onOpen, width }) {
+  const c = useColors(isDark);
+  const [hover, setHover] = useState(false);
+  const W = width || 172;
+  const hue = atlasHue(album.title, artistName);
+  const coverRef = useRef(null);
+  const liked = album.liked_track_count || 0;
+  const deckEase = 'cubic-bezier(.22,.9,.3,1)';
+  const open = () => {
+    const r = coverRef.current && coverRef.current.getBoundingClientRect();
+    onOpen(album, r ? { top:r.top, left:r.left, width:r.width, height:r.height } : null);
+  };
+  return (
+    <div
+      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+      onClick={open}
+      style={{ width:W, cursor:'pointer', position:'relative', zIndex: hover ? 12 : 1 }}
+    >
+      <div ref={coverRef} style={{ position:'relative', width:W, height:W }}>
+        {/* Vinyl sneaks out from behind the sleeve on hover — same disc as the home deck */}
+        <div aria-hidden="true" style={{
+          position:'absolute', top:'4%', left:'6%', width:Math.round(W*0.92), height:Math.round(W*0.92), zIndex:1,
+          transform: hover ? `translateX(${Math.round(W*0.52)}px) rotate(10deg)` : 'translateX(6px)',
+          transition:`transform .5s ${deckEase}`,
+        }}>
+          <div className="vinyl-disc">
+            <span className="vinyl-label" style={{
+              background:`radial-gradient(circle at 38% 32%, oklch(62% 0.16 ${hue}), oklch(45% 0.16 ${(hue+45)%360}) 70%)`,
+            }} />
+          </div>
+        </div>
+        <div style={{
+          position:'relative', zIndex:2, width:W, height:W, borderRadius:12, overflow:'hidden',
+          transform: hover ? 'translateX(-7px) rotate(-2deg)' : 'none',
+          transition:`transform .5s ${deckEase}, box-shadow .5s ease`,
+          boxShadow: hover ? '0 18px 42px rgba(124,91,255,0.32)' : '0 6px 18px rgba(0,0,0,0.3)',
+        }}>
+          <AlbumCover title={album.title} artist={artistName} size={W} isDark={isDark} coverPath={album.cover_art_path} radius={12} fluid />
+          {/* sleeve sheen */}
+          <div aria-hidden="true" style={{
+            position:'absolute', inset:0, borderRadius:12, pointerEvents:'none',
+            background:'linear-gradient(115deg, rgba(255,255,255,0.14) 0%, transparent 34%, transparent 68%, rgba(0,0,0,0.22) 100%)',
+          }} />
+        </div>
+      </div>
+      <div style={{ marginTop:10, display:'flex', alignItems:'baseline', gap:6, minWidth:0 }}>
+        <span className="serif" style={{ fontSize:15, color:c.text, letterSpacing:'-0.01em', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{album.title}</span>
+        {liked >= 3 && (
+          <span
+            title={lang==='ru'
+              ? `${liked} ${atlasRuPlural(liked,'любимый трек','любимых трека','любимых треков')}`
+              : `${liked} liked tracks`}
+            style={{ color:'oklch(78% 0.14 85)', fontSize:13, flexShrink:0, textShadow:'0 0 12px rgba(212,165,90,0.5)' }}
+          >★</span>
+        )}
+      </div>
+      <div className="mono" style={{ marginTop:3, fontSize:10, letterSpacing:'0.16em', color:c.textSubtle, textTransform:'uppercase' }}>
+        {album.year || '—'} · {album.tracks.length} {lang==='ru' ? atlasRuPlural(album.tracks.length,'ТРЕК','ТРЕКА','ТРЕКОВ') : (album.tracks.length===1?'TRACK':'TRACKS')}
+      </div>
+    </div>
+  );
+}
+
+function AtlasAlbumStrip({ albums, artistName, isDark, lang, onOpen }) {
+  const c = useColors(isDark);
+  const wrapRef = useRef(null);
+  const [wrapW, setWrapW] = useState(0);
+  useEffect(() => {
+    const measure = () => { if (wrapRef.current) setWrapW(wrapRef.current.clientWidth); };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, []);
+
+  const CARD = 172, GAP = 28, CAP_H = 64, AXIS_H = 34;
+  const dated = albums.filter(a => a.year);
+  const undated = albums.filter(a => !a.year);
+  const years = dated.map(a => a.year);
+  const minY = years.length ? Math.min(...years) : 0;
+  const maxY = years.length ? Math.max(...years) : 0;
+  // Timeline needs ≥3 dated albums and an actual year spread; otherwise the
+  // proportional axis degenerates and a plain airy row reads better.
+  const timeline = dated.length >= 3 && maxY > minY;
+
+  const kicker = (
+    <span className="mono" style={{ fontSize:10, letterSpacing:'0.24em', color:c.textSubtle, textTransform:'uppercase' }}>
+      {lang==='ru'?'АЛЬБОМЫ':'ALBUMS'} · {albums.length}{timeline ? ` · ${minY}–${maxY}` : ''}
+    </span>
+  );
+
+  if (!timeline) {
+    return (
+      <div ref={wrapRef}>
+        <div style={{ marginBottom:16 }}>{kicker}</div>
+        <div style={{ display:'flex', flexWrap:'wrap', gap:GAP, rowGap:34 }}>
+          {albums.map(a => (
+            <AtlasAlbumCard key={a.title} album={a} artistName={artistName} isDark={isDark} lang={lang} onOpen={onOpen} width={CARD} />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // X positions proportional to year, clamped left→right so cards never collide.
+  const usable = Math.max(wrapW, albums.length * (CARD + GAP));
+  const reserve = undated.length * (CARD + GAP);
+  const axisW = Math.max(CARD, usable - CARD - reserve);
+  const xs = [];
+  dated.forEach((a, i) => {
+    let x = ((a.year - minY) / (maxY - minY)) * axisW;
+    if (i > 0) x = Math.max(x, xs[i-1] + CARD + GAP);
+    xs.push(x);
+  });
+  let cursor = xs.length ? xs[xs.length-1] + CARD + GAP : 0;
+  undated.forEach(() => { xs.push(cursor); cursor += CARD + GAP; });
+  const ordered = [...dated, ...undated];
+  const totalW = Math.max(usable, xs[xs.length-1] + CARD);
+  const axisY = CARD + CAP_H;
+  const tickColor = isDark ? 'rgba(187,168,255,0.5)' : 'rgba(110,80,220,0.45)';
+
+  return (
+    <div ref={wrapRef}>
+      <div style={{ marginBottom:16 }}>{kicker}</div>
+      <div className="atlas-shelf" style={{ overflowX:'auto', paddingBottom:6 }}>
+        <div style={{ position:'relative', width:totalW, height:axisY + AXIS_H }}>
+          {ordered.map((a, i) => (
+            <div key={a.title} style={{ position:'absolute', left:xs[i], top:0 }}>
+              <AtlasAlbumCard album={a} artistName={artistName} isDark={isDark} lang={lang} onOpen={onOpen} width={CARD} />
+            </div>
+          ))}
+          {/* time axis + ticks */}
+          <div aria-hidden="true" style={{
+            position:'absolute', left:0, width:totalW, top:axisY + 10, height:1,
+            background: isDark
+              ? 'linear-gradient(90deg, rgba(187,168,255,0.45), rgba(187,168,255,0.08))'
+              : 'linear-gradient(90deg, rgba(110,80,220,0.4), rgba(110,80,220,0.06))',
+          }} />
+          {ordered.map((a, i) => (
+            <Fragment key={`tick-${a.title}`}>
+              <span aria-hidden="true" style={{ position:'absolute', left:xs[i] + CARD/2, top:axisY + 5, width:1, height:6, background:tickColor }} />
+              <span className="mono" style={{
+                position:'absolute', left:xs[i] + CARD/2, top:axisY + 16, transform:'translateX(-50%)',
+                fontSize:9.5, letterSpacing:'0.14em', color:c.textMuted,
+              }}>{a.year || '—'}</span>
+            </Fragment>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ArtistAtlasSection({
   isDark, lang, artistSlug, visible, onNav,
   onPlayTrack, navigateToArtist,
 }) {
   const c = useColors(isDark);
   const [data, setData] = useState(null);
-  const [status, setStatus] = useState('idle');  // 'idle'|'loading'|'loaded'|'empty'|'error'
-  const [tab, setTab] = useState('discog');      // 'bio'|'discog'|'facts'
+  const [status, setStatus] = useState('idle');  // 'idle'|'loading'|'loaded'|'error'
+  const [albumModal, setAlbumModal] = useState(null);  // { album, originRect }
+  const [enterEpoch, setEnterEpoch] = useState(0);
+  const [condensed, setCondensed] = useState(false);
+  const [activeId, setActiveId] = useState(null);
+  const scrollRef = useRef(null);
+  const heroRef = useRef(null);
+  const bioRef = useRef(null);
+  const factsRef = useRef(null);
+  const albumsRef = useRef(null);
+
+  // Replay the .lib-rise cascade on each visit (section stays mounted, see App).
+  useEffect(() => { if (visible !== false) setEnterEpoch(e => e + 1); }, [visible]);
 
   useEffect(() => {
     if (!visible || !artistSlug) return;
     let cancelled = false;
     setStatus('loading');
+    setAlbumModal(null);
+    setCondensed(false);
+    setActiveId(null);
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
     apiFetch(`/artists/${encodeURIComponent(artistSlug)}?lang=${encodeURIComponent(lang)}`)
-      .then(res => {
-        if (cancelled) return;
-        setData(res);
-        setStatus('loaded');
-        // Default tab: Bio if available, else Discog
-        setTab(res.bio ? 'bio' : 'discog');
-      })
+      .then(res => { if (!cancelled) { setData(res); setStatus('loaded'); } })
       .catch(() => { if (!cancelled) setStatus('error'); });
     return () => { cancelled = true; };
   }, [visible, artistSlug, lang]);
 
-  if (!artistSlug) {
-    return (
-      <div style={{ padding: 40, color: c.textMuted }}>
-        {lang === 'ru' ? 'Артист не выбран' : 'No artist selected'}
-      </div>
-    );
-  }
-  if (status === 'loading' || status === 'idle') {
-    return <div style={{ padding: 40, color: c.textMuted }}>{lang==='ru'?'Загрузка…':'Loading…'}</div>;
-  }
-  if (status === 'error' || !data) {
-    return <div style={{ padding: 40, color: c.textMuted }}>{lang==='ru'?'Не удалось загрузить артиста.':'Could not load artist.'}</div>;
-  }
+  // Scroll plumbing: condensed dock past the hero + active anchor highlight.
+  const handleScroll = () => {
+    const sc = scrollRef.current;
+    if (!sc) return;
+    const heroH = heroRef.current ? heroRef.current.offsetHeight : 340;
+    setCondensed(sc.scrollTop > heroH - 70);
+    const probe = sc.scrollTop + 170;
+    let act = null;
+    [['bio', bioRef], ['facts', factsRef], ['albums', albumsRef]].forEach(([id, r]) => {
+      if (r.current && r.current.offsetTop <= probe) act = id;
+    });
+    if (act) setActiveId(act);
+  };
 
-  const heroCover = data.albums[0]?.cover_art_path || null;
-  const contextBits = [
-    data.genre,
-    data.album_count ? `${data.album_count} ${lang==='ru'?'альбом(ов)':'album(s)'}` : null,
-    data.decade_range,
+  const shell = (msg) => (
+    <div style={{ flex:1, display:'grid', placeItems:'center', background:c.bg }}>
+      <span className="mono" style={{ fontSize:11, letterSpacing:'0.24em', color:c.textSubtle, textTransform:'uppercase' }}>{msg}</span>
+    </div>
+  );
+  if (!artistSlug) return shell(lang==='ru'?'Артист не выбран':'No artist selected');
+  if (status === 'loading' || status === 'idle') return shell(lang==='ru'?'Загрузка…':'Loading…');
+  if (status === 'error' || !data) return shell(lang==='ru'?'Не удалось загрузить артиста':'Could not load artist');
+
+  const sectionsCfg = [
+    data.bio ? { id:'bio', label: lang==='ru'?'БИО':'BIO' } : null,
+    (data.facts || []).length ? { id:'facts', label: lang==='ru'?'ФАКТЫ':'FACTS' } : null,
+    (data.albums || []).length ? { id:'albums', label: lang==='ru'?'АЛЬБОМЫ':'ALBUMS' } : null,
   ].filter(Boolean);
+  const sectionRefMap = { bio: bioRef, facts: factsRef, albums: albumsRef };
+  const prefersReduced = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  const scrollToSection = (id) => {
+    const el = sectionRefMap[id] && sectionRefMap[id].current;
+    if (el) el.scrollIntoView({ behavior: prefersReduced ? 'auto' : 'smooth', block:'start' });
+  };
+  const effectiveActive = activeId || (sectionsCfg[0] && sectionsCfg[0].id) || null;
 
   // ▶ Spin from here — autoplay queue seeded by first track of first album
   const onSpin = () => {
-    const seed = data.albums[0]?.tracks[0];
+    const seed = data.albums[0] && data.albums[0].tracks[0];
     if (!seed || !onPlayTrack) return;
     onPlayTrack(
       { track: seed, score: 1, matched_on: 'lyrics' },
@@ -11343,199 +11822,95 @@ function ArtistAtlasSection({
     onNav?.('player');
   };
 
-  const tabsCfg = [
-    data.bio && { id: 'bio',    label: lang==='ru'?'БИО':'BIO' },
-    { id: 'discog', label: lang==='ru'?'ДИСКОГРАФИЯ':'DISCOGRAPHY' },
-    { id: 'facts',  label: `${lang==='ru'?'ФАКТЫ':'FACTS'}·${data.facts.length}` },
-  ].filter(Boolean);
+  // ArtistAlbum → AlbumSummary-ish shape the shared AlbumModal expects
+  // (note: modal tracks use `duration`, aggregate tracks use `duration_sec`).
+  const toModalAlbum = (album) => ({
+    album_title: album.title,
+    primary_artist: data.name,
+    primary_artist_slug: data.slug,
+    cover_art_path: album.cover_art_path,
+    year: album.year,
+    track_count: album.tracks.length,
+    duration_seconds: album.tracks.reduce((s, t) => s + (t.duration_sec || 0), 0),
+    tracks: album.tracks.map(t => ({
+      track_id: t.track_id, title: t.title, artist: t.artist,
+      duration: t.duration_sec, year: t.year, cover_art_path: t.cover_art_path,
+    })),
+  });
+  const openAlbum = (album, rect) => setAlbumModal({ album: toModalAlbum(album), originRect: rect });
 
   return (
-    <div style={{
-      flex:1, display:'flex', flexDirection:'column', overflow:'auto',
-      padding:'24px 36px 48px',
-    }}>
-      {/* Breadcrumb */}
-      <div className="mono" style={{
-        fontSize:10, letterSpacing:'0.22em',
-        color:c.textSubtle, opacity:0.55, marginBottom:18,
-        textTransform:'uppercase',
+    <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', position:'relative', background:c.bg }}>
+      {/* Condensed glass dock — fades in once the hero scrolls away */}
+      <div style={{
+        position:'absolute', top:12, left:26, right:26, zIndex:40,
+        display:'flex', alignItems:'center', gap:16, padding:'8px 12px 8px 18px', borderRadius:14,
+        ...atlasGlass(isDark),
+        opacity: condensed ? 1 : 0,
+        transform: condensed ? 'translateY(0)' : 'translateY(-14px)',
+        pointerEvents: condensed ? 'auto' : 'none',
+        transition:'opacity .28s ease, transform .28s ease',
       }}>
-        <span
-          style={{ cursor:'pointer' }}
-          onClick={() => onNav?.('library')}
-        >{lang==='ru'?'БИБЛИОТЕКА':'LIBRARY'}</span>
-        {' / '}
-        <span>{lang==='ru'?'АРТИСТЫ':'ARTISTS'}</span>
-        {' / '}
-        <span style={{ color:c.text, opacity:1 }}>{data.name.toUpperCase()}</span>
+        <span className="serif" style={{
+          fontSize:17, color:c.text, letterSpacing:'-0.01em',
+          whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', minWidth:0,
+        }}>{data.name}</span>
+        <div style={{ flex:1 }} />
+        <AtlasAnchorPills sections={sectionsCfg} activeId={effectiveActive} onAnchor={scrollToSection} isDark={isDark} compact />
+        <AtlasSpinButton onSpin={onSpin} lang={lang} compact />
       </div>
 
-      {/* Hero row */}
-      <div style={{ display:'flex', gap:24, alignItems:'flex-start', marginBottom:28 }}>
-        <div style={{ flexShrink:0 }}>
-          <AlbumCover
-            title={data.name} artist=""
-            size={138} isDark={isDark}
-            coverPath={heroCover} radius={14}
-          />
-        </div>
-        <div style={{ flex:1, minWidth:0 }}>
-          <h1 className="serif" style={{
-            fontSize:'clamp(32px, 3.4vw, 44px)', fontWeight:300, lineHeight:1.05,
-            color:c.text, letterSpacing:'-0.025em', margin:0,
-          }}>
-            {data.name}
-          </h1>
-          {contextBits.length > 0 && (
-            <div className="mono" style={{
-              marginTop:10, fontSize:11, letterSpacing:'0.18em',
-              color:c.textMuted, textTransform:'uppercase',
+      <div ref={scrollRef} onScroll={handleScroll} style={{ flex:1, overflowY:'auto', position:'relative' }}>
+        <div key={`atlas-${enterEpoch}`}>
+          <AtlasHero data={data} isDark={isDark} lang={lang} onNav={onNav} heroRef={heroRef} />
+
+          {/* Floating glass dock overlapping the hero's bottom edge */}
+          <div className="lib-rise" style={{ maxWidth:1120, margin:'0 auto', padding:'0 32px', position:'relative', zIndex:6 }}>
+            <div style={{
+              marginTop:-34, borderRadius:16, padding:'10px 14px',
+              display:'flex', alignItems:'center', justifyContent:'space-between', gap:14,
+              ...atlasGlass(isDark),
             }}>
-              {contextBits.join(' · ')}
+              <AtlasAnchorPills sections={sectionsCfg} activeId={effectiveActive} onAnchor={scrollToSection} isDark={isDark} />
+              <AtlasSpinButton onSpin={onSpin} lang={lang} />
             </div>
-          )}
-          <button
-            onClick={onSpin}
-            style={{
-              marginTop:18, padding:'10px 18px', borderRadius:99,
-              background:`linear-gradient(135deg, oklch(67% 0.18 270), oklch(52% 0.22 285))`,
-              color:'#fff', fontSize:13, fontWeight:600, letterSpacing:'0.04em',
-              border:'1px solid oklch(50% 0.2 275 / 0.4)',
-              cursor:'pointer',
-              boxShadow:'0 4px 16px rgba(124,91,255,0.35)',
-            }}
-          >
-            ▶ {lang==='ru'?'Запустить отсюда':'Spin from here'}
-          </button>
-        </div>
-      </div>
+          </div>
 
-      {/* Tab pills */}
-      <div style={{ display:'flex', gap:6, marginBottom:18, borderBottom:`1px solid ${c.border}`, paddingBottom:10 }}>
-        {tabsCfg.map(t => {
-          const active = tab === t.id;
-          return (
-            <button
-              key={t.id}
-              onClick={() => setTab(t.id)}
-              className="mono"
-              style={{
-                padding:'6px 14px', borderRadius:99,
-                border:`1px solid ${active ? 'oklch(60% 0.18 270 / 0.5)' : c.border}`,
-                background: active ? 'oklch(60% 0.18 270 / 0.12)' : 'transparent',
-                color: active ? c.text : c.textMuted,
-                fontSize:10, letterSpacing:'0.18em', cursor:'pointer',
-                transition:'all 180ms ease',
-              }}
-            >{t.label}</button>
-          );
-        })}
-      </div>
-
-      {/* Tab content */}
-      {tab === 'bio' && data.bio && (
-        <div className="panel-v3" style={{
-          padding:'24px 28px', borderRadius:14,
-          background: isDark ? 'rgba(255,255,255,0.025)' : 'rgba(255,255,255,0.65)',
-          border:`1px solid ${c.border}`,
-        }}>
-          <div className="serif" style={{
-            fontSize:16, lineHeight:1.65, color:c.text, margin:0,
-            letterSpacing:'-0.005em',
-          }}><MarkdownText text={data.bio} /></div>
-          <button
-            onClick={() => setTab('facts')}
-            style={{
-              marginTop:16, background:'transparent', border:'none',
-              color:'oklch(70% 0.13 75)', cursor:'pointer',
-              fontSize:12, fontFamily:'inherit',
-            }}
-          >→ {lang==='ru'?'все факты':'all facts'}</button>
-        </div>
-      )}
-
-      {tab === 'discog' && (
-        <div style={{ display:'flex', flexDirection:'column', gap:20 }}>
-          {data.albums.map(album => (
-            <div key={album.title} style={{
-              display:'flex', gap:18, alignItems:'flex-start',
-              padding:'12px 0', borderBottom:`1px solid ${c.border}`,
-            }}>
-              <AlbumCover
-                title={album.title} artist={data.name}
-                size={138} isDark={isDark}
-                coverPath={album.cover_art_path} radius={10}
-              />
-              <div style={{ flex:1, minWidth:0 }}>
-                <div className="serif" style={{
-                  fontSize:20, fontWeight:500, color:c.text,
-                  letterSpacing:'-0.01em',
-                }}>{album.title}</div>
-                <div className="mono" style={{
-                  marginTop:4, fontSize:10, letterSpacing:'0.18em',
-                  color:c.textMuted, textTransform:'uppercase',
-                }}>
-                  {album.year || '—'} · {album.tracks.length} {lang==='ru'?'треков':'tracks'}
-                </div>
-                <div style={{ marginTop:10, display:'flex', flexDirection:'column', gap:4 }}>
-                  {album.tracks.map(t => (
-                    <div key={t.track_id}
-                      onClick={() => onPlayTrack?.({ track: t, score: 1, matched_on: 'lyrics' },
-                                                    album.tracks.map(x => ({ track: x, score:1, matched_on:'lyrics' })))}
-                      style={{
-                        display:'flex', alignItems:'center', gap:10,
-                        padding:'6px 10px', borderRadius:6,
-                        cursor:'pointer', fontSize:13, color:c.text,
-                      }}
-                      onMouseEnter={e => e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)'}
-                      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-                    >
-                      <span style={{ color:c.textSubtle, minWidth:18, fontFamily:"'JetBrains Mono', monospace", fontSize:11 }}>▶</span>
-                      <span style={{ flex:1, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t.title}</span>
-                      {/* feat. mark — collaborators other than the page artist. Excludes by
-                          display name; an aliased page name (e.g. "Ye" vs "Kanye West") is a
-                          known cosmetic limitation (the aliased name may still appear here). */}
-                      {(t.artists?.length > 1) && (() => {
-                        const others = t.artists.filter(
-                          a => a.toLowerCase() !== (data.name || '').toLowerCase()
-                        );
-                        return others.length ? (
-                          <span className="mono" style={{
-                            fontSize:10, color:c.textSubtle, fontStyle:'italic',
-                            flexShrink:0, maxWidth:'45%', overflow:'hidden',
-                            textOverflow:'ellipsis', whiteSpace:'nowrap',
-                          }}>
-                            feat. {others.join(', ')}
-                          </span>
-                        ) : null;
-                      })()}
-                      <span className="mono" style={{ fontSize:10, color:c.textSubtle }}>
-                        {Math.floor((t.duration_sec || 0) / 60)}:{String(Math.floor((t.duration_sec||0) % 60)).padStart(2,'0')}
-                      </span>
-                    </div>
-                  ))}
-                </div>
+          <div style={{ maxWidth:1120, margin:'0 auto', padding:'34px 32px 110px', display:'flex', flexDirection:'column', gap:46 }}>
+            {data.bio && (
+              <section ref={bioRef} className="lib-rise" style={{ '--lib-d':'0.08s', scrollMarginTop:84 }}>
+                <AtlasBio bio={data.bio} isDark={isDark} lang={lang} />
+              </section>
+            )}
+            {(data.facts || []).length > 0 && (
+              <section ref={factsRef} className="lib-rise" style={{ '--lib-d':'0.16s', scrollMarginTop:84 }}>
+                <AtlasFactsShelf facts={data.facts} isDark={isDark} lang={lang} />
+              </section>
+            )}
+            {(data.albums || []).length > 0 && (
+              <section ref={albumsRef} className="lib-rise" style={{ '--lib-d':'0.24s', scrollMarginTop:84 }}>
+                <AtlasAlbumStrip albums={data.albums} artistName={data.name} isDark={isDark} lang={lang} onOpen={openAlbum} />
+              </section>
+            )}
+            {sectionsCfg.length === 0 && (
+              <div style={{ color:c.textMuted, fontSize:13 }}>
+                {lang==='ru' ? 'Пока пусто — обогатите библиотеку, чтобы здесь появились факты и альбомы.' : 'Nothing here yet — enrich your library to fill this page.'}
               </div>
-            </div>
-          ))}
+            )}
+          </div>
         </div>
-      )}
+      </div>
 
-      {tab === 'facts' && (
-        <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
-          {data.facts.length === 0 ? (
-            <div style={{ color:c.textMuted, fontSize:13 }}>
-              {lang==='ru'?'Факты появятся после обогащения библиотеки.':'No facts yet.'}
-            </div>
-          ) : data.facts.map((f, i) => (
-            <div key={i} className="panel-v3" style={{
-              padding:'14px 18px', borderRadius:10,
-              background: isDark ? 'rgba(255,255,255,0.025)' : 'rgba(255,255,255,0.55)',
-              border:`1px solid ${c.border}`,
-              fontSize:14, lineHeight:1.5, color:c.text,
-            }}>{f}</div>
-          ))}
-        </div>
+      {albumModal && (
+        <AlbumModal
+          album={albumModal.album}
+          originRect={albumModal.originRect}
+          onClose={() => setAlbumModal(null)}
+          onPlayTrack={onPlayTrack}
+          navigateToArtist={navigateToArtist}
+          isDark={isDark}
+          lang={lang}
+        />
       )}
     </div>
   );
