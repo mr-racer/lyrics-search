@@ -986,6 +986,44 @@ class MetadataDB:
             for r in rows
         ]
 
+    # Tables holding per-collection Qdrant point ids that re-indexing orphans.
+    _TRACK_REF_TABLES = ("track_reactions", "playback_events")
+    _PRUNE_DELETE_CHUNK = 500
+
+    @classmethod
+    def prune_orphaned_tracks(
+        cls, collection_name: str, live_ids: set[str]
+    ) -> dict[str, int]:
+        """Delete rows whose track_id is no longer a live Qdrant point id.
+
+        Re-indexing drops + recreates the collection with fresh ``uuid4`` point
+        ids, leaving the old ids dangling in ``track_reactions`` /
+        ``playback_events``. Those orphans surface in «Поток» as empty-payload
+        «—» tracks that 404 on /stream and /lyrics. Called after a fit completes
+        with the collection's current id set. Returns ``{table: rows_deleted}``.
+        """
+        conn = cls._connect()
+        removed: dict[str, int] = {}
+        for table in cls._TRACK_REF_TABLES:
+            rows = conn.execute(
+                f"SELECT DISTINCT track_id FROM {table} WHERE collection_name = ?",
+                (collection_name,),
+            ).fetchall()
+            orphans = [r[0] for r in rows if r[0] not in live_ids]
+            deleted = 0
+            for i in range(0, len(orphans), cls._PRUNE_DELETE_CHUNK):
+                batch = orphans[i: i + cls._PRUNE_DELETE_CHUNK]
+                placeholders = ",".join("?" * len(batch))
+                cur = conn.execute(
+                    f"DELETE FROM {table} WHERE collection_name = ? "
+                    f"AND track_id IN ({placeholders})",
+                    (collection_name, *batch),
+                )
+                deleted += cur.rowcount
+            removed[table] = deleted
+        conn.commit()
+        return removed
+
     @classmethod
     def get_reactions_for_tracks(
         cls, collection_name: str, track_ids: list[str]

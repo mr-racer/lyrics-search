@@ -533,7 +533,40 @@ class IndexingService:
         # Indexing drops + recreates the collection, so this batch IS the whole
         # collection — its mean/std are the collection's normalisation stats.
         self._persist_axis_norm_stats(sonic_axes_map)
+
+        # Fresh uuid4 point ids orphan the old reactions/playback events in
+        # SQLite — drop those so «Поток» stops surfacing empty «—» 404 tracks.
+        self._prune_orphaned_track_refs()
         logger.info("[IndexingService] Indexing complete: %d tracks", total)
+
+    def _prune_orphaned_track_refs(self) -> None:
+        """Drop SQLite reactions/events pointing at now-deleted point ids.
+
+        Best-effort: a re-index already succeeded by the time this runs, so a
+        prune failure must never fail the index — it only leaves stale rows the
+        stream's per-pool resolve guard still filters out.
+        """
+        coll = str(self.engine.collection_name)
+        client = self.engine.qdrant_client
+        try:
+            live_ids: set[str] = set()
+            offset = None
+            while True:
+                batch, offset = client.scroll(
+                    collection_name=coll, limit=1000,
+                    with_payload=False, with_vectors=False, offset=offset,
+                )
+                live_ids.update(str(p.id) for p in batch)
+                if offset is None or not batch:
+                    break
+            removed = MetadataDB.prune_orphaned_tracks(coll, live_ids)
+            if any(removed.values()):
+                logger.info(
+                    "[IndexingService] pruned orphaned track refs in %s: %s",
+                    coll, removed,
+                )
+        except Exception:
+            logger.exception("[IndexingService] orphan prune failed — non-fatal")
 
     def _compute_sonic_axes(self, clap_map: dict) -> dict:
         """Map ``(artist, title) → {axis: raw_score}`` for every CLAP-encoded track.

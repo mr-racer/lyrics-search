@@ -955,9 +955,14 @@ def next_chunk(
             excluded=set(exclude_ids or []) | session_played,
         )
         _, liked_payloads = _retrieve_track_data(qdrant_client, collection_name, sampled)
+        # Drop liked ids that no longer resolve in Qdrant. Likes live in SQLite
+        # but re-indexing mints fresh point ids, orphaning old reactions; an
+        # unresolved id would otherwise ship as an empty-payload «—» track that
+        # 404s on /stream and /lyrics. Pools A/B are immune (built from Qdrant).
         liked_cands = [
-            StreamCandidate(track_id=t, payload=liked_payloads.get(t, {}), pool="liked")
+            StreamCandidate(track_id=t, payload=liked_payloads[t], pool="liked")
             for t in sampled
+            if t in liked_payloads
         ]
 
     # 8. Score + assemble.
