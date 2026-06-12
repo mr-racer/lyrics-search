@@ -274,6 +274,22 @@ class TestAssembleChunk:
         assert len(out) == 3
         assert all(c.pool == "liked" for c in out)
 
+    def test_slider_zero_strict_no_liked_topup(self):
+        """Slider at the «новое» extreme is a hard promise: a dry main pool
+        returns a short chunk instead of leaking liked tracks beyond quota.
+        In small libraries main dries constantly (liked + session-played are
+        excluded), so without this the slider's zero position is a no-op."""
+        liked = [_cand(f"l{i}", artist=f"a{i}", pool="liked") for i in range(5)]
+        out = assemble_chunk([], liked, n=3, liked_share=0.0, recent_artists=[])
+        assert out == []
+
+    def test_slider_zero_strict_partial_main(self):
+        """Same promise when main has SOME candidates: serve them, then stop."""
+        main = [_cand("m0", artist="a0", cos=0.5)]
+        liked = [_cand(f"l{i}", artist=f"la{i}", pool="liked") for i in range(5)]
+        out = assemble_chunk(main, liked, n=3, liked_share=0.0, recent_artists=[])
+        assert [c.pool for c in out] == ["anchor"]
+
     def test_both_dry_returns_short_chunk(self):
         out = assemble_chunk([], [], n=3, liked_share=0.5, recent_artists=[])
         assert out == []

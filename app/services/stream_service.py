@@ -721,7 +721,11 @@ def assemble_chunk(
     Interleaving rules: ≤2 liked подряд, ≤2 одного артиста подряд (the artist
     window seeds from the session's last plays). Artist-repeat soft penalty
     (last ARTIST_REPEAT_WINDOW tracks) is applied positionally here. When one
-    side runs dry the other tops up — недобор хуже мягкого нарушения квоты.
+    side runs dry the other tops up — недобор хуже мягкого нарушения квоты —
+    EXCEPT at liked_share == 0: the slider's «новое» extreme is a hard promise,
+    so a dry main pool yields a short chunk rather than liked tracks beyond
+    quota (in small libraries main dries constantly — liked + session-played
+    are excluded — and the topup would make the zero position a no-op).
     """
     liked_quota = max(0, min(n, round(n * liked_share)))
     main_sorted = sorted(main, key=lambda c: c.score, reverse=True)
@@ -776,7 +780,9 @@ def assemble_chunk(
             c = _pick(main_sorted, dynamic_score=True)
             if c is not None:
                 consecutive_liked = 0
-        if c is None and liked_queue:  # main dry — topup from liked beyond quota
+        if c is None and liked_queue and liked_share > 0:
+            # main dry — topup from liked beyond quota, unless the slider sits
+            # at the strict-«новое» extreme
             c = _pick(liked_queue, dynamic_score=False)
             if c is not None:
                 consecutive_liked += 1

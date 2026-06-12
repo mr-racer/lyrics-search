@@ -246,7 +246,7 @@ class LibraryService:
     async def index_folder(
         self,
         folder_path: str,
-        collection_name: str = "music_explorer",
+        collection_name: str,
         better_lyrics_quality: bool = False,
         text_model: Optional[str] = None,
         enhance_by_musicbrainz: bool = False,
@@ -255,6 +255,13 @@ class LibraryService:
         """
         Index all audio files in folder with progress tracking.
         Returns dict with job_id for tracking progress via SSE.
+
+        ``collection_name`` is REQUIRED — no silent default. Every collection
+        this service creates must be the caller's derived account collection
+        (``acct_<user.id>``); a fallback name here once produced a library
+        invisible to every derived route (playback history, stream, profile
+        all read ``acct_*`` while the music sat in the default-named
+        collection).
 
         ``account_id``: per-account indexing slot (Phase B). Defaults to
         ``"default"`` so callers that don't thread an identity through still
