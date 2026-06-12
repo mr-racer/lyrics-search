@@ -244,6 +244,226 @@ def test_fetch_audiodb_for_artist_handles_total_network_failure(isolated_db, tmp
     # No row written; next index will retry.
     assert MetadataDB.get_artist_audiodb("unreachable-artist", "test_col") is None
 
+# ---------------------------------------------------------------------------
+# Deezer fallback — artist image when AudioDB yields none
+# ---------------------------------------------------------------------------
+
+
+def _deezer_json_response(name="Kanye West", picture_xl="http://cdn.deezer.example/pic_xl.jpg"):
+    resp = MagicMock()
+    resp.json.return_value = {"data": [{"name": name, "picture_xl": picture_xl}], "total": 1}
+    resp.raise_for_status.return_value = None
+    return resp
+
+
+def _jpeg_response():
+    resp = MagicMock()
+    resp.content = b"\xff\xd8\xfffake_jpeg_bytes"
+    resp.raise_for_status.return_value = None
+    return resp
+
+
+def test_deezer_fallback_when_audiodb_misses(isolated_db, tmp_path, monkeypatch):
+    """AudioDB doesn't know the artist -> Deezer search by the same +slug fills thumb_path."""
+    monkeypatch.setattr("app.services.audiodb_service.ARTIST_COVERS_DIR", tmp_path)
+
+    audiodb_json = MagicMock()
+    audiodb_json.json.return_value = {"artists": None}
+    audiodb_json.raise_for_status.return_value = None
+    deezer_json = _deezer_json_response()
+    img_response = _jpeg_response()
+
+    captured = []
+
+    def fake_get(url, timeout=None):
+        captured.append(url)
+        if "search.php" in url:
+            return audiodb_json
+        if "api.deezer.com" in url:
+            return deezer_json
+        return img_response
+
+    with patch("app.services.audiodb_service.requests.get", side_effect=fake_get):
+        _run(fetch_audiodb_for_artist("Kanye West", "test_col"))
+
+    # Deezer queried with the lowercase+plus slug, not the display name
+    assert any("api.deezer.com/search/artist?q=kanye+west" in u for u in captured)
+    row = MetadataDB.get_artist_audiodb("kanye-west", "test_col")
+    assert row is not None
+    assert row["thumb_path"] and row["thumb_path"].startswith("/covers/artists/")
+    assert row["thumb_path"].endswith(".jpg")
+    assert row["audiodb_fetched_at"]  # still marked fetched — no re-fetch loop
+
+
+def test_deezer_fallback_when_audiodb_image_downloads_fail(isolated_db, tmp_path, monkeypatch):
+    """AudioDB found the artist but both image downloads fail -> Deezer fills thumb_path,
+    while AudioDB text fields are still persisted."""
+    monkeypatch.setattr("app.services.audiodb_service.ARTIST_COVERS_DIR", tmp_path)
+
+    audiodb_json = MagicMock()
+    audiodb_json.json.return_value = _audiodb_response()
+    audiodb_json.raise_for_status.return_value = None
+    deezer_json = _deezer_json_response()
+    img_response = _jpeg_response()
+
+    def fake_get(url, timeout=None):
+        if "search.php" in url:
+            return audiodb_json
+        if "audiodb.com" in url:  # cutout + thumb downloads
+            raise requests.ConnectionError("image host down")
+        if "api.deezer.com" in url:
+            return deezer_json
+        return img_response  # deezer picture_xl
+
+    with patch("app.services.audiodb_service.requests.get", side_effect=fake_get):
+        _run(fetch_audiodb_for_artist("Kanye West", "test_col"))
+
+    row = MetadataDB.get_artist_audiodb("kanye-west", "test_col")
+    assert row["audiodb_bio"] == "Bio in English."  # AudioDB text intact
+    assert row["cutout_path"] is None
+    assert row["thumb_path"] and row["thumb_path"].startswith("/covers/artists/")
+
+
+def test_deezer_skipped_when_audiodb_image_downloaded(isolated_db, tmp_path, monkeypatch):
+    """AudioDB gave an image and the download succeeded -> never knock on Deezer."""
+    monkeypatch.setattr("app.services.audiodb_service.ARTIST_COVERS_DIR", tmp_path)
+
+    audiodb_json = MagicMock()
+    audiodb_json.json.return_value = _audiodb_response()
+    audiodb_json.raise_for_status.return_value = None
+    img_response = MagicMock()
+    img_response.content = b"\x89PNG\r\n\x1a\nfake"
+    img_response.raise_for_status.return_value = None
+
+    captured = []
+
+    def fake_get(url, timeout=None):
+        captured.append(url)
+        return audiodb_json if "search.php" in url else img_response
+
+    with patch("app.services.audiodb_service.requests.get", side_effect=fake_get):
+        _run(fetch_audiodb_for_artist("Kanye West", "test_col"))
+
+    assert not any("deezer" in u for u in captured)
+
+
+def test_deezer_skipped_when_only_cutout_downloaded(isolated_db, tmp_path, monkeypatch):
+    """One successfully downloaded AudioDB image (cutout) is enough to skip Deezer."""
+    monkeypatch.setattr("app.services.audiodb_service.ARTIST_COVERS_DIR", tmp_path)
+
+    audiodb_json = MagicMock()
+    audiodb_json.json.return_value = _audiodb_response(strArtistThumb=None)
+    audiodb_json.raise_for_status.return_value = None
+    img_response = MagicMock()
+    img_response.content = b"\x89PNG\r\n\x1a\nfake"
+    img_response.raise_for_status.return_value = None
+
+    captured = []
+
+    def fake_get(url, timeout=None):
+        captured.append(url)
+        return audiodb_json if "search.php" in url else img_response
+
+    with patch("app.services.audiodb_service.requests.get", side_effect=fake_get):
+        _run(fetch_audiodb_for_artist("Kanye West", "test_col"))
+
+    assert not any("deezer" in u for u in captured)
+    row = MetadataDB.get_artist_audiodb("kanye-west", "test_col")
+    assert row["cutout_path"] is not None
+    assert row["thumb_path"] is None
+
+
+def test_deezer_fallback_rejects_name_mismatch(isolated_db, tmp_path, monkeypatch):
+    """First Deezer result name != pre-slugify query -> picture is NOT downloaded."""
+    monkeypatch.setattr("app.services.audiodb_service.ARTIST_COVERS_DIR", tmp_path)
+
+    audiodb_json = MagicMock()
+    audiodb_json.json.return_value = {"artists": None}
+    audiodb_json.raise_for_status.return_value = None
+    deezer_json = _deezer_json_response(name="Kanye East")
+
+    captured = []
+
+    def fake_get(url, timeout=None):
+        captured.append(url)
+        if "search.php" in url:
+            return audiodb_json
+        if "api.deezer.com" in url:
+            return deezer_json
+        raise AssertionError(f"unexpected download: {url}")
+
+    with patch("app.services.audiodb_service.requests.get", side_effect=fake_get):
+        _run(fetch_audiodb_for_artist("Kanye West", "test_col"))
+
+    assert not any("pic_xl" in u for u in captured)
+    row = MetadataDB.get_artist_audiodb("kanye-west", "test_col")
+    assert row is not None
+    assert row["thumb_path"] is None
+    assert row["audiodb_fetched_at"]
+
+
+def test_deezer_fallback_name_match_is_case_insensitive(isolated_db, tmp_path, monkeypatch):
+    """'KANYE WEST' from Deezer matches the query 'Kanye West'."""
+    monkeypatch.setattr("app.services.audiodb_service.ARTIST_COVERS_DIR", tmp_path)
+
+    audiodb_json = MagicMock()
+    audiodb_json.json.return_value = {"artists": None}
+    audiodb_json.raise_for_status.return_value = None
+    deezer_json = _deezer_json_response(name="KANYE WEST")
+    img_response = _jpeg_response()
+
+    def fake_get(url, timeout=None):
+        if "search.php" in url:
+            return audiodb_json
+        if "api.deezer.com" in url:
+            return deezer_json
+        return img_response
+
+    with patch("app.services.audiodb_service.requests.get", side_effect=fake_get):
+        _run(fetch_audiodb_for_artist("Kanye West", "test_col"))
+
+    row = MetadataDB.get_artist_audiodb("kanye-west", "test_col")
+    assert row["thumb_path"] is not None
+
+
+def test_deezer_fallback_survives_deezer_failure(isolated_db, tmp_path, monkeypatch):
+    """Deezer down / empty results -> row is still written (graceful, thumb stays None)."""
+    monkeypatch.setattr("app.services.audiodb_service.ARTIST_COVERS_DIR", tmp_path)
+
+    audiodb_json = MagicMock()
+    audiodb_json.json.return_value = {"artists": None}
+    audiodb_json.raise_for_status.return_value = None
+
+    def fake_get(url, timeout=None):
+        if "search.php" in url:
+            return audiodb_json
+        raise requests.ConnectionError("deezer down")
+
+    with patch("app.services.audiodb_service.requests.get", side_effect=fake_get):
+        with patch("app.services.audiodb_service.asyncio.sleep", return_value=None):
+            _run(fetch_audiodb_for_artist("Kanye West", "test_col"))
+
+    row = MetadataDB.get_artist_audiodb("kanye-west", "test_col")
+    assert row is not None
+    assert row["thumb_path"] is None
+    assert row["audiodb_fetched_at"]
+
+    # Empty result list is equally graceful
+    deezer_empty = MagicMock()
+    deezer_empty.json.return_value = {"data": [], "total": 0}
+    deezer_empty.raise_for_status.return_value = None
+
+    def fake_get2(url, timeout=None):
+        return audiodb_json if "search.php" in url else deezer_empty
+
+    with patch("app.services.audiodb_service.requests.get", side_effect=fake_get2):
+        _run(fetch_audiodb_for_artist("Other Band", "test_col"))
+
+    row2 = MetadataDB.get_artist_audiodb("other-band", "test_col")
+    assert row2 is not None
+    assert row2["thumb_path"] is None
+
+
 from app.services.audiodb_service import fetch_audiodb_for_artists
 
 

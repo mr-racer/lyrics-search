@@ -1,7 +1,9 @@
-"""AudioDB (theaudiodb.com) artist enrichment.
+"""AudioDB (theaudiodb.com) artist enrichment, with Deezer image fallback.
 
 Pulls bio + mood + country + label + 2 PNGs per artist during the FACTS stage
-of indexing. Mandatory: runs always, fails gracefully on network errors.
+of indexing. When AudioDB yields no downloadable image, falls back to the
+Deezer search API for a square artist picture (exact-name match required).
+Mandatory: runs always, fails gracefully on network errors.
 
 Sibling of artist_facts_service.py — same sequential-fetch-with-progress pattern.
 """
@@ -117,6 +119,33 @@ async def _download_image(url: str | None) -> str | None:
 
 
 AUDIODB_BASE_URL = "https://www.theaudiodb.com/api/v1/json/123/search.php"
+DEEZER_SEARCH_URL = "https://api.deezer.com/search/artist"
+
+
+async def _fetch_deezer_picture(canonical_artist: str) -> str | None:
+    """Deezer fallback for the artist image when AudioDB yields none.
+
+    Searches with the same lowercase+plus slug as AudioDB, but the FIRST
+    result's `name` must match the pre-slugify canonical name (case-insensitive)
+    — Deezer search is fuzzy, so without this check 'kanye+west' could return
+    a tribute act. On match downloads the square `picture_xl` into the shared
+    artists covers dir. Best-effort: any failure returns None.
+    """
+    url = f"{DEEZER_SEARCH_URL}?q={_audiodb_slug(canonical_artist)}"
+    data = await _http_get_json(url)
+    if not data:
+        return None
+    results = data.get("data") or []
+    if not results:
+        return None
+    name = (results[0].get("name") or "").strip()
+    if name.casefold() != canonical_artist.strip().casefold():
+        logger.info(
+            "[Deezer] name mismatch for %r: first result is %r — skipping",
+            canonical_artist, name,
+        )
+        return None
+    return await _download_image(results[0].get("picture_xl"))
 
 
 async def fetch_audiodb_for_artist(artist: str, collection_name: str) -> None:
@@ -125,6 +154,9 @@ async def fetch_audiodb_for_artist(artist: str, collection_name: str) -> None:
     Skip-if-already-fetched: examines audiodb_fetched_at, which is set on every
     persisted write (including empty 'artist not found' rows). Total-network-failure
     does NOT set the timestamp, so the next indexing run retries.
+
+    Deezer fallback: when AudioDB yields no downloadable image (artist unknown,
+    or both image downloads failed), picture_xl from Deezer fills thumb_path.
     """
     canonical = _canonical_artist_name(artist)
     slug = _slugify_artist(canonical)
@@ -141,18 +173,22 @@ async def fetch_audiodb_for_artist(artist: str, collection_name: str) -> None:
 
     artists_list = data.get("artists")
     if not artists_list:
-        # AudioDB knows this is a miss — mark fetched-but-empty so we don't re-fetch.
+        # AudioDB knows this is a miss — try Deezer for at least an image,
+        # then mark fetched-but-empty so we don't re-fetch.
+        deezer_thumb = await _fetch_deezer_picture(canonical)
         MetadataDB.upsert_artist_audiodb(
             slug=slug, collection_name=collection_name,
             audiodb_bio=None, mood=None,
             country_code=None, country=None, label=None,
-            cutout_path=None, thumb_path=None, audiodb_mbid=None,
+            cutout_path=None, thumb_path=deezer_thumb, audiodb_mbid=None,
         )
         return
 
     a = artists_list[0]
     cutout_path = await _download_image(a.get("strArtistCutout"))
     thumb_path = await _download_image(a.get("strArtistThumb"))
+    if not cutout_path and not thumb_path:
+        thumb_path = await _fetch_deezer_picture(canonical)
 
     MetadataDB.upsert_artist_audiodb(
         slug=slug,
