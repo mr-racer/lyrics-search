@@ -40,6 +40,101 @@
     input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:13px; height:13px; border-radius:50%; background:#fff; box-shadow:0 0 5px rgba(100,70,255,0.5); cursor:grab; transition:transform 0.15s; }
     input[type=range]::-webkit-slider-thumb:hover { transform:scale(1.3); }
 
+    /* ── Skeuomorphic slider (SkeRange) ───────────────────────────
+       A carved groove + a raised tactile knob. A transparent native
+       <input type=range> sits on top for drag / keyboard / a11y; the
+       visible fill + knob mirror its value. Theme-aware via CSS vars,
+       accent injected per-instance through --rng-accent. */
+    .ske-rng {
+      --rng-knob: 18px;
+      --rng-track-h: 6px;
+      --rng-groove: oklch(26% 0.015 280);
+      --rng-groove-hi: rgba(255,255,255,0.07);
+      --rng-knob-top: oklch(95% 0.008 280);
+      --rng-knob-bot: oklch(78% 0.02 280);
+      --rng-knob-ring: rgba(0,0,0,0.45);
+      position: relative; width: 100%; height: 22px; flex-shrink: 0;
+    }
+    .ske-rng-track {
+      position: absolute; left: 0; right: 0; top: 50%;
+      height: var(--rng-track-h); transform: translateY(-50%);
+      border-radius: 999px; background: var(--rng-groove);
+      box-shadow:
+        inset 0 2px 3px rgba(0,0,0,0.6),
+        inset 0 -1px 1px var(--rng-groove-hi),
+        0 1px 0 rgba(255,255,255,0.05);
+    }
+    .ske-rng-fill {
+      position: absolute; top: 50%; height: var(--rng-track-h);
+      transform: translateY(-50%); border-radius: 999px;
+      background: linear-gradient(180deg,
+        color-mix(in oklch, var(--rng-accent) 72%, white) 0%,
+        var(--rng-accent) 52%,
+        color-mix(in oklch, var(--rng-accent) 82%, black) 100%);
+      box-shadow:
+        inset 0 1px 1px rgba(255,255,255,0.5),
+        inset 0 -1px 1px rgba(0,0,0,0.25),
+        0 0 7px -1px var(--rng-accent);
+    }
+    .ske-rng-knob {
+      position: absolute; top: 50%; z-index: 2;
+      width: var(--rng-knob); height: var(--rng-knob); border-radius: 50%;
+      transform: translate(-50%, -50%); pointer-events: none;
+      background: radial-gradient(circle at 50% 30%, var(--rng-knob-top), var(--rng-knob-bot));
+      box-shadow:
+        inset 0 1px 1px rgba(255,255,255,0.75),
+        inset 0 -1.5px 2px rgba(0,0,0,0.3),
+        0 2px 4px rgba(0,0,0,0.45),
+        0 0 0 1px var(--rng-knob-ring),
+        0 0 8px -2px var(--rng-accent);
+      transition: transform 0.14s ease, box-shadow 0.16s ease;
+    }
+    .ske-rng-knob::after {
+      content: ''; position: absolute; left: 50%; top: 30%;
+      width: 38%; height: 30%; transform: translateX(-50%);
+      border-radius: 50%; background: rgba(255,255,255,0.55);
+      filter: blur(0.5px); pointer-events: none;
+    }
+    .ske-rng:hover .ske-rng-knob {
+      transform: translate(-50%, -50%) scale(1.12);
+      box-shadow:
+        inset 0 1px 1px rgba(255,255,255,0.8),
+        inset 0 -1.5px 2px rgba(0,0,0,0.3),
+        0 3px 7px rgba(0,0,0,0.5),
+        0 0 0 1px var(--rng-knob-ring),
+        0 0 12px -1px var(--rng-accent);
+    }
+    .ske-rng:active .ske-rng-knob { transform: translate(-50%, -50%) scale(0.97); }
+    .ske-rng-input {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      margin: 0; padding: 0; background: transparent; opacity: 0;
+      cursor: pointer; z-index: 3;
+    }
+    .ske-rng-input::-webkit-slider-thumb { -webkit-appearance: none; width: var(--rng-knob); height: var(--rng-knob); }
+    .ske-rng-input::-moz-range-thumb { width: var(--rng-knob); height: var(--rng-knob); border: none; }
+    /* Fixed-stop sliders: knob + fill glide on value change (snap feel). */
+    .ske-rng.is-animated .ske-rng-knob {
+      transition: transform 0.14s ease, box-shadow 0.16s ease,
+                  left 0.34s cubic-bezier(0.34, 1.4, 0.5, 1);
+    }
+    .ske-rng.is-animated .ske-rng-fill {
+      transition: width 0.34s cubic-bezier(0.34, 1.4, 0.5, 1),
+                  left 0.34s cubic-bezier(0.34, 1.4, 0.5, 1);
+    }
+    .ske-rng.is-disabled { opacity: 0.45; pointer-events: none; }
+    body[data-theme="light"] .ske-rng {
+      --rng-groove: oklch(82% 0.012 280);
+      --rng-groove-hi: rgba(255,255,255,0.7);
+      --rng-knob-top: oklch(99% 0.004 280);
+      --rng-knob-bot: oklch(88% 0.012 280);
+      --rng-knob-ring: rgba(40,30,60,0.22);
+    }
+    body[data-theme="light"] .ske-rng-track {
+      box-shadow:
+        inset 0 2px 3px rgba(40,30,60,0.28),
+        inset 0 -1px 1px rgba(255,255,255,0.8);
+    }
+
     /* ── Landing player queue item ────────────────────────────── */
     .queue-item { transition: background 0.15s ease; }
 
@@ -1774,6 +1869,12 @@ function setStoredAuth({ token, user }) {
     localStorage.setItem('musix_user_email', user.email || '');
     localStorage.setItem('musix_user_role',  user.role || '');
   }
+  // A successful auth ends any 401-kick state: reset the reload-loop guard
+  // and drop the legacy '#login' hash older builds left in the URL.
+  sessionStorage.removeItem('musix_auth_kick_ts');
+  if (window.location.hash === '#login') {
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+  }
 }
 
 function clearStoredAuth() {
@@ -1781,6 +1882,41 @@ function clearStoredAuth() {
   localStorage.removeItem('musix_user_id');
   localStorage.removeItem('musix_user_email');
   localStorage.removeItem('musix_user_role');
+  // Drop the cached stream token too — it must not survive a logout into
+  // the next account's session (module state, declared below).
+  _streamToken = '';
+  _streamTokenExpMs = 0;
+}
+
+// ─── Stream token — auth for <audio> URLs ───────────────────────────────────
+// Media elements can't send an Authorization header, so /stream URLs carry a
+// short-lived scope-limited JWT in ?st= (minted by POST /auth/stream-token).
+// Cached in module state; App refreshes it on mount + on an interval well
+// inside the server TTL, so buildStreamUrl can stay synchronous.
+let _streamToken = '';
+let _streamTokenExpMs = 0;
+
+async function refreshStreamToken() {
+  if (!getStoredToken()) return;            // not logged in yet — nothing to mint
+  try {
+    const data = await apiFetch('/auth/stream-token', { method: 'POST' });
+    _streamToken = data.token || '';
+    _streamTokenExpMs = Date.now() + (data.expires_in || 3600) * 1000;
+  } catch (e) {
+    console.warn('[stream-token] refresh failed', e);
+  }
+}
+
+function buildStreamUrl(trackId) {
+  // Self-heal: if the cached token is missing or in its last 5 minutes,
+  // kick off a background refresh. The CURRENT url may still 401 in the
+  // missing-token edge (first play racing the boot refresh) — the next
+  // track change picks up the fresh token.
+  if (!_streamToken || Date.now() > _streamTokenExpMs - 5 * 60 * 1000) {
+    refreshStreamToken();
+  }
+  const base = `${API}/search/tracks/${trackId}/stream`;
+  return _streamToken ? `${base}?st=${encodeURIComponent(_streamToken)}` : base;
 }
 
 // ─── Phase D — one-time localStorage migration ──────────────────────────────
@@ -1844,13 +1980,19 @@ function runCollectionLocalStorageMigration_d(userId) {
 // Soft-redirect on 401 — clear storage and force a full reload so the App
 // re-renders into the LoginScreen branch. window.location.reload is the
 // simplest "remount everything" lever and sidesteps stale React state.
+//
+// Reload-loop guard: a timestamp in sessionStorage, NOT the URL hash. The old
+// hash check ('#login') had a trap: nothing cleared the hash after a
+// successful login, so the NEXT 401 cleared the token WITHOUT reloading —
+// the app stayed mounted token-less and every request 401'd with
+// "missing or invalid Authorization header" until a manual reload.
+const AUTH_KICK_GUARD_MS = 5000;
 function _onAuthFailure() {
   clearStoredAuth();
-  // Avoid reload-loops if we're already on the login screen.
-  if (window.location.hash !== '#login') {
-    window.location.hash = '#login';
-    window.location.reload();
-  }
+  const last = parseInt(sessionStorage.getItem('musix_auth_kick_ts') || '0', 10);
+  if (Date.now() - last < AUTH_KICK_GUARD_MS) return;  // just kicked — don't loop
+  sessionStorage.setItem('musix_auth_kick_ts', String(Date.now()));
+  window.location.reload();
 }
 
 async function apiFetch(path, opts = {}) {
@@ -1918,23 +2060,22 @@ async function postPlaybackEvent({ trackId, collectionName, playedSec, totalDur,
     // listen (like/dislike/skip/pause/seek)? null = unknown (legacy semantics).
     interacted: interacted ?? null,
   });
-  // Send the JSON payload with a CORS-safelisted content-type (text/plain) so
-  // the request stays "simple" and skips the preflight. An application/json
-  // beacon triggers a preflight that navigator.sendBeacon can't satisfy →
-  // cross-origin playback events were silently dropped (CORS error). The
-  // backend parses the body regardless of content-type.
+  // fetch + keepalive instead of navigator.sendBeacon: /playback/events sits
+  // behind the JWT gate and beacons CANNOT carry an Authorization header —
+  // every beacon 401'd and ALL listen history was silently dropped. keepalive
+  // gives the same survives-unload semantics while allowing headers.
+  const token = getStoredToken();
+  if (!token) return;  // logged out — the server would only 401 it anyway
   try {
-    if (navigator.sendBeacon) {
-      const blob = new Blob([body], { type: 'text/plain;charset=UTF-8' });
-      navigator.sendBeacon(`${API}/playback/events`, blob);
-    } else {
-      await fetch(`${API}/playback/events`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
-        body,
-        keepalive: true,
-      });
-    }
+    await fetch(`${API}/playback/events`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body,
+      keepalive: true,
+    });
   } catch (e) {
     console.warn('[playback] failed to post event', e);
   }
@@ -2706,6 +2847,52 @@ function Spinner({ size = 16, color }) {
   );
 }
 
+// ─── SkeRange ───────────────────────────────────────────────────────────────
+// Skeuomorphic slider: a carved groove + a raised knob. The native <input>
+// rides transparently on top so drag / track-click / keyboard / a11y all work
+// for free, while the visible fill + knob mirror its value. Knob & fill are
+// inset by the knob radius so the knob never spills past the rail.
+//   • accent   — per-instance fill/glow colour (purple, gold, …)
+//   • animated — knob & fill glide between stops (use for fixed-value sliders;
+//                leave off for continuous drags so the knob tracks the finger)
+//   • bipolar  — fill grows out from the centre (zero) instead of the left
+const SKE_RNG_KNOB = 18; // px — keep in sync with --rng-knob
+function SkeRange({ value, min = 0, max = 100, step = 1, onChange,
+                    accent = 'oklch(62% 0.2 275)', animated = false,
+                    bipolar = false, disabled = false, ariaLabel, style }) {
+  const range = (max - min) || 1;
+  const clamp = p => Math.max(0, Math.min(100, p));
+  const pct = clamp(((value - min) / range) * 100);
+  // Centre position of the knob at fraction p (inset by the knob radius).
+  const center = p => `calc(${SKE_RNG_KNOB / 2}px + (100% - ${SKE_RNG_KNOB}px) * ${p / 100})`;
+
+  let fillStyle;
+  if (bipolar) {
+    const zero = clamp(((0 - min) / range) * 100);
+    const lo = Math.min(pct, zero);
+    const hi = Math.max(pct, zero);
+    fillStyle = { left: center(lo), width: `calc((100% - ${SKE_RNG_KNOB}px) * ${(hi - lo) / 100})` };
+  } else {
+    fillStyle = { left: 0, width: center(pct) };
+  }
+
+  const cls = 'ske-rng'
+    + (animated ? ' is-animated' : '')
+    + (disabled ? ' is-disabled' : '');
+
+  return (
+    <div className={cls} style={{ '--rng-accent': accent, ...style }}>
+      <div className="ske-rng-track" />
+      <div className="ske-rng-fill" style={fillStyle} />
+      <div className="ske-rng-knob" style={{ left: center(pct) }} />
+      <input type="range" className="ske-rng-input"
+        min={min} max={max} step={step} value={value} disabled={disabled}
+        onChange={e => onChange(Number(e.target.value))}
+        aria-label={ariaLabel} />
+    </div>
+  );
+}
+
 // ─── AlbumCover ───────────────────────────────────────────────────────────────
 function AlbumCover({ title='', artist='', size=44, isDark, coverPath, radius, fluid }) {
   const hue = ((title.charCodeAt(0)||65)*37 + (artist.charCodeAt(0)||65)*17) % 360;
@@ -3267,10 +3454,10 @@ function ForYouHero({ isDark, lang, onStartStream, navigateToArtist }) {
               <span className="mono" style={{ fontSize:10, letterSpacing:'.18em', color:c.textSubtle, flex:'none' }}>
                 {lang==='ru'?'ЛЮБИМЫЕ':'LIKED'} {Math.round(likedShare*100)}%
               </span>
-              <input type="range" min="0" max="100" step="10" value={Math.round(likedShare*100)}
-                     onChange={e => setShare(Number(e.target.value) / 100)}
-                     style={{ flex:1, accentColor:'oklch(62% 0.2 275)', height:3, cursor:'pointer' }}
-                     aria-label={lang==='ru'?'Доля любимых треков в потоке':'Share of liked tracks in the stream'} />
+              <SkeRange min={0} max={100} step={10} value={Math.round(likedShare*100)}
+                     onChange={v => setShare(v / 100)}
+                     accent="oklch(62% 0.2 275)" style={{ flex:1 }}
+                     ariaLabel={lang==='ru'?'Доля любимых треков в потоке':'Share of liked tracks in the stream'} />
               <span className="mono" style={{ fontSize:10, letterSpacing:'.18em', color:c.textSubtle, flex:'none' }}>
                 {lang==='ru'?'НОВОЕ':'NEW'}
               </span>
@@ -3838,7 +4025,7 @@ function FloatingIconNav({ section, onNav, isDark, lang, onSettings, currentTrac
     <div className={isDark ? undefined : 'lg-light'} style={{
       width:'92px', minWidth:'92px', height:'100vh', display:'flex', flexDirection:'column',
       alignItems:'center', padding:'14px 0 16px',
-      background:'transparent', zIndex:10, flexShrink:0,
+      background:'transparent', zIndex:10, flexShrink:0, position:'relative',
     }}>
       {/* Brand mark — free-floating letterpress glyph, returns to the landing */}
       <button className="lg-logo" onClick={() => onNav('home')} title={lang==='ru'?'На главную':'Home'}
@@ -3857,8 +4044,14 @@ function FloatingIconNav({ section, onNav, isDark, lang, onSettings, currentTrac
       <div style={{ flex:1 }} />
 
       {/* Floating glass capsule with the four tabs + sliding blob indicator */}
+      {/* overflow:clip keeps the springy blob inside the glass capsule: its
+          overshoot bezier overshoots ~8-10% of travel, which on the long
+          player↔search hop (186px) pokes ~9px past the rounded end. Clipping to
+          the capsule's border-radius contains it — the droplet now squashes
+          against the glass wall on arrival instead of escaping, while the full
+          spring wobble is preserved. */}
       <nav className="lg-island" style={{ width:TAB_H + 12, borderRadius:(TAB_H + 12) / 2, padding:6,
-        position:'relative', display:'flex', flexDirection:'column', gap:TAB_GAP }}>
+        position:'relative', overflow:'clip', display:'flex', flexDirection:'column', gap:TAB_GAP }}>
         <div className="lg-blob" style={{
           width:TAB_H, height:TAB_H,
           transform:`translateY(${blobY}px) scale(${activeIdx >= 0 ? 1 : 0.4})`,
@@ -3881,8 +4074,12 @@ function FloatingIconNav({ section, onNav, isDark, lang, onSettings, currentTrac
       <div style={{ flex:1 }} />
 
       {/* Bottom glass island: settings + Now Playing pebble. The pebble slot
-          collapses (flies up + fades) on the player view to keep the rail clean. */}
+          collapses (flies up + fades) on the player view to keep the rail clean.
+          Pinned absolute at the bottom (out of flex flow) so the pebble's
+          collapse/expand changes only this island's own height — it grows
+          upward into empty space and never shifts the centered tab capsule. */}
       <div className="lg-island" style={{ width:60, borderRadius:30, padding:6,
+        position:'absolute', left:16, bottom:16,
         display:'flex', flexDirection:'column', alignItems:'center', gap:2 }}>
         <button onClick={onSettings} title={lang==='ru'?'Настройки':'Settings'}
           style={{ width:44, height:44, borderRadius:22, display:'grid', placeItems:'center', cursor:'pointer',
@@ -4745,7 +4942,11 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
   const isEmpty = results.length === 0;
 
   return (
-    <div className="panel-v3" style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', borderRadius:0, border:'none', boxShadow:'none' }}>
+    /* Section root stays flat c.bg (matching Library/Recommend) so it lines up
+       with the background behind the transparent floating nav. Using .panel-v3
+       here tinted the whole section with translucent glass, leaving a gray/black
+       tone seam at the rail's edge. Glass lives on the inner cards, not the shell. */
+    <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:c.bg }}>
       {/* ── Section Header with mode toggle ── */}
       <SectionHeader
         isDark={isDark} lang={lang}
@@ -5608,10 +5809,11 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream }
                       <span className="mono" style={{ fontSize:'10px', letterSpacing:'0.14em', color:c.textMuted, width:'104px', flex:'none' }}>
                         {RECSYS_AXIS_LABELS[a][lang==='ru'?'ru':'en']}
                       </span>
-                      <input type="range" min={-200} max={200} step={10}
+                      <SkeRange min={-200} max={200} step={10} bipolar
                         value={Math.round((targets[a] || 0) * 100)}
-                        onChange={e => setKnob(a, Number(e.target.value) / 100)}
-                        style={{ flex:1, accentColor:'oklch(72% 0.13 75)', height:3, cursor:'pointer' }} />
+                        onChange={v => setKnob(a, v / 100)}
+                        accent="oklch(72% 0.13 75)" style={{ flex:1 }}
+                        ariaLabel={RECSYS_AXIS_LABELS[a][lang==='ru'?'ru':'en']} />
                       <span className="mono" style={{ fontSize:'11px', color: knobsDirty ? c.amber : c.textSubtle, width:'38px', textAlign:'right' }}>
                         {(targets[a] || 0).toFixed(1)}
                       </span>
@@ -9493,7 +9695,17 @@ function useCoverColor(coverUrl) {
     if (cacheRef.current[coverUrl]) { setColor(cacheRef.current[coverUrl]); return; }
     let cancelled = false;
     const img = new Image();
-    img.crossOrigin = 'anonymous';
+    // Covers are served same-origin (/api/v1/covers/...), where canvas reads
+    // are always permitted. Do NOT set crossOrigin for them: the ambient layer
+    // loads the very same cover first as a no-cors <img>/background-image, and a
+    // later crossOrigin='anonymous' request for that URL can't reuse the cached
+    // no-cors response — the browser raises a CORS error, the canvas is tainted,
+    // getImageData throws, and the hook falls back to null → the purple default
+    // (hsl(270,...)). Opt into CORS only for genuinely remote covers, which need
+    // it (and degrade gracefully to the purple fallback if the host omits ACAO).
+    const isRemote = /^https?:\/\//i.test(coverUrl) &&
+      !coverUrl.startsWith(window.location.origin);
+    if (isRemote) img.crossOrigin = 'anonymous';
     img.onload = () => {
       if (cancelled) return;
       try {
@@ -10012,6 +10224,39 @@ function VolumeControl({ volume, onChange, isDark, lang }) {
   );
 }
 
+// ─── PlayerAmbient — full-bleed ambient wash behind the whole shell ──────────
+// Lifted out of PlayerSection so the blurred-cover wash spans the ENTIRE
+// viewport and flows *behind* the transparent floating nav, instead of
+// stopping at the section's left edge (which left a hard black strip under the
+// rail). PlayerSection renders transparent and sits on top of this layer.
+// Driven by App.playerTrack, which stays in lockstep with the player's current
+// track via handleTrackChange.
+function PlayerAmbient({ track, isDark }) {
+  const coverUrl = track?.cover_art_path
+    ? (track.cover_art_path.startsWith('http') ? track.cover_art_path : `${API}${track.cover_art_path}`)
+    : null;
+  const pBg    = isDark ? '#0B0E14' : '#f4f5fa';
+  const pBgEnd = isDark ? '#0F111A' : '#eaeaf0';
+  return (
+    <div style={{
+      position:'absolute', inset:0, zIndex:0, overflow:'hidden', pointerEvents:'none',
+      background:`linear-gradient(180deg, ${pBg} 0%, ${pBgEnd} 100%)`,
+    }}>
+      {coverUrl && (
+        <div className="player-bg-cover"
+          style={{ backgroundImage:`url(${coverUrl})`, opacity: isDark ? 0.48 : 0.26 }} />
+      )}
+      <div className="player-bg-shade" style={{
+        background: isDark
+          ? `linear-gradient(180deg, ${pBg}66 0%, ${pBg}b3 70%, ${pBg}e6 100%)`
+          : `linear-gradient(180deg, ${pBg}8c 0%, ${pBg}d0 100%)`,
+      }} />
+      <div className="player-bg-grain" />
+      <div className="player-bg-vignette" />
+    </div>
+  );
+}
+
 function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, onStreamSignal, audio, visible, lyricsMode, onToggleLyrics, onCloseLyrics, showToast, navigateToArtist, aiStatus, onAddToPlaylist }) {
   const [playlist, setPlaylist] = useState(initialPlaylist || []);
   const [currentIndex, setCurrentIndex] = useState(-1);
@@ -10261,7 +10506,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
     if (idx < 0) return;
     setCurrentIndex(idx);
     const track = initialPlaylist[idx].track;
-    const url = `${API}/search/tracks/${track.track_id}/stream`;
+    const url = buildStreamUrl(track.track_id);
     if (audio) {
       // Home unmounts every section, so the first nav away from home REMOUNTS
       // this section and re-runs this effect with the persisted playlist+track.
@@ -10281,7 +10526,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
   // Sync audio source when current track changes
   useEffect(() => {
     if (!currentTrack || !audio) return;
-    const url = `${API}/search/tracks/${currentTrack.track_id}/stream`;
+    const url = buildStreamUrl(currentTrack.track_id);
     audio.setSrc(url, { trackId: currentTrack.track_id });
     // Only auto-play when section is visible
     if (visible && isPlaying) setTimeout(() => audio.play(), 50);
@@ -10321,7 +10566,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
 
     setCurrentIndex(index);
     const track = playlist[index].track;
-    const url = `${API}/search/tracks/${track.track_id}/stream`;
+    const url = buildStreamUrl(track.track_id);
     if (audio) { audio.setSrc(url, { trackId: track.track_id }); setTimeout(() => audio.play(), 50); }
     fetchReaction(track.track_id);
     // Propagate the new track up so App.playerTrack stays in sync. Without
@@ -10456,38 +10701,18 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
     return `${m}:${sec.toString().padStart(2, '0')}`;
   };
 
-  const streamUrl = currentTrack
-    ? `${API}/search/tracks/${currentTrack.track_id}/stream`
-    : null;
-
   const progressPct = duration ? (currentTime / duration * 100) : 0;
 
   return (
     <div style={{
       flex:1, display:'flex', flexDirection:'column', overflow:'hidden',
-      background: `linear-gradient(180deg, ${pBg} 0%, ${pBgEnd} 100%)`,
+      // The ambient wash (blurred cover + shade + grain + vignette) now lives
+      // at the App shell level (PlayerAmbient) as a full-bleed layer so it
+      // flows behind the floating nav. This section stays transparent and rides
+      // on top of it — no more hard black strip under the rail.
+      background: 'transparent',
       position: 'relative',
     }}>
-      {/* Background stack: blurred current cover + shade for text contrast +
-          film grain + vignette. All pointer-events:none; content columns sit
-          above at z:1. The shade gradient keeps controls readable even over
-          very bright covers. */}
-      {coverUrl && (
-        <div
-          className="player-bg-cover"
-          style={{
-            backgroundImage: `url(${coverUrl})`,
-            opacity: isDark ? 0.48 : 0.26,
-          }}
-        />
-      )}
-      <div className="player-bg-shade" style={{
-        background: isDark
-          ? `linear-gradient(180deg, ${pBg}66 0%, ${pBg}b3 70%, ${pBg}e6 100%)`
-          : `linear-gradient(180deg, ${pBg}8c 0%, ${pBg}d0 100%)`,
-      }} />
-      <div className="player-bg-grain" />
-      <div className="player-bg-vignette" />
 
       {/* Main content area — top padding gives the cover breathing room from
           the (now collapsed) section header bar. */}
@@ -11567,6 +11792,14 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
 
   const c = useColors(isDark);
 
+  // Stream token for <audio> URLs: mint on mount, refresh every 20 min
+  // (server TTL is 60 min) so a long listening session never goes stale.
+  useEffect(() => {
+    refreshStreamToken();
+    const t = setInterval(refreshStreamToken, 20 * 60 * 1000);
+    return () => clearInterval(t);
+  }, []);
+
   // Boot
   useEffect(() => {
     apiFetch('/library/collections')
@@ -11803,7 +12036,12 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
   return (
     <div className={themeAnim ? 'theme-transition theme-fade' : ''} style={{
       display:'flex', width:'100vw', height:'100vh', overflow:'hidden', background: c.bg,
+      position: 'relative',
     }}>
+      {/* Full-bleed ambient wash for the player view — sits behind the
+          transparent floating nav AND the section content so the blurred-cover
+          glow no longer cuts off at the rail's edge. */}
+      {section === 'player' && <PlayerAmbient track={playerTrack} isDark={isDark} />}
       {section === 'home' ? (
         <LandingScreen
           isDark={isDark} lang={lang}
@@ -12053,11 +12291,15 @@ function SetupWizard({ onComplete }) {
   const probeLlm = async () => {
     setProbing(true); setProbe(null);
     try {
-      const res = await fetch(API + '/system/llm-status', {
-        method:'POST', headers:{ 'Content-Type':'application/json' },
+      // apiFetch (not raw fetch): /system/llm-status is behind the JWT gate.
+      // The wizard reaches this step AFTER /instance/setup stored the token,
+      // so the header is available — a raw fetch here returned the 401 body
+      // {"detail": "missing or invalid Authorization header"} as the "probe".
+      const res = await apiFetch('/system/llm-status', {
+        method:'POST',
         body: JSON.stringify({ base_url: llmUrl.trim() || null, model: llmModel.trim() || null }),
       });
-      setProbe(await res.json());
+      setProbe(res);
     } catch (e) {
       setProbe({ available:false, error:String(e.message || e) });
     } finally { setProbing(false); }
@@ -12361,10 +12603,10 @@ function SetupWizard({ onComplete }) {
       <div className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'10px', textAlign:'center' }}>
         {ru ? 'КАЧЕСТВО ПОИСКА' : 'SEARCH QUALITY'}
       </div>
-      <input type="range" min="0" max="2" step="1" value={tier}
-        onChange={e => setTier(Number(e.target.value))}
-        disabled={musicBusy}
-        style={{ width:'100%', accentColor:'oklch(62% 0.2 275)', cursor:'pointer' }} />
+      <SkeRange min={0} max={2} step={1} value={tier} animated
+        onChange={setTier} disabled={musicBusy}
+        accent="oklch(62% 0.2 275)" style={{ width:'100%' }}
+        ariaLabel={ru ? 'Качество поиска' : 'Search quality'} />
       <div style={{ display:'flex', marginTop:'6px' }}>
         {WIZ_TIERS.map((t, i) => (
           <div key={i} onClick={() => !musicBusy && setTier(i)}
