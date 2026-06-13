@@ -249,10 +249,18 @@ def create_app() -> FastAPI:
         )
 
     # Cover art endpoint — serve extracted album covers with long cache
-    @app.get("/api/v1/covers/{cover_file}", tags=["Covers"])
+    # :path converter so nested covers match too — artist avatars live under
+    # covers/artists/<hash>.<ext>. With the default {cover_file} (no slashes)
+    # those requests fell through to the SPA catch-all, were served index.html
+    # as text/html, and the browser blocked them (ERR_BLOCKED_BY_ORB).
+    @app.get("/api/v1/covers/{cover_file:path}", tags=["Covers"])
     async def serve_cover(cover_file: str):
-        """Serve an extracted album cover image."""
-        cover_path = COVERS_DIR / cover_file
+        """Serve an extracted album or artist cover image."""
+        # :path matches slashes, so guard against escaping COVERS_DIR.
+        covers_root = COVERS_DIR.resolve()
+        cover_path = (covers_root / cover_file).resolve()
+        if not cover_path.is_relative_to(covers_root):
+            raise HTTPException(status_code=404, detail="Cover not found")
         if not cover_path.exists() or not cover_path.is_file():
             raise HTTPException(status_code=404, detail="Cover not found")
 

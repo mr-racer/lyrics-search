@@ -187,3 +187,51 @@ async def get_track_reaction(
     )
 
 
+# ── Track lyrics (on-demand) ───────────────────────────────────────────────────
+
+@router.get("/tracks/{track_id}/lyrics")
+async def get_track_lyrics(
+    track_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Return a track's full lyrics by id.
+
+    The player fetches lyrics here on every track change so EVERY playback
+    source shows them — search hits carry `lyrics` inline, but autoplay-queue,
+    recently-played, liked and stream payloads do not. The lyrics live in the
+    Qdrant payload regardless, so one lookup covers all sources.
+    """
+    # Phase D-soft: derive collection from JWT user; ignore client-supplied value.
+    derived = derive_collection_for_user(current_user)
+
+    db = request.app.state.db_client
+    if db is None or db.qdrant is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    try:
+        result = db.qdrant.retrieve(
+            collection_name=derived,
+            ids=[track_id],
+            with_payload=True,
+            with_vectors=False,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Track not found: {e}")
+
+    if not result:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Track {track_id} not found in collection {derived}",
+        )
+
+    raw = (result[0].payload or {}).get("lyrics") or ""
+    return {"track_id": track_id, "lyrics": raw.strip() or None}
+
+
+# ── Legacy stub ────────────────────────────────────────────────────────────────
+
+@router.get("/{track_id}")
+async def get_track(track_id: str):
+    """Get track by ID."""
+    raise HTTPException(status_code=501, detail="Not yet implemented")
