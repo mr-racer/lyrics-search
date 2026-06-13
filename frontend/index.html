@@ -8585,6 +8585,245 @@ function MembersPanel({ lang, showToast }) {
 // quality but really wants a GPU. Names must match ModelRegistry.TEXT_MODELS.
 const HEAVY_TEXT_MODEL = 'Qwen/Qwen3-Embedding-0.6B';
 
+// ─── Instance AI settings (owner) ─────────────────────────────────────────────
+// Standalone editor for the server-side AI/embedding policy. Reads the
+// authoritative resolver view from GET /instance/settings (key arrives masked:
+// value=null + has_value), writes via PATCH. A blank API-key field leaves the
+// stored secret untouched. Reused by OwnerAdminDashboard; kept separate from
+// SettingsPanel's localStorage-coupled LLM editor (which still serves sharing).
+function InstanceAISettings({ isDark, lang, showToast }) {
+  const c = useColors(isDark);
+  const ru = lang === 'ru';
+  const [loaded, setLoaded] = useState(false);
+  const [loadErr, setLoadErr] = useState(null);
+  const [baseUrl, setBaseUrl] = useState('');
+  const [model, setModel] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [hasKey, setHasKey] = useState(false);
+  const [aiEnabled, setAiEnabled] = useState(false);
+  const [clapEnabled, setClapEnabled] = useState(true);
+  const [tier, setTier] = useState(0);   // index into WIZ_TIERS (Fast/Balanced/Quality)
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    apiFetch('/instance/settings').then(res => {
+      if (!alive) return;
+      const s = res.settings || {};
+      const sval = (k) => (s[k] && s[k].value != null ? String(s[k].value) : '');
+      const sbool = (k, dflt) => {
+        const v = s[k] && s[k].value;
+        if (v == null) return dflt;
+        return String(v).toLowerCase() === 'true';
+      };
+      setBaseUrl(sval('LLM_BASE_URL'));
+      setModel(sval('LLM_MODEL'));
+      setHasKey(!!(s['LLM_API_KEY'] && s['LLM_API_KEY'].has_value));
+      setAiEnabled(sbool('AI_ENABLED', false));
+      setClapEnabled(sbool('CLAP_ENABLED', true));
+      const em = sval('EMBED_MODEL');
+      const ti = WIZ_TIERS.findIndex(t => (t.model || '') === em);
+      setTier(ti >= 0 ? ti : 0);
+      setLoaded(true);
+    }).catch(e => { if (alive) { setLoadErr(String(e.message || e)); setLoaded(true); } });
+    return () => { alive = false; };
+  }, []);
+
+  const save = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      // Send the full policy; omit llm_api_key when blank so the secret is kept.
+      // embed_model=null on the light tier clears the override (resolver default).
+      const body = {
+        llm_base_url: baseUrl.trim() || null,
+        llm_model: model.trim() || null,
+        embed_model: WIZ_TIERS[tier].model,
+        clap_enabled: clapEnabled,
+        ai_enabled: aiEnabled,
+        ...(apiKey.trim() ? { llm_api_key: apiKey.trim() } : {}),
+      };
+      const res = await apiFetch('/instance/settings', { method: 'PATCH', body: JSON.stringify(body) });
+      const s = res.settings || {};
+      setHasKey(!!(s['LLM_API_KEY'] && s['LLM_API_KEY'].has_value));
+      setApiKey('');
+      setSaved(true); setTimeout(() => setSaved(false), 2000);
+    } catch (e) { showToast && showToast(String(e.message || e)); }
+    finally { setBusy(false); }
+  };
+
+  const label = (t) => <div className="mono-label" style={{ color: c.textSubtle, marginBottom: 7 }}>{t}</div>;
+  const inputStyle = {
+    width: '100%', padding: '10px 13px', borderRadius: 10,
+    border: `1px solid ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.10)'}`,
+    background: isDark ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.75)',
+    color: c.text, fontSize: 14, outline: 'none', fontFamily: "'JetBrains Mono', monospace",
+  };
+
+  if (!loaded) return <div style={{ padding: '18px 0' }}><Spinner size={16} /></div>;
+
+  return (
+    <div>
+      {loadErr && (
+        <div style={{ padding: '9px 13px', marginBottom: 14, borderRadius: 10, background: c.redBg, color: c.red, fontSize: 13 }}>
+          {loadErr}
+        </div>
+      )}
+
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: c.textMuted, marginBottom: 14 }}>
+        <ToggleSwitch checked={aiEnabled} onChange={v => setAiEnabled(v)} isDark={isDark} />
+        {ru ? 'AI-функции включены (для всех участников)' : 'AI features enabled (for all members)'}
+      </label>
+
+      {label('BASE URL')}
+      <input value={baseUrl} onChange={e => setBaseUrl(e.target.value)}
+        placeholder="http://localhost:1234/v1" style={{ ...inputStyle, marginBottom: 12 }} />
+
+      {label(ru ? 'МОДЕЛЬ' : 'MODEL')}
+      <input value={model} onChange={e => setModel(e.target.value)}
+        placeholder="gpt-4o-mini" style={{ ...inputStyle, marginBottom: 12 }} />
+
+      {label(ru ? 'API-КЛЮЧ · ОСТАВЬТЕ ПУСТЫМ, ЧТОБЫ НЕ МЕНЯТЬ' : 'API KEY · LEAVE BLANK TO KEEP')}
+      <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)}
+        placeholder={hasKey ? (ru ? 'ключ задан · ••••••' : 'key set · ••••••') : (ru ? 'для локального сервера обычно не нужен' : 'usually not needed for a local server')}
+        style={{ ...inputStyle, marginBottom: 14 }} />
+
+      {label(ru ? 'МОДЕЛЬ ЭМБЕДДИНГОВ' : 'EMBEDDING MODEL')}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+        {WIZ_TIERS.map((t, i) => (
+          <button key={i} type="button" disabled={busy}
+            onClick={() => !busy && setTier(i)}
+            className={`pill-v3${tier === i ? ' pill-v3-active' : ''}`}
+            style={{ flex: 1, padding: '9px 6px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, cursor: busy ? 'not-allowed' : 'pointer' }}>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>{ru ? t.ru : t.en}</span>
+            <span style={{ fontSize: 10, color: c.textSubtle }}>{ru ? t.noteRu : t.noteEn}</span>
+          </button>
+        ))}
+      </div>
+      <div style={{ fontSize: 11, color: c.textMuted, lineHeight: 1.5, margin: '6px 2px 16px' }}>
+        {ru
+          ? 'Применяется к новым библиотекам участников при индексации. Уже проиндексированные коллекции не меняются.'
+          : "Applied to members' new libraries at index time. Already-indexed collections are unchanged."}
+      </div>
+
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: c.textMuted, marginBottom: 18 }}>
+        <ToggleSwitch checked={clapEnabled} onChange={v => setClapEnabled(v)} isDark={isDark} />
+        {ru ? 'Аудио-анализ CLAP' : 'CLAP audio analysis'}
+      </label>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <button onClick={save} disabled={busy} className="cta-v3" style={{
+          padding: '9px 18px', fontSize: 13,
+          opacity: busy ? 0.55 : 1, cursor: busy ? 'not-allowed' : 'pointer',
+          background: saved ? 'linear-gradient(180deg, oklch(63% 0.17 142), oklch(53% 0.18 138))' : undefined,
+          boxShadow: saved ? 'inset 0 1px 0 rgba(255,255,255,0.25), 0 3px 10px oklch(63% 0.17 142 / 0.4)' : undefined,
+        }}>
+          {busy ? (ru ? 'Сохранение…' : 'Saving…') : saved ? (ru ? '✓ Сохранено' : '✓ Saved') : (ru ? 'Сохранить' : 'Save')}
+        </button>
+        <span className="mono-label" style={{ color: c.textSubtle, letterSpacing: '0.14em' }}>
+          LM STUDIO · OLLAMA · OPENAI
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ─── Owner admin dashboard (server mode) ──────────────────────────────────────
+// Mounted by Root INSTEAD of <App> for the server-mode owner. The owner account
+// runs the instance (AI policy, invites, members) and does not listen to music —
+// "Log out" returns to LoginScreen to sign in as a regular member. Lives outside
+// <App>, so it owns its own theme/lang state (mirrors SetupWizard).
+function OwnerAdminDashboard({ onLogout }) {
+  const [isDark, setDark] = useState(() => (localStorage.getItem('musix_theme') || 'dark') === 'dark');
+  const [lang, setLang]   = useState(() => localStorage.getItem('musix_lang') || 'ru');
+  const c = useColors(isDark);
+  const ru = lang === 'ru';
+  const [toast, setToast] = useState('');
+  const showToast = (m) => { setToast(String(m)); setTimeout(() => setToast(''), 3200); };
+  const handleTheme = () => setDark(d => { const n = !d; localStorage.setItem('musix_theme', n ? 'dark' : 'light'); return n; });
+  const toggleLang = () => setLang(l => { const n = l === 'ru' ? 'en' : 'ru'; localStorage.setItem('musix_lang', n); return n; });
+  const email = localStorage.getItem('musix_user_email') || '';
+
+  return (
+    <div className="grain" style={{
+      width: '100vw', height: '100vh', overflow: 'auto', position: 'relative',
+      background: isDark
+        ? 'radial-gradient(ellipse at top, #15151b 0%, #0a0a0e 60%, #07070a 100%)'
+        : 'radial-gradient(ellipse at top, #fafaff 0%, #ececf3 60%, #e3e2e8 100%)',
+      color: c.text,
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '24px 32px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <BrandMark size={36} isDark={isDark} />
+          <span className="serif" style={{ fontSize: 28, letterSpacing: '-0.02em' }}>Musi<i style={{ color: 'oklch(62% 0.2 275)' }}>X</i></span>
+          <span className="mono" style={{
+            fontSize: 10, letterSpacing: '0.2em', padding: '3px 8px', borderRadius: 6,
+            background: 'rgba(124,91,255,0.18)', color: '#bba8ff', border: '1px solid rgba(124,91,255,0.3)',
+          }}>ADMIN</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button className="pill-v3" onClick={handleTheme} style={{ width: 34, height: 34, padding: 0, borderRadius: '50%', display: 'grid', placeItems: 'center' }}>
+            {isDark ? '☀' : '☾'}
+          </button>
+          <button className="pill-v3" onClick={toggleLang} style={{ padding: '6px 12px' }}>{ru ? 'EN' : 'RU'}</button>
+          <button onClick={onLogout} style={{
+            padding: '7px 16px', borderRadius: 9, fontSize: 13, cursor: 'pointer',
+            background: 'rgba(255,80,80,0.12)', color: '#ff9090', border: '1px solid rgba(255,80,80,0.22)',
+          }}>
+            {ru ? 'Выйти' : 'Log out'}
+          </button>
+        </div>
+      </div>
+
+      <div style={{ maxWidth: 720, margin: '12px auto 64px', padding: '0 32px' }}>
+        <div className="mono" style={{ fontSize: 13, color: c.textSubtle, letterSpacing: '0.32em', marginBottom: 12 }}>
+          — {ru ? 'ПАНЕЛЬ АДМИНИСТРАТОРА' : 'ADMIN CONSOLE'}
+        </div>
+        <h1 className="serif" style={{ fontSize: 44, lineHeight: 1.04, letterSpacing: '-0.025em', marginBottom: 14 }}>
+          {ru ? <>Управление <i style={{ color: 'oklch(62% 0.2 275)' }}>инстансом</i>.</> : <>Manage your <i style={{ color: 'oklch(62% 0.2 275)' }}>instance</i>.</>}
+        </h1>
+        <p style={{ fontSize: 15, color: c.textMuted, lineHeight: 1.6, marginBottom: 6 }}>
+          {ru
+            ? 'Этот аккаунт настраивает AI и приглашает пользователей. Музыку слушают в обычных аккаунтах — выйдите и войдите по инвайту.'
+            : 'This account configures AI and invites users. Music is played from regular accounts — log out and sign in via invite.'}
+        </p>
+        {email && (
+          <div className="mono-label" style={{ color: c.textSubtle, letterSpacing: '0.14em', marginBottom: 4 }}>
+            {ru ? 'ВЛАДЕЛЕЦ' : 'OWNER'} · {email}
+          </div>
+        )}
+
+        <section className="panel-v3" style={{ padding: '18px 20px', marginTop: 22 }}>
+          <div className="mono-label" style={{ color: c.textSubtle, marginBottom: 14 }}>
+            {ru ? 'AI ИНСТАНСА' : 'INSTANCE AI'}
+          </div>
+          <InstanceAISettings isDark={isDark} lang={lang} showToast={showToast} />
+        </section>
+
+        <section className="panel-v3" style={{ padding: '2px 20px 12px', marginTop: 18 }}>
+          <InvitesPanel lang={lang} showToast={showToast} />
+        </section>
+
+        <section className="panel-v3" style={{ padding: '2px 20px 12px', marginTop: 18 }}>
+          <MembersPanel lang={lang} showToast={showToast} />
+        </section>
+      </div>
+
+      {toast && (
+        <div style={{
+          position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 200,
+          padding: '11px 18px', borderRadius: 12, fontSize: 13, maxWidth: '90vw',
+          background: isDark ? 'rgba(20,20,28,0.95)' : 'rgba(255,255,255,0.96)',
+          color: c.text, border: `1px solid ${c.border}`, boxShadow: '0 8px 30px rgba(0,0,0,0.3)',
+        }}>
+          {toast}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, onTheme, onLang, collections, onLogout, instanceMode, showToast }) {
   const c = useColors(isDark);
   // 'light' | 'heavy' — derived from the legacy text_model localStorage key so
@@ -8837,13 +9076,6 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
                 + {lang==='ru'?'Добавить музыку':'Add music'}
               </button>
             </div>
-
-            {instanceMode === 'server' && (localStorage.getItem('musix_user_role') === 'owner') && (
-              <>
-                <InvitesPanel lang={lang} showToast={showToast} />
-                <MembersPanel lang={lang} showToast={showToast} />
-              </>
-            )}
           </section>
 
           {/* ─── Intelligence: LLM status + advanced fields + one-button enrichment ─── */}
@@ -9087,12 +9319,6 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
           />
         )}
         <AccountSettings onLogout={onLogout} lang={lang} />
-        {instanceMode === 'server' && (localStorage.getItem('musix_user_role') === 'owner') && (
-          <>
-            <InvitesPanel lang={lang} showToast={showToast} />
-            <MembersPanel lang={lang} showToast={showToast} />
-          </>
-        )}
       </div>
     </>
   );
@@ -9108,6 +9334,27 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
   const [committing, setCommitting] = useState(false);
   const [jobId, setJobId] = useState(null);
   const [showWizard, setShowWizard] = useState(false);
+  // Folder selection happens IN THE BROWSER (webkitdirectory), then the files
+  // are uploaded like any other — server-mode members may upload but may NOT
+  // point the host indexer at a path (/library/index is owner-only). Set the
+  // attribute on the DOM node directly: React strips the unknown JSX prop.
+  const folderInputRef = useRef(null);
+  useEffect(() => {
+    if (folderInputRef.current) {
+      folderInputRef.current.setAttribute('webkitdirectory', '');
+      folderInputRef.current.setAttribute('directory', '');
+    }
+  }, []);
+
+  // Picked a whole folder: keep only audio files (a directory carries covers,
+  // playlists, etc.), then funnel into the same upload pipeline as PICK FILES.
+  const onPickFolder = (e) => {
+    const picked = Array.from(e.target.files || []).filter(
+      f => /\.(flac|mp3|m4a|aac|ogg|wav|opus)$/i.test(f.name),
+    );
+    setFiles(picked);
+    setProgress(picked.map(f => ({ name: f.name, size: f.size, status: 'queued' })));
+  };
 
   const onPick = (e) => {
     const picked = Array.from(e.target.files || []);
@@ -9182,39 +9429,56 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
         <TopRightControls isDark={isDark} lang={lang} onLang={onLang} onTheme={onTheme} onSettings={() => {}} />
       </div>
 
-      <div style={{ maxWidth:'620px', margin:'40px auto 0', padding:'0 32px' }}>
+      <div style={{ maxWidth:'620px', margin:'40px auto 64px', padding:'0 32px' }}>
         <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.32em', marginBottom:'14px' }}>
           — {lang==='ru'?'ЗАГРУЗКА БИБЛИОТЕКИ':'UPLOAD LIBRARY'}
         </div>
         <h1 className="serif" style={{ fontSize:'56px', lineHeight:'1.02', letterSpacing:'-0.025em', marginBottom:'18px' }}>
           {lang==='ru' ? <>Загрузи <i style={{ color:'oklch(62% 0.2 275)' }}>треки</i>.</> : <>Upload your <i style={{ color:'oklch(62% 0.2 275)' }}>tracks</i>.</>}
         </h1>
-        <p style={{ fontSize:'15px', color:c.textMuted, lineHeight:'1.6', marginBottom:'34px' }}>
+        <p style={{ fontSize:'15px', color:c.textMuted, lineHeight:'1.6', marginBottom:'24px' }}>
           {lang==='ru'
-            ? 'Файлы будут храниться на сервере под твоим аккаунтом. Поддерживаются FLAC, MP3, M4A.'
-            : 'Files are stored on the server under your account. FLAC, MP3, M4A are supported.'}
+            ? 'Выберите папку с музыкой или отдельные файлы — они загрузятся и сохранятся на сервере под вашим аккаунтом. FLAC, MP3, M4A.'
+            : 'Pick a music folder or individual files — they upload and are stored on the server under your account. FLAC, MP3, M4A.'}
         </p>
 
         <div className={ske('panel', isDark)}
           onDragOver={(e) => e.preventDefault()}
           onDrop={onDrop}
-          style={{ padding:'48px 28px', borderRadius:'18px', border:`2px dashed ${c.border}`, textAlign:'center' }}>
+          style={{ padding:'44px 28px', borderRadius:'18px', border:`2px dashed ${c.border}`, textAlign:'center' }}>
           <div style={{ fontSize:'48px', marginBottom:'12px' }}>📁</div>
-          <p style={{ fontSize:'14px', color:c.textMuted, marginBottom:'14px' }}>
+          <p style={{ fontSize:'14px', color:c.textMuted, marginBottom:'16px' }}>
             {lang==='ru'?'Перетащи аудиофайлы сюда, или':'Drag audio files here, or'}
           </p>
+          {/* Folder picker (browser-side; webkitdirectory set on the node via the
+              ref above) and the plain multi-file picker both feed the SAME upload
+              pipeline — the files are POSTed to /library/upload, not host-indexed. */}
+          <input ref={folderInputRef} type="file" multiple
+            onChange={onPickFolder}
+            disabled={anyUploading||committing}
+            style={{ display:'none' }}
+            id="onboard-folder-picker" />
           <input type="file" multiple
             accept=".flac,.mp3,.m4a,.aac,.ogg,.wav,.opus"
             onChange={onPick}
             disabled={anyUploading||committing}
             style={{ display:'none' }}
             id="onboard-picker" />
-          <label htmlFor="onboard-picker" className="ske-accent"
-            style={{ display:'inline-block', padding:'11px 22px', borderRadius:'10px', fontSize:'14px',
-              cursor:'pointer', opacity: anyUploading||committing ? 0.5 : 1,
-              pointerEvents: anyUploading||committing ? 'none' : 'auto' }}>
-            {lang==='ru'?'ВЫБРАТЬ ФАЙЛЫ':'PICK FILES'}
-          </label>
+          <div style={{ display:'flex', gap:'10px', justifyContent:'center', flexWrap:'wrap' }}>
+            <label htmlFor="onboard-folder-picker" className="ske-accent"
+              style={{ display:'inline-block', padding:'11px 22px', borderRadius:'10px', fontSize:'14px',
+                cursor:'pointer', opacity: anyUploading||committing ? 0.5 : 1,
+                pointerEvents: anyUploading||committing ? 'none' : 'auto' }}>
+              {lang==='ru'?'ВЫБРАТЬ ПАПКУ':'PICK FOLDER'}
+            </label>
+            <label htmlFor="onboard-picker" className={ske('btn', isDark)}
+              style={{ display:'inline-block', padding:'11px 22px', borderRadius:'10px', fontSize:'14px',
+                color:c.textMuted,
+                cursor:'pointer', opacity: anyUploading||committing ? 0.5 : 1,
+                pointerEvents: anyUploading||committing ? 'none' : 'auto' }}>
+              {lang==='ru'?'ИЛИ ФАЙЛЫ':'OR FILES'}
+            </label>
+          </div>
         </div>
 
         {progress.length > 0 && (
@@ -13674,7 +13938,7 @@ function SetupWizard({ onComplete }) {
 
   return (
     <div className="grain" style={{
-      width:'100vw', minHeight:'100vh', overflow:'auto', position:'relative',
+      width:'100vw', height:'100vh', overflow:'auto', position:'relative',
       background: isDark
         ? 'radial-gradient(ellipse at top, #15151b 0%, #0a0a0e 60%, #07070a 100%)'
         : 'radial-gradient(ellipse at top, #fafaff 0%, #ececf3 60%, #e3e2e8 100%)',
@@ -13781,8 +14045,18 @@ function Root() {
     return <LoginScreen instanceMode={instanceMode} onAuthSuccess={onAuthSuccess} lang={localStorage.getItem('musix_lang') || 'ru'} />;
   }
 
-  // Token present → mount App. We pass instanceMode down so App can branch
-  // on it (e.g. hide the Invites panel in sharing mode).
+  // Token present. Server-mode owner runs the instance, not the music app:
+  // mount the admin dashboard (invites/members/AI policy + logout) INSTEAD of
+  // <App>. Role comes from localStorage — populated by setStoredAuth on both
+  // login and /instance/setup. To listen, the owner logs out and signs in as a
+  // regular member. Members + sharing-mode users mount <App> unchanged.
+  const role = localStorage.getItem('musix_user_role') || '';
+  if (instanceMode === 'server' && role === 'owner') {
+    return <OwnerAdminDashboard onLogout={() => { clearStoredAuth(); setToken(''); }} />;
+  }
+
+  // We pass instanceMode down so App can branch on it (e.g. hide the Invites
+  // panel in sharing mode).
   return <App instanceMode={instanceMode} onLogout={() => { clearStoredAuth(); setToken(''); }} />;
 }
 
