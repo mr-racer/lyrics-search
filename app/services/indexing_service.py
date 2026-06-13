@@ -27,11 +27,11 @@ import gc
 import logging
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 import numpy as np
 import torch
-from qdrant_client import QdrantClient, models
+from qdrant_client import models
 from tqdm.auto import tqdm
 
 from app.indexing.folder_scanner import scan_and_enrich_folder

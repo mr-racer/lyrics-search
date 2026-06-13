@@ -32,7 +32,6 @@ import secrets
 import sqlite3
 import time
 import uuid
-from typing import Optional
 
 import jwt
 from argon2 import PasswordHasher

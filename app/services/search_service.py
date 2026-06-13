@@ -184,7 +184,6 @@ class SearchService:
         logger.info("[SearchService] Qdrant returned %d points", len(results.points) if results else 0)
         
         hits = self._points_to_hits(results.points[:limit], matched_on="audio", collection_name=collection_name)
-        # filtered_hits = [h for h in hits if h.score >= 0.1]
         filtered_hits = hits
         
         logger.info("[SearchService] After score filter (>=0.1): %d hits", len(filtered_hits))
@@ -341,17 +340,6 @@ class SearchService:
 
         merged.sort(key=lambda h: h.score, reverse=True)
         return merged
-
-    # ── Legacy alias (backward compat) ──
-
-    async def search_lyrics(
-        self,
-        query: str,
-        filters: SearchFilters | None = None,
-        limit: int = 10,
-    ) -> List[TrackHit]:
-        """Alias for _search_text for backward compatibility."""
-        return await self._search_text(query, filters, limit)
 
     # ── Helpers ──
 

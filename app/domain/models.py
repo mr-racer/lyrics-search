@@ -1,6 +1,6 @@
 """Domain models for Music Explorer."""
 
-from typing import Literal, List, Optional, Annotated, Dict
+from typing import Literal, List, Optional, Dict
 from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 
 
@@ -169,34 +169,11 @@ class TrackChatResponse(BaseModel):
     message: str
     web_search_used: bool = False
 
-# LLM MODELS
-# TODO поменял QueryItem на BaseQueryItem, проверь что в нужных местах поменялось.
-
 class BaseQueryItem(BaseModel):
     query: str
 
-class RephrasedQuery(BaseModel):
-    new_queries: list[str]
-
-class SearchAction(BaseModel):
-    action: Literal["search"]
-    confidence: Literal["low", "medium", "high"]
-    queries: list[BaseQueryItem]
-
-class AnswerAction(BaseModel):
-    action: Literal["answer"]
-    confidence: Literal["high", "medium", "low"]
-    song: str | None
-    artist: str | None
-    message: str
-
 
 # ── PydanticAI Agent Models ────────────────────────────────────────────────────
-
-class QueryType(BaseModel):
-    """Тип запроса после классификации."""
-    type: Literal["text", "audio", "hybrid"]
-    reasoning: str = Field(description="Краткое объяснение, почему этот тип")
 
 
 class SearchPlan(BaseModel):
@@ -235,11 +212,6 @@ class ScoreResult(BaseModel):
         return data
 
 
-class AudioAnswer(BaseModel):
-    """Ответ от AudioAgent."""
-    message: str
-    best_hit: dict | None = None
-    hits: List[dict] = Field(default_factory=list)
 
 
 class ValidatorResult(BaseModel):
@@ -249,30 +221,7 @@ class ValidatorResult(BaseModel):
     queries: List[BaseQueryItem] | None = None  # новые запросы если valid=False
 
 
-class PlannerOutput(BaseModel):
-    action: Literal["request filter", "search"]
-    filters: SearchFilters | None
-    filter_lookup: SearchFilters | None
-    # queries: 
 
-# {
-#   "action": "request_filter" | "search",
-#   "filters": {
-#     "Artist": "..." | null,
-#     "Album": "..." | null,
-#     "Genre": "..." | null,
-#     "year_range": "YYYY-YYYY" | null
-#   } | null,
-#   "filter_lookup": {
-#     "Artist": "raw user input to resolve" | null,
-#     "Album": "..." | null,
-#     "Genre": "..." | null
-#   } | null,
-#   "queries": [{"query": "..."}],
-#   "search_mode": "CONSERVATIVE" | "AGGRESSIVE"
-# }
-
-LLMResponse = Annotated[SearchAction | AnswerAction, Field(discriminator="action")]
 
 
 # SONIC DESCRIPTOR MODELS

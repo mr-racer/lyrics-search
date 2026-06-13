@@ -41,7 +41,7 @@ async def event_stream(job_id: str, job_tracker) -> AsyncGenerator[str, None]:
 
             except asyncio.TimeoutError:
                 # Heartbeat + current live state (nothing in queue, safe to use live)
-                yield f": heartbeat\n\n"
+                yield ": heartbeat\n\n"
                 yield f"data: {json.dumps(job_tracker.get_progress_summary(job))}\n\n"
                 
     finally:

@@ -19,14 +19,12 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Awaitable, Callable
 
-from openai import AsyncOpenAI
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel as OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from app.domain.models import AudioAnswer, BaseQueryItem, ScoreResult, SearchPlan, TrackHit, ValidatorResult
+from app.domain.models import BaseQueryItem, ScoreResult, SearchPlan, ValidatorResult
 from app.services.agent_deps import SearchDeps
 from app.services.llm_client import _get_client
 
@@ -280,117 +278,6 @@ Example:
 """.strip()
 
 
-AUDIO_AGENT_SYSTEM_PROMPT: str = """
-You are a music search assistant specializing in audio-based queries.
-The user described a song by mood, vibe, or acoustic characteristics.
-Find the best match in their local music library using CLAP audio search.
-
-WORKFLOW:
-1. Call clap_rephrase to transform the user's query into 3 CLAP-friendly English prompts.
-2. Call search_db with each of the 3 rephrased prompts to find audio matches.
-3. Analyze the combined results and return the best match as AudioAnswer.
-
-RULES:
-- Always rephrase first, then search. Never search with the raw user query.
-- Search with all 3 rephrased prompts to maximize coverage.
-- Pick the single best match from all results (highest score, best semantic match).
-- The message in AudioAnswer should be conversational and in the user's language.
-- If no good matches found, return an empty hits list and a helpful message explaining what was searched.
-""".strip()
-
-
-def create_audio_agent(deps: SearchDeps) -> Agent:
-    """Create an AudioAgent for the audio fast-path.
-
-    The agent uses two tools:
-    - clap_rephrase: transforms mood queries into 3 CLAP-friendly prompts
-    - search_db: searches the music library using audio (CLAP) mode
-
-    After searching, the agent returns an AudioAnswer with the best match.
-    Raw hits from all searches are cached in deps._audio_hits for the endpoint.
-    """
-    model = _create_pydantic_model(deps.llm_base_url, deps.llm_model)
-    agent = Agent(
-        model,
-        output_type=AudioAnswer,
-        system_prompt=AUDIO_AGENT_SYSTEM_PROMPT,
-    )
-
-    # Cache for raw hits — populated by search_db, read by the endpoint
-    audio_hits_cache: list[TrackHit] = []
-
-    @agent.tool_plain
-    async def clap_rephrase(user_query: str) -> str:  # noqa: F841
-        """Rephrase a mood/vibe query into 3 CLAP-friendly English prompts for audio search.
-
-        Use this tool first to transform the user's natural language description
-        into optimized prompts for CLAP text-to-audio retrieval.
-
-        Args:
-            user_query: The user's original query describing mood, vibe, or acoustic characteristics.
-
-        Returns:
-            A newline-separated string of 3 CLAP-optimized English prompts.
-        """
-        try:
-            from app.services.llm_client import ask_llm
-
-            rephrase_prompt = _CLAP_REPHRASE_SYSTEM_PROMPT.format(user_query=user_query)
-            result = await ask_llm(
-                user_query,
-                system_prompt=rephrase_prompt,
-                parse_json=True,
-                base_url=deps.llm_base_url,
-                model=deps.llm_model,
-            )
-            if isinstance(result, list) and result:
-                return "\n".join(result)
-        except Exception as exc:
-            logger.warning("[audio_agent] CLAP rephrasing failed: %s", exc)
-        return user_query
-
-    @agent.tool_plain
-    async def search_db(query: str) -> str:  # noqa: F841
-        """Search the music database using audio (CLAP) mode.
-
-        Use this tool with each rephrased prompt from clap_rephrase.
-        Returns formatted search results with title, artist, album, year, and score.
-
-        Args:
-            query: A CLAP-optimized English prompt for audio search.
-
-        Returns:
-            Formatted string of search results (up to 10 tracks with metadata and scores).
-        """
-        try:
-            hits = await deps.search(query=query, mode="audio", limit=10)
-            if not hits:
-                return "No results found for this query."
-
-            # Cache raw hits for the endpoint to use
-            audio_hits_cache.extend(hits)
-
-            lines: list[str] = []
-            for hit in hits:
-                t = hit.track
-                line = f"- {t.title} by {t.artist}"
-                if t.album:
-                    line += f" [{t.album}]"
-                if t.year:
-                    line += f" ({t.year})"
-                line += f" [score: {hit.score:.3f}]"
-                lines.append(line)
-            return "\n".join(lines)
-        except Exception as exc:
-            logger.warning("[audio_agent] search_db failed for query=%r: %s", query, exc)
-            return f"Search error: {exc}"
-
-    # Attach cache to agent for retrieval after run()
-    agent._audio_hits_cache = audio_hits_cache  # type: ignore[attr-defined]
-
-    return agent
-
-
 # ---------------------------------------------------------------------------
 # ValidatorAgent
 # ---------------------------------------------------------------------------
@@ -455,12 +342,10 @@ def create_validator_agent(deps: SearchDeps):
 __all__ = [
     "create_planner_agent",
     "create_scorer_agent",
-    "create_audio_agent",
     "create_validator_agent",
     "PLANNER_PROMPT",
     "SCORER_PROMPT",
     "VALIDATOR_PROMPT",
-    "AUDIO_AGENT_SYSTEM_PROMPT",
     "_AUDIO_ANSWER_PROMPT",
     "_CLAP_REPHRASE_SYSTEM_PROMPT",
 ]

@@ -40,7 +40,6 @@ from app.services.agents import (
 )
 from app.services.agent_deps import SearchDeps
 from app.services.llm_client import ask_llm
-import traceback
 import logging
 
 logger = logging.getLogger(__name__)

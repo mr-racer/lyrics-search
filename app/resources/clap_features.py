@@ -11,7 +11,6 @@ import gc
 import hashlib
 import json
 import logging
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -28,12 +27,6 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 MAX_DURATION = 420  # seconds — kept here so clap_features is self-contained
 
-
-@dataclass
-class TrackFeatures:
-    title: str
-    artist: str
-    vector_clap: list
 
 
 # --------------------------------------------------------------------------

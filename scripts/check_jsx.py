@@ -4,7 +4,6 @@ Per memory: feedback_smoke_test_must_parse. Standalone on purpose: no app
 imports, so it runs in <5s and can gate every frontend edit."""
 import re
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 

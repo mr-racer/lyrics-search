@@ -5,7 +5,6 @@ import hashlib
 import heapq
 import logging
 import random
-import uuid
 from collections import Counter
 from datetime import date as _date
 from pathlib import Path
@@ -276,7 +275,7 @@ async def get_collections(request: Request) -> dict:
     try:
         qdrant = db_client.qdrant
         cols = qdrant.get_collections().collections
-    except Exception as e:
+    except Exception:
         return {"collections": [], "total_points": 0, "qdrant_available": False}
 
     # Enrich each collection with the text model it was indexed with (if any).
