@@ -2374,6 +2374,7 @@ function useAudioPlayer() {
 function useAIStatus() {
   const [aiAvailable, setAiAvailable] = useState(null); // null = probing
   const [aiEnabledForCollection, setAiEnabledForCollection] = useState(null);
+  const [instanceAiAvailable, setInstanceAiAvailable] = useState(null); // admin policy
   const [llmError, setLlmError] = useState(null);
   const [llmInfo, setLlmInfo] = useState(null);  // {base_url, model}
   const probeTimer = useRef(null);
@@ -2422,13 +2423,27 @@ function useAIStatus() {
       .catch(() => setAiEnabledForCollection(true));  // graceful default
   }, []);
 
+  // Instance AI policy (admin toggle + endpoint). Gates members so they don't
+  // see AI when the admin disabled it. Owners are never gated by this — they
+  // manage the policy. Default true (non-blocking) on older servers / errors.
+  useEffect(() => {
+    apiFetch('/instance/config')
+      .then(r => setInstanceAiAvailable(r.ai_available !== false))
+      .catch(() => setInstanceAiAvailable(true));
+  }, []);
+
   // `null` on either signal means we haven't heard back yet — distinct from
   // a confirmed `false`. Consumers should treat `aiProbing` as "don't decide
   // yet" (show skeleton/spinner) rather than as "AI off".
   const aiProbing = aiAvailable === null || aiEnabledForCollection === null;
-  const aiActive = !!(aiAvailable && aiEnabledForCollection);
+  const isOwner = (localStorage.getItem('musix_user_role') || '') === 'owner';
+  // instanceAiAvailable===null (still loading) must NOT block — only a confirmed
+  // false gates, and only for members.
+  const instanceGate = isOwner || instanceAiAvailable !== false;
+  const aiActive = !!(aiAvailable && aiEnabledForCollection && instanceGate);
   return {
     aiAvailable, aiEnabledForCollection, aiActive, aiProbing,
+    instanceAiAvailable,
     llmError, llmInfo, refresh: probe,
     setAiEnabledForCollection,   // exposed so Settings toggle can update locally w/o re-fetch
   };
@@ -8323,6 +8338,12 @@ function AccountSettings({ onLogout, lang }) {
   );
 }
 
+// Full registration URL for an invite code. The register form parses
+// `#/register?invite=<12 chars>` from the hash, so a member can just open this.
+function inviteLink(code) {
+  return `${window.location.origin}/#/register?invite=${code}`;
+}
+
 function InvitesPanel({ lang, showToast }) {
   const [invites, setInvites] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -8338,12 +8359,16 @@ function InvitesPanel({ lang, showToast }) {
 
   useEffect(() => { reload(); }, [reload]);
 
+  const copyLink = (code) => {
+    navigator.clipboard?.writeText(inviteLink(code)).catch(() => {});
+    showToast(lang === 'ru' ? 'Ссылка-приглашение скопирована' : 'Invite link copied');
+  };
+
   const onCreate = async () => {
     setCreating(true);
     try {
       const inv = await apiFetch('/auth/invites', { method: 'POST' });
-      navigator.clipboard?.writeText(inv.code).catch(() => {});
-      showToast(`${lang === 'ru' ? 'Код' : 'Code'}: ${inv.code} ${lang === 'ru' ? '(скопирован)' : '(copied)'}`);
+      copyLink(inv.code);   // copy the full link, not just the bare code
       reload();
     } catch (err) {
       showToast(String(err.message || err));
@@ -8395,14 +8420,72 @@ function InvitesPanel({ lang, showToast }) {
                 {lang === 'ru' ? `истекает через ${expiresIn} дн.` : `expires in ${expiresIn} d`}
               </div>
             </div>
-            <button onClick={() => onRevoke(iv.code)}
-              style={{
-                fontSize: 11, padding: '4px 10px', borderRadius: 6,
-                background: 'transparent', color: '#888',
-                border: '1px solid rgba(255,255,255,0.06)',
-              }}>
-              {lang === 'ru' ? 'Удалить' : 'Revoke'}
-            </button>
+            <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+              <button onClick={() => copyLink(iv.code)}
+                style={{
+                  fontSize: 11, padding: '4px 10px', borderRadius: 6,
+                  background: 'rgba(124,91,255,0.12)', color: '#bba8ff',
+                  border: '1px solid rgba(124,91,255,0.22)',
+                }}>
+                {lang === 'ru' ? 'Ссылка' : 'Link'}
+              </button>
+              <button onClick={() => onRevoke(iv.code)}
+                style={{
+                  fontSize: 11, padding: '4px 10px', borderRadius: 6,
+                  background: 'transparent', color: '#888',
+                  border: '1px solid rgba(255,255,255,0.06)',
+                }}>
+                {lang === 'ru' ? 'Удалить' : 'Revoke'}
+              </button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Owner-only roster (server mode). Shows who registered and via which invite —
+// backed by GET /admin/members.
+function MembersPanel({ lang, showToast }) {
+  const [members, setMembers] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    setLoading(true);
+    apiFetch('/admin/members')
+      .then(setMembers)
+      .catch(err => showToast(String(err.message || err)))
+      .finally(() => setLoading(false));
+  }, [showToast]);
+
+  return (
+    <div style={{ padding: '16px 0', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+      <div className="mono" style={{ fontSize: 11, letterSpacing: '0.18em', color: 'rgba(238,238,243,.5)', marginBottom: 10 }}>
+        {lang === 'ru' ? 'УЧАСТНИКИ' : 'MEMBERS'}{members.length > 0 ? ` · ${members.length}` : ''}
+      </div>
+      {loading && <div style={{ fontSize: 12, color: '#666' }}>{lang === 'ru' ? 'Загрузка…' : 'Loading…'}</div>}
+      {!loading && members.length === 0 && (
+        <div style={{ fontSize: 12, color: '#666' }}>{lang === 'ru' ? 'Пока только вы' : 'Just you so far'}</div>
+      )}
+      {members.map(m => {
+        const joined = m.created_at ? new Date(m.created_at * 1000).toLocaleDateString() : '';
+        return (
+          <div key={m.id} style={{
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            padding: '8px 0', borderBottom: '1px solid rgba(255,255,255,0.03)',
+          }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 13, color: '#eee', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.email}</div>
+              <div style={{ fontSize: 11, color: '#666', marginTop: 2 }}>
+                {m.role === 'owner'
+                  ? (lang === 'ru' ? 'владелец' : 'owner')
+                  : (lang === 'ru' ? `участник · с ${joined}` : `member · since ${joined}`)}
+              </div>
+            </div>
+            {m.invite_code && (
+              <span className="mono" style={{ fontSize: 10, color: '#777', flexShrink: 0, marginLeft: 10 }}>{m.invite_code}</span>
+            )}
           </div>
         );
       })}
@@ -8437,7 +8520,9 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
 
   const [llmBaseUrl, setLlmBaseUrl] = useState(() => localStorage.getItem('llm_base_url') || '');
   const [llmModel, setLlmModel] = useState(() => localStorage.getItem('llm_model') || '');
+  const [llmKey, setLlmKey] = useState('');   // API key — secret, never read from localStorage
   const [llmSaved, setLlmSaved] = useState(false);
+  const isOwner = (localStorage.getItem('musix_user_role') || '') === 'owner';
 
   // Section UI state: collection switcher list, LLM advanced fields, and the
   // new-collection modal.
@@ -8560,6 +8645,20 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
     setLlmBaseUrl(url); setLlmModel(model);
     localStorage.setItem('llm_base_url', url);
     localStorage.setItem('llm_model', model);
+    // Owner: persist to instance settings so the choice is server-side (members
+    // inherit, API key is storable) and authoritative over per-browser values.
+    // Saving an LLM config implies the owner wants AI on.
+    if (isOwner) {
+      try {
+        await apiFetch('/instance/settings', { method: 'PATCH', body: JSON.stringify({
+          llm_base_url: url,
+          llm_model: model,
+          ...(llmKey.trim() ? { llm_api_key: llmKey.trim() } : {}),
+          ai_enabled: true,
+        }) });
+        setLlmKey('');   // don't keep the secret in component state after save
+      } catch (e) { showToast?.(String(e.message || e)); }
+    }
     setLlmSaved(true); setTimeout(() => setLlmSaved(false), 2000);
     await aiStatus?.refresh?.();
   };
@@ -8653,7 +8752,10 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
             </div>
 
             {instanceMode === 'server' && (localStorage.getItem('musix_user_role') === 'owner') && (
-              <InvitesPanel lang={lang} showToast={showToast} />
+              <>
+                <InvitesPanel lang={lang} showToast={showToast} />
+                <MembersPanel lang={lang} showToast={showToast} />
+              </>
             )}
           </section>
 
@@ -8698,6 +8800,14 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
                 {fieldLabel(lang==='ru'?'МОДЕЛЬ':'MODEL')}
                 <input value={llmModel} onChange={e=>setLlmModel(e.target.value)}
                   placeholder="gpt-4o-mini" style={{ ...inputStyle, marginBottom:14 }} />
+                {isOwner && (
+                  <>
+                    {fieldLabel(lang==='ru'?'API-КЛЮЧ · ОСТАВЬТЕ ПУСТЫМ, ЧТОБЫ НЕ МЕНЯТЬ':'API KEY · LEAVE BLANK TO KEEP')}
+                    <input type="password" value={llmKey} onChange={e=>setLlmKey(e.target.value)}
+                      placeholder={lang==='ru'?'для локального сервера обычно не нужен':'usually not needed for a local server'}
+                      style={{ ...inputStyle, marginBottom:14 }} />
+                  </>
+                )}
                 <div style={{ display:'flex', alignItems:'center', gap:12 }}>
                   <button onClick={saveLLM} className="cta-v3" style={{
                     padding:'9px 18px', fontSize:13,
@@ -8891,7 +9001,10 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
         )}
         <AccountSettings onLogout={onLogout} lang={lang} />
         {instanceMode === 'server' && (localStorage.getItem('musix_user_role') === 'owner') && (
-          <InvitesPanel lang={lang} showToast={showToast} />
+          <>
+            <InvitesPanel lang={lang} showToast={showToast} />
+            <MembersPanel lang={lang} showToast={showToast} />
+          </>
         )}
       </div>
     </>
@@ -12647,7 +12760,13 @@ const WIZ_TIERS = [
     noteRu: 'мультиязычный · медленнее', noteEn: 'multilingual · slower' },
 ];
 
-const WIZ_STEPS = ['welcome', 'account', 'mode', 'music', 'ai', 'indexing'];
+// Step order branches on the chosen mode. Server: the owner sets instance-wide
+// AI + embedding policy (no music — members bring their own libraries later).
+// Sharing: single user adds music, optionally AI, then indexes inline.
+// The first three steps are identical in both, so stepIndex stays correct while
+// mode is still null (welcome/account/mode).
+const WIZ_STEPS_SHARING = ['welcome', 'account', 'mode', 'music', 'ai', 'indexing'];
+const WIZ_STEPS_SERVER  = ['welcome', 'account', 'mode', 'policy'];
 
 // Stage keys come from the shared JobTracker (same SSE stream the existing
 // IndexingModal/UploadIndexingWizard consume).
@@ -12709,10 +12828,15 @@ function SetupWizard({ onComplete }) {
   // ai — OpenAI-compatible endpoint, probed via existing POST /system/llm-status.
   const [llmUrl, setLlmUrl]           = useState(() => localStorage.getItem('llm_base_url') || '');
   const [llmModel, setLlmModel]       = useState(() => localStorage.getItem('llm_model') || '');
+  const [llmKey, setLlmKey]           = useState('');     // API key — server-side secret, never localStorage
   const [probe, setProbe]             = useState(null);   // null | {available, error}
   const [probing, setProbing]         = useState(false);
   const [aiBusy, setAiBusy]           = useState(false);
   const [aiConnected, setAiConnected] = useState(false);
+
+  // policy — server-mode instance settings step (PATCH /instance/settings)
+  const [policyBusy, setPolicyBusy]   = useState(false);
+  const [policyError, setPolicyError] = useState('');
 
   // indexing — mirrors UploadIndexingWizard's SSE consumption.
   const [stepStatus, setStepStatus]       = useState({});
@@ -12726,9 +12850,11 @@ function SetupWizard({ onComplete }) {
   });
   const handleLang = (l) => { setLang(l); localStorage.setItem('musix_lang', l); };
 
-  const stepIndex = WIZ_STEPS.indexOf(step);
+  const wizSteps = mode === 'server' ? WIZ_STEPS_SERVER : WIZ_STEPS_SHARING;
+  const stepIndex = wizSteps.indexOf(step);
 
-  const advanceFromSetup = () => setStep('music');
+  // Server mode: owner configures instance policy instead of bringing music.
+  const advanceFromSetup = () => setStep(mode === 'server' ? 'policy' : 'music');
   const advanceFromMusic = () => setStep('ai');
   const advanceFromAi = () => {
     // Something to watch? → progress screen. Music skipped? → done.
@@ -12760,11 +12886,45 @@ function SetupWizard({ onComplete }) {
       localStorage.setItem('llm_base_url', llmUrl.trim());
       localStorage.setItem('llm_model', llmModel.trim());
       await apiFetch('/library/ai-enabled', { method:'PATCH', body: JSON.stringify({ enabled:true }) });
+      // Unify with server mode: persist AI config to instance settings so the
+      // backend resolver (not per-browser localStorage) is the source of truth.
+      // Sharing has a single user — the owner — so this PATCH is authorized.
+      await apiFetch('/instance/settings', { method:'PATCH', body: JSON.stringify({
+        llm_base_url: llmUrl.trim(),
+        llm_model: llmModel.trim(),
+        ...(llmKey.trim() ? { llm_api_key: llmKey.trim() } : {}),
+        embed_model: WIZ_TIERS[tier].model,
+        ai_enabled: true,
+      }) });
       setAiConnected(true);
       advanceFromAi();
     } catch (e) {
       setProbe({ available:false, error:String(e.message || e) });
     } finally { setAiBusy(false); }
+  };
+
+  // Server mode: save instance-wide policy (embedding + optional AI) and finish.
+  // No music here — members upload under their own accounts; the owner can index
+  // their own library afterwards via the normal upload flow.
+  const submitPolicy = async (enableAi) => {
+    if (policyBusy) return;
+    setPolicyBusy(true); setPolicyError('');
+    try {
+      const body = { embed_model: WIZ_TIERS[tier].model, clap_enabled: true };
+      if (enableAi) {
+        body.llm_base_url = llmUrl.trim();
+        body.llm_model = llmModel.trim();
+        if (llmKey.trim()) body.llm_api_key = llmKey.trim();
+        body.ai_enabled = true;
+      } else {
+        body.ai_enabled = false;
+      }
+      await apiFetch('/instance/settings', { method:'PATCH', body: JSON.stringify(body) });
+      applyTierToLocalStorage();   // owner's own search session uses the same model
+      onComplete({ mode });
+    } catch (e) {
+      setPolicyError(String(e.message || e));
+    } finally { setPolicyBusy(false); }
   };
 
   const runAiBootstrap = async () => {
@@ -13191,6 +13351,13 @@ function SetupWizard({ onComplete }) {
         placeholder="qwen2.5-14b-instruct" disabled={aiBusy}
         className={ske('inset', isDark)} style={{ width:'100%', padding:'11px 13px', borderRadius:'10px', border:'none',
           color:c.text, fontSize:'14px', outline:'none', fontFamily:"'JetBrains Mono', monospace", marginBottom:'14px' }} />
+      <div className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'8px' }}>
+        {ru ? 'API-КЛЮЧ · НЕОБЯЗАТЕЛЬНО' : 'API KEY · OPTIONAL'}
+      </div>
+      <input type="password" value={llmKey} onChange={e => setLlmKey(e.target.value)}
+        placeholder={ru ? 'для локального сервера обычно не нужен' : 'usually not needed for a local server'} disabled={aiBusy}
+        className={ske('inset', isDark)} style={{ width:'100%', padding:'11px 13px', borderRadius:'10px', border:'none',
+          color:c.text, fontSize:'14px', outline:'none', fontFamily:"'JetBrains Mono', monospace", marginBottom:'14px' }} />
       <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'18px' }}>
         <button onClick={probeLlm} disabled={probing || !llmUrl.trim()}
           className={ske('btn', isDark)} style={{ padding:'9px 16px', borderRadius:'10px', fontSize:'13px',
@@ -13220,6 +13387,78 @@ function SetupWizard({ onComplete }) {
             display:'flex', alignItems:'center', justifyContent:'center', gap:'8px' }}>
           {aiBusy ? <Spinner size={14} color="white" /> : null}
           {ru ? 'ПОДКЛЮЧИТЬ →' : 'CONNECT →'}
+        </button>
+      </div>
+    </div>
+  );
+
+  const renderPolicy = () => (
+    <div className={ske('panel', isDark)} style={{ padding:'30px 32px', borderRadius:'18px' }}>
+      <h2 className="serif" style={{ fontSize:'30px', letterSpacing:'-0.02em', marginBottom:'6px' }}>
+        {ru ? 'Настройки сервера' : 'Server policy'}
+      </h2>
+      <p style={{ fontSize:'13px', color:c.textMuted, lineHeight:'1.5', marginBottom:'18px' }}>
+        {ru ? 'Эти параметры — общие для всего сервера. Участники по инвайтам только загружают свою музыку; модель эмбеддингов и AI вы задаёте один раз.'
+            : 'These apply to the whole server. Invited members only upload their music; you choose the embedding model and AI once.'}
+      </p>
+
+      {renderSlider()}
+
+      <div style={{ height:'1px', background:c.border, margin:'22px 0 18px' }} />
+
+      <div className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'10px' }}>
+        {ru ? 'AI (НЕОБЯЗАТЕЛЬНО)' : 'AI (OPTIONAL)'}
+      </div>
+      <p style={{ fontSize:'12px', color:c.textMuted, lineHeight:'1.5', marginBottom:'14px' }}>
+        {ru ? 'OpenAI-совместимый сервер (LM Studio, Ollama…). Ключ хранится на сервере и не показывается участникам.'
+            : 'OpenAI-compatible server (LM Studio, Ollama…). The key is stored server-side and never shown to members.'}
+      </p>
+      <div className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'8px' }}>BASE URL</div>
+      <input value={llmUrl} onChange={e => { setLlmUrl(e.target.value); setProbe(null); }}
+        placeholder="http://localhost:1234/v1" disabled={policyBusy}
+        className={ske('inset', isDark)} style={{ width:'100%', padding:'11px 13px', borderRadius:'10px', border:'none',
+          color:c.text, fontSize:'14px', outline:'none', fontFamily:"'JetBrains Mono', monospace", marginBottom:'14px' }} />
+      <div className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'8px' }}>{ru ? 'МОДЕЛЬ' : 'MODEL'}</div>
+      <input value={llmModel} onChange={e => { setLlmModel(e.target.value); setProbe(null); }}
+        placeholder="qwen2.5-14b-instruct" disabled={policyBusy}
+        className={ske('inset', isDark)} style={{ width:'100%', padding:'11px 13px', borderRadius:'10px', border:'none',
+          color:c.text, fontSize:'14px', outline:'none', fontFamily:"'JetBrains Mono', monospace", marginBottom:'14px' }} />
+      <div className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'8px' }}>{ru ? 'API-КЛЮЧ · НЕОБЯЗАТЕЛЬНО' : 'API KEY · OPTIONAL'}</div>
+      <input type="password" value={llmKey} onChange={e => setLlmKey(e.target.value)}
+        placeholder={ru ? 'для локального сервера обычно не нужен' : 'usually not needed for a local server'} disabled={policyBusy}
+        className={ske('inset', isDark)} style={{ width:'100%', padding:'11px 13px', borderRadius:'10px', border:'none',
+          color:c.text, fontSize:'14px', outline:'none', fontFamily:"'JetBrains Mono', monospace", marginBottom:'14px' }} />
+      <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'18px' }}>
+        <button onClick={probeLlm} disabled={probing || !llmUrl.trim()}
+          className={ske('btn', isDark)} style={{ padding:'9px 16px', borderRadius:'10px', fontSize:'13px',
+            color:c.textMuted, cursor: probing || !llmUrl.trim() ? 'not-allowed' : 'pointer',
+            display:'flex', alignItems:'center', gap:'6px' }}>
+          {probing ? <Spinner size={12} /> : '⚡'}
+          {ru ? 'Проверить соединение' : 'Test connection'}
+        </button>
+        {probe && (
+          <span style={{ fontSize:'12px', color: probe.available ? 'oklch(70% 0.18 145)' : c.red }}>
+            {probe.available ? (ru ? '✓ модель найдена' : '✓ model found') : `✗ ${probe.error || (ru ? 'недоступно' : 'unavailable')}`}
+          </span>
+        )}
+      </div>
+
+      {policyError && (
+        <div style={{ padding:'9px 13px', marginBottom:'14px', borderRadius:'10px', background:c.redBg, color:c.red, fontSize:'13px' }}>{policyError}</div>
+      )}
+
+      <div style={{ display:'flex', gap:'10px' }}>
+        <button onClick={() => submitPolicy(false)} disabled={policyBusy}
+          style={{ flex:1, padding:'13px', borderRadius:'10px', background:'transparent',
+            border:`1px solid ${c.border}`, color:c.textMuted, fontSize:'14px', cursor: policyBusy ? 'wait' : 'pointer' }}>
+          {ru ? 'Без AI' : 'Without AI'}
+        </button>
+        <button onClick={() => submitPolicy(true)} disabled={policyBusy || !llmUrl.trim() || !llmModel.trim()}
+          className="ske-accent" style={{ flex:1, padding:'13px', borderRadius:'10px', fontSize:'14px', fontWeight:'600',
+            opacity: policyBusy || !llmUrl.trim() || !llmModel.trim() ? 0.5 : 1,
+            cursor: policyBusy ? 'wait' : 'pointer', display:'flex', alignItems:'center', justifyContent:'center', gap:'8px' }}>
+          {policyBusy ? <Spinner size={14} color="white" /> : null}
+          {ru ? 'СОХРАНИТЬ И ЗАВЕРШИТЬ →' : 'SAVE & FINISH →'}
         </button>
       </div>
     </div>
@@ -13355,8 +13594,9 @@ function SetupWizard({ onComplete }) {
           {step === 'mode'    && renderMode()}
           {step === 'music'   && renderMusic()}
           {step === 'ai'      && renderAi()}
+          {step === 'policy'  && renderPolicy()}
           {step === 'indexing' && renderIndexing()}
-          <WizardDots count={WIZ_STEPS.length} active={stepIndex} c={c} />
+          <WizardDots count={wizSteps.length} active={stepIndex} c={c} />
         </div>
       </div>
     </div>

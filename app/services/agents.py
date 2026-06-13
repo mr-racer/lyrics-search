@@ -18,7 +18,6 @@ All agents are created via factory functions that accept a
 from __future__ import annotations
 
 import logging
-import os
 
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel as OpenAIModel
@@ -26,7 +25,7 @@ from pydantic_ai.providers.openai import OpenAIProvider
 
 from app.domain.models import BaseQueryItem, ScoreResult, SearchPlan, ValidatorResult
 from app.services.agent_deps import SearchDeps
-from app.services.llm_client import _get_client
+from app.services.llm_client import _get_client, resolve_model
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +134,7 @@ def _create_pydantic_model(
     model_name: str | None = None,
 ) -> OpenAIModel:
     """Create a pydantic_ai OpenAIModel from the project's client cache."""
-    resolved_model = (model_name or os.getenv("LLM_MODEL", "openai/gpt-oss-20b")).strip()
+    resolved_model = resolve_model(model_name)
     openai_client = _get_client(base_url)
     provider = OpenAIProvider(openai_client=openai_client)
     return OpenAIModel(resolved_model, provider=provider)

@@ -15,6 +15,14 @@ from app.resources.metadata_db import MetadataDB
 from app.services.auth_service import (
     AuthService, InvalidTokenError, TokenExpiredError,
 )
+from app.services.settings_service import SettingsService, settings_service
+
+
+def get_settings_service() -> SettingsService:
+    """Return the process-wide SettingsService singleton. It holds no mutable
+    state (resolves over MetadataDB + os.environ on each call), so no lifespan
+    wiring is needed — unlike AuthService which carries the JWT secret."""
+    return settings_service
 
 
 def get_auth_service(request: Request) -> AuthService:

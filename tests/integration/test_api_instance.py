@@ -25,7 +25,7 @@ def test_instance_config_returns_sharing_mode():
         MetadataDB.set_instance_config(mode="sharing", created_at=1.0)
         r = c.get("/api/v1/instance/config")
         assert r.status_code == 200
-        assert r.json() == {"mode": "sharing"}
+        assert r.json() == {"mode": "sharing", "ai_available": False}
 
 
 def test_instance_config_returns_server_mode():
@@ -37,4 +37,4 @@ def test_instance_config_returns_server_mode():
         MetadataDB.set_instance_config(mode="server", created_at=1.0)
         r = c.get("/api/v1/instance/config")
         assert r.status_code == 200
-        assert r.json() == {"mode": "server"}
+        assert r.json() == {"mode": "server", "ai_available": False}

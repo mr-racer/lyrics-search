@@ -3,29 +3,77 @@ the frontend reads /config pre-login to pick the right UX (sharing vs server);
 /setup is the first-run bootstrap and self-closes after the first success."""
 from __future__ import annotations
 
+import time
+
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.api.dependencies import get_auth_service
-from app.domain.models import AuthResponse, InstanceConfigResponse, SetupRequest
+from app.api.dependencies import (
+    get_auth_service, get_owner, get_settings_service,
+)
+from app.domain.models import (
+    AuthResponse, InstanceConfigResponse, InstanceSettingsPatch,
+    InstanceSettingsResponse, SetupRequest, User,
+)
 from app.resources.metadata_db import MetadataDB
 from app.services.auth_service import (
     AuthService, EmailAlreadyTakenError, InstanceAlreadyInitializedError,
     WeakPasswordError,
 )
+from app.services.settings_service import SettingsService
 
 
 router = APIRouter(prefix="/instance", tags=["Instance"])
 
+# PATCH field (snake) → instance_settings key (mirrors env var name).
+_FIELD_TO_KEY = {
+    "llm_base_url": "LLM_BASE_URL",
+    "llm_model":    "LLM_MODEL",
+    "llm_api_key":  "LLM_API_KEY",
+    "embed_model":  "EMBED_MODEL",
+    "clap_enabled": "CLAP_ENABLED",
+    "ai_enabled":   "AI_ENABLED",
+}
+
 
 @router.get("/config", response_model=InstanceConfigResponse)
-def get_instance_config() -> InstanceConfigResponse:
+def get_instance_config(
+    settings: SettingsService = Depends(get_settings_service),
+) -> InstanceConfigResponse:
     cfg = MetadataDB.get_instance_config()
     if cfg is None:
         raise HTTPException(
             status_code=404,
             detail="instance not initialized",
         )
-    return InstanceConfigResponse(mode=cfg["mode"])
+    return InstanceConfigResponse(
+        mode=cfg["mode"], ai_available=settings.ai_available(),
+    )
+
+
+# ── Instance settings (owner-only) ───────────────────────────────────────────
+@router.get("/settings", response_model=InstanceSettingsResponse)
+def get_instance_settings(
+    _owner: User = Depends(get_owner),
+    settings: SettingsService = Depends(get_settings_service),
+) -> InstanceSettingsResponse:
+    """Resolved instance settings for the owner UI. The LLM API key is masked
+    (value=null, has_value bool) — the raw secret never crosses this boundary."""
+    return InstanceSettingsResponse(settings=settings.public_view())
+
+
+@router.patch("/settings", response_model=InstanceSettingsResponse)
+def patch_instance_settings(
+    req: InstanceSettingsPatch,
+    _owner: User = Depends(get_owner),
+    settings: SettingsService = Depends(get_settings_service),
+) -> InstanceSettingsResponse:
+    """Write only the fields present in the request (exclude_unset). A field set
+    to null clears the override; an omitted field is left untouched. Returns the
+    re-resolved (masked) view so the UI updates without a second round-trip."""
+    provided = req.model_dump(exclude_unset=True)
+    patch = {_FIELD_TO_KEY[f]: v for f, v in provided.items() if f in _FIELD_TO_KEY}
+    settings.set_many(patch, updated_at=time.time())
+    return InstanceSettingsResponse(settings=settings.public_view())
 
 
 @router.post("/setup", response_model=AuthResponse)

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import logging
-import os
 
 import httpx
 from fastapi import APIRouter
 
 from app.domain.models import LLMStatusRequest, LLMStatusResponse
+from app.services.llm_client import resolve_base_url, resolve_model
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/system", tags=["System"])
@@ -27,12 +27,14 @@ def _normalize_base_url(url: str) -> str:
 async def llm_status(req: LLMStatusRequest) -> LLMStatusResponse:
     """Probe the configured LLM endpoint with a lightweight GET /models.
 
-    The frontend passes its localStorage-configured base_url+model in the body;
-    server falls back to env LLM_BASE_URL / LLM_MODEL when fields are omitted.
-    Returns available=True if the upstream responds 2xx within 3s.
+    The body wins so the owner can test a CANDIDATE endpoint (typed in the
+    wizard) before saving it. When the body is empty we fall back to the
+    instance-settings resolver (DB > env > default), so a later "test current
+    config" probe works too.
     """
-    base_url = (req.base_url or os.getenv("LLM_BASE_URL", "")).strip()
-    model = (req.model or os.getenv("LLM_MODEL", "")).strip() or None
+    raw = (req.base_url or "").strip()
+    base_url = _normalize_base_url(raw) if raw else resolve_base_url()
+    model = (req.model or "").strip() or resolve_model()
 
     if not base_url:
         return LLMStatusResponse(
