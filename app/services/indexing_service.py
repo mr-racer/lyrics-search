@@ -26,6 +26,7 @@ from __future__ import annotations
 import gc
 import logging
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -48,6 +49,13 @@ from app.resources.qdrant_payload import build_text_for_embedding, prepare_metad
 from app.services.artist_split import split_artists, artist_slugs as _artist_slugs
 
 logger = logging.getLogger(__name__)
+
+# Parallel workers for the server-mode upload scan (per-file tag read + ONLINE
+# lyrics fetch). Mirrors scan_and_enrich_folder's default so uploaded files
+# fetch lyrics concurrently instead of one-at-a-time. The work is network-bound,
+# so threads (not processes) are the right tool; the lyrics APIs' rate limits
+# are respected by lyrics_fetchers' per-request time.sleep inside each thread.
+_UPLOAD_SCAN_WORKERS = 8
 
 
 # ─── Folder scan wrapper ─────────────────────────────────────────────────────
@@ -335,63 +343,76 @@ class IndexingService:
         data: dict[str, dict] = {}
         upload_by_key: dict[str, str] = {}   # "Artist — Title" -> upload_id
 
-        # This loop is the slow pre-embedding part of an upload job (per-file
-        # tag read + ONLINE lyrics fetch), so it must report progress — "scan"
-        # maps to the LYRICS stage in LibraryService._on_index_progress.
-        # Without these calls the wizard's SSE stream (and tqdm) stays silent
-        # until embedding starts.
+        # The pre-embedding scan (per-file tag read + ONLINE lyrics fetch) is the
+        # slow part of an upload job, and it is network-bound — so we fan it out
+        # across a thread pool (mirroring scan_and_enrich_folder) instead of
+        # processing one file at a time. Each worker does only the pure
+        # network/disk work and returns a result; DB status writes, the data dict
+        # and progress reporting all happen in THIS thread as futures complete, so
+        # no locking is needed despite the parallelism.
+        def _scan_one(row: dict) -> tuple[dict, dict | None, str | None]:
+            """Read tags, fetch lyrics and extract cover art for one uploaded file.
+
+            Pure w.r.t. shared state: returns ``(row, info, error)`` and lets the
+            caller serialize DB writes + progress. ``info`` is None (with a
+            non-None ``error``) when the row should be marked failed.
+            """
+            file_path = Path(row["storage_path"])
+            if not file_path.exists():
+                return row, None, f"file missing on disk: {file_path}"
+            try:
+                info = process_file(file_path, False)
+            except Exception as e:
+                logger.exception("[index_uploads] metadata read failed for %s", file_path)
+                return row, None, str(e)
+            if not info or not info.get("title") or not info.get("artist"):
+                return row, None, "missing title/artist in metadata tags"
+            if not info.get("lyrics"):
+                info["lyrics"] = "No lyrics were found :("
+            info["file_path"] = str(file_path)
+            # The folder flow extracts embedded art in _metadata_to_tracks;
+            # uploads skipped that step, so every server-mode track rendered the
+            # no-cover equalizer fallback.
+            try:
+                info["cover_art_path"] = save_cover_art(str(file_path), row["sha256"][:16])
+            except Exception as e:
+                logger.warning(
+                    "[index_uploads] cover extraction failed for %s: %s", file_path, e,
+                )
+                info["cover_art_path"] = None
+            return row, info, None
+
+        # Progress must be reported — "scan" maps to the LYRICS stage in
+        # LibraryService._on_index_progress; without it the wizard's SSE stream
+        # (and tqdm) stays silent until embedding starts.
         total_rows = len(upload_rows)
         if progress_callback:
             progress_callback("scan", 0, total_rows, "Чтение метаданных и поиск текстов...")
 
-        for i, row in enumerate(
-            tqdm(upload_rows, desc="[index_uploads] metadata+lyrics"), start=1,
-        ):
-            file_path = Path(row["storage_path"])
-            label = row.get("original_filename") or file_path.name
-            if not file_path.exists():
-                MetadataDB.update_pending_upload_status(
-                    row["upload_id"], status="failed",
-                    error=f"file missing on disk: {file_path}",
-                )
-            else:
-                try:
-                    info = process_file(file_path, False)
-                    if not info or not info.get("title") or not info.get("artist"):
-                        MetadataDB.update_pending_upload_status(
-                            row["upload_id"], status="failed",
-                            error="missing title/artist in metadata tags",
-                        )
-                        info = None
-                    else:
-                        if not info.get("lyrics"):
-                            info["lyrics"] = "No lyrics were found :("
-                        info["file_path"] = str(file_path)
-                        # The folder flow extracts embedded art in
-                        # _metadata_to_tracks; uploads skipped that step, so
-                        # every server-mode track rendered the no-cover
-                        # equalizer fallback.
-                        try:
-                            info["cover_art_path"] = save_cover_art(
-                                str(file_path), row["sha256"][:16],
-                            )
-                        except Exception as e:
-                            logger.warning(
-                                "[index_uploads] cover extraction failed for %s: %s",
-                                file_path, e,
-                            )
-                            info["cover_art_path"] = None
-                        key = f"{info['artist']} — {info['title']}"
-                        data[key] = info
-                        upload_by_key[key] = row["upload_id"]
-                        label = key
-                except Exception as e:
-                    logger.exception("[index_uploads] metadata read failed for %s", file_path)
+        completed = 0
+        workers = min(_UPLOAD_SCAN_WORKERS, total_rows) or 1
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(_scan_one, row): row for row in upload_rows}
+            for future in tqdm(
+                as_completed(futures), total=total_rows,
+                desc="[index_uploads] metadata+lyrics",
+            ):
+                row, info, error = future.result()
+                completed += 1
+                if error is not None:
                     MetadataDB.update_pending_upload_status(
-                        row["upload_id"], status="failed", error=str(e),
+                        row["upload_id"], status="failed", error=error,
                     )
-            if progress_callback:
-                progress_callback("scan", i, total_rows, f"[{i}/{total_rows}] {label}")
+                    label = row.get("original_filename") or Path(row["storage_path"]).name
+                else:
+                    key = f"{info['artist']} — {info['title']}"
+                    data[key] = info
+                    upload_by_key[key] = row["upload_id"]
+                    label = key
+                if progress_callback:
+                    progress_callback(
+                        "scan", completed, total_rows, f"[{completed}/{total_rows}] {label}",
+                    )
 
         if not data:
             logger.info("[index_uploads] nothing to index for account=%s", account_id)
@@ -533,7 +554,40 @@ class IndexingService:
         # Indexing drops + recreates the collection, so this batch IS the whole
         # collection — its mean/std are the collection's normalisation stats.
         self._persist_axis_norm_stats(sonic_axes_map)
+
+        # Fresh uuid4 point ids orphan the old reactions/playback events in
+        # SQLite — drop those so «Поток» stops surfacing empty «—» 404 tracks.
+        self._prune_orphaned_track_refs()
         logger.info("[IndexingService] Indexing complete: %d tracks", total)
+
+    def _prune_orphaned_track_refs(self) -> None:
+        """Drop SQLite reactions/events pointing at now-deleted point ids.
+
+        Best-effort: a re-index already succeeded by the time this runs, so a
+        prune failure must never fail the index — it only leaves stale rows the
+        stream's per-pool resolve guard still filters out.
+        """
+        coll = str(self.engine.collection_name)
+        client = self.engine.qdrant_client
+        try:
+            live_ids: set[str] = set()
+            offset = None
+            while True:
+                batch, offset = client.scroll(
+                    collection_name=coll, limit=1000,
+                    with_payload=False, with_vectors=False, offset=offset,
+                )
+                live_ids.update(str(p.id) for p in batch)
+                if offset is None or not batch:
+                    break
+            removed = MetadataDB.prune_orphaned_tracks(coll, live_ids)
+            if any(removed.values()):
+                logger.info(
+                    "[IndexingService] pruned orphaned track refs in %s: %s",
+                    coll, removed,
+                )
+        except Exception:
+            logger.exception("[IndexingService] orphan prune failed — non-fatal")
 
     def _compute_sonic_axes(self, clap_map: dict) -> dict:
         """Map ``(artist, title) → {axis: raw_score}`` for every CLAP-encoded track.

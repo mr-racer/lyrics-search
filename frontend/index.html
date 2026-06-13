@@ -6,7 +6,7 @@
   <title>MusiX — Studio Console</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:ital,wght@0,400;0,700;1,400;1,700&family=JetBrains+Mono:wght@400;500;600&family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:ital,wght@0,400;0,700;1,400;1,700&family=JetBrains+Mono:wght@400;500;600&family=Geist:wght@400;500;600;700&family=Noto+Color+Emoji&display=swap" rel="stylesheet" />
 
   <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
   <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
@@ -637,6 +637,54 @@
     @media (max-width: 880px) { .atlas-cutout { display: none; } }
     @media (prefers-reduced-motion: reduce) {
       .atlas-cutout { animation: none !important; opacity: 1 !important; }
+    }
+
+    /* Cutout hero backdrop: a burst of light rays + a drifting particle field
+       behind the figure, replacing the flat colour wash. Hue/intensity are
+       fed per-artist via CSS custom properties from the component. */
+    /* Lives inside the centred 1120 container so its origin tracks the cutout on
+       wide screens; --burst-x marks the figure's horizontal centre. */
+    .atlas-burst { position: absolute; inset: 0; pointer-events: none; }
+    .atlas-burst::before {           /* slowly rotating light rays */
+      content: ''; position: absolute; top: 50%; left: var(--burst-x, 80%);
+      width: 150vmax; height: 150vmax; transform: translate(-50%, -50%);
+      background: repeating-conic-gradient(from 0deg at 50% 50%,
+        var(--ray-color, rgba(255,255,255,.07)) 0deg 3deg,
+        transparent 3deg 13deg);
+      -webkit-mask-image: radial-gradient(circle at 50% 50%, #000 4%, transparent 56%);
+              mask-image: radial-gradient(circle at 50% 50%, #000 4%, transparent 56%);
+      animation: atlasRays 90s linear infinite;
+    }
+    .atlas-burst::after {            /* soft pulsing core flare */
+      content: ''; position: absolute; top: 50%; left: var(--burst-x, 80%);
+      width: 84vmax; height: 84vmax; transform: translate(-50%, -50%);
+      background: radial-gradient(circle at 50% 50%,
+        var(--flare-inner, rgba(255,248,235,.5)) 0%,
+        var(--flare-mid, oklch(70% 0.12 60 / 0.28)) 26%,
+        transparent 62%);
+      animation: atlasFlare 7.5s ease-in-out infinite;
+    }
+    .atlas-particles {
+      position: absolute; inset: 0; pointer-events: none; opacity: .6;
+      background-image:
+        radial-gradient(circle, rgba(255,255,255,.95) 0.9px, transparent 1.6px),
+        radial-gradient(circle, rgba(255,255,255,.5) 0.9px, transparent 1.6px),
+        radial-gradient(circle, var(--spark, rgba(255,236,200,.8)) 1.1px, transparent 1.8px);
+      background-size: 120px 120px, 170px 170px, 240px 240px;
+      background-position: 0 0, 55px 80px, 130px 30px;
+      -webkit-mask-image: radial-gradient(ellipse 60% 86% at var(--burst-x, 80%) 50%, #000 0%, transparent 78%);
+              mask-image: radial-gradient(ellipse 60% 86% at var(--burst-x, 80%) 50%, #000 0%, transparent 78%);
+      animation: atlasDrift 26s linear infinite;
+    }
+    @keyframes atlasRays  { to { transform: translate(50%, -50%) rotate(360deg); } }
+    @keyframes atlasFlare { 0%, 100% { opacity: .82; } 50% { opacity: 1; } }
+    @keyframes atlasDrift {
+      from { background-position: 0 0, 55px 80px, 130px 30px; }
+      to   { background-position: 0 -120px, 55px -10px, 130px -210px; }
+    }
+    @media (max-width: 880px) { .atlas-particles { display: none; } }
+    @media (prefers-reduced-motion: reduce) {
+      .atlas-burst::before, .atlas-burst::after, .atlas-particles { animation: none !important; }
     }
 
     /* ── Album gatefold modal (vinyl flip) ────────────────────── */
@@ -2062,8 +2110,12 @@ function getSessionId() {
   return id;
 }
 
-async function postPlaybackEvent({ trackId, collectionName, playedSec, totalDur, interacted }) {
-  if (!trackId || !collectionName || playedSec == null) return;
+async function postPlaybackEvent({ trackId, playedSec, totalDur, interacted }) {
+  // No collection guard: the server derives the collection from the JWT and
+  // ignores any client-supplied value (Phase D-soft). Requiring a non-empty
+  // collectionName here silently dropped EVERY event after Phase D removed
+  // activeCollection from the player — that's why playback_events stayed empty.
+  if (!trackId || playedSec == null) return;
   const body = JSON.stringify({
     session_id: getSessionId(),
     track_id: trackId,
@@ -2142,13 +2194,12 @@ function markPlaybackInteracted(el) {
 function flushAccumulatedListen(el) {
   if (!el || el.dataset.playEmitted === '1') return;
   const trackId = el.dataset.playbackTrackId;
-  const collectionName = el.dataset.playbackCollection;
-  if (!trackId || !collectionName) return;
+  if (!trackId) return;  // collection is server-derived; only the track id is required
   const acc = parseFloat(el.dataset.playAcc || '0');
   if (acc < 1) return;  // nothing meaningful heard yet
   el.dataset.playEmitted = '1';
   postPlaybackEvent({
-    trackId, collectionName,
+    trackId,
     playedSec: acc,
     totalDur: el.duration || null,
     interacted: el.dataset.playInteracted === '1',
@@ -10805,6 +10856,30 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
   const [expandedLines, setExpandedLines] = useState(new Set());
   const [explainStates, setExplainStates] = useState(new Map());
 
+  // On-demand lyrics. Only search hits carry `lyrics` inline; autoplay-queue,
+  // recently-played, liked and stream tracks don't, so the player fetches the
+  // full text by track_id and every source shows lyrics uniformly.
+  const [fetchedLyrics, setFetchedLyrics] = useState(null);
+  useEffect(() => {
+    const id = currentTrack?.track_id;
+    if (!id) { setFetchedLyrics(null); return; }
+    // Inline lyrics already present (search path) — no fetch needed.
+    if (currentTrack?.lyrics) { setFetchedLyrics(currentTrack.lyrics); return; }
+    let alive = true;
+    setFetchedLyrics(null);
+    apiFetch(`/search/tracks/${encodeURIComponent(id)}/lyrics`)
+      .then(r => { if (alive) setFetchedLyrics((r && r.lyrics) || null); })
+      .catch(() => { if (alive) setFetchedLyrics(null); });
+    return () => { alive = false; };
+  }, [currentTrack?.track_id]);
+
+  // Track object the lyrics view consumes — currentTrack with lyrics filled in
+  // from whichever source had them (inline or fetched).
+  const lyricsTrack = useMemo(
+    () => (currentTrack ? { ...currentTrack, lyrics: currentTrack.lyrics || fetchedLyrics || null } : null),
+    [currentTrack, fetchedLyrics]
+  );
+
   // Reset when track changes — different lyrics, different state
   useEffect(() => {
     setExpandedLines(new Set());
@@ -10851,7 +10926,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
             album: currentTrack?.album || null,
             year: currentTrack?.year || null,
             genre: currentTrack?.genre || null,
-            full_lyrics: currentTrack?.lyrics || '',
+            full_lyrics: currentTrack?.lyrics || fetchedLyrics || '',
           },
           mode: 'lyric_explain',
           selected_line: line,
@@ -10878,7 +10953,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
         return next;
       });
     }
-  }, [currentTrack, expandedLines, explainStates]);
+  }, [currentTrack, fetchedLyrics, expandedLines, explainStates]);
 
   // Burst feedback for like/dislike icon clicks (single active burst at a time)
   const [burstFor, setBurstFor] = useState(null);
@@ -11364,7 +11439,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                       </div>
                       <div className="player-art-back">
                         <LyricsBackFace
-                          track={currentTrack}
+                          track={lyricsTrack}
                           isVisible={lyricsMode}
 
                           isDark={isDark}
@@ -11888,28 +11963,61 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef }) {
   const c = useColors(isDark);
   const hue = atlasHue(data.name, data.name.slice(1));
   const backdrop = atlasImgUrl(data.thumb_path) || atlasImgUrl(data.albums?.[0]?.cover_art_path);
-  // Foreground: prefer the cutout, fall back to the regular photo (AudioDB
-  // thumb / Deezer) so artists without a cutout still get a face in the hero.
-  const heroImg = atlasImgUrl(data.cutout_path) || atlasImgUrl(data.thumb_path);
-  // null while probing → render neither variant for a beat (entrance
-  // animation hides the swap); true → cutout treatment; false → photo.
-  const heroAlpha = useImageHasAlpha(heroImg);
+  const cutout = atlasImgUrl(data.cutout_path);
   const flag = atlasFlag(data.country_code);
-  const bits = [
+
+  // Identity line: genre + where the artist is from.
+  const originLine = [
     data.genre,
+    flag
+      ? `${flag} ${(data.country || data.country_code || '').toUpperCase()}`
+      : (data.country ? data.country.toUpperCase() : null),
+  ].filter(Boolean).join(' · ');
+
+  // Library-derived lines: which decades this listener owns + the catalogue size.
+  const decadeLabel = lang==='ru' ? 'Десятилетия в твоей библиотеке' : 'Decades in your library';
+  const countsLine = [
     data.album_count ? `${data.album_count} ${lang==='ru' ? atlasRuPlural(data.album_count,'АЛЬБОМ','АЛЬБОМА','АЛЬБОМОВ') : (data.album_count===1?'ALBUM':'ALBUMS')}` : null,
     data.track_count ? `${data.track_count} ${lang==='ru' ? atlasRuPlural(data.track_count,'ТРЕК','ТРЕКА','ТРЕКОВ') : (data.track_count===1?'TRACK':'TRACKS')}` : null,
-    data.decade_range,
-    flag ? `${flag} ${(data.country || data.country_code || '').toUpperCase()}` : (data.country || null),
-  ].filter(Boolean);
+  ].filter(Boolean).join(' · ');
+
+  // Three exclusive hero treatments:
+  //  • cutout — transparent PNG of the artist, raised into the upper band (no backdrop)
+  //  • photo  — only a full-bleed image exists: show it un-blurred, centred, fading to facts
+  //  • mono   — nothing usable: atmospheric gradient + monogram square
+  const mode = cutout ? 'cutout' : (backdrop ? 'photo' : 'mono');
 
   return (
-    <div ref={heroRef} style={{ position:'relative', height:'clamp(300px, 40vh, 430px)', overflow:'hidden' }}>
-      {backdrop ? (
-        <img src={backdrop} alt="" aria-hidden="true" style={{
-          position:'absolute', top:'-8%', left:'-8%', width:'116%', height:'116%',
-          objectFit:'cover',
-          filter:`blur(46px) saturate(1.3) brightness(${isDark ? 0.52 : 1.02})`,
+    <div ref={heroRef} style={{ position:'relative', height:'clamp(420px, 56vh, 600px)', overflow:'hidden' }}>
+      {mode === 'photo' ? (
+        // Crisp portrait scaled by HEIGHT (not stretched to full width, which on
+        // wide screens cropped it to a thin slice). The whole figure stays visible;
+        // the bottom ~20% softly blurs out behind the dock/facts header.
+        <Fragment>
+          <img src={backdrop} alt="" aria-hidden="true" style={{
+            position:'absolute', top:0, left:'50%', transform:'translateX(-50%)',
+            height:'100%', width:'auto', maxWidth:'none',
+            filter: isDark ? 'brightness(0.92) saturate(1.04)' : 'saturate(1.02)',
+            WebkitMaskImage:'linear-gradient(180deg, #000 0%, #000 84%, transparent 100%)',
+            maskImage:'linear-gradient(180deg, #000 0%, #000 84%, transparent 100%)',
+          }} />
+          {/* frosted veil that blurs the lower edge as it slides under the header */}
+          <div aria-hidden="true" style={{
+            position:'absolute', left:0, right:0, bottom:0, height:'26%', pointerEvents:'none',
+            backdropFilter:'blur(13px)', WebkitBackdropFilter:'blur(13px)',
+            WebkitMaskImage:'linear-gradient(180deg, transparent 0%, #000 62%)',
+            maskImage:'linear-gradient(180deg, transparent 0%, #000 62%)',
+          }} />
+        </Fragment>
+      ) : mode === 'cutout' ? (
+        // Light-burst stage behind the figure: a near-neutral deep base here, with
+        // the rays/flare/particles rendered inside the centred container below so
+        // their origin tracks the cutout on wide screens.
+        <div aria-hidden="true" style={{
+          position:'absolute', inset:0,
+          background: isDark
+            ? `radial-gradient(ellipse 92% 112% at 73% 50%, oklch(21% 0.015 ${hue}) 0%, oklch(13% 0.01 ${hue}) 55%, ${c.bg} 100%)`
+            : `radial-gradient(ellipse 92% 112% at 73% 50%, oklch(96% 0.012 ${hue}) 0%, oklch(92% 0.01 ${hue}) 55%, ${c.bg} 100%)`,
         }} />
       ) : (
         <div aria-hidden="true" style={{
@@ -11928,6 +12036,21 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef }) {
       }} />
 
       <div style={{ position:'relative', maxWidth:1120, margin:'0 auto', height:'100%', padding:'0 32px' }}>
+        {/* Light-burst (cutout only) — inside the container so --burst-x is measured
+            against the same centred box as the figure, keeping the glow on the cutout. */}
+        {mode === 'cutout' && (
+          <div className="atlas-burst" aria-hidden="true" style={{
+            '--burst-x': '80%',
+            '--burst-hue': hue,
+            '--ray-color': isDark ? 'rgba(255,255,255,0.075)' : 'rgba(120,92,220,0.10)',
+            '--flare-inner': isDark ? 'rgba(255,250,240,0.5)' : 'rgba(255,255,255,0.72)',
+            '--flare-mid': isDark ? `oklch(68% 0.14 ${hue} / 0.30)` : `oklch(80% 0.12 ${hue} / 0.34)`,
+            '--spark': isDark ? 'rgba(255,238,205,0.85)' : `oklch(58% 0.16 ${hue} / 0.55)`,
+          }}>
+            <div className="atlas-particles" />
+          </div>
+        )}
+
         {/* Breadcrumb */}
         <div className="mono" style={{
           position:'absolute', top:20, left:32, zIndex:3, fontSize:10,
@@ -11942,35 +12065,15 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef }) {
           <span style={{ color: isDark ? '#fff' : '#161620' }}>{data.name.toUpperCase()}</span>
         </div>
 
-        {/* Cutout photo / soft-masked plain photo / monogram square fallback */}
-        {heroImg && heroAlpha === true && (
-          <img src={heroImg} alt="" className="atlas-cutout" style={{
-            position:'absolute', right:36, bottom:0, height:'88%', maxWidth:'44%',
-            objectFit:'contain', objectPosition:'bottom right', zIndex:1,
+        {/* Cutout photo (raised, capped) — or monogram square when there is no image at all */}
+        {mode === 'cutout' && (
+          <img src={cutout} alt="" className="atlas-cutout" style={{
+            position:'absolute', right:36, top:44, bottom:34, maxWidth:'44%',
+            objectFit:'contain', objectPosition:'top right', zIndex:1,
             filter:'drop-shadow(0 16px 38px rgba(0,0,0,0.5))',
           }} />
         )}
-        {heroImg && heroAlpha === false && (
-          /* Rectangular photo: no hard edges — both the wrapper (horizontal)
-             and the img (vertical) carry an alpha mask, and nested masks
-             multiply, so all four sides dissolve into the blurred backdrop
-             (which is the same image → reads as ambient edge fill). The top
-             fade also clears the breadcrumb line, so text never sits on a
-             hard photo edge. No drop-shadow: it would redraw the rectangle. */
-          <div className="atlas-cutout" aria-hidden="true" style={{
-            position:'absolute', right:24, bottom:0, height:'82%', maxWidth:'46%', zIndex:1,
-            WebkitMaskImage:'linear-gradient(to right, transparent 0%, black 24%, black 84%, transparent 100%)',
-            maskImage:'linear-gradient(to right, transparent 0%, black 24%, black 84%, transparent 100%)',
-          }}>
-            <img src={heroImg} alt="" style={{
-              height:'100%', maxWidth:'100%', objectFit:'cover', objectPosition:'top center',
-              display:'block', filter:'saturate(1.08)',
-              WebkitMaskImage:'linear-gradient(to bottom, transparent 0%, black 28%, black 90%, rgba(0,0,0,0.45) 100%)',
-              maskImage:'linear-gradient(to bottom, transparent 0%, black 28%, black 90%, rgba(0,0,0,0.45) 100%)',
-            }} />
-          </div>
-        )}
-        {!heroImg && (
+        {mode === 'mono' && (
           <div className="atlas-cutout" style={{
             position:'absolute', right:40, bottom:38, width:148, height:148,
             borderRadius:20, zIndex:1, display:'grid', placeItems:'center',
@@ -11983,20 +12086,54 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef }) {
           </div>
         )}
 
-        {/* Name + context line */}
-        <div style={{ position:'absolute', left:32, right:'44%', bottom:58, zIndex:2, minWidth:0 }}>
+        {/* Name + context lines. In cutout mode the name sits on the left,
+            vertically centred against the figure; otherwise it anchors bottom-left. */}
+        <div style={{
+          position:'absolute', left:32, right: mode==='cutout' ? '46%' : '44%', zIndex:2, minWidth:0,
+          ...(mode==='cutout' ? { top:'50%', transform:'translateY(-50%)' } : { bottom:58 }),
+        }}>
           <h1 className="serif" style={{
-            fontSize:'clamp(38px, 4.6vw, 60px)', fontWeight:300, lineHeight:1.02,
+            fontSize: mode==='cutout' ? 'clamp(46px, 5.6vw, 78px)' : 'clamp(38px, 4.6vw, 60px)',
+            fontWeight:300, lineHeight:1.02,
             color:c.text, letterSpacing:'-0.025em', margin:0,
             textShadow: isDark ? '0 2px 26px rgba(0,0,0,0.6)' : '0 2px 22px rgba(255,255,255,0.8)',
           }}>{data.name}</h1>
-          {bits.length > 0 && (
+          {/* Identity — genre · origin (accent). 'Noto Color Emoji' supplies the flag
+              glyph Windows' system emoji font lacks, so it stops rendering as bare "US". */}
+          {originLine && (
             <div className="mono" style={{
-              marginTop:12, fontSize:11, letterSpacing:'0.2em', textTransform:'uppercase',
-              color: isDark ? 'rgba(213,200,255,0.78)' : 'oklch(42% 0.13 282)',
-              textShadow: isDark ? '0 1px 10px rgba(0,0,0,0.55)' : 'none',
+              marginTop:14, fontSize:15, fontWeight:600, letterSpacing:'0.16em', textTransform:'uppercase',
+              fontFamily: "'JetBrains Mono', 'Noto Color Emoji', ui-monospace, monospace",
+              color: isDark ? 'rgba(228,219,255,0.96)' : 'oklch(34% 0.16 282)',
+              textShadow: isDark ? '0 1px 12px rgba(0,0,0,0.6)' : 'none',
               whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
-            }}>{bits.join(' · ')}</div>
+            }}>{originLine}</div>
+          )}
+
+          {/* Library-derived block — decades you own + catalogue counts (muted) */}
+          {(data.decade_range || countsLine) && (
+            <div style={{ marginTop:12, display:'flex', flexDirection:'column', gap:4 }}>
+              {data.decade_range && (
+                <div className="mono" style={{
+                  fontSize:13, letterSpacing:'0.12em',
+                  color: isDark ? 'rgba(210,202,228,0.7)' : 'oklch(46% 0.05 282)',
+                  textShadow: isDark ? '0 1px 9px rgba(0,0,0,0.5)' : 'none',
+                  whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+                }}>
+                  <span style={{ opacity:0.78 }}>{decadeLabel}</span>
+                  {' · '}
+                  <span style={{ textTransform:'uppercase' }}>{data.decade_range}</span>
+                </div>
+              )}
+              {countsLine && (
+                <div className="mono" style={{
+                  fontSize:13, letterSpacing:'0.14em', textTransform:'uppercase',
+                  color: isDark ? 'rgba(210,202,228,0.7)' : 'oklch(46% 0.05 282)',
+                  textShadow: isDark ? '0 1px 9px rgba(0,0,0,0.5)' : 'none',
+                  whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+                }}>{countsLine}</div>
+              )}
+            </div>
           )}
         </div>
       </div>

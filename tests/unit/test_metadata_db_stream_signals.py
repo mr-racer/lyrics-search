@@ -73,3 +73,37 @@ class TestGetReactionsWithUpdatedAt:
         MetadataDB.set_reaction("b", "colB", "like")
         out = MetadataDB.get_reactions_with_updated_at("colA")
         assert [t[0] for t in out] == ["a"]
+
+
+class TestPruneOrphanedTracks:
+    """Re-indexing mints fresh uuid4 point ids; old reactions/events become
+    orphans. prune_orphaned_tracks drops rows whose track_id is no longer a
+    live Qdrant id, scoped to the re-indexed collection."""
+
+    def test_removes_orphan_reactions_and_events(self):
+        MetadataDB.set_reaction("kept", "colA", "like")
+        MetadataDB.set_reaction("gone", "colA", "like")
+        _insert("kept")
+        _insert("gone")
+
+        removed = MetadataDB.prune_orphaned_tracks("colA", {"kept"})
+
+        assert removed == {"track_reactions": 1, "playback_events": 1}
+        assert [t[0] for t in MetadataDB.get_reactions_with_updated_at("colA")] == ["kept"]
+        assert [r["track_id"] for r in MetadataDB.get_playback_signals("colA")] == ["kept"]
+
+    def test_scoped_to_collection(self):
+        """A re-index of colA must not touch colB's history."""
+        MetadataDB.set_reaction("b", "colB", "like")
+        MetadataDB.set_reaction("orphan", "colA", "like")
+
+        MetadataDB.prune_orphaned_tracks("colA", set())
+
+        assert [t[0] for t in MetadataDB.get_reactions_with_updated_at("colB")] == ["b"]
+        assert MetadataDB.get_reactions_with_updated_at("colA") == []
+
+    def test_noop_when_all_live(self):
+        MetadataDB.set_reaction("a", "colA", "like")
+        _insert("a")
+        removed = MetadataDB.prune_orphaned_tracks("colA", {"a", "extra"})
+        assert removed == {"track_reactions": 0, "playback_events": 0}

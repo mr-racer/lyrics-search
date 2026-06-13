@@ -74,3 +74,14 @@ def test_artist_cover_resolves_as_image(client, artist_cover_file):
 def test_artist_cover_missing_404s(client, artist_cover_file):
     resp = client.get("/api/v1/covers/artists/nope.png")
     assert resp.status_code == 404
+
+
+def test_cover_path_traversal_blocked(client, cover_file):
+    """A :path param matches slashes — guard against escaping COVERS_DIR.
+
+    URL-encoded dots/slashes survive client normalization and reach the
+    server as a real traversal payload, so the server-side guard is what
+    must reject it.
+    """
+    resp = client.get("/api/v1/covers/%2e%2e%2f%2e%2e%2fmain.py")
+    assert resp.status_code == 404

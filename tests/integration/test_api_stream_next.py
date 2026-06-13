@@ -178,6 +178,27 @@ class TestStreamNext:
             served = {t["track_id"] for t in resp.json()["tracks"]}
             assert "a5" not in served
 
+    def test_orphaned_liked_track_not_served(self, client):
+        """Re-indexing mints fresh uuid4 ids, orphaning old likes in SQLite.
+        The liked pool must drop ids that no longer resolve in Qdrant instead of
+        emitting an empty-payload «—» track that 404s on /stream and /lyrics."""
+        coll = _owner_collection(client)
+        for i in range(3):
+            _post_event(client, f"a{i}", session="old")
+        # a real like + a stale like whose track no longer exists in Qdrant
+        _like(client, coll, "a3")
+        _like(client, coll, "ghost_reindexed")
+
+        resp = client.get("/api/v1/recommend/stream/next",
+                          params={"session_id": "s_orphan", "n": 3, "liked_share": 1.0})
+        body = resp.json()
+        served = {t["track_id"] for t in body["tracks"]}
+        assert "ghost_reindexed" not in served
+        # no leaked placeholder track in the chunk
+        for t in body["tracks"]:
+            assert t["title"] != "—"
+            assert t["file_path"], "served track must resolve to a playable file"
+
     def test_liked_share_full_returns_only_liked(self, client):
         coll = _owner_collection(client)
         for i in range(3):
