@@ -11305,6 +11305,44 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
 
 const atlasImgUrl = (p) => (p ? (p.startsWith('http') ? p : `${API}${p}`) : null);
 
+// True artist cutouts are PNGs with transparent margins, but AudioDB
+// sometimes ships a plain rectangular photo in the cutout slot. Probe the
+// alpha channel on a tiny canvas: null = probing, true = has transparency
+// (render as a free-standing cutout), false = solid photo (render with the
+// soft-mask treatment so its edges dissolve into the blurred backdrop).
+function useImageHasAlpha(url) {
+  const [hasAlpha, setHasAlpha] = useState(null);
+  useEffect(() => {
+    setHasAlpha(null);
+    if (!url) return;
+    if (/\.jpe?g(\?|#|$)/i.test(url)) { setHasAlpha(false); return; }  // JPEG has no alpha channel
+    let dead = false;
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      if (dead) return;
+      try {
+        const cv = document.createElement('canvas');
+        cv.width = cv.height = 24;
+        const ctx = cv.getContext('2d', { willReadFrequently: true });
+        ctx.drawImage(img, 0, 0, 24, 24);
+        const px = ctx.getImageData(0, 0, 24, 24).data;
+        let transparent = false;
+        for (let i = 3; i < px.length; i += 4) {
+          if (px[i] < 250) { transparent = true; break; }
+        }
+        setHasAlpha(transparent);
+      } catch (e) {
+        setHasAlpha(false);  // tainted canvas / decode failure → treat as photo
+      }
+    };
+    img.onerror = () => { if (!dead) setHasAlpha(false); };
+    img.src = url;
+    return () => { dead = true; };
+  }, [url]);
+  return hasAlpha;
+}
+
 // "GB" → 🇬🇧 via regional-indicator pair; null for anything not 2 ASCII letters.
 const atlasFlag = (cc) => {
   if (!cc || !/^[A-Za-z]{2}$/.test(cc)) return null;
@@ -11373,7 +11411,12 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef }) {
   const c = useColors(isDark);
   const hue = atlasHue(data.name, data.name.slice(1));
   const backdrop = atlasImgUrl(data.thumb_path) || atlasImgUrl(data.albums?.[0]?.cover_art_path);
-  const cutout = atlasImgUrl(data.cutout_path);
+  // Foreground: prefer the cutout, fall back to the regular photo (AudioDB
+  // thumb / Deezer) so artists without a cutout still get a face in the hero.
+  const heroImg = atlasImgUrl(data.cutout_path) || atlasImgUrl(data.thumb_path);
+  // null while probing → render neither variant for a beat (entrance
+  // animation hides the swap); true → cutout treatment; false → photo.
+  const heroAlpha = useImageHasAlpha(heroImg);
   const flag = atlasFlag(data.country_code);
   const bits = [
     data.genre,
@@ -11422,14 +11465,35 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef }) {
           <span style={{ color: isDark ? '#fff' : '#161620' }}>{data.name.toUpperCase()}</span>
         </div>
 
-        {/* Cutout photo, or monogram square fallback */}
-        {cutout ? (
-          <img src={cutout} alt="" className="atlas-cutout" style={{
+        {/* Cutout photo / soft-masked plain photo / monogram square fallback */}
+        {heroImg && heroAlpha === true && (
+          <img src={heroImg} alt="" className="atlas-cutout" style={{
             position:'absolute', right:36, bottom:0, height:'88%', maxWidth:'44%',
             objectFit:'contain', objectPosition:'bottom right', zIndex:1,
             filter:'drop-shadow(0 16px 38px rgba(0,0,0,0.5))',
           }} />
-        ) : (
+        )}
+        {heroImg && heroAlpha === false && (
+          /* Rectangular photo: no hard edges — both the wrapper (horizontal)
+             and the img (vertical) carry an alpha mask, and nested masks
+             multiply, so all four sides dissolve into the blurred backdrop
+             (which is the same image → reads as ambient edge fill). The top
+             fade also clears the breadcrumb line, so text never sits on a
+             hard photo edge. No drop-shadow: it would redraw the rectangle. */
+          <div className="atlas-cutout" aria-hidden="true" style={{
+            position:'absolute', right:24, bottom:0, height:'82%', maxWidth:'46%', zIndex:1,
+            WebkitMaskImage:'linear-gradient(to right, transparent 0%, black 24%, black 84%, transparent 100%)',
+            maskImage:'linear-gradient(to right, transparent 0%, black 24%, black 84%, transparent 100%)',
+          }}>
+            <img src={heroImg} alt="" style={{
+              height:'100%', maxWidth:'100%', objectFit:'cover', objectPosition:'top center',
+              display:'block', filter:'saturate(1.08)',
+              WebkitMaskImage:'linear-gradient(to bottom, transparent 0%, black 28%, black 90%, rgba(0,0,0,0.45) 100%)',
+              maskImage:'linear-gradient(to bottom, transparent 0%, black 28%, black 90%, rgba(0,0,0,0.45) 100%)',
+            }} />
+          </div>
+        )}
+        {!heroImg && (
           <div className="atlas-cutout" style={{
             position:'absolute', right:40, bottom:38, width:148, height:148,
             borderRadius:20, zIndex:1, display:'grid', placeItems:'center',

@@ -42,3 +42,35 @@ def test_cover_has_acao_with_origin_header(client, cover_file):
     )
     assert resp.status_code == 200
     assert resp.headers.get("access-control-allow-origin") == "*"
+
+
+@pytest.fixture
+def artist_cover_file(tmp_path, monkeypatch):
+    """One fake artist image under COVERS_DIR/artists/ (AudioDB/Deezer cache)."""
+    import app.api.main as main_mod
+
+    monkeypatch.setattr(main_mod, "COVERS_DIR", tmp_path)
+    (tmp_path / "artists").mkdir()
+    name = "cafebabedeadbeef.png"
+    (tmp_path / "artists" / name).write_bytes(b"\x89PNG\r\n\x1a\n fake png body")
+    return name
+
+
+def test_artist_cover_resolves_as_image(client, artist_cover_file):
+    """Artist images live one directory deeper (/covers/artists/<hash>.<ext>).
+
+    serve_cover's single-segment path param can't match them, so they used to
+    fall through to the SPA catch-all and come back as text/html (index.html)
+    — a permanently broken <img> in the Atlas hero. The dedicated route must
+    return the bytes with an image content-type + the same ACAO/cache headers
+    (the hero photo is canvas-probed for transparency, same as useCoverColor)."""
+    resp = client.get(f"/api/v1/covers/artists/{artist_cover_file}")
+    assert resp.status_code == 200
+    assert resp.headers.get("content-type", "").startswith("image/")
+    assert resp.headers.get("access-control-allow-origin") == "*"
+    assert "immutable" in resp.headers.get("cache-control", "")
+
+
+def test_artist_cover_missing_404s(client, artist_cover_file):
+    resp = client.get("/api/v1/covers/artists/nope.png")
+    assert resp.status_code == 404

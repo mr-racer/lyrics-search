@@ -31,6 +31,9 @@ demo.html
 # covers
 /frontend/covers
 
+# media (server-mode uploads — runtime data, not source)
+/media
+
 # notebooks
 /notebooks
 # node

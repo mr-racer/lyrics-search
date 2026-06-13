@@ -279,6 +279,37 @@ def create_app() -> FastAPI:
             },
         )
 
+    # Artist images (AudioDB cutouts / Deezer thumbs) live one directory
+    # deeper: /covers/artists/<hash>.<ext>. serve_cover's single-segment path
+    # param can't match the extra segment, so these URLs used to fall through
+    # to the SPA catch-all and come back as index.html — a permanently broken
+    # <img> in the Atlas hero.
+    @app.get("/api/v1/covers/artists/{cover_file}", tags=["Covers"])
+    async def serve_artist_cover(cover_file: str):
+        """Serve a cached artist image with the same cache/ACAO contract as covers."""
+        # Windows quirk: a URL-encoded backslash (%5C) survives into the path
+        # param and Path() treats it as a separator — refuse anything that
+        # isn't a plain filename.
+        if Path(cover_file).name != cover_file:
+            raise HTTPException(status_code=404, detail="Cover not found")
+        cover_path = COVERS_DIR / "artists" / cover_file
+        if not cover_path.exists() or not cover_path.is_file():
+            raise HTTPException(status_code=404, detail="Cover not found")
+
+        ext = cover_path.suffix.lower()
+        content_type = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
+
+        return Response(
+            cover_path.read_bytes(),
+            media_type=content_type,
+            headers={
+                "Cache-Control": "public, max-age=31536000, immutable",
+                # Same unconditional ACAO as serve_cover — the Atlas hero
+                # canvas-probes this image for transparency.
+                "Access-Control-Allow-Origin": "*",
+            },
+        )
+
     # Routers — MUST be registered BEFORE the SPA catch-all so Starlette
     # matches /api/v1/... routes first (routes are evaluated in order).
     # Phase A: dependencies=[Depends(get_current_user)] gates every existing
