@@ -9,7 +9,6 @@ from _pytest.python import Package
 # Stub heavy optional deps before any app.* module loads them.
 sys.modules.setdefault("laion_clap", types.ModuleType("laion_clap"))
 sys.modules.setdefault("musicbrainzngs", types.ModuleType("musicbrainzngs"))
-sys.modules.setdefault("hdbscan", types.ModuleType("hdbscan"))
 
 
 def pytest_configure(config):

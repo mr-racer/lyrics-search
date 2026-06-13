@@ -21,8 +21,6 @@ def test_index_one_track_persists_descriptor(monkeypatch, tmp_path):
     svc = SonicDescriptorService(
         prompt_vocab_path=vocab_path,
         embeddings_path=embs_path,
-        cluster_dir=tmp_path / "c",
-        classifier_dir=tmp_path / "cls",
         top_k_tags=2,
     )
 
@@ -62,8 +60,6 @@ def test_index_track_descriptor_persists_when_song_row_absent(monkeypatch, tmp_p
     svc = SonicDescriptorService(
         prompt_vocab_path=vocab_path,
         embeddings_path=embs_path,
-        cluster_dir=tmp_path / "c",
-        classifier_dir=tmp_path / "cls",
         top_k_tags=2,
     )
 

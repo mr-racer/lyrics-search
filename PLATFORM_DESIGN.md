@@ -650,6 +650,17 @@ re-ranking по интерпретируемым осям (`sonic_axes` payload 
 
 ### 5.7 Sonic Descriptor Layer (foundation for §5.1 Vibe/Sibling, §5.4 rationale, §5.6 clusters)
 
+> **⚠️ УДАЛЕНО (2026-06-13):** HDBSCAN-кластеризация и MLP-классификатор `sonic_class`
+> (подсекции **5.7.2 Custom Sonic Class Classifier** и **5.7.4 Cluster Curator Tool**,
+> а также cluster-overlay на Sonic Map) **вырезаны из кодовой базы** вместе с
+> зависимостью `hdbscan`. Причина: подсистема не была подключена к фронтенду
+> (`predict_class` без обученной модели всегда возвращал `None`), а `hdbscan`
+> усложнял сборку Docker-образа. **Остаётся только Track 1 — zero-shot
+> prompt-probing tags (§5.7.1)**, на которых работают Sonic Facets/фильтры.
+> Колонки `songs.sonic_class` / `sonic_class_confidence` сохранены в схеме (всегда
+> `NULL`), чтобы не делать миграцию БД. Описание ниже оставлено как исторический
+> контекст.
+
 **Проблема**: CLAP даёт 512-dim opaque vector. LLM не может прочитать его и описать словами. Все features которые делают взаимодействие "Listen smart" (Sonic Vibe фраза, Sonic Sibling "почему похож", For You rationale, cluster labels на Sonic Map) — требуют **interpretable descriptors**, не вектора.
 
 **Решение**: Sonic Descriptor Layer — промежуточный слой между CLAP embedding и LLM/UI. Состоит из **двух independent моделей** на одном входе (CLAP vector):

@@ -198,27 +198,6 @@ def test_sonic_descriptor_optional_class():
     assert d.tags[0].tag == "warm"
 
 
-def test_classifier_status_unready_state():
-    from app.domain.models import ClassifierStatus
-    s = ClassifierStatus(status="untrained", trained_at=None, accuracy=None, classes=[])
-    assert s.status == "untrained"
-    assert s.classes == []
-
-
-def test_cluster_representative_shape():
-    from app.domain.models import ClusterRepresentative
-    r = ClusterRepresentative(
-        cluster_id=0,
-        size=12,
-        representative_tracks=[
-            {"track_id": "t1", "title": "Song", "artist": "Artist", "cover_art_path": None},
-        ],
-        current_label=None,
-    )
-    assert r.size == 12
-    assert r.representative_tracks[0]["track_id"] == "t1"
-
-
 class TestTrackChatModels:
     def test_track_chat_context_required_fields(self):
         from app.domain.models import TrackChatContext
