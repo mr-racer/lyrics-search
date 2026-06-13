@@ -292,31 +292,6 @@ class SonicDescriptor(BaseModel):
     sonic_class_confidence: float | None = None
 
 
-class ClassifierStatus(BaseModel):
-    """Readiness state of the custom sonic-class MLP classifier."""
-    status: Literal["untrained", "training", "ready", "failed"]
-    trained_at: float | None = None
-    accuracy: float | None = None
-    classes: list[str] = []
-
-
-class ClusterRepresentative(BaseModel):
-    """One cluster's id, size, and top-N representative tracks (closest to centroid)."""
-    cluster_id: int
-    size: int
-    representative_tracks: list[dict]  # [{track_id, title, artist, cover_art_path}, ...]
-    current_label: str | None = None
-
-
-class ClusterLabelsRequest(BaseModel):
-    """Body for POST /library/clusters/labels — user-assigned cluster names.
-
-    Phase D (D-hard): the server derives the collection from the JWT; the
-    client no longer supplies it.
-    """
-    labels: dict[int, str]  # {0: "Lo-fi indie", 1: "Cinematic drone", ...}
-
-
 class PlaybackEventIn(BaseModel):
     """Request body for POST /playback/events."""
     session_id: str
