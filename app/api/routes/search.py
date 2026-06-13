@@ -2,11 +2,11 @@
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 
 from app.domain.models import (
-    SearchRequest, SearchResponse, TrackHit, User,
+    SearchRequest, SearchResponse, User,
     TrackReactionRequest, TrackReactionResponse,
 )
 from app.api.dependencies import get_current_user, get_user_for_stream
@@ -21,18 +21,6 @@ router = APIRouter(prefix="/search", tags=["Search"])
 # can't send an Authorization header. Its own get_user_for_stream dependency
 # accepts Bearer OR a short-lived ?st= stream token — auth is still mandatory.
 stream_router = APIRouter(prefix="/search", tags=["Search"])
-
-
-# ── Dependencies ───────────────────────────────────────────────────────────────
-
-def get_search_service(request: Request):
-    """Dependency: get SearchService from app state."""
-    return request.app.state.search_service
-
-
-def get_db_client(request: Request):
-    """Dependency: get LyricsDB from app state."""
-    return request.app.state.db_client
 
 
 # ── Search ────────────────────────────────────────────────────────────────────
@@ -199,9 +187,3 @@ async def get_track_reaction(
     )
 
 
-# ── Legacy stub ────────────────────────────────────────────────────────────────
-
-@router.get("/{track_id}")
-async def get_track(track_id: str):
-    """Get track by ID."""
-    raise HTTPException(status_code=501, detail="Not yet implemented")

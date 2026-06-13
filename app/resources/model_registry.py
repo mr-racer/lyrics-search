@@ -111,11 +111,6 @@ class ModelRegistry:
         working and now get the per-model load lock for free."""
         return cls.get_text_model(model_name)
 
-    @classmethod
-    def get_text_model_config(cls, model_name: str) -> tuple[str, int]:
-        """Get vector_name and dim for a text model (loads if needed)."""
-        _, vector_name, dim = cls.get_text_model(model_name)
-        return vector_name, dim
 
     @classmethod
     def list_text_models(cls) -> dict[str, dict]:

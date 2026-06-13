@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.api.dependencies import get_current_user, get_owner
+from app.api.dependencies import get_owner
 from app.api.helpers import derive_collection_for_user
 from app.domain.models import User
 from app.resources.metadata_db import MetadataDB

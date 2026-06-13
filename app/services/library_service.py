@@ -27,7 +27,6 @@ from .job_tracker import JobTracker, IndexStage, IndexStatus
 from .similarity_service import analyze_collection
 from .song_facts_service import fetch_facts_for_songs
 from .sonic_descriptor_service import SonicDescriptorService
-from ._WIP_musicbraniz_search import MusicBrainzLookup
 
 logger = logging.getLogger(__name__)
 

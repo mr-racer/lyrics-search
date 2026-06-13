@@ -68,21 +68,3 @@ def get_lyrics(title: str, artist: str, better_lyrics_quality: bool) -> str | No
         return None
 
     return lyrics
-
-
-def research_with_musixmatch(song: str) -> str:
-    try:
-        info = song.split(' — ', maxsplit=1)
-        new_text = syncedlyrics.search(
-            f"{info[0]} {info[1]}",
-            providers=['Musixmatch'],
-            plain_only=True,
-        )
-        time.sleep(TIME_BETWEEN_REQUESTS_ENHANCED_LYRICS)
-
-        if new_text:
-            new_text = re.sub(r'\[.*?\]', '', new_text)
-            return new_text
-    except Exception as e:
-        logger.warning("[lyrics] musixmatch fetch failed: %s", e)
-        return None
