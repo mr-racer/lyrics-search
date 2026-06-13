@@ -1,5 +1,7 @@
 """IndexingService.index_uploads assembles a dict from pending_uploads + delegates to fit."""
 
+import threading
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -118,6 +120,60 @@ class TestIndexUploadsProgressAndCovers:
             data = args[0] if args else kwargs.get("data")
             entry = data[next(iter(data))]
             assert entry["cover_art_path"] == "/covers/abc.jpg"
+
+
+class TestIndexUploadsConcurrency:
+    """The metadata+lyrics scan is network-bound (an online lyrics fetch per
+    file). Server-mode uploads must fetch concurrently — like the folder-scan
+    path (scan_and_enrich_folder) — not one file at a time."""
+
+    def _row_n(self, tmp_path, n):
+        f = tmp_path / f"song{n}.flac"
+        f.write_bytes(b"\x00")  # content irrelevant — process_file is mocked
+        return {
+            "upload_id": f"u{n}",
+            "account_id": "acct_x",
+            "sha256": f"deadbeef{n:08d}",
+            "original_filename": f"song{n}.flac",
+            "storage_path": str(f),
+            "size_bytes": 1,
+            "status": "uploaded",
+            "track_id": None,
+            "error": None,
+            "created_at": float(n),
+        }
+
+    def test_lyrics_fetch_runs_concurrently(self, tmp_path):
+        from app.services.indexing_service import IndexingService
+
+        svc = IndexingService(MagicMock())
+        n = 3
+        # A 3-party barrier is satisfied ONLY if all 3 process_file calls are
+        # in flight simultaneously. Sequential processing strands the first
+        # thread at the barrier → BrokenBarrierError on timeout → that row
+        # drops to "failed" and never reaches _fit_impl.
+        barrier = threading.Barrier(n, timeout=5)
+
+        def fake_process_file(file_path, better):
+            barrier.wait()
+            stem = Path(file_path).stem
+            return {"title": f"Song {stem}", "artist": f"Artist {stem}", "lyrics": "la"}
+
+        rows = [self._row_n(tmp_path, i) for i in range(n)]
+
+        with patch.object(svc, "_fit_impl") as fit_mock, \
+             patch("app.indexing.folder_scanner.process_file", side_effect=fake_process_file), \
+             patch("app.indexing.cover_art.save_cover_art", return_value=None), \
+             patch("app.resources.metadata_db.MetadataDB.update_pending_upload_status"):
+            svc.index_uploads(account_id="acct_x", upload_rows=rows)
+
+        assert fit_mock.called, (
+            "no rows reached embedding — process_file calls never overlapped, "
+            "so the barrier timed out: uploads are still processed sequentially"
+        )
+        args, kwargs = fit_mock.call_args
+        data = args[0] if args else kwargs.get("data")
+        assert len(data) == n, f"expected {n} concurrently-processed tracks, got {len(data)}"
 
 
 class TestIndexUploadsUpdatesStatus:
