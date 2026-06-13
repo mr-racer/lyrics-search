@@ -90,3 +90,17 @@ def primary_artist(raw: str | None) -> str:
     """First (primary) participant, or the trimmed raw string if unsplittable."""
     parts = split_artists(raw)
     return parts[0] if parts else " ".join((raw or "").split())
+
+
+def name_for_slug(raw: str | None, slug: str) -> str | None:
+    """The participant display name whose canonical slug == ``slug``.
+
+    Labels a collaborator correctly on the artist page: "Dua Lipa x Angele" must
+    show "Dua Lipa" on the dua-lipa page (and "Angele" on the angele page), never
+    the whole raw tag. Slug computation mirrors ``artist_slugs`` exactly
+    (``_slugify`` + alias resolution). Returns None when no participant maps.
+    """
+    for name in split_artists(raw):
+        if _ALIASES.get(_slugify(name), _slugify(name)) == slug:
+            return name
+    return None

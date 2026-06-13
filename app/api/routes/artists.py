@@ -14,7 +14,7 @@ from app.api.helpers import derive_collection_for_user
 from app.domain.models import ArtistAggregate, ArtistAlbum, TrackMetadata, User
 from app.resources.metadata_db import MetadataDB
 from app.services.artist_facts_service import _slugify as _slugify_artist
-from app.services.artist_split import split_artists, artist_slugs
+from app.services.artist_split import split_artists, artist_slugs, name_for_slug
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/artists", tags=["Artists"])
@@ -161,17 +161,19 @@ def build_artist_aggregate(db, collection: str, canonical_slug: str, lang: str) 
     if not artist_tracks and not row:
         raise HTTPException(status_code=404, detail=f"unknown artist: {canonical_slug}")
 
-    # Prefer the artist name from Qdrant track payloads (those are the real
-    # tagged metadata). The SQLite ``artists.name`` column can be a slug-derived
-    # placeholder (e.g. "dua lipa") because ``add_artist_facts_batch`` does
-    # ``ON CONFLICT DO UPDATE SET name = slug.replace("-", " ")``. Fall back to
-    # the SQLite row name only when no tracks are present, and finally to a
-    # title-cased slug.
-    name = (
-        (artist_tracks[0].artist if artist_tracks else None)
-        or (row[0] if row else None)
-        or canonical_slug.replace("-", " ").title()
-    )
+    # Display name = THIS artist's own participant name, taken from a track where
+    # they appear (raw tags are the real tagged metadata). Crucially NOT the whole
+    # raw ``artist`` tag of the first track: that may be a collaboration, so
+    # "Dua Lipa x Angele" would mislabel the dua-lipa page as the collab. The
+    # SQLite ``artists.name`` can be a slug-derived placeholder
+    # (``add_artist_facts_batch`` does ``ON CONFLICT SET name = slug.replace``),
+    # so it's only a fallback when no tracks are present; finally a title-cased slug.
+    name = None
+    for t in artist_tracks:
+        name = name_for_slug(t.artist, canonical_slug)
+        if name:
+            break
+    name = name or (row[0] if row else None) or canonical_slug.replace("-", " ").title()
 
     # Group tracks by album
     by_album: dict[str, list[TrackMetadata]] = defaultdict(list)

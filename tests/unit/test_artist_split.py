@@ -1,6 +1,8 @@
 """Unit tests for the artist splitter (whole-slug matching, curated rules)."""
 
-from app.services.artist_split import split_artists, artist_slugs, primary_artist
+from app.services.artist_split import (
+    split_artists, artist_slugs, primary_artist, name_for_slug,
+)
 
 
 class TestSplitArtists:
@@ -64,3 +66,25 @@ class TestSlugsAndFalseInclusion:
         # The whole point: 'ye' is a distinct slug, never a substring match.
         assert "ye" not in artist_slugs("Kanye West")
         assert "ye" not in artist_slugs("Yeah Yeah Yeahs")
+
+
+class TestNameForSlug:
+    def test_picks_primary_participant(self):
+        assert name_for_slug("Dua Lipa x Angele", "dua-lipa") == "Dua Lipa"
+
+    def test_picks_featured_participant(self):
+        # The whole point of the fix: the feat's page gets the feat's name.
+        assert name_for_slug("Dua Lipa x Angele", "angele") == "Angele"
+
+    def test_solo(self):
+        assert name_for_slug("Dua Lipa", "dua-lipa") == "Dua Lipa"
+
+    def test_no_match_returns_none(self):
+        assert name_for_slug("Dua Lipa x Angele", "taylor-swift") is None
+
+    def test_alias_resolves_to_canonical_slug(self):
+        # "Ye" maps to kanye-west by alias; the tagged name "Ye" is returned.
+        assert name_for_slug("Ye, Sia", "kanye-west") == "Ye"
+
+    def test_none_input(self):
+        assert name_for_slug(None, "x") is None
