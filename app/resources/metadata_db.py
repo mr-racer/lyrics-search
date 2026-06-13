@@ -208,6 +208,16 @@ _SCHEMA_SQL: Tuple[str, ...] = (
         mode        TEXT NOT NULL CHECK (mode IN ('sharing', 'server')),
         created_at  REAL NOT NULL
     )""",
+    # Server-mode onboarding: instance-level settings (LLM endpoint/key/model,
+    # embedding model, AI/CLAP flags) written via the wizard/Settings and read
+    # by SettingsService with precedence DB > env > default. Key-value so keys
+    # mirror env var names (LLM_BASE_URL, LLM_MODEL, LLM_API_KEY, EMBED_MODEL,
+    # CLAP_ENABLED, AI_ENABLED) and new keys need no migration.
+    """CREATE TABLE IF NOT EXISTS instance_settings (
+        key         TEXT PRIMARY KEY,
+        value       TEXT,
+        updated_at  REAL NOT NULL
+    )""",
     # Phase C: server-mode upload pipeline. One row per file upload — survives
     # restart so an interrupted batch-commit can be resumed via /library/upload/{id}.
     """CREATE TABLE IF NOT EXISTS pending_uploads (
@@ -2056,6 +2066,26 @@ class MetadataDB:
         conn.commit()
         return cur.rowcount > 0
 
+    @classmethod
+    def list_users_with_invite(cls) -> list[dict]:
+        """All users with the invite code each registered through (LEFT JOIN on
+        invites.consumed_by). The owner / pre-invite accounts get invite_code
+        None. Ordered oldest-first. Powers the owner 'Members' admin view."""
+        conn = cls._connect()
+        rows = conn.execute(
+            """SELECT u.id, u.email, u.role, u.created_at, u.last_login_at, i.code
+               FROM users u
+               LEFT JOIN invites i ON i.consumed_by = u.id
+               ORDER BY u.created_at ASC"""
+        ).fetchall()
+        return [
+            {
+                "id": r[0], "email": r[1], "role": r[2], "created_at": r[3],
+                "last_login_at": r[4], "invite_code": r[5],
+            }
+            for r in rows
+        ]
+
     # ── Phase B: per-user settings (columns on the users table) ────────────
     @classmethod
     def get_user_settings(cls, user_id: str) -> Optional[Dict]:
@@ -2328,4 +2358,50 @@ class MetadataDB:
             "INSERT INTO instance_config (id, mode, created_at) VALUES (1, ?, ?)",
             (mode, created_at),
         )
+        conn.commit()
+
+    # ─── Instance settings (key-value; read via SettingsService) ───────────
+    @classmethod
+    def get_instance_setting(cls, key: str) -> str | None:
+        """Return the stored value for ``key`` or None if unset. None means
+        'fall through to env/default' — it is NOT the same as an empty string."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT value FROM instance_settings WHERE key = ?", (key,)
+        ).fetchone()
+        return row[0] if row is not None else None
+
+    @classmethod
+    def get_all_instance_settings(cls) -> dict[str, str | None]:
+        """Return {key: value} for every stored setting (no env/default merge)."""
+        conn = cls._connect()
+        rows = conn.execute(
+            "SELECT key, value FROM instance_settings"
+        ).fetchall()
+        return {r[0]: r[1] for r in rows}
+
+    @classmethod
+    def set_instance_settings(
+        cls, mapping: dict[str, str | None], updated_at: float,
+    ) -> None:
+        """Upsert each key in ``mapping``. A None/empty value DELETES the key so
+        the resolver falls back to env/default (rather than storing an empty
+        string that would mask the env var). No-op on an empty mapping."""
+        if not mapping:
+            return
+        conn = cls._connect()
+        for key, value in mapping.items():
+            if value is None or value == "":
+                conn.execute(
+                    "DELETE FROM instance_settings WHERE key = ?", (key,)
+                )
+            else:
+                conn.execute(
+                    """INSERT INTO instance_settings (key, value, updated_at)
+                       VALUES (?, ?, ?)
+                       ON CONFLICT(key) DO UPDATE SET
+                         value = excluded.value,
+                         updated_at = excluded.updated_at""",
+                    (key, value, updated_at),
+                )
         conn.commit()

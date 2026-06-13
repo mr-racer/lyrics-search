@@ -919,7 +919,8 @@ async def get_upload_status(
 
 class _BatchCommitRequest(BaseModel):
     upload_ids: list[str]
-    # Wizard slider tier; None = backend default model (jina-small).
+    # IGNORED (kept for graceful back-compat): in server mode the embedding
+    # model is the admin's instance setting (EMBED_MODEL), not a member choice.
     text_model: str | None = None
 
 
@@ -931,6 +932,7 @@ async def batch_commit_uploads(
 ) -> dict:
     """Enqueue indexing for a set of already-uploaded files (server mode)."""
     from app.resources.metadata_db import MetadataDB
+    from app.services.settings_service import settings_service
     if not req.upload_ids:
         raise HTTPException(status_code=400, detail="upload_ids must not be empty")
     service: LibraryService = request.app.state.library_service
@@ -948,8 +950,11 @@ async def batch_commit_uploads(
             status_code=400, detail="none of the upload_ids belong to the caller",
         )
 
+    # Hard-lock the embedding model to the instance setting (admin decides).
+    # None → backend default (jina-small), same as before when unset.
     job_id = service.enqueue_upload_indexing(
-        account_id=current_user.id, upload_ids=mine, text_model=req.text_model,
+        account_id=current_user.id, upload_ids=mine,
+        text_model=settings_service.embed_model(),
     )
     return {"job_id": job_id}
 

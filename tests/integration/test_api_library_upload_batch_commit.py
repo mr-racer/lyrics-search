@@ -10,6 +10,14 @@ from app.api.dependencies import get_current_user
 from app.domain.models import User
 
 
+@pytest.fixture(autouse=True)
+def _clean_embed_env(monkeypatch):
+    """The embedding model now resolves via SettingsService (DB > env > default).
+    Strip EMBED_MODEL so a dev shell value can't make these assertions flaky."""
+    monkeypatch.delenv("EMBED_MODEL", raising=False)
+    yield
+
+
 @pytest.fixture
 def _server_mode(clean_metadata_db, tmp_path):
     from app.resources.metadata_db import MetadataDB
@@ -91,7 +99,14 @@ class TestBatchCommit:
             )
             assert resp.status_code == 400
 
-    def test_text_model_threaded_to_service(self, _server_mode):
+    def test_embedding_model_uses_instance_setting_ignoring_body(self, _server_mode):
+        """D5: in server mode the embedding model is the admin's instance
+        setting; the body text_model is IGNORED (member can't override)."""
+        import time
+        from app.resources.metadata_db import MetadataDB
+        MetadataDB.set_instance_settings(
+            {"EMBED_MODEL": "intfloat/multilingual-e5-base"}, time.time(),
+        )
         u1 = _mk("acct_alice", "d" * 64, "x.flac")
         app = create_app()
         _login(app, "acct_alice")
@@ -100,8 +115,9 @@ class TestBatchCommit:
             with TestClient(app) as c:
                 resp = c.post(
                     "/api/v1/library/upload/batch-commit",
+                    # Body value must be ignored in favor of the instance model.
                     json={"upload_ids": [u1],
-                          "text_model": "intfloat/multilingual-e5-base"},
+                          "text_model": "Qwen/Qwen3-Embedding-0.6B"},
                 )
                 assert resp.status_code == 200, resp.text
             assert enq.call_args.kwargs.get("text_model") == "intfloat/multilingual-e5-base"

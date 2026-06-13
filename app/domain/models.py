@@ -702,6 +702,10 @@ class Invite(BaseModel):
 class InstanceConfigResponse(BaseModel):
     """Body of GET /instance/config — public, no auth."""
     mode: Literal["sharing", "server"]
+    # Whether AI features should be offered to members (admin enabled AI AND a
+    # working LLM endpoint is configured). Exposed publicly so a member's
+    # frontend can decide UI without ever seeing the endpoint/key.
+    ai_available: bool = False
 
 
 class SetupRequest(BaseModel):
@@ -737,3 +741,45 @@ class InviteResponse(BaseModel):
     expires_at: float
     consumed: bool
     consumed_at: Optional[float] = None
+
+
+# ── Instance settings (owner-only; server-mode onboarding) ──────────────────
+class SettingItem(BaseModel):
+    """One resolved instance setting for the owner Settings UI. ``value`` is the
+    effective value (DB > env > default); ``source`` says where it came from.
+    For secrets, ``value`` is null and ``has_value`` indicates whether a key is
+    configured."""
+    value: Optional[str] = None
+    source: Literal["db", "env", "default"]
+    has_value: Optional[bool] = None
+
+
+class InstanceSettingsResponse(BaseModel):
+    """Body of GET /instance/settings (owner-only). Keyed by setting name
+    (LLM_BASE_URL, LLM_MODEL, LLM_API_KEY, EMBED_MODEL, CLAP_ENABLED,
+    AI_ENABLED)."""
+    settings: Dict[str, SettingItem]
+
+
+class InstanceSettingsPatch(BaseModel):
+    """Body of PATCH /instance/settings (owner-only). Only fields explicitly
+    present are written (handler uses exclude_unset). A field set to null clears
+    the override (resolver falls back to env/default). For ``llm_api_key``, send
+    the unchanged-sentinel to keep the stored secret untouched."""
+    llm_base_url: Optional[str] = None
+    llm_model: Optional[str] = None
+    llm_api_key: Optional[str] = None
+    embed_model: Optional[str] = None
+    clap_enabled: Optional[bool] = None
+    ai_enabled: Optional[bool] = None
+
+
+class MemberResponse(BaseModel):
+    """One row of GET /admin/members (owner-only). ``invite_code`` is the code a
+    member registered with (None for the owner / pre-invite accounts)."""
+    id: str
+    email: str
+    role: Literal["owner", "member"]
+    created_at: float
+    last_login_at: Optional[float] = None
+    invite_code: Optional[str] = None

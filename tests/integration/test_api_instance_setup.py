@@ -26,10 +26,11 @@ def test_setup_creates_owner_and_returns_working_token(clean_metadata_db):
         )
         assert me.status_code == 200, me.text
         assert me.json()["id"] == data["user"]["id"]
-        # Instance is now initialized with the chosen mode.
+        # Instance is now initialized with the chosen mode. ai_available is
+        # False until the owner configures + enables AI (instance settings).
         cfg = c.get("/api/v1/instance/config")
         assert cfg.status_code == 200
-        assert cfg.json() == {"mode": "sharing"}
+        assert cfg.json() == {"mode": "sharing", "ai_available": False}
 
 
 def test_setup_409_when_already_initialized(clean_metadata_db):

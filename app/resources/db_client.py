@@ -23,10 +23,15 @@ class DbClient:
     """
 
     def __init__(self,
-                 qdrant_url: str = "http://localhost:6333",
+                 qdrant_url: str | None = None,
                  collection_name: str = "music_explorer",
                  model_name: str | None = None):
-        self.qdrant_url = qdrant_url
+        # QDRANT_URL env override lets the app reach Qdrant by its Docker
+        # Compose service name (http://qdrant:6333) inside a container, while
+        # still defaulting to localhost for bare-metal/Windows runs.
+        self.qdrant_url = qdrant_url or os.environ.get(
+            "QDRANT_URL", "http://localhost:6333"
+        )
         self.collection_name = collection_name
         self.model_name = model_name or os.environ.get(
             "TEXT_MODEL",

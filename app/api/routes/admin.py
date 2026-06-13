@@ -9,16 +9,27 @@ from __future__ import annotations
 
 import logging
 from types import SimpleNamespace
+from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.api.dependencies import get_owner
+from app.api.dependencies import get_owner, require_mode
 from app.api.helpers import derive_collection_for_user
-from app.domain.models import User
+from app.domain.models import MemberResponse, User
 from app.resources.metadata_db import MetadataDB
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 logger = logging.getLogger(__name__)
+
+
+@router.get(
+    "/members", response_model=List[MemberResponse],
+    dependencies=[Depends(require_mode("server"))],
+)
+def list_members(_owner: User = Depends(get_owner)) -> List[MemberResponse]:
+    """Owner-only roster for the 'Members' admin view: every account with the
+    invite code it registered through. Server mode only (sharing has one user)."""
+    return [MemberResponse(**r) for r in MetadataDB.list_users_with_invite()]
 
 
 @router.post("/accounts/{user_id}/wipe")
