@@ -202,7 +202,16 @@ class SonicDescriptorService:
 
         Returns ``{"n_tracks": int, "n_clusters": int}``.
         """
-        import hdbscan
+        # hdbscan is an optional dependency, removed from the default build.
+        # Sonic clustering / cluster-discovery is the only feature that needs it;
+        # surface a clear message instead of a raw ModuleNotFoundError.
+        try:
+            import hdbscan
+        except ModuleNotFoundError as e:
+            raise RuntimeError(
+                "Sonic clustering is disabled in this build (hdbscan not installed). "
+                "Add 'hdbscan' to requirements.txt and rebuild to enable it."
+            ) from e
 
         # 1. Collect all vectors + slugs (need both for persistence + representatives)
         vectors: list[np.ndarray] = []

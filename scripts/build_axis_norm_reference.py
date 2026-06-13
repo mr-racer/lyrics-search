@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Iterable
 
@@ -90,7 +91,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--collection", required=True,
                         help="Indexed Qdrant collection to use as the reference library")
-    parser.add_argument("--qdrant-url", default="http://localhost:6333")
+    parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL", "http://localhost:6333"))
     parser.add_argument("--output", type=Path, default=AXIS_NORM_REFERENCE_PATH)
     parser.add_argument("--dry-run", action="store_true",
                         help="Print the stats without writing the file")

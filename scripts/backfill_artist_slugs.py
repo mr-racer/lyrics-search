@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from typing import Iterable
 
@@ -100,7 +101,7 @@ def backfill_collection(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--collection", required=True)
-    parser.add_argument("--qdrant-url", default="http://localhost:6333")
+    parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL", "http://localhost:6333"))
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 

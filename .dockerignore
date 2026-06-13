@@ -1,0 +1,40 @@
+# ── Data dirs (mounted as volumes, must NOT bloat the build context) ────────
+media
+cache
+weights
+qdrant_storage
+frontend/covers
+
+# ── VCS / tooling / local-only ──────────────────────────────────────────────
+.git
+.gitignore
+.claude
+.superpowers
+.tmp
+.cursor*
+node_modules
+notebooks
+docs
+demo.html
+
+# ── Python caches / test artifacts ──────────────────────────────────────────
+__pycache__
+**/__pycache__
+*.py[codz]
+*.so
+.pytest_cache
+.ruff_cache
+.mypy_cache
+htmlcov
+.coverage*
+tests
+
+# ── Secrets / env ────────────────────────────────────────────────────────────
+.env
+*.log
+
+# ── Other services' configs (not part of the app image) ─────────────────────
+searxng
+docker-compose.yml
+docker-compose.override.yml
+Dockerfile

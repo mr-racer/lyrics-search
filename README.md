@@ -53,20 +53,36 @@ MusiX extracts cover art directly from your audio files and displays it alongsid
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Quick Start (Docker — recommended)
+
+Everything runs in containers — app (with GPU), Qdrant, and SearXNG:
 
 ```bash
-# 1. Start Qdrant (vector database)
-docker-compose up -d
+# 1. Configure (optional but recommended — sets JWT secret + LLM key)
+cp .env.example .env   # then edit .env
+
+# 2. Build + start the whole stack
+docker compose up -d --build
+```
+
+Open `http://localhost:8000` → the first-run wizard creates your owner account → point MusiX at your music (upload or index) → start searching.
+
+> **GPU note:** the `musix` service requests an NVIDIA GPU. Requires Docker Desktop with the WSL2 backend + NVIDIA Container Toolkit. To run CPU-only, remove the `deploy.resources` block from `docker-compose.yml` and switch `requirements.txt` to CPU torch wheels.
+
+<details>
+<summary>Bare-metal (no Docker) — Windows dev</summary>
+
+```bash
+# 1. Start Qdrant + SearXNG
+docker compose up -d qdrant searxng
 
 # 2. Install dependencies
 pip install -e .
 
-# 3. Run the server
+# 3. Run the server (QDRANT_URL defaults to http://localhost:6333)
 uvicorn app.api.main:app --reload --host 0.0.0.0 --port 8000 --log-config logging.conf
 ```
-
-Open `http://localhost:8000` → point MusiX at your music folder → start searching.
+</details>
 
 ---
 
