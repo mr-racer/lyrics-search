@@ -62,3 +62,49 @@ def test_feat_role_visible_via_primary_slug(client):
     tracks = {t["title"]: t for al in resp.json()["albums"] for t in al["tracks"]}
     assert tracks["T2"]["primary_artist_slug"] == "kanye-west"
     assert tracks["T3"]["primary_artist_slug"] == "drake"
+
+
+def _single_artist_client(tmp_path, monkeypatch, pts):
+    """A client whose Qdrant returns exactly `pts` (in order) for any scroll."""
+    monkeypatch.setattr("app.resources.metadata_db.DB_PATH", tmp_path / "m.db")
+    MetadataDB._reset_for_tests()
+    MetadataDB.init()
+    qdrant = MagicMock()
+    qdrant.scroll.return_value = (pts, None)
+    db = MagicMock(); db.qdrant = qdrant
+    app.state.db_client = db
+    c = TestClient(app)
+    authenticate_test_client(c, app)
+    return c
+
+
+def test_artist_name_is_canonical_not_raw_collab_tag(tmp_path, monkeypatch):
+    # Regression: the page title must be the canonical participant, never the raw
+    # collab tag of whatever track scrolls first. The FIRST point for dua-lipa is
+    # a collaboration — the name must still resolve to "Dua Lipa".
+    c = _single_artist_client(tmp_path, monkeypatch, [
+        _pt("1", "Dua Lipa x Angele", ["dua-lipa", "angele"], "dua-lipa"),
+        _pt("2", "Dua Lipa", ["dua-lipa"], "dua-lipa"),
+    ])
+    try:
+        resp = c.get("/api/v1/artists/dua-lipa", params={"collection": "c"})
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "Dua Lipa"
+    finally:
+        MetadataDB._reset_for_tests()
+        app.state.db_client = None
+
+
+def test_featured_artist_name_taken_from_their_participant(tmp_path, monkeypatch):
+    # The feat's page (angele) must show "Angele", not the whole "Dua Lipa x
+    # Angele" tag, even though every one of their tracks is a collaboration.
+    c = _single_artist_client(tmp_path, monkeypatch, [
+        _pt("1", "Dua Lipa x Angele", ["dua-lipa", "angele"], "dua-lipa"),
+    ])
+    try:
+        resp = c.get("/api/v1/artists/angele", params={"collection": "c"})
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "Angele"
+    finally:
+        MetadataDB._reset_for_tests()
+        app.state.db_client = None
