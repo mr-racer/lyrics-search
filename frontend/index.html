@@ -2449,6 +2449,93 @@ function useAIStatus() {
   };
 }
 
+// ─── useMediaSession — expose now-playing to the OS ─────────────────────────
+// Feeds the Media Session API → Windows SMTC (the media flyout by the clock,
+// lock screen, and hardware/media keys), the same mechanism Spotify/Yandex web
+// use. Title/artist/album + album art + play/pause/prev/next + a position
+// scrubber. No-op where unsupported; Chromium/Edge give the full SMTC.
+function useMediaSession({ currentTrack, isPlaying, audioRef, onPlay, onPause, onNext, onPrev, onSeek }) {
+  // Action callbacks via a ref so handlers register once but always call the
+  // latest closures (next/prev/seek are recreated each render).
+  const cbs = useRef({});
+  cbs.current = { onPlay, onPause, onNext, onPrev, onSeek };
+
+  // Metadata on track change.
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    if (!currentTrack) { navigator.mediaSession.metadata = null; return; }
+    let art = null;
+    const rel = currentTrack.cover_art_path;
+    if (rel) {
+      const u = rel.startsWith('http') ? rel : `${API}${rel}`;
+      art = u.startsWith('http') ? u : window.location.origin + u;
+    }
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: currentTrack.title || '',
+        artist: currentTrack.artist || '',
+        album: currentTrack.album || '',
+        artwork: art ? [
+          { src: art, sizes: '256x256', type: 'image/jpeg' },
+          { src: art, sizes: '512x512', type: 'image/jpeg' },
+        ] : [],
+      });
+    } catch {}
+  }, [currentTrack?.track_id, currentTrack?.title, currentTrack?.artist, currentTrack?.album, currentTrack?.cover_art_path]);
+
+  // Register action handlers once.
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    const ms = navigator.mediaSession;
+    const set = (action, fn) => { try { ms.setActionHandler(action, fn); } catch {} };
+    set('play', () => cbs.current.onPlay?.());
+    set('pause', () => cbs.current.onPause?.());
+    set('previoustrack', () => cbs.current.onPrev?.());
+    set('nexttrack', () => cbs.current.onNext?.());
+    set('seekto', (e) => {
+      if (e && typeof e.seekTime === 'number') {
+        if (cbs.current.onSeek) cbs.current.onSeek(e.seekTime);
+        else if (audioRef?.current) audioRef.current.currentTime = e.seekTime;
+      }
+    });
+    return () => ['play', 'pause', 'previoustrack', 'nexttrack', 'seekto'].forEach(a => set(a, null));
+  }, [audioRef]);
+
+  // Mirror play/pause state.
+  useEffect(() => {
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = currentTrack ? (isPlaying ? 'playing' : 'paused') : 'none';
+    }
+  }, [isPlaying, currentTrack?.track_id]);
+
+  // Position/duration for the system scrubber.
+  useEffect(() => {
+    const el = audioRef?.current;
+    if (!el || !('mediaSession' in navigator) || !('setPositionState' in navigator.mediaSession)) return;
+    const upd = () => {
+      const d = el.duration;
+      if (d && isFinite(d) && d > 0) {
+        try {
+          navigator.mediaSession.setPositionState({
+            duration: d,
+            position: Math.min(Math.max(el.currentTime || 0, 0), d),
+            playbackRate: el.playbackRate || 1,
+          });
+        } catch {}
+      }
+    };
+    el.addEventListener('timeupdate', upd);
+    el.addEventListener('loadedmetadata', upd);
+    el.addEventListener('durationchange', upd);
+    upd();
+    return () => {
+      el.removeEventListener('timeupdate', upd);
+      el.removeEventListener('loadedmetadata', upd);
+      el.removeEventListener('durationchange', upd);
+    };
+  }, [audioRef, currentTrack?.track_id]);
+}
+
 // ─── useGlobalKeyboardShortcuts — document-level playback + nav shortcuts ───
 function useGlobalKeyboardShortcuts({ audio, onNavToSection, onToggleLyrics, onCloseLyrics }) {
   useEffect(() => {
@@ -10796,6 +10883,19 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
     }
   };
   const seek = (time) => { if (audio) audio.seek(time); };
+
+  // Expose now-playing to the OS media controls (Windows SMTC / media keys).
+  // Wired to the same handlers as the on-screen player buttons.
+  useMediaSession({
+    currentTrack,
+    isPlaying,
+    audioRef: audio?.audioRef,
+    onPlay: () => audio?.play?.(),
+    onPause: () => audio?.pause?.(),
+    onNext: nextTrack,
+    onPrev: prevTrack,
+    onSeek: seek,
+  });
 
   const setReaction = async (val) => {
     if (!currentTrack) return;
