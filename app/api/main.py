@@ -222,10 +222,6 @@ def create_app() -> FastAPI:
         expose_headers=["*"],
     )
 
-    @app.get("/", tags=["Health"])
-    async def root():
-        return {"name": "Music Explorer", "version": "0.1.0", "status": "running", "docs": "/docs"}
-
     @app.get("/health", tags=["Health"])
     async def health_check():
         return {

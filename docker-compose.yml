@@ -4,7 +4,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: musix:latest
     container_name: musix
     restart: unless-stopped
     ports:
