@@ -67,6 +67,12 @@ class PlaybackSignal:
     interacted: bool | None = None
 
 
+def _clap_vector(point):
+    """Extract a point's CLAP vector, tolerating both named-vector dicts
+    (``{"clap": [...]}``) and the bare-list vectors older indexes stored."""
+    return point.vector.get("clap") if isinstance(point.vector, dict) else point.vector
+
+
 def is_skip(played_sec: float, total_dur: float | None) -> bool:
     """Design §3 skip rule: <30s, but для коротких треков — <25% длительности."""
     if total_dur and 0.0 < total_dur < SKIP_SHORT_TRACK_SEC:
@@ -621,7 +627,7 @@ def pool_explore_candidates(
         pts = []
     vec_by_id = {}
     for p in pts:
-        v = p.vector.get("clap") if isinstance(p.vector, dict) else p.vector
+        v = _clap_vector(p)
         if v:
             vec_by_id[str(p.id)] = np.asarray(v, dtype=np.float32)
     for tid in sampled:
@@ -822,7 +828,7 @@ def _retrieve_track_data(
     for p in pts:
         tid = str(p.id)
         payloads[tid] = p.payload or {}
-        v = p.vector.get("clap") if isinstance(p.vector, dict) else p.vector
+        v = _clap_vector(p)
         if v:
             vectors[tid] = np.asarray(v, dtype=np.float32)
     return vectors, payloads
