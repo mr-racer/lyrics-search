@@ -6,7 +6,7 @@
   <title>MusiX — Studio Console</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:ital,wght@0,400;0,700;1,400;1,700&family=JetBrains+Mono:wght@400;500;600&family=Geist:wght@400;500;600;700&family=Noto+Color+Emoji&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:ital,wght@0,400;0,700;1,400;1,700&family=Playfair+Display:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500;600&family=Geist:wght@400;500;600;700&family=Noto+Color+Emoji&display=swap" rel="stylesheet" />
 
   <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
   <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
@@ -24,6 +24,8 @@
       text-rendering: optimizeLegibility;
     }
     .serif { font-family: 'Noto Sans', 'Times New Roman', serif; font-weight: 400; letter-spacing: -0.01em; }
+    /* Expressive display serif for the "Твой Вайб" line — Playfair (Cyrillic OK). */
+    .vibe-serif { font-family: 'Playfair Display', Georgia, 'Times New Roman', serif; }
     .mono  { font-family: 'JetBrains Mono', ui-monospace, monospace; }
 
     ::-webkit-scrollbar { width: 6px; height: 6px; }
@@ -1191,17 +1193,15 @@
       top: 0;
       height: 100%;
       width: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 clamp(4px, 0.8vw, 12px);
-      gap: 2px;
       pointer-events: none;
       z-index: 0;
-      filter: blur(9px) saturate(1.5);
-      -webkit-filter: blur(9px) saturate(1.5);
-      overflow: visible;  /* let the blur halo bleed past strip edges */
+      /* A touch of saturation keeps the cover-derived tint vivid; a slight
+         blur softens the wave's edge so the boundary isn't harsh. */
+      filter: saturate(1.2) blur(0.8px);
+      -webkit-filter: saturate(1.2) blur(0.8px);
+      overflow: visible;  /* let the soft path edges bleed past strip edges */
     }
+    .player-spectrum svg { display: block; width: 100%; height: 100%; overflow: visible; }
     /* Outer-edge mask gradient: bars fade from transparent at the column
        edge to fully opaque ~12% across. Without this, the strip's bounding
        box terminates abruptly at the row edge — bars at the outer position
@@ -1218,21 +1218,7 @@
       -webkit-mask-image: linear-gradient(to left,  transparent 0%, #000 12%, #000 100%);
               mask-image: linear-gradient(to left,  transparent 0%, #000 12%, #000 100%);
     }
-    .player-spectrum-bar {
-      flex: 0 0 clamp(6px, 0.85vw, 13px);
-      height: 86%;          /* near full row height — bigger visual amplitude */
-      border-radius: 999px; /* round caps top + bottom — wave feel */
-      transform: scaleY(0);
-      transform-origin: center;
-      will-change: transform;
-      background: linear-gradient(
-        to top,
-        transparent 0%,
-        var(--bar-color, oklch(62% 0.16 270)) 35%,
-        var(--bar-color, oklch(62% 0.16 270)) 65%,
-        transparent 100%
-      );
-    }
+    /* .player-spectrum-bar removed — the strip is now a single SVG wave path. */
     @media (prefers-reduced-motion: reduce) {
       .player-spectrum { display: none; }
     }
@@ -1873,6 +1859,20 @@
     .fy-hybrid:hover .fy-bg1{animation-duration:3.4s}.fy-hybrid:hover .fy-bg2{animation-duration:4s}.fy-hybrid:hover .fy-bg3{animation-duration:4.6s}.fy-hybrid:hover .fy-bg4{animation-duration:3.7s}
     .fy-hybrid:hover .fy-ring{opacity:1;animation-duration:2.4s}
     .fy-hybrid:hover .fy-halo{animation:fyHaloOut 1s ease-out infinite}
+    /* ── Artist-hero aurora: drifting album-colour blobs for the no-photo state.
+       Reuses the For-You fyBlobA-D keyframes (their translate %s are relative to
+       each blob's own box, so they scale up to hero size). The container masks the
+       blobs to fade out toward both horizontal edges; the base linear-gradient
+       behind them stays full-bleed so the colour field never hard-cuts on wide screens. */
+    .atlas-aurora{position:absolute;inset:0;overflow:hidden;
+      -webkit-mask-image:linear-gradient(90deg,transparent 0%,#000 14%,#000 86%,transparent 100%);
+      mask-image:linear-gradient(90deg,transparent 0%,#000 14%,#000 86%,transparent 100%)}
+    .aurora-blob{position:absolute;width:62%;height:135%;border-radius:50%;filter:blur(72px);opacity:.7;will-change:transform}
+    .aurora-blob-0{top:-30%;left:-10%;animation:fyBlobA 19s ease-in-out infinite}
+    .aurora-blob-1{top:-12%;left:36%;animation:fyBlobB 23s ease-in-out infinite}
+    .aurora-blob-2{top:-26%;left:62%;animation:fyBlobC 27s ease-in-out infinite}
+    .aurora-blob-3{top:2%;left:18%;animation:fyBlobD 21s ease-in-out infinite}
+    @media (prefers-reduced-motion: reduce){.aurora-blob{animation:none}}
     /* Home hero stream console: vinyl record that slides out from behind the lead cover.
        The slide transform lives on a wrapper div (React inline style); this class only
        owns the disc look + the perpetual slow spin, so the two transforms never clash. */
@@ -1899,6 +1899,22 @@
     .load-skel--l{background:rgba(0,0,0,.06)}
     .load-skel::after{content:'';position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.10),transparent);background-size:200% 100%;animation:shimmer 1.5s ease-in-out infinite}
     .load-skel--l::after{background:linear-gradient(90deg,transparent,rgba(255,255,255,.6),transparent);background-size:200% 100%}
+    /* ── Home «Эфир» landing: split hero + discovery rail (desktop, fluid) ─── */
+    .efir-main{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(340px,1fr);
+      gap:clamp(20px,2.4vw,40px);max-width:1320px;margin:0 auto;
+      padding:0 clamp(20px,3vw,40px) clamp(28px,4vh,56px);align-items:stretch}
+    .efir-rail{display:flex;flex-direction:column;gap:clamp(16px,1.6vw,22px);min-width:0}
+    /* Reflow: rail drops under the hero, then its two cards sit side by side */
+    @media (max-width:1180px){
+      .efir-main{grid-template-columns:1fr}
+      .efir-rail{display:grid;grid-template-columns:1fr 1fr}
+    }
+    @media (max-width:720px){ .efir-rail{grid-template-columns:1fr} }
+    /* Wide aurora "wave" — reuses the fy-blob keyframes at a larger scale */
+    .efir-wave{position:relative;overflow:hidden;isolation:isolate}
+    .efir-wave .fy-blob{width:58%;height:200%;filter:blur(40px)}
+    .efir-wave .fy-bg1{top:-34%;left:-10%}.efir-wave .fy-bg2{top:-14%;left:22%}
+    .efir-wave .fy-bg3{top:-46%;left:50%}.efir-wave .fy-bg4{top:-18%;left:74%}
   </style>
 </head>
 <body>
@@ -3446,44 +3462,26 @@ function Skel({ w, h, r, isDark, style }) {
   );
 }
 
-// One shelf-row placeholder (mono label + a row of cover tiles with title/artist lines).
-function ShelfSkeleton({ isDark, count }) {
-  const n = count || 6;
-  return (
-    <div style={{ padding:'0 40px', marginTop:34 }}>
-      <Skel w={140} h={11} r={4} isDark={isDark} />
-      <div style={{ display:'flex', gap:16, marginTop:14 }}>
-        {Array.from({ length:n }).map((_, i) => (
-          <div key={i} style={{ width:120, flex:'none' }}>
-            <Skel w={120} h={120} r={10} isDark={isDark} />
-            <Skel w={100} h={12} r={4} isDark={isDark} style={{ marginTop:9 }} />
-            <Skel w={68} h={11} r={4} isDark={isDark} style={{ marginTop:6 }} />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function ForYouHero({ isDark, lang, onStartStream, navigateToArtist }) {
   const c = useColors(isDark);
   const [profile, setProfile] = useState(null);
-  const [vibe, setVibe] = useState(null);
+  const [vibe, setVibe] = useState(null);          // { phrase, source } | null
+  const [vibeLoading, setVibeLoading] = useState(true);
   const [hoverCtl, setHoverCtl] = useState(false);
-  const [hoverDeck, setHoverDeck] = useState(false);
   const [loading, setLoading] = useState(true);
   const [likedShare, setLikedShare] = useState(0.3);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const shareTimer = useRef(null);
 
   // Derived BEFORE the hooks that depend on them — @babel/standalone hoists
   // const→var, so a later declaration would silently read as undefined in deps.
   const islands = (profile && profile.islands) || [];
-  const lead = islands.length ? islands[0].tracks[0] : null;
-  const anchorCovers = islands
+  const hasProfile = islands.length > 0;
+  const anchors = islands
     .map(isl => (isl.tracks && isl.tracks[0]) || null)
-    .filter(t => t && t.track_id !== (lead && lead.track_id));
-  const leadCoverUrl = homeCoverUrl(lead && lead.cover_art_path);
-  const color = useCoverColor(leadCoverUrl);
+    .filter(Boolean);
+  const topCoverUrl = homeCoverUrl(anchors[0] && anchors[0].cover_art_path);
+  const color = useCoverColor(topCoverUrl);
 
   useEffect(() => {
     let alive = true;
@@ -3498,14 +3496,18 @@ function ForYouHero({ isDark, lang, onStartStream, navigateToArtist }) {
     return () => { alive = false; };
   }, []);
 
+  // The wave/vibe phrase — a short AI line over long- + short-term taste. The
+  // endpoint returns an instant phrase (cached AI or deterministic fallback)
+  // and warms the LLM cache in the background, so the hero never blocks.
   useEffect(() => {
-    if (!lead) { setVibe(null); return; }
     let alive = true;
-    apiFetch(`/metadata/tracks/${encodeURIComponent(lead.track_id)}/sonic-vibe`)
-      .then(r => { if (alive) setVibe(r && r.phrase ? r.phrase : null); })
-      .catch(() => { if (alive) setVibe(null); });
+    setVibeLoading(true);
+    apiFetch(`/recommend/taste-vibe?lang=${encodeURIComponent(lang)}`)
+      .then(r => { if (alive) setVibe(r && r.phrase ? r : null); })
+      .catch(() => { if (alive) setVibe(null); })
+      .finally(() => { if (alive) setVibeLoading(false); });
     return () => { alive = false; };
-  }, [lead && lead.track_id]);
+  }, [lang]);
 
   // Persist the liked/new slider (debounced) — the stream reads it server-side
   // on every chunk, so moving it mid-stream takes effect on the next chunk.
@@ -3519,136 +3521,153 @@ function ForYouHero({ isDark, lang, onStartStream, navigateToArtist }) {
     }, 350);
   };
 
-  if (!profile) return loading ? (
-    <div style={{ padding:'40px 40px 26px' }}>
-      <div className={ske('panel', isDark)} style={{ maxWidth:920, margin:'0 auto', borderRadius:24, padding:'40px 48px 38px' }}>
-        <div style={{ display:'flex', gap:52, alignItems:'center' }}>
-          <Skel w={204} h={204} r={16} isDark={isDark} style={{ flex:'none' }} />
-          <div style={{ flex:1 }}>
-            <Skel w={120} h={11} r={4} isDark={isDark} />
-            <Skel w={250} h={28} r={7} isDark={isDark} style={{ marginTop:14 }} />
-            <Skel w={150} h={13} r={5} isDark={isDark} style={{ marginTop:10 }} />
-            <Skel w={330} h={16} r={6} isDark={isDark} style={{ marginTop:14 }} />
-            <div style={{ display:'flex', alignItems:'center', gap:14, marginTop:22 }}>
-              <Skel w={62} h={62} r={'50%'} isDark={isDark} />
-              <Skel w={170} h={11} r={4} isDark={isDark} />
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  ) : null;
-
-  const ambient = color
-    ? `radial-gradient(ellipse 70% 120% at 78% 10%, hsla(${color.h},${color.s}%,${color.l}%,.32), transparent 60%), radial-gradient(ellipse 50% 80% at 6% 100%, rgba(255,120,200,.12), transparent 60%)`
-    : `radial-gradient(ellipse 70% 120% at 78% 10%, rgba(124,91,255,.32), transparent 60%)`;
-  // Vinyl center label picks up the lead cover's dominant hue (same source as the ambient wash).
-  const labelBg = color
-    ? `radial-gradient(circle at 38% 32%, hsla(${color.h},${color.s}%,${Math.min(color.l + 18, 82)}%,.95), hsla(${color.h},${color.s}%,${color.l}%,1) 70%)`
-    : 'radial-gradient(circle at 38% 32%, #b06bff, #6a44d6 70%)';
-
   const startStream = () => { if (onStartStream) onStartStream(); };
+  const phrase = vibe && vibe.phrase;
 
-  // Profile formed = at least one taste island; otherwise the stream starts
-  // in exploration mode and the hero says so honestly.
-  const hasProfile = islands.length > 0;
-  const anchorStrip = anchorCovers.slice(0, 4);
-  const deckEase = 'cubic-bezier(.22,.9,.3,1)';
+  const heroGlass = isDark
+    ? 'linear-gradient(150deg, rgba(30,28,42,.72), rgba(16,16,22,.66))'
+    : 'linear-gradient(150deg, rgba(255,255,255,.72), rgba(244,243,250,.62))';
+  const heroShadow = isDark
+    ? '0 30px 70px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.08)'
+    : '0 30px 60px rgba(60,45,100,.16), inset 0 1px 0 rgba(255,255,255,.9)';
+  const tint = color
+    ? `radial-gradient(ellipse 60% 90% at 22% 0%, hsla(${color.h},${color.s}%,${color.l}%,.30), transparent 62%)`
+    : `radial-gradient(ellipse 60% 90% at 22% 0%, rgba(124,91,255,.26), transparent 62%)`;
+  // Soft fade so the aurora dissolves into the glass instead of cutting off.
+  const waveFade = 'linear-gradient(180deg, #000 0%, #000 46%, transparent 100%)';
 
   return (
-    <div style={{ padding:'40px 40px 26px' }}>
-      {/* The one raised "device" on the landing page — everything else stays flat/editorial. */}
-      <div className={ske('panel', isDark)} style={{ position:'relative', maxWidth:920, margin:'0 auto', borderRadius:24, overflow:'hidden', padding:'40px 48px 38px' }}>
-        <div className={brushed(isDark)} style={{ position:'absolute', top:0, left:0, right:0, height:9 }} />
-        <div style={{ position:'absolute', inset:0, background:ambient, pointerEvents:'none' }} />
-        <div style={{ position:'relative', display:'flex', gap:52, alignItems:'center' }}>
-          {/* Deck: lead cover as a record sleeve; the vinyl slides out on hover */}
-          <div style={{ position:'relative', flex:'none', width:316, height:204, cursor:'pointer' }}
-               onMouseEnter={() => setHoverDeck(true)} onMouseLeave={() => setHoverDeck(false)}
-               onClick={startStream} role="button" aria-label={lang==='ru'?'Включить ваш стрим':'Start your stream'}>
-            <div style={{ position:'absolute', left:10, top:7, width:190, height:190, zIndex:2,
-                          transform: hoverDeck ? 'translateX(112px) rotate(12deg)' : 'translateX(38px)',
-                          transition:`transform .55s ${deckEase}` }}>
-              <div className="vinyl-disc"><span className="vinyl-label" style={{ background:labelBg }} /></div>
+    // The lead element — liquid glass over the page, with the aurora "wave" as
+    // its motif instead of a single album cover (we show the vibe, not a song).
+    // Flex column so the play cluster centers in whatever height the row takes.
+    <div className="efir-hero" style={{
+      position:'relative', borderRadius:24, overflow:'hidden', padding:'clamp(24px,2vw,38px)',
+      border:`1px solid ${c.border}`, background:heroGlass,
+      backdropFilter:'blur(26px)', WebkitBackdropFilter:'blur(26px)',
+      boxShadow:heroShadow, animation:'fadeInUp .55s cubic-bezier(.22,.9,.3,1)',
+      display:'flex', flexDirection:'column',
+    }}>
+      {/* brushed top hairline — a small skeuomorphic nod under the glass */}
+      <div className={brushed(isDark)} style={{ position:'absolute', top:0, left:0, right:0, height:7, opacity:.7 }} />
+      {/* aurora "wave" band — soft-masked so it melts into the glass below */}
+      <div className="efir-wave" style={{ position:'absolute', top:0, left:0, right:0, height:'58%', opacity:isDark?0.55:0.45, pointerEvents:'none',
+        WebkitMaskImage:waveFade, maskImage:waveFade }}>
+        <span className="fy-blob fy-bg1" /><span className="fy-blob fy-bg2" /><span className="fy-blob fy-bg3" /><span className="fy-blob fy-bg4" />
+      </div>
+      {/* dominant-hue tint + frost so the headline stays readable over the wave */}
+      <div style={{ position:'absolute', inset:0, background:tint, pointerEvents:'none' }} />
+      <div style={{ position:'absolute', inset:0, pointerEvents:'none', background: isDark
+        ? 'linear-gradient(180deg, rgba(16,16,22,.10) 0%, rgba(16,16,22,.55) 60%)'
+        : 'linear-gradient(180deg, rgba(255,255,255,.06) 0%, rgba(255,255,255,.6) 60%)' }} />
+
+      <div style={{ position:'relative', zIndex:2, display:'flex', flexDirection:'column', flex:1, minHeight:0 }}>
+        {/* Top: kicker + the wave/vibe phrase headline (no concrete song) */}
+        <div>
+          <div className="mono" style={{ display:'flex', alignItems:'center', fontSize:9.5, letterSpacing:'.28em', color: isDark ? '#c9b8ff' : 'oklch(46% 0.19 280)' }}>
+            <span className="hero-eq" aria-hidden="true"><span /><span /><span /><span /><span /></span>
+            {lang==='ru'?'ТВОЙ ВАЙБ':'YOUR VIBE'}
+          </div>
+          {loading || vibeLoading ? (
+            <div style={{ marginTop:16 }}>
+              <Skel w={'78%'} h={26} r={8} isDark={isDark} />
+              <Skel w={'52%'} h={26} r={8} isDark={isDark} style={{ marginTop:10 }} />
             </div>
-            <div style={{ position:'absolute', left:0, top:0, width:204, height:204, borderRadius:16, overflow:'hidden', zIndex:3,
-                          background:'#241d38', transition:`transform .55s ${deckEase}, box-shadow .55s ease`,
-                          transform: hoverDeck ? 'rotate(-2.5deg) translateX(-6px)' : 'none',
-                          boxShadow: hoverDeck
-                            ? '0 26px 60px rgba(124,91,255,.5), inset 0 1px 0 rgba(255,255,255,.16)'
-                            : '0 22px 55px rgba(124,91,255,.4), inset 0 1px 0 rgba(255,255,255,.14)' }}>
-              {leadCoverUrl && <img src={leadCoverUrl} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />}
+          ) : phrase ? (
+            <div className="vibe-serif" style={{ fontSize:'clamp(18px,2vw,26px)', fontWeight:400, lineHeight:1.22, letterSpacing:'0', marginTop:12, color:c.text, maxWidth:620 }}>
+              {phrase}
+            </div>
+          ) : (
+            <Fragment>
+              <div className="vibe-serif" style={{ fontSize:'clamp(18px,2vw,26px)', fontWeight:400, marginTop:12, color:c.text }}>
+                {lang==='ru'?'Начнём с разведки':'Let’s start exploring'}
+              </div>
+              <div style={{ fontSize:11, color:c.textMuted, marginTop:8, maxWidth:520, lineHeight:1.5 }}>
+                {lang==='ru'
+                  ? 'Истории пока мало — поток начнёт с неизученных уголков библиотеки и подстроится под ваши реакции.'
+                  : 'Not much history yet — the stream starts from unexplored corners and adapts to your reactions.'}
+              </div>
+            </Fragment>
+          )}
+        </div>
+
+        {/* Centered control cluster — fills the remaining height of the block */}
+        <div style={{ flex:1, display:'flex', flexDirection:'column', justifyContent:'center', alignItems:'center', gap:'clamp(18px,2.6vh,30px)', marginTop:'clamp(12px,1.5vh,20px)' }}>
+          {/* Big play orb + copy to its right */}
+          <div style={{ display:'flex', alignItems:'center', gap:'clamp(16px,1.6vw,26px)' }}>
+            <div style={{ width:98, height:98, flex:'none', display:'grid', placeItems:'center' }}>
+              <div style={{ transform:'scale(1.5)' }}>
+                <div className="fy-hybrid tint-irid" onMouseEnter={() => setHoverCtl(true)} onMouseLeave={() => setHoverCtl(false)}
+                     onClick={startStream} role="button" aria-label={lang==='ru'?'Включить ваш поток':'Start your stream'}>
+                  <span className="fy-ring" />
+                  <span className="fy-clip"><span className="fy-blob fy-bg1" /><span className="fy-blob fy-bg2" /><span className="fy-blob fy-bg3" /><span className="fy-blob fy-bg4" /></span>
+                  <span className="fy-glasscap" />
+                  <span className="fy-glyph">▶</span>
+                  <span className="fy-halo" />
+                </div>
+              </div>
+            </div>
+            <div style={{ minWidth:0, maxWidth:300 }}>
+              <div className="mono" style={{ fontSize:'clamp(11px,0.9vw,13px)', letterSpacing:'.18em', color:hoverCtl?(isDark?'#f3ecff':'#2c2440'):c.text, transition:'color .3s', cursor:'pointer' }}
+                   onClick={startStream}>
+                {lang==='ru'?'ВКЛЮЧИТЬ ВАШ ПОТОК':'START YOUR STREAM'}
+              </div>
+              <div style={{ fontSize:'clamp(11px,0.78vw,12px)', color:c.textMuted, marginTop:6, lineHeight:1.45 }}>
+                {hasProfile
+                  ? (lang==='ru' ? 'Включите волну, собранную под ваш вкус — она подстроится под реакции' : 'Start a wave tuned to your taste — it adapts to your reactions')
+                  : (lang==='ru' ? 'Режим разведки — начнём с неизученного и подстроимся' : 'Exploration mode — we start from the unknown and adapt')}
+              </div>
             </div>
           </div>
-          {/* Copy + controls */}
-          <div className="stagger" style={{ flex:1, minWidth:0 }}>
-            <div className="mono" style={{ display:'flex', alignItems:'center', fontSize:11, letterSpacing:'.28em', color: isDark ? '#c9b8ff' : 'oklch(46% 0.19 280)' }}>
-              <span className="hero-eq" aria-hidden="true"><span /><span /><span /><span /><span /></span>
-              {lang==='ru'?'ВАШ ПОТОК':'YOUR STREAM'}
-            </div>
-            <div className="serif" style={{ fontSize:32, fontWeight:300, letterSpacing:'-.01em', marginTop:12, color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-              {hasProfile ? (lead.title) : (lang==='ru'?'Начнём с разведки':'Start exploring')}
-            </div>
-            <div style={{ fontSize:13, color:c.textMuted, marginTop:4 }}>
-              {hasProfile ? (
-                <Fragment>
-                  <span style={{ cursor:'pointer' }} onClick={() => navigateToArtist && navigateToArtist(slugifyArtistName(lead.artist))}>{lead.artist}</span>
-                  {islands.length > 1
-                    ? ` · ${lang==='ru' ? `и ещё ${islands.length - 1} ${islands.length - 1 === 1 ? 'остров вкуса' : 'острова вкуса'}` : `+ ${islands.length - 1} more taste island${islands.length - 1 === 1 ? '' : 's'}`}`
-                    : ''}
-                </Fragment>
-              ) : (
-                lang==='ru'
-                  ? 'Истории пока мало — поток начнёт с неизученных уголков библиотеки и подстроится под реакции'
-                  : 'Not much history yet — the stream starts from unexplored corners and adapts to your reactions'
-              )}
-            </div>
-            {vibe && <div className="serif" style={{ fontStyle:'italic', fontSize:15.5, color: isDark ? '#f3ecff' : '#2c2440', opacity:.88, lineHeight:1.45, marginTop:13, display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden' }}>❝ {vibe} ❞</div>}
-            <div style={{ display:'flex', alignItems:'center', gap:14, marginTop:22 }}>
-              <div className="fy-hybrid tint-irid" onMouseEnter={() => setHoverCtl(true)} onMouseLeave={() => setHoverCtl(false)} onClick={startStream} role="button" aria-label={lang==='ru'?'Включить ваш поток':'Start your stream'}>
-                <span className="fy-ring" />
-                <span className="fy-clip"><span className="fy-blob fy-bg1" /><span className="fy-blob fy-bg2" /><span className="fy-blob fy-bg3" /><span className="fy-blob fy-bg4" /></span>
-                <span className="fy-glasscap" />
-                <span className="fy-glyph">▶</span>
-                <span className="fy-halo" />
+
+          {/* Taste anchors — under the play + title, above the wave settings */}
+          {hasProfile && anchors.length > 0 && (
+            <div style={{ display:'flex', alignItems:'center', gap:11 }}>
+              <span className="mono" style={{ fontSize:10, letterSpacing:'.2em', color:c.textSubtle }}>{lang==='ru'?'ЯКОРЯ ВКУСА':'TASTE ANCHORS'}</span>
+              <div style={{ display:'flex' }}>
+                {anchors.slice(0, 5).map((t, i) => {
+                  const src = homeCoverUrl(t.cover_art_path);
+                  return (
+                    <div key={t.track_id || i} title={`${t.title || ''}${t.artist ? ' — ' + t.artist : ''}`}
+                         onClick={() => t.artist && navigateToArtist && navigateToArtist(slugifyArtistName(t.artist))}
+                         style={{ width:30, height:30, borderRadius:8, overflow:'hidden', marginLeft: i ? -9 : 0, cursor:'pointer',
+                                  position:'relative', zIndex: 10 - i, background:'#241d38',
+                                  border:`1.5px solid ${isDark ? '#26262d' : '#fff'}`, boxShadow:'0 4px 10px rgba(0,0,0,.35)' }}>
+                      {src && <img src={src} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />}
+                    </div>
+                  );
+                })}
               </div>
-              <span className="mono" style={{ fontSize:11, letterSpacing:'.2em', color:(hoverCtl||hoverDeck)?(isDark?'#f3ecff':'#2c2440'):c.textMuted, transition:'color .3s' }}>{lang==='ru'?'ВКЛЮЧИТЬ ВАШ ПОТОК':'START YOUR STREAM'}</span>
             </div>
-            {/* Liked/new slider — persisted server-side; the stream reads it on
-                every chunk, so changes apply within a track or two. */}
-            <div style={{ display:'flex', alignItems:'center', gap:12, marginTop:18, maxWidth:340 }}>
-              <span className="mono" style={{ fontSize:10, letterSpacing:'.18em', color:c.textSubtle, flex:'none' }}>
-                {lang==='ru'?'ЛЮБИМЫЕ':'LIKED'} {Math.round(likedShare*100)}%
-              </span>
-              <SkeRange min={0} max={100} step={10} value={Math.round(likedShare*100)}
-                     onChange={v => setShare(v / 100)}
-                     accent="oklch(62% 0.2 275)" style={{ flex:1 }}
-                     ariaLabel={lang==='ru'?'Доля любимых треков в потоке':'Share of liked tracks in the stream'} />
-              <span className="mono" style={{ fontSize:10, letterSpacing:'.18em', color:c.textSubtle, flex:'none' }}>
-                {lang==='ru'?'НОВОЕ':'NEW'}
-              </span>
-            </div>
-            {hasProfile && anchorStrip.length > 0 && (
-              <div style={{ display:'flex', alignItems:'center', gap:11, marginTop:18 }}>
-                <span className="mono" style={{ fontSize:10, letterSpacing:'.2em', color:c.textSubtle }}>{lang==='ru'?'ЯКОРЯ ВКУСА':'TASTE ANCHORS'}</span>
-                <div style={{ display:'flex' }}>
-                  {anchorStrip.map((t, i) => {
-                    const src = homeCoverUrl(t.cover_art_path);
-                    return (
-                      <div key={t.track_id || i} title={`${t.title || ''}${t.artist ? ' — ' + t.artist : ''}`}
-                           style={{ width:30, height:30, borderRadius:8, overflow:'hidden', marginLeft: i ? -9 : 0,
-                                    position:'relative', zIndex: 10 - i, background:'#241d38',
-                                    border:`1.5px solid ${isDark ? '#26262d' : '#fff'}`, boxShadow:'0 4px 10px rgba(0,0,0,.35)' }}>
-                        {src && <img src={src} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />}
-                      </div>
-                    );
-                  })}
-                </div>
-                {islands.length > anchorStrip.length + 1 && (
-                  <span className="mono" style={{ fontSize:10, color:c.textSubtle }}>+{islands.length - anchorStrip.length - 1}</span>
-                )}
+          )}
+
+          {/* Stream settings — collapsed; the gear reveals the liked/new dial */}
+          <div style={{ width:'100%', maxWidth:380, display:'flex', flexDirection:'column', alignItems:'center' }}>
+            <button onClick={() => setSettingsOpen(o => !o)} title={lang==='ru'?'Настройки потока':'Stream settings'}
+              style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 12px', borderRadius:10, cursor:'pointer',
+                background: settingsOpen ? (isDark?'rgba(255,255,255,.06)':'rgba(0,0,0,.04)') : 'transparent',
+                border:`1px solid ${settingsOpen ? c.border : 'transparent'}`, color:c.textMuted, transition:'all .3s ease' }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+              <span className="mono" style={{ fontSize:10, letterSpacing:'.16em' }}>{lang==='ru'?'НАСТРОЙКИ ПОТОКА':'STREAM SETTINGS'}</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                   style={{ transform: settingsOpen ? 'rotate(180deg)' : 'none', transition:'transform .3s ease' }}><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div style={{ width:'100%', overflow:'hidden', maxHeight: settingsOpen ? 100 : 0, opacity: settingsOpen ? 1 : 0,
+              transition:'max-height .4s cubic-bezier(.22,.9,.3,1), opacity .35s ease' }}>
+              <div style={{ display:'flex', alignItems:'center', gap:12, marginTop:14 }}>
+                <span className="mono" style={{ fontSize:10, letterSpacing:'.18em', color:c.textSubtle, flex:'none' }}>
+                  {lang==='ru'?'НОВОЕ':'NEW'}
+                </span>
+                <SkeRange min={0} max={100} step={10} value={Math.round(likedShare*100)}
+                       onChange={v => setShare(v / 100)} accent="oklch(62% 0.2 275)" style={{ flex:1 }}
+                       ariaLabel={lang==='ru'?'Баланс нового и любимого в потоке':'Balance of new vs liked in the stream'} />
+                <span className="mono" style={{ fontSize:10, letterSpacing:'.18em', color:c.textSubtle, flex:'none' }}>
+                  {lang==='ru'?'ЛЮБИМЫЕ':'LIKED'}
+                </span>
               </div>
-            )}
+              <div className="mono" style={{ fontSize:9, letterSpacing:'.12em', color:c.textSubtle, textAlign:'center', marginTop:8 }}>
+                {lang==='ru'?'ПО УМОЛЧАНИЮ — 70% НОВОГО · 30% ЛЮБИМОГО':'DEFAULT — 70% NEW · 30% LIKED'}
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -3688,83 +3707,27 @@ function homeDeriveDifferent(resp) {
   return out;
 }
 
-// /playlists returns PlaylistsResponse: { playlists: [...], collection_name }
-// Each playlist has: id, name, track_count, cover_track_ids[], cover_art_paths[]
-function homePlaylistCards(resp, lang) {
-  const arr = Array.isArray(resp) ? resp : ((resp && Array.isArray(resp.playlists)) ? resp.playlists : []);
-  const unit = lang === 'ru' ? 'треков' : 'tracks';
-  return arr.map(p => ({
-    track_id: p.id,
-    title: p.name || '',
-    artist: `${p.track_count != null ? p.track_count : '?'} ${unit}`,
-    cover_art_path: (p.cover_art_paths && p.cover_art_paths.find(x => x)) || null,
-  }));
+// Shared glass surface for the discovery rail cards (Artist of the day +
+// Something new). Theme-aware inline (the file's idiom) — class only carries
+// the layout/hover that doesn't depend on the theme.
+function railCardStyle(isDark, c) {
+  return {
+    // flex column + grow-not-shrink so the two rail cards stretch to fill the
+    // column and their bottoms line up with the For-You hero (no dangling).
+    position:'relative', display:'flex', flexDirection:'column', flex:'1 0 auto',
+    borderRadius:20, overflow:'hidden', padding:'clamp(18px,1.5vw,24px)',
+    border:`1px solid ${c.border}`,
+    background: isDark
+      ? 'linear-gradient(160deg, rgba(28,26,38,.6), rgba(16,16,22,.5))'
+      : 'linear-gradient(160deg, rgba(255,255,255,.7), rgba(245,244,250,.55))',
+    backdropFilter:'blur(20px)', WebkitBackdropFilter:'blur(20px)',
+    boxShadow: isDark ? '0 16px 40px rgba(0,0,0,.35)' : '0 16px 36px rgba(60,45,100,.12)',
+    transition:'transform .5s cubic-bezier(.22,.9,.3,1), box-shadow .5s ease',
+  };
 }
 
-function RediscoveryBand({ isDark, lang, onPick, navigateToArtist }) {
-  const c = useColors(isDark);
-  const [data, setData] = useState(null);
-  const [fact, setFact] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const coverUrl = homeCoverUrl(data && data.track && data.track.cover_art_path);
-  const color = useCoverColor(coverUrl);
-
-  useEffect(() => {
-    let alive = true;
-    apiFetch(`/library/rediscover`)
-      .then(r => {
-        if (!alive || !r || !r.track) { setData(null); return null; }
-        setData(r);
-        return apiFetch(`/metadata/tracks/${encodeURIComponent(r.track.track_id)}/facts`);
-      })
-      .then(f => { if (alive && Array.isArray(f) && f.length) setFact(f[0].fact || f[0]); })
-      .catch(() => {})
-      .finally(() => { if (alive) setLoading(false); });
-    return () => { alive = false; };
-  }, []);
-
-  if (!data || !data.track) return loading ? (
-    <div style={{ margin:'20px 0', padding:'40px 40px 44px' }}>
-      <div style={{ display:'flex', justifyContent:'space-between' }}>
-        <Skel w={150} h={11} r={4} isDark={isDark} />
-        <Skel w={110} h={11} r={4} isDark={isDark} />
-      </div>
-      <div style={{ textAlign:'center', marginTop:18 }}>
-        <Skel w={112} h={112} r={12} isDark={isDark} style={{ display:'inline-block' }} />
-        <div style={{ display:'flex', justifyContent:'center', marginTop:16 }}><Skel w={220} h={18} r={6} isDark={isDark} /></div>
-        <div style={{ display:'flex', justifyContent:'center', marginTop:12 }}><Skel w={420} h={15} r={6} isDark={isDark} style={{ maxWidth:'80%' }} /></div>
-      </div>
-    </div>
-  ) : null;
-  const t = data.track;
-  const wash = color
-    ? `radial-gradient(ellipse 62% 130% at 50% 42%, hsla(${color.h},${color.s}%,${color.l}%,.17) 0%, hsla(${color.h},${color.s}%,${color.l}%,.09) 38%, transparent 80%)`
-    : `radial-gradient(ellipse 62% 130% at 50% 42%, rgba(124,91,255,.15), transparent 80%)`;
-
-  return (
-    <div style={{ position:'relative', margin:'20px 0', padding:'40px 40px 44px', background:wash,
-                  WebkitMaskImage:'linear-gradient(180deg, transparent 0%, #000 22%, #000 78%, transparent 100%)',
-                  maskImage:'linear-gradient(180deg, transparent 0%, #000 22%, #000 78%, transparent 100%)' }}>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline' }}>
-        <div className="mono" style={{ fontSize:11, letterSpacing:'.24em', color:c.textSubtle }}>{lang==='ru'?'↺ ОТКРОЙТЕ ЗАНОВО':"↺ TODAY'S REDISCOVERY"}</div>
-        <div className="mono" style={{ fontSize:11, letterSpacing:'.16em', color:c.amber }}>{homeGapBadge(data, lang)}</div>
-      </div>
-      <div style={{ textAlign:'center', marginTop:18 }}>
-        <div style={{ position:'relative', display:'inline-block', cursor:'pointer' }} onClick={() => onPick && onPick(t)}>
-          <div style={{ width:112, height:112, borderRadius:12, overflow:'hidden', boxShadow:'0 16px 36px rgba(0,0,0,.45)', background:'#241d38' }}>
-            {coverUrl && <img src={coverUrl} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />}
-          </div>
-          <span style={{ position:'absolute', right:-10, bottom:-10, width:44, height:44, borderRadius:'50%', background:'linear-gradient(180deg,#9a7bff,#6a44d6)', color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', fontSize:16, boxShadow:'0 8px 20px rgba(124,91,255,.5)' }}>▶</span>
-        </div>
-        <div className="serif" style={{ fontSize:19, fontWeight:300, marginTop:14, color:c.text }}>
-          {t.title} <span style={{ fontSize:13, color:c.textMuted, cursor:'pointer' }} onClick={() => navigateToArtist && navigateToArtist(slugifyArtistName(t.artist))}>· {t.artist}</span>
-        </div>
-        {fact && <div className="serif" style={{ fontStyle:'italic', fontSize:16, color:c.text, opacity:.9, marginTop:10, maxWidth:500, marginLeft:'auto', marginRight:'auto', lineHeight:1.45 }}>❝ {fact} ❞</div>}
-      </div>
-    </div>
-  );
-}
-
+// ★ Artist of the day — vertical glass card. Shows the artist's own photo
+// (thumb/cutout) at ~2/3 width when present; if there's none, no image at all.
 function FeaturedArtistCard({ isDark, lang, navigateToArtist }) {
   const c = useColors(isDark);
   const [a, setA] = useState(null);
@@ -3780,282 +3743,245 @@ function FeaturedArtistCard({ isDark, lang, navigateToArtist }) {
     return () => { alive = false; };
   }, [lang]);
 
-  // On lang change `a` is kept (not cleared), so the card swaps in place without a
-  // skeleton flash; the skeleton only shows on first mount while `a` is still null.
-  if (!a) return loading ? (
-    <div style={{ padding:'34px 40px 0' }}>
-      <Skel w={150} h={11} r={4} isDark={isDark} />
-      <div style={{ display:'flex', gap:34, alignItems:'center', marginTop:18 }}>
-        <Skel w={80} h={80} r={11} isDark={isDark} style={{ flex:'none' }} />
-        <div style={{ flex:1 }}>
-          <Skel w={200} h={20} r={6} isDark={isDark} />
-          <Skel w={150} h={13} r={5} isDark={isDark} style={{ marginTop:10 }} />
-          <Skel w={460} h={14} r={5} isDark={isDark} style={{ marginTop:10, maxWidth:'90%' }} />
-          <Skel w={120} h={13} r={5} isDark={isDark} style={{ marginTop:12 }} />
-        </div>
-      </div>
+  const base = railCardStyle(isDark, c);
+
+  // On lang change `a` is kept (not cleared), so the card swaps in place without
+  // a skeleton flash; the skeleton only shows on first mount while `a` is null.
+  if (!a) return (
+    <div style={base}>
+      <Skel w={130} h={11} r={4} isDark={isDark} />
+      {loading ? (
+        <Fragment>
+          <Skel w={'66%'} h={150} r={14} isDark={isDark} style={{ margin:'16px auto 0' }} />
+          <Skel w={'70%'} h={18} r={6} isDark={isDark} style={{ marginTop:16 }} />
+          <Skel w={'50%'} h={12} r={5} isDark={isDark} style={{ marginTop:9 }} />
+          <Skel w={'92%'} h={12} r={5} isDark={isDark} style={{ marginTop:12 }} />
+        </Fragment>
+      ) : (
+        <div style={{ fontSize:13, color:c.textSubtle, marginTop:14 }}>{lang==='ru'?'Пока нет артиста дня':'No featured artist yet'}</div>
+      )}
     </div>
-  ) : null;
-  const covers = (a.albums || []).map(al => homeCoverUrl(al.cover_art_path)).filter(Boolean).slice(0, 3);
-  const single = covers.length <= 1;
+  );
+
+  // Artist photo — prefer the rectangular thumb, fall back to the cutout. No
+  // image → render none (no album-cover fallback).
+  const img = homeCoverUrl(a.thumb_path || a.cutout_path);
   const ctx = [a.genre, a.decade_range, a.album_count ? `${a.album_count} ${lang==='ru'?'альбомов':'albums'}` : null].filter(Boolean).join(' · ');
-  const tf = (base, hov) => (hover ? hov : base);
+  const open = () => navigateToArtist && navigateToArtist(a.slug);
 
   return (
-    <div style={{ padding:'34px 40px 0' }}>
+    <div style={{ ...base, cursor:'pointer', transform: hover ? 'translateY(-3px)' : 'none' }}
+         onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} onClick={open}>
       <div className="mono" style={{ fontSize:11, letterSpacing:'.26em', color:c.textSubtle }}>{lang==='ru'?'★ АРТИСТ ДНЯ':'★ FEATURED ARTIST'}</div>
-      <div style={{ display:'flex', gap:34, alignItems:'center', marginTop:18 }}>
-        <div style={{ position:'relative', width:230, height:88, flex:'none', cursor:'pointer' }}
-             onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
-             onClick={() => navigateToArtist && navigateToArtist(a.slug)}>
-          {single ? (
-            covers[0] ? (
-              // Lone album: centered, no fanned-stack animation — just a gentle lift on hover.
-              <div style={{ position:'absolute', width:80, height:80, left:75, top:4, borderRadius:11, overflow:'hidden',
-                zIndex:2, boxShadow:'0 12px 28px rgba(0,0,0,.45)',
-                transition:'transform .42s cubic-bezier(.22,.9,.3,1)',
-                transform: hover ? 'translateY(-6px) scale(1.04)' : 'none' }}>
-                <img src={covers[0]} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />
-              </div>
-            ) : null
-          ) : [0,1,2].map(i => covers[i] ? (
-            <div key={i} style={{ position:'absolute', width:80, height:80, borderRadius:11, overflow:'hidden',
-              left:[0,42,84][i], top:4, zIndex:i===1?2:1, boxShadow:'0 12px 28px rgba(0,0,0,.45)',
-              transition:'transform .42s cubic-bezier(.22,.9,.3,1)',
-              transform:[ tf('rotate(-6deg)','rotate(-13deg) translateX(-26px) translateY(-4px)'),
-                          tf('rotate(0deg)','translateY(-8px) scale(1.04)'),
-                          tf('rotate(6deg)','rotate(13deg) translateX(26px) translateY(-4px)') ][i] }}>
-              <img src={covers[i]} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />
-            </div>
-          ) : null)}
+      {img && (
+        <div style={{ width:'66%', margin:'16px auto 2px', borderRadius:14, overflow:'hidden',
+          boxShadow:'0 16px 34px rgba(0,0,0,.45)', transition:'transform .42s cubic-bezier(.22,.9,.3,1)',
+          transform: hover ? 'translateY(-4px) scale(1.02)' : 'none' }}>
+          <img src={img} alt={a.name} style={{ width:'100%', height:'auto', display:'block', objectFit:'cover' }} />
         </div>
-        <div style={{ flex:1 }}>
-          <div className="serif" style={{ fontSize:22, fontWeight:300, color:c.text }}>{a.name}</div>
-          <div style={{ fontSize:14, color:c.textMuted }}>{ctx}</div>
-          {a.bio && <div style={{ fontSize:14, color:c.text, opacity:.72, marginTop:8, maxWidth:520, lineHeight:1.5, display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden' }}>{a.bio}</div>}
-          <div style={{ fontSize:13, color:'#c9b8ff', marginTop:11, cursor:'pointer' }} onClick={() => navigateToArtist && navigateToArtist(a.slug)}>→ {lang==='ru'?'Открыть Атлас':'Open Atlas'}</div>
+      )}
+      <div className="serif" style={{ fontSize:'clamp(18px,1.5vw,22px)', fontWeight:300, color:c.text, marginTop:14, textAlign:'center' }}>{a.name}</div>
+      {ctx && <div style={{ fontSize:13, color:c.textMuted, marginTop:3, textAlign:'center' }}>{ctx}</div>}
+      {a.bio && <div style={{ fontSize:13, color:c.text, opacity:.72, marginTop:9, lineHeight:1.5, textAlign:'center', display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden' }}>{a.bio}</div>}
+      <div style={{ marginTop:'auto', paddingTop:14, fontSize:13, color:'#c9b8ff', textAlign:'center' }}>→ {lang==='ru'?'Открыть Атлас':'Open Atlas'}</div>
+    </div>
+  );
+}
+
+// ✦ Something new — one merged discovery block. Pool blends two notions of
+// "new": a forgotten/never-played track (/library/rediscover) and tracks unlike
+// the user's usual taste (/library/top-pairs → dissimilar). ↻ cycles the pool.
+function DiscoverNewCard({ isDark, lang, onPick, navigateToArtist }) {
+  const c = useColors(isDark);
+  const [pool, setPool] = useState([]);
+  const [idx, setIdx] = useState(0);
+  const [factMap, setFactMap] = useState({});   // track_id -> fact | null
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    Promise.allSettled([
+      apiFetch(`/library/rediscover`),
+      apiFetch(`/library/top-pairs`),
+    ]).then(([rd, tp]) => {
+      if (!alive) return;
+      const out = [];
+      const r = rd.status === 'fulfilled' ? rd.value : null;
+      if (r && r.track) out.push({ ...r.track, kind:'rediscover', last_played:r.last_played, never_played:r.never_played });
+      const diff = tp.status === 'fulfilled' ? homeDeriveDifferent(tp.value) : [];
+      for (const d of diff.slice(0, 6)) {
+        if (!out.some(x => x.track_id === d.track_id)) out.push({ ...d, kind:'different' });
+      }
+      setPool(out);
+    }).finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, []);
+
+  // Derived BEFORE the hooks below — @babel/standalone hoists const→var.
+  const cur = pool[idx] || null;
+  const coverUrl = homeCoverUrl(cur && cur.cover_art_path);
+  const color = useCoverColor(coverUrl);
+
+  // Lazy-fetch one fact per candidate (cached by track_id).
+  useEffect(() => {
+    if (!cur || !cur.track_id || cur.track_id in factMap) return;
+    let alive = true;
+    apiFetch(`/metadata/tracks/${encodeURIComponent(cur.track_id)}/facts`)
+      .then(f => {
+        const fact = (f && ((f.song_facts && f.song_facts[0]) || (f.artist_facts && f.artist_facts[0]))) || null;
+        if (alive) setFactMap(prev => ({ ...prev, [cur.track_id]: fact }));
+      })
+      .catch(() => { if (alive) setFactMap(prev => ({ ...prev, [cur.track_id]: null })); });
+    return () => { alive = false; };
+  }, [cur && cur.track_id]);
+
+  const base = railCardStyle(isDark, c);
+  base.transition = undefined;  // no hover-lift on this card (it has internal controls)
+
+  if (loading) return (
+    <div style={base}>
+      <Skel w={130} h={11} r={4} isDark={isDark} />
+      <div style={{ flex:1, display:'flex', flexDirection:'column', justifyContent:'center', alignItems:'center', marginTop:14 }}>
+        <Skel w={104} h={104} r={12} isDark={isDark} />
+        <Skel w={'70%'} h={16} r={6} isDark={isDark} style={{ marginTop:14 }} />
+        <Skel w={'45%'} h={11} r={5} isDark={isDark} style={{ marginTop:9 }} />
+        <Skel w={'88%'} h={12} r={5} isDark={isDark} style={{ marginTop:14 }} />
+      </div>
+    </div>
+  );
+  if (!cur) return null;
+
+  const wash = color
+    ? `radial-gradient(ellipse 80% 100% at 50% 0%, hsla(${color.h},${color.s}%,${color.l}%,.16), transparent 72%)`
+    : `radial-gradient(ellipse 80% 100% at 50% 0%, rgba(124,91,255,.14), transparent 72%)`;
+  const badge = cur.kind === 'rediscover'
+    ? homeGapBadge({ never_played: cur.never_played, last_played: cur.last_played }, lang)
+    : (lang==='ru' ? 'НЕПОХОЖЕ НА ВАШ ВКУС' : 'UNLIKE YOUR USUAL');
+  const fact = factMap[cur.track_id];
+  const next = () => setIdx(i => (pool.length ? (i + 1) % pool.length : 0));
+
+  return (
+    <div style={base}>
+      <div style={{ position:'absolute', inset:0, background:wash, pointerEvents:'none' }} />
+      <div style={{ position:'relative', display:'flex', flexDirection:'column', flex:1, minHeight:0 }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+          <div className="mono" style={{ fontSize:11, letterSpacing:'.24em', color:c.textSubtle }}>{lang==='ru'?'✦ ЧТО-ТО НОВОЕ':'✦ SOMETHING NEW'}</div>
+          {pool.length > 1 && (
+            <button onClick={next} title={lang==='ru'?'Ещё вариант':'Another one'} className={ske('btn', isDark)}
+              style={{ width:30, height:30, borderRadius:'50%', display:'grid', placeItems:'center', color:c.textMuted, flex:'none' }}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 2v6h6"/><path d="M21 12A9 9 0 0 0 6 5.3L3 8"/><path d="M21 22v-6h-6"/><path d="M3 12a9 9 0 0 0 15 6.7l3-2.7"/></svg>
+            </button>
+          )}
+        </div>
+        {/* album + text centered, filling the remaining card height */}
+        <div style={{ flex:1, display:'flex', flexDirection:'column', justifyContent:'center', alignItems:'center', textAlign:'center', marginTop:14 }}>
+          <div style={{ position:'relative', cursor:'pointer' }} onClick={() => onPick && onPick(cur)}>
+            <div style={{ width:104, height:104, borderRadius:12, overflow:'hidden', background:'#241d38', boxShadow:'0 14px 30px rgba(0,0,0,.45)' }}>
+              {coverUrl && <img src={coverUrl} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />}
+            </div>
+            <span style={{ position:'absolute', right:-8, bottom:-8, width:34, height:34, borderRadius:'50%',
+              background:'linear-gradient(180deg,#9a7bff,#6a44d6)', color:'#fff', display:'grid', placeItems:'center',
+              fontSize:13, boxShadow:'0 8px 18px rgba(124,91,255,.5)' }}>▶</span>
+          </div>
+          <div className="mono" style={{ fontSize:9.5, letterSpacing:'.14em', color:c.amber, marginTop:16 }}>{badge}</div>
+          <div className="serif" style={{ fontSize:18, fontWeight:300, color:c.text, marginTop:7, lineHeight:1.25, cursor:'pointer' }}
+               onClick={() => onPick && onPick(cur)}>{cur.title}</div>
+          {cur.artist ? (
+            <div style={{ fontSize:12.5, color:c.textMuted, marginTop:3, cursor:'pointer' }}
+                 onClick={() => navigateToArtist && navigateToArtist(slugifyArtistName(cur.artist))}>{cur.artist}</div>
+          ) : null}
+          {fact && <div className="serif" style={{ fontStyle:'italic', fontSize:14, color:c.text, opacity:.86, marginTop:14, lineHeight:1.5, maxWidth:340,
+            display:'-webkit-box', WebkitLineClamp:3, WebkitBoxOrient:'vertical', overflow:'hidden' }}>❝ {fact} ❞</div>}
         </div>
       </div>
     </div>
   );
 }
 
-function ShelfCard({ item, isDark, onPick, navigateToArtist }) {
+// Header pill → Library, with a live "N albums · M tracks" summary from /library/stats.
+function LibraryPill({ stats, isDark, lang, onClick }) {
   const c = useColors(isDark);
   const [hover, setHover] = useState(false);
-  const src = homeCoverUrl(item.cover_art_path);
+  const albums = stats && typeof stats.unique_albums === 'number' ? stats.unique_albums : null;
+  const tracks = stats && typeof stats.total_tracks === 'number' ? stats.total_tracks : null;
+  const fmt = (n) => (n == null ? '—' : (n.toLocaleString ? n.toLocaleString() : n));
+  const summary = (albums != null || tracks != null)
+    ? `${fmt(albums)} ${lang==='ru'?'альб':'alb'} · ${fmt(tracks)} ${lang==='ru'?'трек':'tr'}`
+    : (lang==='ru'?'Открыть фонотеку':'Browse library');
   return (
-    <div style={{ width:120, flex:'none', cursor:'pointer' }}
-         onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} onClick={() => onPick && onPick(item)}>
-      <div style={{ position:'relative', width:120, height:120, borderRadius:10, overflow:'hidden', background:'#241d38',
-                    boxShadow: hover ? '0 16px 32px rgba(0,0,0,.45)' : '0 10px 24px rgba(0,0,0,.35)',
-                    transform: hover ? 'translateY(-6px) rotate(-1.6deg) scale(1.02)' : 'none',
-                    transition:'transform .35s cubic-bezier(.22,.9,.3,1), box-shadow .35s ease' }}>
-        {src && <img src={src} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />}
-        <span style={{ position:'absolute', right:7, bottom:7, width:28, height:28, borderRadius:'50%',
-                       background:'linear-gradient(180deg,#9a7bff,#6a44d6)', color:'#fff',
-                       display:'flex', alignItems:'center', justifyContent:'center', fontSize:10,
-                       boxShadow:'0 6px 14px rgba(124,91,255,.5), inset 0 1px 0 rgba(255,255,255,.3)',
-                       opacity: hover ? 1 : 0, transform: hover ? 'translateY(0)' : 'translateY(8px)',
-                       transition:'opacity .28s ease, transform .28s cubic-bezier(.22,.9,.3,1)' }}>▶</span>
-      </div>
-      <div style={{ fontSize:12, color:c.text, marginTop:7, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{item.title}</div>
-      {item.artist ? (
-        <div style={{ fontSize:11, color:c.textMuted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', cursor:'pointer' }}
-             onClick={(e) => { e.stopPropagation(); navigateToArtist && navigateToArtist(slugifyArtistName(item.artist)); }}>{item.artist}</div>
-      ) : null}
-    </div>
+    <button onClick={onClick} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+      title={lang==='ru'?'Перейти в библиотеку':'Go to library'}
+      style={{ display:'flex', alignItems:'center', gap:11, padding:'8px 14px 8px 11px', borderRadius:14, cursor:'pointer',
+        border:`1px solid ${hover?c.borderStrong:c.border}`,
+        background: isDark ? (hover?'rgba(255,255,255,.07)':'rgba(255,255,255,.04)') : (hover?'rgba(255,255,255,.92)':'rgba(255,255,255,.6)'),
+        backdropFilter:'blur(16px)', WebkitBackdropFilter:'blur(16px)',
+        boxShadow: hover ? '0 8px 22px rgba(60,45,100,.16)' : '0 4px 12px rgba(60,45,100,.08)',
+        transition:'all .35s cubic-bezier(.22,.9,.3,1)', transform: hover ? 'translateY(-1px)' : 'none' }}>
+      <span style={{ display:'grid', placeItems:'center', width:30, height:30, borderRadius:9, flex:'none',
+        background:'linear-gradient(160deg, oklch(62% 0.18 275), oklch(58% 0.18 305))', color:'#fff',
+        boxShadow:'0 4px 12px rgba(124,91,255,.4)' }}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></svg>
+      </span>
+      <span style={{ textAlign:'left', lineHeight:1.15 }}>
+        <span style={{ display:'block', fontSize:13.5, fontWeight:600, color:c.text }}>{lang==='ru'?'Библиотека':'Library'}</span>
+        <span className="mono" style={{ display:'block', fontSize:10, letterSpacing:'.04em', color:c.textMuted, marginTop:1 }}>{summary}</span>
+      </span>
+      <span style={{ color:c.textMuted, fontSize:16, marginLeft:2 }}>→</span>
+    </button>
   );
 }
 
-function Shelf({ label, items, isDark, onPick, navigateToArtist }) {
+// ─── HeaderNowPlaying — compact quick-resume player pill in the landing header.
+// Sits beside the Library pill; null when nothing is loaded. The full player
+// (scrub, like, queue) opens on a click of the cover/title.
+function HeaderNowPlaying({ track, audio, isDark, lang, onOpenPlayer }) {
   const c = useColors(isDark);
-  if (!items || items.length === 0) return null;
-  return (
-    <div style={{ padding:'0 40px', marginTop:34 }}>
-      <div className="mono" style={{ fontSize:11, letterSpacing:'.26em', color:c.textSubtle }}>{label}</div>
-      {/* paddingTop gives the hover lift (translateY(-6px) + scale) headroom inside the
-          overflowX:auto row — an auto-overflow container clips vertical overflow too,
-          so without it the raised cover gets sheared at the top edge. */}
-      <div style={{ display:'flex', gap:16, marginTop:4, overflowX:'auto', paddingTop:14, paddingBottom:6 }}>
-        {items.map((it, i) => (
-          <ShelfCard key={(it && (it.track_id || it.id)) || i} item={it} isDark={isDark} onPick={onPick} navigateToArtist={navigateToArtist} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function AlternativeModes({ isDark, lang, onNav }) {
-  const c = useColors(isDark);
-  const [h, setH] = useState(null);
-  const booksIcon = (<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round"><rect x="4" y="5" width="3.6" height="15" rx="1"/><rect x="8.6" y="5" width="3.6" height="15" rx="1"/><path d="m14.2 6.3 3.4.9-2.8 13.2-3.4-.9z"/></svg>);
-  const searchIcon = (<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-5.5-5.5"/></svg>);
-  const Block = ({ id, icon, title, desc, cta }) => (
-    <div onMouseEnter={() => setH(id)} onMouseLeave={() => setH(null)} onClick={() => onNav(id)}
-         style={{ flex:1, padding:'22px 24px', borderRadius:14, cursor:'pointer',
-                  backgroundColor: h===id ? (isDark?'rgba(255,255,255,.05)':'rgba(0,0,0,.045)') : 'transparent',
-                  transform: h===id ? 'translateY(-3px)' : 'none',
-                  transition:'background-color .5s ease, transform .5s cubic-bezier(.22,.9,.3,1)' }}>
-      <div style={{ display:'flex', alignItems:'center', gap:13 }}>
-        <span style={{ color:'#c9b8ff', display:'flex', transition:'filter .55s ease',
-                       filter: h===id ? 'drop-shadow(0 0 16px rgba(124,91,255,.6))' : 'drop-shadow(0 0 10px rgba(124,91,255,.4))' }}>{icon}</span>
-        <span className="serif" style={{ fontSize:22, fontWeight:300, color:c.text }}>{title}</span>
-      </div>
-      <div style={{ fontSize:14, color:c.textMuted, marginTop:12, lineHeight:1.5 }}>{desc}</div>
-      <div style={{ fontSize:13, color:'#c9b8ff', marginTop:12 }}>{cta}</div>
-    </div>
-  );
-  return (
-    <div style={{ padding:'38px 40px 44px' }}>
-      <div className="mono" style={{ fontSize:11, letterSpacing:'.26em', color:c.textSubtle }}>{lang==='ru'?'ИНОЙ СПОСОБ СЛУШАТЬ':'ANOTHER WAY TO LISTEN'}</div>
-      <div style={{ display:'flex', gap:28, marginTop:16 }}>
-        <Block id="library" icon={booksIcon} title={lang==='ru'?'Библиотека':'Library'}
-               desc={lang==='ru'?'Ручной выбор без рекомендаций: альбомы, треки, лайки и плейлисты — слушайте то, что выбрали сами.':'Manual picks, no recommendations: albums, tracks, likes and playlists.'}
-               cta={lang==='ru'?'→ Открыть библиотеку':'→ Open library'} />
-        <Block id="search" icon={searchIcon} title={lang==='ru'?'Поиск':'Search'}
-               desc={lang==='ru'?'Найти конкретное и разобрать лирику — по тексту, по звуку или по настроению.':'Find a specific track and explore lyrics — by text, sound, or mood.'}
-               cta={lang==='ru'?'→ Открыть поиск':'→ Open search'} />
-      </div>
-    </div>
-  );
-}
-
-// ─── NowPlayingStrip — airy quick-player line above the stream console ───────
-// Rendered on the landing page only while a track is loaded into the shared
-// audio controller. Sits in the same 920px column as the hero console but is
-// deliberately weightless (glass + hairline border, no ske-panel) so the
-// skeuomorphic deck below keeps the visual lead.
-function NowPlayingStrip({ track, audio, isDark, lang, onOpenPlayer }) {
-  const c = useColors(isDark);
-  const [liked, setLiked] = useState(false);
   const currentTime = useCurrentTime();
+  const [hover, setHover] = useState(false);
   const duration = (audio && audio.duration) || 0;
   const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0;
   const cover = homeCoverUrl(track && track.cover_art_path);
   const isPlaying = !!(audio && audio.isPlaying);
-
-  useEffect(() => {
-    if (!track || !track.track_id) { setLiked(false); return; }
-    let alive = true;
-    apiFetch(`/search/tracks/${encodeURIComponent(track.track_id)}/reaction`)
-      .then(r => { if (alive) setLiked((r && r.reaction) === 'like'); })
-      .catch(() => { if (alive) setLiked(false); });
-    return () => { alive = false; };
-  }, [track && track.track_id]);
-
   if (!track) return null;
-
-  const toggleLike = async () => {
-    const next = !liked;
-    setLiked(next);
-    try {
-      await apiFetch(`/search/tracks/${encodeURIComponent(track.track_id)}/reaction`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reaction: next ? 'like' : null }),
-      });
-    } catch { setLiked(!next); }
-  };
-
-  const fmt = (s) => {
-    if (!s || isNaN(s)) return '0:00';
-    const m = Math.floor(s / 60);
-    const sec = Math.round(s % 60);
-    return `${m}:${String(sec).padStart(2, '0')}`;
-  };
-  const meta = [track.artist, track.album].filter(Boolean).join(' · ');
-  const scrubberTrack = isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.10)';
-
   return (
-    <div style={{ padding:'34px 40px 0' }}>
-      <div style={{ maxWidth:920, margin:'0 auto', display:'flex', alignItems:'center', gap:14,
-                    padding:'9px 14px 9px 9px', borderRadius:16,
-                    background: isDark ? 'rgba(255,255,255,0.035)' : 'rgba(255,255,255,0.55)',
-                    border:`1px solid ${isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)'}`,
-                    backdropFilter:'blur(18px)', WebkitBackdropFilter:'blur(18px)',
-                    boxShadow: isDark
-                      ? 'inset 0 1px 0 rgba(255,255,255,0.06), 0 6px 22px rgba(0,0,0,0.25)'
-                      : 'inset 0 1px 0 rgba(255,255,255,0.9), 0 6px 18px rgba(40,30,60,0.10)',
-                    animation:'fadeInUp .5s cubic-bezier(.22,.9,.3,1)' }}>
-        {/* Cover thumb → opens the full player */}
-        <div onClick={onOpenPlayer} title={lang==='ru'?'Открыть плеер':'Open player'}
-             style={{ width:44, height:44, borderRadius:10, overflow:'hidden', flex:'none', cursor:'pointer',
-                      background:'#241d38', boxShadow:'0 4px 12px rgba(0,0,0,.35)' }}>
-          {cover && <img src={cover} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />}
-        </div>
-        {/* Title line + scrubber */}
-        <div style={{ flex:1, minWidth:0 }}>
-          <div style={{ display:'flex', alignItems:'baseline', gap:8, minWidth:0 }}>
-            <span onClick={onOpenPlayer}
-                  style={{ fontSize:13, fontWeight:600, color:c.text, cursor:'pointer',
-                           whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title || '—'}</span>
-            {meta && <span style={{ fontSize:11.5, color:c.textMuted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', flexShrink:4 }}>{meta}</span>}
-          </div>
-          <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:5 }}>
-            <span className="mono" style={{ fontSize:9.5, letterSpacing:'.08em', color:c.textSubtle }}>{fmt(currentTime)}</span>
-            <input type="range" min={0} max={1} step={0.001} value={progress}
-                   onChange={(e) => {
-                     if (!audio || !duration) return;
-                     audio.seek(parseFloat(e.target.value) * duration);
-                   }}
-                   className="mini-scrubber"
-                   style={{ flex:1, height:4, borderRadius:2,
-                            WebkitAppearance:'none', appearance:'none', outline:'none', border:'none', cursor:'pointer',
-                            background:`linear-gradient(90deg, oklch(60% 0.18 270) ${progress*100}%, ${scrubberTrack} ${progress*100}%)` }} />
-            <span className="mono" style={{ fontSize:9.5, letterSpacing:'.08em', color:c.textSubtle }}>{fmt(duration)}</span>
-          </div>
-        </div>
-        {/* Controls: play/pause (embossed) + like */}
-        <button className={ske('btn', isDark)} onClick={() => audio && audio.togglePlay && audio.togglePlay()}
-                title={isPlaying ? (lang==='ru'?'Пауза':'Pause') : (lang==='ru'?'Играть':'Play')}
-                style={{ width:34, height:34, borderRadius:'50%', flex:'none',
-                         display:'grid', placeItems:'center', color:c.text }}>
-          {isPlaying
-            ? <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-            : <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style={{ marginLeft:2 }}><polygon points="6,4 20,12 6,20"/></svg>}
-        </button>
-        <button onClick={toggleLike}
-                title={liked ? (lang==='ru'?'Убрать лайк':'Unlike') : (lang==='ru'?'Лайкнуть':'Like')}
-                style={{ width:30, height:30, flex:'none', display:'grid', placeItems:'center',
-                         fontSize:16, lineHeight:1, color: liked ? '#ff78c8' : c.textMuted,
-                         textShadow: liked ? '0 0 12px rgba(255,120,200,.55)' : 'none',
-                         transition:'color .25s ease, text-shadow .25s ease, transform .15s ease' }}
-                onMouseDown={(e) => { e.currentTarget.style.transform = 'scale(1.25)'; }}
-                onMouseUp={(e) => { e.currentTarget.style.transform = 'scale(1)'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.transform = 'scale(1)'; }}>
-          {liked ? '♥' : '♡'}
-        </button>
+    <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+      style={{ display:'flex', alignItems:'center', gap:10, padding:'6px 10px 6px 6px', borderRadius:14, maxWidth:300,
+        border:`1px solid ${hover ? c.borderStrong : c.border}`,
+        background: isDark ? (hover?'rgba(255,255,255,.07)':'rgba(255,255,255,.04)') : (hover?'rgba(255,255,255,.92)':'rgba(255,255,255,.6)'),
+        backdropFilter:'blur(16px)', WebkitBackdropFilter:'blur(16px)',
+        boxShadow: hover ? '0 8px 22px rgba(60,45,100,.16)' : '0 4px 12px rgba(60,45,100,.08)',
+        transition:'all .35s cubic-bezier(.22,.9,.3,1)' }}>
+      <div onClick={onOpenPlayer} title={lang==='ru'?'Открыть плеер':'Open player'}
+        style={{ width:34, height:34, borderRadius:9, overflow:'hidden', flex:'none', cursor:'pointer', background:'#241d38' }}>
+        {cover && <img src={cover} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />}
       </div>
+      <div onClick={onOpenPlayer} style={{ width:150, minWidth:0, cursor:'pointer' }}>
+        <div style={{ fontSize:12.5, fontWeight:600, color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title || '—'}</div>
+        <div style={{ position:'relative', height:3, borderRadius:2, marginTop:4, background:isDark?'rgba(255,255,255,.12)':'rgba(0,0,0,.12)' }}>
+          <div style={{ position:'absolute', left:0, top:0, bottom:0, width:`${progress*100}%`, borderRadius:2, background:'oklch(62% 0.18 275)' }} />
+        </div>
+      </div>
+      <button className={ske('btn', isDark)} onClick={() => audio && audio.togglePlay && audio.togglePlay()}
+        title={isPlaying ? (lang==='ru'?'Пауза':'Pause') : (lang==='ru'?'Играть':'Play')}
+        style={{ width:32, height:32, borderRadius:'50%', flex:'none', display:'grid', placeItems:'center', color:c.text }}>
+        {isPlaying
+          ? <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+          : <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" style={{ marginLeft:2 }}><polygon points="6,4 20,12 6,20"/></svg>}
+      </button>
     </div>
   );
 }
 
 function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLibrary, stats, playerTrack, playerPlaylist, onTrackChange, onPlayTrack, onStartStream, audio, navigateToArtist }) {
   const c = useColors(isDark);
-  const [recent, setRecent] = useState([]);
-  const [liked, setLiked] = useState([]);
-  const [different, setDifferent] = useState([]);
-  const [playlists, setPlaylists] = useState([]);
-  const [loading, setLoading] = useState(true);
 
-  // `loading` starts true so the shelf skeletons paint on the very first frame
-  // after (re)mount — the tab-return blank-flash fix. It is only ever flipped to
-  // false (on settle), never back to true, so a lang toggle re-fetches in place
-  // without re-flashing skeletons over already-loaded shelves.
-  useEffect(() => {
-    let alive = true;
-    Promise.allSettled([
-      apiFetch(`/playback/recent?limit=12`).then(r => { if (alive) setRecent((r && r.tracks) || []); }),
-      apiFetch(`/library/liked-songs`).then(r => { if (alive) setLiked(((r && r.tracks) || []).slice(0, 12)); }),
-      apiFetch(`/library/top-pairs`).then(r => { if (alive) setDifferent(homeDeriveDifferent(r)); }),
-      apiFetch(`/playlists`).then(r => { if (alive) setPlaylists(homePlaylistCards(r, lang)); }),
-    ]).finally(() => { if (alive) setLoading(false); });
-    return () => { alive = false; };
-  }, [lang]);
-
+  // «Эфир»: one airy screen. The rail cards (artist of the day + something new)
+  // fetch their own data, so the landing itself is just layout — no shelves,
+  // no recently-played / liked rows, library reachable from the header.
   return (
     <div className="grain" style={{
       width:'100vw', height:'100vh', overflow:'hidden auto', position:'relative',
+      display:'flex', flexDirection:'column',
       background: isDark
         ? 'radial-gradient(ellipse at top, #15151b 0%, #0a0a0e 60%, #07070a 100%)'
         : 'radial-gradient(ellipse at top, #fafaff 0%, #ececf3 60%, #e3e2e8 100%)',
@@ -4079,56 +4005,40 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLi
           transparent 48.5%)`,
       }} />
 
-      {/* Header bar */}
+      {/* Header: brand + quick Library (with live summary) + Search + controls */}
       <div style={{
-        position:'relative', display:'flex', alignItems:'center', justifyContent:'space-between',
-        padding:'24px 32px',
+        position:'relative', display:'flex', alignItems:'center', justifyContent:'space-between', gap:16,
+        padding:'clamp(18px,2.4vh,26px) clamp(20px,3vw,40px)', flexWrap:'wrap',
       }}>
         <div style={{ display:'flex', alignItems:'center', gap:'14px' }}>
           <BrandMark size={42} isDark={isDark} />
-          <div>
-            <div className="serif" style={{ fontSize:'34px', lineHeight:'0.95', letterSpacing:'-0.02em' }}>
-              Musi<i style={{ color: 'oklch(62% 0.2 275)' }}>X</i>
-            </div>
+          <div className="serif" style={{ fontSize:'clamp(26px,2.6vw,34px)', lineHeight:'0.95', letterSpacing:'-0.02em' }}>
+            Musi<i style={{ color: 'oklch(62% 0.2 275)' }}>X</i>
           </div>
         </div>
-        <TopRightControls isDark={isDark} lang={lang} onLang={onLang} onTheme={onTheme} onSettings={onSettings} />
+        <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
+          <HeaderNowPlaying track={playerTrack} audio={audio} isDark={isDark} lang={lang} onOpenPlayer={() => onNav('player')} />
+          <LibraryPill stats={stats} isDark={isDark} lang={lang} onClick={() => onNav('library')} />
+          <button onClick={() => onNav('search')} title={lang==='ru'?'Поиск':'Search'} className={ske('btn', isDark)}
+            style={{ width:38, height:38, borderRadius:'50%', display:'grid', placeItems:'center', color:c.textMuted }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          </button>
+          <TopRightControls isDark={isDark} lang={lang} onLang={onLang} onTheme={onTheme} onSettings={onSettings} />
+        </div>
       </div>
 
-      {/* Discovery Magazine body */}
-      <div style={{ position:'relative', maxWidth:'1280px', margin:'0 auto', paddingBottom:'80px' }}>
-        <NowPlayingStrip track={playerTrack} audio={audio} isDark={isDark} lang={lang}
-                         onOpenPlayer={() => onNav('player')} />
-        <ForYouHero isDark={isDark} lang={lang}
-                    onStartStream={onStartStream} navigateToArtist={navigateToArtist} />
-        <FeaturedArtistCard isDark={isDark} lang={lang}
-                            navigateToArtist={navigateToArtist} />
-        <RediscoveryBand isDark={isDark} lang={lang}
-                         onPick={(t) => onPlayTrack && onPlayTrack({ track: t }, [{ track: t }])}
-                         navigateToArtist={navigateToArtist} />
-        {loading ? (
-          <Fragment>
-            <ShelfSkeleton isDark={isDark} />
-            <ShelfSkeleton isDark={isDark} />
-          </Fragment>
-        ) : (
-          <Fragment>
-            <Shelf label={lang==='ru'?'НЕДАВНО ИГРАЛИ':'RECENTLY PLAYED'} items={recent} isDark={isDark}
-                   onPick={(it) => onPlayTrack && onPlayTrack({ track: it }, recent.map(x => ({ track: x })))}
-                   navigateToArtist={navigateToArtist} />
-            <Shelf label={lang==='ru'?'ВАШИ ЛАЙКИ':'YOUR LIKED SONGS'} items={liked} isDark={isDark}
-                   onPick={(it) => onPlayTrack && onPlayTrack({ track: it }, liked.map(x => ({ track: x })))}
-                   navigateToArtist={navigateToArtist} />
-            <Shelf label={lang==='ru'?'ПОПРОБУЙТЕ ДРУГОЕ':'TRY SOMETHING DIFFERENT'} items={different} isDark={isDark}
-                   onPick={(it) => onPlayTrack && onPlayTrack({ track: it }, different.map(x => ({ track: x })))}
-                   navigateToArtist={navigateToArtist} />
-            {playlists.length > 0 && (
-              <Shelf label={lang==='ru'?'ВАШИ ПЛЕЙЛИСТЫ':'YOUR PLAYLISTS'} items={playlists} isDark={isDark}
-                     onPick={() => onNav('library')} navigateToArtist={navigateToArtist} />
-            )}
-          </Fragment>
-        )}
-        <AlternativeModes isDark={isDark} lang={lang} onNav={onNav} />
+      {/* «Эфир» split — vertically centered in the viewport below the header */}
+      <div style={{ position:'relative', flex:'1 0 auto', display:'flex', flexDirection:'column', justifyContent:'center' }}>
+        <div className="efir-main" style={{ position:'relative' }}>
+          <ForYouHero isDark={isDark} lang={lang}
+                      onStartStream={onStartStream} navigateToArtist={navigateToArtist} />
+          <div className="efir-rail">
+            <FeaturedArtistCard isDark={isDark} lang={lang} navigateToArtist={navigateToArtist} />
+            <DiscoverNewCard isDark={isDark} lang={lang}
+                             onPick={(t) => onPlayTrack && onPlayTrack({ track: t }, [{ track: t }])}
+                             navigateToArtist={navigateToArtist} />
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -9999,17 +9909,21 @@ function LyricsBackFace({
       {lyrics ? (
         <div style={{ whiteSpace: 'pre-wrap' }}>
           {lyrics.split('\n').map((line, i) => (
-            <InlineLyricExplain
-              key={i}
-              line={line}
-              lineIdx={i}
-              expandedLines={expandedLines}
-              explainStates={explainStates}
-              onToggle={onToggleLyricExplain}
-              isDark={isDark}
-              aiActive={aiActive}
-              lang={lang}
-            />
+            line.trim() === '' ? (
+              <div key={i} aria-hidden="true" style={{ height: 16 }} />
+            ) : (
+              <InlineLyricExplain
+                key={i}
+                line={line}
+                lineIdx={i}
+                expandedLines={expandedLines}
+                explainStates={explainStates}
+                onToggle={onToggleLyricExplain}
+                isDark={isDark}
+                aiActive={aiActive}
+                lang={lang}
+              />
+            )
           ))}
         </div>
       ) : (
@@ -10287,98 +10201,289 @@ function useCoverColor(coverUrl) {
   return color;
 }
 
+// ── Artist-hero aurora palette ───────────────────────────────────────────────
+// Album covers are sampled for their dominant colours to paint the artist hero's
+// "no photo" state (a drifting For-You-style gradient). Deliberately separate from
+// useCoverColor above, which sits on the player's singleton sampling path — we keep
+// that blast radius at zero.
+function _clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
+// Shortest distance between two hues on the 0-360 colour wheel.
+function _hueDist(a, b) { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; }
+
+// Load a cover and hand back its W×H pixel buffer, mirroring useCoverColor's CORS
+// dance: same-origin reads must OMIT crossOrigin (a cached no-cors copy would taint
+// the canvas otherwise); remote reads opt into CORS on a ?cors=1 sampling URL.
+// Resolves null on taint/decode/error — never rejects.
+function loadCoverPixels(url, W, H) {
+  W = W || 32; H = H || 32;
+  return new Promise((resolve) => {
+    if (!url) { resolve(null); return; }
+    const img = new Image();
+    const isRemote = /^https?:\/\//i.test(url) && !url.startsWith(window.location.origin);
+    if (isRemote) img.crossOrigin = 'anonymous';
+    const fetchUrl = isRemote ? url + (url.includes('?') ? '&' : '?') + 'cors=1' : url;
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = W; canvas.height = H;
+        const cx = canvas.getContext('2d', { willReadFrequently: true });
+        cx.drawImage(img, 0, 0, W, H);
+        resolve(cx.getImageData(0, 0, W, H).data);
+      } catch (e) {
+        resolve(null);  // CORS-tainted canvas / decode failure
+      }
+    };
+    img.onerror = () => resolve(null);
+    img.src = fetchUrl;
+  });
+}
+
+// Quantise an RGBA pixel buffer into up to k vivid, hue-separated colours. Vivid
+// pixels (mid-luminance, saturated) are binned into 12 hue buckets weighted by
+// saturation; the heaviest buckets win, each ≥40° apart so we never return
+// near-identical stops. Monochrome/sparse covers fall back to spreading the
+// strongest colour across hue+lightness so one album still yields 2-3 stops.
+function pixelsToPalette(data, k) {
+  if (!data) return [];
+  const BINS = 12;
+  const bins = [];
+  for (let i = 0; i < BINS; i++) bins.push({ w: 0, h: 0, s: 0, l: 0, n: 0 });
+  let fallback = null, fbScore = -1;
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] < 200) continue;
+    const hsl = rgbToHsl(data[i], data[i + 1], data[i + 2]);
+    const h = hsl.h, s = hsl.s, l = hsl.l;
+    if (l > 22 && l < 82) {
+      const score = (s / 100) * (1 - Math.abs(l - 55) / 55);
+      if (score > fbScore) { fbScore = score; fallback = { h, s, l }; }
+    }
+    if (l <= 22 || l >= 82 || s < 18) continue;
+    const bi = Math.min(BINS - 1, Math.floor((h / 360) * BINS));
+    const bn = bins[bi];
+    bn.w += s; bn.h += h * s; bn.s += s * s; bn.l += l * s; bn.n++;
+  }
+  const cand = bins
+    .filter(bn => bn.n > 0 && bn.w > 0)
+    .map(bn => ({ h: bn.h / bn.w, s: bn.s / bn.w, l: bn.l / bn.w, w: bn.w }))
+    .sort((x, y) => y.w - x.w);
+  const out = [];
+  for (let i = 0; i < cand.length && out.length < k; i++) {
+    const cc = cand[i];
+    if (out.some(o => _hueDist(o.h, cc.h) < 40)) continue;
+    out.push({ h: cc.h, s: cc.s, l: cc.l });
+  }
+  if (out.length < k) {
+    const base = out[0] || fallback || { h: 270, s: 50, l: 55 };
+    const spread = [0, 22, -26, 12], lift = [0, 10, -8, 6];
+    let si = out.length === 0 ? 0 : 1;
+    while (out.length < k && si < spread.length) {
+      out.push({
+        h: ((base.h + spread[si]) % 360 + 360) % 360,
+        s: _clamp(base.s, 30, 80),
+        l: _clamp(base.l + lift[si], 20, 80),
+      });
+      si++;
+    }
+  }
+  return out.slice(0, k);
+}
+
+// Theme-safe CSS stops: clamp saturation/lightness so the artist name stays legible
+// over the gradient (brighter band in light theme, deeper in dark).
+function auroraStops(colors, isDark) {
+  return colors.map(({ h, s, l }) => {
+    const sc = _clamp(s, 38, 72);
+    const lc = isDark ? _clamp(l, 38, 56) : _clamp(l, 58, 74);
+    return `hsl(${h.toFixed(0)}, ${sc.toFixed(0)}%, ${lc.toFixed(0)}%)`;
+  });
+}
+
+// Synthetic 3-colour palette from a name-derived hue — used when an artist has no
+// album covers to sample, so the aurora still has something to shimmer.
+function nameHueColors(hue) {
+  return [
+    { h: hue, s: 60, l: 55 },
+    { h: (hue + 45) % 360, s: 52, l: 50 },
+    { h: ((hue + 330) % 360), s: 46, l: 60 },
+  ];
+}
+
+// Guarantee at least `want` stops so the base linear-gradient always has ≥2 colour
+// stops (a 1-stop gradient is invalid CSS). Pads by spreading the first colour
+// across hue+lightness; an empty input falls back to the name-derived hue.
+function padPalette(colors, hue, want) {
+  want = want || 3;
+  const out = (colors && colors.length) ? colors.slice() : nameHueColors(hue);
+  if (out.length >= want) return out;
+  const base = out[0];
+  const spread = [18, -24, 30, -14], lift = [8, -10, 5, -6];
+  for (let i = 0; out.length < want && i < spread.length; i++) {
+    out.push({
+      h: ((base.h + spread[i]) % 360 + 360) % 360,
+      s: _clamp(base.s, 30, 80),
+      l: _clamp(base.l + lift[i], 20, 80),
+    });
+  }
+  return out;
+}
+
+// Sample N album covers into a 3-4 colour aurora palette. One cover → its 2-3
+// dominant colours; many covers → one dominant per cover (hue-deduped, capped 4),
+// echoing how the player tints its equalizer per track. A single useEffect keyed on
+// the joined URL list keeps this rules-of-hooks-safe (no per-cover hook calls).
+function useCoverPalette(urls) {
+  const key = (urls || []).join('|');
+  const [state, setState] = useState({ colors: [], loading: !!key });
+  const cacheRef = useRef({});
+  useEffect(() => {
+    if (!key) { setState({ colors: [], loading: false }); return; }
+    if (cacheRef.current[key]) { setState({ colors: cacheRef.current[key], loading: false }); return; }
+    let cancelled = false;
+    setState(s => ({ colors: s.colors, loading: true }));
+    const list = key.split('|');
+    Promise.all(list.map(u => loadCoverPixels(u, 32, 32))).then(pixels => {
+      if (cancelled) return;
+      const valid = pixels.filter(Boolean);
+      let colors = [];
+      if (valid.length === 1) {
+        colors = pixelsToPalette(valid[0], 3);
+      } else if (valid.length >= 2) {
+        for (let i = 0; i < valid.length && colors.length < 4; i++) {
+          const cc = pixelsToPalette(valid[i], 1)[0];
+          if (cc && !colors.some(o => _hueDist(o.h, cc.h) < 28)) colors.push(cc);
+        }
+      }
+      cacheRef.current[key] = colors;
+      setState({ colors, loading: false });
+    });
+    return () => { cancelled = true; };
+  }, [key]);
+  return state;
+}
+
 // Mirrored spectrum strip. Reads frequency bins from the shared analyser
 // once per rAF and animates child bar elements via scaleY transform. Side
 // determines bin-to-bar mapping: BOTH sides anchor low-freq near the cover
 // so a beat thunders inward from both directions, and high-freq decays
 // outward toward the column edge.
-function SpectrumBars({ side, analyserRef, dataArrayRef, color, isPlaying, barCount = 32 }) {
-  const barsRef = useRef([]);
+function SpectrumBars({ side, analyserRef, dataArrayRef, color, isPlaying, barCount = 40 }) {
+  const pathRef = useRef(null);
+  const rawRef = useRef(null);
   const targetsRef = useRef(null);
   const currentsRef = useRef(null);
   const fadeRef = useRef(0);
+  const peakRef = useRef(0.12);   // smoothed running peak for the AGC
+  const N = Math.max(8, barCount);
 
-  if (!targetsRef.current || targetsRef.current.length !== barCount) {
-    targetsRef.current = new Float32Array(barCount);
-    currentsRef.current = new Float32Array(barCount);
+  if (!targetsRef.current || targetsRef.current.length !== N) {
+    rawRef.current = new Float32Array(N);
+    targetsRef.current = new Float32Array(N);
+    currentsRef.current = new Float32Array(N);
   }
 
   useEffect(() => {
     let frameId;
+    const A = 46;   // amplitude in viewBox units (half of the 100-tall strip)
+    // Smooth a polyline into a quadratic path (curve through segment midpoints).
+    const smooth = (pts) => {
+      let d = '';
+      for (let i = 1; i < pts.length; i++) {
+        const mx = (pts[i - 1][0] + pts[i][0]) / 2;
+        const my = (pts[i - 1][1] + pts[i][1]) / 2;
+        d += `Q ${pts[i - 1][0].toFixed(2)} ${pts[i - 1][1].toFixed(2)} ${mx.toFixed(2)} ${my.toFixed(2)} `;
+      }
+      const last = pts[pts.length - 1];
+      d += `L ${last[0].toFixed(2)} ${last[1].toFixed(2)} `;
+      return d;
+    };
+    // Symmetric filled ribbon: top edge + mirrored bottom edge, closed.
+    const buildPath = () => {
+      const cur = currentsRef.current;
+      const top = [], bot = [];
+      for (let i = 0; i < N; i++) {
+        const x = (i / (N - 1)) * 100;
+        const a = Math.max(0, Math.min(1, cur[i])) * A * fadeRef.current;
+        top.push([x, 50 - a]);
+        bot.push([x, 50 + a]);
+      }
+      const botRev = bot.reverse();
+      return `M ${top[0][0].toFixed(2)} ${top[0][1].toFixed(2)} ` + smooth(top) +
+             `L ${botRev[0][0].toFixed(2)} ${botRev[0][1].toFixed(2)} ` + smooth(botRev) + 'Z';
+    };
     const render = () => {
       const data = dataArrayRef?.current;
       const analyser = analyserRef?.current;
+      const raw = rawRef.current;
       if (analyser && data) {
         analyser.getByteFrequencyData(data);
-        // Use the lower ~45% of bins — that's where vocal/melody/bass live.
-        // Top bins are mostly air noise on most material; trimming them
-        // spreads real energy across the full strip width so the outer
-        // bars don't sit permanently dead.
+        // Lower ~45% of bins hold vocal/melody/bass; spreading them across the
+        // strip keeps the outer end alive instead of permanently dead.
         const usefulBins = Math.floor(data.length * 0.45);
-        for (let i = 0; i < barCount; i++) {
-          const start = Math.floor(i * usefulBins / barCount);
-          const end   = Math.floor((i + 1) * usefulBins / barCount);
+        let frameMax = 0;
+        for (let i = 0; i < N; i++) {
+          const start = Math.floor(i * usefulBins / N);
+          const end   = Math.floor((i + 1) * usefulBins / N);
           let sum = 0;
           for (let j = start; j < end; j++) sum += data[j];
-          targetsRef.current[i] = sum / Math.max(1, end - start) / 255;
+          const v = sum / Math.max(1, end - start) / 255;
+          raw[i] = v;
+          if (v > frameMax) frameMax = v;
+        }
+        // AGC: a smoothed peak (fast attack, slow release) normalises the SHAPE
+        // so loud passages no longer flat-line at max; the overall size still
+        // tracks loudness (quiet → smaller), keeping the wave informative.
+        const pk = peakRef.current;
+        peakRef.current = pk + (frameMax - pk) * (frameMax > pk ? 0.45 : 0.02);
+        const denom = Math.max(peakRef.current, 0.05);
+        const loud = Math.min(1, peakRef.current * 1.5 + 0.1);
+        for (let i = 0; i < N; i++) {
+          targetsRef.current[i] = Math.min(1, (raw[i] / denom) * loud);
         }
       } else {
-        for (let i = 0; i < barCount; i++) targetsRef.current[i] = 0;
+        for (let i = 0; i < N; i++) targetsRef.current[i] = 0;
+        peakRef.current *= 0.9;
       }
-      // Global fade so the strip eases in/out when play state flips.
+      // Global fade so the wave eases in/out when play state flips.
       const targetFade = isPlaying ? 1 : 0;
       fadeRef.current += (targetFade - fadeRef.current) * 0.06;
-
-      // DOM index `d` → data-bin lookup so left/right are mirrored.
-      for (let d = 0; d < barCount; d++) {
-        const dataBin = side === 'left' ? (barCount - 1 - d) : d;
+      // DOM index `d` → data-bin lookup so left/right mirror around the cover.
+      for (let d = 0; d < N; d++) {
+        const dataBin = side === 'left' ? (N - 1 - d) : d;
         const target = targetsRef.current[dataBin] || 0;
-        currentsRef.current[d] += (target - currentsRef.current[d]) * 0.22;
-        const el = barsRef.current[d];
-        if (el) {
-          const v = Math.max(0, Math.min(1, currentsRef.current[d]));
-          // No minimum scale — bars must fully collapse when fade=0 so they
-          // don't show as thin sliver lines while paused.
-          // tanh soft-knee instead of a hard clamp: lifts quiet sections
-          // (×~1.8 near zero) yet saturates gradually, so loud choruses keep
-          // a visible wave shape instead of a flat row of maxed bars.
-          const scale = Math.tanh(v * 1.8) * fadeRef.current;
-          el.style.transform = `scaleY(${scale})`;
-        }
+        currentsRef.current[d] += (target - currentsRef.current[d]) * 0.28;
       }
+      const el = pathRef.current;
+      if (el) el.setAttribute('d', buildPath());
       frameId = requestAnimationFrame(render);
     };
     frameId = requestAnimationFrame(render);
     return () => cancelAnimationFrame(frameId);
-  }, [analyserRef, dataArrayRef, isPlaying, barCount, side]);
+  }, [analyserRef, dataArrayRef, isPlaying, N, side]);
 
-  // Cover-color → bar color (HSL). Clamp saturation/lightness so very dark
-  // or very pale covers still produce a readable bar tint.
+  // Cover-color → wave tint (HSL). Clamp saturation/lightness so very dark or
+  // very pale covers still produce a readable tint.
   const hue = color ? color.h : 270;
   const sat = color ? Math.min(85, Math.max(45, color.s)) : 60;
   const lit = color ? Math.min(72, Math.max(52, color.l)) : 62;
   const barColor = `hsl(${hue.toFixed(0)}, ${sat.toFixed(0)}%, ${lit.toFixed(0)}%)`;
+  const gradId = `spec-grad-${side}`;
+  // Horizontal fill ramp: bright at the cover-side edge, dim at the outer edge,
+  // so the wave reads as anchored on the album. (left strip → cover on the right)
+  const coverAtRight = side === 'left';
 
-  // Opacity ramps from edge (dim) to cover-side (bright) so the bars feel
-  // anchored on the cover and dissolve outward.
   return (
-    <div className={`player-spectrum player-spectrum--${side}`}
-      style={{ '--bar-color': barColor }}
-      aria-hidden="true"
-    >
-      {Array.from({ length: barCount }, (_, i) => {
-        const proximity = side === 'left'
-          ? i / (barCount - 1)
-          : (barCount - 1 - i) / (barCount - 1);
-        const opacity = 0.32 + proximity * 0.6;
-        return (
-          <div key={i}
-            ref={el => { barsRef.current[i] = el; }}
-            className="player-spectrum-bar"
-            style={{ opacity }}
-          />
-        );
-      })}
+    <div className={`player-spectrum player-spectrum--${side}`} aria-hidden="true">
+      <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id={gradId}
+            x1={coverAtRight ? '0' : '1'} y1="0" x2={coverAtRight ? '1' : '0'} y2="0">
+            <stop offset="0%"   stopColor={barColor} stopOpacity="0.10" />
+            <stop offset="55%"  stopColor={barColor} stopOpacity="0.55" />
+            <stop offset="100%" stopColor={barColor} stopOpacity="0.92" />
+          </linearGradient>
+        </defs>
+        <path ref={pathRef} d="" fill={`url(#${gradId})`} />
+      </svg>
     </div>
   );
 }
@@ -10737,9 +10842,10 @@ function VolumeControl({ volume, onChange, isDark, lang }) {
         </svg>
       </button>
       <div style={{
-        position: 'absolute', left: 'calc(100% + 2px)', top: '50%', transform: 'translateY(-50%)',
+        position: 'absolute', left: 'calc(100% - 6px)', top: '50%', transform: 'translateY(-50%)',
         display: 'flex', alignItems: 'center',
-        width: expanded ? 94 : 0, opacity: expanded ? 1 : 0,
+        paddingTop: 10, paddingBottom: 10,
+        width: expanded ? 100 : 0, opacity: expanded ? 1 : 0,
         overflow: 'hidden', pointerEvents: expanded ? 'auto' : 'none',
         transition: 'width 0.22s cubic-bezier(0.22,0.9,0.3,1), opacity 0.18s ease',
       }}>
@@ -10838,6 +10944,49 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
     if (w >= 1700) return 44;
     return 32;
   }, []);
+
+  // Adaptive cover size. On short viewports the fixed 60vh cover + title + sonic
+  // vibe + controls overflow the column (overflow:hidden + center), pushing the
+  // Lossless badge off-screen. Measure the column and shrink the cover so ≥10%
+  // of the column height stays free — but never grow it past the current
+  // clamp(220px,60vh,640px) cap. Sized in a layout effect so it's set pre-paint.
+  const playerColRef = useRef(null);
+  const playerHintRef = useRef(null);
+  const playerMetaRef = useRef(null);
+  const [coverPx, setCoverPx] = useState(null);
+  useLayoutEffect(() => {
+    if (!visible) return;
+    const col = playerColRef.current;
+    if (!col) return;
+    const measure = () => {
+      const colH = col.clientHeight;
+      const colW = col.clientWidth;
+      if (colH <= 0) return;
+      const cs = getComputedStyle(col);
+      const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+      const gap = parseFloat(cs.rowGap) || parseFloat(cs.gap) || 0;
+      const nGaps = Math.max(0, col.children.length - 1);
+      const hintH = playerHintRef.current ? playerHintRef.current.offsetHeight : 0;
+      const metaH = playerMetaRef.current ? playerMetaRef.current.offsetHeight : 0;
+      const winH = window.innerHeight || colH;
+      const capPx = Math.min(760, Math.max(220, 0.72 * winH));  // height cap (raised for a larger cover)
+      const reserve = 0.07 * colH;                               // ≥7% free space (logo is shorter now)
+      const avail = colH - padY - gap * nGaps - reserve - hintH - metaH;
+      // Horizontal guard: the cover is square + sized only by height, so on a
+      // tall-but-narrow viewport it could exceed the column width and clip
+      // (col has overflow:hidden). Cap by width minus room for the flanking
+      // prev/next buttons + their gaps (~150px).
+      const availW = colW - 150;
+      const px = Math.round(Math.max(140, Math.min(capPx, avail, availW)));
+      setCoverPx(prev => (prev !== null && Math.abs(prev - px) < 2) ? prev : px);
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(col);
+    if (playerMetaRef.current) ro.observe(playerMetaRef.current);
+    window.addEventListener('resize', measure);
+    return () => { ro.disconnect(); window.removeEventListener('resize', measure); };
+  }, [visible, currentTrack?.track_id, lyricsMode]);
 
   // Vinyl-stack transition: snapshot of outgoing track + direction, plus a
   // nonce that bumps on every track change to re-trigger the CSS entry
@@ -11297,7 +11446,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
             within the column when there's vertical slack. The cover-row sits
             outside the constrained-width inner wrapper so prev/next side
             buttons can flank the cover in the column's empty horizontal slack. */}
-        <div className="player-fade-in" style={{
+        <div className="player-fade-in" ref={playerColRef} style={{
           flex:1, minWidth:0,
           display:'flex', flexDirection:'column',
           alignItems:'center', justifyContent:'center',
@@ -11310,6 +11459,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
               so it doesn't push the cover down for returning users. */}
           {currentTrack && (
             <div
+              ref={playerHintRef}
               className={`player-art-hint${hintVisible ? '' : ' player-art-hint--hidden'}`}
               style={{ height: hintVisible ? 'auto' : 0, marginBottom: hintVisible ? 4 : 0 }}
               aria-hidden={!hintVisible}
@@ -11366,7 +11516,10 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
               onMouseEnter={lyricsMode ? undefined : handleArtMouseEnter}
               onMouseLeave={handleArtMouseLeave}
               onClick={currentTrack ? handleCoverClick : undefined}
-              style={{ cursor: currentTrack ? 'pointer' : 'default' }}
+              style={{
+                cursor: currentTrack ? 'pointer' : 'default',
+                ...(coverPx ? { width: `${coverPx}px`, maxWidth: `${coverPx}px` } : null),
+              }}
             >
               {/* Outgoing cover snapshot — animates "into the stack". Keyed on
                   entryNonce so rapid next-spam restarts the exit cleanly. */}
@@ -11480,9 +11633,9 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
 
           {/* Controls + meta column, constrained to cover width. The cover-row
               above is the only element allowed to spill outside this clamp. */}
-          <div style={{
+          <div ref={playerMetaRef} style={{
             width:'100%',
-            maxWidth:'clamp(220px, 60vh, 640px)',
+            maxWidth: coverPx ? `min(${Math.round(coverPx * 1.35)}px, 100%)` : 'min(clamp(300px, 80vh, 860px), 100%)',
             display:'flex', flexDirection:'column',
             gap:'clamp(10px, 1.6vh, 18px)',
             minHeight:0,
@@ -11648,7 +11801,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                     title={isFlac ? 'FLAC · Lossless' : `ALAC · ${currentTrack.bitrate_kbps} kbps`}
                     style={{
                       height: 'auto',
-                      width: 128,
+                      width: coverPx ? Math.max(80, Math.min(150, Math.round(coverPx * 0.26))) : 128,
                       filter: iconFilter,
                       userSelect: 'none',
                       pointerEvents: 'none',
@@ -11962,7 +12115,9 @@ function AtlasSpinButton({ onSpin, lang, compact }) {
 function AtlasHero({ data, isDark, lang, onNav, heroRef }) {
   const c = useColors(isDark);
   const hue = atlasHue(data.name, data.name.slice(1));
-  const backdrop = atlasImgUrl(data.thumb_path) || atlasImgUrl(data.albums?.[0]?.cover_art_path);
+  // Only a real artist photo counts as a backdrop. Album covers are NO LONGER
+  // promoted to a full-bleed image — they feed the aurora gradient instead (below).
+  const backdrop = atlasImgUrl(data.thumb_path);
   const cutout = atlasImgUrl(data.cutout_path);
   const flag = atlasFlag(data.country_code);
 
@@ -11983,9 +12138,20 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef }) {
 
   // Three exclusive hero treatments:
   //  • cutout — transparent PNG of the artist, raised into the upper band (no backdrop)
-  //  • photo  — only a full-bleed image exists: show it un-blurred, centred, fading to facts
-  //  • mono   — nothing usable: atmospheric gradient + monogram square
-  const mode = cutout ? 'cutout' : (backdrop ? 'photo' : 'mono');
+  //  • photo  — a real artist photo exists: show it un-blurred, centred, fading to facts
+  //  • aurora — no artist photo: a drifting gradient painted from album-cover colours
+  //             (or a name-derived hue when there are no covers to sample)
+  const mode = cutout ? 'cutout' : (backdrop ? 'photo' : 'aurora');
+
+  // Album covers → aurora palette (sampled only in aurora mode; [] is a hook no-op).
+  // One album yields 2-3 colours; several yield one dominant each (hue-deduped).
+  const coverUrls = mode === 'aurora'
+    ? Array.from(new Set((data.albums || [])
+        .map(a => atlasImgUrl(a.cover_art_path))
+        .filter(Boolean)))
+    : [];
+  const { colors: sampledColors } = useCoverPalette(coverUrls);
+  const auroraCss = auroraStops(padPalette(sampledColors, hue, 3), isDark);
 
   return (
     <div ref={heroRef} style={{ position:'relative', height:'clamp(420px, 56vh, 600px)', overflow:'hidden' }}>
@@ -12020,10 +12186,21 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef }) {
             : `radial-gradient(ellipse 92% 112% at 73% 50%, oklch(96% 0.012 ${hue}) 0%, oklch(92% 0.01 ${hue}) 55%, ${c.bg} 100%)`,
         }} />
       ) : (
-        <div aria-hidden="true" style={{
-          position:'absolute', inset:0,
-          background:`linear-gradient(135deg, oklch(${isDark?'30%':'80%'} 0.1 ${hue}), oklch(${isDark?'19%':'88%'} 0.07 ${(hue+45)%360}))`,
-        }} />
+        // aurora — full-bleed base gradient + drifting album-colour blobs, masked
+        // to fade out toward both horizontal edges (no hard cutoff on wide screens)
+        <Fragment>
+          <div aria-hidden="true" style={{
+            position:'absolute', inset:0,
+            background:`linear-gradient(150deg, ${auroraCss.join(', ')})`,
+            transition:'background 600ms ease',
+          }} />
+          <div className="atlas-aurora" aria-hidden="true">
+            {[0,1,2,3].map(i => (
+              <div key={i} className={`aurora-blob aurora-blob-${i}`}
+                   style={{ background: auroraCss[i % auroraCss.length] }} />
+            ))}
+          </div>
+        </Fragment>
       )}
       {/* depth accent + readability wash toward the page bg */}
       <div aria-hidden="true" style={{
@@ -12065,7 +12242,7 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef }) {
           <span style={{ color: isDark ? '#fff' : '#161620' }}>{data.name.toUpperCase()}</span>
         </div>
 
-        {/* Cutout photo (raised, capped) — or monogram square when there is no image at all */}
+        {/* Cutout photo (raised, capped) — cutout mode only; aurora has no focal art */}
         {mode === 'cutout' && (
           <img src={cutout} alt="" className="atlas-cutout" style={{
             position:'absolute', right:36, top:44, bottom:34, maxWidth:'44%',
@@ -12073,23 +12250,11 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef }) {
             filter:'drop-shadow(0 16px 38px rgba(0,0,0,0.5))',
           }} />
         )}
-        {mode === 'mono' && (
-          <div className="atlas-cutout" style={{
-            position:'absolute', right:40, bottom:38, width:148, height:148,
-            borderRadius:20, zIndex:1, display:'grid', placeItems:'center',
-            background:`linear-gradient(135deg, oklch(38% 0.13 ${hue}), oklch(52% 0.18 ${(hue+45)%360}))`,
-            boxShadow:'inset 0 1px 0 rgba(255,255,255,0.2), 0 18px 40px rgba(0,0,0,0.35)',
-          }}>
-            <span className="serif" style={{ fontSize:52, fontWeight:300, color:'rgba(255,255,255,0.78)', letterSpacing:'0.02em' }}>
-              {data.name.split(/\s+/).slice(0,2).map(w => (w[0]||'').toUpperCase()).join('')}
-            </span>
-          </div>
-        )}
 
         {/* Name + context lines. In cutout mode the name sits on the left,
             vertically centred against the figure; otherwise it anchors bottom-left. */}
         <div style={{
-          position:'absolute', left:32, right: mode==='cutout' ? '46%' : '44%', zIndex:2, minWidth:0,
+          position:'absolute', left:32, right: mode==='cutout' ? '46%' : (mode==='aurora' ? 32 : '44%'), zIndex:2, minWidth:0,
           ...(mode==='cutout' ? { top:'50%', transform:'translateY(-50%)' } : { bottom:58 }),
         }}>
           <h1 className="serif" style={{
