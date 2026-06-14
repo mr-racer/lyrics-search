@@ -1,55 +1,96 @@
-# 🎵 MusiX — Find Music by Meaning, Not by Name
+# 🎵 MusiX — A Local Music Player That Actually Knows Your Taste
 
-> **Stop guessing search queries. Start describing what you remember.**
+> **Your music. Your machine. An AI that listens with you — not instead of you.**
 
-You remember the vibe, a lyric fragment, or that one line about a car — but not the song title. MusiX finds it anyway.
+MusiX is a music player for **your own library** — the files you already own, on your
+own computer. Point it at a folder of MP3/FLAC, and on top of a clean player it adds
+an AI layer that learns what you love: it builds a portrait of your taste, keeps an
+endless personal stream going, writes playlists from a one-line wish, tells you the
+story behind every artist and song, and chats with you about whatever is playing.
 
-Drop your local music library into MusiX, and it builds a **semantic index** of every track: lyrics, mood, genre, metadata. Then you ask in plain language — and get ranked results with matching lyric snippets and album art.
+No streaming catalog. No "songs you might also like" pulled from strangers. No
+AI-generated tracks, no auto-remixes — **only the music you chose to add.**
+
+---
+
+## 🔒 Local-first, by design
+
+This is the whole point, so it comes first:
+
+- **Everything runs on your machine** — the player, the AI brain, the database. Nothing
+  about your listening is uploaded to a MusiX cloud, because there isn't one.
+- **You choose the library.** MusiX only ever sees the folder you point it at. It never
+  reaches out to add tracks, suggest "official" versions, or slip in AI-made songs or
+  remixes. What you put in is exactly what you get back.
+- **Your taste data stays yours** — likes, play history, the taste portrait, and chat
+  history live in a local SQLite file on your disk.
+- **The AI can be fully local too.** MusiX talks to any OpenAI-compatible LLM endpoint,
+  so you can run the language model on your own GPU with **LM Studio** or **Ollama** and
+  keep the entire experience offline.
 
 ---
 
 ## ✨ What can it do?
 
-### 🔍 Semantic Lyrics Search
+### 🎧 A real player for your own files
 
-Describe a song in your own words, and MusiX understands the *meaning*, not just keywords:
+The new heart of MusiX is the player itself: gapless playback of your local library,
+album art pulled straight from your files, lyrics in view, a reactive equalizer, and an
+"aurora" mode that paints the screen with the mood of the current track. Organize your
+music into multiple libraries and switch between them instantly.
 
-> _"Song where the singer talks about driving a Mercedes at night"_
-> _"Что-то про дождь и городские огни, женский голос"_
+### 🌊 An endless personal stream
 
-No more "song that goes dah-dah-dah-dah" on YouTube. MusiX uses vector embeddings to match your description against the actual semantic content of every lyric in your library.
+Hit play and never stop. MusiX keeps an infinite, personalized stream running — each next
+track chosen from **your** library to match where your ears are right now. When it runs
+out of fresh picks it gracefully loops back instead of dead-ending, so the music never
+just stops.
 
-### 🎧 Search by Sound & Mood
+### 🪞 Your musical taste, put into words
 
-Not just lyrics — search by **acoustic characteristics**. Describe the sound, energy, or atmosphere:
+MusiX doesn't just recommend — it can **explain you to yourself**. From what you actually
+play and like, it builds:
 
-> _"Aggressive trap beat with 808 bass"_
-> _"Медленная акустическая баллада с фортепиано"_
+- **Taste islands** — the distinct clusters of sound you keep coming back to, each given
+  a punchy name ("Late-Night Synthwave", not "Artist X").
+- **A sound-axis profile** — where you sit on energy, vocals, spaciousness, brightness,
+  acousticness, and how experimental you lean.
+- **A listener portrait** — a few honest sentences about what you love, contradictions
+  included.
+- **A "wave" tagline** on the For-You screen that captures the mood you're in *today*,
+  blending your lasting taste with what's been on rotation lately.
 
-Under the hood, MusiX uses **CLAP** (Contrastive Language-Audio Pretraining) to bridge text descriptions and audio embeddings — so you can find songs by how they *sound*, not just what they *say*.
+### 🪄 Playlists from a single wish
 
-### 💬 AI Chat Assistant
+Describe what you want in plain language — _"energetic rock about love"_, _"a calm
+late-night jazz set"_ — and MusiX builds a curated, well-ordered playlist **out of your
+own library**, with a short reason next to each pick explaining why it made the cut. It
+plans the search, pulls real tracks from your collection, and sequences them so the set
+flows.
 
-Don't feel like crafting the perfect query? Chat with MusiX naturally. The built-in AI assistant:
+### 📖 Bios & facts about artists and songs
 
-- Understands conversational context across multiple rounds
-- Translates your casual descriptions into precise search queries
-- Returns ranked results with confidence scores
-- Remembers your conversation history per collection
+Every artist gets a researched one-paragraph biography; every song gets a set of curated
+facts — the story, the context, the trivia. Tap into them while you listen, or browse a
+stream of random facts about the music you own.
 
-### 📚 Multi-Library Collections
+### 💬 Chat about the song that's playing
 
-Index multiple folders into separate named collections — switch between them instantly:
+Open the chat drawer on any track and ask anything:
 
-- Your personal MP3 archive
-- A band's complete discography
-- A curated playlist of FLAC rips
+- _"What is this song actually about?"_
+- _"Does this sample something?"_
+- _"Why does the bridge change key here?"_
 
-Each collection gets its own vector index, chat history, and search scope.
+The assistant answers from the song's full lyrics, metadata, and facts — and only reaches
+out to the web when the answer genuinely isn't in front of it (and tells you honestly when
+it can't find something).
 
-### 🖼️ Album Art
+### 🔎 Pinpoint questions about the lyrics
 
-MusiX extracts cover art directly from your audio files and displays it alongside search results — no missing covers, no broken links.
+See a line you don't get? Select it and ask. MusiX explains **that exact line** — the
+reference, the wordplay, the meaning — in a couple of sentences, quoting the phrase back
+to you instead of giving a generic summary.
 
 ---
 
@@ -104,7 +145,7 @@ take a while. When it finishes, MusiX is running quietly in the background.
 ### Step 5 — Open it in your browser
 
 Go to **<http://localhost:8000>**. The first-run wizard creates your owner
-account → point MusiX at your music (upload or index) → start searching. 🎉
+account → point MusiX at your music (upload or index) → start listening. 🎉
 
 ### Everyday commands
 
@@ -140,10 +181,16 @@ uvicorn app.api.main:app --reload --host 0.0.0.0 --port 8000 --log-config loggin
 
 ## 🧠 How it works (briefly)
 
-1. **Index** — MusiX scans your folder, extracts metadata (title, artist, album, genre, duration) and lyrics from file tags. Missing lyrics are auto-fetched from online sources.
-2. **Embed** — Every song's lyrics are converted into a dense vector (Sentence Transformers). Audio characteristics are embedded separately (CLAP).
-3. **Search** — Your query is embedded the same way. Cosine similarity ranks the closest matches. Hybrid mode fuses both signals.
-4. **Display** — Results appear with lyric snippets, confidence scores, album art, and metadata filters.
+1. **Add your library** — MusiX scans your folder, reads tags (title, artist, album,
+   genre, duration) and lyrics, and extracts cover art. Missing lyrics are filled in
+   automatically.
+2. **Learn the sound** — each track is analyzed for its acoustic character and lyrical
+   content, so MusiX can tell what sits near what *inside your own collection*.
+3. **Learn you** — your plays and likes shape a living taste profile: islands, sound
+   axes, and a portrait, all recomputed as your taste drifts.
+4. **Play it back** — the player streams your files, the stream keeps choosing what's
+   next, the AI writes playlists and bios, and the chat answers questions — all from the
+   music you own.
 
 ---
 
@@ -151,12 +198,13 @@ uvicorn app.api.main:app --reload --host 0.0.0.0 --port 8000 --log-config loggin
 
 | Feature | Status |
 |---------|--------|
-| Semantic lyrics search | ✅ Done |
-| Audio/mood search (CLAP) | ✅ Done |
-| AI chat assistant | ✅ Done |
-| Album art extraction | ✅ Done |
-| Multi-collection support | ✅ Done |
-| Smart recommendations | 🚧 In progress |
+| Local music player (stream, aurora, EQ) | ✅ Done |
+| Endless personalized stream | ✅ Done |
+| Taste profile (islands, axes, portrait) | ✅ Done |
+| AI playlist generation from a wish | ✅ Done |
+| Artist bios & song facts | ✅ Done |
+| Per-track chat + lyric line explanations | ✅ Done |
+| Album art & multi-library support | ✅ Done |
 | Audio waveform visualization | 📋 Planned |
 | Mobile-responsive UI | 📋 Planned |
 
@@ -164,18 +212,26 @@ uvicorn app.api.main:app --reload --host 0.0.0.0 --port 8000 --log-config loggin
 
 ## ⚙️ Configuration
 
-Set via `.env` file or environment variables:
+Set via a `.env` file (copy `.env.example` to `.env`) or environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `QDRANT_URL` | `http://localhost:6333` | Vector database endpoint |
-| `TEXT_MODEL` | `jinaai/jina-embeddings-v2-small-en` | Lyrics embedding model |
-| `AUDIO_MODEL` | `laion/clap-htsat-base` | Audio embedding model |
-| `LLM_BASE_URL` | — | OpenAI-compatible LLM endpoint (LM Studio, Ollama, etc.) |
+| `QDRANT_URL` | `http://qdrant:6333` | Local taste-index database endpoint (use `http://localhost:6333` for a bare-metal run) |
+| `LLM_BASE_URL` | — | OpenAI-compatible LLM endpoint (LM Studio, Ollama, or a hosted API) |
+| `LLM_MODEL` | — | LLM model name to use |
+| `OPENAI_API_KEY` | — | API key for the LLM endpoint (any value for local servers) |
+| `TEXT_MODEL` | `jinaai/jina-embeddings-v2-small-en` | Lyrics analysis model |
+| `MUSIX_JWT_SECRET` | — | 32+ random chars for auth (`openssl rand -hex 32`) |
 | `MUSIC_FOLDER` | — | Default music library path |
+
+Without an LLM configured, the player and your library work fully — only the AI
+features (taste portrait, playlists, chat, bios) stay disabled.
 
 ---
 
 ## 📜 License
 
-MIT — use it, fork it, remix it.
+Licensed under the **Apache License, Version 2.0**. You may use, modify, and
+distribute MusiX, including for commercial purposes, provided you keep the
+required attribution and `NOTICE`. The license also includes an explicit patent
+grant. See the [LICENSE](LICENSE) file for the full terms.
