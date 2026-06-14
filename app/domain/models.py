@@ -33,6 +33,9 @@ class TrackMetadata(BaseModel):
     # Canonical participants derived from the raw `artist` string at index time.
     artists: list[str] | None = None
     primary_artist_slug: str | None = None
+    # Real position in the release, from file tags — drives album track ordering.
+    track_number: int | None = None
+    disc_number: int | None = None
 
 
 class ScoreBreakdown(BaseModel):
