@@ -31,3 +31,20 @@ def test_payload_missing_artist():
     assert p["artists"] == []
     assert p["artist_slugs"] == []
     assert p["primary_artist_slug"] is None
+
+
+def test_payload_carries_track_and_disc_number():
+    info = {
+        "lyrics": "x", "title": "T", "artist": "A", "album": "Alb",
+        "track_number": 5, "disc_number": 2,
+    }
+    p = _build_payload_for_upsert(info, slug=None)
+    assert p["track_number"] == 5
+    assert p["disc_number"] == 2
+
+
+def test_payload_track_number_defaults_to_none():
+    info = {"lyrics": "x", "title": "T", "artist": "A", "album": "Alb"}
+    p = _build_payload_for_upsert(info, slug=None)
+    assert p["track_number"] is None
+    assert p["disc_number"] is None

@@ -80,6 +80,30 @@ def validate_year(raw: str | None) -> int | None:
     return None
 
 
+def parse_track_index(raw) -> int | None:
+    """Parse a track- or disc-index tag value into a positive int, or None.
+
+    Handles the shapes mutagen returns across containers:
+      - FLAC / MP3 (EasyID3): a string like ``"5"`` or ``"5/12"`` (index / total)
+      - MP4 (``trkn`` / ``disk``): an ``(index, total)`` tuple, or a bare int
+    Returns None for missing, zero, or unparseable values.
+    """
+    if raw is None or isinstance(raw, bool):  # bool is an int subclass — exclude
+        return None
+    if isinstance(raw, int):
+        return raw if raw > 0 else None
+    if isinstance(raw, (tuple, list)):
+        return parse_track_index(raw[0]) if raw else None
+    if isinstance(raw, str):
+        head = raw.strip().split("/", 1)[0].strip()
+        try:
+            n = int(head)
+        except ValueError:
+            return None
+        return n if n > 0 else None
+    return None
+
+
 def get_flac_metadata(filepath: str) -> dict:
     audio = FLAC(filepath)
     duration = audio.info.length
@@ -99,6 +123,8 @@ def get_flac_metadata(filepath: str) -> dict:
         "genre":        (audio.get("genre")  or [""])[0].strip() or None,
         "duration":     round(duration),
         "bitrate_kbps": bitrate_kbps,
+        "track_number": parse_track_index((audio.get("tracknumber") or [None])[0]),
+        "disc_number":  parse_track_index((audio.get("discnumber")  or [None])[0]),
     }
 
 
@@ -123,6 +149,9 @@ def get_alac_metadata(filepath: str) -> dict:
         "genre":        _tag("©gen") or None,
         "duration":     round(duration),
         "bitrate_kbps": bitrate_kbps,
+        # MP4 stores track/disc as a list of (index, total) tuples.
+        "track_number": parse_track_index((audio.tags.get("trkn") or [None])[0]),
+        "disc_number":  parse_track_index((audio.tags.get("disk") or [None])[0]),
     }
 
 
@@ -154,6 +183,8 @@ def get_mp3_metadata(filepath: str) -> dict:
         "year":     validate_year(raw_year),
         "genre":    (audio.get("genre")  or [""])[0].strip() or None,
         "duration": duration,
+        "track_number": parse_track_index((audio.get("tracknumber") or [None])[0]),
+        "disc_number":  parse_track_index((audio.get("discnumber")  or [None])[0]),
     }
 
 

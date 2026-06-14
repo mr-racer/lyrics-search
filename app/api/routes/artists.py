@@ -102,6 +102,8 @@ def _track_from_payload(point_id: str, p: dict) -> TrackMetadata:
         label=p.get("label"),
         samples=p.get("samples"),
         sampled_by=p.get("sampled_by"),
+        track_number=p.get("track_number"),
+        disc_number=p.get("disc_number"),
     )
 
 
@@ -113,6 +115,19 @@ def _decade_range(years: list[int]) -> Optional[str]:
     if len(valid) == 1:
         return f"{valid[0]}s"
     return f"{valid[0]}s-{valid[-1]}s"
+
+
+def _album_track_sort_key(tracks: list[TrackMetadata]) -> list[TrackMetadata]:
+    """Order an album's tracks by real position.
+
+    If EVERY track has a ``track_number``, sort by ``(disc_number or 1,
+    track_number)``. Otherwise fall back to title order for the whole album — the
+    agreed behaviour for incomplete numbering (no separate trailing bucket for
+    un-numbered tracks). ``sorted`` is stable, so equal keys keep scroll order.
+    """
+    if tracks and all(t.track_number is not None for t in tracks):
+        return sorted(tracks, key=lambda t: (t.disc_number or 1, t.track_number))
+    return sorted(tracks, key=lambda t: (t.title or "").lower())
 
 
 def build_artist_aggregate(db, collection: str, canonical_slug: str, lang: str) -> ArtistAggregate:
@@ -187,6 +202,7 @@ def build_artist_aggregate(db, collection: str, canonical_slug: str, lang: str) 
     liked_ids = {tid for tid, r in reactions.items() if r == "like"}
     albums: list[ArtistAlbum] = []
     for album_title, tracks in by_album.items():
+        tracks = _album_track_sort_key(tracks)
         years = [t.year for t in tracks if t.year]
         # Representative cover = first track's that has one
         cover = next((t.cover_art_path for t in tracks if t.cover_art_path), None)
