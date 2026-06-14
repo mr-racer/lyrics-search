@@ -53,20 +53,94 @@ MusiX extracts cover art directly from your audio files and displays it alongsid
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Quick Start (Anaconda — run it on your own machine)
+
+This branch runs MusiX **directly on your computer** with **Anaconda** — a free,
+beginner-friendly Python toolkit. You don't need to know how to code: open one
+window, then copy each command, paste it, and press **Enter**.
+
+### Step 0 — Install the tools (one time only)
+
+1. **Anaconda** — download from <https://www.anaconda.com/download> and install
+   it with the default options.
+2. **Docker Desktop** — download from
+   <https://www.docker.com/products/docker-desktop/> and install it. MusiX keeps
+   its search index in a small database called **Qdrant**, and the simplest way
+   to run Qdrant is through Docker. Start Docker Desktop once and leave it
+   running in the background (its whale icon should say "running").
+
+### Step 1 — Open the Anaconda Prompt
+
+Click **Start**, type **Anaconda Prompt**, and open it. A black window appears —
+this is where you paste the commands below. *(On macOS/Linux, use your normal
+Terminal instead.)*
+
+### Step 2 — Go to the project folder
+
+Replace the path with wherever you unzipped MusiX, then press **Enter**:
 
 ```bash
-# 1. Start Qdrant (vector database)
-docker-compose up -d
-
-# 2. Install dependencies
-pip install -e .
-
-# 3. Run the server
-uvicorn app.api.main:app --reload --host 0.0.0.0 --port 8000 --log-config logging.conf
+cd C:\Users\YourName\Desktop\lyrics-search
 ```
 
-Open `http://localhost:8000` → point MusiX at your music folder → start searching.
+### Step 3 — Create the `musix` environment (one time only)
+
+This makes a clean, isolated space for MusiX so it never clashes with other
+software on your computer:
+
+```bash
+conda create -n musix python=3.11 -y
+conda activate musix
+```
+
+Your prompt should now start with `(musix)`. **Tip:** every time you open a new
+Anaconda Prompt, run `conda activate musix` again before using MusiX.
+
+### Step 4 — Install MusiX and everything it needs (one time only)
+
+```bash
+pip install -r requirements.txt
+```
+
+This downloads MusiX plus its AI models — several gigabytes, so the first run
+takes a while. Grab a coffee. ☕
+
+> 💡 A recent **NVIDIA GPU** is recommended (the install grabs GPU-accelerated
+> AI libraries). It will still install without one, but searching will be
+> slower.
+
+### Step 5 — Start the Qdrant database
+
+Make sure **Docker Desktop is running**, then:
+
+```bash
+docker run -d --name qdrant -p 6333:6333 qdrant/qdrant
+```
+
+You only create it once. After that you can start/stop it from the Docker
+Desktop window, or with `docker start qdrant` / `docker stop qdrant`.
+
+### Step 6 — Start MusiX
+
+```bash
+uvicorn app.api.main:app --host 0.0.0.0 --port 8000 --log-config logging.conf
+```
+
+Keep this window open — it **is** the running app. To stop MusiX later, click
+the window and press **Ctrl + C**.
+
+### Step 7 — Open it in your browser
+
+Go to **<http://localhost:8000>**, point MusiX at your music folder, and start
+searching. 🎉
+
+> ℹ️ Don't double-click `index.html` — MusiX is a web app, so the page only
+> works while the server from Step 6 is running and you open it through
+> `localhost:8000`.
+
+> 🔎 *Optional:* web search for missing lyrics uses **SearXNG**. To enable it,
+> run `docker-compose up -d` (this branch's compose file starts SearXNG).
+> MusiX works fine without it.
 
 ---
 
