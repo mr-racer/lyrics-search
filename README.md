@@ -53,21 +53,73 @@ MusiX extracts cover art directly from your audio files and displays it alongsid
 
 ---
 
-## 🚀 Quick Start (Docker — recommended)
+## 🚀 Quick Start (Docker — the easy way)
 
-Everything runs in containers — app (with GPU), Qdrant, and SearXNG:
+Everything — the app, the search database (Qdrant), and the web-search helper
+(SearXNG) — runs inside **Docker** containers. You don't install Python or any
+AI models by hand; **one command** downloads and starts it all.
+
+### Step 0 — Install Docker Desktop (one time only)
+
+Download **Docker Desktop** from
+<https://www.docker.com/products/docker-desktop/> and install it with the
+default options. Start it once and wait until its whale icon says it's running.
+
+> 💡 On Windows, Docker Desktop will offer to enable **WSL2** — say yes.
+
+### Step 1 — Get the project
+
+Download this branch as a ZIP from GitHub and unzip it (or `git clone` it if you
+know Git). Remember where you put the folder.
+
+### Step 2 — Open a terminal **inside** the project folder
+
+- **Windows:** open the unzipped folder in File Explorer, click the address bar
+  at the top, type `cmd`, and press **Enter**. A black window opens, already
+  pointed at the folder.
+- **macOS/Linux:** open Terminal and `cd` into the folder.
+
+### Step 3 — (Optional) add your settings
+
+MusiX works out of the box, but you can plug in an AI chat key and a security
+secret. Make your own settings file:
 
 ```bash
-# 1. Configure (optional but recommended — sets JWT secret + LLM key)
-cp .env.example .env   # then edit .env
+copy .env.example .env       # Windows
+# cp .env.example .env       # macOS/Linux
+```
 
-# 2. Build + start the whole stack
+Then open `.env` in any text editor and fill in the blanks. You can skip this
+and do it later.
+
+### Step 4 — Start everything
+
+```bash
 docker compose up -d --build
 ```
 
-Open `http://localhost:8000` → the first-run wizard creates your owner account → point MusiX at your music (upload or index) → start searching.
+The first run downloads several gigabytes (the app image + AI models), so it can
+take a while. When it finishes, MusiX is running quietly in the background.
 
-> **GPU note:** the `musix` service requests an NVIDIA GPU. Requires Docker Desktop with the WSL2 backend + NVIDIA Container Toolkit. To run CPU-only, remove the `deploy.resources` block from `docker-compose.yml` and switch `requirements.txt` to CPU torch wheels.
+### Step 5 — Open it in your browser
+
+Go to **<http://localhost:8000>**. The first-run wizard creates your owner
+account → point MusiX at your music (upload or index) → start searching. 🎉
+
+### Everyday commands
+
+```bash
+docker compose ps        # see what's running
+docker compose logs -f   # watch the app's output (Ctrl+C just stops watching)
+docker compose down      # stop everything
+docker compose up -d     # start again later (no --build needed next time)
+```
+
+> **GPU note:** the `musix` service requests an NVIDIA GPU for faster AI. It
+> needs Docker Desktop with the WSL2 backend **+** the NVIDIA Container Toolkit.
+> **No GPU?** Open `docker-compose.yml`, delete the `deploy.resources` block
+> under the `musix` service, and switch `requirements.txt` to the CPU torch
+> wheels — then run Step 4 again.
 
 <details>
 <summary>Bare-metal (no Docker) — Windows dev</summary>
