@@ -13132,6 +13132,11 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     if (streamFetchingRef.current) return [];
     streamFetchingRef.current = true;
     try {
+      // exclude_ids carries ONLY the prefetch buffer (tracks already issued but
+      // not yet played — the stateless-gap cover). Anti-repeat of already-PLAYED
+      // tracks is now owned by the server's round floor; we deliberately no longer
+      // send the last-N played here — that client-side hard list used to re-create
+      // the «Поток пуст» exhaustion on a long session (design 2026-06-14).
       const exclude = new Set();
       if (excludeQueue) {
         playerPlaylist.forEach(h => {
@@ -13139,7 +13144,6 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
           if (t && t.track_id) exclude.add(t.track_id);
         });
       }
-      Array.from(playedTrackIdsRef.current).slice(-40).forEach(id => exclude.add(id));
       const ex = Array.from(exclude).slice(0, 50).join(',');
       const data = await apiFetch(
         `/recommend/stream/next?session_id=${encodeURIComponent(getSessionId())}&n=3` +
@@ -13161,7 +13165,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     const hits = await fetchStreamChunk({ excludeQueue: false });
     if (!hits.length) {
       streamActiveRef.current = false;
-      showToast(lang === 'ru' ? 'Поток пуст — в библиотеке нет кандидатов' : 'Stream is empty — no candidates in the library');
+      showToast(lang === 'ru' ? 'Библиотека пуста — добавьте или проиндексируйте музыку' : 'Library is empty — add or index your music');
       return;
     }
     setPlayerPlaylist(hits);
