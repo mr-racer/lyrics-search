@@ -36,6 +36,7 @@ from qdrant_client import models
 from tqdm.auto import tqdm
 
 from app.indexing.folder_scanner import scan_and_enrich_folder
+from app.resources.qdrant_utils import scroll_all
 from app.resources.clap_features import (
     AXIS_NAMES,
     _encode_clap,
@@ -433,24 +434,15 @@ class IndexingService:
         # is unique within a single batch — same caveat as scan_folder.
         try:
             client = self.engine.qdrant_client
-            offset = None
             id_by_key: dict[str, str] = {}
-            while True:
-                points, next_offset = client.scroll(
-                    collection_name=collection_name,
-                    offset=offset,
-                    limit=500,
-                    with_payload=["title", "artist"],
-                    with_vectors=False,
-                )
-                for p in points:
-                    pl = p.payload or {}
-                    k = f"{(pl.get('artist') or '').strip()} — {(pl.get('title') or '').strip()}"
-                    if k in upload_by_key and k not in id_by_key:
-                        id_by_key[k] = str(p.id)
-                if next_offset is None or not points:
-                    break
-                offset = next_offset
+            for p in scroll_all(
+                client, collection_name, batch_size=500,
+                with_payload=["title", "artist"], with_vectors=False,
+            ):
+                pl = p.payload or {}
+                k = f"{(pl.get('artist') or '').strip()} — {(pl.get('title') or '').strip()}"
+                if k in upload_by_key and k not in id_by_key:
+                    id_by_key[k] = str(p.id)
 
             out: dict[str, str] = {}
             for key, upload_id in upload_by_key.items():
@@ -572,16 +564,13 @@ class IndexingService:
         coll = str(self.engine.collection_name)
         client = self.engine.qdrant_client
         try:
-            live_ids: set[str] = set()
-            offset = None
-            while True:
-                batch, offset = client.scroll(
-                    collection_name=coll, limit=1000,
-                    with_payload=False, with_vectors=False, offset=offset,
+            live_ids: set[str] = {
+                str(p.id)
+                for p in scroll_all(
+                    client, coll, batch_size=1000,
+                    with_payload=False, with_vectors=False,
                 )
-                live_ids.update(str(p.id) for p in batch)
-                if offset is None or not batch:
-                    break
+            }
             removed = MetadataDB.prune_orphaned_tracks(coll, live_ids)
             if any(removed.values()):
                 logger.info(

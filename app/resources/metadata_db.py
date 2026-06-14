@@ -680,6 +680,15 @@ class MetadataDB:
         ).fetchall()
         return [r[0] for r in rows]
 
+    @staticmethod
+    def _join_facts_by_slug(rows) -> Dict[str, str]:
+        """Group ``(slug, fact)`` rows into ``{slug: facts joined by \\n\\n}``,
+        preserving row order (matches the previous flat-file format)."""
+        grouped: Dict[str, List[str]] = {}
+        for slug, fact in rows:
+            grouped.setdefault(slug, []).append(fact)
+        return {slug: "\n\n".join(facts) for slug, facts in grouped.items()}
+
     @classmethod
     def get_all_artist_facts_by_collection(cls, collection_name: str) -> Dict[str, str]:
         """Return a dict of ``{artist_slug: joined_facts_text}`` for a collection.
@@ -696,10 +705,7 @@ class MetadataDB:
             (collection_name,),
         ).fetchall()
 
-        result: Dict[str, List[str]] = {}
-        for slug, fact in rows:
-            result.setdefault(slug, []).append(fact)
-        return {slug: "\n\n".join(facts) for slug, facts in result.items()}
+        return cls._join_facts_by_slug(rows)
 
     # ── Songs ──
 
@@ -828,10 +834,7 @@ class MetadataDB:
             (collection_name,),
         ).fetchall()
 
-        result: Dict[str, List[str]] = {}
-        for slug, fact in rows:
-            result.setdefault(slug, []).append(fact)
-        return {slug: "\n\n".join(facts) for slug, facts in result.items()}
+        return cls._join_facts_by_slug(rows)
 
     # ── Random facts ──
 
@@ -1759,21 +1762,22 @@ class MetadataDB:
     # ── Bulk refined facts loaders (for search service caching) ──
 
     @classmethod
-    def get_all_refined_artist_facts(cls, collection_name: str) -> Dict[str, str]:
-        """Return ``{artist_slug: joined_refined_text}`` across all collections.
+    def _get_all_refined_facts(cls, scope: str) -> Dict[str, str]:
+        """Shared loader for refined artist/song facts.
 
-        Reads from the ``refined_facts`` table (scope='artist'). Each row's
-        ``refined_json`` is a JSON array of ``{"text": str}`` objects. Refined
-        facts are collection-independent (keyed by slug), so the collection_name
-        arg is accepted for signature stability but not used to filter — the
-        caller merges by slug and only slugs present in its collection are used.
+        Returns ``{scope_key: joined_refined_text}`` from the ``refined_facts``
+        table for the given ``scope`` ('artist' | 'song'). Each row's
+        ``refined_json`` is a JSON array of ``{"text": str}`` objects; entries
+        without text are dropped. Refined facts are collection-independent
+        (keyed by slug), so no collection filter is applied — callers merge by
+        slug and keep only the slugs present in their collection.
         """
         import json as _json
 
         conn = cls._connect()
         rows = conn.execute(
             "SELECT scope_key, refined_json FROM refined_facts WHERE scope = ?",
-            ("artist",),
+            (scope,),
         ).fetchall()
 
         result: Dict[str, str] = {}
@@ -1791,39 +1795,27 @@ class MetadataDB:
         return result
 
     @classmethod
+    def get_all_refined_artist_facts(cls, collection_name: str) -> Dict[str, str]:
+        """Return ``{artist_slug: joined_refined_text}`` across all collections.
+
+        Reads from the ``refined_facts`` table (scope='artist'). collection_name
+        is accepted for signature stability but not used to filter — refined
+        facts are collection-independent (see :meth:`_get_all_refined_facts`).
+        """
+        return cls._get_all_refined_facts("artist")
+
+    @classmethod
     def get_all_refined_song_facts(cls, collection_name: str) -> Dict[str, str]:
         """Return ``{song_slug: joined_refined_text}`` across all collections.
 
-        Reads from the ``refined_facts`` table (scope='song'). The ``scope_key``
-        is the song_slug (same format as song_facts table slugs).
-
-        Refined facts are collection-independent (keyed by slug), so the
-        collection_name arg is accepted for signature stability but not used to
-        filter. Returns a dict keyed by song_slug so the search service can merge
-        refined facts into TrackHit.song_facts using the same key as
-        load_all_song_facts_for_collection().
+        Reads from the ``refined_facts`` table (scope='song'); ``scope_key`` is
+        the song_slug (same format as song_facts table slugs). collection_name is
+        accepted for signature stability but not used to filter — refined facts
+        are collection-independent (see :meth:`_get_all_refined_facts`). Keyed by
+        song_slug so the search service can merge into TrackHit.song_facts using
+        the same key as load_all_song_facts_for_collection().
         """
-        import json as _json
-
-        conn = cls._connect()
-        rows = conn.execute(
-            "SELECT scope_key, refined_json FROM refined_facts WHERE scope = ?",
-            ("song",),
-        ).fetchall()
-
-        result: Dict[str, str] = {}
-        for track_id, json_str in rows:
-            try:
-                arr = _json.loads(json_str)
-                texts = [
-                    item.get("text", "") for item in arr
-                    if isinstance(item, dict) and item.get("text")
-                ]
-                if texts:
-                    result[track_id] = "\n\n".join(texts)
-            except Exception:
-                pass
-        return result
+        return cls._get_all_refined_facts("song")
 
     # ─── Playlists CRUD (Plan 19) ────────────────────────────────────────
     @classmethod
