@@ -501,6 +501,7 @@ async def get_stats(
         "collection_name": None,
         "unique_genres": 0,
         "unique_artists": 0,
+        "unique_albums": 0,
         "genres": [],
         "duration_buckets": [],
         "top_artists": [],
@@ -542,6 +543,9 @@ async def get_stats(
     duration_counter: Counter = Counter()
     artist_counter: Counter = Counter()
     year_counter: Counter = Counter()
+    # Distinct albums, keyed case-insensitively on the title — mirrors how
+    # /library/albums groups, so the landing's "N albums" matches the library.
+    album_keys: set[str] = set()
     offset = None
 
     try:
@@ -550,7 +554,7 @@ async def get_stats(
                 collection_name=target_col,
                 offset=offset,
                 limit=250,
-                with_payload=["genre", "duration", "duration_range", "artist", "year"],
+                with_payload=["genre", "duration", "duration_range", "artist", "year", "album"],
                 with_vectors=False,
             )
             for point in results:
@@ -572,6 +576,9 @@ async def get_stats(
                 artist = pl.get("artist")
                 if artist and str(artist).strip():
                     artist_counter[str(artist).strip()] += 1
+                album = pl.get("album")
+                if album and str(album).strip():
+                    album_keys.add(str(album).strip().lower())
                 year = pl.get("year")
                 try:
                     yi = int(year) if year is not None else None
@@ -624,6 +631,7 @@ async def get_stats(
         "collection_name": target_col,
         "unique_genres": unique_genre_count,
         "unique_artists": unique_artist_count,
+        "unique_albums": len(album_keys),
         "genres": top_genres,
         "duration_buckets": top_durations,
         "top_artists": top_artists,
