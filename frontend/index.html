@@ -1477,7 +1477,11 @@
     @keyframes eqBar2 { 0%,100%{height:8px} 50%{height:16px} }
     @keyframes eqBar3 { 0%,100%{height:6px} 50%{height:12px} }
     .player-eq-bar {
-      display: inline-block; width: 3px; border-radius: 2px; background: #7C5BFF; margin-right: 1px;
+      display: inline-block; width: 3px; border-radius: 2px; margin-right: 1px;
+      background: linear-gradient(to bottom,
+        rgba(124, 91, 255, 1)    0%,    /* верхний край — сплошной */
+        rgba(124, 91, 255, 0.25) 50%,   /* центр — мягкий */
+        rgba(124, 91, 255, 1)    100%); /* нижний край — сплошной */
     }
     .player-eq-bar:nth-child(1) { animation: eqBar1 0.8s ease-in-out infinite; }
     .player-eq-bar:nth-child(2) { animation: eqBar2 0.6s ease-in-out infinite; }
@@ -1867,7 +1871,7 @@
     .atlas-aurora{position:absolute;inset:0;overflow:hidden;
       -webkit-mask-image:linear-gradient(90deg,transparent 0%,#000 14%,#000 86%,transparent 100%);
       mask-image:linear-gradient(90deg,transparent 0%,#000 14%,#000 86%,transparent 100%)}
-    .aurora-blob{position:absolute;width:62%;height:135%;border-radius:50%;filter:blur(72px);opacity:.7;will-change:transform}
+    .aurora-blob{position:absolute;width:62%;height:135%;border-radius:50%;filter:blur(40px);opacity:.7;will-change:transform}
     .aurora-blob-0{top:-30%;left:-10%;animation:fyBlobA 19s ease-in-out infinite}
     .aurora-blob-1{top:-12%;left:36%;animation:fyBlobB 23s ease-in-out infinite}
     .aurora-blob-2{top:-26%;left:62%;animation:fyBlobC 27s ease-in-out infinite}
@@ -12154,7 +12158,7 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef }) {
   const auroraCss = auroraStops(padPalette(sampledColors, hue, 3), isDark);
 
   return (
-    <div ref={heroRef} style={{ position:'relative', height:'clamp(420px, 56vh, 600px)', overflow:'hidden' }}>
+    <div ref={heroRef} style={{ position:'relative', height: mode==='aurora' ? 'clamp(250px, 32vh, 320px)' : 'clamp(420px, 56vh, 600px)', overflow:'hidden' }}>
       {mode === 'photo' ? (
         // Crisp portrait scaled by HEIGHT (not stretched to full width, which on
         // wide screens cropped it to a thin slice). The whole figure stays visible;
@@ -12211,6 +12215,14 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef }) {
         position:'absolute', inset:0,
         background:`linear-gradient(180deg, ${isDark?'rgba(13,13,16,0.2)':'rgba(242,241,246,0.14)'} 0%, transparent 38%, ${c.bg} 99%)`,
       }} />
+      {/* Soft left fade: the hero colour dissolves into the page bg toward the
+          floating nav rail instead of hard-cutting at the content's left edge, so
+          the rail reads as floating ABOVE the colour field rather than replacing
+          it. Sits above the colour layers but below the name/breadcrumb content. */}
+      <div aria-hidden="true" style={{
+        position:'absolute', inset:0, pointerEvents:'none',
+        background:`linear-gradient(90deg, ${c.bg} 0px, ${c.bg}00 120px)`,
+      }} />
 
       <div style={{ position:'relative', maxWidth:1120, margin:'0 auto', height:'100%', padding:'0 32px' }}>
         {/* Light-burst (cutout only) — inside the container so --burst-x is measured
@@ -12255,7 +12267,7 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef }) {
             vertically centred against the figure; otherwise it anchors bottom-left. */}
         <div style={{
           position:'absolute', left:32, right: mode==='cutout' ? '46%' : (mode==='aurora' ? 32 : '44%'), zIndex:2, minWidth:0,
-          ...(mode==='cutout' ? { top:'50%', transform:'translateY(-50%)' } : { bottom:58 }),
+          ...(mode==='cutout' ? { top:'50%', transform:'translateY(-50%)' } : mode==='aurora' ? { top:52 } : { bottom:58 }),
         }}>
           <h1 className="serif" style={{
             fontSize: mode==='cutout' ? 'clamp(46px, 5.6vw, 78px)' : 'clamp(38px, 4.6vw, 60px)',
@@ -13132,6 +13144,11 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     if (streamFetchingRef.current) return [];
     streamFetchingRef.current = true;
     try {
+      // exclude_ids carries ONLY the prefetch buffer (tracks already issued but
+      // not yet played — the stateless-gap cover). Anti-repeat of already-PLAYED
+      // tracks is now owned by the server's round floor; we deliberately no longer
+      // send the last-N played here — that client-side hard list used to re-create
+      // the «Поток пуст» exhaustion on a long session (design 2026-06-14).
       const exclude = new Set();
       if (excludeQueue) {
         playerPlaylist.forEach(h => {
@@ -13139,7 +13156,6 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
           if (t && t.track_id) exclude.add(t.track_id);
         });
       }
-      Array.from(playedTrackIdsRef.current).slice(-40).forEach(id => exclude.add(id));
       const ex = Array.from(exclude).slice(0, 50).join(',');
       const data = await apiFetch(
         `/recommend/stream/next?session_id=${encodeURIComponent(getSessionId())}&n=3` +
@@ -13161,7 +13177,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     const hits = await fetchStreamChunk({ excludeQueue: false });
     if (!hits.length) {
       streamActiveRef.current = false;
-      showToast(lang === 'ru' ? 'Поток пуст — в библиотеке нет кандидатов' : 'Stream is empty — no candidates in the library');
+      showToast(lang === 'ru' ? 'Библиотека пуста — добавьте или проиндексируйте музыку' : 'Library is empty — add or index your music');
       return;
     }
     setPlayerPlaylist(hits);

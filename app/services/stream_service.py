@@ -410,6 +410,13 @@ LIKED_COOLDOWN_H = 8.0     # hard «не чаще раза в 8 часов»
 MAX_CONSECUTIVE_LIKED = 2
 MAX_CONSECUTIVE_ARTIST = 2  # autoplay_service rule, reused
 
+# Anti-repeat floor (design 2026-06-14: «бесконечный круг»). The «жёсткий пол»
+# under round replay: these stay hard-excluded even after a «круг» wraps, so the
+# just-heard tracks never recur immediately. Everything older is only soft-demoted
+# (relax pass + recency penalty) — «жёсткий пол + мягкий хвост».
+ANTIREPEAT_FLOOR_TRACKS = 10    # last N played tracks never repeat
+ANTIREPEAT_FLOOR_MINUTES = 30   # anything played within X minutes never repeats
+
 DEFAULT_CHUNK_N = 3
 DEFAULT_LIKED_SHARE = 0.30
 LONG_TERM_EVENT_CAP = 2000  # newest events fed into profile building
@@ -834,6 +841,29 @@ def _retrieve_track_data(
     return vectors, payloads
 
 
+def _anti_repeat_floor(
+    recency_hours: dict[str, float],
+    *,
+    n_tracks: int = ANTIREPEAT_FLOOR_TRACKS,
+    minutes: float = ANTIREPEAT_FLOOR_MINUTES,
+) -> set[str]:
+    """Hard «не повторять только что услышанное»: the last ``n_tracks`` played
+    (by recency) ∪ everything played within the last ``minutes``.
+
+    ``recency_hours`` is ``{track_id: hours_since_last_play}`` (already built in
+    ``next_chunk``). Global (per-collection), not session-scoped — a track heard
+    minutes ago shouldn't recur even in a fresh tab/session. This is the floor
+    that survives a round reset; older plays fall through to the soft relax pass.
+    """
+    if not recency_hours:
+        return set()
+    window_h = minutes / 60.0
+    floor = {tid for tid, h in recency_hours.items() if h <= window_h}
+    by_recent = sorted(recency_hours.items(), key=lambda kv: kv[1])
+    floor.update(tid for tid, _ in by_recent[:n_tracks])
+    return floor
+
+
 def next_chunk(
     *,
     qdrant_client,
@@ -918,7 +948,6 @@ def next_chunk(
     # 6. Shared filter set + per-track stats.
     session_played = {s.track_id for s in session_events}
     liked_ids = {r.track_id for r in reactions if r.reaction == "like"}
-    excluded = negatives | session_played | set(exclude_ids or []) | liked_ids
 
     play_counts = MetadataDB.get_play_counts_by_track(collection_name)
     recency_hours: dict[str, float] = {}
@@ -927,10 +956,18 @@ def next_chunk(
         if dt is not None:
             recency_hours[tid] = max(0.0, (now - dt).total_seconds() / 3600.0)
 
-    # 7. Pools.
-    pool_a = pool_anchor_candidates(qdrant_client, collection_name, top_anchors, excluded)
-    main = list(pool_a.values())
+    # HARD exclusions (never served this request). session_played is deliberately
+    # NOT hard: once a «круг» exhausts the library the stream must replay rather
+    # than go empty (design 2026-06-14). Older session plays demote via the relax
+    # pass + recency penalty; only the anti-repeat FLOOR (just-heard tracks) stays
+    # hard across the round boundary — «жёсткий пол + мягкий хвост».
+    floor_ids = _anti_repeat_floor(recency_hours)
+    base_exclude = set(exclude_ids or [])
+    hard_excluded = negatives | base_exclude | liked_ids | floor_ids
+    fresh_excluded = hard_excluded | session_played   # Pass 1 strictness
 
+    # 7. Explore + liked pools — immune to round exhaustion (explore is low-play
+    # by definition; liked rotates on its own 8h cooldown), so built once.
     liked_quota = max(0, min(n, round(n * (liked_share if liked_share is not None
                                            else DEFAULT_LIKED_SHARE))))
     non_liked_slots = n - liked_quota
@@ -944,7 +981,7 @@ def next_chunk(
         negative_vectors = [vectors[t] for t in negatives if t in vectors]
         explore_cands = pool_explore_candidates(
             qdrant_client, collection_name,
-            excluded=excluded, reacted_ids={r.track_id for r in reactions},
+            excluded=fresh_excluded, reacted_ids={r.track_id for r in reactions},
             play_counts=play_counts, axis_stats=axis_stats,
             negative_vectors=negative_vectors, axis_names=AXIS_NAMES, rng=rng,
         )
@@ -958,7 +995,7 @@ def next_chunk(
         }
         sampled = sample_liked_tracks(
             liked_weights, recency_hours, liked_quota, rng,
-            excluded=set(exclude_ids or []) | session_played,
+            excluded=base_exclude | session_played,
         )
         _, liked_payloads = _retrieve_track_data(qdrant_client, collection_name, sampled)
         # Drop liked ids that no longer resolve in Qdrant. Likes live in SQLite
@@ -971,17 +1008,25 @@ def next_chunk(
             if t in liked_payloads
         ]
 
-    # 8. Score + assemble.
-    score_candidates(
-        main, p_final=p_final, confidence=confidence,
-        play_counts=play_counts, recency_hours=recency_hours,
-        axis_stats=axis_stats, axis_names=AXIS_NAMES,
-    )
-
     recent_artists = [
         (payloads.get(s.track_id) or {}).get("artist", "").strip().lower()
         for s in session_events[-ARTIST_REPEAT_WINDOW:]
     ]
+
+    def _anchor_main(excluded: set[str]) -> list[StreamCandidate]:
+        """Build + score the anchor pool against an exclusion set."""
+        pool = pool_anchor_candidates(qdrant_client, collection_name, top_anchors, excluded)
+        cands = list(pool.values())
+        score_candidates(
+            cands, p_final=p_final, confidence=confidence,
+            play_counts=play_counts, recency_hours=recency_hours,
+            axis_stats=axis_stats, axis_names=AXIS_NAMES,
+        )
+        return cands
+
+    # 8. Pass 1 — fresh only: today's behaviour (anchor + explore + liked).
+    main = _anchor_main(fresh_excluded)
+    pool_a_size = len(main)
     explore_picks = explore_cands[:explore_slots]
     chunk = assemble_chunk(
         main, liked_cands,
@@ -994,6 +1039,52 @@ def next_chunk(
         chunk.insert(rng.randrange(len(chunk) + 1), c)
     chunk = chunk[:n]
 
+    # 9. Pass 2 — relax: the «круг» wrapped. Replay already-heard anchors
+    # (oldest-ish first via the recency penalty in the score), still honouring the
+    # anti-repeat floor and dislikes. Only the anchor pool needs topping up.
+    relaxed_used = False
+    if len(chunk) < n:
+        chosen = {c.track_id for c in chunk}
+        relaxed_main = sorted(_anchor_main(hard_excluded | chosen),
+                              key=lambda c: c.score, reverse=True)
+        if relaxed_main:
+            relaxed_used = True
+            chunk.extend(relaxed_main[: n - len(chunk)])
+
+    # 10. Pass 3 — last resort (library ≤ floor): replay least-recently-played.
+    # Floor lifted, dislikes stay hard («пока дизлайк стоит»). Guarantees the
+    # stream is never empty while a non-disliked track exists in the collection.
+    fallback_used = False
+    if len(chunk) < n:
+        chosen = {c.track_id for c in chunk}
+        stale = [
+            tid for tid, _ in sorted(recency_hours.items(),
+                                     key=lambda kv: kv[1], reverse=True)
+            if tid not in negatives and tid not in base_exclude and tid not in chosen
+        ]
+        need = n - len(chunk)
+        _, stale_payloads = _retrieve_track_data(
+            qdrant_client, collection_name, stale[:need])
+        for tid in stale[:need]:
+            if tid in stale_payloads:
+                fallback_used = True
+                chunk.append(StreamCandidate(
+                    track_id=tid, payload=stale_payloads[tid], pool="replay"))
+
+    # 11. Round number — cosmetic (display only, never gates selection): how many
+    # times the session has cycled the eligible library.
+    round_no = 1
+    try:
+        total = qdrant_client.count(collection_name=collection_name).count
+    except Exception:
+        total = None
+    if total:
+        eligible_size = max(1, total - len(negatives))
+        # total session plays (incl. repeats) ÷ library size = how many times the
+        # session has cycled. session_played is a SET (≤ library), so it could
+        # never exceed round 1 — use the event count.
+        round_no = max(1, math.ceil(len(session_events) / eligible_size))
+
     diagnostics = {
         "n_session_signals": n_session_signals,
         "w_session": round(w_s, 3),
@@ -1002,10 +1093,14 @@ def next_chunk(
         "n_negatives": len(negatives),
         "profile_confidence": round(confidence, 3),
         "axis_stats_source": (axis_stats or {}).get("source"),
-        "pool_sizes": {"anchor": len(pool_a), "explore": len(explore_cands),
+        "pool_sizes": {"anchor": pool_a_size, "explore": len(explore_cands),
                        "liked": len(liked_cands)},
         "liked_quota": liked_quota,
         "explore_slots": len(explore_picks),
+        "round": round_no,
+        "n_floor": len(floor_ids),
+        "relaxed": relaxed_used,
+        "fallback": fallback_used,
     }
     return {"tracks": chunk, "diagnostics": diagnostics}
 
