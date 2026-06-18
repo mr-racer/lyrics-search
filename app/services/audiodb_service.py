@@ -21,6 +21,7 @@ import requests
 
 from app.resources.metadata_db import MetadataDB
 from app.services.artist_facts_service import _slugify as _slugify_artist
+from app.services.proxy_config import get_proxy
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,7 @@ JSON_TIMEOUT_SEC = 0.4
 
 def _sync_get_json(url: str) -> dict | None:
     """Blocking GET that raises_for_status and parses JSON."""
-    r = requests.get(url, timeout=JSON_TIMEOUT_SEC)
+    r = requests.get(url, timeout=JSON_TIMEOUT_SEC, proxies=get_proxy())
     r.raise_for_status()
     return r.json()
 
@@ -95,7 +96,7 @@ async def _download_image(url: str | None) -> str | None:
         return None
     try:
         r = await asyncio.to_thread(
-            lambda: requests.get(url, timeout=IMAGE_TIMEOUT_SEC),
+            lambda: requests.get(url, timeout=IMAGE_TIMEOUT_SEC, proxies=get_proxy()),
         )
         r.raise_for_status()
         data = r.content
