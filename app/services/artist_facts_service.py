@@ -15,6 +15,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from ..resources.metadata_db import MetadataDB
+from app.services.proxy_config import get_proxy
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ def _fetch_facts_html(artist: str) -> Optional[str]:
     slug = _slugify(artist)
     url = f"https://www.songfacts.com/facts/{slug}"
     try:
-        resp = requests.get(url, timeout=REQUEST_TIMEOUT)
+        resp = requests.get(url, timeout=REQUEST_TIMEOUT, proxies=get_proxy())
         resp.raise_for_status()
         return resp.text
     except requests.RequestException as e:

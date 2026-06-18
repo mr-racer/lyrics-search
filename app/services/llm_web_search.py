@@ -20,6 +20,7 @@ from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from app.services.llm_client import _get_client
+from app.services.proxy_config import get_proxy
 
 logger = logging.getLogger(__name__)
 logging.getLogger("readability.readability").setLevel(logging.ERROR)
@@ -69,6 +70,7 @@ def search_searxng(query: str, max_results: int = 5) -> list[dict]:
                 ),
             },
             timeout=10,
+            proxy=(get_proxy() or {}).get("https"),
         )
         resp.raise_for_status()
         data = resp.json()
@@ -124,7 +126,7 @@ def fetch_full_content(url: str, max_chars: int = 4000) -> str:
         )
     }
     try:
-        resp = httpx.get(url, headers=headers, timeout=8, follow_redirects=True)
+        resp = httpx.get(url, headers=headers, timeout=8, follow_redirects=True, proxy=(get_proxy() or {}).get("https"))
         resp.raise_for_status()
 
         doc = Document(resp.text)
