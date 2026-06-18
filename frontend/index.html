@@ -651,7 +651,7 @@
       content: ''; position: absolute; top: 50%; left: var(--burst-x, 80%);
       width: 150vmax; height: 150vmax; transform: translate(-50%, -50%);
       background: repeating-conic-gradient(from 0deg at 50% 50%,
-        var(--ray-color, rgba(255,255,255,.07)) 0deg 3deg,
+        var(--ray-color, rgba(255,255,255,.14)) 0deg 3deg,
         transparent 3deg 13deg);
       -webkit-mask-image: radial-gradient(circle at 50% 50%, #000 4%, transparent 56%);
               mask-image: radial-gradient(circle at 50% 50%, #000 4%, transparent 56%);
@@ -661,24 +661,24 @@
       content: ''; position: absolute; top: 50%; left: var(--burst-x, 80%);
       width: 84vmax; height: 84vmax; transform: translate(-50%, -50%);
       background: radial-gradient(circle at 50% 50%,
-        var(--flare-inner, rgba(255,248,235,.5)) 0%,
-        var(--flare-mid, oklch(70% 0.12 60 / 0.28)) 26%,
+        var(--flare-inner, rgba(255,248,235,.68)) 0%,
+        var(--flare-mid, oklch(70% 0.12 60 / 0.42)) 26%,
         transparent 62%);
       animation: atlasFlare 7.5s ease-in-out infinite;
     }
     .atlas-particles {
-      position: absolute; inset: 0; pointer-events: none; opacity: .6;
+      position: absolute; inset: 0; pointer-events: none; opacity: .85;
       background-image:
-        radial-gradient(circle, rgba(255,255,255,.95) 0.9px, transparent 1.6px),
-        radial-gradient(circle, rgba(255,255,255,.5) 0.9px, transparent 1.6px),
-        radial-gradient(circle, var(--spark, rgba(255,236,200,.8)) 1.1px, transparent 1.8px);
+        radial-gradient(circle, rgba(255,255,255,.98) 1.3px, transparent 2px),
+        radial-gradient(circle, rgba(255,255,255,.6) 1.2px, transparent 2px),
+        radial-gradient(circle, var(--spark, rgba(255,236,200,.95)) 1.5px, transparent 2.4px);
       background-size: 120px 120px, 170px 170px, 240px 240px;
       background-position: 0 0, 55px 80px, 130px 30px;
       -webkit-mask-image: radial-gradient(ellipse 60% 86% at var(--burst-x, 80%) 50%, #000 0%, transparent 78%);
               mask-image: radial-gradient(ellipse 60% 86% at var(--burst-x, 80%) 50%, #000 0%, transparent 78%);
       animation: atlasDrift 26s linear infinite;
     }
-    @keyframes atlasRays  { to { transform: translate(50%, -50%) rotate(360deg); } }
+    @keyframes atlasRays  { from { transform: translate(-50%, -50%) rotate(0deg); } to { transform: translate(-50%, -50%) rotate(360deg); } }
     @keyframes atlasFlare { 0%, 100% { opacity: .82; } 50% { opacity: 1; } }
     @keyframes atlasDrift {
       from { background-position: 0 0, 55px 80px, 130px 30px; }
@@ -12219,10 +12219,10 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef }) {
           <div className="atlas-burst" aria-hidden="true" style={{
             '--burst-x': '80%',
             '--burst-hue': hue,
-            '--ray-color': isDark ? 'rgba(255,255,255,0.075)' : 'rgba(120,92,220,0.10)',
-            '--flare-inner': isDark ? 'rgba(255,250,240,0.5)' : 'rgba(255,255,255,0.72)',
-            '--flare-mid': isDark ? `oklch(68% 0.14 ${hue} / 0.30)` : `oklch(80% 0.12 ${hue} / 0.34)`,
-            '--spark': isDark ? 'rgba(255,238,205,0.85)' : `oklch(58% 0.16 ${hue} / 0.55)`,
+            '--ray-color': isDark ? 'rgba(255,255,255,0.14)' : 'rgba(120,92,220,0.18)',
+            '--flare-inner': isDark ? 'rgba(255,250,240,0.68)' : 'rgba(255,255,255,0.85)',
+            '--flare-mid': isDark ? `oklch(68% 0.14 ${hue} / 0.42)` : `oklch(80% 0.12 ${hue} / 0.45)`,
+            '--spark': isDark ? 'rgba(255,238,205,0.95)' : `oklch(58% 0.16 ${hue} / 0.7)`,
           }}>
             <div className="atlas-particles" />
           </div>
@@ -12248,6 +12248,8 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef }) {
             position:'absolute', right:36, top:44, bottom:34, maxWidth:'44%',
             objectFit:'contain', objectPosition:'top right', zIndex:1,
             filter:'drop-shadow(0 16px 38px rgba(0,0,0,0.5))',
+            WebkitMaskImage:'linear-gradient(180deg, #000 0%, #000 92%, transparent 100%)',
+            maskImage:'linear-gradient(180deg, #000 0%, #000 92%, transparent 100%)',
           }} />
         )}
 
