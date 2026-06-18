@@ -8363,32 +8363,6 @@ function AIIndexingCard({ isDark, lang, aiStatus }) {
 }
 
 // ─── Settings overlay (slides in from right) ─────────────────────────────────
-// ─── Phase A: Account + Invites panels (rendered inside SettingsPanel) ───
-function AccountSettings({ onLogout, lang }) {
-  const email = localStorage.getItem('musix_user_email') || '';
-  const role  = localStorage.getItem('musix_user_role')  || '';
-  return (
-    <div style={{ padding: '16px 0', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
-      <div className="mono" style={{ fontSize: 11, letterSpacing: '0.18em', color: 'rgba(238,238,243,.5)', marginBottom: 8 }}>
-        {lang === 'ru' ? 'АККАУНТ' : 'ACCOUNT'}
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <div>
-          <div style={{ fontSize: 14, color: '#eee' }}>{email}</div>
-          <div style={{ fontSize: 11, color: '#888', marginTop: 2, textTransform: 'uppercase', letterSpacing: '0.1em' }}>{role}</div>
-        </div>
-        <button onClick={onLogout}
-          style={{
-            padding: '6px 14px', borderRadius: 8, fontSize: 13,
-            background: 'rgba(255,80,80,0.12)', color: '#ff9090',
-            border: '1px solid rgba(255,80,80,0.2)',
-          }}>
-          {lang === 'ru' ? 'Выйти' : 'Log out'}
-        </button>
-      </div>
-    </div>
-  );
-}
 
 // Full registration URL for an invite code. The register form parses
 // `#/register?invite=<12 chars>` from the hash, so a member can just open this.
@@ -8814,6 +8788,11 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
   const [llmKey, setLlmKey] = useState('');   // API key — secret, never read from localStorage
   const [llmSaved, setLlmSaved] = useState(false);
   const isOwner = (localStorage.getItem('musix_user_role') || '') === 'owner';
+  // In server mode the SettingsPanel is only ever reached by a member (the owner
+  // is routed to OwnerAdminDashboard). Members must not configure the LLM — the
+  // admin's instance settings already override every request arg server-side
+  // (llm_client.resolve_*), so the per-member endpoint/model form is dead UI.
+  const serverMember = instanceMode === 'server';
 
   // Section UI state: collection switcher list, LLM advanced fields, and the
   // new-collection modal.
@@ -9038,7 +9017,7 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
 
             <div style={{ display:'flex', gap:8, marginTop:14, flexWrap:'wrap' }}>
               <button className="pill-v3" onClick={() => setCreateOpen(true)}>
-                + {lang==='ru'?'Добавить музыку':'Add music'}
+                {lang==='ru'?'Заменить музыку':'Replace music'}
               </button>
             </div>
           </section>
@@ -9070,13 +9049,15 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
                 onClick={() => aiStatus?.refresh?.()}>
                 ↻ {lang==='ru'?'Проверить':'Re-check'}
               </button>
-              <button className={`pill-v3${llmOpen ? ' pill-v3-active' : ''}`} style={{ padding:'4px 12px', fontSize:11 }}
-                onClick={() => setLlmOpen(o => !o)}>
-                {lang==='ru'?'Настроить':'Configure'} {llmOpen ? '▴' : '▾'}
-              </button>
+              {!serverMember && (
+                <button className={`pill-v3${llmOpen ? ' pill-v3-active' : ''}`} style={{ padding:'4px 12px', fontSize:11 }}
+                  onClick={() => setLlmOpen(o => !o)}>
+                  {lang==='ru'?'Настроить':'Configure'} {llmOpen ? '▴' : '▾'}
+                </button>
+              )}
             </div>
 
-            {llmOpen && (
+            {!serverMember && llmOpen && (
               <div style={{ marginTop:14 }}>
                 {fieldLabel('BASE URL')}
                 <input value={llmBaseUrl} onChange={e=>setLlmBaseUrl(e.target.value)}
@@ -9283,7 +9264,6 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
             onAiBootstrapLater={() => setShowModal(false)}
           />
         )}
-        <AccountSettings onLogout={onLogout} lang={lang} />
       </div>
     </>
   );
