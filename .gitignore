@@ -246,3 +246,8 @@ __marimo__/
 
 # Playwright MCP debug artifacts
 .playwright-mcp/
+
+# ngrok tunneling binary — download locally, never commit (bloats history)
+ngrok
+ngrok.exe
+ngrok-stable-*.zip
