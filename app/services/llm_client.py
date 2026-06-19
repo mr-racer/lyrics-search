@@ -20,6 +20,10 @@ import json
 import logging
 import os
 from openai import AsyncOpenAI
+try:
+    from openai import DefaultAsyncHttpxClient as _AsyncHttpxClient
+except ImportError:  # very old openai SDK
+    from httpx import AsyncClient as _AsyncHttpxClient
 
 from app.services.settings_service import settings_service
 
@@ -70,6 +74,10 @@ def _get_client(base_url: str | None = None, api_key: str | None = None) -> Asyn
         kwargs: dict = {"api_key": resolved_key}
         if resolved_url:
             kwargs["base_url"] = resolved_url
+        # trust_env=False: never auto-route the (usually localhost) LLM endpoint
+        # through a shell-exported HTTP_PROXY. Our proxy is sourced only from .env
+        # and applied explicitly where needed (see proxy_config).
+        kwargs["http_client"] = _AsyncHttpxClient(trust_env=False)
         _clients[cache_key] = AsyncOpenAI(**kwargs)
 
     return _clients[cache_key]

@@ -34,10 +34,11 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-_Device = "cpu" if os.environ.get("FORCE_CPU") == "1" else ("cuda" if torch.cuda.is_available() else "cpu")
+_FORCE_CPU = os.environ.get("FORCE_CPU", "").strip().lower() in ("1", "true", "yes", "on")
+_Device = "cpu" if _FORCE_CPU else ("cuda" if torch.cuda.is_available() else "cpu")
 DEVICE = torch.device(_Device)
-if os.environ.get("FORCE_CPU") == "1":
-    logger.info("[ModelRegistry] FORCE_CPU=1 — using CPU for all models")
+if _FORCE_CPU:
+    logger.info("[ModelRegistry] FORCE_CPU set — using CPU for all models")
 else:
     logger.info("[ModelRegistry] using device: %s", DEVICE)
 CLAP_WEIGHTS_PATH = Path(__file__).parent.parent.parent / "weights" / "music_audioset_epoch_15_esc_90.14.pt"

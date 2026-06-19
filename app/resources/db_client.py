@@ -46,9 +46,10 @@ class DbClient:
 
     def _connect(self) -> "DbClient":
         # Create Qdrant client (fast — just TCP connect).
-        # HTTP_PROXY is cleared in docker-compose environment so QdrantClient
-        # never routes through the proxy — internal Docker traffic stays direct.
-        self._qdrant_client = QdrantClient(url=self.qdrant_url)
+        # trust_env=False so QdrantClient's httpx never auto-detects a (shell-
+        # exported) HTTP_PROXY and routes this internal Qdrant connection through
+        # it — internal traffic always stays direct, on every deployment path.
+        self._qdrant_client = QdrantClient(url=self.qdrant_url, trust_env=False)
 
         # Create LyricsSearchEngine with lazy model loading (default)
         # Models are NOT loaded here — they load on first search access

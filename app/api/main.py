@@ -336,6 +336,13 @@ def create_app() -> FastAPI:
     app.include_router(instance_router,     prefix="/api/v1")
     app.include_router(auth_router,         prefix="/api/v1")
 
+    # Machine-readable service info. Root `/` serves the SPA (via the catch-all
+    # below), so expose the JSON status payload here for health-probing monitors.
+    # MUST be registered before the catch-all so it isn't shadowed.
+    @app.get("/api", tags=["System"])
+    async def api_info():
+        return {"name": "Music Explorer", "version": "0.1.0", "status": "running", "docs": "/docs"}
+
     # SPA catch-all — must be LAST so it doesn't shadow API routes
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):

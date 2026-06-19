@@ -100,7 +100,13 @@ def search_ddg(query: str, max_results: int = 5) -> list[dict]:
     if not _WEB_SEARCH_AVAILABLE:
         return []
     try:
-        with DDGS() as ddgs:
+        # Route the external DDG fallback through the proxy when configured;
+        # tolerate DDGS versions that don't accept a `proxy` kwarg.
+        try:
+            ddgs_cm = DDGS(proxy=get_proxy_url())
+        except TypeError:
+            ddgs_cm = DDGS()
+        with ddgs_cm as ddgs:
             results = list(ddgs.text(query, max_results=max_results))
         logger.debug("[ddg] query=%r → %d results", query, len(results))
         if not results:
