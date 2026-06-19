@@ -1934,7 +1934,11 @@
     @keyframes obDrift2{0%{transform:translate(0,0) scale(1)}50%{transform:translate(-22px,20px) scale(1.05)}100%{transform:translate(0,0) scale(1)}}
     @keyframes obDrift3{0%{transform:translate(0,0) scale(1)}50%{transform:translate(18px,-18px) scale(1.07)}100%{transform:translate(0,0) scale(1)}}
     @media (prefers-reduced-motion:reduce){.ob-blob{animation:none!important}}
-    .ob-feat{position:relative;z-index:1;background:var(--ob-card-bg);border-radius:14px;padding:15px 16px;box-shadow:inset 0 1px 0 var(--ob-glass-sheen),inset 0 0 0 1px var(--ob-card-edge),0 4px 14px rgba(0,0,0,.16);}
+    .ob-feat{position:relative;z-index:1;background:var(--ob-card-bg);border-radius:14px;padding:15px 16px;box-shadow:inset 0 1px 0 var(--ob-glass-sheen),inset 0 0 0 1px var(--ob-card-edge),0 4px 14px rgba(0,0,0,.16);transition:transform .25s cubic-bezier(.2,.7,.2,1),box-shadow .25s;}
+    .ob-feat-hover:hover{transform:translateY(-6px);box-shadow:inset 0 1px 0 var(--ob-glass-sheen),inset 0 0 0 1px rgba(154,133,255,.35),0 16px 34px rgba(124,92,255,.28);}
+    .ob-indet{position:absolute;top:0;bottom:0;width:38%;border-radius:3px;background:linear-gradient(90deg,transparent,oklch(68% .17 272),transparent);animation:obIndet 1.3s ease-in-out infinite;}
+    @keyframes obIndet{0%{left:-40%}100%{left:100%}}
+    @media (prefers-reduced-motion:reduce){.ob-indet{animation:none;left:0;width:100%;opacity:.5}}
   </style>
 </head>
 <body>
@@ -8387,7 +8391,7 @@ function inviteLink(code) {
   return `${window.location.origin}/#/register?invite=${code}`;
 }
 
-function InvitesPanel({ lang, showToast }) {
+function InvitesPanel({ lang, showToast, hideHeader, reloadKey }) {
   const [invites, setInvites] = useState([]);
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -8400,7 +8404,7 @@ function InvitesPanel({ lang, showToast }) {
       .finally(() => setLoading(false));
   }, [showToast]);
 
-  useEffect(() => { reload(); }, [reload]);
+  useEffect(() => { reload(); }, [reload, reloadKey]);
 
   const copyLink = (code) => {
     navigator.clipboard?.writeText(inviteLink(code)).catch(() => {});
@@ -8430,11 +8434,13 @@ function InvitesPanel({ lang, showToast }) {
   };
 
   return (
-    <div style={{ padding: '16px 0', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+    <div style={hideHeader ? { paddingTop: 2 } : { padding: '16px 0', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-        <span className="mono" style={{ fontSize: 11, letterSpacing: '0.18em', color: 'rgba(238,238,243,.5)' }}>
-          {lang === 'ru' ? 'ИНВАЙТЫ' : 'INVITES'}
-        </span>
+        {hideHeader ? <span /> : (
+          <span className="mono" style={{ fontSize: 11, letterSpacing: '0.18em', color: 'rgba(238,238,243,.5)' }}>
+            {lang === 'ru' ? 'ИНВАЙТЫ' : 'INVITES'}
+          </span>
+        )}
         <button onClick={onCreate} disabled={creating}
           style={{
             padding: '5px 12px', borderRadius: 8, fontSize: 12,
@@ -8490,7 +8496,7 @@ function InvitesPanel({ lang, showToast }) {
 
 // Owner-only roster (server mode). Shows who registered and via which invite —
 // backed by GET /admin/members.
-function MembersPanel({ lang, showToast }) {
+function MembersPanel({ lang, showToast, hideHeader }) {
   const [members, setMembers] = useState([]);
   const [loading, setLoading] = useState(false);
 
@@ -8503,10 +8509,12 @@ function MembersPanel({ lang, showToast }) {
   }, [showToast]);
 
   return (
-    <div style={{ padding: '16px 0', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
-      <div className="mono" style={{ fontSize: 11, letterSpacing: '0.18em', color: 'rgba(238,238,243,.5)', marginBottom: 10 }}>
-        {lang === 'ru' ? 'УЧАСТНИКИ' : 'MEMBERS'}{members.length > 0 ? ` · ${members.length}` : ''}
-      </div>
+    <div style={hideHeader ? { paddingTop: 2 } : { padding: '16px 0', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
+      {!hideHeader && (
+        <div className="mono" style={{ fontSize: 11, letterSpacing: '0.18em', color: 'rgba(238,238,243,.5)', marginBottom: 10 }}>
+          {lang === 'ru' ? 'УЧАСТНИКИ' : 'MEMBERS'}{members.length > 0 ? ` · ${members.length}` : ''}
+        </div>
+      )}
       {loading && <div style={{ fontSize: 12, color: '#666' }}>{lang === 'ru' ? 'Загрузка…' : 'Loading…'}</div>}
       {!loading && members.length === 0 && (
         <div style={{ fontSize: 12, color: '#666' }}>{lang === 'ru' ? 'Пока только вы' : 'Just you so far'}</div>
@@ -8700,6 +8708,20 @@ function OwnerAdminDashboard({ onLogout }) {
   const handleTheme = () => setDark(d => { const n = !d; localStorage.setItem('musix_theme', n ? 'dark' : 'light'); return n; });
   const toggleLang = () => setLang(l => { const n = l === 'ru' ? 'en' : 'ru'; localStorage.setItem('musix_lang', n); return n; });
   const email = localStorage.getItem('musix_user_email') || '';
+  const [editAi, setEditAi] = useState(false);
+  const [invBump, setInvBump] = useState(0);   // bump → InvitesPanel reloads after a callout-created invite
+  const [calloutBusy, setCalloutBusy] = useState(false);
+  const createInviteFromCallout = async () => {
+    if (calloutBusy) return;
+    setCalloutBusy(true);
+    try {
+      const inv = await apiFetch('/auth/invites', { method: 'POST' });
+      try { await navigator.clipboard?.writeText(inviteLink(inv.code)); } catch (e) {}
+      showToast(ru ? 'Приглашение создано — ссылка скопирована' : 'Invite created — link copied');
+      setInvBump(b => b + 1);
+    } catch (e) { showToast(String(e.message || e)); }
+    finally { setCalloutBusy(false); }
+  };
 
   return (
     <div className="grain ob-root" style={{
@@ -8737,50 +8759,81 @@ function OwnerAdminDashboard({ onLogout }) {
         </div>
       </div>
 
-      <div style={{ position:'relative', zIndex:1, maxWidth: 720, margin: '12px auto 64px', padding: '0 32px' }}>
-        <div className="mono" style={{ fontSize: 13, color: c.textSubtle, letterSpacing: '0.32em', marginBottom: 12 }}>
-          — {ru ? 'ПАНЕЛЬ АДМИНИСТРАТОРА' : 'ADMIN CONSOLE'}
-        </div>
-        <h1 className="serif" style={{ fontSize: 44, lineHeight: 1.04, letterSpacing: '-0.025em', marginBottom: 14 }}>
-          {ru ? <>Управление <i style={{ color: 'oklch(62% 0.2 275)' }}>инстансом</i>.</> : <>Manage your <i style={{ color: 'oklch(62% 0.2 275)' }}>instance</i>.</>}
-        </h1>
-        <p style={{ fontSize: 15, color: c.textMuted, lineHeight: 1.6, marginBottom: 6 }}>
-          {ru
-            ? 'Этот аккаунт настраивает AI и приглашает пользователей. Музыку слушают в обычных аккаунтах — выйдите и войдите по инвайту.'
-            : 'This account configures AI and invites users. Music is played from regular accounts — log out and sign in via invite.'}
-        </p>
-        {email && (
-          <div className="mono-label" style={{ color: c.textSubtle, letterSpacing: '0.14em', marginBottom: 4 }}>
-            {ru ? 'ВЛАДЕЛЕЦ' : 'OWNER'} · {email}
+      <div style={{ position:'relative', zIndex:1, maxWidth: 1080, margin: '8px auto 64px', padding: '0 32px' }}>
+        {/* status + owner line */}
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:12, flexWrap:'wrap', marginBottom:16 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:10, fontSize:13, color:'#bfeccd',
+            background:'rgba(95,208,138,.1)', borderRadius:12, padding:'10px 15px', boxShadow:'inset 0 0 0 1px rgba(95,208,138,.3)' }}>
+            ✓ {ru ? 'Сервер настроен. Приглашайте участников — каждый принесёт свою музыку.'
+                  : 'Server is set up. Invite members — each brings their own music.'}
           </div>
-        )}
+          {email && (
+            <div className="mono-label" style={{ color: c.textSubtle, letterSpacing: '0.14em' }}>
+              {ru ? 'ВЛАДЕЛЕЦ' : 'OWNER'} · {email}
+            </div>
+          )}
+        </div>
 
-        <div className="ob-glass" style={{ marginTop: 20, padding: '18px 20px',
+        {/* prominent listen callout */}
+        <div className="ob-glass" style={{ padding: '18px 22px', marginBottom: 18,
           background:'linear-gradient(180deg,rgba(154,133,255,.16),rgba(154,133,255,.06))',
           boxShadow:'inset 0 0 0 1px rgba(154,133,255,.38),0 0 30px rgba(124,92,255,.2)' }}>
           <div className="mono" style={{ fontSize: 11, letterSpacing: '0.22em', textTransform: 'uppercase', color: '#cfc4ff' }}>
             {ru ? 'Хотите слушать музыку?' : 'Want to listen?'}
           </div>
-          <div style={{ fontSize: 14.5, marginTop: 8, lineHeight: 1.5 }}>
-            {ru ? 'Админ-аккаунт — только для управления. Создайте приглашение ниже и войдите как обычный участник — собственным аккаунтом.'
-                : 'The admin account is for management only. Create an invite below and sign in as a regular member with your own account.'}
+          <div className="serif" style={{ fontSize: 22, margin: '8px 0 0', letterSpacing:'-0.01em' }}>
+            {ru ? 'Админ-аккаунт — только для управления' : 'The admin account is for management only'}
+          </div>
+          <div style={{ fontSize: 13.5, color: c.textMuted, marginTop: 6, lineHeight: 1.5 }}>
+            {ru ? 'Чтобы слушать свою музыку, создайте приглашение и войдите как обычный участник — собственным аккаунтом.'
+                : 'To listen to your music, create an invite and sign in as a regular member with your own account.'}
+          </div>
+          <button onClick={createInviteFromCallout} disabled={calloutBusy} className="cta-v3"
+            style={{ marginTop: 14, padding: '10px 18px', fontSize: 13, opacity: calloutBusy ? 0.6 : 1, cursor: calloutBusy ? 'wait' : 'pointer' }}>
+            {calloutBusy ? (ru ? 'Создаём…' : 'Creating…') : (ru ? '＋ Создать приглашение и скопировать ссылку' : '＋ Create invite & copy link')}
+          </button>
+        </div>
+
+        {/* three sections, side by side */}
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:14, alignItems:'start' }}>
+          <div className="ob-glass" style={{ padding: '18px 20px' }}>
+            <div className="serif" style={{ fontSize: 17, fontWeight: 600, marginBottom: 8 }}>
+              {ru ? 'Настройки системы' : 'System settings'}
+            </div>
+            <div style={{ fontSize: 12.5, color: c.textMuted, lineHeight: 1.5 }}>
+              {ru ? 'Модель поиска, гуру (AI) и аудио-анализ — применяются ко всем участникам.'
+                  : 'Search model, guru (AI) and audio analysis — applied to all members.'}
+            </div>
+            <button onClick={() => setEditAi(v => !v)}
+              style={{ marginTop: 12, background:'transparent', border:'none', color:'#c3b8ff', fontSize:12.5, textDecoration:'underline', cursor:'pointer' }}>
+              {editAi ? (ru ? 'Свернуть' : 'Collapse') : (ru ? 'Изменить →' : 'Edit →')}
+            </button>
+          </div>
+
+          <div className="ob-glass" style={{ padding: '18px 20px' }}>
+            <div className="serif" style={{ fontSize: 17, fontWeight: 600, marginBottom: 4 }}>
+              {ru ? 'Участники' : 'Members'}
+            </div>
+            <MembersPanel lang={lang} showToast={showToast} hideHeader />
+          </div>
+
+          <div className="ob-glass" style={{ padding: '18px 20px' }}>
+            <div className="serif" style={{ fontSize: 17, fontWeight: 600, marginBottom: 4 }}>
+              {ru ? 'Приглашения' : 'Invites'}
+            </div>
+            <InvitesPanel lang={lang} showToast={showToast} hideHeader reloadKey={invBump} />
           </div>
         </div>
 
-        <section className="panel-v3" style={{ padding: '18px 20px', marginTop: 18 }}>
-          <div className="mono-label" style={{ color: c.textSubtle, marginBottom: 14 }}>
-            {ru ? 'AI ИНСТАНСА' : 'INSTANCE AI'}
+        {/* full AI editor expands here */}
+        {editAi && (
+          <div className="ob-glass" style={{ padding: '22px 24px', marginTop: 14 }}>
+            <div className="mono-label" style={{ color: c.textSubtle, marginBottom: 14 }}>
+              {ru ? 'AI ИНСТАНСА' : 'INSTANCE AI'}
+            </div>
+            <InstanceAISettings isDark={isDark} lang={lang} showToast={showToast} />
           </div>
-          <InstanceAISettings isDark={isDark} lang={lang} showToast={showToast} />
-        </section>
-
-        <section className="panel-v3" style={{ padding: '2px 20px 12px', marginTop: 18 }}>
-          <InvitesPanel lang={lang} showToast={showToast} />
-        </section>
-
-        <section className="panel-v3" style={{ padding: '2px 20px 12px', marginTop: 18 }}>
-          <MembersPanel lang={lang} showToast={showToast} />
-        </section>
+        )}
       </div>
 
       {toast && (
@@ -9305,6 +9358,104 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
 
 // ─── Onboarding (compact, themed) ─────────────────────────────────────────────
 // ─── Server-mode upload onboarding (Phase C) ─────────────────────────────────
+// Reusable stage bar (member onboarding). `indeterminate` shows a moving shimmer
+// for stages with no granular progress (the server-side awaited AI phase).
+function OBStageBar({ c, label, state, pct, indeterminate }) {
+  return (
+    <div style={{ marginBottom:12 }}>
+      <div style={{ display:'flex', justifyContent:'space-between', marginBottom:4 }}>
+        <span className="mono" style={{ fontSize:12, letterSpacing:'0.12em', color: state==='running' ? c.text : c.textSubtle }}>{label}</span>
+        <span style={{ fontSize:11, color: state==='failed' ? c.red : c.textSubtle }}>
+          {state==='done' ? '✓' : state==='failed' ? '✗' : state==='running' ? '…' : '·'}
+        </span>
+      </div>
+      <div style={{ height:5, borderRadius:3, background:c.border, overflow:'hidden', position:'relative' }}>
+        {indeterminate && state==='running'
+          ? <div className="ob-indet" />
+          : <div style={{ height:'100%', width:`${pct||0}%`, transition:'width 0.4s', background: state==='done' ? 'oklch(63% 0.17 142)' : 'linear-gradient(90deg, oklch(65% 0.18 270), oklch(75% 0.17 280))' }} />}
+      </div>
+    </div>
+  );
+}
+
+// Inline member indexing: core stages from SSE + the 3 guru AI stages shown as
+// indeterminate bars while the backend runs them (awaited, after FACTS) — only
+// when the instance LLM is online (otherwise the job completes with no AI phase
+// and aiWaiting never trips). Replaces the modal UploadIndexingWizard in the
+// member onboarding so it sits inside the SetupRail layout.
+function MemberIndexing({ ru, c, isDark, jobId, onDone }) {
+  const [stepStatus, setStepStatus] = useState({});
+  const [stageProgress, setStageProgress] = useState({});
+  const [error, setError] = useState(null);
+  const [done, setDone] = useState(false);
+  const [aiWaiting, setAiWaiting] = useState(false);
+
+  useEffect(() => {
+    if (!jobId) return;
+    const evt = new EventSource(`${API}/index/progress/${jobId}`);
+    evt.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.stages) {
+          const statusMap = { completed:'done', failed:'failed', running:'running', pending:'pending' };
+          setStepStatus(prev => { const next = { ...prev }; for (const [k, v] of Object.entries(data.stages)) next[k] = statusMap[v.status] || v.status || 'pending'; return next; });
+          setStageProgress(prev => { const next = { ...prev }; for (const [k, v] of Object.entries(data.stages)) next[k] = { current: v.current ?? prev[k]?.current ?? 0, total: v.total ?? prev[k]?.total ?? 0 }; return next; });
+        }
+        if (data.overall_status !== 'completed' && data.stages?.facts?.status === 'completed') setAiWaiting(true);
+        if (data.overall_status === 'completed') { evt.close(); setDone(true); setTimeout(onDone, 1400); }
+        else if (data.overall_status === 'failed') { evt.close(); setError(data.error || data.message || 'failed'); }
+      } catch (err) {}
+    };
+    return () => evt.close();
+  }, [jobId]);
+
+  const aiStages = [
+    { key:'artist_bio',    label: ru ? 'Биографии артистов' : 'Artist bios' },
+    { key:'refined_facts', label: ru ? 'Углубление фактов' : 'Deeper facts' },
+    { key:'sonic_vibe',    label: ru ? 'Звучание песен' : 'Song vibes' },
+  ];
+
+  if (done) {
+    return (
+      <div className="ob-glass" style={{ padding:'30px 28px', textAlign:'center', boxShadow:'inset 0 1px 0 var(--ob-glass-sheen),0 12px 50px rgba(0,0,0,.28),0 0 70px rgba(95,208,138,.22)' }}>
+        <div style={{ fontSize:'60px', lineHeight:1, marginBottom:'12px', filter:'drop-shadow(0 0 26px rgba(95,208,138,.9)) drop-shadow(0 0 8px rgba(95,208,138,.75))' }}>✨</div>
+        <div className="mono" style={{ fontSize:'11px', letterSpacing:'0.24em', textTransform:'uppercase', color:'#a9ecc4' }}>{ru ? 'Всё готово' : 'All set'}</div>
+        <h2 className="serif" style={{ fontSize:'28px', margin:'8px 0' }}>{ru ? 'Библиотека готова' : 'Your library is ready'}</h2>
+        <p style={{ fontSize:'13.5px', color:c.textMuted, lineHeight:1.6 }}>{ru ? 'Открываем плеер…' : 'Opening the player…'}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="ob-glass" style={{ padding:'26px 28px' }}>
+      <h2 className="serif" style={{ fontSize:'26px', letterSpacing:'-0.02em', marginBottom:'18px' }}>
+        {error ? (ru ? 'Что-то пошло не так' : 'Something went wrong') : (ru ? 'Собираем вашу библиотеку…' : 'Building your library…')}
+      </h2>
+      {error ? (
+        <div style={{ padding:'10px 14px', borderRadius:'10px', background:c.redBg, color:c.red, fontSize:'13px' }}>{error}</div>
+      ) : (
+        <>
+          {Object.keys(WIZ_STAGE_LABELS).map(k => {
+            const st = stepStatus[k] || 'pending';
+            const pr = stageProgress[k] || { current:0, total:0 };
+            const pct = st === 'done' ? 100 : pr.total > 0 ? Math.round(100 * pr.current / pr.total) : 0;
+            return <OBStageBar key={k} c={c} label={ru ? WIZ_STAGE_LABELS[k].ru : WIZ_STAGE_LABELS[k].en} state={st} pct={pct} />;
+          })}
+          {aiWaiting && (
+            <>
+              <div className="mono" style={{ display:'flex', alignItems:'center', gap:'9px', margin:'16px 0 10px',
+                fontSize:'11px', letterSpacing:'0.2em', textTransform:'uppercase', color:'#c3b8ff' }}>
+                ✨ {ru ? 'С помощью гуру' : 'With the guru'}
+              </div>
+              {aiStages.map(s => <OBStageBar key={s.key} c={c} label={s.label} state="running" indeterminate />)}
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
   const c = useColors(isDark);
   const [files, setFiles] = useState([]);
@@ -9430,9 +9581,9 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
           : 'radial-gradient(ellipse at top, #fafaff 0%, #ececf3 60%, #e3e2e8 100%)',
         color: c.text }}>
         {header}
-        <div style={{ maxWidth:'940px', margin:'24px auto 48px', padding:'0 32px', position:'relative' }}>
+        <div style={{ maxWidth:'min(1320px, 94vw)', margin:'24px auto 48px', padding:'0 32px', position:'relative' }}>
           <DriftBackdrop />
-          <GlassCard style={{ padding:'34px 32px' }}>
+          <GlassCard style={{ padding:'clamp(30px, 3vw, 60px) clamp(28px, 3vw, 56px)' }}>
             <WelcomeSlide ru={ru} c={c} onStart={dismissWelcome} />
           </GlassCard>
         </div>
@@ -9450,17 +9601,25 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
     }}>
       {header}
 
-      <div style={{ maxWidth:'620px', margin:'40px auto 64px', padding:'0 32px' }}>
-        <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.32em', marginBottom:'14px' }}>
-          — {lang==='ru'?'ЗАГРУЗКА БИБЛИОТЕКИ':'UPLOAD LIBRARY'}
+      <div style={{ maxWidth:'900px', margin:'28px auto 64px', padding:'0 32px', position:'relative' }}>
+        <div style={{ display:'flex', gap:24, position:'relative' }}>
+          <DriftBackdrop />
+          <SetupRail ru={ru} steps={[{ key:'music', label: ru?'Музыка':'Music' }, { key:'done', label: ru?'Готово':'Done' }]} currentKey={showWizard ? 'done' : 'music'} />
+          <div style={{ flex:1, position:'relative', zIndex:1, minWidth:0 }}>
+        {showWizard && jobId ? (
+          <MemberIndexing ru={ru} c={c} isDark={isDark} jobId={jobId} onDone={onDone} />
+        ) : (
+        <div>
+        <div className="mono" style={{ fontSize:'11px', color:c.textSubtle, letterSpacing:'0.24em', textTransform:'uppercase', marginBottom:'8px' }}>
+          {lang==='ru'?'Шаг 1 · Загрузка':'Step 1 · Upload'}
         </div>
-        <h1 className="serif" style={{ fontSize:'56px', lineHeight:'1.02', letterSpacing:'-0.025em', marginBottom:'18px' }}>
-          {lang==='ru' ? <>Загрузи <i style={{ color:'oklch(62% 0.2 275)' }}>треки</i>.</> : <>Upload your <i style={{ color:'oklch(62% 0.2 275)' }}>tracks</i>.</>}
-        </h1>
-        <p style={{ fontSize:'15px', color:c.textMuted, lineHeight:'1.6', marginBottom:'24px' }}>
+        <h2 className="serif" style={{ fontSize:'30px', lineHeight:'1.04', letterSpacing:'-0.02em', marginBottom:'10px' }}>
+          {lang==='ru' ? <>Загрузите <i style={{ color:'oklch(62% 0.2 275)' }}>музыку</i></> : <>Upload your <i style={{ color:'oklch(62% 0.2 275)' }}>music</i></>}
+        </h2>
+        <p style={{ fontSize:'14px', color:c.textMuted, lineHeight:'1.6', marginBottom:'20px' }}>
           {lang==='ru'
-            ? 'Выберите папку с музыкой или отдельные файлы — они загрузятся и сохранятся на сервере под вашим аккаунтом. FLAC, MP3, M4A.'
-            : 'Pick a music folder or individual files — they upload and are stored on the server under your account. FLAC, MP3, M4A.'}
+            ? 'Папка с музыкой или отдельные файлы — загрузятся и сохранятся под вашим аккаунтом. FLAC, MP3, M4A.'
+            : 'A music folder or individual files — uploaded and stored under your account. FLAC, MP3, M4A.'}
         </p>
 
         <div className="ob-glass"
@@ -9540,11 +9699,11 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
             )}
           </div>
         )}
+        </div>
+        )}
+          </div>
+        </div>
       </div>
-
-      {showWizard && jobId && (
-        <UploadIndexingWizard isDark={isDark} lang={lang} jobId={jobId} onDone={onDone} />
-      )}
     </div>
   );
 }
@@ -13590,10 +13749,10 @@ function GlassCard({ children, style, className }) {
 }
 function FeatureCard({ icon, title, body }) {
   return (
-    <div className="ob-feat">
-      <div style={{ fontSize:19, lineHeight:1 }}>{icon}</div>
-      <div style={{ fontWeight:600, fontSize:14, margin:'8px 0 4px' }}>{title}</div>
-      <div style={{ fontSize:12.5, lineHeight:1.45, opacity:.72 }}>{body}</div>
+    <div className="ob-feat ob-feat-hover" style={{ padding:'clamp(15px, 1.3vw, 26px)' }}>
+      <div style={{ fontSize:'clamp(20px, 1.7vw, 32px)', lineHeight:1 }}>{icon}</div>
+      <div style={{ fontWeight:600, fontSize:'clamp(14px, 1.05vw, 20px)', margin:'10px 0 5px' }}>{title}</div>
+      <div style={{ fontSize:'clamp(12.5px, 0.92vw, 16px)', lineHeight:1.45, opacity:.72 }}>{body}</div>
     </div>
   );
 }
@@ -13605,14 +13764,14 @@ function WelcomeSlide({ ru, c, onStart }) {
     { icon:'🌐', title: ru?'Свой сервер':'Your own server', body: ru?'Зови друзей. Библиотека без ИИ-музыки и ремиксов — песня всегда доступна.':'Invite friends. A library with no AI music or remixes — a song never disappears.' },
   ];
   return (
-    <div style={{ display:'flex', gap:28, alignItems:'center', flexWrap:'wrap' }}>
-      <div style={{ flex:'1 1 320px', minWidth:300 }}>
-        <div className="mono" style={{ fontSize:11, letterSpacing:'.26em', textTransform:'uppercase', opacity:.5 }}>{ru?'— Добро пожаловать':'— Welcome'}</div>
-        <h1 className="serif" style={{ fontSize:44, lineHeight:1.05, letterSpacing:'-.02em', margin:'12px 0 10px' }}>{ru?'Добро пожаловать в ':'Welcome to '}<span style={{ color:'oklch(62% 0.2 275)' }}>MusiX</span>!</h1>
-        <div style={{ fontSize:18, opacity:.65 }}>{ru?'Ваш личный музыкальный гуру':'Your personal music guru'}</div>
-        <button className="ske-accent" style={{ marginTop:22, padding:'13px 28px', borderRadius:12, fontSize:14.5, fontWeight:600, border:'none', cursor:'pointer' }} onClick={onStart}>{ru?'В мир музыки →':'Into the music →'}</button>
+    <div style={{ display:'flex', gap:'clamp(28px, 3vw, 60px)', alignItems:'center', flexWrap:'wrap' }}>
+      <div style={{ flex:'1 1 360px', minWidth:300 }}>
+        <div className="mono" style={{ fontSize:'clamp(11px, 0.85vw, 14px)', letterSpacing:'.26em', textTransform:'uppercase', opacity:.5 }}>{ru?'— Добро пожаловать':'— Welcome'}</div>
+        <h1 className="serif" style={{ fontSize:'clamp(40px, 4vw, 78px)', lineHeight:1.04, letterSpacing:'-.02em', margin:'clamp(12px,1vw,22px) 0 clamp(10px,0.8vw,16px)' }}>{ru?'Добро пожаловать в ':'Welcome to '}<span style={{ color:'oklch(62% 0.2 275)' }}>MusiX</span>!</h1>
+        <div style={{ fontSize:'clamp(17px, 1.5vw, 27px)', opacity:.65 }}>{ru?'Ваш личный музыкальный гуру':'Your personal music guru'}</div>
+        <button className="ske-accent" style={{ marginTop:'clamp(22px, 1.9vw, 34px)', padding:'clamp(13px,1vw,18px) clamp(28px,2.4vw,46px)', borderRadius:12, fontSize:'clamp(14.5px, 1.1vw, 19px)', fontWeight:600, border:'none', cursor:'pointer' }} onClick={onStart}>{ru?'В мир музыки →':'Into the music →'}</button>
       </div>
-      <div style={{ flex:'1 1 340px', display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>{feats.map((f,i)=><FeatureCard key={i} icon={f.icon} title={f.title} body={f.body} />)}</div>
+      <div style={{ flex:'1 1 380px', display:'grid', gridTemplateColumns:'1fr 1fr', gap:'clamp(12px, 1vw, 20px)' }}>{feats.map((f,i)=><FeatureCard key={i} icon={f.icon} title={f.title} body={f.body} />)}</div>
     </div>
   );
 }
@@ -14475,7 +14634,7 @@ function SetupWizard({ onComplete }) {
         <TopRightControls isDark={isDark} lang={lang} onLang={handleLang} onTheme={handleTheme} onSettings={() => {}} />
       </div>
       <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', padding:'24px 32px 48px' }}>
-        <div style={{ width:'100%', maxWidth: step === 'welcome' ? '940px' : '880px' }}>
+        <div style={{ width:'100%', maxWidth: step === 'welcome' ? 'min(1320px, 94vw)' : '880px' }}>
           {step === 'welcome' ? renderWelcome() : (
             <div style={{ position:'relative', display:'flex', gap:24 }}>
               <DriftBackdrop />
