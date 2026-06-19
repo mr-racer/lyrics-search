@@ -59,6 +59,32 @@ class TestIndexUploadsAssemblesData:
             assert entry["title"] == "Tiny Test Song"
             assert entry["artist"] == "Tiny Test Artist"
 
+    def test_indexed_sink_is_populated(self, tmp_path, audio_path):
+        """The optional indexed_sink out-param exposes the indexed batch so the
+        server-mode upload runner can run the FACTS/enrichment stage on it."""
+        from app.services.indexing_service import IndexingService
+
+        svc = IndexingService(MagicMock())
+        flac = tmp_path / "song.flac"
+        flac.write_bytes(audio_path("tiny.flac").read_bytes())
+        rows = [{
+            "upload_id": "u1", "account_id": "acct_x", "sha256": "deadbeef",
+            "original_filename": "song.flac", "storage_path": str(flac),
+            "size_bytes": flac.stat().st_size, "status": "uploaded",
+            "track_id": None, "error": None, "created_at": 1.0,
+        }]
+        sink: dict = {}
+        with patch.object(svc, "_fit_impl"), \
+             patch("app.indexing.folder_scanner.get_lyrics", return_value=""), \
+             patch("app.resources.metadata_db.MetadataDB.update_pending_upload_status"):
+            svc.index_uploads(account_id="acct_x", upload_rows=rows, indexed_sink=sink)
+
+        assert sink, "indexed_sink should be populated with the indexed batch"
+        key = next(iter(sink))
+        assert " — " in key
+        assert sink[key]["artist"] == "Tiny Test Artist"
+        assert sink[key]["title"] == "Tiny Test Song"
+
 
 class TestIndexUploadsProgressAndCovers:
     """The metadata+lyrics loop is the SLOW pre-embedding part of an upload

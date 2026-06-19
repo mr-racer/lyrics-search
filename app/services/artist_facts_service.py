@@ -140,6 +140,10 @@ async def fetch_facts_for_artists(
         found = bool(text)
         if found:
             results[artist] = text
+        logger.info(
+            "[enrich] artist facts | %-8s | %s",
+            "FOUND" if found else "MISSING", artist,
+        )
         if progress_callback:
             progress_callback(idx, total, artist, found)
         await asyncio.sleep(delay)

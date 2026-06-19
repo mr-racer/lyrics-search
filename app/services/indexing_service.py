@@ -318,8 +318,14 @@ class IndexingService:
         upload_rows: list[dict],
         *,
         progress_callback: Optional[Callable] = None,
+        indexed_sink: Optional[dict] = None,
     ) -> dict[str, str]:
         """Index a list of already-uploaded files (server mode).
+
+        ``indexed_sink``: optional out-dict. When provided, it is updated with the
+        ``"Artist — Title" -> song_info`` map of every track that was indexed, so
+        the caller (the upload runner) can run the FACTS/enrichment stage on
+        exactly this batch's artists and songs. The return value is unchanged.
 
         Each row in ``upload_rows`` is a ``pending_uploads`` record produced by
         the multipart upload endpoint; the file already lives at
@@ -416,6 +422,11 @@ class IndexingService:
                     progress_callback(
                         "scan", completed, total_rows, f"[{completed}/{total_rows}] {label}",
                     )
+
+        # Hand the indexed batch back to the caller (for the FACTS stage) before
+        # the early-return so an empty batch simply leaves the sink empty.
+        if indexed_sink is not None:
+            indexed_sink.update(data)
 
         if not data:
             logger.info("[index_uploads] nothing to index for account=%s", account_id)

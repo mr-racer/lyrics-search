@@ -140,6 +140,16 @@ async def _wait_for_job(job_id: str) -> None:
             pass
 
 
+async def wait_for_job(job_id: str) -> None:
+    """Await a started job to completion (or failure/cancel).
+
+    Public wrapper over ``_wait_for_job`` for callers (e.g. the server-mode
+    upload runner) that start a job and must block until it finishes before
+    proceeding. Safe to call after the job already finished (no-op).
+    """
+    await _wait_for_job(job_id)
+
+
 def cancel_job(job_id: str) -> bool:
     """Cancel a running job. Returns True if the job was running."""
     task = _running_tasks.get(job_id)

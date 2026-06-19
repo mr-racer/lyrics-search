@@ -19,6 +19,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+
+import httpx
 from openai import AsyncOpenAI
 try:
     from openai import DefaultAsyncHttpxClient as _AsyncHttpxClient
@@ -56,6 +58,30 @@ def resolve_api_key(arg: str | None = None) -> str:
     """DB instance setting > arg > env > built-in 'lm-studio' default."""
     return (settings_service.db_value("LLM_API_KEY")
             or arg or os.getenv("OPENAI_API_KEY") or DEFAULT_API_KEY).strip()
+
+
+async def is_llm_available(base_url: str | None = None, model: str | None = None) -> bool:
+    """Return True if the resolved LLM endpoint is reachable and serves the model.
+
+    Resolves the endpoint/model from instance settings (DB > arg > env), then
+    probes ``GET <base>/v1/models`` and checks the resolved model is listed.
+    Mirrors the /system/llm-status check, but returns a plain bool so the
+    server-mode upload flow can gate auto AI-indexing on it. ``trust_env=False``
+    keeps a shell-exported HTTP_PROXY from tunnelling the (localhost) LLM probe.
+    """
+    resolved_url = resolve_base_url(base_url)
+    if not resolved_url:
+        return False
+    resolved_model = (model or "").strip() or resolve_model()
+    try:
+        async with httpx.AsyncClient(timeout=3.0, trust_env=False) as client:
+            resp = await client.get(f"{resolved_url}/models")
+            resp.raise_for_status()
+            data = resp.json()
+        return resolved_model in [m.get("id") for m in data.get("data", [])]
+    except Exception as e:
+        logger.debug("[llm_client] availability probe failed for %s: %s", resolved_url, e)
+        return False
 
 
 def resolve_model(arg: str | None = None) -> str:

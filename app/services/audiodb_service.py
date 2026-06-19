@@ -183,6 +183,10 @@ async def fetch_audiodb_for_artist(artist: str, collection_name: str) -> None:
             country_code=None, country=None, label=None,
             cutout_path=None, thumb_path=deezer_thumb, audiodb_mbid=None,
         )
+        logger.info(
+            "[enrich] artist media | bio:no  image:%-3s | %s (AudioDB miss)",
+            "yes" if deezer_thumb else "no", canonical,
+        )
         return
 
     a = artists_list[0]
@@ -191,10 +195,11 @@ async def fetch_audiodb_for_artist(artist: str, collection_name: str) -> None:
     if not cutout_path and not thumb_path:
         thumb_path = await _fetch_deezer_picture(canonical)
 
+    bio_text = a.get("strBiographyEN") or a.get("strBiography")
     MetadataDB.upsert_artist_audiodb(
         slug=slug,
         collection_name=collection_name,
-        audiodb_bio=a.get("strBiographyEN") or a.get("strBiography"),
+        audiodb_bio=bio_text,
         mood=a.get("strMood"),
         country_code=a.get("strCountryCode"),
         country=a.get("strCountry"),
@@ -202,6 +207,12 @@ async def fetch_audiodb_for_artist(artist: str, collection_name: str) -> None:
         cutout_path=cutout_path,
         thumb_path=thumb_path,
         audiodb_mbid=a.get("strMusicBrainzID"),
+    )
+    logger.info(
+        "[enrich] artist media | bio:%-3s image:%-3s | %s",
+        "yes" if bio_text else "no",
+        "yes" if (cutout_path or thumb_path) else "no",
+        canonical,
     )
 
 

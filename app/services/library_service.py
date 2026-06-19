@@ -209,10 +209,14 @@ class LibraryService:
 
             # index_uploads sets+restores engine.collection_name = acct_<id>
             # internally via fit_with_progress, so we don't mutate it here.
+            # indexed_data collects this batch's "Artist — Title" -> info so the
+            # FACTS/enrichment stage below can run on exactly these tracks.
+            indexed_data: dict = {}
             await asyncio.get_running_loop().run_in_executor(
                 None,
                 lambda: indexing.index_uploads(
                     account_id=account_id, upload_rows=rows, progress_callback=_sync_cb,
+                    indexed_sink=indexed_data,
                 ),
             )
 
@@ -224,6 +228,20 @@ class LibraryService:
             except Exception as e:
                 logger.warning(
                     "[LibraryService] failed to persist collection_settings: %s", e,
+                )
+
+            # Server-mode enrichment: FACTS (song/artist facts + AudioDB bio +
+            # artist images), then — if the LLM is reachable — the AI tasks,
+            # awaited. This mirrors the folder flow's FACTS stage which uploads
+            # previously skipped entirely (no bios/facts/images in server mode).
+            # Awaited here on purpose: overall_status only flips to COMPLETED once
+            # enrichment finishes, and the frontend gates player entry on it.
+            try:
+                await self._enrich_uploads(job, account_id, indexed_data)
+            except Exception:
+                logger.exception(
+                    "[enrich] upload enrichment failed for account=%s (tracks already indexed)",
+                    account_id,
                 )
 
             job.overall_status = IndexStatus.COMPLETED
@@ -241,6 +259,169 @@ class LibraryService:
         finally:
             _INDEX_SEMAPHORE.release()
             self.finish_job(account_id=account_id)
+
+    async def _enrich_uploads(self, job, account_id: str, indexed_data: dict) -> None:
+        """Post-index enrichment for server-mode uploads (the folder flow's FACTS
+        stage, which uploads previously skipped entirely).
+
+        Runs song facts, artist facts and AudioDB biography + artist images for
+        the just-indexed batch, then — only if the LLM is reachable — the AI
+        tasks (sonic_vibe, refined_facts, artist_bio) resolved against instance
+        settings. The AI tasks are awaited so the upload job reports COMPLETED
+        only after everything finishes (the frontend gates player entry on it).
+        """
+        if not indexed_data:
+            return
+
+        from app.services.audiodb_service import fetch_audiodb_for_artists
+        from app.services import ai_indexing_service
+        from app.services.llm_client import (
+            is_llm_available, resolve_base_url, resolve_model,
+        )
+
+        collection_name = f"acct_{account_id}"
+        unique_artists = sorted({
+            (info.get("artist") or "").strip()
+            for info in indexed_data.values()
+            if (info.get("artist") or "").strip()
+        })
+        unique_songs = sorted({
+            ((info.get("artist") or "").strip(), (info.get("title") or "").strip())
+            for info in indexed_data.values()
+            if (info.get("artist") or "").strip() and (info.get("title") or "").strip()
+        })
+
+        # ── Stage FACTS ──────────────────────────────────────────────────────
+        stage_facts = job.stages[IndexStage.FACTS]
+        stage_facts.status = IndexStatus.RUNNING
+        stage_facts.started_at = time.time()
+        # Each artist contributes 2 units (songfacts + audiodb); each song 1.
+        facts_total = len(unique_artists) * 2 + len(unique_songs)
+        stage_facts.total = facts_total
+        stage_facts.message = "Поиск фактов..."
+        await self._notify_progress(job, {
+            "stage": IndexStage.FACTS.value,
+            "stage_status": IndexStatus.RUNNING.value,
+            "message": stage_facts.message, "current": 0, "total": facts_total,
+        })
+        logger.info(
+            "[enrich] FACTS stage start: %d artists, %d songs (collection=%s)",
+            len(unique_artists), len(unique_songs), collection_name,
+        )
+
+        facts_progress = {"artists": 0, "songs": 0, "audiodb": 0}
+        facts_found = {"artists": 0, "songs": 0, "audiodb": 0}
+
+        def _make_cb(bucket: str):
+            def _cb(current: int, total: int, label: str, found: bool):
+                facts_progress[bucket] = current
+                if found:
+                    facts_found[bucket] += 1
+                combined = sum(facts_progress.values())
+                stage_facts.current = combined
+                stage_facts.found = sum(facts_found.values())
+                stage_facts.not_found = max(0, facts_total - stage_facts.found)
+                stage_facts.message = f"Факты: {label}"
+                asyncio.create_task(self._notify_progress(job, {
+                    "stage": IndexStage.FACTS.value,
+                    "current": combined, "total": facts_total,
+                    "message": stage_facts.message,
+                    "found": stage_facts.found, "not_found": stage_facts.not_found,
+                }))
+            return _cb
+
+        if facts_total:
+            if unique_artists or unique_songs:
+                try:
+                    await asyncio.wait_for(asyncio.gather(
+                        fetch_facts_for_artists(
+                            unique_artists, collection_name,
+                            progress_callback=_make_cb("artists"),
+                        ),
+                        fetch_facts_for_songs(
+                            unique_songs, collection_name,
+                            progress_callback=_make_cb("songs"),
+                        ),
+                        return_exceptions=True,
+                    ), timeout=180)
+                except Exception as e:
+                    logger.warning("[enrich] facts fetch timed out/failed: %s", e)
+            if unique_artists:
+                try:
+                    await asyncio.wait_for(
+                        fetch_audiodb_for_artists(
+                            unique_artists, collection_name,
+                            progress_callback=_make_cb("audiodb"),
+                        ),
+                        timeout=300,
+                    )
+                except Exception as e:
+                    logger.warning("[enrich] AudioDB enrichment timed out/failed: %s", e)
+
+        stage_facts.status = IndexStatus.COMPLETED
+        stage_facts.current = facts_total
+        stage_facts.completed_at = time.time()
+        stage_facts.found = sum(facts_found.values())
+        stage_facts.not_found = max(0, facts_total - stage_facts.found)
+        stage_facts.message = (
+            f"Факты: {stage_facts.found} найдено из {facts_total}"
+            if facts_total else "Нет данных"
+        )
+        await self._notify_progress(job, {
+            "stage": IndexStage.FACTS.value,
+            "stage_status": IndexStatus.COMPLETED.value,
+            "current": facts_total, "total": facts_total,
+            "message": stage_facts.message,
+            "found": stage_facts.found, "not_found": stage_facts.not_found,
+        })
+        logger.info(
+            "[enrich] FACTS stage done: %d/%d found (collection=%s)",
+            stage_facts.found, facts_total, collection_name,
+        )
+
+        # ── Auto AI-indexing — only when the LLM is actually reachable ────────
+        if not await is_llm_available():
+            logger.info(
+                "[enrich] LLM unreachable — skipping auto AI-indexing (collection=%s)",
+                collection_name,
+            )
+            return
+
+        base_url = resolve_base_url()
+        model = resolve_model()
+        n_total = len(indexed_data)
+        # Server uploads have no per-request language; default to RU (the app's
+        # primary language). The folder/sharing flow passes the user's choice.
+        lang = "ru"
+        logger.info(
+            "[enrich] LLM reachable (base_url=%s model=%s) — auto AI-indexing %s",
+            base_url, model, collection_name,
+        )
+        for task_type in ("sonic_vibe", "refined_facts", "artist_bio"):
+            try:
+                job_id = ai_indexing_service.start_job(
+                    task_type=task_type,
+                    collection_name=collection_name,
+                    lang=lang,
+                    db_client=self.db_client,
+                    llm_client=None,
+                    n_total=n_total,
+                    llm_base_url=base_url,
+                    llm_model=model,
+                    bio_source=("web" if task_type == "artist_bio" else "facts"),
+                )
+                await ai_indexing_service.wait_for_job(job_id)
+                logger.info(
+                    "[enrich] AI task '%s' finished (collection=%s)",
+                    task_type, collection_name,
+                )
+            except ValueError as e:
+                logger.warning("[enrich] AI task '%s' skipped: %s", task_type, e)
+            except Exception:
+                logger.exception(
+                    "[enrich] AI task '%s' failed (collection=%s)",
+                    task_type, collection_name,
+                )
 
     async def index_folder(
         self,
