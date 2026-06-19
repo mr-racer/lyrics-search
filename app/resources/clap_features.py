@@ -11,6 +11,7 @@ import gc
 import hashlib
 import json
 import logging
+import os
 from pathlib import Path
 
 import numpy as np
@@ -23,7 +24,12 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+_Device = "cpu" if os.environ.get("FORCE_CPU") == "1" else ("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE = torch.device(_Device)
+if os.environ.get("FORCE_CPU") == "1":
+    logger.info("[clap_features] FORCE_CPU=1 — using CPU for CLAP inference")
+else:
+    logger.info("[clap_features] using device: %s", DEVICE)
 
 MAX_DURATION = 420  # seconds — kept here so clap_features is self-contained
 

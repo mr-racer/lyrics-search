@@ -12,6 +12,7 @@ DbClient:
 """
 
 import gc
+import os
 import threading
 from pathlib import Path
 import torch
@@ -33,7 +34,12 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+_Device = "cpu" if os.environ.get("FORCE_CPU") == "1" else ("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE = torch.device(_Device)
+if os.environ.get("FORCE_CPU") == "1":
+    logger.info("[ModelRegistry] FORCE_CPU=1 — using CPU for all models")
+else:
+    logger.info("[ModelRegistry] using device: %s", DEVICE)
 CLAP_WEIGHTS_PATH = Path(__file__).parent.parent.parent / "weights" / "music_audioset_epoch_15_esc_90.14.pt"
 CLAP_WEIGHTS_URL = "https://huggingface.co/lukewys/laion_clap/resolve/main/music_audioset_epoch_15_esc_90.14.pt"
 
