@@ -45,7 +45,14 @@ def prepare_metadata(data: dict):
     """
     data_prep = list(data.values())
 
-    filtered = [d for d in data_prep if d['duration'] <= MAX_DURATION and len(d['lyrics']) > 50]
+    # No lyrics gate: index every track (lyric-less songs rely on the CLAP audio
+    # vector + a title/artist text vector). Keep the duration cap, and require a
+    # numeric duration so newly-included tracks whose duration couldn't be read
+    # don't crash the comparison / percentile math below.
+    filtered = [
+        d for d in data_prep
+        if isinstance(d.get('duration'), (int, float)) and d['duration'] <= MAX_DURATION
+    ]
     durations = np.array([d['duration'] for d in filtered])
 
     p25 = np.percentile(durations, 25)

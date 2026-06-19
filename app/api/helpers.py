@@ -8,7 +8,9 @@ never derive the collection name inline, never accept it from the client.
 from __future__ import annotations
 
 import logging
+import os
 import re
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +34,36 @@ def derive_collection_for_user(user) -> str:
     if not _VALID_USER_ID.match(user_id):
         raise ValueError(f"user.id contains invalid characters: {user_id!r}")
     return f"acct_{user_id}"
+
+
+def member_index_root() -> str:
+    """Allowed root path that MEMBERS may index in server mode (index-by-reference).
+
+    Read from the ``MEMBER_INDEX_ROOT`` env var. Empty/unset = feature OFF, which
+    preserves the default owner-only folder-indexing boundary. When set (e.g.
+    ``/music``, typically a read-only bind-mount of a trusted disk), members may
+    index that directory and anything beneath it — but never an arbitrary host
+    path (the streamer serves whatever ``file_path`` lands in their collection, so
+    confining the indexer is what keeps the boundary). See ``path_within_root``.
+    """
+    return os.getenv("MEMBER_INDEX_ROOT", "").strip()
+
+
+def path_within_root(candidate: str, root: str) -> bool:
+    """True iff ``candidate`` resolves to ``root`` or a path beneath it.
+
+    Both sides are ``resolve()``-d (symlinks + ``..`` collapsed) BEFORE comparison
+    so a member can't escape via ``/music/../etc`` or a crafted relative path. An
+    empty ``root`` means the feature is disabled → always False.
+    """
+    if not root:
+        return False
+    try:
+        root_real = Path(root).resolve()
+        cand_real = Path(candidate).resolve()
+    except (OSError, ValueError):
+        return False
+    return cand_real == root_real or root_real in cand_real.parents
 
 
 def deprecated_collection_warning(supplied: str | None, derived: str, endpoint: str) -> None:

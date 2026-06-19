@@ -78,13 +78,21 @@ def scan_and_enrich_folder(music_folder: str, workers: int = 8, better_lyrics_qu
             meta = future.result()
             processed_count += 1
 
-            if meta.get("lyrics"):
-                found_count += 1
-                key = f"{meta['artist']} — {meta['title']}"
-                results.setdefault(key, meta)
-            else:
+            if meta is None:
+                # process_file returns None only when title/artist tags are missing
+                # — that track can't be identified (distinct from "no lyrics"). Count
+                # it and skip; this also guards the .get() below against None.
                 not_found_count += 1
-                meta['lyrics'] = 'No lyrics were found :('
+            elif meta.get("lyrics"):
+                found_count += 1
+                results.setdefault(f"{meta['artist']} — {meta['title']}", meta)
+            else:
+                # No lyrics found — still index the track. build_text_for_embedding
+                # falls back to title/artist and the CLAP audio vector carries sonic
+                # search; empty (not a placeholder) so no junk text gets embedded.
+                not_found_count += 1
+                meta['lyrics'] = ''
+                results.setdefault(f"{meta['artist']} — {meta['title']}", meta)
 
             if progress_callback:
                 fp = futures[future]

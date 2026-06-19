@@ -9533,6 +9533,8 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
   const [committing, setCommitting] = useState(false);
   const [jobId, setJobId] = useState(null);
   const [showWizard, setShowWizard] = useState(false);
+  const [memberIndexRoot, setMemberIndexRoot] = useState(null);
+  const [indexingFolder, setIndexingFolder] = useState(false);
   const ru = lang === 'ru';
   const uid = (typeof localStorage !== 'undefined' && localStorage.getItem('musix_user_id')) || '';
   // Marketing welcome shows once per account on first onboarding, then never.
@@ -9624,6 +9626,33 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
   const allDone = progress.length > 0 && progress.every(p => p.status === 'done' || p.status === 'failed');
   const anyUploading = progress.some(p => p.status === 'uploading');
   const successCount = progress.filter(p => p.status === 'done').length;
+
+  // Server-mode opt-in (MEMBER_INDEX_ROOT): if the operator mounted a trusted
+  // folder and exposed it via /instance/config, members may index it in place
+  // instead of uploading. Fetch once; the button below renders only when set.
+  useEffect(() => {
+    apiFetch('/instance/config')
+      .then(cfg => { if (cfg && cfg.mode === 'server' && cfg.member_index_root) setMemberIndexRoot(cfg.member_index_root); })
+      .catch(() => {});
+  }, []);
+
+  // Index the mounted root in place, then hand the returned job to the same
+  // MemberIndexing progress view the upload flow uses.
+  const startFolderIndex = async () => {
+    if (indexingFolder || anyUploading || committing) return;
+    setIndexingFolder(true);
+    try {
+      const res = await apiFetch('/library/index', {
+        method: 'POST',
+        body: JSON.stringify({ folder_path: memberIndexRoot }),
+      });
+      if (res && res.job_id) { setJobId(res.job_id); setShowWizard(true); }
+      else throw new Error((res && res.message) || 'no job_id');
+    } catch (e) {
+      setIndexingFolder(false);
+      alert(`${ru ? 'Не удалось запустить индексацию' : 'Failed to start indexing'}: ${e.message}`);
+    }
+  };
 
   const OB_VARS = {
     '--ob-glass-bg': isDark ? 'rgba(255,255,255,.055)' : 'rgba(255,255,255,.62)',
@@ -9732,6 +9761,25 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
             </label>
           </div>
         </div>
+
+        {memberIndexRoot && (
+          <div className="ob-glass" style={{ marginTop:'14px', padding:'16px 20px', borderRadius:'14px' }}>
+            <div style={{ fontSize:'13.5px', color:c.textMuted, lineHeight:1.55, marginBottom:'12px' }}>
+              {ru
+                ? <>Музыка уже примонтирована на сервере по пути <code style={{ color:c.text }}>{memberIndexRoot}</code>? Проиндексируй её на месте — без повторной загрузки. <b>Заменит текущую библиотеку.</b></>
+                : <>Music already mounted on the server at <code style={{ color:c.text }}>{memberIndexRoot}</code>? Index it in place — no re-upload. <b>Replaces your current library.</b></>}
+            </div>
+            <button onClick={startFolderIndex} disabled={indexingFolder||anyUploading||committing}
+              className={ske('btn', isDark)}
+              style={{ padding:'11px 22px', borderRadius:'10px', fontSize:'14px', fontWeight:'600',
+                cursor: indexingFolder||anyUploading||committing ? 'not-allowed' : 'pointer',
+                opacity: indexingFolder||anyUploading||committing ? 0.5 : 1 }}>
+              {indexingFolder
+                ? (ru?'Запуск…':'Starting…')
+                : (ru?`Индексировать ${memberIndexRoot}`:`Index ${memberIndexRoot}`)}
+            </button>
+          </div>
+        )}
 
         {progress.length > 0 && (
           <div className="ob-glass ob-listin" style={{ marginTop:'14px', padding:'16px 20px', borderRadius:'14px' }}>

@@ -45,8 +45,10 @@ def get_instance_config(
             status_code=404,
             detail="instance not initialized",
         )
+    from app.api.helpers import member_index_root
     return InstanceConfigResponse(
         mode=cfg["mode"], ai_available=settings.ai_available(),
+        member_index_root=(member_index_root() or None) if cfg["mode"] == "server" else None,
     )
 
 

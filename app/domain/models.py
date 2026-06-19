@@ -714,6 +714,10 @@ class InstanceConfigResponse(BaseModel):
     # working LLM endpoint is configured). Exposed publicly so a member's
     # frontend can decide UI without ever seeing the endpoint/key.
     ai_available: bool = False
+    # Server mode only: the mounted path (MEMBER_INDEX_ROOT) that members may
+    # index by reference, or null when the opt-in is off. Lets the member UI
+    # show/hide the "index mounted folder" action without exposing host details.
+    member_index_root: str | None = None
 
 
 class SetupRequest(BaseModel):

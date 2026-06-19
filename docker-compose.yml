@@ -28,6 +28,11 @@ services:
       - http_proxy=
       - HTTPS_PROXY=
       - https_proxy=
+      # Opt-in: allow non-owner MEMBERS to index the mounted music folder in place
+      # (index-by-reference, no upload/copy). Must equal the CONTAINER side of the
+      # music bind-mount below. Unset = owner-only folder indexing (default, safe).
+      # Only point this at a TRUSTED, ideally read-only mount.
+      # - MEMBER_INDEX_ROOT=/music
     volumes:
       # Bind mounts — visible/editable from the host (Windows project layout):
       - ./media:/app/media                      # client uploads (server mode)
@@ -37,9 +42,12 @@ services:
       - ./.env:/app/.env:ro                     # proxy_config reads HTTP_PROXY directly from .env
       # Named volume — keeps downloaded HF/CLAP models across rebuilds:
       - hf-cache:/app/.hf-cache
-      # Optional: mount an external music folder (read-only) to index by link.
-      # Use a path that exists on your host, e.g.:
-      # - "D:/Music:/music:ro"
+      # Index music WITHOUT copying it onto the server: bind-mount an external
+      # folder (read-only) and index it in place ("by reference"). Pair this with
+      # MEMBER_INDEX_ROOT below so members (not just the owner) can index it.
+      # Mount a path that exists on your host, e.g.:
+      # - "/mnt/music:/music:ro"          # Linux (see fstab note in README)
+      # - "D:/Music:/music:ro"            # Windows host
     depends_on:
       qdrant:
         condition: service_healthy

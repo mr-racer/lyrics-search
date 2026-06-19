@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 from app.domain.models import ArtistAggregate, IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RediscoverResponse, User
 from app.api.dependencies import get_current_user, require_mode
-from app.api.helpers import derive_collection_for_user
+from app.api.helpers import derive_collection_for_user, member_index_root, path_within_root
 from app.services.library_service import LibraryService
 from app.services import uploads_service
 from app.services._magic_sniff import sniff_audio_mime
@@ -791,10 +791,20 @@ async def index_folder(
     from app.resources.metadata_db import MetadataDB
     cfg = MetadataDB.get_instance_config()
     if cfg is not None and cfg.get("mode") == "server" and current_user.role != "owner":
-        raise HTTPException(
-            status_code=403,
-            detail="folder indexing is owner-only in server mode — upload files instead",
-        )
+        # Members are owner-only for folder indexing UNLESS the operator opted in
+        # by setting MEMBER_INDEX_ROOT (a trusted, usually read-only mount). Then a
+        # member may index that root or any path beneath it — but nothing else, so
+        # they still can't point the indexer/streamer at arbitrary host files.
+        root = member_index_root()
+        if not root or not path_within_root(req.folder_path, root):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"members may only index {root} in server mode"
+                    if root else
+                    "folder indexing is owner-only in server mode — upload files instead"
+                ),
+            )
 
     # Service availability next — if Qdrant/the whole library service is down,
     # 503 takes precedence over a bad folder (and preserves the pre-Phase-C
