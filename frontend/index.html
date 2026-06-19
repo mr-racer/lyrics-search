@@ -8565,8 +8565,7 @@ function InstanceAISettings({ isDark, lang, showToast }) {
   const [apiKey, setApiKey] = useState('');
   const [hasKey, setHasKey] = useState(false);
   const [aiEnabled, setAiEnabled] = useState(false);
-  const [clapEnabled, setClapEnabled] = useState(true);
-  const [tier, setTier] = useState(0);   // index into WIZ_TIERS (Fast/Balanced/Quality)
+  const [tier, setTier] = useState(0);   // index into WIZ_TIERS (Speed/Balance/Quality)
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -8585,7 +8584,6 @@ function InstanceAISettings({ isDark, lang, showToast }) {
       setModel(sval('LLM_MODEL'));
       setHasKey(!!(s['LLM_API_KEY'] && s['LLM_API_KEY'].has_value));
       setAiEnabled(sbool('AI_ENABLED', false));
-      setClapEnabled(sbool('CLAP_ENABLED', true));
       const em = sval('EMBED_MODEL');
       const ti = WIZ_TIERS.findIndex(t => (t.model || '') === em);
       setTier(ti >= 0 ? ti : 0);
@@ -8604,7 +8602,7 @@ function InstanceAISettings({ isDark, lang, showToast }) {
         llm_base_url: baseUrl.trim() || null,
         llm_model: model.trim() || null,
         embed_model: WIZ_TIERS[tier].model,
-        clap_enabled: clapEnabled,
+        clap_enabled: true,
         ai_enabled: aiEnabled,
         ...(apiKey.trim() ? { llm_api_key: apiKey.trim() } : {}),
       };
@@ -8635,60 +8633,67 @@ function InstanceAISettings({ isDark, lang, showToast }) {
         </div>
       )}
 
-      <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: c.textMuted, marginBottom: 14 }}>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13.5, fontWeight: 600, color: c.text, marginBottom: 12 }}>
         <ToggleSwitch checked={aiEnabled} onChange={v => setAiEnabled(v)} isDark={isDark} />
-        {ru ? 'AI-функции включены (для всех участников)' : 'AI features enabled (for all members)'}
+        {ru ? 'Гуру (AI) — для всех участников' : 'Guru (AI) — for all members'}
       </label>
 
-      {label('BASE URL')}
-      <input value={baseUrl} onChange={e => setBaseUrl(e.target.value)}
-        placeholder="http://localhost:1234/v1" style={{ ...inputStyle, marginBottom: 12 }} />
+      {aiEnabled ? (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 4 }}>
+          <div style={{ gridColumn: '1 / -1' }}>
+            {label('BASE URL')}
+            <input value={baseUrl} onChange={e => setBaseUrl(e.target.value)}
+              placeholder="http://localhost:1234/v1" style={inputStyle} />
+          </div>
+          <div>
+            {label(ru ? 'МОДЕЛЬ' : 'MODEL')}
+            <input value={model} onChange={e => setModel(e.target.value)}
+              placeholder="gpt-4o-mini" style={inputStyle} />
+          </div>
+          <div>
+            {label(ru ? 'API-КЛЮЧ · ПУСТО = НЕ МЕНЯТЬ' : 'API KEY · BLANK = KEEP')}
+            <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)}
+              placeholder={hasKey ? (ru ? 'ключ задан · ••••••' : 'key set · ••••••') : (ru ? 'обычно не нужен локально' : 'usually not needed locally')}
+              style={inputStyle} />
+          </div>
+          <div className="mono-label" style={{ gridColumn: '1 / -1', color: c.textSubtle, letterSpacing: '0.14em' }}>
+            LM STUDIO · OLLAMA · OPENAI
+          </div>
+        </div>
+      ) : (
+        <div style={{ fontSize: 12.5, color: c.textMuted, lineHeight: 1.5, marginBottom: 4 }}>
+          {ru ? 'Чат о треках, биографии артистов, звуковые описания песен. Нужен OpenAI-совместимый сервер.'
+              : 'Track chat, artist bios, sonic descriptions. Needs an OpenAI-compatible server.'}
+        </div>
+      )}
 
-      {label(ru ? 'МОДЕЛЬ' : 'MODEL')}
-      <input value={model} onChange={e => setModel(e.target.value)}
-        placeholder="gpt-4o-mini" style={{ ...inputStyle, marginBottom: 12 }} />
+      <div style={{ height: 1, background: c.border, margin: '16px 0' }} />
 
-      {label(ru ? 'API-КЛЮЧ · ОСТАВЬТЕ ПУСТЫМ, ЧТОБЫ НЕ МЕНЯТЬ' : 'API KEY · LEAVE BLANK TO KEEP')}
-      <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)}
-        placeholder={hasKey ? (ru ? 'ключ задан · ••••••' : 'key set · ••••••') : (ru ? 'для локального сервера обычно не нужен' : 'usually not needed for a local server')}
-        style={{ ...inputStyle, marginBottom: 14 }} />
-
-      {label(ru ? 'МОДЕЛЬ ЭМБЕДДИНГОВ' : 'EMBEDDING MODEL')}
-      <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+      {label(ru ? 'КАЧЕСТВО ОБРАБОТКИ ТЕКСТОВ ПЕСЕН' : 'LYRICS-SEARCH QUALITY')}
+      <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
         {WIZ_TIERS.map((t, i) => (
           <button key={i} type="button" disabled={busy}
             onClick={() => !busy && setTier(i)}
             className={`pill-v3${tier === i ? ' pill-v3-active' : ''}`}
-            style={{ flex: 1, padding: '9px 6px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, cursor: busy ? 'not-allowed' : 'pointer' }}>
-            <span style={{ fontSize: 13, fontWeight: 600 }}>{ru ? t.ru : t.en}</span>
-            <span style={{ fontSize: 10, color: c.textSubtle }}>{ru ? t.noteRu : t.noteEn}</span>
+            style={{ flex: 1, padding: '10px 6px', fontSize: 13, fontWeight: 600, cursor: busy ? 'not-allowed' : 'pointer' }}>
+            {ru ? t.ru : t.en}
           </button>
         ))}
       </div>
-      <div style={{ fontSize: 11, color: c.textMuted, lineHeight: 1.5, margin: '6px 2px 16px' }}>
+      <div style={{ fontSize: 11, color: c.textMuted, lineHeight: 1.5, margin: '8px 2px 16px' }}>
         {ru
-          ? 'Применяется к новым библиотекам участников при индексации. Уже проиндексированные коллекции не меняются.'
-          : "Applied to members' new libraries at index time. Already-indexed collections are unchanged."}
+          ? 'Точность поиска по словам внутри песен. Применяется к новым библиотекам участников; уже проиндексированные не меняются.'
+          : "How precisely members search words inside songs. Applied to new libraries; already-indexed collections are unchanged."}
       </div>
 
-      <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: c.textMuted, marginBottom: 18 }}>
-        <ToggleSwitch checked={clapEnabled} onChange={v => setClapEnabled(v)} isDark={isDark} />
-        {ru ? 'Аудио-анализ CLAP' : 'CLAP audio analysis'}
-      </label>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <button onClick={save} disabled={busy} className="cta-v3" style={{
-          padding: '9px 18px', fontSize: 13,
-          opacity: busy ? 0.55 : 1, cursor: busy ? 'not-allowed' : 'pointer',
-          background: saved ? 'linear-gradient(180deg, oklch(63% 0.17 142), oklch(53% 0.18 138))' : undefined,
-          boxShadow: saved ? 'inset 0 1px 0 rgba(255,255,255,0.25), 0 3px 10px oklch(63% 0.17 142 / 0.4)' : undefined,
-        }}>
-          {busy ? (ru ? 'Сохранение…' : 'Saving…') : saved ? (ru ? '✓ Сохранено' : '✓ Saved') : (ru ? 'Сохранить' : 'Save')}
-        </button>
-        <span className="mono-label" style={{ color: c.textSubtle, letterSpacing: '0.14em' }}>
-          LM STUDIO · OLLAMA · OPENAI
-        </span>
-      </div>
+      <button onClick={save} disabled={busy} className="cta-v3" style={{
+        padding: '10px 20px', fontSize: 13,
+        opacity: busy ? 0.55 : 1, cursor: busy ? 'not-allowed' : 'pointer',
+        background: saved ? 'linear-gradient(180deg, oklch(63% 0.17 142), oklch(53% 0.18 138))' : undefined,
+        boxShadow: saved ? 'inset 0 1px 0 rgba(255,255,255,0.25), 0 3px 10px oklch(63% 0.17 142 / 0.4)' : undefined,
+      }}>
+        {busy ? (ru ? 'Сохранение…' : 'Saving…') : saved ? (ru ? '✓ Сохранено' : '✓ Saved') : (ru ? 'Сохранить' : 'Save')}
+      </button>
     </div>
   );
 }
@@ -8796,18 +8801,26 @@ function OwnerAdminDashboard({ onLogout }) {
 
         {/* three sections, side by side */}
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:14, alignItems:'start' }}>
-          <div className="ob-glass" style={{ padding: '18px 20px' }}>
-            <div className="serif" style={{ fontSize: 17, fontWeight: 600, marginBottom: 8 }}>
-              {ru ? 'Настройки системы' : 'System settings'}
+          <div className="ob-glass" style={{ padding: '18px 20px', gridColumn: editAi ? '1 / -1' : 'auto' }}>
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10 }}>
+              <div className="serif" style={{ fontSize: 17, fontWeight: 600 }}>
+                {ru ? 'Настройки системы' : 'System settings'}
+              </div>
+              <button onClick={() => setEditAi(v => !v)}
+                style={{ background:'transparent', border:'none', color:'#c3b8ff', fontSize:12.5, textDecoration:'underline', cursor:'pointer', flexShrink:0 }}>
+                {editAi ? (ru ? 'Свернуть' : 'Collapse') : (ru ? 'Изменить →' : 'Edit →')}
+              </button>
             </div>
-            <div style={{ fontSize: 12.5, color: c.textMuted, lineHeight: 1.5 }}>
-              {ru ? 'Модель поиска, гуру (AI) и аудио-анализ — применяются ко всем участникам.'
-                  : 'Search model, guru (AI) and audio analysis — applied to all members.'}
-            </div>
-            <button onClick={() => setEditAi(v => !v)}
-              style={{ marginTop: 12, background:'transparent', border:'none', color:'#c3b8ff', fontSize:12.5, textDecoration:'underline', cursor:'pointer' }}>
-              {editAi ? (ru ? 'Свернуть' : 'Collapse') : (ru ? 'Изменить →' : 'Edit →')}
-            </button>
+            {editAi ? (
+              <div style={{ marginTop: 16 }}>
+                <InstanceAISettings isDark={isDark} lang={lang} showToast={showToast} />
+              </div>
+            ) : (
+              <div style={{ fontSize: 12.5, color: c.textMuted, lineHeight: 1.5, marginTop: 8 }}>
+                {ru ? 'Модель поиска по текстам и гуру (AI) — применяются ко всем участникам.'
+                    : 'Lyrics-search model and guru (AI) — applied to all members.'}
+              </div>
+            )}
           </div>
 
           <div className="ob-glass" style={{ padding: '18px 20px' }}>
@@ -8825,15 +8838,6 @@ function OwnerAdminDashboard({ onLogout }) {
           </div>
         </div>
 
-        {/* full AI editor expands here */}
-        {editAi && (
-          <div className="ob-glass" style={{ padding: '22px 24px', marginTop: 14 }}>
-            <div className="mono-label" style={{ color: c.textSubtle, marginBottom: 14 }}>
-              {ru ? 'AI ИНСТАНСА' : 'INSTANCE AI'}
-            </div>
-            <InstanceAISettings isDark={isDark} lang={lang} showToast={showToast} />
-          </div>
-        )}
       </div>
 
       {toast && (
