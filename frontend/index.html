@@ -1922,12 +1922,13 @@
     /* === onboarding redesign === (.ob-root sets the --ob-* vars per theme) */
     .ob-glass{position:relative;z-index:1;background:var(--ob-glass-bg);border-radius:22px;backdrop-filter:blur(20px) saturate(135%);-webkit-backdrop-filter:blur(20px) saturate(135%);box-shadow:inset 0 1px 0 var(--ob-glass-sheen),0 12px 50px rgba(0,0,0,.28);}
     .ob-glass::before{content:"";position:absolute;inset:-1px;border-radius:23px;box-shadow:inset 0 0 0 1.5px var(--ob-glass-edge);filter:blur(3px);pointer-events:none;}
-    /* radial mask feathers the container's own edge to transparent BEFORE the
-       overflow:hidden clip can show — kills the hard rectangular cutoff of the
-       blurred blobs (most visible along the short bottom edge). */
+    /* The mask must reach FULLY transparent AT the box edges (horizontal radius
+       50%, vertical tuned so the bottom hits 0) — if it's still ~50% at the edge,
+       overflow:hidden clips that band into a hard step and the edge reads as
+       sharp. Glow becomes a soft centred oval; the top keeps a little light. */
     .ob-drift{position:absolute;inset:0;overflow:hidden;pointer-events:none;border-radius:inherit;
-      -webkit-mask-image:radial-gradient(72% 74% at 50% 41%,#000 40%,transparent 100%);
-      mask-image:radial-gradient(72% 74% at 50% 41%,#000 40%,transparent 100%);}
+      -webkit-mask-image:radial-gradient(50% 60% at 50% 42%,#000 12%,transparent 100%);
+      mask-image:radial-gradient(50% 60% at 50% 42%,#000 12%,transparent 100%);}
     /* blob size + blur scale with the viewport (clamp/vw) so the glow holds its
        proportions across 13"→27"; blur eased down a touch (~61px vs 74px at 16").
        margins reproduce the original composition exactly: calc(offset - size/2). */
@@ -1942,6 +1943,14 @@
     @keyframes obDrift2{0%{transform:translate(0,0) scale(1)}50%{transform:translate(-22px,20px) scale(1.05)}100%{transform:translate(0,0) scale(1)}}
     @keyframes obDrift3{0%{transform:translate(0,0) scale(1)}50%{transform:translate(18px,-18px) scale(1.07)}100%{transform:translate(0,0) scale(1)}}
     @media (prefers-reduced-motion:reduce){.ob-blob{animation:none!important}}
+    /* The file-list block mounts when files are picked. Animating its HEIGHT (not
+       just opacity) grows the flex row gradually, so the drift glow — anchored to
+       the row centre — glides to its new spot instead of snapping. overflow:hidden
+       makes max-height a reveal; min(content,max-height) lets short lists settle
+       early without the glow over-travelling. */
+    .ob-listin{animation:obListIn .55s cubic-bezier(.22,.61,.36,1) both;overflow:hidden;}
+    @keyframes obListIn{from{opacity:0;max-height:0;margin-top:0;transform:translateY(-6px)}to{opacity:1;max-height:420px;margin-top:14px;transform:translateY(0)}}
+    @media (prefers-reduced-motion:reduce){.ob-listin{animation:none}}
     .ob-feat{position:relative;z-index:1;background:var(--ob-card-bg);border-radius:14px;padding:15px 16px;box-shadow:inset 0 1px 0 var(--ob-glass-sheen),inset 0 0 0 1px var(--ob-card-edge),0 4px 14px rgba(0,0,0,.16);transition:transform .25s cubic-bezier(.2,.7,.2,1),box-shadow .25s;}
     .ob-feat-hover:hover{transform:translateY(-6px);box-shadow:inset 0 1px 0 var(--ob-glass-sheen),inset 0 0 0 1px rgba(154,133,255,.35),0 16px 34px rgba(124,92,255,.28);}
     .ob-indet{position:absolute;top:0;bottom:0;width:38%;border-radius:3px;background:linear-gradient(90deg,transparent,oklch(68% .17 272),transparent);animation:obIndet 1.3s ease-in-out infinite;}
@@ -9685,7 +9694,7 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
         </div>
 
         {progress.length > 0 && (
-          <div className="ob-glass" style={{ marginTop:'14px', padding:'16px 20px', borderRadius:'14px' }}>
+          <div className="ob-glass ob-listin" style={{ marginTop:'14px', padding:'16px 20px', borderRadius:'14px' }}>
             <div className="mono" style={{ fontSize:'13px', color:c.textSubtle, marginBottom:'10px' }}>
               {progress.length} {lang==='ru'?'ФАЙЛОВ':'FILES'}
               {successCount > 0 && ` · ${successCount} ${lang==='ru'?'ГОТОВО':'DONE'}`}
