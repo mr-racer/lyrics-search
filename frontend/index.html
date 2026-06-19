@@ -9545,13 +9545,16 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
   };
   // Folder selection happens IN THE BROWSER (webkitdirectory), then the files
   // are uploaded like any other — server-mode members may upload but may NOT
-  // point the host indexer at a path (/library/index is owner-only). Set the
-  // attribute on the DOM node directly: React strips the unknown JSX prop.
-  const folderInputRef = useRef(null);
-  useEffect(() => {
-    if (folderInputRef.current) {
-      folderInputRef.current.setAttribute('webkitdirectory', '');
-      folderInputRef.current.setAttribute('directory', '');
+  // point the host indexer at a path (/library/index is owner-only). React drops
+  // the unknown JSX prop, so it's set on the DOM node directly — via a CALLBACK
+  // REF, not a mount effect: this input lives behind the welcome-slide gate and
+  // mounts only after dismiss, so a useEffect([]) would fire once while the node
+  // is still null and never re-run, leaving "PICK FOLDER" as a plain file picker
+  // on first onboarding. A callback ref fires exactly when the node attaches.
+  const attachFolderInput = useCallback((node) => {
+    if (node) {
+      node.setAttribute('webkitdirectory', '');
+      node.setAttribute('directory', '');
     }
   }, []);
 
@@ -9702,7 +9705,7 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
           {/* Folder picker (browser-side; webkitdirectory set on the node via the
               ref above) and the plain multi-file picker both feed the SAME upload
               pipeline — the files are POSTed to /library/upload, not host-indexed. */}
-          <input ref={folderInputRef} type="file" multiple
+          <input ref={attachFolderInput} type="file" multiple
             onChange={onPickFolder}
             disabled={anyUploading||committing}
             style={{ display:'none' }}
