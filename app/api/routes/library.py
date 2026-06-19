@@ -258,28 +258,36 @@ async def get_random_tracks(
 # ── Collections info ──────────────────────────────────────────────────────────
 
 @router.get("/collections")
-async def get_collections(request: Request) -> dict:
+async def get_collections(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> dict:
     """Return all Qdrant collections with their point counts.
 
     Used by the frontend on startup to decide whether to show the
     onboarding screen (no data) or the main search UI.
 
-    Returns {"collections": [...], "total_points": N, "qdrant_available": bool}
+    Also returns ``user_points`` — the count of tracks in the
+    authenticated user's own collection — so the frontend can decide
+    per-user whether to show onboarding instead of relying on the
+    global total.
+
+    Returns {"collections": [...], "total_points": N, "user_points": N, "qdrant_available": bool}
     """
     db_client = request.app.state.db_client
 
     # Qdrant was unavailable at startup
     if db_client is None:
-        return {"collections": [], "total_points": 0, "qdrant_available": False}
+        return {"collections": [], "total_points": 0, "user_points": 0, "qdrant_available": False}
 
     try:
         qdrant = db_client.qdrant
         cols = qdrant.get_collections().collections
     except Exception:
-        return {"collections": [], "total_points": 0, "qdrant_available": False}
+        return {"collections": [], "total_points": 0, "user_points": 0, "qdrant_available": False}
 
     # Enrich each collection with the text model it was indexed with (if any).
-    # Legacy collections indexed before this column existed will report None;
+    # Legacy collections indexed before this column exists will report None;
     # the frontend may then prompt re-indexing or fall back gracefully.
     from app.resources.metadata_db import MetadataDB
     try:
@@ -288,6 +296,9 @@ async def get_collections(request: Request) -> dict:
         pass
 
     result = []
+    user_points = 0
+    derived = derive_collection_for_user(current_user)
+
     for col in cols:
         try:
             info = qdrant.get_collection(col.name)
@@ -301,9 +312,13 @@ async def get_collections(request: Request) -> dict:
             pass
         result.append({"name": col.name, "count": count, "text_model": text_model})
 
+        if col.name == derived:
+            user_points = count
+
     return {
         "collections": result,
         "total_points": sum(c["count"] for c in result),
+        "user_points": user_points,
         "qdrant_available": True,
     }
 
@@ -501,6 +516,7 @@ async def get_stats(
         "collection_name": None,
         "unique_genres": 0,
         "unique_artists": 0,
+        "unique_albums": 0,
         "genres": [],
         "duration_buckets": [],
         "top_artists": [],
@@ -542,6 +558,9 @@ async def get_stats(
     duration_counter: Counter = Counter()
     artist_counter: Counter = Counter()
     year_counter: Counter = Counter()
+    # Distinct albums, keyed case-insensitively on the title — mirrors how
+    # /library/albums groups, so the landing's "N albums" matches the library.
+    album_keys: set[str] = set()
     offset = None
 
     try:
@@ -550,7 +569,7 @@ async def get_stats(
                 collection_name=target_col,
                 offset=offset,
                 limit=250,
-                with_payload=["genre", "duration", "duration_range", "artist", "year"],
+                with_payload=["genre", "duration", "duration_range", "artist", "year", "album"],
                 with_vectors=False,
             )
             for point in results:
@@ -572,6 +591,9 @@ async def get_stats(
                 artist = pl.get("artist")
                 if artist and str(artist).strip():
                     artist_counter[str(artist).strip()] += 1
+                album = pl.get("album")
+                if album and str(album).strip():
+                    album_keys.add(str(album).strip().lower())
                 year = pl.get("year")
                 try:
                     yi = int(year) if year is not None else None
@@ -624,6 +646,7 @@ async def get_stats(
         "collection_name": target_col,
         "unique_genres": unique_genre_count,
         "unique_artists": unique_artist_count,
+        "unique_albums": len(album_keys),
         "genres": top_genres,
         "duration_buckets": top_durations,
         "top_artists": top_artists,

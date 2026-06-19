@@ -132,6 +132,236 @@ async def enrich_profile(
     return {**content, "islands": profile["islands"]}
 
 
+# ── Taste vibe: one short "wave" phrase for the For-You hero ─────────────────
+#
+# Blends LONG-TERM taste (islands + axes) with SHORT-TERM rotation (recently
+# played/liked artists) into a single mood phrase. The hero must never block on
+# the LLM, so the read path (``taste_vibe_cached_or_fallback``) returns a cached
+# AI phrase when fresh, else an instant deterministic phrase; the route then
+# schedules ``generate_taste_vibe`` as a background task to warm the cache.
+
+TASTE_VIBE_KIND = "taste_vibe"
+MAX_VIBE_CHARS = 130
+
+_VIBE_SYSTEM = """You write ONE short phrase — a "wave" tagline — describing what a listener is in the mood for right now, for a music player's "For You" hero.
+
+Language for the output: {lang_name}.
+
+You are given the listener's LONG-TERM taste (stable islands of tracks they love + a sound-axis profile) and their SHORT-TERM rotation (artists they've been playing/liking lately). Lead with the current mood; ground it in their lasting identity. If short-term and long-term pull apart, that tension is the interesting part — name it.
+
+Rules:
+- ONE phrase, max ~110 characters. No second sentence.
+- Evocative and concrete: name the sound, the mood, the energy. NEVER filler ("eclectic", "diverse taste", "music lover", "wide range").
+- No emoji, no quotes, no artist names, no hashtags.
+- No trailing period unless it reads naturally.
+
+Output ONLY the phrase text — nothing else."""
+
+
+def _vibe_source_hash(islands: list[dict], recent_artists: list[str]) -> str:
+    """Cache fingerprint: long-term island membership + short-term rotation.
+
+    Regenerates when either the stable islands OR the recent-artist bucket
+    shifts, so the phrase tracks taste drift without churning on every play.
+    """
+    membership = sorted(
+        sorted(m["track_id"] for m in isl.get("tracks", [])) for isl in islands
+    )
+    blob = json.dumps({"islands": membership, "recent": sorted(recent_artists)})
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
+
+
+def recent_rotation(qdrant_client, collection_name: str, *, limit: int = 6) -> list[str]:
+    """Top distinct artists the listener has played/liked most recently.
+
+    Short-term signal for the taste vibe. Reads the tail of playback_events +
+    recent likes, then resolves artist names from Qdrant payloads in one batched
+    retrieve. Best-effort: returns [] on any failure (the vibe still works on
+    long-term data alone).
+    """
+    try:
+        signals = MetadataDB.get_playback_signals(collection_name, limit=120)
+    except Exception:
+        signals = []
+    # get_playback_signals is chronological (oldest→newest) → reverse for recency.
+    recent_ids: list[str] = []
+    seen_ids: set[str] = set()
+    for s in reversed(signals):
+        tid = s.get("track_id")
+        if tid and tid not in seen_ids:
+            seen_ids.add(tid)
+            recent_ids.append(tid)
+        if len(recent_ids) >= 40:
+            break
+    try:
+        likes = [
+            tid for (tid, reaction, _ts)
+            in MetadataDB.get_reactions_with_updated_at(collection_name)
+            if reaction == "like"
+        ]
+    except Exception:
+        likes = []
+    for tid in likes[:20]:
+        if tid and tid not in seen_ids:
+            seen_ids.add(tid)
+            recent_ids.append(tid)
+    if not recent_ids:
+        return []
+    try:
+        pts = qdrant_client.retrieve(
+            collection_name=collection_name, ids=recent_ids,
+            with_payload=["artist"], with_vectors=False,
+        )
+        by_id = {str(p.id): (p.payload or {}).get("artist") for p in pts}
+    except Exception:
+        by_id = {}
+    artists: list[str] = []
+    seen_artists: set[str] = set()
+    for tid in recent_ids:  # preserve recency order
+        a = (by_id.get(tid) or "").strip()
+        if a and a.lower() not in seen_artists:
+            seen_artists.add(a.lower())
+            artists.append(a)
+        if len(artists) >= limit:
+            break
+    return artists
+
+
+def _vibe_user_prompt(profile: dict, recent_artists: list[str]) -> str:
+    lines = ["LONG-TERM TASTE ISLANDS (strongest first):"]
+    for i, isl in enumerate(profile["islands"][:4], 1):
+        members = "; ".join(f"{m['artist']} — {m['title']}" for m in isl["tracks"][:3])
+        lines.append(f"{i}. weight={isl['weight']}: {members}")
+    axes = profile.get("axes")
+    if axes:
+        lines.append("\nSOUND AXES (z-score, + = first pole):")
+        for name, ax in axes.items():
+            lines.append(f"- {name}: {ax['z']} ({ax['level']})")
+    if recent_artists:
+        lines.append("\nSHORT-TERM ROTATION (most recent first): " + ", ".join(recent_artists))
+    else:
+        lines.append("\nSHORT-TERM ROTATION: (not enough recent activity)")
+    lines.append("\nWrite the one-phrase wave tagline:")
+    return "\n".join(lines)
+
+
+def _validate_vibe(phrase: str) -> str:
+    """Trim, drop wrapping quotes, keep the first line, enforce length cap."""
+    phrase = (phrase or "").strip().strip('"').strip("'").strip()
+    phrase = phrase.split("\n")[0].strip()
+    if len(phrase) > MAX_VIBE_CHARS:
+        phrase = phrase[:MAX_VIBE_CHARS].rstrip() + "…"
+    return phrase
+
+
+def _top_artists_from_islands(islands: list[dict], n: int = 2) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for isl in islands:
+        for m in isl.get("tracks", []):
+            a = (m.get("artist") or "").strip()
+            if a and a.lower() not in seen:
+                seen.add(a.lower())
+                out.append(a)
+            if len(out) >= n:
+                return out
+    return out
+
+
+def deterministic_taste_vibe(profile: dict, recent_artists: list[str], lang: str) -> dict:
+    """Instant, no-LLM fallback phrase from island artists + recent rotation.
+
+    Used when AI is disabled, and as the immediate response while the AI phrase
+    generates in the background. Frames a "wave" rather than naming a single
+    song. Returns {"phrase", "source"}.
+    """
+    long_artists = _top_artists_from_islands(profile.get("islands", []), n=2)
+    lead = recent_artists[0] if recent_artists else (long_artists[0] if long_artists else None)
+    base = long_artists[0] if long_artists else lead
+    if not base:
+        return {"phrase": None, "source": None}
+    ru = lang == "ru"
+    if lead and base and lead.lower() != base.lower():
+        phrase = (f"Сейчас тянет к {lead} — на вашей волне вокруг {base}"
+                  if ru else f"Leaning into {lead} lately — riding your wave around {base}")
+    elif len(long_artists) >= 2:
+        phrase = (f"Волна вокруг {long_artists[0]}, {long_artists[1]} и близкого по звуку"
+                  if ru else f"A wave around {long_artists[0]}, {long_artists[1]} and kindred sounds")
+    else:
+        phrase = (f"Волна вокруг {base} и близкого по звуку"
+                  if ru else f"A wave around {base} and kindred sounds")
+    return {"phrase": _validate_vibe(phrase), "source": "fallback"}
+
+
+def get_cached_taste_vibe(
+    collection_name: str, lang: str, islands: list[dict], recent_artists: list[str],
+) -> dict | None:
+    """Fresh cached AI phrase for the current islands+rotation, or None."""
+    cached = MetadataDB.get_recsys_llm_text(
+        collection_name, TASTE_VIBE_KIND, lang,
+        source_hash=_vibe_source_hash(islands, recent_artists),
+    )
+    if cached and cached.get("phrase"):
+        return {"phrase": cached["phrase"], "source": cached.get("source", "ai")}
+    return None
+
+
+def taste_vibe_cached_or_fallback(
+    *, qdrant_client, collection_name: str, lang: str = "en",
+) -> dict:
+    """Fast path for the hero — NEVER calls the LLM.
+
+    Returns the fresh cached AI phrase if present, else an instant deterministic
+    phrase plus ``needs_generation=True`` so the route can schedule a background
+    LLM warm-up. Returns ``phrase=None`` for cold-start users (no islands yet).
+    """
+    profile = stream_service.long_term_profile(
+        qdrant_client=qdrant_client, collection_name=collection_name,
+    )
+    if not profile["islands"]:
+        return {"phrase": None, "source": None, "needs_generation": False}
+    recent = recent_rotation(qdrant_client, collection_name)
+    cached = get_cached_taste_vibe(collection_name, lang, profile["islands"], recent)
+    if cached:
+        return {**cached, "needs_generation": False}
+    return {**deterministic_taste_vibe(profile, recent, lang), "needs_generation": True}
+
+
+async def generate_taste_vibe(
+    *, qdrant_client, collection_name: str, lang: str = "en",
+    llm_base_url: str | None = None, llm_model: str | None = None,
+) -> dict:
+    """Build + cache the AI wave phrase (blocking LLM call). Returns the dict.
+
+    Safe as a background task: recomputes its own profile + rotation (no caller
+    state) and degrades to the deterministic phrase on any LLM failure.
+    """
+    profile = stream_service.long_term_profile(
+        qdrant_client=qdrant_client, collection_name=collection_name,
+    )
+    if not profile["islands"]:
+        return {"phrase": None, "source": None}
+    recent = recent_rotation(qdrant_client, collection_name)
+    phrase = ""
+    try:
+        raw = await ask_llm(
+            _vibe_user_prompt(profile, recent),
+            system_prompt=_VIBE_SYSTEM.format(lang_name=_lang_name(lang)),
+            base_url=llm_base_url, model=llm_model, temperature=0.7,
+        )
+        phrase = _validate_vibe(raw or "")
+    except Exception:
+        logger.warning("[taste_vibe] LLM error — deterministic fallback", exc_info=True)
+    if not phrase:
+        return deterministic_taste_vibe(profile, recent, lang)
+    content = {"phrase": phrase, "source": "ai"}
+    MetadataDB.set_recsys_llm_text(
+        collection_name, TASTE_VIBE_KIND, lang,
+        _vibe_source_hash(profile["islands"], recent), content,
+    )
+    return content
+
+
 # ── Prompt-to-playlist: plan → execute → select ─────────────────────────────
 
 _PLAN_SYSTEM = """You translate a music listener's wish into search actions over their indexed personal library.

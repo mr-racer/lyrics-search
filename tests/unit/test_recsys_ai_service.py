@@ -205,3 +205,142 @@ class TestAIPlaylist:
         assert fake_search.calls[0]["mode"] == "text"   # seed resolution
         assert sim_mock.call_args.kwargs["seed_track_id"] == "seed"
         assert out["tracks"][0]["track_id"] == "sim1"
+
+
+# ── Taste vibe (For-You hero phrase) ────────────────────────────────────────
+
+def _vibe_island(rep, artists):
+    return {
+        "track_id": rep, "weight": 1.0,
+        "tracks": [{"track_id": f"{rep}-{i}", "title": f"T{i}", "artist": a,
+                    "cover_art_path": None} for i, a in enumerate(artists)],
+    }
+
+
+class FakeQdrant:
+    """Minimal qdrant stub: retrieve(ids) → points with an artist payload."""
+    def __init__(self, by_id):
+        self._by_id = by_id
+
+    def retrieve(self, collection_name, ids, with_payload=None, with_vectors=False):
+        return [SimpleNamespace(id=tid, payload={"artist": self._by_id.get(tid)})
+                for tid in ids if tid in self._by_id]
+
+
+class TestVibeSourceHash:
+    def test_stable_across_order(self):
+        islands = [_vibe_island("x", ["A", "B"])]
+        assert (svc._vibe_source_hash(islands, ["Burial", "Bonobo"])
+                == svc._vibe_source_hash(islands, ["Bonobo", "Burial"]))
+
+    def test_changes_with_rotation(self):
+        islands = [_vibe_island("x", ["A"])]
+        assert (svc._vibe_source_hash(islands, ["Burial"])
+                != svc._vibe_source_hash(islands, ["Aphex Twin"]))
+
+
+class TestDeterministicVibe:
+    def test_blends_recent_and_long_term(self):
+        prof = {"islands": [_vibe_island("x", ["Boards of Canada", "Aphex Twin"])]}
+        out = svc.deterministic_taste_vibe(prof, ["Burial"], "ru")
+        assert out["source"] == "fallback"
+        assert "Burial" in out["phrase"] and "Boards of Canada" in out["phrase"]
+
+    def test_two_artist_form_when_no_recent(self):
+        prof = {"islands": [_vibe_island("x", ["Boards of Canada", "Aphex Twin"])]}
+        out = svc.deterministic_taste_vibe(prof, [], "en")
+        assert out["source"] == "fallback"
+        assert "Boards of Canada" in out["phrase"] and "Aphex Twin" in out["phrase"]
+
+    def test_cold_start_returns_none(self):
+        out = svc.deterministic_taste_vibe({"islands": []}, [], "ru")
+        assert out == {"phrase": None, "source": None}
+
+
+class TestRecentRotation:
+    def test_orders_by_recency_dedups_and_resolves_artists(self):
+        # get_playback_signals is chronological (oldest→newest); recent_rotation
+        # reverses it, so t3 is the most recent.
+        signals = [{"track_id": "t1"}, {"track_id": "t2"}, {"track_id": "t3"}]
+        reactions = [("t4", "like", "2026"), ("t5", "dislike", "2026")]
+        by_id = {"t3": "Burial", "t2": "Burial", "t1": "Aphex Twin", "t4": "Bonobo"}
+        with patch.object(svc.MetadataDB, "get_playback_signals", return_value=signals), \
+             patch.object(svc.MetadataDB, "get_reactions_with_updated_at", return_value=reactions):
+            out = svc.recent_rotation(FakeQdrant(by_id), "col")
+        # Burial (t3) first, then Aphex Twin (t1), then liked Bonobo (t4). t2's
+        # duplicate Burial is dropped; the disliked t5 never enters.
+        assert out == ["Burial", "Aphex Twin", "Bonobo"]
+
+    def test_empty_when_no_signals(self):
+        with patch.object(svc.MetadataDB, "get_playback_signals", return_value=[]), \
+             patch.object(svc.MetadataDB, "get_reactions_with_updated_at", return_value=[]):
+            assert svc.recent_rotation(FakeQdrant({}), "col") == []
+
+
+class TestTasteVibeCachedOrFallback:
+    def test_cache_hit_returns_ai_phrase(self):
+        islands = [_vibe_island("x", ["A", "B"])]
+        profile = {"islands": islands}
+        with patch.object(svc.stream_service, "long_term_profile", return_value=profile), \
+             patch.object(svc, "recent_rotation", return_value=["Burial"]):
+            MetadataDB.set_recsys_llm_text(
+                "col", svc.TASTE_VIBE_KIND, "ru",
+                svc._vibe_source_hash(islands, ["Burial"]),
+                {"phrase": "Полночный дрейф", "source": "ai"},
+            )
+            out = svc.taste_vibe_cached_or_fallback(
+                qdrant_client=object(), collection_name="col", lang="ru")
+        assert out == {"phrase": "Полночный дрейф", "source": "ai", "needs_generation": False}
+
+    def test_cache_miss_returns_fallback_needs_generation(self):
+        islands = [_vibe_island("x", ["Boards of Canada"])]
+        profile = {"islands": islands}
+        with patch.object(svc.stream_service, "long_term_profile", return_value=profile), \
+             patch.object(svc, "recent_rotation", return_value=[]):
+            out = svc.taste_vibe_cached_or_fallback(
+                qdrant_client=object(), collection_name="col", lang="en")
+        assert out["source"] == "fallback" and out["needs_generation"] is True
+        assert "Boards of Canada" in out["phrase"]
+
+    def test_cold_start_no_generation(self):
+        with patch.object(svc.stream_service, "long_term_profile", return_value={"islands": []}), \
+             patch.object(svc, "recent_rotation", return_value=[]):
+            out = svc.taste_vibe_cached_or_fallback(
+                qdrant_client=object(), collection_name="col", lang="ru")
+        assert out == {"phrase": None, "source": None, "needs_generation": False}
+
+
+class TestGenerateTasteVibe:
+    @pytest.mark.asyncio
+    async def test_generates_validates_and_caches(self):
+        islands = [_vibe_island("x", ["A", "B"])]
+        profile = {"islands": islands, "axes": None}
+        with patch.object(svc.stream_service, "long_term_profile", return_value=profile), \
+             patch.object(svc, "recent_rotation", return_value=["Burial"]), \
+             patch.object(svc, "ask_llm", new=AsyncMock(return_value='  "Полночный дрейф между эмбиентом и брейкбитом"  ')):
+            out = await svc.generate_taste_vibe(qdrant_client=object(), collection_name="col", lang="ru")
+        assert out["source"] == "ai"
+        assert out["phrase"] == "Полночный дрейф между эмбиентом и брейкбитом"
+        # persisted under the matching islands+rotation hash
+        cached = svc.get_cached_taste_vibe("col", "ru", islands, ["Burial"])
+        assert cached["phrase"] == out["phrase"]
+
+    @pytest.mark.asyncio
+    async def test_empty_profile_skips_llm(self):
+        mock_llm = AsyncMock()
+        with patch.object(svc.stream_service, "long_term_profile", return_value={"islands": []}), \
+             patch.object(svc, "ask_llm", new=mock_llm):
+            out = await svc.generate_taste_vibe(qdrant_client=object(), collection_name="col")
+        assert out == {"phrase": None, "source": None}
+        mock_llm.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_llm_error_falls_back_to_deterministic(self):
+        islands = [_vibe_island("x", ["Boards of Canada"])]
+        profile = {"islands": islands, "axes": None}
+        with patch.object(svc.stream_service, "long_term_profile", return_value=profile), \
+             patch.object(svc, "recent_rotation", return_value=[]), \
+             patch.object(svc, "ask_llm", new=AsyncMock(side_effect=RuntimeError("llm down"))):
+            out = await svc.generate_taste_vibe(qdrant_client=object(), collection_name="col", lang="en")
+        assert out["source"] == "fallback"
+        assert "Boards of Canada" in out["phrase"]

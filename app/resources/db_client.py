@@ -45,7 +45,9 @@ class DbClient:
         return self._connect()
 
     def _connect(self) -> "DbClient":
-        # Create Qdrant client (fast — just TCP connect)
+        # Create Qdrant client (fast — just TCP connect).
+        # HTTP_PROXY is cleared in docker-compose environment so QdrantClient
+        # never routes through the proxy — internal Docker traffic stays direct.
         self._qdrant_client = QdrantClient(url=self.qdrant_url)
 
         # Create LyricsSearchEngine with lazy model loading (default)

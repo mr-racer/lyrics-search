@@ -75,6 +75,10 @@ class FakeQdrant:
         pts = list(self.points.values())
         return pts, None
 
+    def count(self, collection_name, exact=True):
+        from types import SimpleNamespace
+        return SimpleNamespace(count=len(self.points))
+
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
@@ -117,6 +121,21 @@ def _like(client, coll, track):
 
 def _dislike(client, coll, track):
     MetadataDB.set_reaction(track, coll, "dislike")
+
+
+def _backdate_event(coll, track, session, hours_ago, played=190.0, dur=200.0):
+    """Insert a playback event with an explicit PAST played_at. The API always
+    stamps CURRENT_TIMESTAMP, so any «old» history (needed to exercise the relax
+    pass and the anti-repeat floor) must be written directly."""
+    conn = MetadataDB._connect()
+    conn.execute(
+        "INSERT INTO playback_events "
+        "(session_id, collection_name, track_id, played_sec, total_dur, "
+        " skipped_early, interacted, played_at) "
+        "VALUES (?,?,?,?,?,0,1, datetime('now', ?))",
+        (session, coll, track, played, dur, f"-{hours_ago} hours"),
+    )
+    conn.commit()
 
 
 class TestStreamNext:
@@ -251,6 +270,67 @@ class TestStreamNext:
         resp = client.get("/api/v1/recommend/stream/next",
                           params={"session_id": "s5"})
         assert resp.status_code == 503
+
+
+class TestStreamRoundReset:
+    """«Бесконечный круг» (design 2026-06-14): a session that has heard everything
+    replays instead of going empty, the just-heard floor holds, vibe is carried."""
+
+    def test_exhausted_session_replays_instead_of_empty(self, client):
+        """«Долго слушал → Поток пуст» regression: one session plays the WHOLE
+        library, yet the next request still returns a full chunk (via fallback)."""
+        for cluster in ("a", "b"):
+            for i in range(N_PER_CLUSTER):
+                _post_event(client, f"{cluster}{i}", session="marathon")
+        resp = client.get("/api/v1/recommend/stream/next",
+                          params={"session_id": "marathon", "n": 3})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["tracks"]) == 3
+        assert all(t["file_path"] for t in body["tracks"])
+
+    def test_relax_replays_old_but_never_the_floor(self, client):
+        """Whole library played in one session, most of it long ago: the relax pass
+        serves older tracks while the anti-repeat floor keeps the just-heard out."""
+        coll = _owner_collection(client)
+        for cluster in ("a", "b"):
+            for i in range(N_PER_CLUSTER):
+                _backdate_event(coll, f"{cluster}{i}", "S", hours_ago=120)  # 5 days
+        # a0, a1 heard minutes ago → inside the 30-min floor
+        _backdate_event(coll, "a0", "S", hours_ago=0.1)
+        _backdate_event(coll, "a1", "S", hours_ago=0.1)
+
+        resp = client.get("/api/v1/recommend/stream/next",
+                          params={"session_id": "S", "n": 3, "liked_share": 0.0})
+        body = resp.json()
+        served = {t["track_id"] for t in body["tracks"]}
+        assert len(served) == 3                    # filled from replay, not empty
+        assert served.isdisjoint({"a0", "a1"})     # floor holds across the round
+        assert body["diagnostics"]["relaxed"] is True
+
+    def test_vibe_carried_into_replay(self, client):
+        """Session blend (w_s) must survive into the relaxed round — the replay
+        still follows the mood the listener drifted into this session."""
+        coll = _owner_collection(client)
+        for cluster in ("a", "b"):
+            for i in range(N_PER_CLUSTER):
+                _backdate_event(coll, f"{cluster}{i}", "S", hours_ago=120)
+        resp = client.get("/api/v1/recommend/stream/next",
+                          params={"session_id": "S", "n": 3, "liked_share": 0.0})
+        # 24 session signals saturate w_s at its 0.5 ceiling — vibe is in force.
+        assert resp.json()["diagnostics"]["w_session"] == 0.5
+
+    def test_diagnostics_round_increments_after_a_full_cycle(self, client):
+        """round = ceil(total session plays / library size): a 2nd lap reads as 2."""
+        coll = _owner_collection(client)
+        for cluster in ("a", "b"):              # 24 distinct plays
+            for i in range(N_PER_CLUSTER):
+                _backdate_event(coll, f"{cluster}{i}", "cyc", hours_ago=2)
+        for i in range(6):                       # +6 repeats → 30 events over 24 tracks
+            _backdate_event(coll, f"a{i}", "cyc", hours_ago=0.1)
+        resp = client.get("/api/v1/recommend/stream/next",
+                          params={"session_id": "cyc", "n": 3})
+        assert resp.json()["diagnostics"]["round"] == 2   # ceil(30 / 24)
 
 
 class TestStreamSettings:

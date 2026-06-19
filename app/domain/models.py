@@ -439,9 +439,10 @@ class StreamTrack(TrackMetadata):
 
     The diagnostics double as raw material for a future rationale chip
     («почему этот трек») — design §7. ``pool="axis"`` marks tracks picked by
-    the axis-playlist knobs rather than the stream pools.
+    the axis-playlist knobs rather than the stream pools; ``pool="replay"`` marks
+    a track resurfaced by the round-reset last-resort pass (design 2026-06-14).
     """
-    pool: Literal["anchor", "explore", "liked", "axis"]
+    pool: Literal["anchor", "explore", "liked", "axis", "replay"]
     anchor_track_id: Optional[str] = None   # closest anchor (pool=anchor only)
     axis_match: Optional[float] = None
     score: Optional[float] = None

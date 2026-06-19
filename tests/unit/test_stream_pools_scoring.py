@@ -6,12 +6,14 @@ import pytest
 
 from app.resources.clap_features import AXIS_NAMES
 from app.services.stream_service import (
+    ANTIREPEAT_FLOOR_TRACKS,
     AXIS_MATCH_DIST_SCALE,
     Anchor,
     LIKED_COOLDOWN_H,
     SCORE_W_ANCHOR,
     SCORE_W_NOVELTY,
     StreamCandidate,
+    _anti_repeat_floor,
     assemble_chunk,
     axis_match_score,
     pool_anchor_candidates,
@@ -293,3 +295,29 @@ class TestAssembleChunk:
     def test_both_dry_returns_short_chunk(self):
         out = assemble_chunk([], [], n=3, liked_share=0.5, recent_artists=[])
         assert out == []
+
+
+class TestAntiRepeatFloor:
+    """«Жёсткий пол» под round-replay: just-heard tracks never recur (design 2026-06-14)."""
+
+    def test_empty_recency_is_empty(self):
+        assert _anti_repeat_floor({}) == set()
+
+    def test_last_n_tracks_floored(self):
+        # 15 tracks all played long ago (outside the minutes window) → floor is the
+        # ANTIREPEAT_FLOOR_TRACKS most-recent by recency, nothing more.
+        recency = {f"t{i}": float(i + 1) for i in range(15)}  # 1h … 15h ago
+        floor = _anti_repeat_floor(recency)
+        assert len(floor) == ANTIREPEAT_FLOOR_TRACKS
+        assert "t0" in floor          # 1h ago — most recent
+        assert "t14" not in floor     # 15h ago — oldest, beyond last-N
+
+    def test_within_minutes_floored_even_beyond_n(self):
+        # n_tracks=0 isolates the minutes rule: a fresh play floors, an old one doesn't.
+        floor = _anti_repeat_floor({"fresh": 0.1, "old": 100.0}, n_tracks=0)
+        assert floor == {"fresh"}
+
+    def test_union_of_both_rules(self):
+        recency = {"a": 0.1, "b": 0.2, "c": 1.0, "d": 2.0}
+        # minutes(30 → 0.5h): {a, b} ; last-1 by recency: {a} → union {a, b}
+        assert _anti_repeat_floor(recency, n_tracks=1, minutes=30) == {"a", "b"}
