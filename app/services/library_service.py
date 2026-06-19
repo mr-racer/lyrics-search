@@ -115,7 +115,7 @@ class LibraryService:
 
     def enqueue_upload_indexing(
         self, *, account_id: str, upload_ids: list[str],
-        text_model: Optional[str] = None,
+        text_model: Optional[str] = None, lang: str = "ru",
     ) -> str:
         """Server-mode batch-commit entry point. Returns the JobTracker job_id.
 
@@ -149,13 +149,13 @@ class LibraryService:
             )
         job.overall_status = IndexStatus.RUNNING
         asyncio.create_task(
-            self._run_upload_indexing_job(job, account_id, upload_ids, text_model)
+            self._run_upload_indexing_job(job, account_id, upload_ids, text_model, lang)
         )
         return job.job_id
 
     async def _run_upload_indexing_job(
         self, job, account_id: str, upload_ids: list[str],
-        text_model: Optional[str] = None,
+        text_model: Optional[str] = None, lang: str = "ru",
     ):
         """Background runner for server-mode uploads — mirrors _run_indexing_job."""
         await asyncio.to_thread(_INDEX_SEMAPHORE.acquire)
@@ -237,7 +237,7 @@ class LibraryService:
             # Awaited here on purpose: overall_status only flips to COMPLETED once
             # enrichment finishes, and the frontend gates player entry on it.
             try:
-                await self._enrich_uploads(job, account_id, indexed_data)
+                await self._enrich_uploads(job, account_id, indexed_data, lang)
             except Exception:
                 logger.exception(
                     "[enrich] upload enrichment failed for account=%s (tracks already indexed)",
@@ -260,7 +260,7 @@ class LibraryService:
             _INDEX_SEMAPHORE.release()
             self.finish_job(account_id=account_id)
 
-    async def _enrich_uploads(self, job, account_id: str, indexed_data: dict) -> None:
+    async def _enrich_uploads(self, job, account_id: str, indexed_data: dict, lang: str = "ru") -> None:
         """Post-index enrichment for server-mode uploads (the folder flow's FACTS
         stage, which uploads previously skipped entirely).
 
@@ -390,9 +390,6 @@ class LibraryService:
         base_url = resolve_base_url()
         model = resolve_model()
         n_total = len(indexed_data)
-        # Server uploads have no per-request language; default to RU (the app's
-        # primary language). The folder/sharing flow passes the user's choice.
-        lang = "ru"
         logger.info(
             "[enrich] LLM reachable (base_url=%s model=%s) — auto AI-indexing %s",
             base_url, model, collection_name,

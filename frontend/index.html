@@ -9344,7 +9344,7 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
     try {
       const res = await apiFetch('/library/upload/batch-commit', {
         method: 'POST',
-        body: JSON.stringify({ upload_ids: ids }),
+        body: JSON.stringify({ upload_ids: ids, lang }),
       });
       setJobId(res.job_id);
       setShowWizard(true);
@@ -13758,7 +13758,7 @@ function SetupWizard({ onComplete }) {
         }
       }
       if (!ids.length) throw new Error(ru ? 'Ни один файл не загрузился' : 'No files were uploaded');
-      const body = { upload_ids: ids };
+      const body = { upload_ids: ids, lang: ru ? 'ru' : 'en' };
       if (WIZ_TIERS[tier].model) body.text_model = WIZ_TIERS[tier].model;
       const res = await apiFetch('/library/upload/batch-commit', { method:'POST', body: JSON.stringify(body) });
       setJobId(res.job_id);

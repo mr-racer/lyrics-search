@@ -945,6 +945,8 @@ class _BatchCommitRequest(BaseModel):
     # IGNORED (kept for graceful back-compat): in server mode the embedding
     # model is the admin's instance setting (EMBED_MODEL), not a member choice.
     text_model: str | None = None
+    # UI language → language of auto-generated AI enrichment (bios/facts/vibes).
+    lang: str = "ru"
 
 
 @router.post("/upload/batch-commit", dependencies=[Depends(require_mode("server"))])
@@ -978,6 +980,7 @@ async def batch_commit_uploads(
     job_id = service.enqueue_upload_indexing(
         account_id=current_user.id, upload_ids=mine,
         text_model=settings_service.embed_model(),
+        lang=(req.lang or "ru").strip().lower(),
     )
     return {"job_id": job_id}
 
