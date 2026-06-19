@@ -1919,6 +1919,22 @@
     .efir-wave .fy-blob{width:58%;height:200%;filter:blur(40px)}
     .efir-wave .fy-bg1{top:-34%;left:-10%}.efir-wave .fy-bg2{top:-14%;left:22%}
     .efir-wave .fy-bg3{top:-46%;left:50%}.efir-wave .fy-bg4{top:-18%;left:74%}
+    /* === onboarding redesign === (.ob-root sets the --ob-* vars per theme) */
+    .ob-glass{position:relative;z-index:1;background:var(--ob-glass-bg);border-radius:22px;backdrop-filter:blur(20px) saturate(135%);-webkit-backdrop-filter:blur(20px) saturate(135%);box-shadow:inset 0 1px 0 var(--ob-glass-sheen),0 12px 50px rgba(0,0,0,.28);}
+    .ob-glass::before{content:"";position:absolute;inset:-1px;border-radius:23px;box-shadow:inset 0 0 0 1.5px var(--ob-glass-edge);filter:blur(3px);pointer-events:none;}
+    .ob-drift{position:absolute;inset:0;overflow:hidden;pointer-events:none;border-radius:inherit;}
+    .ob-blob{position:absolute;border-radius:50%;filter:blur(74px);left:50%;top:50%;will-change:transform;}
+    .ob-blob-a{width:380px;height:380px;margin:-190px 0 0 -150px;background:radial-gradient(circle,var(--ob-blob1),transparent 67%);opacity:.55;animation:obDrift1 22s ease-in-out infinite;}
+    .ob-blob-b{width:300px;height:300px;margin:-210px 0 0 60px;background:radial-gradient(circle,var(--ob-blob2),transparent 67%);opacity:.4;animation:obDrift2 28s ease-in-out infinite;}
+    .ob-blob-c{width:280px;height:280px;margin:20px 0 0 -240px;background:radial-gradient(circle,var(--ob-blob3),transparent 68%);opacity:.32;animation:obDrift3 34s ease-in-out infinite;}
+    .ob-drift-success .ob-blob-a{background:radial-gradient(circle,#5fd08a,transparent 66%);opacity:.6;}
+    .ob-drift-success .ob-blob-b{background:radial-gradient(circle,#5fd08a,transparent 70%);opacity:.4;}
+    .ob-drift-success .ob-blob-c{background:radial-gradient(circle,#7d5cff,transparent 68%);opacity:.28;}
+    @keyframes obDrift1{0%{transform:translate(0,0) scale(1)}50%{transform:translate(26px,16px) scale(1.06)}100%{transform:translate(0,0) scale(1)}}
+    @keyframes obDrift2{0%{transform:translate(0,0) scale(1)}50%{transform:translate(-22px,20px) scale(1.05)}100%{transform:translate(0,0) scale(1)}}
+    @keyframes obDrift3{0%{transform:translate(0,0) scale(1)}50%{transform:translate(18px,-18px) scale(1.07)}100%{transform:translate(0,0) scale(1)}}
+    @media (prefers-reduced-motion:reduce){.ob-blob{animation:none!important}}
+    .ob-feat{position:relative;z-index:1;background:var(--ob-card-bg);border-radius:14px;padding:15px 16px;box-shadow:inset 0 1px 0 var(--ob-glass-sheen),inset 0 0 0 1px var(--ob-card-edge),0 4px 14px rgba(0,0,0,.16);}
   </style>
 </head>
 <body>
@@ -8686,14 +8702,19 @@ function OwnerAdminDashboard({ onLogout }) {
   const email = localStorage.getItem('musix_user_email') || '';
 
   return (
-    <div className="grain" style={{
+    <div className="grain ob-root" style={{
+      '--ob-glass-bg': isDark ? 'rgba(255,255,255,.055)' : 'rgba(255,255,255,.62)',
+      '--ob-glass-sheen': isDark ? 'rgba(255,255,255,.12)' : 'rgba(255,255,255,.9)',
+      '--ob-glass-edge': isDark ? 'rgba(255,255,255,.18)' : 'rgba(0,0,0,.10)',
+      '--ob-blob1':'#7d5cff', '--ob-blob2':'#3aa0ff', '--ob-blob3':'#c061ff',
       width: '100vw', height: '100vh', overflow: 'auto', position: 'relative',
       background: isDark
         ? 'radial-gradient(ellipse at top, #15151b 0%, #0a0a0e 60%, #07070a 100%)'
         : 'radial-gradient(ellipse at top, #fafaff 0%, #ececf3 60%, #e3e2e8 100%)',
       color: c.text,
     }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '24px 32px' }}>
+      <DriftBackdrop />
+      <div style={{ position:'relative', zIndex:1, display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '24px 32px' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <BrandMark size={36} isDark={isDark} />
           <span className="serif" style={{ fontSize: 28, letterSpacing: '-0.02em' }}>Musi<i style={{ color: 'oklch(62% 0.2 275)' }}>X</i></span>
@@ -8716,7 +8737,7 @@ function OwnerAdminDashboard({ onLogout }) {
         </div>
       </div>
 
-      <div style={{ maxWidth: 720, margin: '12px auto 64px', padding: '0 32px' }}>
+      <div style={{ position:'relative', zIndex:1, maxWidth: 720, margin: '12px auto 64px', padding: '0 32px' }}>
         <div className="mono" style={{ fontSize: 13, color: c.textSubtle, letterSpacing: '0.32em', marginBottom: 12 }}>
           — {ru ? 'ПАНЕЛЬ АДМИНИСТРАТОРА' : 'ADMIN CONSOLE'}
         </div>
@@ -8734,7 +8755,19 @@ function OwnerAdminDashboard({ onLogout }) {
           </div>
         )}
 
-        <section className="panel-v3" style={{ padding: '18px 20px', marginTop: 22 }}>
+        <div className="ob-glass" style={{ marginTop: 20, padding: '18px 20px',
+          background:'linear-gradient(180deg,rgba(154,133,255,.16),rgba(154,133,255,.06))',
+          boxShadow:'inset 0 0 0 1px rgba(154,133,255,.38),0 0 30px rgba(124,92,255,.2)' }}>
+          <div className="mono" style={{ fontSize: 11, letterSpacing: '0.22em', textTransform: 'uppercase', color: '#cfc4ff' }}>
+            {ru ? 'Хотите слушать музыку?' : 'Want to listen?'}
+          </div>
+          <div style={{ fontSize: 14.5, marginTop: 8, lineHeight: 1.5 }}>
+            {ru ? 'Админ-аккаунт — только для управления. Создайте приглашение ниже и войдите как обычный участник — собственным аккаунтом.'
+                : 'The admin account is for management only. Create an invite below and sign in as a regular member with your own account.'}
+          </div>
+        </div>
+
+        <section className="panel-v3" style={{ padding: '18px 20px', marginTop: 18 }}>
           <div className="mono-label" style={{ color: c.textSubtle, marginBottom: 14 }}>
             {ru ? 'AI ИНСТАНСА' : 'INSTANCE AI'}
           </div>
@@ -9280,6 +9313,16 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
   const [committing, setCommitting] = useState(false);
   const [jobId, setJobId] = useState(null);
   const [showWizard, setShowWizard] = useState(false);
+  const ru = lang === 'ru';
+  const uid = (typeof localStorage !== 'undefined' && localStorage.getItem('musix_user_id')) || '';
+  // Marketing welcome shows once per account on first onboarding, then never.
+  const [welcomed, setWelcomed] = useState(() => {
+    try { return localStorage.getItem('musix_welcome_seen_' + uid) === '1'; } catch (e) { return false; }
+  });
+  const dismissWelcome = () => {
+    try { localStorage.setItem('musix_welcome_seen_' + uid, '1'); } catch (e) {}
+    setWelcomed(true);
+  };
   // Folder selection happens IN THE BROWSER (webkitdirectory), then the files
   // are uploaded like any other — server-mode members may upload but may NOT
   // point the host indexer at a path (/library/index is owner-only). Set the
@@ -9359,21 +9402,53 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
   const anyUploading = progress.some(p => p.status === 'uploading');
   const successCount = progress.filter(p => p.status === 'done').length;
 
+  const OB_VARS = {
+    '--ob-glass-bg': isDark ? 'rgba(255,255,255,.055)' : 'rgba(255,255,255,.62)',
+    '--ob-glass-sheen': isDark ? 'rgba(255,255,255,.12)' : 'rgba(255,255,255,.9)',
+    '--ob-glass-edge': isDark ? 'rgba(255,255,255,.18)' : 'rgba(0,0,0,.10)',
+    '--ob-card-bg': isDark ? 'linear-gradient(180deg,#1d1d23,#131318)' : 'linear-gradient(180deg,#ffffff,#eef0f5)',
+    '--ob-card-edge': isDark ? 'rgba(255,255,255,.05)' : 'rgba(0,0,0,.06)',
+    '--ob-blob1':'#7d5cff', '--ob-blob2':'#3aa0ff', '--ob-blob3':'#c061ff',
+  };
+
+  const header = (
+    <div style={{ display:'flex', justifyContent:'space-between', padding:'24px 32px' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
+        <BrandMark size={36} isDark={isDark} />
+        <span className="serif" style={{ fontSize:'28px', letterSpacing:'-0.02em' }}>Musi<i style={{ color:'oklch(62% 0.2 275)' }}>X</i></span>
+      </div>
+      <TopRightControls isDark={isDark} lang={lang} onLang={onLang} onTheme={onTheme} onSettings={() => {}} />
+    </div>
+  );
+
+  if (!welcomed) {
+    return (
+      <div className="grain ob-root" style={{ ...OB_VARS,
+        width:'100vw', height:'100vh', overflow:'auto', position:'relative',
+        background: isDark
+          ? 'radial-gradient(ellipse at top, #15151b 0%, #0a0a0e 60%, #07070a 100%)'
+          : 'radial-gradient(ellipse at top, #fafaff 0%, #ececf3 60%, #e3e2e8 100%)',
+        color: c.text }}>
+        {header}
+        <div style={{ maxWidth:'940px', margin:'24px auto 48px', padding:'0 32px', position:'relative' }}>
+          <DriftBackdrop />
+          <GlassCard style={{ padding:'34px 32px' }}>
+            <WelcomeSlide ru={ru} c={c} onStart={dismissWelcome} />
+          </GlassCard>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="grain" style={{
+    <div className="grain ob-root" style={{ ...OB_VARS,
       width:'100vw', height:'100vh', overflow:'auto', position:'relative',
       background: isDark
         ? 'radial-gradient(ellipse at top, #15151b 0%, #0a0a0e 60%, #07070a 100%)'
         : 'radial-gradient(ellipse at top, #fafaff 0%, #ececf3 60%, #e3e2e8 100%)',
       color: c.text,
     }}>
-      <div style={{ display:'flex', justifyContent:'space-between', padding:'24px 32px' }}>
-        <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
-          <BrandMark size={36} isDark={isDark} />
-          <span className="serif" style={{ fontSize:'28px', letterSpacing:'-0.02em' }}>Musi<i style={{ color:'oklch(62% 0.2 275)' }}>X</i></span>
-        </div>
-        <TopRightControls isDark={isDark} lang={lang} onLang={onLang} onTheme={onTheme} onSettings={() => {}} />
-      </div>
+      {header}
 
       <div style={{ maxWidth:'620px', margin:'40px auto 64px', padding:'0 32px' }}>
         <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.32em', marginBottom:'14px' }}>
@@ -9388,7 +9463,7 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
             : 'Pick a music folder or individual files — they upload and are stored on the server under your account. FLAC, MP3, M4A.'}
         </p>
 
-        <div className={ske('panel', isDark)}
+        <div className="ob-glass"
           onDragOver={(e) => e.preventDefault()}
           onDrop={onDrop}
           style={{ padding:'44px 28px', borderRadius:'18px', border:`2px dashed ${c.border}`, textAlign:'center' }}>
@@ -9428,7 +9503,7 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
         </div>
 
         {progress.length > 0 && (
-          <div className={ske('panel', isDark)} style={{ marginTop:'14px', padding:'16px 20px', borderRadius:'14px' }}>
+          <div className="ob-glass" style={{ marginTop:'14px', padding:'16px 20px', borderRadius:'14px' }}>
             <div className="mono" style={{ fontSize:'13px', color:c.textSubtle, marginBottom:'10px' }}>
               {progress.length} {lang==='ru'?'ФАЙЛОВ':'FILES'}
               {successCount > 0 && ` · ${successCount} ${lang==='ru'?'ГОТОВО':'DONE'}`}
@@ -9549,16 +9624,31 @@ function UploadIndexingWizard({ isDark, lang, jobId, onDone }) {
       {aiWaiting && !done && !error && (
         <div style={{
           position:'fixed', left:0, right:0, bottom:0, zIndex:10000,
-          padding:'10px 16px', textAlign:'center', backdropFilter:'blur(4px)',
+          padding:'12px 16px', backdropFilter:'blur(6px)',
           background: isDark ? 'rgba(20,20,28,0.92)' : 'rgba(250,250,255,0.95)',
           color: isDark ? '#cdd5e0' : '#334',
-          fontSize:'13px', lineHeight:1.4,
           borderTop: `1px solid ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'}`,
         }}>
-          <Spinner size={13} />{' '}
-          {lang==='ru'
-            ? 'AI-обработка (биографии и факты)… не закрывайте страницу — плеер откроется автоматически.'
-            : 'AI processing (bios & facts)… keep this page open — the player opens automatically.'}
+          <div style={{ maxWidth:'620px', margin:'0 auto' }}>
+            <div className="mono" style={{ display:'flex', alignItems:'center', gap:'8px', fontSize:'10px',
+              letterSpacing:'0.2em', textTransform:'uppercase', color:'#c3b8ff', marginBottom:'8px' }}>
+              <Spinner size={12} /> ✨ {lang==='ru' ? 'С помощью гуру' : 'With the guru'}
+            </div>
+            <div style={{ display:'flex', gap:'18px', flexWrap:'wrap', fontSize:'12.5px' }}>
+              {[
+                lang==='ru'?'Биографии артистов':'Artist bios',
+                lang==='ru'?'Углубление фактов':'Deeper facts',
+                lang==='ru'?'Звучание песен':'Song vibes',
+              ].map((label, i) => (
+                <span key={i} style={{ display:'flex', alignItems:'center', gap:'6px', opacity:.85 }}>
+                  <span style={{ color:'oklch(62% 0.2 275)' }}>⟳</span>{label}
+                </span>
+              ))}
+            </div>
+            <div style={{ fontSize:'11px', color: isDark ? 'rgba(255,255,255,.45)' : 'rgba(0,0,0,.45)', marginTop:'8px' }}>
+              {lang==='ru' ? 'Не закрывайте страницу — плеер откроется автоматически.' : 'Keep this page open — the player opens automatically.'}
+            </div>
+          </div>
         </div>
       )}
     </>
@@ -13450,7 +13540,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
 // model:null = omit text_model (backend default jina-small).
 const WIZ_TIERS = [
   { model: null,                            dim: 512,
-    ru: 'Быстро',   en: 'Fast',
+    ru: 'Скорость', en: 'Speed',
     noteRu: 'только английский',         noteEn: 'English only' },
   { model: 'intfloat/multilingual-e5-base', dim: 768,
     ru: 'Баланс',   en: 'Balanced',
@@ -13465,18 +13555,26 @@ const WIZ_TIERS = [
 // Sharing: single user adds music, optionally AI, then indexes inline.
 // The first three steps are identical in both, so stepIndex stays correct while
 // mode is still null (welcome/account/mode).
-const WIZ_STEPS_SHARING = ['welcome', 'account', 'mode', 'music', 'ai', 'indexing'];
-const WIZ_STEPS_SERVER  = ['welcome', 'account', 'mode', 'policy'];
+const stepsSharing = (ru) => [
+  { key:'accountMode', label: ru ? 'Аккаунт и режим' : 'Account & mode' },
+  { key:'music',       label: ru ? 'Музыка' : 'Music' },
+  { key:'ai',          label: ru ? 'Гуру (AI)' : 'Guru (AI)' },
+  { key:'indexing',    label: ru ? 'Готово' : 'Done' },
+];
+const stepsServer = (ru) => [
+  { key:'accountMode', label: ru ? 'Аккаунт и режим' : 'Account & mode' },
+  { key:'policy',      label: ru ? 'Настройки системы' : 'System settings' },
+];
 
 // Stage keys come from the shared JobTracker (same SSE stream the existing
 // IndexingModal/UploadIndexingWizard consume).
 const WIZ_STAGE_LABELS = {
-  lyrics:   { ru: 'Тексты песен',  en: 'Lyrics' },
-  facts:    { ru: 'Факты',         en: 'Facts' },
-  metadata: { ru: 'Метаданные',    en: 'Metadata' },
-  dense:    { ru: 'Эмбеддинги',    en: 'Embeddings' },
-  audio:    { ru: 'Аудио-анализ',  en: 'Audio analysis' },
-  analysis: { ru: 'Анализ связей', en: 'Similarity analysis' },
+  lyrics:   { ru: 'Тексты песен',     en: 'Lyrics' },
+  facts:    { ru: 'Факты и истории',  en: 'Facts & stories' },
+  metadata: { ru: 'Метаданные',       en: 'Metadata' },
+  dense:    { ru: 'Поиск по смыслу',  en: 'Semantic search' },
+  audio:    { ru: 'Анализ звучания',  en: 'Sound analysis' },
+  analysis: { ru: 'Карта похожих',    en: 'Similarity map' },
 };
 
 function WizardDots({ count, active, c }) {
@@ -13489,6 +13587,77 @@ function WizardDots({ count, active, c }) {
           transition:'background 0.25s',
         }} />
       ))}
+    </div>
+  );
+}
+
+// ─── Onboarding redesign: shared liquid-glass primitives ─────────────────
+function DriftBackdrop({ variant }) {
+  return (
+    <div className={'ob-drift' + (variant === 'success' ? ' ob-drift-success' : '')} aria-hidden="true">
+      <div className="ob-blob ob-blob-a"></div><div className="ob-blob ob-blob-b"></div><div className="ob-blob ob-blob-c"></div>
+    </div>
+  );
+}
+function GlassCard({ children, style, className }) {
+  return <div className={'ob-glass' + (className ? ' ' + className : '')} style={style}>{children}</div>;
+}
+function FeatureCard({ icon, title, body }) {
+  return (
+    <div className="ob-feat">
+      <div style={{ fontSize:19, lineHeight:1 }}>{icon}</div>
+      <div style={{ fontWeight:600, fontSize:14, margin:'8px 0 4px' }}>{title}</div>
+      <div style={{ fontSize:12.5, lineHeight:1.45, opacity:.72 }}>{body}</div>
+    </div>
+  );
+}
+function WelcomeSlide({ ru, c, onStart }) {
+  const feats = [
+    { icon:'🎯', title: ru?'Прозрачные рекомендации':'Transparent recommendations', body: ru?'Настраивай: больше любимого или старого. Оценивай свои острова вкуса.':'Tune it: more loved or more old. Rate your taste islands.' },
+    { icon:'🔎', title: ru?'Всё про песню':'Everything about a song', body: ru?'Как создавалась, о чём, что семплирует. Тыкни в строчку — гуру объяснит.':'How it was made, what it means, what it samples. Tap a line — the guru explains.' },
+    { icon:'💡', title: ru?'Другая сторона артистов':'The other side of artists', body: ru?'Маколей Калкин — крёстный отец детей Майкла Джексона. И ещё сотни фактов.':"Macaulay Culkin is godfather to Michael Jackson's kids. And hundreds more facts." },
+    { icon:'🌐', title: ru?'Свой сервер':'Your own server', body: ru?'Зови друзей. Библиотека без ИИ-музыки и ремиксов — песня всегда доступна.':'Invite friends. A library with no AI music or remixes — a song never disappears.' },
+  ];
+  return (
+    <div style={{ display:'flex', gap:28, alignItems:'center', flexWrap:'wrap' }}>
+      <div style={{ flex:'1 1 320px', minWidth:300 }}>
+        <div className="mono" style={{ fontSize:11, letterSpacing:'.26em', textTransform:'uppercase', opacity:.5 }}>{ru?'— Добро пожаловать':'— Welcome'}</div>
+        <h1 className="serif" style={{ fontSize:44, lineHeight:1.05, letterSpacing:'-.02em', margin:'12px 0 10px' }}>{ru?'Добро пожаловать в ':'Welcome to '}<span style={{ color:'oklch(62% 0.2 275)' }}>MusiX</span>!</h1>
+        <div style={{ fontSize:18, opacity:.65 }}>{ru?'Ваш личный музыкальный гуру':'Your personal music guru'}</div>
+        <button className="ske-accent" style={{ marginTop:22, padding:'13px 28px', borderRadius:12, fontSize:14.5, fontWeight:600, border:'none', cursor:'pointer' }} onClick={onStart}>{ru?'В мир музыки →':'Into the music →'}</button>
+      </div>
+      <div style={{ flex:'1 1 340px', display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 }}>{feats.map((f,i)=><FeatureCard key={i} icon={f.icon} title={f.title} body={f.body} />)}</div>
+    </div>
+  );
+}
+function SetupRail({ ru, steps, currentKey }) {
+  const idx = steps.findIndex(s => s.key === currentKey);
+  return (
+    <div className="ob-rail" style={{ flex:'0 0 188px', display:'flex', flexDirection:'column', gap:2, position:'relative', zIndex:1 }}>
+      <div className="mono" style={{ fontSize:11, letterSpacing:'.24em', textTransform:'uppercase', opacity:.5, marginBottom:12 }}>{ru?'◆ Настройка':'◆ Setup'}</div>
+      {steps.filter(s => s.key !== 'welcome').map((s, i) => {
+        const my = steps.findIndex(x => x.key === s.key);
+        const state = my < idx ? 'done' : (my === idx ? 'now' : 'todo');
+        return (
+          <div key={s.key} style={{ display:'flex', alignItems:'center', gap:12, padding:11, borderRadius:10, background: state==='now'?'rgba(154,133,255,.12)':'transparent' }}>
+            <span style={{ width:28, height:28, borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:'Georgia,serif', fontWeight:600, fontSize:12,
+              background: state==='done'?'linear-gradient(180deg,oklch(67% .18 270),oklch(54% .22 280))':'transparent',
+              color: state==='done'?'#fff':(state==='now'?'oklch(70% .16 270)':'rgba(128,128,128,.6)'),
+              boxShadow: state==='now'?'0 0 0 2px oklch(62% .2 275),0 0 12px oklch(62% .2 275 / .5)':(state==='todo'?'inset 0 0 0 1px rgba(128,128,128,.3)':'none') }}>{state==='done'?'✓':(i+1)}</span>
+            <span style={{ fontSize:13.5, fontWeight: state==='now'?600:400, opacity: state==='todo'?.5:1 }}>{s.label}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+function ModeCard({ sel, onClick, title, body, note }) {
+  return (
+    <div onClick={onClick} style={{ cursor:'pointer', background:'var(--ob-card-bg)', borderRadius:12, padding:13,
+        boxShadow: sel?'inset 0 0 0 2px oklch(62% .2 275),0 6px 18px rgba(124,92,255,.3)':'inset 0 0 0 1px var(--ob-card-edge),0 3px 10px rgba(0,0,0,.18)' }}>
+      <div style={{ fontWeight:600, fontSize:13 }}>{title}</div>
+      <div style={{ fontSize:11.5, opacity:.7, lineHeight:1.4, marginTop:3 }}>{body}</div>
+      {note && <div style={{ fontSize:10.5, color:'#cdbfff', background:'rgba(139,116,255,.12)', border:'1px solid rgba(139,116,255,.3)', borderRadius:8, padding:'6px 9px', marginTop:8 }}>{note}</div>}
     </div>
   );
 }
@@ -13544,14 +13713,19 @@ function SetupWizard({ onComplete }) {
   const [indexError, setIndexError]       = useState(null);
   const [indexDone, setIndexDone]         = useState(false);
   const [aiKickoff, setAiKickoff]         = useState(false);
+  // AI enrichment as indexing stages (sharing: opt-out; runs the 3 AI tasks
+  // and polls /library/ai-index/status to fill their bars before finishing).
+  const [enrichWithAi, setEnrichWithAi]   = useState(true);
+  const [aiStatus, setAiStatus]           = useState(null);
+  const [aiRunning, setAiRunning]         = useState(false);
+  const [aiDone, setAiDone]               = useState(false);
 
   const handleTheme = () => setDark(d => {
     const next = !d; localStorage.setItem('musix_theme', next ? 'dark' : 'light'); return next;
   });
   const handleLang = (l) => { setLang(l); localStorage.setItem('musix_lang', l); };
 
-  const wizSteps = mode === 'server' ? WIZ_STEPS_SERVER : WIZ_STEPS_SHARING;
-  const stepIndex = wizSteps.indexOf(step);
+  const railSteps = mode === 'server' ? stepsServer(ru) : stepsSharing(ru);
 
   // Server mode: owner configures instance policy instead of bringing music.
   const advanceFromSetup = () => setStep(mode === 'server' ? 'policy' : 'music');
@@ -13687,6 +13861,41 @@ function SetupWizard({ onComplete }) {
     return () => evt.close();
   }, [step, jobId, syncDoneCount]);
 
+  // After core indexing completes: if the owner connected AI and kept enrichment
+  // on, run the three AI tasks as visible stages (poll their status) before the
+  // finish. shouldEnrich=false → finish immediately. Member mode (T3) reuses the
+  // same idea driven by ai_available.
+  const shouldEnrich = aiConnected && enrichWithAi;
+  useEffect(() => {
+    if (!indexDone) return;
+    if (!shouldEnrich) { setAiDone(true); return; }
+    if (aiRunning || aiDone) return;
+    let cancelled = false;
+    const tasks = ['artist_bio', 'refined_facts', 'sonic_vibe'];
+    const terminal = (s) => s === 'done' || s === 'failed' || s === 'cancelled';
+    (async () => {
+      setAiRunning(true);
+      for (const task of tasks) {
+        try {
+          await apiFetch(`/library/ai-index/${task}`, { method:'POST', body: JSON.stringify({
+            lang,
+            llm_base_url: localStorage.getItem('llm_base_url') || undefined,
+            llm_model: localStorage.getItem('llm_model') || undefined,
+          }) });
+        } catch (e) { /* 409 already-running etc. — non-fatal */ }
+      }
+      for (let i = 0; i < 800 && !cancelled; i++) {
+        let st = null;
+        try { st = await apiFetch('/library/ai-index/status'); } catch (e) {}
+        if (st && !cancelled) setAiStatus(st);
+        if (st && tasks.every(t => st[t] && terminal(st[t].status))) break;
+        await new Promise(r => setTimeout(r, 1500));
+      }
+      if (!cancelled) { setAiRunning(false); setAiDone(true); }
+    })();
+    return () => { cancelled = true; };
+  }, [indexDone, shouldEnrich]);
+
   const applyTierToLocalStorage = () => {
     // Mirror the Settings panel behavior: search must use the same model the
     // collection is indexed with; server also pins it in collection_settings
@@ -13773,12 +13982,12 @@ function SetupWizard({ onComplete }) {
   const emailOk = /\S+@\S+\.\S+/.test(email.trim());
   const passOk  = password.length >= 6;
 
-  const submitAccount = (e) => {
-    e.preventDefault();
+  const continueAccountMode = () => {
     if (!emailOk) { setAccError(ru ? 'Похоже, это не email' : 'That does not look like an email'); return; }
     if (!passOk)  { setAccError(ru ? 'Пароль — минимум 6 символов' : 'Password must be at least 6 characters'); return; }
+    if (!mode)    { setAccError(ru ? 'Выберите, где живёт музыка' : 'Choose where your music lives'); return; }
     setAccError('');
-    setStep('mode');
+    submitSetup();
   };
 
   const submitSetup = async () => {
@@ -13806,124 +14015,89 @@ function SetupWizard({ onComplete }) {
   };
 
   const renderWelcome = () => (
-    <div style={{ textAlign:'center' }}>
-      <div className="mono" style={{ fontSize:'13px', color:c.textSubtle, letterSpacing:'0.32em', marginBottom:'14px' }}>
-        — {ru ? 'ПЕРВЫЙ ЗАПУСК' : 'FIRST RUN'}
-      </div>
-      <h1 className="serif" style={{ fontSize:'54px', lineHeight:'1.04', letterSpacing:'-0.025em', marginBottom:'16px' }}>
-        {ru ? <>Добро <i style={{ color:'oklch(62% 0.2 275)' }}>пожаловать</i>.</> : <>Welcome <i style={{ color:'oklch(62% 0.2 275)' }}>aboard</i>.</>}
-      </h1>
-      <p style={{ fontSize:'15px', color:c.textMuted, lineHeight:'1.6', marginBottom:'30px', maxWidth:'460px', marginLeft:'auto', marginRight:'auto' }}>
-        {ru
-          ? 'MusiX — семантический поиск по вашей музыке. Инстанс ещё не настроен: создадим аккаунт владельца, добавим музыку и, по желанию, AI. Пара минут.'
-          : 'MusiX is semantic search over your music. This instance is not set up yet: we will create the owner account, add music and (optionally) AI. A couple of minutes.'}
-      </p>
-      <button onClick={() => setStep('account')} className="ske-accent"
-        style={{ padding:'13px 34px', borderRadius:'12px', fontSize:'15px', fontWeight:'600', letterSpacing:'0.08em', cursor:'pointer' }}>
-        {ru ? '▶ НАЧАТЬ НАСТРОЙКУ' : '▶ START SETUP'}
-      </button>
+    <div style={{ position:'relative' }}>
+      <DriftBackdrop />
+      <GlassCard style={{ padding:'34px 32px' }}>
+        <WelcomeSlide ru={ru} c={c} onStart={() => setStep('accountMode')} />
+      </GlassCard>
     </div>
   );
 
-  const renderAccount = () => (
-    <form onSubmit={submitAccount} className={ske('panel', isDark)} style={{ padding:'30px 32px', borderRadius:'18px' }}>
-      <h2 className="serif" style={{ fontSize:'30px', letterSpacing:'-0.02em', marginBottom:'6px' }}>
-        {ru ? 'Аккаунт владельца' : 'Owner account'}
+  const renderAccountMode = () => (
+    <div className="ob-glass" style={{ padding:'26px 28px' }}>
+      <div className="mono" style={{ fontSize:'11px', letterSpacing:'0.24em', textTransform:'uppercase', color:c.textSubtle }}>
+        {ru ? 'Шаг 1' : 'Step 1'}
+      </div>
+      <h2 className="serif" style={{ fontSize:'26px', letterSpacing:'-0.02em', margin:'7px 0 4px' }}>
+        {ru ? 'Создадим ваш аккаунт' : "Let's create your account"}
       </h2>
-      <p style={{ fontSize:'13px', color:c.textMuted, lineHeight:'1.5', marginBottom:'22px' }}>
+      <p style={{ fontSize:'13px', color:c.textMuted, lineHeight:'1.5', marginBottom:'16px' }}>
         {ru ? 'Этот аккаунт станет владельцем инстанса.' : 'This account becomes the instance owner.'}
       </p>
       <div className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'8px' }}>EMAIL</div>
-      <input type="email" required autoFocus value={email} onChange={e => setEmail(e.target.value)}
+      <input type="email" autoFocus value={email} onChange={e => setEmail(e.target.value)}
         className={ske('inset', isDark)}
-        style={{ width:'100%', padding:'11px 13px', borderRadius:'10px', border:'none', color:c.text, fontSize:'15px', outline:'none', marginBottom:'16px' }} />
+        style={{ width:'100%', padding:'11px 13px', borderRadius:'10px', border:'none', color:c.text, fontSize:'15px', outline:'none', marginBottom:'14px' }} />
       <div className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'8px' }}>
         {ru ? 'ПАРОЛЬ · МИН. 6 СИМВОЛОВ' : 'PASSWORD · MIN 6 CHARS'}
       </div>
-      <input type="password" required value={password} onChange={e => setPassword(e.target.value)}
+      <input type="password" value={password} onChange={e => setPassword(e.target.value)}
         className={ske('inset', isDark)}
         style={{ width:'100%', padding:'11px 13px', borderRadius:'10px', border:'none', color:c.text, fontSize:'15px', outline:'none', marginBottom:'18px' }} />
-      {accError && (
-        <div style={{ padding:'9px 13px', marginBottom:'14px', borderRadius:'10px', background:c.redBg, color:c.red, fontSize:'13px' }}>{accError}</div>
-      )}
-      <button type="submit" className="ske-accent"
-        style={{ width:'100%', padding:'13px 20px', borderRadius:'12px', fontSize:'15px', fontWeight:'600', letterSpacing:'0.08em', cursor:'pointer' }}>
-        {ru ? 'ПРОДОЛЖИТЬ →' : 'CONTINUE →'}
-      </button>
-    </form>
-  );
 
-  const renderMode = () => (
-    <div>
-      <h2 className="serif" style={{ fontSize:'30px', letterSpacing:'-0.02em', marginBottom:'6px', textAlign:'center' }}>
-        {ru ? 'Где живёт ваша музыка?' : 'Where does your music live?'}
-      </h2>
-      <p style={{ fontSize:'13px', color:c.textMuted, textAlign:'center', marginBottom:'22px' }}>
-        {ru ? 'Это определяет режим инстанса.' : 'This sets the instance mode.'}
-      </p>
-      <div style={{ display:'flex', gap:'14px', marginBottom:'14px' }}>
-        {[
-          { value:'sharing', icon:'📁',
-            title: ru ? 'Локальная папка' : 'Local folder',
-            desc: ru ? 'Музыка уже на этом компьютере. Указываете папку — индексируем на месте.'
-                     : 'Music is already on this machine. Point at a folder — we index it in place.',
-            sub: ru ? 'режим «sharing» · один пользователь' : '"sharing" mode · single user' },
-          { value:'server', icon:'🌐',
-            title: ru ? 'Сервер' : 'Server',
-            desc: ru ? 'Загружаете файлы через браузер. Можно пригласить друзей по инвайтам.'
-                     : 'Upload files via the browser. Invite friends with invite codes.',
-            sub: ru ? 'режим «server» · мультиаккаунт' : '"server" mode · multi-account' },
-        ].map(opt => (
-          <div key={opt.value} onClick={() => setMode(opt.value)}
-            className={ske('panel', isDark)}
-            style={{
-              flex:1, padding:'20px 18px', borderRadius:'16px', cursor:'pointer',
-              outline: mode === opt.value ? '2px solid oklch(62% 0.2 275)' : '2px solid transparent',
-              transition:'outline 0.15s',
-            }}>
-            <div style={{ fontSize:'26px', marginBottom:'8px' }}>{opt.icon}</div>
-            <div style={{ fontSize:'16px', fontWeight:'600', marginBottom:'6px' }}>{opt.title}</div>
-            <div style={{ fontSize:'13px', color:c.textMuted, lineHeight:'1.5', marginBottom:'8px' }}>{opt.desc}</div>
-            <div className="mono" style={{ fontSize:'11px', color:c.textSubtle }}>{opt.sub}</div>
-          </div>
-        ))}
+      <div className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'10px' }}>
+        {ru ? 'ГДЕ ЖИВЁТ ВАША МУЗЫКА?' : 'WHERE DOES YOUR MUSIC LIVE?'}
       </div>
-      <div style={{ fontSize:'12px', color:'#b08950', textAlign:'center', marginBottom:'16px' }}>
-        ⚠ {ru ? 'Выбор фиксируется. Поменять потом можно только скриптом миграции.'
-              : 'This choice is locked in. Changing it later requires a migration script.'}
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'11px' }}>
+        <ModeCard sel={mode==='sharing'} onClick={() => setMode('sharing')}
+          title={ru ? '📁 Локальная папка' : '📁 Local folder'}
+          body={ru ? 'Музыка уже на этом компьютере. Индексируется на месте, один пользователь.'
+                   : 'Music is already on this machine. Indexed in place, single user.'} />
+        <ModeCard sel={mode==='server'} onClick={() => setMode('server')}
+          title={ru ? '🌐 Сервер' : '🌐 Server'}
+          body={ru ? 'Загрузка через браузер, можно звать друзей.' : 'Upload via the browser, invite friends.'}
+          note={mode==='server' ? (ru ? '⚑ Этот аккаунт станет админским. Чтобы слушать музыку — позже войдёте обычным участником.'
+                                       : '⚑ This account becomes the admin. To listen, sign in later as a regular member.') : null} />
       </div>
-      {setupError && (
-        <div style={{ padding:'9px 13px', marginBottom:'14px', borderRadius:'10px', background:c.redBg, color:c.red, fontSize:'13px' }}>{setupError}</div>
+      <div style={{ fontSize:'12px', color:'#b08950', marginTop:'12px' }}>
+        ⚠ {ru ? 'Выбор режима фиксируется. Поменять потом можно только скриптом миграции.'
+              : 'The mode is locked in. Changing it later requires a migration script.'}
+      </div>
+
+      {(accError || setupError) && (
+        <div style={{ padding:'9px 13px', marginTop:'14px', borderRadius:'10px', background:c.redBg, color:c.red, fontSize:'13px' }}>{accError || setupError}</div>
       )}
-      <button onClick={submitSetup} disabled={!mode || setupBusy} className="ske-accent"
-        style={{ width:'100%', padding:'13px 20px', borderRadius:'12px', fontSize:'15px', fontWeight:'600', letterSpacing:'0.08em',
-          opacity: !mode || setupBusy ? 0.5 : 1, cursor: !mode || setupBusy ? 'not-allowed' : 'pointer',
-          display:'flex', alignItems:'center', justifyContent:'center', gap:'8px' }}>
-        {setupBusy
-          ? <><Spinner size={14} color="white" /> {ru ? 'СОЗДАЁМ…' : 'CREATING…'}</>
-          : (ru ? 'СОЗДАТЬ И ПРОДОЛЖИТЬ →' : 'CREATE & CONTINUE →')}
-      </button>
+      <div style={{ display:'flex', justifyContent:'flex-end', marginTop:'18px' }}>
+        <button onClick={continueAccountMode} disabled={setupBusy} className="ske-accent"
+          style={{ padding:'12px 24px', borderRadius:'12px', fontSize:'15px', fontWeight:'600', letterSpacing:'0.06em',
+            opacity: setupBusy ? 0.5 : 1, cursor: setupBusy ? 'wait' : 'pointer',
+            display:'flex', alignItems:'center', gap:'8px' }}>
+          {setupBusy ? <><Spinner size={14} color="white" /> {ru ? 'СОЗДАЁМ…' : 'CREATING…'}</> : (ru ? 'Продолжить →' : 'Continue →')}
+        </button>
+      </div>
     </div>
   );
 
+  // account + mode merged into renderAccountMode (above).
+
   const renderSlider = () => (
     <div style={{ marginTop:'20px', marginBottom:'4px' }}>
-      <div className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'10px', textAlign:'center' }}>
-        {ru ? 'КАЧЕСТВО ПОИСКА' : 'SEARCH QUALITY'}
+      <div className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'2px' }}>
+        {ru ? 'КАЧЕСТВО ОБРАБОТКИ ТЕКСТОВ ПЕСЕН' : 'LYRICS-SEARCH QUALITY'}
+      </div>
+      <div style={{ fontSize:'12px', color:c.textMuted, marginBottom:'12px' }}>
+        {ru ? 'Точность поиска по словам внутри песен.' : 'How precisely you can search words inside songs.'}
       </div>
       <SkeRange min={0} max={2} step={1} value={tier} animated
         onChange={setTier} disabled={musicBusy}
         accent="oklch(62% 0.2 275)" style={{ width:'100%' }}
-        ariaLabel={ru ? 'Качество поиска' : 'Search quality'} />
+        ariaLabel={ru ? 'Качество обработки текстов песен' : 'Lyrics-search quality'} />
       <div style={{ display:'flex', marginTop:'6px' }}>
         {WIZ_TIERS.map((t, i) => (
           <div key={i} onClick={() => !musicBusy && setTier(i)}
             style={{ flex:1, textAlign: i === 0 ? 'left' : i === 2 ? 'right' : 'center', cursor:'pointer' }}>
-            <div style={{ fontSize:'13px', fontWeight: tier === i ? '600' : '400', color: tier === i ? c.text : c.textMuted }}>
+            <div style={{ fontSize:'13.5px', fontWeight: tier === i ? '600' : '400', color: tier === i ? 'oklch(62% 0.2 275)' : c.textMuted }}>
               {ru ? t.ru : t.en}
-            </div>
-            <div style={{ fontSize:'11px', color:c.textSubtle }}>
-              {(ru ? t.noteRu : t.noteEn)} · {t.dim}d
             </div>
           </div>
         ))}
@@ -13938,8 +14112,8 @@ function SetupWizard({ onComplete }) {
     const serverUsesUpload = mode === 'server' && files.length > 0;
     const canStartMusic = serverUsesUpload || !!folderPath.trim();
     return (
-    <div className={ske('panel', isDark)} style={{ padding:'30px 32px', borderRadius:'18px' }}>
-      <h2 className="serif" style={{ fontSize:'30px', letterSpacing:'-0.02em', marginBottom:'6px' }}>
+    <div className="ob-glass" style={{ padding:'26px 28px' }}>
+      <h2 className="serif" style={{ fontSize:'26px', letterSpacing:'-0.02em', marginBottom:'6px' }}>
         {ru ? 'Добавьте музыку' : 'Add your music'}
       </h2>
       <p style={{ fontSize:'13px', color:c.textMuted, lineHeight:'1.5', marginBottom:'20px' }}>
@@ -14031,8 +14205,8 @@ function SetupWizard({ onComplete }) {
   };
 
   const renderAi = () => (
-    <div className={ske('panel', isDark)} style={{ padding:'30px 32px', borderRadius:'18px' }}>
-      <h2 className="serif" style={{ fontSize:'30px', letterSpacing:'-0.02em', marginBottom:'6px' }}>
+    <div className="ob-glass" style={{ padding:'26px 28px' }}>
+      <h2 className="serif" style={{ fontSize:'26px', letterSpacing:'-0.02em', marginBottom:'6px' }}>
         {ru ? 'Подключить AI?' : 'Connect AI?'}
       </h2>
       <p style={{ fontSize:'13px', color:c.textMuted, lineHeight:'1.5', marginBottom:'20px' }}>
@@ -14074,6 +14248,26 @@ function SetupWizard({ onComplete }) {
           </span>
         )}
       </div>
+      {probe && probe.available && (
+        <div className="ob-glass" style={{ padding:'14px 16px', marginBottom:'16px',
+             background:'linear-gradient(180deg,rgba(154,133,255,.16),rgba(154,133,255,.07))',
+             boxShadow:'inset 0 0 0 1px rgba(154,133,255,.35),0 0 26px rgba(124,92,255,.18)' }}>
+          <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
+            <span style={{ fontWeight:600, fontSize:'13.5px' }}>✨ {ru ? 'Сразу обогатить библиотеку' : 'Enrich the library right away'}</span>
+            <span className="mono" style={{ fontSize:'9px', letterSpacing:'.12em', color:'#cfc4ff', background:'rgba(154,133,255,.2)', border:'1px solid rgba(154,133,255,.4)', borderRadius:'6px', padding:'3px 6px' }}>
+              {ru ? 'РЕКОМЕНДУЕМ' : 'RECOMMENDED'}
+            </span>
+            <label style={{ marginLeft:'auto', cursor:'pointer', display:'flex', alignItems:'center' }}>
+              <input type="checkbox" checked={enrichWithAi} onChange={e => setEnrichWithAi(e.target.checked)}
+                style={{ width:'16px', height:'16px', accentColor:'oklch(62% 0.2 275)', cursor:'pointer' }} />
+            </label>
+          </div>
+          <div style={{ fontSize:'12.5px', color:c.textMuted, lineHeight:'1.5', marginTop:'8px' }}>
+            {ru ? 'Гуру напишет биографии артистов, углубит факты и опишет звучание песен — прямо в этой индексации. Чуть дольше, зато всё готово с первого входа.'
+                : 'The guru writes artist bios, deepens facts and describes how songs sound — inside this same indexing. A bit longer, but ready from the first launch.'}
+          </div>
+        </div>
+      )}
       <div style={{ display:'flex', gap:'10px' }}>
         <button onClick={() => { setAiConnected(false); advanceFromAi(); }} disabled={aiBusy}
           style={{ flex:1, padding:'12px', borderRadius:'10px', background:'transparent',
@@ -14093,9 +14287,9 @@ function SetupWizard({ onComplete }) {
   );
 
   const renderPolicy = () => (
-    <div className={ske('panel', isDark)} style={{ padding:'30px 32px', borderRadius:'18px' }}>
-      <h2 className="serif" style={{ fontSize:'30px', letterSpacing:'-0.02em', marginBottom:'6px' }}>
-        {ru ? 'Настройки сервера' : 'Server policy'}
+    <div className="ob-glass" style={{ padding:'26px 28px' }}>
+      <h2 className="serif" style={{ fontSize:'26px', letterSpacing:'-0.02em', marginBottom:'6px' }}>
+        {ru ? 'Настройки системы' : 'System settings'}
       </h2>
       <p style={{ fontSize:'13px', color:c.textMuted, lineHeight:'1.5', marginBottom:'18px' }}>
         {ru ? 'Эти параметры — общие для всего сервера. Участники по инвайтам только загружают свою музыку; модель эмбеддингов и AI вы задаёте один раз.'
@@ -14164,38 +14358,68 @@ function SetupWizard({ onComplete }) {
     </div>
   );
 
-  const renderIndexing = () => (
-    <div className={ske('panel', isDark)} style={{ padding:'30px 32px', borderRadius:'18px' }}>
-      <h2 className="serif" style={{ fontSize:'30px', letterSpacing:'-0.02em', marginBottom:'18px' }}>
-        {indexError
-          ? (ru ? 'Что-то пошло не так' : 'Something went wrong')
-          : indexDone
-            ? (ru ? 'Готово!' : 'Done!')
-            : (ru ? 'Индексируем библиотеку…' : 'Indexing your library…')}
-      </h2>
+  const aiStageDefs = [
+    { key:'artist_bio',    label: ru ? 'Биографии артистов' : 'Artist bios' },
+    { key:'refined_facts', label: ru ? 'Углубление фактов' : 'Deeper facts' },
+    { key:'sonic_vibe',    label: ru ? 'Звучание песен' : 'Song vibes' },
+  ];
+  const renderStageBar = (label, st, pct) => (
+    <div key={label} style={{ marginBottom:'12px' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'4px' }}>
+        <span className="mono" style={{ fontSize:'12px', letterSpacing:'0.12em', color: st === 'running' ? c.text : c.textSubtle }}>{label}</span>
+        <span style={{ fontSize:'11px', color: st === 'failed' ? c.red : c.textSubtle }}>
+          {st === 'done' ? '✓' : st === 'failed' ? '✗' : st === 'running' ? '…' : '·'}
+        </span>
+      </div>
+      <div style={{ height:'5px', borderRadius:'3px', background:c.border, overflow:'hidden' }}>
+        <div style={{ height:'100%', width:`${pct}%`, transition:'width 0.4s',
+          background: st === 'done' ? 'oklch(63% 0.17 142)' : 'linear-gradient(90deg, oklch(65% 0.18 270), oklch(75% 0.17 280))' }} />
+      </div>
+    </div>
+  );
 
-      {!indexDone && !indexError && Object.keys(WIZ_STAGE_LABELS).map(k => {
-        const st = stepStatus[k] || 'pending';
+  const renderIndexing = () => {
+    const finished = indexDone && (!shouldEnrich || aiDone);
+    return (
+    <div className="ob-glass" style={finished
+      ? { padding:'30px 28px', textAlign:'center', boxShadow:'inset 0 1px 0 var(--ob-glass-sheen),0 12px 50px rgba(0,0,0,.28),0 0 70px rgba(95,208,138,.22)' }
+      : { padding:'26px 28px' }}>
+
+      {!finished && (
+        <h2 className="serif" style={{ fontSize:'26px', letterSpacing:'-0.02em', marginBottom:'18px' }}>
+          {indexError ? (ru ? 'Что-то пошло не так' : 'Something went wrong')
+                      : (ru ? 'Собираем вашу библиотеку…' : 'Building your library…')}
+        </h2>
+      )}
+
+      {!finished && !indexError && Object.keys(WIZ_STAGE_LABELS).map(k => {
+        const st = stepStatus[k] || (indexDone ? 'done' : 'pending');
         const pr = stageProgress[k] || { current: 0, total: 0 };
         const pct = st === 'done' ? 100 : pr.total > 0 ? Math.round(100 * pr.current / pr.total) : 0;
-        return (
-          <div key={k} style={{ marginBottom:'12px' }}>
-            <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'4px' }}>
-              <span className="mono" style={{ fontSize:'12px', letterSpacing:'0.12em',
-                color: st === 'running' ? c.text : c.textSubtle }}>
-                {ru ? WIZ_STAGE_LABELS[k].ru : WIZ_STAGE_LABELS[k].en}
-              </span>
-              <span style={{ fontSize:'11px', color: st === 'failed' ? c.red : c.textSubtle }}>
-                {st === 'done' ? '✓' : st === 'failed' ? '✗' : pr.total > 0 ? `${pr.current}/${pr.total}` : st === 'running' ? '…' : '·'}
-              </span>
-            </div>
-            <div style={{ height:'5px', borderRadius:'3px', background:c.border, overflow:'hidden' }}>
-              <div style={{ height:'100%', width:`${pct}%`, transition:'width 0.4s',
-                background:'linear-gradient(90deg, oklch(65% 0.18 270), oklch(75% 0.17 280))' }} />
-            </div>
-          </div>
-        );
+        return renderStageBar(ru ? WIZ_STAGE_LABELS[k].ru : WIZ_STAGE_LABELS[k].en, st, pct);
       })}
+
+      {!finished && !indexError && shouldEnrich && (indexDone || aiRunning) && (
+        <>
+          <div className="mono" style={{ display:'flex', alignItems:'center', gap:'9px', margin:'16px 0 10px',
+            fontSize:'11px', letterSpacing:'0.2em', textTransform:'uppercase', color:'#c3b8ff' }}>
+            ✨ {ru ? 'С помощью гуру' : 'With the guru'}
+          </div>
+          {aiStageDefs.map(s => {
+            const j = aiStatus && aiStatus[s.key];
+            const status = j ? j.status : 'pending';
+            const st = status === 'done' ? 'done'
+                     : status === 'failed' ? 'failed'
+                     : (status === 'running' || status === 'queued') ? 'running' : 'pending';
+            const pct = j && j.n_total > 0 ? Math.round(100 * j.n_done / j.n_total) : (st === 'done' ? 100 : 0);
+            return renderStageBar(s.label, st, pct);
+          })}
+          <button onClick={() => onComplete({ mode })}
+            style={{ marginTop:'6px', background:'transparent', border:'none', color:c.textSubtle, fontSize:'12px', textDecoration:'underline', cursor:'pointer' }}>
+            {ru ? 'Войти, не дожидаясь' : 'Enter without waiting'}
+          </button>
+        </>
+      )}
 
       {indexError && (
         <div>
@@ -14216,36 +14440,24 @@ function SetupWizard({ onComplete }) {
         </div>
       )}
 
-      {indexDone && (
-        <div>
-          <p style={{ fontSize:'14px', color:c.textMuted, lineHeight:'1.6', marginBottom:'18px' }}>
-            {ru ? 'Библиотека проиндексирована.' : 'Your library is indexed.'}
-            {aiConnected && (ru
-              ? ' Можно сразу запустить AI-обработку (вайбы, факты, биографии) — она пойдёт в фоне.'
-              : ' You can kick off AI processing (vibes, facts, bios) — it runs in the background.')}
+      {finished && (
+        <div style={{ display:'flex', flexDirection:'column', alignItems:'center' }}>
+          <div style={{ fontSize:'60px', lineHeight:1, marginBottom:'12px',
+            filter:'drop-shadow(0 0 26px rgba(95,208,138,.9)) drop-shadow(0 0 8px rgba(95,208,138,.75))' }}>✨</div>
+          <div className="mono" style={{ fontSize:'11px', letterSpacing:'0.24em', textTransform:'uppercase', color:'#a9ecc4' }}>{ru ? 'Всё готово' : 'All set'}</div>
+          <h2 className="serif" style={{ fontSize:'28px', margin:'8px 0' }}>{ru ? 'Гуру познакомился с вашей музыкой' : 'The guru has met your music'}</h2>
+          <p style={{ fontSize:'13.5px', color:c.textMuted, lineHeight:'1.6', maxWidth:'380px' }}>
+            {ru ? 'Библиотека собрана и понимает ваш вкус. Поток, факты и чат — уже ждут.' : 'Your library is built and gets your taste. Stream, facts and chat are ready.'}
           </p>
-          {aiConnected && (
-            <button onClick={runAiBootstrap} disabled={aiKickoff}
-              className="ske-accent" style={{ width:'100%', padding:'12px', borderRadius:'10px', fontSize:'14px',
-                fontWeight:'600', marginBottom:'10px', opacity: aiKickoff ? 0.5 : 1, cursor: aiKickoff ? 'wait' : 'pointer',
-                display:'flex', alignItems:'center', justifyContent:'center', gap:'8px' }}>
-              {aiKickoff ? <Spinner size={14} color="white" /> : '✨'}
-              {ru ? 'ЗАПУСТИТЬ AI-ОБРАБОТКУ И ВОЙТИ' : 'RUN AI PROCESSING & ENTER'}
-            </button>
-          )}
-          <button onClick={() => onComplete({ mode })} disabled={aiKickoff}
-            className={aiConnected ? undefined : 'ske-accent'}
-            style={aiConnected
-              ? { width:'100%', padding:'12px', borderRadius:'10px', background:'transparent',
-                  border:`1px solid ${c.border}`, color:c.textMuted, fontSize:'14px', cursor:'pointer' }
-              : { width:'100%', padding:'13px 20px', borderRadius:'12px', fontSize:'15px', fontWeight:'600',
-                  letterSpacing:'0.08em', cursor:'pointer' }}>
-            {ru ? '▶ ОТКРЫТЬ MUSIX' : '▶ OPEN MUSIX'}
+          <button onClick={() => onComplete({ mode })} className="ske-accent"
+            style={{ marginTop:'18px', padding:'13px 28px', borderRadius:'12px', fontSize:'15px', fontWeight:'600', letterSpacing:'0.06em', cursor:'pointer' }}>
+            {ru ? 'Открыть MusiX →' : 'Open MusiX →'}
           </button>
         </div>
       )}
     </div>
-  );
+    );
+  };
 
   if (alreadyInit) {
     return (
@@ -14273,7 +14485,13 @@ function SetupWizard({ onComplete }) {
   }
 
   return (
-    <div className="grain" style={{
+    <div className="grain ob-root" style={{
+      '--ob-glass-bg': isDark ? 'rgba(255,255,255,.055)' : 'rgba(255,255,255,.62)',
+      '--ob-glass-sheen': isDark ? 'rgba(255,255,255,.12)' : 'rgba(255,255,255,.9)',
+      '--ob-glass-edge': isDark ? 'rgba(255,255,255,.18)' : 'rgba(0,0,0,.10)',
+      '--ob-card-bg': isDark ? 'linear-gradient(180deg,#1d1d23,#131318)' : 'linear-gradient(180deg,#ffffff,#eef0f5)',
+      '--ob-card-edge': isDark ? 'rgba(255,255,255,.05)' : 'rgba(0,0,0,.06)',
+      '--ob-blob1':'#7d5cff', '--ob-blob2':'#3aa0ff', '--ob-blob3':'#c061ff',
       width:'100vw', height:'100vh', overflow:'auto', position:'relative',
       background: isDark
         ? 'radial-gradient(ellipse at top, #15151b 0%, #0a0a0e 60%, #07070a 100%)'
@@ -14288,15 +14506,20 @@ function SetupWizard({ onComplete }) {
         <TopRightControls isDark={isDark} lang={lang} onLang={handleLang} onTheme={handleTheme} onSettings={() => {}} />
       </div>
       <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', padding:'24px 32px 48px' }}>
-        <div style={{ width:'100%', maxWidth:'560px' }}>
-          {step === 'welcome' && renderWelcome()}
-          {step === 'account' && renderAccount()}
-          {step === 'mode'    && renderMode()}
-          {step === 'music'   && renderMusic()}
-          {step === 'ai'      && renderAi()}
-          {step === 'policy'  && renderPolicy()}
-          {step === 'indexing' && renderIndexing()}
-          <WizardDots count={wizSteps.length} active={stepIndex} c={c} />
+        <div style={{ width:'100%', maxWidth: step === 'welcome' ? '940px' : '880px' }}>
+          {step === 'welcome' ? renderWelcome() : (
+            <div style={{ position:'relative', display:'flex', gap:24 }}>
+              <DriftBackdrop />
+              <SetupRail ru={ru} steps={railSteps} currentKey={step} />
+              <div style={{ flex:1, position:'relative', zIndex:1, minWidth:0 }}>
+                {step === 'accountMode' && renderAccountMode()}
+                {step === 'music'    && renderMusic()}
+                {step === 'ai'       && renderAi()}
+                {step === 'policy'   && renderPolicy()}
+                {step === 'indexing' && renderIndexing()}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
