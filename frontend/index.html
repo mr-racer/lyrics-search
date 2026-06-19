@@ -8633,13 +8633,24 @@ function InstanceAISettings({ isDark, lang, showToast }) {
         </div>
       )}
 
-      <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13.5, fontWeight: 600, color: c.text, marginBottom: 12 }}>
-        <ToggleSwitch checked={aiEnabled} onChange={v => setAiEnabled(v)} isDark={isDark} />
-        {ru ? 'Гуру (AI) — для всех участников' : 'Guru (AI) — for all members'}
-      </label>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 13.5, fontWeight: 600, color: c.text }}>{ru ? 'Гуру (AI) — для всех участников' : 'Guru (AI) — for all members'}</span>
+        <div style={{ display: 'inline-flex', borderRadius: 10, overflow: 'hidden', boxShadow: `inset 0 0 0 1px ${c.border}`, flexShrink: 0 }}>
+          <button type="button" onClick={() => setAiEnabled(true)}
+            style={{ padding: '7px 16px', fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer', transition: 'background .15s',
+              background: aiEnabled ? 'oklch(63% 0.17 142)' : 'transparent', color: aiEnabled ? '#fff' : c.textMuted }}>
+            {ru ? 'Вкл' : 'On'}
+          </button>
+          <button type="button" onClick={() => setAiEnabled(false)}
+            style={{ padding: '7px 16px', fontSize: 13, fontWeight: 600, border: 'none', cursor: 'pointer', transition: 'background .15s',
+              background: !aiEnabled ? 'oklch(58% 0.21 25)' : 'transparent', color: !aiEnabled ? '#fff' : c.textMuted }}>
+            {ru ? 'Выкл' : 'Off'}
+          </button>
+        </div>
+      </div>
 
       {aiEnabled ? (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 4 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 12, marginBottom: 4 }}>
           <div style={{ gridColumn: '1 / -1' }}>
             {label('BASE URL')}
             <input value={baseUrl} onChange={e => setBaseUrl(e.target.value)}
@@ -8801,7 +8812,7 @@ function OwnerAdminDashboard({ onLogout }) {
 
         {/* three sections, side by side */}
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:14, alignItems:'start' }}>
-          <div className="ob-glass" style={{ padding: '18px 20px', gridColumn: editAi ? '1 / -1' : 'auto' }}>
+          <div className="ob-glass" style={{ padding: '18px 20px' }}>
             <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10 }}>
               <div className="serif" style={{ fontSize: 17, fontWeight: 600 }}>
                 {ru ? 'Настройки системы' : 'System settings'}
