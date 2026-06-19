@@ -123,6 +123,8 @@ class ChatRequest(BaseModel):
     # LLM connection — overrides env vars LLM_BASE_URL / LLM_MODEL if set
     llm_base_url: Optional[str] = Field(None, description="e.g. http://localhost:8000/v1")
     llm_model: Optional[str] = Field(None, description="e.g. openai/gpt-oss-20b")
+    # UI language → language of the user-facing answer. None = no explicit directive.
+    lang: Optional[str] = Field(None, description='"ru" | "en"')
 
 
 class ChatResponse(BaseModel):
@@ -165,6 +167,8 @@ class TrackChatRequest(BaseModel):
     message: str
     llm_base_url: Optional[str] = None
     llm_model: Optional[str] = None
+    # UI language → reply language. None falls back to "match the user's message".
+    lang: Optional[str] = None
 
 
 class TrackChatResponse(BaseModel):

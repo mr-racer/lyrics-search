@@ -3322,7 +3322,7 @@ function useChatHistory(userId) {
 }
 
 // ─── useTrackChat — per-track localStorage chat history ──────────────────────
-function useTrackChat(trackId, userId) {
+function useTrackChat(trackId, userId, lang) {
   const storageKey = `chatHistory:track:${trackId || '_none'}:${userId || '_anon'}`;
 
   const readMsgs = useCallback(() => {
@@ -3354,6 +3354,7 @@ function useTrackChat(trackId, userId) {
           track_context: trackContext,
           mode: 'song',
           message: text,
+          lang,
           history: messages.filter(m => !m.loading).map(m => ({
             role: m.role, content: m.text || '',
           })),
@@ -3379,7 +3380,7 @@ function useTrackChat(trackId, userId) {
       setMessages(finalMsgs);
       persist(finalMsgs);
     }
-  }, [messages, persist]);
+  }, [messages, persist, lang]);
 
   const clearChat = useCallback(() => {
     setMessages([]);
@@ -4854,7 +4855,7 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
     try {
       const history = messages.filter(m=>!m.loading).map(m=>({ role:m.role==='assistant'?'assistant':'user', content:m.text||'' }));
       const res = await apiFetch('/chat/', { method:'POST', body: JSON.stringify({
-        message:userText, history, mode: effectiveMode, auto_mode: autoMode, ...getLLMSettings()
+        message:userText, history, mode: effectiveMode, auto_mode: autoMode, lang, ...getLLMSettings()
       }) });
       const hits = res.hits || [];
       setResults(hits);
@@ -10512,7 +10513,7 @@ const TRACK_CHAT_SUGGESTED_PROMPTS = [
 function AIChatDrawer({ isOpen, onClose, track, lang, isDark, showToast }) {
   const c = useColors(isDark);
   const trackId = track?.track_id || null;
-  const { messages, sendMessage, clearChat } = useTrackChat(trackId, localStorage.getItem('musix_user_id'));
+  const { messages, sendMessage, clearChat } = useTrackChat(trackId, localStorage.getItem('musix_user_id'), lang);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const endRef = useRef(null);
@@ -11093,9 +11094,9 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
           },
           mode: 'lyric_explain',
           selected_line: line,
-          // The agent prompt instructs LLM to reply in the language of the user's
-          // message — send it in the interface language so RU users get RU replies.
           message: lang === 'ru' ? 'Объясни эту строчку' : 'Explain this line',
+          // Explicit answer language (backend forces the reply language from this).
+          lang,
           llm_base_url: localStorage.getItem('llm_base_url') || undefined,
           llm_model: localStorage.getItem('llm_model') || undefined,
           }),

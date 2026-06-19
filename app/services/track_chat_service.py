@@ -26,6 +26,21 @@ from app.domain.models import TrackChatContext
 
 logger = logging.getLogger(__name__)
 
+_LANG_NAMES = {"ru": "Russian", "en": "English"}
+
+
+def _reply_lang_directive(lang: Optional[str]) -> str:
+    """Explicit reply-language instruction from the UI language.
+
+    Falls back to the message-language heuristic when ``lang`` is unset/unknown
+    (e.g. free-form song chat where matching the user's own message is desirable).
+    """
+    name = _LANG_NAMES.get((lang or "").strip().lower())
+    if name:
+        return f"Reply ONLY in {name}, regardless of the language of the user's message."
+    return "Reply in the language of the user's message (Russian or English)."
+
+
 # ─── Prompts ──────────────────────────────────────────────────────────────────
 
 TRACK_CHAT_PROMPT = """
@@ -38,7 +53,7 @@ If `web_search` returns nothing useful, say so honestly. Don't invent facts.
 
 When discussing the lyrics, quote the exact phrase the user is asking about. Be specific, not generic.
 
-Reply in the language of the user's message (Russian or English).
+{lang_directive}
 
 TRACK CONTEXT:
 {track_context_block}
@@ -51,7 +66,7 @@ You are explaining a single lyric line from a song the listener is hearing.
 Focus on that line. Refer to surrounding lines only when essential.
 Use the `web_search` tool only when the line references something concrete (a place, person, event) that isn't in the provided facts.
 
-Reply in the language of the user's message (Russian or English), in 2-4 sentences.
+{lang_directive} Answer in 2-4 sentences.
 
 TRACK CONTEXT:
 {track_context_block}
@@ -196,12 +211,16 @@ async def answer_track_chat(req):
     block = build_track_context_block(req.track_context, song_facts)
 
     # Choose prompt and fill placeholders
+    directive = _reply_lang_directive(getattr(req, "lang", None))
     if req.mode == "song":
-        system_prompt = TRACK_CHAT_PROMPT.format(track_context_block=block)
+        system_prompt = TRACK_CHAT_PROMPT.format(
+            track_context_block=block, lang_directive=directive,
+        )
     else:
         system_prompt = LYRIC_EXPLAIN_PROMPT.format(
             track_context_block=block,
             selected_line=req.selected_line,
+            lang_directive=directive,
         )
 
     # Build agent (per-request — simpler than thread-safety analysis)

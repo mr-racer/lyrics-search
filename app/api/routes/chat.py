@@ -267,6 +267,21 @@ def _rrf_merge(ranked_lists: list[list[TrackHit]], k: int = 60) -> list[TrackHit
 # ─── Endpoint ─────────────────────────────────────────────────────────────────
 
 
+_ANSWER_LANG_NAMES = {"ru": "Russian", "en": "English"}
+
+
+def _answer_lang_directive(lang: str | None) -> str:
+    """Prefix that forces the user-facing answer language; '' when lang unknown
+    (then existing prompt behaviour — match the query language — is preserved)."""
+    name = _ANSWER_LANG_NAMES.get((lang or "").strip().lower())
+    if not name:
+        return ""
+    return (
+        f'LANGUAGE REQUIREMENT: Write the user-facing "message" strictly in {name}, '
+        f"regardless of the language of the query, context, or facts.\n\n"
+    )
+
+
 @router.post("/")
 async def chat(
     req: ChatRequest,
@@ -531,7 +546,7 @@ async def chat(
                 )
                 answer_result = await ask_llm(
                     req.message,
-                    system_prompt=answer_prompt,
+                    system_prompt=_answer_lang_directive(req.lang) + answer_prompt,
                     parse_json=True,
                     **llm_kw,
                 )
@@ -619,7 +634,7 @@ async def chat(
                 )
                 logger.debug("[chat] Scorer prompt (attempt %d): context has %d chars",
                              attempt, len(context))
-                score = await scorer_fn(req.message, filled)
+                score = await scorer_fn(req.message, _answer_lang_directive(req.lang) + filled)
 
                 action = score.action
                 if action == "search" and score.queries:
@@ -650,7 +665,7 @@ async def chat(
             try:
                 result: dict = await ask_llm(
                     req.message,
-                    system_prompt=filled,
+                    system_prompt=_answer_lang_directive(req.lang) + filled,
                     parse_json=True,
                     **llm_kw,
                 )
