@@ -9483,6 +9483,10 @@ function UploadIndexingWizard({ isDark, lang, jobId, onDone }) {
   });
   const [error, setError] = useState(null);
   const [done, setDone] = useState(false);
+  // Server-mode: after FACTS the backend runs the awaited AI tasks (bios/facts)
+  // before flipping overall_status to 'completed'. We stay on this screen until
+  // then; aiWaiting drives a "finishing" note so the wait is explained.
+  const [aiWaiting, setAiWaiting] = useState(false);
 
   useEffect(() => {
     const evt = new EventSource(`${API}/index/progress/${jobId}`);
@@ -9506,10 +9510,19 @@ function UploadIndexingWizard({ isDark, lang, jobId, onDone }) {
                 total: v.total ?? prev[k]?.total ?? 0,
                 eta: v.eta_seconds ?? prev[k]?.eta ?? null,
                 message: v.message ?? prev[k]?.message ?? null,
+                found: v.found ?? prev[k]?.found ?? null,
+                not_found: v.not_found ?? prev[k]?.not_found ?? null,
               };
             }
             return next;
           });
+        }
+        // Once FACTS is done but the job isn't 'completed', the backend is in the
+        // awaited AI phase (no further stage events, just SSE heartbeats) — show
+        // the finishing note instead of a frozen-looking screen.
+        if (data.overall_status !== 'completed'
+            && data.stages?.facts?.status === 'completed') {
+          setAiWaiting(true);
         }
         if (data.overall_status === 'completed') {
           evt.close(); setDone(true);
@@ -9524,13 +9537,30 @@ function UploadIndexingWizard({ isDark, lang, jobId, onDone }) {
   }, [jobId]);
 
   return (
-    <IndexingModal
-      isDark={isDark} lang={lang} collectionName=""
-      stepStatus={stepStatus} trackCount={done ? (stageProgress.lyrics?.current ?? 0) : null}
-      errorMessage={error}
-      onClose={() => {}}
-      stageProgress={stageProgress}
-    />
+    <>
+      <IndexingModal
+        isDark={isDark} lang={lang} collectionName=""
+        stepStatus={stepStatus} trackCount={done ? (stageProgress.lyrics?.current ?? 0) : null}
+        errorMessage={error}
+        onClose={() => {}}
+        stageProgress={stageProgress}
+      />
+      {aiWaiting && !done && !error && (
+        <div style={{
+          position:'fixed', left:0, right:0, bottom:0, zIndex:10000,
+          padding:'10px 16px', textAlign:'center', backdropFilter:'blur(4px)',
+          background: isDark ? 'rgba(20,20,28,0.92)' : 'rgba(250,250,255,0.95)',
+          color: isDark ? '#cdd5e0' : '#334',
+          fontSize:'13px', lineHeight:1.4,
+          borderTop: `1px solid ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'}`,
+        }}>
+          <Spinner size={13} />{' '}
+          {lang==='ru'
+            ? 'AI-обработка (биографии и факты)… не закрывайте страницу — плеер откроется автоматически.'
+            : 'AI processing (bios & facts)… keep this page open — the player opens automatically.'}
+        </div>
+      )}
+    </>
   );
 }
 
