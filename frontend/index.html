@@ -13577,20 +13577,6 @@ const WIZ_STAGE_LABELS = {
   analysis: { ru: 'Карта похожих',    en: 'Similarity map' },
 };
 
-function WizardDots({ count, active, c }) {
-  return (
-    <div style={{ display:'flex', gap:'8px', justifyContent:'center', marginTop:'28px' }}>
-      {Array.from({ length: count }, (_, i) => (
-        <span key={i} style={{
-          width:'8px', height:'8px', borderRadius:'50%',
-          background: i <= active ? 'oklch(62% 0.2 275)' : c.border,
-          transition:'background 0.25s',
-        }} />
-      ))}
-    </div>
-  );
-}
-
 // ─── Onboarding redesign: shared liquid-glass primitives ─────────────────
 function DriftBackdrop({ variant }) {
   return (
@@ -13712,7 +13698,6 @@ function SetupWizard({ onComplete }) {
   const [stageProgress, setStageProgress] = useState({});
   const [indexError, setIndexError]       = useState(null);
   const [indexDone, setIndexDone]         = useState(false);
-  const [aiKickoff, setAiKickoff]         = useState(false);
   // AI enrichment as indexing stages (sharing: opt-out; runs the 3 AI tasks
   // and polls /library/ai-index/status to fill their bars before finishing).
   const [enrichWithAi, setEnrichWithAi]   = useState(true);
@@ -13799,22 +13784,6 @@ function SetupWizard({ onComplete }) {
     } catch (e) {
       setPolicyError(String(e.message || e));
     } finally { setPolicyBusy(false); }
-  };
-
-  const runAiBootstrap = async () => {
-    // Fire the three cache-building jobs; they run server-side and their
-    // status is visible in Settings → AI. Failures are non-fatal here.
-    setAiKickoff(true);
-    for (const task of ['sonic_vibe', 'refined_facts', 'artist_bio']) {
-      try {
-        await apiFetch(`/library/ai-index/${task}`, { method:'POST', body: JSON.stringify({
-          lang,
-          llm_base_url: localStorage.getItem('llm_base_url') || undefined,
-          llm_model: localStorage.getItem('llm_model') || undefined,
-        }) });
-      } catch (e) { /* runnable later from Settings */ }
-    }
-    onComplete({ mode });
   };
 
   const retryMusic = () => {
