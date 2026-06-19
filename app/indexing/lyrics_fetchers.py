@@ -13,8 +13,6 @@ import time
 import requests
 import syncedlyrics
 
-from app.services.proxy_config import get_proxy
-
 logger = logging.getLogger(__name__)
 
 PROVIDERS = ["Musixmatch", "Lrclib", "NetEase", "Megalobiz"]
@@ -27,7 +25,9 @@ def fetch_lyrics_ovh(artist: str, title: str) -> str | None:
     """Fetch lyrics from lyrics.ovh API. Returns plain lyrics string or None."""
     try:
         url = f"https://api.lyrics.ovh/v1/{artist}/{title}"
-        resp = requests.get(url, timeout=5, proxies=get_proxy())
+        # No proxy for lyrics-text fetching — only the metadata/facts/web-search
+        # services route through get_proxy(); lyrics.ovh goes direct.
+        resp = requests.get(url, timeout=5)
         time.sleep(TIME_BETWEEN_REQUESTS_OVH)
         if resp.status_code == 200:
             data = json.loads(resp.text)
