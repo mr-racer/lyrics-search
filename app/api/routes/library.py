@@ -258,28 +258,36 @@ async def get_random_tracks(
 # ── Collections info ──────────────────────────────────────────────────────────
 
 @router.get("/collections")
-async def get_collections(request: Request) -> dict:
+async def get_collections(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> dict:
     """Return all Qdrant collections with their point counts.
 
     Used by the frontend on startup to decide whether to show the
     onboarding screen (no data) or the main search UI.
 
-    Returns {"collections": [...], "total_points": N, "qdrant_available": bool}
+    Also returns ``user_points`` — the count of tracks in the
+    authenticated user's own collection — so the frontend can decide
+    per-user whether to show onboarding instead of relying on the
+    global total.
+
+    Returns {"collections": [...], "total_points": N, "user_points": N, "qdrant_available": bool}
     """
     db_client = request.app.state.db_client
 
     # Qdrant was unavailable at startup
     if db_client is None:
-        return {"collections": [], "total_points": 0, "qdrant_available": False}
+        return {"collections": [], "total_points": 0, "user_points": 0, "qdrant_available": False}
 
     try:
         qdrant = db_client.qdrant
         cols = qdrant.get_collections().collections
     except Exception:
-        return {"collections": [], "total_points": 0, "qdrant_available": False}
+        return {"collections": [], "total_points": 0, "user_points": 0, "qdrant_available": False}
 
     # Enrich each collection with the text model it was indexed with (if any).
-    # Legacy collections indexed before this column existed will report None;
+    # Legacy collections indexed before this column exists will report None;
     # the frontend may then prompt re-indexing or fall back gracefully.
     from app.resources.metadata_db import MetadataDB
     try:
@@ -288,6 +296,9 @@ async def get_collections(request: Request) -> dict:
         pass
 
     result = []
+    user_points = 0
+    derived = derive_collection_for_user(current_user)
+
     for col in cols:
         try:
             info = qdrant.get_collection(col.name)
@@ -301,9 +312,13 @@ async def get_collections(request: Request) -> dict:
             pass
         result.append({"name": col.name, "count": count, "text_model": text_model})
 
+        if col.name == derived:
+            user_points = count
+
     return {
         "collections": result,
         "total_points": sum(c["count"] for c in result),
+        "user_points": user_points,
         "qdrant_available": True,
     }
 

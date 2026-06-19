@@ -43,11 +43,16 @@ def _fetch_facts_html(artist: str) -> Optional[str]:
     slug = _slugify(artist)
     url = f"https://www.songfacts.com/facts/{slug}"
     try:
+        logger.info("[ArtistFacts] Fetching facts for '%s' (%s)", artist, url)
         resp = requests.get(url, timeout=REQUEST_TIMEOUT, proxies=get_proxy())
+        logger.info("[ArtistFacts] '%s' → HTTP %s, %d bytes", artist, resp.status_code, len(resp.text))
         resp.raise_for_status()
         return resp.text
+    except requests.HTTPError as e:
+        logger.warning("[ArtistFacts] HTTP error for '%s' (%s): HTTP %s", artist, url, e.response.status_code)
+        return None
     except requests.RequestException as e:
-        logger.debug("[ArtistFacts] Failed to fetch facts for %s: %s", artist, e)
+        logger.warning("[ArtistFacts] Failed to fetch facts for '%s': %s", artist, e)
         return None
 
 
@@ -109,6 +114,7 @@ async def fetch_artist_facts(
     """Fetch facts for a single artist. Returns cached text or None."""
     cached = get_cached_facts(collection_name, artist)
     if cached:
+        logger.info("[ArtistFacts] using cached facts for '%s'", artist)
         return cached
 
     html = await asyncio.to_thread(_fetch_facts_html, artist)
@@ -117,9 +123,11 @@ async def fetch_artist_facts(
 
     facts = _parse_facts(html)
     if not facts:
+        logger.info("[ArtistFacts] no facts parsed for '%s' (HTML fetched but no facts found)", artist)
         return None
 
     _save_facts_to_sqlite(collection_name, artist, facts)
+    logger.info("[ArtistFacts] cached %d facts for '%s'", len(facts), artist)
     return "\n\n".join(facts)
 
 

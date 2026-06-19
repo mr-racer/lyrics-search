@@ -18,12 +18,23 @@ services:
       # Reach Qdrant by service name over the Compose network. Set here too so
       # it holds even without a .env file.
       - QDRANT_URL=http://qdrant:6333
+      # ── Prevent HTTP_PROXY from leaking into container environment ──
+      # docker-compose auto-loads .env into container env. Libraries like httpx
+      # and QdrantClient auto-detect HTTP_PROXY from env and would route ALL
+      # requests through the proxy, including internal Docker traffic (Qdrant,
+      # SearXNG). We override these to empty so only code that explicitly calls
+      # get_proxy() (which reads .env directly) uses the proxy.
+      - HTTP_PROXY=
+      - http_proxy=
+      - HTTPS_PROXY=
+      - https_proxy=
     volumes:
       # Bind mounts — visible/editable from the host (Windows project layout):
       - ./media:/app/media                      # client uploads (server mode)
       - ./cache:/app/cache                      # SQLite metadata.db, facts, transcoded
       - ./weights:/app/weights                  # model weights
       - ./frontend/covers:/app/frontend/covers  # extracted album/artist art
+      - ./.env:/app/.env:ro                     # proxy_config reads HTTP_PROXY directly from .env
       # Named volume — keeps downloaded HF/CLAP models across rebuilds:
       - hf-cache:/app/.hf-cache
       # Optional: mount an external music folder (read-only) to index by link.

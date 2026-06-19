@@ -52,8 +52,12 @@ def _fetch_song_facts_html(artist: str, song: str) -> Optional[str]:
     try:
         logger.info("[SongFacts] Fetching facts for '%s — %s' (%s)", artist, song, url)
         resp = requests.get(url, timeout=REQUEST_TIMEOUT, proxies=get_proxy())
+        logger.info("[SongFacts] '%s — %s' → HTTP %s, %d bytes", artist, song, resp.status_code, len(resp.text))
         resp.raise_for_status()
         return resp.text
+    except requests.HTTPError as e:
+        logger.warning("[SongFacts] HTTP error for '%s — %s' (%s): HTTP %s", artist, song, url, e.response.status_code)
+        return None
     except requests.RequestException as e:
         logger.warning("[SongFacts] Failed to fetch facts for '%s — %s': %s", artist, song, e)
         return None
@@ -124,6 +128,7 @@ async def fetch_song_facts(
     """Fetch facts for a single song. Returns cached text or None."""
     cached = get_cached_song_facts(collection_name, artist, song)
     if cached:
+        logger.info("[SongFacts] using cached facts for '%s — %s'", artist, song)
         return cached
 
     html = await asyncio.to_thread(_fetch_song_facts_html, artist, song)
@@ -132,11 +137,11 @@ async def fetch_song_facts(
 
     facts = _parse_song_facts(html)
     if not facts:
-        logger.info("[SongFacts] No facts found for '%s — %s'", artist, song)
+        logger.info("[SongFacts] no facts parsed for '%s — %s' (HTML fetched but no facts found)", artist, song)
         return None
 
     _save_song_facts_to_sqlite(collection_name, artist, song, facts)
-    logger.info("[SongFacts] Cached %d facts for '%s — %s'", len(facts), artist, song)
+    logger.info("[SongFacts] cached %d facts for '%s — %s'", len(facts), artist, song)
     return "\n\n".join(facts)
 
 

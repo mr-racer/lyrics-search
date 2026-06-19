@@ -8763,7 +8763,7 @@ function OwnerAdminDashboard({ onLogout }) {
   );
 }
 
-function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, onTheme, onLang, collections, onLogout, instanceMode, showToast }) {
+function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, onTheme, onLang, collections, userPoints, onLogout, instanceMode, showToast }) {
   const c = useColors(isDark);
   // 'light' | 'heavy' — derived from the legacy text_model localStorage key so
   // an earlier explicit heavy pick survives the UI change.
@@ -9004,7 +9004,7 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
                   {localStorage.getItem('musix_user_email') || (lang==='ru'?'не вошёл':'not logged in')}
                 </div>
                 <div className="mono-label" style={{ color:c.textMuted, marginTop:3, letterSpacing:'0.14em' }}>
-                  {(localStorage.getItem('musix_user_role')||'').toUpperCase()} · {(collections?.[0]?.count) || 0} {lang==='ru'?'ТРЕКОВ':'TRACKS'}
+                  {(localStorage.getItem('musix_user_role')||'').toUpperCase()} · {(userPoints ?? 0)} {lang==='ru'?'ТРЕКОВ':'TRACKS'}
                 </div>
               </div>
               <button onClick={onLogout}
@@ -12944,6 +12944,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
   React.useMemo(() => runCollectionLocalStorageMigration_d(localStorage.getItem('musix_user_id')), []);
 
   const [collections, setCollections] = useState([]);
+  const [userPoints, setUserPoints] = useState(0);
   const aiStatus = useAIStatus();
 
   // Plan 19 follow-up: lift usePlaylists + AddToPlaylistPopover to App-level
@@ -13028,7 +13029,9 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
         if (!res.qdrant_available) { setAppState('no-qdrant'); return; }
         const cols = res.collections || [];
         setCollections(cols);
-        setAppState((res.total_points || 0) > 0 ? 'ready' : 'onboarding');
+        const up = res.user_points || 0;
+        setUserPoints(up);
+        setAppState(up > 0 ? 'ready' : 'onboarding');
       })
       .catch(() => setAppState('no-qdrant'));
   }, []);
@@ -13036,6 +13039,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
   const loadCollections = useCallback(() =>
     apiFetch('/library/collections').then(data => {
       setCollections(data.collections || []);
+      setUserPoints(data.user_points || 0);
     }).catch(() => {}), []);
 
   const handlePlayTrack = (track, results) => {
@@ -13273,7 +13277,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
           onLang={handleLang} onTheme={handleTheme} onSettings={() => setSettingsOpen(true)}
           onNav={(id) => setSection(id)}
 
-          hasLibrary={collections.length > 0}
+          hasLibrary={userPoints > 0}
           stats={stats}
           playerTrack={playerTrack}
           playerPlaylist={playerPlaylist}
@@ -13346,6 +13350,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
           onTheme={handleTheme}
           onLang={handleLang}
           collections={collections}
+          userPoints={userPoints}
           onLogout={onLogout}
           instanceMode={instanceMode}
           showToast={showToast} />

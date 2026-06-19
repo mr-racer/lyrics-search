@@ -33,7 +33,7 @@ _FEAT_RE = re.compile(
 
 
 ARTIST_COVERS_DIR = Path(__file__).resolve().parent.parent.parent / "frontend" / "covers" / "artists"
-IMAGE_TIMEOUT_SEC = 3.0
+IMAGE_TIMEOUT_SEC = 8.0
 
 
 def _canonical_artist_name(artist: str) -> str:
@@ -63,7 +63,9 @@ JSON_TIMEOUT_SEC = 0.4
 
 def _sync_get_json(url: str) -> dict | None:
     """Blocking GET that raises_for_status and parses JSON."""
+    logger.info("[AudioDB] GET %s", url)
     r = requests.get(url, timeout=JSON_TIMEOUT_SEC, proxies=get_proxy())
+    logger.info("[AudioDB] GET %s → HTTP %s", url, r.status_code)
     r.raise_for_status()
     return r.json()
 
@@ -72,7 +74,8 @@ async def _http_get_json(url: str) -> dict | None:
     """Async wrapper around _sync_get_json with single retry on ConnectionError/Timeout."""
     try:
         return await asyncio.to_thread(_sync_get_json, url)
-    except (requests.ConnectionError, requests.Timeout):
+    except (requests.ConnectionError, requests.Timeout) as e:
+        logger.warning("[AudioDB] request failed for %s: %s — retrying", url, e)
         await asyncio.sleep(1.0)
         try:
             return await asyncio.to_thread(_sync_get_json, url)
@@ -82,6 +85,9 @@ async def _http_get_json(url: str) -> dict | None:
         except Exception as e:
             logger.warning("[AudioDB] error during retry %s: %s", url, e)
             return None
+    except requests.HTTPError as e:
+        logger.warning("[AudioDB] HTTP error for %s: %s", url, e)
+        return None
     except Exception as e:
         logger.warning("[AudioDB] error %s: %s", url, e)
         return None
@@ -95,12 +101,15 @@ async def _download_image(url: str | None) -> str | None:
     if not url:
         return None
     try:
+        logger.info("[AudioDB] downloading image: %s", url)
         r = await asyncio.to_thread(
             lambda: requests.get(url, timeout=IMAGE_TIMEOUT_SEC, proxies=get_proxy()),
         )
+        logger.info("[AudioDB] image GET %s → HTTP %s, %d bytes", url, r.status_code, len(r.content))
         r.raise_for_status()
         data = r.content
         if not data:
+            logger.warning("[AudioDB] image download returned 0 bytes: %s", url)
             return None
         if data[:8].startswith(b"\x89PNG\r\n\x1a\n"):
             ext = "png"
@@ -113,7 +122,11 @@ async def _download_image(url: str | None) -> str | None:
         dest = ARTIST_COVERS_DIR / f"{content_hash}.{ext}"
         if not dest.exists():
             dest.write_bytes(data)
+        logger.info("[AudioDB] image saved: %s", dest.name)
         return f"/covers/artists/{content_hash}.{ext}"
+    except requests.HTTPError as e:
+        logger.warning("[AudioDB] image HTTP error %s: %s", url, e)
+        return None
     except Exception as e:
         logger.warning("[AudioDB] image download failed for %s: %s", url, e)
         return None
@@ -170,6 +183,7 @@ async def fetch_audiodb_for_artist(artist: str, collection_name: str) -> None:
 
     # Total fetch failure → don't write a row at all so we retry next time.
     if data is None:
+        logger.info("[AudioDB] no data for artist %r (slug=%s) — will retry next run", canonical, slug)
         return
 
     artists_list = data.get("artists")
@@ -183,6 +197,7 @@ async def fetch_audiodb_for_artist(artist: str, collection_name: str) -> None:
             country_code=None, country=None, label=None,
             cutout_path=None, thumb_path=deezer_thumb, audiodb_mbid=None,
         )
+        logger.info("[AudioDB] artist %r not in AudioDB, deezer_thumb=%s", canonical, deezer_thumb)
         return
 
     a = artists_list[0]
@@ -191,6 +206,14 @@ async def fetch_audiodb_for_artist(artist: str, collection_name: str) -> None:
     if not cutout_path and not thumb_path:
         thumb_path = await _fetch_deezer_picture(canonical)
 
+    logger.info(
+        "[AudioDB] artist %r: bio=%s, mood=%s, cutout=%s, thumb=%s",
+        canonical,
+        bool(a.get("strBiographyEN") or a.get("strBiography")),
+        a.get("strMood"),
+        cutout_path,
+        thumb_path,
+    )
     MetadataDB.upsert_artist_audiodb(
         slug=slug,
         collection_name=collection_name,
@@ -241,7 +264,7 @@ async def fetch_audiodb_for_artists(
             if progress_callback:
                 progress_callback(idx, total, progress_label, found)
         except Exception as e:
-            logger.warning("[AudioDB] unhandled error for %s: %s", canonical, e)
+            logger.error("[AudioDB] unhandled error for %s: %s", canonical, e, exc_info=True)
             results[canonical] = False
             if progress_callback:
                 progress_callback(idx, total, progress_label, False)

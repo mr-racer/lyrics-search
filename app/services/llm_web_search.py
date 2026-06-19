@@ -70,7 +70,7 @@ def search_searxng(query: str, max_results: int = 5) -> list[dict]:
                 ),
             },
             timeout=10,
-            proxy=(get_proxy() or {}).get("https"),
+            proxy=None,  # internal Docker service — never through proxy
         )
         resp.raise_for_status()
         data = resp.json()

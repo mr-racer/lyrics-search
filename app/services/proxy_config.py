@@ -1,9 +1,14 @@
-"""Optional HTTP/HTTPS proxy configuration for outbound requests during indexing.
+"""Optional HTTP/HTTPS proxy for outbound requests during indexing.
 
-Reads ``HTTP_PROXY`` from the environment (or ``os.environ`` fallback). When set,
-returns a dict suitable for both ``requests.get(proxy=...)`` and
-``httpx.get(proxy=...)``. When unset or empty, returns ``None`` so every call
-falls back to direct networking — no proxy at all.
+Reads ``HTTP_PROXY`` from the ``.env`` file **directly** (not from ``os.environ``).
+This is intentional: docker-compose auto-loads ``.env`` into the container
+environment, and libraries like ``httpx`` / ``requests`` / ``QdrantClient``
+auto-detect ``HTTP_PROXY`` from ``os.environ`` — which would route *every*
+request through the proxy, including internal Docker traffic (Qdrant, SearXNG).
+
+By reading the file ourselves and never exporting ``HTTP_PROXY`` into the
+container environment, only code that explicitly calls ``get_proxy()`` and
+passes ``proxies=...`` uses the proxy. Internal requests stay direct.
 
 Supported formats:
     - Single URL::
@@ -12,32 +17,25 @@ Supported formats:
 
       Both HTTP and HTTPS traffic route through the same server.
 
-    - Separate values (comma-separated, ``http=https=...`` also works)::
+    - Separate values (comma-separated)::
 
         HTTP_PROXY=http=http://...,https=http://...
 
-    The simple single-URL form is the most common — it covers a standard
-    transparent proxy or an auth-enabled one with user:pass baked in."""
+    The simple single-URL form is the most common."""
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 
-def get_proxy() -> dict | None:
-    """Return ``{"http": ..., "https": ...}`` when a proxy env var is set, else ``None``.
-
-    Checks ``HTTP_PROXY`` first, then falls back to the conventional lower-case
-    ``http_proxy`` (honoured by many libraries out of the box — we mirror it so
-    Docker / docker-compose users can set either).
-    """
-    raw = os.environ.get("HTTP_PROXY", "") or os.environ.get("http_proxy", "")
+def _parse_proxy(raw: str) -> dict | None:
+    """Parse a proxy URL string into a dict."""
     proxy = raw.strip()
-
     if not proxy:
         return None
 
-    # If the value already looks like a key=value dict, pass it through.
+    # key=value dict form
     if "=" in proxy and (proxy.startswith("http=") or proxy.startswith("https=")):
         result = {}
         for part in proxy.split(","):
@@ -49,3 +47,23 @@ def get_proxy() -> dict | None:
 
     # Single URL — apply to both http and https.
     return {"http": proxy, "https": proxy}
+
+
+def get_proxy() -> dict | None:
+    """Return proxy dict for outbound requests, or ``None``.
+
+    Reads ``HTTP_PROXY`` from the ``.env`` file directly — NOT from
+    ``os.environ`` — so that internal Docker traffic is unaffected.
+    """
+    # Try .env at project root (Docker: /app/.env, local: repo root)
+    for candidate in (Path("/app/.env"), Path(".env")):
+        if candidate.is_file():
+            for line in candidate.read_text().splitlines():
+                line = line.strip()
+                if line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                if key.strip() == "HTTP_PROXY":
+                    return _parse_proxy(value)
+            break  # found .env, no HTTP_PROXY inside
+    return None
