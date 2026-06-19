@@ -1922,11 +1922,19 @@
     /* === onboarding redesign === (.ob-root sets the --ob-* vars per theme) */
     .ob-glass{position:relative;z-index:1;background:var(--ob-glass-bg);border-radius:22px;backdrop-filter:blur(20px) saturate(135%);-webkit-backdrop-filter:blur(20px) saturate(135%);box-shadow:inset 0 1px 0 var(--ob-glass-sheen),0 12px 50px rgba(0,0,0,.28);}
     .ob-glass::before{content:"";position:absolute;inset:-1px;border-radius:23px;box-shadow:inset 0 0 0 1.5px var(--ob-glass-edge);filter:blur(3px);pointer-events:none;}
-    .ob-drift{position:absolute;inset:0;overflow:hidden;pointer-events:none;border-radius:inherit;}
-    .ob-blob{position:absolute;border-radius:50%;filter:blur(74px);left:50%;top:50%;will-change:transform;}
-    .ob-blob-a{width:380px;height:380px;margin:-190px 0 0 -150px;background:radial-gradient(circle,var(--ob-blob1),transparent 67%);opacity:.55;animation:obDrift1 22s ease-in-out infinite;}
-    .ob-blob-b{width:300px;height:300px;margin:-210px 0 0 60px;background:radial-gradient(circle,var(--ob-blob2),transparent 67%);opacity:.4;animation:obDrift2 28s ease-in-out infinite;}
-    .ob-blob-c{width:280px;height:280px;margin:20px 0 0 -240px;background:radial-gradient(circle,var(--ob-blob3),transparent 68%);opacity:.32;animation:obDrift3 34s ease-in-out infinite;}
+    /* radial mask feathers the container's own edge to transparent BEFORE the
+       overflow:hidden clip can show — kills the hard rectangular cutoff of the
+       blurred blobs (most visible along the short bottom edge). */
+    .ob-drift{position:absolute;inset:0;overflow:hidden;pointer-events:none;border-radius:inherit;
+      -webkit-mask-image:radial-gradient(72% 74% at 50% 41%,#000 40%,transparent 100%);
+      mask-image:radial-gradient(72% 74% at 50% 41%,#000 40%,transparent 100%);}
+    /* blob size + blur scale with the viewport (clamp/vw) so the glow holds its
+       proportions across 13"→27"; blur eased down a touch (~61px vs 74px at 16").
+       margins reproduce the original composition exactly: calc(offset - size/2). */
+    .ob-blob{position:absolute;border-radius:50%;filter:blur(clamp(42px,4vw,66px));left:50%;top:50%;will-change:transform;}
+    .ob-blob-a{--s:clamp(300px,30vw,470px);width:var(--s);height:var(--s);margin:calc(var(--s)/-2) 0 0 calc(40px - var(--s)/2);background:radial-gradient(circle,var(--ob-blob1),transparent 67%);opacity:.55;animation:obDrift1 22s ease-in-out infinite;}
+    .ob-blob-b{--s:clamp(240px,24vw,380px);width:var(--s);height:var(--s);margin:calc(-60px - var(--s)/2) 0 0 calc(210px - var(--s)/2);background:radial-gradient(circle,var(--ob-blob2),transparent 67%);opacity:.4;animation:obDrift2 28s ease-in-out infinite;}
+    .ob-blob-c{--s:clamp(220px,22vw,360px);width:var(--s);height:var(--s);margin:calc(160px - var(--s)/2) 0 0 calc(-100px - var(--s)/2);background:radial-gradient(circle,var(--ob-blob3),transparent 68%);opacity:.32;animation:obDrift3 34s ease-in-out infinite;}
     .ob-drift-success .ob-blob-a{background:radial-gradient(circle,#5fd08a,transparent 66%);opacity:.6;}
     .ob-drift-success .ob-blob-b{background:radial-gradient(circle,#5fd08a,transparent 70%);opacity:.4;}
     .ob-drift-success .ob-blob-c{background:radial-gradient(circle,#7d5cff,transparent 68%);opacity:.28;}
