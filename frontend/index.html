@@ -9390,15 +9390,49 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
 
 // ─── Onboarding (compact, themed) ─────────────────────────────────────────────
 // ─── Server-mode upload onboarding (Phase C) ─────────────────────────────────
+// ── Stage ETA helpers (shared by MemberIndexing + SetupWizard) ───────────────
+// fmtEta turns a millisecond estimate into a short "~Xs" / "~Xm Ys" string.
+function fmtEta(ms, ru) {
+  const s = Math.max(1, Math.round(ms / 1000));
+  if (s < 60) return ru ? `~${s} с` : `~${s}s`;
+  const m = Math.floor(s / 60), r = s % 60;
+  return ru ? `~${m} мин ${r} с` : `~${m}m ${r}s`;
+}
+// computeStageEtas estimates remaining time per stage from the SSE current/total.
+// `store` is a mutable { key: {t0, c0} } object (a ref's .current) that anchors
+// each stage's start, so the rate is averaged over the whole stage rather than
+// jumping frame-to-frame. Returns a delta { key: "~Xs" | null } to merge into the
+// eta state. `dense` (text search) is skipped on purpose — it's an indeterminate
+// bar with no granular progress, so no ETA is computed for it.
+function computeStageEtas(stages, store, statusMap, ru, now) {
+  const delta = {};
+  for (const [k, v] of Object.entries(stages)) {
+    if (k === 'dense') continue;
+    const status = statusMap[v.status] || v.status;
+    const total = v.total ?? 0, current = v.current ?? 0;
+    if (status === 'running' && total > 0 && current > 0 && current < total) {
+      const m = store[k] || (store[k] = { t0: now, c0: current });
+      const dc = current - m.c0, dt = now - m.t0;
+      delta[k] = (dc > 0 && dt > 800) ? fmtEta((total - current) * dt / dc, ru) : null;
+    } else {
+      delete store[k];
+      delta[k] = null;
+    }
+  }
+  return delta;
+}
+
 // Reusable stage bar (member onboarding). `indeterminate` shows a moving shimmer
-// for stages with no granular progress (the server-side awaited AI phase).
-function OBStageBar({ c, label, state, pct, indeterminate }) {
+// for stages with no granular progress (text search + the awaited AI phase);
+// `eta` is a short remaining-time string shown next to the … while running.
+function OBStageBar({ c, label, state, pct, indeterminate, eta }) {
   return (
     <div style={{ marginBottom:12 }}>
       <div style={{ display:'flex', justifyContent:'space-between', marginBottom:4 }}>
         <span className="mono" style={{ fontSize:12, letterSpacing:'0.12em', color: state==='running' ? c.text : c.textSubtle }}>{label}</span>
-        <span style={{ fontSize:11, color: state==='failed' ? c.red : c.textSubtle }}>
-          {state==='done' ? '✓' : state==='failed' ? '✗' : state==='running' ? '…' : '·'}
+        <span style={{ display:'flex', alignItems:'center', gap:8, fontSize:11, color: state==='failed' ? c.red : c.textSubtle }}>
+          {eta && state==='running' && <span style={{ fontVariantNumeric:'tabular-nums', opacity:.85 }}>{eta}</span>}
+          <span>{state==='done' ? '✓' : state==='failed' ? '✗' : state==='running' ? '…' : '·'}</span>
         </span>
       </div>
       <div style={{ height:5, borderRadius:3, background:c.border, overflow:'hidden', position:'relative' }}>
@@ -9421,6 +9455,8 @@ function MemberIndexing({ ru, c, isDark, jobId, onDone }) {
   const [error, setError] = useState(null);
   const [done, setDone] = useState(false);
   const [aiWaiting, setAiWaiting] = useState(false);
+  const [etas, setEtas] = useState({});
+  const etaRef = useRef({});
 
   useEffect(() => {
     if (!jobId) return;
@@ -9432,6 +9468,7 @@ function MemberIndexing({ ru, c, isDark, jobId, onDone }) {
           const statusMap = { completed:'done', failed:'failed', running:'running', pending:'pending' };
           setStepStatus(prev => { const next = { ...prev }; for (const [k, v] of Object.entries(data.stages)) next[k] = statusMap[v.status] || v.status || 'pending'; return next; });
           setStageProgress(prev => { const next = { ...prev }; for (const [k, v] of Object.entries(data.stages)) next[k] = { current: v.current ?? prev[k]?.current ?? 0, total: v.total ?? prev[k]?.total ?? 0 }; return next; });
+          setEtas(prev => ({ ...prev, ...computeStageEtas(data.stages, etaRef.current, statusMap, ru, Date.now()) }));
         }
         if (data.overall_status !== 'completed' && data.stages?.facts?.status === 'completed') setAiWaiting(true);
         if (data.overall_status === 'completed') { evt.close(); setDone(true); setTimeout(onDone, 1400); }
@@ -9471,7 +9508,7 @@ function MemberIndexing({ ru, c, isDark, jobId, onDone }) {
             const st = stepStatus[k] || 'pending';
             const pr = stageProgress[k] || { current:0, total:0 };
             const pct = st === 'done' ? 100 : pr.total > 0 ? Math.round(100 * pr.current / pr.total) : 0;
-            return <OBStageBar key={k} c={c} label={ru ? WIZ_STAGE_LABELS[k].ru : WIZ_STAGE_LABELS[k].en} state={st} pct={pct} />;
+            return <OBStageBar key={k} c={c} label={ru ? WIZ_STAGE_LABELS[k].ru : WIZ_STAGE_LABELS[k].en} state={st} pct={pct} indeterminate={k==='dense'} eta={etas[k]} />;
           })}
           {aiWaiting && (
             <>
@@ -13758,12 +13795,16 @@ const stepsServer = (ru) => [
 ];
 
 // Stage keys come from the shared JobTracker (same SSE stream the existing
-// IndexingModal/UploadIndexingWizard consume).
+// IndexingModal/UploadIndexingWizard consume). This object's KEY ORDER is the
+// display order only — the backend runs stages in its own order; each reported
+// key is just mapped to a label/bar. `dense` (text search) is shown right before
+// metadata and rendered as an indeterminate shimmer (its backend progress isn't
+// granular), so it also carries no ETA — see OBStageBar / computeStageEtas.
 const WIZ_STAGE_LABELS = {
   lyrics:   { ru: 'Тексты песен',     en: 'Lyrics' },
   facts:    { ru: 'Факты и истории',  en: 'Facts & stories' },
+  dense:    { ru: 'Поиск по тексту',  en: 'Text search' },
   metadata: { ru: 'Метаданные',       en: 'Metadata' },
-  dense:    { ru: 'Поиск по смыслу',  en: 'Semantic search' },
   audio:    { ru: 'Анализ звучания',  en: 'Sound analysis' },
   analysis: { ru: 'Карта похожих',    en: 'Similarity map' },
 };
@@ -13887,6 +13928,8 @@ function SetupWizard({ onComplete }) {
   // indexing — mirrors UploadIndexingWizard's SSE consumption.
   const [stepStatus, setStepStatus]       = useState({});
   const [stageProgress, setStageProgress] = useState({});
+  const [etas, setEtas]                   = useState({});
+  const etaRef                            = useRef({});
   const [indexError, setIndexError]       = useState(null);
   const [indexDone, setIndexDone]         = useState(false);
   // AI enrichment as indexing stages (sharing: opt-out; runs the 3 AI tasks
@@ -14012,6 +14055,7 @@ function SetupWizard({ onComplete }) {
             }
             return next;
           });
+          setEtas(prev => ({ ...prev, ...computeStageEtas(data.stages, etaRef.current, statusMap, ru, Date.now()) }));
         }
         if (data.overall_status === 'completed') { evt.close(); setIndexDone(true); }
         else if (data.overall_status === 'failed') { evt.close(); setIndexError(data.error || data.message || 'failed'); }
@@ -14523,17 +14567,20 @@ function SetupWizard({ onComplete }) {
     { key:'refined_facts', label: ru ? 'Углубление фактов' : 'Deeper facts' },
     { key:'sonic_vibe',    label: ru ? 'Звучание песен' : 'Song vibes' },
   ];
-  const renderStageBar = (label, st, pct) => (
+  const renderStageBar = (label, st, pct, indeterminate, eta) => (
     <div key={label} style={{ marginBottom:'12px' }}>
       <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'4px' }}>
         <span className="mono" style={{ fontSize:'12px', letterSpacing:'0.12em', color: st === 'running' ? c.text : c.textSubtle }}>{label}</span>
-        <span style={{ fontSize:'11px', color: st === 'failed' ? c.red : c.textSubtle }}>
-          {st === 'done' ? '✓' : st === 'failed' ? '✗' : st === 'running' ? '…' : '·'}
+        <span style={{ display:'flex', alignItems:'center', gap:'8px', fontSize:'11px', color: st === 'failed' ? c.red : c.textSubtle }}>
+          {eta && st === 'running' && <span style={{ fontVariantNumeric:'tabular-nums', opacity:.85 }}>{eta}</span>}
+          <span>{st === 'done' ? '✓' : st === 'failed' ? '✗' : st === 'running' ? '…' : '·'}</span>
         </span>
       </div>
-      <div style={{ height:'5px', borderRadius:'3px', background:c.border, overflow:'hidden' }}>
-        <div style={{ height:'100%', width:`${pct}%`, transition:'width 0.4s',
-          background: st === 'done' ? 'oklch(63% 0.17 142)' : 'linear-gradient(90deg, oklch(65% 0.18 270), oklch(75% 0.17 280))' }} />
+      <div style={{ height:'5px', borderRadius:'3px', background:c.border, overflow:'hidden', position:'relative' }}>
+        {indeterminate && st === 'running'
+          ? <div className="ob-indet" />
+          : <div style={{ height:'100%', width:`${pct}%`, transition:'width 0.4s',
+              background: st === 'done' ? 'oklch(63% 0.17 142)' : 'linear-gradient(90deg, oklch(65% 0.18 270), oklch(75% 0.17 280))' }} />}
       </div>
     </div>
   );
@@ -14556,7 +14603,7 @@ function SetupWizard({ onComplete }) {
         const st = stepStatus[k] || (indexDone ? 'done' : 'pending');
         const pr = stageProgress[k] || { current: 0, total: 0 };
         const pct = st === 'done' ? 100 : pr.total > 0 ? Math.round(100 * pr.current / pr.total) : 0;
-        return renderStageBar(ru ? WIZ_STAGE_LABELS[k].ru : WIZ_STAGE_LABELS[k].en, st, pct);
+        return renderStageBar(ru ? WIZ_STAGE_LABELS[k].ru : WIZ_STAGE_LABELS[k].en, st, pct, k === 'dense', etas[k]);
       })}
 
       {!finished && !indexError && shouldEnrich && (indexDone || aiRunning) && (
