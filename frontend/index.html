@@ -2619,7 +2619,7 @@ function useAIStatus() {
         }),
       });
       setAiAvailable(!!r.available);
-      setLlmError(r.available ? null : (r.error || 'LLM not responding'));
+      setLlmError(r.available ? null : (r.error || 'AI assistant not responding'));
       setLlmInfo({ base_url: r.base_url, model: r.model });
     } catch (e) {
       setAiAvailable(false);
@@ -4692,7 +4692,6 @@ function ScoreBreakdownTooltip({ hit, breakdown, isDark, onPlay, onToggleLike, i
   if (!breakdown && !hit) return null;
   const rows = breakdown ? [
     { label: 'Text',  v: breakdown.text_dense_score },
-    { label: 'BM25',  v: breakdown.text_bm25_score },
     { label: 'Audio', v: breakdown.audio_score },
   ].filter(r => r.v != null) : [];
   return (
@@ -6027,7 +6026,7 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream }
               )}
               {aiError && !aiBusy && (
                 <div className="serif" style={{ fontSize:'14px', color:c.textSubtle, fontStyle:'italic', padding:'16px 4px' }}>
-                  {lang==='ru'?'ИИ не ответил — проверьте LLM в настройках и попробуйте ещё раз':'The AI did not respond — check the LLM in settings and retry'}
+                  {lang==='ru'?'ИИ не ответил — проверьте ИИ-ассистент в настройках и попробуйте ещё раз':'The AI did not respond — check AI assistant in settings and retry'}
                 </div>
               )}
               {aiResult && !aiBusy && (
@@ -6060,7 +6059,7 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream }
               )}
             </>) : (<>
               <div className="serif" style={{ fontSize:'13.5px', fontStyle:'italic', color:c.textSubtle, marginBottom:'16px' }}>
-                {lang==='ru'?'ИИ-режим выключен — быстрые миксы ищут по звучанию без LLM':'AI mode is off — quick mixes search by sound, no LLM needed'}
+                {lang==='ru'?'ИИ-режим выключен — быстрые миксы ищут по звучанию без ИИ-ассистента':'AI mode is off — quick mixes search by sound, no AI assistant needed'}
               </div>
               <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(180px, 1fr))', gap:'12px', marginBottom:'18px' }}>
                 {moodPresets.map(p => {
@@ -6116,8 +6115,8 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream }
             {!profileLoading && !profileAxisValues && (
               <div className="serif" style={{ fontSize:'14px', color:c.textSubtle, fontStyle:'italic', padding:'10px 0 4px' }}>
                 {lang==='ru'
-                  ? 'Осевой профиль появится после переиндексации коллекции и первых прослушиваний'
-                  : 'The axis profile appears after re-indexing the collection and some listening'}
+                  ? 'Осевой профиль появится после обновления библиотеки и первых прослушиваний'
+                  : 'The axis profile appears after updating the library and some listening'}
               </div>
             )}
 
@@ -6173,7 +6172,7 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream }
                 </div>
                 {axisTracks.length ? hitList(axisTracks, false) : (
                   <div className="serif" style={{ fontSize:'13.5px', color:c.textSubtle, fontStyle:'italic' }}>
-                    {lang==='ru'?'Пока пусто — оси появятся после переиндексации':'Empty for now — axes appear after re-indexing'}
+                    {lang==='ru'?'Пока пусто — оси появятся после обновления библиотеки':'Empty for now — axes appear after updating the library'}
                   </div>
                 )}
               </div>
@@ -6305,7 +6304,7 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream }
                 <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'12px' }}>
                   {similarLoading
                     ? (lang==='ru'?'ПОДБОР ПОХОЖИХ…':'FINDING SIMILAR…')
-                    : (lang==='ru'?`ТОП-${similar.length} ПОХОЖИХ · CLAP + ОСИ`:`TOP ${similar.length} SIMILAR · CLAP + AXES`)}
+                    : (lang==='ru'?`ПОХОЖИЕ · ПО ЗВУЧАНИЮ`:`SIMILAR · BY SOUND`)}
                 </div>
                 {similarLoading ? skeletonRows(5)
                  : similar.length > 0 ? hitList(similar, false)
@@ -6494,7 +6493,7 @@ function AlbumsGridTab({ albums, sort, onSortChange, onAlbumOpen, isDark, lang, 
     {id:'track_count_desc', label: lang==='ru' ? 'больше треков' : 'most tracks'},
   ];
   if (!albums || albums.length === 0) {
-    return <div style={{ padding:'64px 20px', textAlign:'center', color:c.textSubtle, fontSize:'14px' }}>{lang==='ru' ? 'Нет треков с album-тегом в этой коллекции' : 'No tracks with album tag in this collection'}</div>;
+    return <div style={{ padding:'64px 20px', textAlign:'center', color:c.textSubtle, fontSize:'14px' }}>{lang==='ru' ? 'Нет треков с album-тегом в этой библиотеке' : 'No tracks with album tag in this library'}</div>;
   }
   return (
     <>
@@ -7258,7 +7257,7 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
       <SectionHeader
         isDark={isDark} lang={lang}
         kicker={lang==='ru' ? 'РАЗДЕЛ 03 · БИБЛИОТЕКА' : 'SECTION 03 · LIBRARY'}
-        title={lang==='ru' ? 'Твоя коллекция' : 'Your library'}
+        title={lang==='ru' ? 'Твоя библиотека' : 'Your library'}
         accent={lang==='ru' ? 'в звуках' : 'in sounds'}
       />
 
@@ -7999,14 +7998,14 @@ function IndexingProgress({ stepStatus, stageProgress, lang, c, isDark }) {
   const internetStages = [
     { key:'lyrics',   icon:'♪', labelRu:'Тексты',         labelEn:'Lyrics' },
     { key:'facts',    icon:'★', labelRu:'Факты',         labelEn:'Facts' },
-    { key:'metadata', icon:'⌕', labelRu:'Метаданные',    labelEn:'Metadata' },
+    { key:'metadata', icon:'⌕', labelRu:'Теги и обложки',    labelEn:'Tags & covers' },
   ];
   const localStages = [
-    { key:'dense',    icon:'◆', labelRu:'Dense эмбеддинги', labelEn:'Dense embeddings' },
-    { key:'audio',    icon:'♫', labelRu:'CLAP аудио',     labelEn:'CLAP audio' },
+    { key:'dense',    icon:'◆', labelRu:'Тексты песен', labelEn:'Lyrics' },
+    { key:'audio',    icon:'♫', labelRu:'Звучание',     labelEn:'Sound' },
   ];
   const finalStages = [
-    { key:'analysis', icon:'∿', labelRu:'Анализ схожести', labelEn:'Similarity analysis' },
+    { key:'analysis', icon:'∿', labelRu:'Похожие треки', labelEn:'Similar tracks' },
   ];
 
   const CheckIcon = ({ size=16, color }) => (
@@ -8184,7 +8183,7 @@ function IndexingModal({
       <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose?.(); }}>
         <div className={ske('panel', isDark)} style={{ maxWidth: 540, padding: 28, borderRadius: 20, animation: 'scaleIn 0.3s cubic-bezier(.22,.9,.3,1)' }}>
           <h2 className="serif" style={{ fontSize: 24, marginTop: 0, marginBottom: 8 }}>
-            {lang==='ru'?'AI-фичи для этой коллекции?':'AI features for this collection?'}
+            {lang==='ru'?'Возможности ИИ для этой библиотеки?':'AI features for this library?'}
           </h2>
           <ul style={{ paddingLeft: 18, fontSize: 13, lineHeight: 1.6, color: isDark?'#bbb':'#444' }}>
             <li>{lang==='ru'?'Чат-поиск в естественном языке':'Natural-language chat search'}</li>
@@ -8194,19 +8193,19 @@ function IndexingModal({
           </ul>
           <p style={{ fontSize: 12, color: isDark?'#888':'#666', marginTop: 12 }}>
             {lang==='ru'
-              ? 'Требуется LLM endpoint (LM Studio, Ollama, OpenAI-совместимый API).'
-              : 'Requires an LLM endpoint (LM Studio, Ollama, or OpenAI-compatible API).'}
+              ? 'Требуется ИИ-ассистент (LM Studio, Ollama, OpenAI-совместимый API).'
+              : 'Requires an AI assistant endpoint (LM Studio, Ollama, or OpenAI-compatible API).'}
           </p>
           {aiStatus?.aiAvailable === true && (
             <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 8,
               background: 'rgba(40,160,80,0.10)', fontSize: 12 }}>
-              ✅ {lang==='ru'?'LLM подключён':'LLM connected'}{aiStatus.llmInfo?.model ? ` · ${aiStatus.llmInfo.model}` : ''}
+              ✅ {lang==='ru'?'ИИ-ассистент подключён':'AI assistant connected'}{aiStatus.llmInfo?.model ? ` · ${aiStatus.llmInfo.model}` : ''}
             </div>
           )}
           {aiStatus?.aiAvailable === false && (
             <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 8,
               background: 'rgba(239,68,68,0.10)', fontSize: 12 }}>
-              ⚠ {lang==='ru'?'LLM не отвечает.':'LLM not responding.'} {lang==='ru'?'Можно включить и настроить позже.':'You can enable and configure later.'}
+              ⚠ {lang==='ru'?'ИИ-ассистент не отвечает.':'AI assistant not responding.'} {lang==='ru'?'Можно включить и настроить позже.':'You can enable and configure later.'}
             </div>
           )}
           <div style={{ display: 'flex', gap: 10, marginTop: 24 }}>
@@ -8241,10 +8240,10 @@ function IndexingModal({
             ✅ {lang==='ru'?'Индексация готова':'Indexing complete'}
           </h2>
           <p style={{ fontSize: 13, color: isDark?'#bbb':'#444', lineHeight: 1.5 }}>
-            {trackCount ? `${trackCount} ${lang==='ru'?'треков проиндексировано.':'tracks indexed.'}` : ''}
+            {trackCount ? `${trackCount} ${lang==='ru'?'треков добавлено.':'tracks added.'}` : ''}
           </p>
           <p style={{ fontSize: 14, color: isDark?'#ddd':'#222', marginTop: 16 }}>
-            {lang==='ru'?'Запустить AI-индексацию артефактов?':'Run AI artifact indexing?'}
+            {lang==='ru'?'Запустить дополнительные ИИ-функции?':'Run extra AI features?'}
           </p>
           <ul style={{ paddingLeft: 18, fontSize: 12, color: isDark?'#aaa':'#555', lineHeight: 1.6 }}>
             <li>{lang==='ru'?'Sonic Vibe — атмосферная фраза для каждого трека':'Sonic Vibe — mood phrase per track'}</li>
@@ -8453,8 +8452,8 @@ function AIIndexingCard({ isDark, lang, aiStatus }) {
     }
     if (taskType === 'artist_bio') {
       return lang === 'ru'
-        ? 'Веб-поиск не вернул результатов. Проверь подключение к интернету и настройки LLM.'
-        : 'Web search returned no results. Check your internet connection and LLM settings.';
+        ? 'Веб-поиск не вернул результатов. Проверь подключение к интернету и настройки ИИ-ассистента.'
+        : 'Web search returned no results. Check your internet connection and AI assistant settings.';
     }
     return lang === 'ru'
       ? 'Нет фактов о треках/артистах для уточнения. Сначала обогати библиотеку фактами.'
@@ -8499,8 +8498,8 @@ function AIIndexingCard({ isDark, lang, aiStatus }) {
         }}>
           <span style={{ flex: 1 }}>
             ⚠ {lang==='ru'
-              ? 'ИИ отключён для этой коллекции.'
-              : 'AI is disabled for this collection.'}
+              ? 'ИИ отключён для этой библиотеки.'
+              : 'AI is disabled for this library.'}
           </span>
           <button
             onClick={async () => {
@@ -8522,12 +8521,12 @@ function AIIndexingCard({ isDark, lang, aiStatus }) {
 
       <div style={{ fontSize: 12, color: c.textMuted, lineHeight: 1.55, marginBottom: 12 }}>
         {lang === 'ru'
-          ? 'Sonic vibe, уточнённые факты и биографии артистов. Три задачи выполняются по очереди на вашем LLM.'
-          : 'Sonic vibe, refined facts and artist bios. The three tasks run back to back on your LLM.'}
+          ? 'Sonic vibe, уточнённые факты и биографии артистов. Три задачи выполняются по очереди с вашим ИИ-ассистентом.'
+          : 'Sonic vibe, refined facts and artist bios. The three tasks run back to back with your AI assistant.'}
       </div>
 
       <button className="cta-v3" disabled={!canRun} onClick={runAll}
-        title={!aiStatus?.aiAvailable ? (lang==='ru'?'LLM не подключён':'Connect LLM to enable') : undefined}
+        title={!aiStatus?.aiAvailable ? (lang==='ru'?'ИИ-ассистент не подключён':'Connect AI assistant to enable') : undefined}
         style={{ width: '100%', opacity: canRun ? 1 : 0.45, cursor: canRun ? 'pointer' : 'not-allowed' }}>
         {busyAll
           ? `⏳ ${pipelineTask ? taskTitle(pipelineTask) : (lang==='ru'?'Идёт обработка':'Processing')}…`
@@ -8917,8 +8916,8 @@ function InstanceAISettings({ isDark, lang, showToast }) {
       </div>
       <div style={{ fontSize: 11, color: c.textMuted, lineHeight: 1.5, margin: '8px 2px 16px' }}>
         {ru
-          ? 'Точность поиска по словам внутри песен. Применяется к новым библиотекам участников; уже проиндексированные не меняются.'
-          : "How precisely members search words inside songs. Applied to new libraries; already-indexed collections are unchanged."}
+          ? 'Точность поиска по словам внутри песен. Применяется к новым библиотекам участников; уже добавленные не меняются.'
+          : "How precisely members search words inside songs. Applied to new libraries; already-added collections are unchanged."}
       </div>
 
       <button onClick={save} disabled={busy} className="cta-v3" style={{
@@ -9364,12 +9363,12 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
               }} />
               <span style={{ flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
                 {aiStatus?.aiAvailable === true && (lang === 'ru'
-                  ? `LLM подключён${aiStatus.llmInfo?.model ? ` · ${aiStatus.llmInfo.model}` : ''}`
-                  : `LLM connected${aiStatus.llmInfo?.model ? ` · ${aiStatus.llmInfo.model}` : ''}`)}
+                  ? `ИИ-ассистент подключён${aiStatus.llmInfo?.model ? ` · ${aiStatus.llmInfo.model}` : ''}`
+                  : `AI assistant connected${aiStatus.llmInfo?.model ? ` · ${aiStatus.llmInfo.model}` : ''}`)}
                 {aiStatus?.aiAvailable === false && (lang === 'ru'
-                  ? `LLM офлайн · ${aiStatus.llmError || 'не отвечает'}`
-                  : `LLM offline · ${aiStatus.llmError || 'no response'}`)}
-                {aiStatus?.aiAvailable === null && (lang === 'ru' ? 'Проверка LLM…' : 'Probing LLM…')}
+                  ? `ИИ-ассистент офлайн · ${aiStatus.llmError || 'не отвечает'}`
+                  : `AI assistant offline · ${aiStatus.llmError || 'no response'}`)}
+                {aiStatus?.aiAvailable === null && (lang === 'ru' ? 'Проверка ИИ-ассистента…' : 'Probing AI assistant…')}
               </span>
               <button className="pill-v3" style={{ padding:'4px 12px', fontSize:11 }}
                 onClick={() => aiStatus?.refresh?.()}>
@@ -9466,10 +9465,10 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
               <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:18 }}>
                 <div>
                   <div className="serif" style={{ fontSize:22, color:c.text, letterSpacing:'-0.01em' }}>
-                    {lang==='ru'?'Новая коллекция':'New collection'}
+                    {lang==='ru'?'Новая библиотека':'New library'}
                   </div>
                   <div className="mono-label" style={{ color:c.textSubtle, marginTop:4 }}>
-                    {lang==='ru'?'ИНДЕКСИРОВАТЬ ПАПКУ':'INDEX A FOLDER'}
+                    {lang==='ru'?'ДОБАВИТЬ ПАПКУ':'ADD A FOLDER'}
                   </div>
                 </div>
                 <button onClick={() => setCreateOpen(false)} className="pill-v3" style={{
@@ -9479,7 +9478,7 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
                 </button>
               </div>
 
-              {fieldLabel(lang==='ru'?'ИМЯ КОЛЛЕКЦИИ':'COLLECTION NAME')}
+              {fieldLabel(lang==='ru'?'ИМЯ БИБЛИОТЕКИ':'LIBRARY NAME')}
               <input value={collName} onChange={e=>setCollName(e.target.value)} disabled={indexing}
                 placeholder={lang==='ru'?'например: my_music':'e.g. my_music'} style={{ ...inputStyle, marginBottom:14 }} />
 
@@ -9496,7 +9495,7 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
                   placeholder="/path/to/music" style={{ ...inputStyle, flex:1, width:'auto' }} />
               </div>
 
-              {fieldLabel(lang==='ru'?'МОДЕЛЬ ЭМБЕДДИНГОВ':'EMBEDDING MODEL')}
+              {fieldLabel(lang==='ru'?'МОДЕЛЬ':'MODEL')}
               <div className="tier-slider" data-tier={modelTier}
                 onClick={() => !indexing && setModelTier(t => t === 'light' ? 'heavy' : 'light')}>
                 <div className="tier-slider-knob" />
@@ -9515,8 +9514,8 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
                       ? 'Быстрая и экономная — отлично работает на CPU.'
                       : 'Fast and lean — runs great on CPU.')
                   : (lang==='ru'
-                      ? 'Заметно точнее, но медленнее — для комфортной индексации лучше иметь GPU.'
-                      : 'Noticeably more accurate but slower — a GPU is recommended for indexing.')}
+                      ? 'Заметно точнее, но медленнее — для комфортной обработки лучше иметь видеокарту.'
+                      : 'Noticeably more accurate but slower — a graphics card is recommended for processing.')}
               </div>
 
               <label style={{ display:'flex', alignItems:'center', gap:8, fontSize:13, color:c.textMuted, marginBottom:8 }}>
@@ -9536,8 +9535,8 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
                   display:'flex', alignItems:'center', justifyContent:'center', gap:8,
                 }}>
                 {indexing
-                  ? <Fragment><Spinner size={14} color="white" /> {lang==='ru'?'Идёт индексация…':'Indexing…'}</Fragment>
-                  : (lang==='ru'?'▶ Запустить индексацию':'▶ Start indexing')}
+                  ? <Fragment><Spinner size={14} color="white" /> {lang==='ru'?'Идёт добавление…':'Adding…'}</Fragment>
+                  : (lang==='ru'?'▶ Добавить музыку':'▶ Add music')}
               </button>
             </div>
           </Fragment>
@@ -9857,7 +9856,7 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
       else throw new Error((res && res.message) || 'no job_id');
     } catch (e) {
       setIndexingFolder(false);
-      alert(`${ru ? 'Не удалось запустить индексацию' : 'Failed to start indexing'}: ${e.message}`);
+      alert(`${ru ? 'Не удалось добавить музыку' : 'Failed to add music'}: ${e.message}`);
     }
   };
 
@@ -9973,8 +9972,8 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
           <div className="ob-glass" style={{ marginTop:'14px', padding:'16px 20px', borderRadius:'14px' }}>
             <div style={{ fontSize:'13.5px', color:c.textMuted, lineHeight:1.55, marginBottom:'12px' }}>
               {ru
-                ? <>Музыка уже примонтирована на сервере по пути <code style={{ color:c.text }}>{memberIndexRoot}</code>? Проиндексируй её на месте — без повторной загрузки. <b>Заменит текущую библиотеку.</b></>
-                : <>Music already mounted on the server at <code style={{ color:c.text }}>{memberIndexRoot}</code>? Index it in place — no re-upload. <b>Replaces your current library.</b></>}
+                ? <>Музыка уже примонтирована на сервере по пути <code style={{ color:c.text }}>{memberIndexRoot}</code>? Добавь её в библиотеку на месте — без повторной загрузки. <b>Заменит текущую библиотеку.</b></>
+                : <>Music already mounted on the server at <code style={{ color:c.text }}>{memberIndexRoot}</code>? Add it to your library in place — no re-upload. <b>Replaces your current library.</b></>}
             </div>
             <button onClick={startFolderIndex} disabled={indexingFolder||anyUploading||committing}
               className={ske('btn', isDark)}
@@ -9983,7 +9982,7 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
                 opacity: indexingFolder||anyUploading||committing ? 0.5 : 1 }}>
               {indexingFolder
                 ? (ru?'Запуск…':'Starting…')
-                : (ru?`Индексировать ${memberIndexRoot}`:`Index ${memberIndexRoot}`)}
+                : (ru?`Заменить музыку: ${memberIndexRoot}`:`Replace music: ${memberIndexRoot}`)}
             </button>
           </div>
         )}
@@ -10282,13 +10281,13 @@ function OnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
         </h1>
         <p style={{ fontSize:'15px', color:c.textMuted, lineHeight:'1.6', marginBottom:'34px' }}>
           {lang==='ru'
-            ? 'MusiX индексирует музыкальную папку локально и позволяет искать треки по смыслу — текстам и звуку. Ничего не уходит в облако.'
-            : 'MusiX indexes a music folder locally so you can search tracks by meaning — lyrics and audio. Nothing leaves your machine.'}
+            ? 'MusiX добавляет музыку локально и позволяет искать треки по смыслу — текстам и звуку. Ничего не уходит в облако.'
+            : 'MusiX adds your music locally so you can search tracks by meaning — lyrics and audio. Nothing leaves your machine.'}
         </p>
 
         <div className={ske('panel', isDark)} style={{ padding:'26px 28px', borderRadius:'18px' }}>
           <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'8px' }}>
-            {lang==='ru'?'ИМЯ КОЛЛЕКЦИИ':'COLLECTION NAME'}
+            {lang==='ru'?'ИМЯ БИБЛИОТЕКИ':'LIBRARY NAME'}
           </div>
           <input value={collName} onChange={e=>setCollName(e.target.value)} disabled={indexing}
             className={ske('inset', isDark)} style={{ width:'100%', padding:'10px 13px', borderRadius:'10px', border:'none',
@@ -10363,10 +10362,10 @@ function NoQdrantScreen({ isDark, lang }) {
           ● {lang==='ru'?'ОТКЛЮЧЕНО':'OFFLINE'}
         </div>
         <h2 className="serif" style={{ fontSize:'34px', lineHeight:'1', letterSpacing:'-0.02em', marginBottom:'14px' }}>
-          {lang==='ru'?<>Qdrant <i style={{ color: c.red }}>не запущен</i>.</> : <>Qdrant is <i style={{ color: c.red }}>offline</i>.</>}
+          {lang==='ru'?<><i style={{ color: c.red }}>Поиск временно недоступен</i>.</> : <><i style={{ color: c.red }}>Search temporarily unavailable</i>.</>}
         </h2>
         <p style={{ fontSize:'14px', color:c.textMuted, lineHeight:'1.6', marginBottom:'18px' }}>
-          {lang==='ru'?'Векторная база нужна для индексации и поиска. Запусти её одной командой:':'The vector store powers indexing and search. Boot it with one command:'}
+          {lang==='ru'?'Поиск временно недоступен. Запусти его одной командой:':'Search is temporarily unavailable. Boot it with one command:'}
         </p>
         <div className={ske('display', isDark)} style={{
           padding:'14px 18px', borderRadius:'12px', marginBottom:'22px',
@@ -10406,7 +10405,7 @@ function DeleteConfirm({ isDark, lang, name, onConfirm, onCancel }) {
           {lang==='ru'?<>Удалить <i>{name}</i>?</> : <>Delete <i>{name}</i>?</>}
         </div>
         <p style={{ fontSize:'15px', color:c.textMuted, marginBottom:'22px', lineHeight:'1.5' }}>
-          {lang==='ru'?'Коллекция и все векторы будут удалены безвозвратно.':'The collection and all its vectors will be removed permanently.'}
+          {lang==='ru'?'Библиотека и все данные будут удалены безвозвратно.':'Your library and all its data will be permanently deleted.'}
         </p>
         <div style={{ display:'flex', gap:'10px' }}>
           <button onClick={onCancel} className={ske('btn', isDark)} style={{
@@ -10519,7 +10518,7 @@ function LyricsBackFace({
         </div>
       ) : (
         <div style={{ color: headingColor, fontStyle: 'italic' }}>
-          {lang === 'ru' ? 'тексты не проиндексированы' : 'no lyrics indexed yet'}
+          {lang === 'ru' ? 'тексты ещё не добавлены' : 'no lyrics added yet'}
         </div>
       )}
     </div>
@@ -10625,7 +10624,6 @@ function PlayerScoreBars({ breakdown, isDark }) {
       animation: 'scoreBarsFade 120ms ease-out',
     }}>
       {row('TEXT',  breakdown.text_dense_score)}
-      {row('BM25',  breakdown.text_bm25_score)}
       {row('AUDIO', breakdown.audio_score)}
     </div>
   );
@@ -12653,7 +12651,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                           letterSpacing: '0.18em',
                         }}>
                           <span style={{ flex: 1, height: 1, background: isDark ? '#2a2a32' : 'rgba(22,22,32,0.10)' }} />
-                          <span>{lang === 'ru' ? 'АВТОПОДБОР · CLAP' : 'AUTOPLAY · CLAP-SIMILAR'}</span>
+                          <span>{lang === 'ru' ? 'АВТОПОДБОР' : 'AUTOPLAY'}</span>
                           <span style={{ flex: 1, height: 1, background: isDark ? '#2a2a32' : 'rgba(22,22,32,0.10)' }} />
                         </div>
                       )}
@@ -13956,7 +13954,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     if (!hits.length) {
       streamActiveRef.current = false;
       setStreamActive(false);
-      showToast(lang === 'ru' ? 'Библиотека пуста — добавьте или проиндексируйте музыку' : 'Library is empty — add or index your music');
+      showToast(lang === 'ru' ? 'Библиотека пуста — добавьте музыку' : 'Library is empty — add your music');
       return;
     }
     setPlayerPlaylist(hits);
@@ -14577,8 +14575,8 @@ function SetupWizard({ onComplete }) {
       advanceFromMusic();
     } catch (e) {
       setMusicError(/HTTP 503/.test(String(e.message))
-        ? (ru ? 'Qdrant недоступен — запустите docker-compose up -d и повторите.'
-              : 'Qdrant is unavailable — run docker-compose up -d and retry.')
+        ? (ru ? 'Поиск временно недоступен — запустите docker-compose up -d и повторите.'
+              : 'Search is temporarily unavailable — run docker-compose up -d and retry.')
         : e.message);
     } finally { setMusicBusy(false); }
   };
@@ -14769,8 +14767,8 @@ function SetupWizard({ onComplete }) {
         {mode === 'server'
           ? (ru ? 'Укажите папку с музыкой на сервере — или загрузите файлы, они будут храниться под вашим аккаунтом. FLAC, MP3, M4A.'
                 : 'Point at a music folder on the server — or upload files to store them under your account. FLAC, MP3, M4A.')
-          : (ru ? 'Укажите папку с музыкой на этом компьютере — проиндексируем её на месте.'
-                : 'Point at a music folder on this machine — we index it in place.')}
+          : (ru ? 'Укажите папку с музыкой на этом компьютере — добавим её в библиотеку.'
+                : 'Point at a music folder on this machine — we add it to your library.')}
       </p>
 
       <div style={{ display:'flex', gap:'8px' }}>
@@ -14842,7 +14840,7 @@ function SetupWizard({ onComplete }) {
           display:'flex', alignItems:'center', justifyContent:'center', gap:'8px' }}>
         {musicBusy
           ? <><Spinner size={14} color="white" /> {ru ? 'ЗАПУСКАЕМ…' : 'STARTING…'}</>
-          : (ru ? '▶ ПРОИНДЕКСИРОВАТЬ' : '▶ INDEX')}
+          : (ru ? '▶ ДОБАВИТЬ МУЗЫКУ' : '▶ ADD MUSIC')}
       </button>
       <button onClick={skipMusic} disabled={musicBusy}
         style={{ width:'100%', marginTop:'10px', padding:'10px', borderRadius:'10px', background:'transparent',
@@ -14912,7 +14910,7 @@ function SetupWizard({ onComplete }) {
             </label>
           </div>
           <div style={{ fontSize:'12.5px', color:c.textMuted, lineHeight:'1.5', marginTop:'8px' }}>
-            {ru ? 'Гуру напишет биографии артистов, углубит факты и опишет звучание песен — прямо в этой индексации. Чуть дольше, зато всё готово с первого входа.'
+            {ru ? 'Гуру напишет биографии артистов, углубит факты и опишет звучание песен — прямо при добавлении музыки. Чуть дольше, зато всё готово с первого входа.'
                 : 'The guru writes artist bios, deepens facts and describes how songs sound — inside this same indexing. A bit longer, but ready from the first launch.'}
           </div>
         </div>
@@ -14941,8 +14939,8 @@ function SetupWizard({ onComplete }) {
         {ru ? 'Настройки системы' : 'System settings'}
       </h2>
       <p style={{ fontSize:'13px', color:c.textMuted, lineHeight:'1.5', marginBottom:'18px' }}>
-        {ru ? 'Эти параметры — общие для всего сервера. Участники по инвайтам только загружают свою музыку; модель эмбеддингов и AI вы задаёте один раз.'
-            : 'These apply to the whole server. Invited members only upload their music; you choose the embedding model and AI once.'}
+        {ru ? 'Эти параметры — общие для всего сервера. Участники по инвайтам только загружают свою музыку; модель и AI вы задаёте один раз.'
+            : 'These apply to the whole server. Invited members only upload their music; you choose the model and AI once.'}
       </p>
 
       {renderSlider()}
