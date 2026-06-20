@@ -118,6 +118,67 @@ class TestGetTopPairs:
         assert "song" in similar[0]["song"].lower()
 
 
+class TestGetTopPairsBuildTimeAlbumFilter:
+    """Build-time same-album exclusion: the cached `top_similar` list must hold
+    nearest DIFFERENT-album neighbours (scanning deeper to backfill), so the
+    read-time same-album drop never starves the player rail below top_k."""
+
+    def _matrix(self):
+        # seed = id_0; its two NEAREST (id_1, id_2) share id_0's album, the
+        # farther id_3/id_4 are different albums. The diagonal must be inf.
+        m = np.array([
+            [np.inf, 0.10, 0.20, 0.50, 0.60],
+            [0.10, np.inf, 0.30, 0.70, 0.80],
+            [0.20, 0.30, np.inf, 0.40, 0.90],
+            [0.50, 0.70, 0.40, np.inf, 0.15],
+            [0.60, 0.80, 0.90, 0.15, np.inf],
+        ], dtype=float)
+        ids = [f"id_{i}" for i in range(5)]
+        id2name = {f"id_{i}": f"Artist - Song {i}" for i in range(5)}
+        albums = {0: "Seed", 1: "Seed", 2: "Seed", 3: "Other", 4: "OtherTwo"}
+        id2payload = {
+            f"id_{i}": {"cover_art_path": f"/c/{i}.jpg", "album": albums[i]}
+            for i in range(5)
+        }
+        return m, ids, id2name, id2payload
+
+    def test_excludes_same_album_from_similar_when_enabled(self):
+        m, ids, id2name, id2payload = self._matrix()
+        similar, _ = get_top_pairs(
+            m, ids, id2name, id2payload, top_k=2, drop_same_album_similar=True
+        )
+        # nearest are id_1/id_2 (same album as seed) → skipped; backfill to id_3/id_4
+        s0 = [n["track_id"] for n in similar[0]["top_similar"]]
+        assert s0 == ["id_3", "id_4"]
+
+    def test_default_keeps_same_album(self):
+        m, ids, id2name, id2payload = self._matrix()
+        similar, _ = get_top_pairs(m, ids, id2name, id2payload, top_k=2)
+        s0 = [n["track_id"] for n in similar[0]["top_similar"]]
+        assert s0 == ["id_1", "id_2"]  # nearest regardless of album
+
+    def test_dissimilar_unaffected_by_album_flag(self):
+        m, ids, id2name, id2payload = self._matrix()
+        _, diss_on = get_top_pairs(
+            m, ids, id2name, id2payload, top_k=2, drop_same_album_similar=True
+        )
+        _, diss_off = get_top_pairs(m, ids, id2name, id2payload, top_k=2)
+        on0 = [n["track_id"] for n in diss_on[0]["top_dissimilar"]]
+        off0 = [n["track_id"] for n in diss_off[0]["top_dissimilar"]]
+        assert on0 == off0  # contrast keeps same-album → flag has no effect
+
+    def test_keeps_as_many_as_exist_when_album_dominates(self):
+        # Only id_3 differs in album from the seed → similar can hold just 1,
+        # even with top_k=3 (we never invent different-album neighbours).
+        m, ids, id2name, id2payload = self._matrix()
+        id2payload["id_4"]["album"] = "Seed"  # now id_1,id_2,id_4 all same album
+        similar, _ = get_top_pairs(
+            m, ids, id2name, id2payload, top_k=3, drop_same_album_similar=True
+        )
+        s0 = [n["track_id"] for n in similar[0]["top_similar"]]
+        assert s0 == ["id_3"]
+
+
 class TestBuildTrackPairs:
     def test_enriches_from_payload_and_keeps_score(self):
         from app.services.similarity_service import build_track_pairs

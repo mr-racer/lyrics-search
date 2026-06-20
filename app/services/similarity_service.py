@@ -37,8 +37,17 @@ def get_top_pairs(
     id2name: Dict[str, str],
     id2payload: Dict[str, dict],
     top_k: int = 5,
+    *,
+    drop_same_album_similar: bool = False,
 ) -> tuple:
     """Extract top-K most similar and most dissimilar pairs per track.
+
+    With ``drop_same_album_similar`` the *similar* list skips neighbours that
+    share the seed track's album and scans deeper to backfill up to ``top_k`` —
+    so the cached list holds ``top_k`` *different-album* similars (when the
+    library has them), and the read-time same-album drop in
+    :func:`build_track_pairs` can never starve the player rail below the cap.
+    The *dissimilar* (contrast) list is never album-filtered.
 
     Returns:
         (similar_list, dissimilar_list) — each is a list of dicts:
@@ -69,8 +78,25 @@ def get_top_pairs(
     for i in range(n):
         sorted_idx = np.argsort(dist_matrix[i])
 
-        # Similar: smallest distances
-        sim_idx = sorted_idx[:k]
+        # Similar: smallest distances. With drop_same_album_similar, skip
+        # neighbours sharing the seed's album and scan deeper to backfill up to
+        # k different-album similars (keeping as many as actually exist).
+        if drop_same_album_similar:
+            seed_alb = ((id2payload.get(ids[i], {}) or {}).get("album") or "").strip().lower()
+            picked: List[int] = []
+            for j in sorted_idx:
+                if j == i:
+                    continue  # self (inf distance)
+                if seed_alb:
+                    alb_j = ((id2payload.get(ids[j], {}) or {}).get("album") or "").strip().lower()
+                    if alb_j and alb_j == seed_alb:
+                        continue
+                picked.append(int(j))
+                if len(picked) >= k:
+                    break
+            sim_idx = np.array(picked, dtype=int)
+        else:
+            sim_idx = sorted_idx[:k]
         sim_scores = (1.0 - dist_matrix[i, sim_idx] / 2.0) * 100.0
 
         # Dissimilar: largest distances (skip inf on diagonal), most-different first
@@ -403,7 +429,13 @@ async def analyze_collection(
         )
 
     # ── Step 3: Extract top pairs ──
-    similar, dissimilar = get_top_pairs(dist_matrix, ids, id2name, id2payload, top_k=12)
+    # Same-album similars are excluded at BUILD time (scanning deeper to backfill)
+    # so the cached list holds genuinely different-album neighbours; the player
+    # rail's read-time same-album drop then never falls short of its top-3 cap.
+    similar, dissimilar = get_top_pairs(
+        dist_matrix, ids, id2name, id2payload, top_k=12,
+        drop_same_album_similar=True,
+    )
 
     # ── Step 4: Save to cache ──
     cache_path = save_top_pairs(similar, dissimilar, collection_name)
