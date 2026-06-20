@@ -67,7 +67,7 @@ def _apply_filters(
             continue
 
         dur = coerce_float((pt.payload or {}).get("duration"))
-        if dur is not None and 0.0 < dur < 30.0:
+        if dur is not None and 0.0 < dur < 60.0:
             dropped_excluded += 1
             continue
 

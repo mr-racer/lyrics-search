@@ -811,7 +811,7 @@ async def get_top_pairs_for_track(
     result = build_track_pairs(
         sim, diss, payload_by_id, top_k=3,
         seed_album=payload_by_id.get(track_id, {}).get("album"),
-        drop_same_album_similar=True, min_duration=30.0,
+        drop_same_album_similar=True, min_duration=60.0,
     )
     return {
         "available": True,

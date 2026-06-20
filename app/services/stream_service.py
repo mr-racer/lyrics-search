@@ -54,11 +54,11 @@ H_IMPLICIT_DAYS = 30.0  # playback events, from played_at
 IDLE_STREAK = 5
 
 # Minimum track duration for recommendation surfaces (intros/interludes filter).
-MIN_TRACK_DURATION_SEC = 30.0  # drop intros/interludes from recs & similar rails
+MIN_TRACK_DURATION_SEC = 60.0  # drop intros/interludes from recs & similar rails
 
 
 def _duration_ok(payload) -> bool:
-    """True unless the track's duration is KNOWN and shorter than 30s.
+    """True unless the track's duration is KNOWN and shorter than 60s.
     Missing/zero duration is kept (avoid dropping real songs with absent tags)."""
     d = coerce_float((payload or {}).get("duration"))
     return d is None or d <= 0.0 or d >= MIN_TRACK_DURATION_SEC

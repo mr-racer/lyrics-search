@@ -390,7 +390,7 @@ async def analyze_collection(
             continue
         pl = pt.payload or {}
         dur = coerce_float(pl.get("duration"))
-        if dur is not None and 0.0 < dur < 30.0:
+        if dur is not None and 0.0 < dur < 60.0:
             continue
         vectors_map[pt.id] = vec
         artist = pl.get("artist", "Unknown")

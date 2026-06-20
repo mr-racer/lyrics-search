@@ -1,4 +1,4 @@
-"""<30s duration filter helper for the recommendation surfaces."""
+"""<60s duration filter helper for the recommendation surfaces."""
 import pytest
 
 from app.services import stream_service as ss
@@ -8,10 +8,10 @@ from app.services import stream_service as ss
     (None, True),      # unknown → keep
     (0, True),         # zero/unknown → keep
     (5, False),        # short → drop
-    (29.9, False),
-    (30.0, True),      # exactly 30 → keep
+    (59.9, False),
+    (60.0, True),      # exactly 60 → keep
     (180, True),
-    ("45", True),      # coerced
+    ("75", True),      # coerced
     ("12", False),
 ])
 def test_duration_ok(dur, ok):
