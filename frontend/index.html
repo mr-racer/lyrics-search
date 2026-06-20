@@ -13988,10 +13988,11 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
       const fresh = await fetchStreamChunk();
       if (fresh.length && streamActiveRef.current) {
         setPlayerPlaylist(prev => [...prev, ...fresh]);
+        return fresh;
       }
-      return;
+      return [];
     }
-    if (!seedTrack?.track_id) return;
+    if (!seedTrack?.track_id) return [];
     const excluded = Array.from(playedTrackIdsRef.current).slice(-200).join(',');
     try {
       const data = await apiFetch(
@@ -14001,7 +14002,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
         `&limit=20`
       );
       const newTracks = data.tracks || [];
-      if (newTracks.length === 0) return;
+      if (newTracks.length === 0) return [];
       // PlayerSection's playlist is HIT[]-shaped ({track, score, matched_on}),
       // so wrap each fetched TrackMetadata accordingly.
       const newHits = newTracks.map(t => ({
@@ -14011,8 +14012,10 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
         _autoplay: true,
       }));
       setPlayerPlaylist(prev => [...prev, ...newHits]);
+      return newHits;
     } catch (e) {
       console.warn('[autoplay] failed to fetch queue', e);
+      return [];
     }
   };
 
@@ -14037,7 +14040,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
       fresh = await fetchStreamChunk();
       if (fresh.length) setPlayerPlaylist(prev => [...prev, ...fresh]);
     } else {
-      await ensureAutoplayQueue(cur);  // appends to playerPlaylist
+      fresh = (await ensureAutoplayQueue(cur)) || [];
     }
     const firstFresh = fresh[0];
     if (firstFresh) {
@@ -14046,9 +14049,6 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
       setTimeout(() => audio.play && audio.play(), 50);
       handleTrackChange(t);
     }
-    // (non-stream ensureAutoplayQueue path: the appended tail will be picked up on
-    //  the next render's playerPlaylist; if nothing was appended, playback stops —
-    //  same terminal behaviour as today.)
   };
 
   // Off-player auto-advance. On the player screen, PlayerSection owns the 'ended'
