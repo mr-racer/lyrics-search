@@ -12090,13 +12090,19 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
   const setReaction = async (val) => {
     if (!currentTrack) return;
     markPlaybackInteracted(audio?.audioRef?.current);
-    triggerBurst(val);  // visual feedback fires immediately, even if API is slow
+    // Toggle: clicking the already-active reaction CLEARS it. Compute the target
+    // ONCE and send exactly what the UI shows. The body used to always send `val`
+    // while local state toggled, so a second click re-upserted the same reaction
+    // server-side (the backend DELETEs only on reaction:null) — like/dislike could
+    // never be un-set from the player, and fetchReaction snapped the heart back.
+    const next = (val === liked) ? null : val;
+    triggerBurst(next);  // burst on set; next === null (clear) shows no burst
     try {
       await apiFetch(`/search/tracks/${currentTrack.track_id}/reaction`, {
         method: 'POST',
-        body: JSON.stringify({ reaction: val }),
+        body: JSON.stringify({ reaction: next }),
       });
-      setLiked(val === liked ? null : val);
+      setLiked(next);
       // Like/dislike = strong stream signal — the prefetched tail was picked
       // by the pre-reaction profile, let App rebuild it.
       if (onStreamSignal) onStreamSignal('reaction', currentTrack);
