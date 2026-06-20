@@ -1611,6 +1611,64 @@
     }
     .player-playlist-item:hover { background: rgba(255,255,255,0.05); }
     .player-playlist-item.player-active { background: rgba(124,91,255,0.1); }
+
+    /* ── Queue drag-to-reorder ─────────────────────────────────────────
+       Signature motion: the grabbed row lifts off the surface (depth +
+       accent ring + slight scale) while neighbours recoil to open a
+       drawer-like gap. Locked history dims to mark the fixed zone. The
+       drop lands quietly with a single accent glow. Tuned to the player's
+       existing spatial/vinyl motion vocabulary. */
+    .player-playlist-item.q-draggable { cursor: grab; touch-action: pan-y; }
+    .player-playlist-item.q-draggable:active { cursor: grabbing; }
+    /* Neighbours easing apart — decelerate curve, the "reaction" of the list. */
+    .player-playlist-item.q-shift {
+      transition: transform 0.24s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.18s ease;
+      will-change: transform;
+    }
+    /* The lifted row — follows the pointer instantly (no transform transition). */
+    .player-playlist-item.q-dragging {
+      transition: none;
+      position: relative;
+      z-index: 30;
+      cursor: grabbing;
+      background: rgba(124,91,255,0.14);
+      box-shadow: 0 14px 30px rgba(0,0,0,0.34), 0 0 0 1.5px rgba(124,91,255,0.55);
+    }
+    /* Fixed zone (already-played + now-playing) recedes during a drag. */
+    .player-playlist-item.q-locked { opacity: 0.4; }
+    /* Drop confirmation — one accent pulse, then gone. */
+    @keyframes qDropGlow {
+      0%   { box-shadow: 0 0 0 0 rgba(124,91,255,0); }
+      28%  { box-shadow: 0 0 0 2px rgba(124,91,255,0.55), 0 0 18px rgba(124,91,255,0.42); }
+      100% { box-shadow: 0 0 0 0 rgba(124,91,255,0); }
+    }
+    .player-playlist-item.q-dropped { animation: qDropGlow 0.52s ease; }
+    /* Grip affordance — fades in on row hover, only for draggable rows. */
+    .q-grip {
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      color: rgba(238,238,243,0.22);
+      font-size: 15px;
+      letter-spacing: -2px;
+      line-height: 1;
+      user-select: none;
+      cursor: grab;
+      opacity: 0;
+      transition: opacity 0.15s ease, color 0.15s ease;
+    }
+    .player-playlist-item:hover .q-grip { opacity: 1; }
+    .q-grip:hover { color: rgba(124,91,255,0.85); }
+    body[data-theme="light"] .q-grip { color: rgba(22,22,32,0.22); }
+    body[data-theme="light"] .player-playlist-item.q-dragging {
+      background: #ffffff;
+      box-shadow: 0 14px 30px rgba(22,22,32,0.16), 0 0 0 1.5px rgba(124,91,255,0.5);
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .player-playlist-item.q-shift { transition: background 0.18s ease; }
+      .player-playlist-item.q-dropped { animation: none; }
+    }
+
     .sim-card { transition: background 0.15s ease; border-radius: 10px; }
     .sim-card:hover { background: rgba(255,255,255,0.06); }
 
@@ -11602,7 +11660,223 @@ function SimilarityRail({ trackId, lang, isDark, drawerOpen, onQueueNext }) {
   );
 }
 
-function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, onStreamSignal, audio, visible, lyricsMode, onToggleLyrics, onCloseLyrics, showToast, navigateToArtist, aiStatus, onAddToPlaylist, onQueueNext }) {
+// ── Queue drag-to-reorder hook ──────────────────────────────────────────────
+// Pointer-events drag for the player QUEUE. Reorders ONLY the future slice
+// (indices >= lockedBefore); the already-played + now-playing prefix is locked
+// so the recommendation/stream engine never desyncs (design spec §5–§6).
+//   • Mouse: 5px move threshold, so a plain click still plays the track.
+//   • Touch: ~200ms long-press, so a vertical scroll still works (scroll wins
+//     unless you hold still — a pointercancel from native scroll aborts it).
+// Commits via onCommit(from, over): `over` is the destination index in ORIGINAL
+// array coordinates; the caller splices the with-`from`-removed array at `over`.
+//
+// Stability: window listeners are memoized ([]) and read ALL mutable state from
+// the S.current session (incl. snapshots of lockedBefore/onCommit taken at drag
+// start), so a setDrag re-render can't strand a stale closure on window.
+function useQueueReorder({ lockedBefore, count, onCommit, scrollRef }) {
+  const reduced = useMemo(() => {
+    try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; }
+    catch (e) { return false; }
+  }, []);
+  const [drag, setDrag] = useState(null);   // {from, over, dy, height} | null — drives the render
+  const S = useRef(null);                    // mutable drag session
+  const rafRef = useRef(0);
+  const clickGuard = useRef(false);          // swallow the click that trails a real drag
+
+  const stopAuto = useCallback(() => {
+    if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = 0; }
+  }, []);
+
+  // Untransformed geometry of every draggable row currently in the DOM.
+  const measure = useCallback((container) =>
+    Array.from(container.querySelectorAll('[data-qrow]')).map((n) => {
+      const r = n.getBoundingClientRect();
+      return { index: Number(n.dataset.qrow), mid: r.top + r.height / 2, height: r.height };
+    }), []);
+
+  // Destination index in ORIGINAL coordinates from the live pointer Y.
+  const computeOver = useCallback((s, clientY) => {
+    let over = s.from;
+    for (let i = 0; i < s.rects.length; i++) {
+      const rc = s.rects[i];
+      if (rc.index < s.lockedBefore || rc.index === s.from) continue;
+      if (rc.index < s.from && clientY < rc.mid) over = Math.min(over, rc.index);
+      if (rc.index > s.from && clientY > rc.mid) over = Math.max(over, rc.index);
+    }
+    return over;
+  }, []);
+
+  const update = useCallback((clientY) => {
+    const s = S.current;
+    if (!s || !s.active) return;
+    s.lastY = clientY;
+    const sc = scrollRef && scrollRef.current;
+    const scrollDelta = sc ? sc.scrollTop - s.scroll0 : 0;
+    const dy = (clientY - s.grabY) + scrollDelta;   // +scrollDelta keeps the row under the finger while auto-scrolling
+    s.over = computeOver(s, clientY);
+    setDrag({ from: s.from, over: s.over, dy, height: s.height });
+  }, [scrollRef, computeOver]);
+
+  const tickAuto = useCallback(() => {
+    const s = S.current;
+    const sc = scrollRef && scrollRef.current;
+    if (!s || !s.active || !sc) { stopAuto(); return; }
+    const r = sc.getBoundingClientRect();
+    const EDGE = 52, MAX = 15;
+    let v = 0;
+    if (s.lastY < r.top + EDGE) v = -MAX * Math.min(1, (r.top + EDGE - s.lastY) / EDGE);
+    else if (s.lastY > r.bottom - EDGE) v = MAX * Math.min(1, (s.lastY - (r.bottom - EDGE)) / EDGE);
+    if (v !== 0) {
+      const before = sc.scrollTop;
+      sc.scrollTop = sc.scrollTop + v;
+      const applied = sc.scrollTop - before;
+      if (applied !== 0) {
+        // Shift the cached (untransformed) midpoints by the scroll delta instead
+        // of re-measuring — the rows now carry drag transforms, so a fresh
+        // getBoundingClientRect would read shifted positions and skew the slot calc.
+        for (let i = 0; i < s.rects.length; i++) s.rects[i].mid -= applied;
+        update(s.lastY);
+      }
+    }
+    rafRef.current = requestAnimationFrame(tickAuto);
+  }, [scrollRef, stopAuto, update]);
+
+  const begin = useCallback((clientY) => {
+    const s = S.current;
+    const sc = scrollRef && scrollRef.current;
+    if (!s || !sc) return;
+    s.active = true;
+    s.grabY = clientY;
+    s.scroll0 = sc.scrollTop;
+    s.rects = measure(sc);
+    const own = s.rects.find((rc) => rc.index === s.from);
+    s.height = own ? own.height : 64;
+    clickGuard.current = true;            // a drag started → suppress the trailing click
+    update(clientY);
+    stopAuto();
+    rafRef.current = requestAnimationFrame(tickAuto);
+  }, [scrollRef, measure, update, stopAuto, tickAuto]);
+
+  // The drag logic lives in refs (reassigned each render with the latest stable
+  // closures). The functions ACTUALLY bound to window are the stable dispatchers
+  // below — so add/remove always use the SAME identity and a setDrag re-render
+  // can never strand a listener (removeEventListener would otherwise miss).
+  const moveRef = useRef(null), upRef = useRef(null), cancelRef = useRef(null);
+  const winMove = useCallback((e) => { if (moveRef.current) moveRef.current(e); }, []);
+  const winUp = useCallback(() => { if (upRef.current) upRef.current(); }, []);
+  const winCancel = useCallback(() => { if (cancelRef.current) cancelRef.current(); }, []);
+
+  const detach = useCallback(() => {
+    stopAuto();
+    window.removeEventListener('pointermove', winMove);
+    window.removeEventListener('pointerup', winUp);
+    window.removeEventListener('pointercancel', winCancel);
+  }, [stopAuto, winMove, winUp, winCancel]);
+
+  const finish = useCallback((commit) => {
+    const s = S.current;
+    detach();
+    if (s && s.longPress) clearTimeout(s.longPress);
+    if (s && s.active && commit && s.over !== s.from && typeof s.onCommit === 'function') {
+      s.onCommit(s.from, s.over);
+    }
+    // The trailing click (fired right after pointerup) is swallowed via clickGuard.
+    // If a drag ended over a different element no click may fire at all, so self-
+    // clear shortly after to avoid eating the NEXT legitimate click.
+    if (s && s.active) setTimeout(() => { clickGuard.current = false; }, 350);
+    S.current = null;
+    setDrag(null);
+  }, [detach]);
+
+  moveRef.current = (e) => {
+    const s = S.current;
+    if (!s) return;
+    if (!s.active) {
+      const moved = Math.abs(e.clientY - s.downY) + Math.abs(e.clientX - s.downX);
+      if (s.isTouch) { if (moved > 8) finish(false); return; }   // pre-long-press move = scroll → abort
+      if (moved > 5) begin(e.clientY);                            // mouse drag threshold
+      return;
+    }
+    e.preventDefault();    // gesture is ours now — block native scroll / text selection
+    update(e.clientY);
+  };
+  upRef.current = () => finish(true);
+  cancelRef.current = () => finish(false);
+
+  // Begin a press session. Recreated each render so it snapshots the CURRENT
+  // lockedBefore / onCommit into the session for the stable handlers to read.
+  const startSession = (index, e) => {
+    if (index < lockedBefore) return;             // locked prefix — not draggable
+    if (count - lockedBefore < 2) return;         // <2 future tracks — nothing to reorder
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (S.current) finish(false);                 // defensive: never run two sessions
+    const isTouch = e.pointerType !== 'mouse';
+    S.current = {
+      from: index, active: false, isTouch,
+      downX: e.clientX, downY: e.clientY, grabY: e.clientY,
+      scroll0: 0, rects: [], height: 0, over: index, lastY: e.clientY, longPress: 0,
+      lockedBefore, onCommit,
+    };
+    window.addEventListener('pointermove', winMove, { passive: false });
+    window.addEventListener('pointerup', winUp);
+    window.addEventListener('pointercancel', winCancel);
+    if (isTouch) {
+      S.current.longPress = setTimeout(() => {
+        if (S.current && !S.current.active) begin(S.current.downY);
+      }, 200);
+    }
+  };
+
+  // Cleanup on unmount — never strand listeners or an animation frame.
+  useEffect(() => () => { detach(); }, [detach]);
+
+  // Per-row props: data tag, drag/shift/locked classes, transform offset, and
+  // (for draggable rows) the pointerdown that opens a session.
+  const getRowProps = (index) => {
+    const draggable = index >= lockedBefore && (count - lockedBefore) >= 2;
+    const cls = [];
+    const style = {};
+    if (draggable) cls.push('q-draggable');
+    if (drag) {
+      // Row order in the DOM never changes mid-drag — only transforms move; the
+      // array commit happens on drop. (The lifted row's opacity is forced full
+      // and the locked prefix dimmed inline, since the row carries an inline
+      // opacity that would otherwise outrank the q-* classes.)
+      if (index === drag.from) {
+        cls.push('q-dragging');
+        style.transform = `translateY(${drag.dy}px) scale(${reduced ? 1 : 1.025})`;
+        style.opacity = 1;
+        style.cursor = 'grabbing';
+      } else if (index < lockedBefore) {
+        cls.push('q-locked');
+        style.opacity = 0.4;
+      } else {
+        cls.push('q-shift');
+        let ty = 0;
+        if (drag.over > drag.from && index > drag.from && index <= drag.over) ty = -drag.height;
+        else if (drag.over < drag.from && index >= drag.over && index < drag.from) ty = drag.height;
+        style.transform = `translateY(${ty}px)`;
+      }
+    }
+    return {
+      'data-qrow': index,
+      className: cls.join(' '),
+      style,
+      onPointerDown: draggable ? (e) => startSession(index, e) : undefined,
+    };
+  };
+
+  // True (and self-resets) when the click event trailing a real drag should be
+  // swallowed so the drop doesn't also fire the row's play-on-click.
+  const consumeClick = useCallback(() => {
+    if (clickGuard.current) { clickGuard.current = false; return true; }
+    return false;
+  }, []);
+
+  return { getRowProps, consumeClick, dragging: !!drag };
+}
+
+function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, onStreamSignal, audio, visible, lyricsMode, onToggleLyrics, onCloseLyrics, showToast, navigateToArtist, aiStatus, onAddToPlaylist, onQueueNext, onReorderQueue }) {
   const [playlist, setPlaylist] = useState(initialPlaylist || []);
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [liked, setLiked] = useState(null);
@@ -11615,6 +11889,44 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
   // effect deps `[currentTrack?.track_id]` always evaluate to `[undefined]`
   // and silently skip — i.e. lyric-explain state never reset on track change.
   const currentTrack = currentIndex >= 0 && currentIndex < playlist.length ? playlist[currentIndex].track : null;
+
+  // ── Queue drag-to-reorder ───────────────────────────────────────────────
+  // Freshest playlist mirrored into a ref so the commit (snapshotted by the
+  // drag hook at grab time) reorders the LATEST array — a stream append landing
+  // mid-drag (always at the tail) won't get dropped.
+  const playlistRef = useRef(playlist);
+  playlistRef.current = playlist;
+  const queueScrollRef = useRef(null);
+  const [droppedId, setDroppedId] = useState(null);   // track id to flash after a drop
+  const droppedTimerRef = useRef(null);
+
+  // Commit a reorder: move item `from` → `over` (original coords), push the new
+  // order UP to App.playerPlaylist (source of truth) so the next wave append
+  // can't clobber it, and briefly glow the moved row. Played + now-playing stay
+  // locked by the hook, so `currentIndex` and stream dedup are untouched.
+  const reorderQueue = (from, over) => {
+    const cur = playlistRef.current || [];
+    if (from < 0 || from >= cur.length) return;
+    const dest = Math.max(0, Math.min(over, cur.length - 1));
+    const next = cur.slice();
+    const moved = next.splice(from, 1)[0];
+    next.splice(dest, 0, moved);
+    setPlaylist(next);
+    if (onReorderQueue) onReorderQueue(next);
+    const id = moved && moved.track && moved.track.track_id;
+    if (id) {
+      setDroppedId(id);
+      if (droppedTimerRef.current) clearTimeout(droppedTimerRef.current);
+      droppedTimerRef.current = setTimeout(() => setDroppedId(null), 560);
+    }
+  };
+
+  const queueReorder = useQueueReorder({
+    lockedBefore: currentIndex + 1,   // lock already-played + the now-playing track
+    count: playlist.length,
+    onCommit: reorderQueue,
+    scrollRef: queueScrollRef,
+  });
 
   // Derive playback state from shared audio hook
   const isPlaying = audio?.isPlaying ?? false;
@@ -12624,7 +12936,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
             }}>
               {lang === 'ru' ? 'ОЧЕРЕДЬ' : 'QUEUE'} · {playlist.length} {lang === 'ru' ? 'ТРЕКОВ' : 'TRACKS'}
             </div>
-            <div className="player-scroll" style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+            <div ref={queueScrollRef} className="player-scroll" style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
               {playlist.length === 0 ? (
                 <div style={{
                   textAlign: 'center',
@@ -12639,6 +12951,8 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                 return playlist.map((hit, i) => {
                   const t = hit.track || {};
                   const active = i === currentIndex;
+                  const rp = queueReorder.getRowProps(i);
+                  const dropped = !!droppedId && t.track_id === droppedId;
                   return (
                     <Fragment key={t.track_id || i}>
                       {i === firstAutoplayIdx && firstAutoplayIdx !== -1 && (
@@ -12658,8 +12972,13 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                         </div>
                       )}
                       <div
-                        className={`player-playlist-item${active ? ' player-active' : ''}`}
-                        onClick={() => { markPlaybackInteracted(audio?.audioRef?.current); playTrackAt(i); }}
+                        data-qrow={rp['data-qrow']}
+                        className={`player-playlist-item${active ? ' player-active' : ''}${rp.className ? ' ' + rp.className : ''}${dropped ? ' q-dropped' : ''}`}
+                        onPointerDown={rp.onPointerDown}
+                        onClick={() => {
+                          if (queueReorder.consumeClick()) return;   // swallow the click that trails a drag
+                          markPlaybackInteracted(audio?.audioRef?.current); playTrackAt(i);
+                        }}
                         onMouseEnter={() => setHoveredQueueIdx(i)}
                         onMouseLeave={() => setHoveredQueueIdx(-1)}
                         style={{
@@ -12667,6 +12986,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                           padding:'10px 14px', cursor:'pointer', marginBottom:'2px',
                           position: 'relative',
                           opacity: hit._autoplay && !active ? 0.75 : 1,
+                          ...rp.style,
                         }}>
                         {/* Index or equalizer */}
                         <div style={{ width:'22px', textAlign:'center', flexShrink:0 }}>
@@ -12719,6 +13039,13 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                         )}
                         {i === hoveredQueueIdx && hit.score_breakdown && (
                           <PlayerScoreBars breakdown={hit.score_breakdown} isDark={isDark} />
+                        )}
+                        {rp.className.split(' ').indexOf('q-draggable') >= 0 && (
+                          <span
+                            className="q-grip"
+                            title={lang === 'ru' ? 'Перетащите, чтобы переставить' : 'Drag to reorder'}
+                            onClick={(e) => e.stopPropagation()}
+                          >⋮⋮</span>
                         )}
                       </div>
                     </Fragment>
@@ -14206,6 +14533,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
                 onAddToPlaylist={openAddToPlaylist}
                 playlistsListing={appPlaylists}
                 onQueueNext={id === 'player' ? handleQueueNext : undefined}
+                onReorderQueue={id === 'player' ? setPlayerPlaylist : undefined}
               />
             </div>
           ))}
