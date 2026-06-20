@@ -7179,6 +7179,93 @@ function PlaylistsTab({ listing, activePlaylistId, onOpenPlaylist, onCloseDetail
 }
 
 // ─── LIBRARY SECTION ──────────────────────────────────────────────────────────
+// ── Catalog quick-search (non-LLM: title / album / artist in one field) ──────
+function CatalogSearchBar({ value, onChange, isDark, lang, loading }) {
+  const c = useColors(isDark);
+  return (
+    <div style={{ position:'relative' }}>
+      <input
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        placeholder={lang==='ru' ? 'Поиск: песня, альбом или исполнитель…' : 'Search: song, album or artist…'}
+        aria-label={lang==='ru' ? 'Поиск по библиотеке' : 'Search the library'}
+        style={{
+          width:'100%', boxSizing:'border-box',
+          background:'rgba(255,255,255,.04)', border:`1px solid ${c.border}`,
+          borderRadius:'14px', padding:'14px 44px 14px 16px',
+          color:c.text, fontSize:'15px', outline:'none', backdropFilter:'blur(20px)',
+        }}
+      />
+      <span style={{ position:'absolute', right:'16px', top:'50%', transform:'translateY(-50%)', color:c.textDim, fontSize:'14px', pointerEvents:'none' }}>
+        {loading ? '⏳' : '🔎'}
+      </span>
+    </div>
+  );
+}
+
+function CatalogResults({ hits, loading, onOpen, isDark, lang }) {
+  const c = useColors(isDark);
+  const badge = (t) => t === 'song' ? '♪' : t === 'album' ? '💿' : '🎤';
+  const typeLabel = (t) => lang === 'ru'
+    ? (t === 'song' ? 'Песня' : t === 'album' ? 'Альбом' : 'Исполнитель')
+    : (t === 'song' ? 'Song' : t === 'album' ? 'Album' : 'Artist');
+
+  if (!hits.length) {
+    return (
+      <div className="lib-tab-pane" style={{ padding:'28px', textAlign:'center', color:c.textDim }}>
+        {loading
+          ? (lang === 'ru' ? 'Поиск…' : 'Searching…')
+          : (lang === 'ru' ? 'Ничего не найдено' : 'Nothing found')}
+      </div>
+    );
+  }
+
+  return (
+    <div className="lib-tab-pane" style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
+      {hits.map((h, i) => {
+        const cover = h.type === 'artist' ? h.image : h.cover_art_path;
+        const coverUrl = homeCoverUrl(cover);
+        const primary = h.type === 'song' ? h.title : (h.type === 'album' ? h.album : h.artist);
+        const secondary = h.type === 'song'
+          ? h.artist
+          : (h.type === 'album'
+              ? h.artist
+              : (h.track_count != null ? `${h.track_count} ${lang === 'ru' ? 'треков' : 'tracks'}` : ''));
+        const key = `${h.type}-${h.track_id || h.artist_slug || ''}-${h.album || h.title || ''}-${i}`;
+        return (
+          <div
+            key={key}
+            onClick={() => onOpen(h)}
+            style={{
+              display:'flex', alignItems:'center', gap:'12px', cursor:'pointer',
+              background:'rgba(255,255,255,.04)', border:`1px solid ${c.border}`,
+              borderRadius:'12px', padding:'10px 14px',
+            }}
+          >
+            <div style={{
+              width:'44px', height:'44px', flex:'0 0 auto',
+              borderRadius: h.type === 'artist' ? '50%' : '8px',
+              overflow:'hidden', background:'rgba(255,255,255,.06)',
+              display:'flex', alignItems:'center', justifyContent:'center', fontSize:'18px',
+            }}>
+              {coverUrl
+                ? <img src={coverUrl} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />
+                : badge(h.type)}
+            </div>
+            <div style={{ flex:1, minWidth:0 }}>
+              <div style={{ color:c.text, fontWeight:600, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{primary}</div>
+              <div style={{ color:c.textDim, fontSize:'13px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{secondary}</div>
+            </div>
+            <div style={{ color:c.textDim, fontSize:'11px', textTransform:'uppercase', letterSpacing:'.5px', flex:'0 0 auto' }}>
+              {badge(h.type)} {typeLabel(h.type)}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTrack, onAddToPlaylist, playlistsListing, visible }) {
   const c = useColors(isDark);
 
@@ -7199,6 +7286,12 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
   // playlistsListing is now provided by App-level usePlaylists (lifted in Plan 19 follow-up)
   const [activePlaylistId, setActivePlaylistId] = React.useState(null);
   const [showNewPlaylistModal, setShowNewPlaylistModal] = React.useState(false);
+
+  // ── Catalog quick-search (replaces tabs while typing) ─────────────────
+  const [catalogQuery, setCatalogQuery] = useState('');
+  const [catalogHits, setCatalogHits] = useState([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const catalogTimer = useRef(null);
 
   const toggleLike = async (track_id) => {
     const next = !(likedMap[track_id] !== false);   // default-true for items already in liked list
@@ -7253,9 +7346,43 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
       .then(setAlbumsData).catch(() => setAlbumsData({albums:[]}));
   }, [albumSort]);
 
+  // ── Effect 3: debounced catalog search ───────────────────────────────
+  useEffect(() => {
+    const q = catalogQuery.trim();
+    if (catalogTimer.current) clearTimeout(catalogTimer.current);
+    if (q.length < 2) { setCatalogHits([]); setCatalogLoading(false); return; }
+    setCatalogLoading(true);
+    catalogTimer.current = setTimeout(() => {
+      apiFetch(`/search/catalog?q=${encodeURIComponent(q)}&limit=12`)
+        .then(hits => setCatalogHits(Array.isArray(hits) ? hits : []))
+        .catch(() => setCatalogHits([]))
+        .finally(() => setCatalogLoading(false));
+    }, 150);
+    return () => { if (catalogTimer.current) clearTimeout(catalogTimer.current); };
+  }, [catalogQuery]);
+
+  const openCatalogHit = (h) => {
+    if (h.type === 'song') {
+      const toHit = (x) => ({
+        track: { track_id: x.track_id, title: x.title, artist: x.artist, album: x.album, cover_art_path: x.cover_art_path },
+        score: x.score,
+      });
+      const songHits = catalogHits.filter(x => x.type === 'song');
+      onPlayTrack(toHit(h), songHits.map(toHit));
+    } else if (h.type === 'album') {
+      const albums = albumsData?.albums || [];
+      const found = albums.find(a => a.primary_artist_slug === h.artist_slug && a.album_title === h.album)
+        || albums.find(a => a.album_title === h.album);
+      if (found) setAlbumModal({ album: found, originRect: null });
+    } else if (h.type === 'artist') {
+      navigateToArtist(h.artist_slug);
+    }
+  };
+
   const albumsCount = albumsData?.albums?.length ?? 0;
   const likedCount  = likedData?.tracks?.length ?? 0;
   const recentCount = recentData?.tracks?.length ?? 0;
+  const catalogActive = catalogQuery.trim().length >= 2;
 
   return (
     <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:c.bg }}>
@@ -7279,6 +7406,24 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
             <ListeningWidgetsRow data={listenData} isDark={isDark} lang={lang} />
           </div>
 
+          <div className="lib-rise" style={{ '--lib-d':'0.16s' }}>
+            <CatalogSearchBar
+              value={catalogQuery}
+              onChange={setCatalogQuery}
+              loading={catalogLoading}
+              isDark={isDark} lang={lang}
+            />
+          </div>
+
+          {catalogActive ? (
+            <CatalogResults
+              hits={catalogHits}
+              loading={catalogLoading}
+              onOpen={openCatalogHit}
+              isDark={isDark} lang={lang}
+            />
+          ) : (
+          <React.Fragment>
           <div className="lib-rise" style={{ '--lib-d':'0.18s' }}>
             <LibraryTabsStrip
               active={activeTab}
@@ -7350,6 +7495,8 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
             />
           )}
           </div>
+          </React.Fragment>
+          )}
 
         </div>
       </div>

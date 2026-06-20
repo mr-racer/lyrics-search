@@ -368,12 +368,12 @@ _PLAN_SYSTEM = """You translate a music listener's wish into search actions over
 
 Available tools:
 - "clap_search" — search by SOUND. The query must be an English description of sound/mood/instrumentation, written like an audio caption (e.g. "a calm late-night jazz track with soft female vocals and brushed drums"). Use for any wish about vibe, genre, energy, instruments.
-- "library_search" — search by LYRICS THEME and metadata. English query about what the songs are ABOUT (e.g. "songs about heartbreak and moving on"). Use for lyrical/thematic wishes.
+- "library_search" — find specific songs by NAME: a song title, an album name, or an artist name. Query = the name exactly as the user wrote it, in their own language/script (do NOT translate). Returns the actual songs (an album or artist name returns that album's / artist's tracks). Use when the wish names a song, album, or artist.
 - "similar_tracks" — tracks that SOUND like one specific track the user explicitly named. Query = "Artist Title" exactly as the user named it. Use ONLY when a concrete song is named.
 
 Rules:
 - 1 to {max_actions} actions. One focused action beats three vague ones.
-- A wish can mix kinds: "энергичный рок про любовь" → clap_search (energetic rock sound) + library_search (love lyrics).
+- A wish can mix kinds: "что-нибудь энергичное у Queen" → clap_search (energetic sound) + library_search (Queen).
 - "title": a short playlist name in {lang_name} that captures the wish.
 
 Output ONLY minified JSON, no prose, no fences:
@@ -443,6 +443,17 @@ async def _execute_action(
                 "tool": tool,
             })
         return out
+
+    if tool == "library_search":
+        # Catalog tracks mode: match by NAME (title/album/artist) and return the
+        # actual songs (album/artist queries explode into their tracks).
+        from app.services import catalog_search_service
+        tracks = catalog_search_service.search_catalog_tracks(
+            qdrant_client, collection_name, query, limit,
+        )
+        for t in tracks:
+            t["tool"] = tool
+        return tracks
 
     mode = "audio" if tool == "clap_search" else "hybrid"
     hits = await search_service.search(

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.resources.metadata_db import MetadataDB
+from app.services import catalog_search_service
 from app.services import recsys_ai_service as svc
 from app.services.recsys_ai_service import (
     _validate_plan,
@@ -122,6 +123,15 @@ def _hit(tid, title=None, artist="A"):
     return SimpleNamespace(track=track, score=0.9)
 
 
+def _trackdict(tid, title=None, artist="A"):
+    """A catalog tracks-mode result dict (what search_catalog_tracks returns)."""
+    return {
+        "track_id": tid, "title": title or f"T{tid}", "artist": artist,
+        "album": None, "year": 2020, "genre": "g", "duration": 200.0,
+        "file_path": f"/{tid}.mp3", "cover_art_path": None,
+    }
+
+
 class FakeSearchService:
     def __init__(self):
         self.calls = []
@@ -145,7 +155,10 @@ class TestAIPlaylist:
                                {"n": 1, "reason": "дождливый бит"},
                                {"n": 99, "reason": "мимо"}]}
         fake_search = FakeSearchService()
-        with patch.object(svc, "ask_llm", new=AsyncMock(side_effect=[plan, selection])):
+        # library_search now routes to the catalog tracks engine (by name → songs).
+        with patch.object(svc, "ask_llm", new=AsyncMock(side_effect=[plan, selection])), \
+             patch.object(catalog_search_service, "search_catalog_tracks",
+                          return_value=[_trackdict("hy1"), _trackdict("au1")]):
             out = await ai_playlist(
                 search_service=fake_search, qdrant_client=object(),
                 collection_name="col", prompt="дождь и кофе", lang="ru", limit=5,

@@ -91,6 +91,27 @@ class SearchResponse(BaseModel):
     mode: Literal["text", "audio", "hybrid"]
 
 
+class CatalogHit(BaseModel):
+    """One result of the non-LLM catalog search (GET /search/catalog).
+
+    Discriminated by ``type``; only the fields relevant to that type are set.
+    """
+    type: Literal["song", "album", "artist"]
+    score: float
+    # song
+    track_id: str | None = None
+    title: str | None = None
+    # song + album
+    album: str | None = None
+    cover_art_path: str | None = None
+    # all (album: primary artist; artist: the artist)
+    artist: str | None = None
+    artist_slug: str | None = None
+    # album + artist
+    track_count: int | None = None
+    image: str | None = None            # artist photo (thumb_path / cutout_path)
+
+
 class IndexRequest(BaseModel):
     """Запрос на индексацию папки с музыкой."""
     folder_path: str

@@ -2,11 +2,11 @@
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
 from app.domain.models import (
-    SearchRequest, SearchResponse, User,
+    SearchRequest, SearchResponse, User, CatalogHit,
     TrackReactionRequest, TrackReactionResponse,
 )
 from app.api.dependencies import get_current_user, get_user_for_stream
@@ -64,6 +64,28 @@ async def search_tracks(
     )
 
     return SearchResponse(hits=hits, query=req.query, mode=req.mode)
+
+
+@router.get("/catalog", response_model=list[CatalogHit])
+async def catalog_search(
+    request: Request,
+    q: str = Query("", description="Query — title / album / artist, in one field."),
+    limit: int = Query(12, ge=1, le=50),
+    current_user: User = Depends(get_current_user),
+) -> list[CatalogHit]:
+    """Non-LLM catalog search: artists / albums / songs by name, best-match first.
+
+    Separate from the semantic ``POST /search/`` — matches names (BM25F over
+    title/album/artist), not lyrics. The collection is derived from the JWT.
+    """
+    from app.services import catalog_search_service
+
+    db_client = getattr(request.app.state, "db_client", None)
+    if db_client is None:
+        return []
+    collection = derive_collection_for_user(current_user)
+    hits = catalog_search_service.search_catalog(db_client.qdrant, collection, q, limit)
+    return [CatalogHit(**h) for h in hits]
 
 
 @router.get("/models/text")
