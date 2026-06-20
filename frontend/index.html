@@ -1464,6 +1464,8 @@
     }
     .player-playlist-item:hover { background: rgba(255,255,255,0.05); }
     .player-playlist-item.player-active { background: rgba(124,91,255,0.1); }
+    .sim-card { transition: background 0.15s ease; border-radius: 10px; }
+    .sim-card:hover { background: rgba(255,255,255,0.06); }
 
     /* Control icon buttons */
     .player-ctrl-btn {
@@ -1774,6 +1776,7 @@
     body[data-theme="light"] .player-playlist-item.player-active {
       background: rgba(124,91,255,0.08);
     }
+    body[data-theme="light"] .sim-card:hover { background: rgba(22,22,32,0.05); }
     body[data-theme="light"] .player-fact-row {
       border-bottom: 1px solid rgba(22,22,32,0.06);
     }
@@ -11284,6 +11287,103 @@ function PlayerAmbient({ track, isDark }) {
   );
 }
 
+// ── Player Similarity Rail (CLAP «похожие / контраст» under the queue) ───────
+// Fetches the current track's top-3 similar + top-3 contrasting neighbours from
+// the memoized top-pairs cache. Renders nothing when there is no data (the
+// analysis hasn't run, or the track isn't in the cache) or while the AI chat
+// drawer is open. A click queues the track to play NEXT (not replace, not end).
+function SimilarityColumn({ accent, label, items, tint, isDark, onQueueNext }) {
+  const text   = isDark ? '#FFFFFF' : '#161620';
+  const muted  = isDark ? '#9BA1B0' : 'rgba(22,22,32,0.62)';
+  const subtle = isDark ? 'rgba(255,255,255,0.30)' : 'rgba(22,22,32,0.42)';
+  return (
+    <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{
+        fontSize: 10, letterSpacing: '0.18em',
+        fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+        color: accent, display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2,
+      }}>
+        <span style={{ width: 6, height: 6, borderRadius: '50%', background: accent }} />
+        {label}
+      </div>
+      {items.length === 0 ? (
+        <div style={{ fontSize: 12, color: subtle, padding: '6px 4px' }}>—</div>
+      ) : items.map((t, i) => (
+        <div
+          key={t.track_id || i}
+          className="sim-card"
+          onClick={() => onQueueNext(t)}
+          title={(t.title || '') + ' — ' + (t.artist || '')}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 10, padding: '6px 8px',
+            cursor: 'pointer', background: tint, borderLeft: `2px solid ${accent}`,
+          }}>
+          <AlbumCover title={t.title} artist={t.artist} size={38} isDark={isDark} coverPath={t.cover_art_path} radius={8} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{
+              fontSize: 13, fontWeight: 500, color: text, letterSpacing: '-0.01em',
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}>{t.title || '—'}</div>
+            <div style={{
+              fontSize: 12, color: muted, marginTop: 1,
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}>{t.artist || '—'}</div>
+          </div>
+          {typeof t.score === 'number' && (
+            <span style={{
+              fontSize: 10, color: subtle, flexShrink: 0,
+              fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+            }}>{Math.round(t.score)}%</span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SimilarityRail({ trackId, lang, isDark, drawerOpen, onQueueNext }) {
+  const [data, setData] = useState(null); // { similar:[], dissimilar:[] } | null
+  useEffect(() => {
+    if (!trackId) { setData(null); return; }
+    let alive = true;
+    setData(null);
+    apiFetch('/library/top-pairs/' + encodeURIComponent(trackId))
+      .then(r => {
+        if (!alive) return;
+        const has = r && r.available && (((r.similar || []).length) || ((r.dissimilar || []).length));
+        setData(has ? { similar: r.similar || [], dissimilar: r.dissimilar || [] } : null);
+      })
+      .catch(() => { if (alive) setData(null); });
+    return () => { alive = false; };
+  }, [trackId]);
+
+  if (drawerOpen || !data) return null;
+
+  return (
+    <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ borderTop: `1px solid ${isDark ? '#2a2a32' : 'rgba(22,22,32,0.08)'}` }} />
+      <div style={{ display: 'flex', gap: 12, paddingTop: 2 }}>
+        <SimilarityColumn
+          accent="#34D399"
+          label={lang === 'ru' ? 'ПОХОЖИЕ' : 'SIMILAR'}
+          items={data.similar}
+          tint={isDark ? 'rgba(52,211,153,0.06)' : 'rgba(52,211,153,0.08)'}
+          isDark={isDark}
+          onQueueNext={onQueueNext}
+        />
+        <SimilarityColumn
+          accent="#F59E0B"
+          label={lang === 'ru' ? 'КОНТРАСТ' : 'CONTRAST'}
+          items={data.dissimilar}
+          tint={isDark ? 'rgba(245,158,11,0.06)' : 'rgba(245,158,11,0.08)'}
+          isDark={isDark}
+          onQueueNext={onQueueNext}
+        />
+      </div>
+    </div>
+  );
+}
+
 function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, onStreamSignal, audio, visible, lyricsMode, onToggleLyrics, onCloseLyrics, showToast, navigateToArtist, aiStatus, onAddToPlaylist }) {
   const [playlist, setPlaylist] = useState(initialPlaylist || []);
   const [currentIndex, setCurrentIndex] = useState(-1);
@@ -11668,6 +11768,20 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
     // read playerTrack at App level) would keep showing the *initial* track
     // even after the user skipped to a different one inside the playlist.
     if (onTrackChange) onTrackChange(track);
+  };
+
+  // Insert a track to play NEXT (right after the current one). Used by the
+  // SimilarityRail. Deliberately NOT flagged `_autoplay`, so it sits above the
+  // «АВТОПОДБОР» divider and reads as a manually queued track. Does not disturb
+  // the autoplay tail-append (which targets the END on queue exhaustion).
+  const queueTrackNext = (track) => {
+    if (!track || !track.track_id) return;
+    setPlaylist(prev => {
+      const insertAt = currentIndex + 1;
+      const hit = { track, score: 0, matched_on: 'audio', _queuedNext: true };
+      return [...prev.slice(0, insertAt), hit, ...prev.slice(insertAt)];
+    });
+    if (showToast) showToast(lang === 'ru' ? 'Поставлено следующим' : 'Queued next');
   };
 
   // When audio ends: advance within the current playlist if there's a next
@@ -12241,7 +12355,10 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
             flex: playlist.length === 0 ? '0 0 auto' : 1,
             position: 'relative',
             overflow: 'hidden',
-            minHeight: 0,
+            // Floor at ~3 queue rows + header so the queue never collapses below
+            // 3 visible tracks on short viewports (the SimilarityRail below takes
+            // its natural height, leaving the queue the rest).
+            minHeight: playlist.length === 0 ? 0 : 236,
             display: 'flex',
             flexDirection: 'column',
           }}>
@@ -12379,6 +12496,14 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
             showToast={showToast}
           />
           </div>
+
+          <SimilarityRail
+            trackId={currentTrack?.track_id}
+            lang={lang}
+            isDark={isDark}
+            drawerOpen={drawerOpen}
+            onQueueNext={queueTrackNext}
+          />
         </div>
       </div>
 
