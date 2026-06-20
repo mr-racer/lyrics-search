@@ -11586,7 +11586,7 @@ function SimilarityRail({ trackId, lang, isDark, drawerOpen, onQueueNext }) {
   );
 }
 
-function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, onStreamSignal, audio, visible, lyricsMode, onToggleLyrics, onCloseLyrics, showToast, navigateToArtist, aiStatus, onAddToPlaylist }) {
+function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, onStreamSignal, audio, visible, lyricsMode, onToggleLyrics, onCloseLyrics, showToast, navigateToArtist, aiStatus, onAddToPlaylist, onQueueNext }) {
   const [playlist, setPlaylist] = useState(initialPlaylist || []);
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [liked, setLiked] = useState(null);
@@ -11977,20 +11977,6 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
     // read playerTrack at App level) would keep showing the *initial* track
     // even after the user skipped to a different one inside the playlist.
     if (onTrackChange) onTrackChange(track);
-  };
-
-  // Insert a track to play NEXT (right after the current one). Used by the
-  // SimilarityRail. Deliberately NOT flagged `_autoplay`, so it sits above the
-  // «АВТОПОДБОР» divider and reads as a manually queued track. Does not disturb
-  // the autoplay tail-append (which targets the END on queue exhaustion).
-  const queueTrackNext = (track) => {
-    if (!track || !track.track_id) return;
-    setPlaylist(prev => {
-      const insertAt = currentIndex + 1;
-      const hit = { track, score: 0, matched_on: 'audio', _queuedNext: true };
-      return [...prev.slice(0, insertAt), hit, ...prev.slice(insertAt)];
-    });
-    if (showToast) showToast(lang === 'ru' ? 'Поставлено следующим' : 'Queued next');
   };
 
   // When audio ends: advance within the current playlist if there's a next
@@ -12744,7 +12730,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
             lang={lang}
             isDark={isDark}
             drawerOpen={drawerOpen}
-            onQueueNext={queueTrackNext}
+            onQueueNext={onQueueNext}
           />
         </div>
       </div>
@@ -13886,6 +13872,36 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     }
   };
 
+  // Queue a track (from the player's similar/contrast rail) to play NEXT.
+  // Inserts into the single source-of-truth queue (App.playerPlaylist) so it
+  // survives PlayerSection's prop re-sync; marked _noInfluence so its eventual
+  // playback does NOT feed the "For You" taste profile (the user hand-picked it).
+  const handleQueueNext = (track) => {
+    if (!track || !track.track_id) return;
+    const hit = { track, score: 0, matched_on: 'audio', _queuedNext: true, _noInfluence: true };
+    setPlayerPlaylist(prev => {
+      const cur = playerTrack;
+      const idx = cur ? prev.findIndex(h => ((h && h.track) ? h.track : h).track_id === cur.track_id) : -1;
+      const at = idx >= 0 ? idx + 1 : prev.length;
+      return [...prev.slice(0, at), hit, ...prev.slice(at)];
+    });
+    if (track.file_path === undefined) {
+      apiFetch(`/metadata/tracks?ids=${encodeURIComponent(track.track_id)}`)
+        .then(full => {
+          if (!Array.isArray(full) || !full.length) return;
+          const fresh = full[0];
+          if (!fresh || !fresh.track_id) return;
+          setPlayerPlaylist(prev => prev.map(h => (
+            (h && h.track && h.track.track_id === fresh.track_id)
+              ? { ...h, track: { ...h.track, ...fresh, duration: fresh.duration_sec ?? h.track.duration } }
+              : h
+          )));
+        })
+        .catch(() => {});
+    }
+    showToast(lang === 'ru' ? 'Поставлено следующим' : 'Queued next');
+  };
+
   // Home mini-player prev/next. On the home screen PlayerSection is unmounted,
   // so its [initialTrack] effect (which normally drives setSrc + play) never
   // fires — changing playerTrack alone would update the strip but not the
@@ -14173,6 +14189,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
                 onNav={setSection}
                 onAddToPlaylist={openAddToPlaylist}
                 playlistsListing={appPlaylists}
+                onQueueNext={id === 'player' ? handleQueueNext : undefined}
               />
             </div>
           ))}
