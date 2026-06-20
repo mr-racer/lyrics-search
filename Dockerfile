@@ -1,5 +1,19 @@
 # MusiX application image.
 #
+# ── Stage 1: build the Vite frontend ────────────────────────────────────────
+# The frontend is a Vite project (frontend/). We compile it to static assets
+# here and copy only the built dist/ into the runtime image — Node and
+# node_modules never reach the final image.
+FROM node:24-alpine AS frontend-build
+WORKDIR /build
+# Lockfile first for layer caching: this layer only rebuilds when deps change.
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+# → /build/dist
+
+# ── Stage 2: the Python application image ───────────────────────────────────
 # Base: PyTorch CUDA runtime already ships torch 2.6.0+cu124 (+torchvision /
 # torchaudio), so `pip install -r requirements.txt` reuses those wheels instead
 # of re-downloading ~2.5 GB from the PyTorch index.
@@ -35,7 +49,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Application code. Data dirs (media/, cache/, weights/, frontend/covers/) are
 # volumes — intentionally NOT copied (also excluded via .dockerignore).
 COPY app/ ./app/
-COPY frontend/ ./frontend/
+# Frontend: only the compiled assets from the build stage. The source tree
+# (src/, node_modules/) never reaches the runtime image. covers/ is a volume.
+COPY --from=frontend-build /build/dist ./frontend/dist
 COPY scripts/ ./scripts/
 COPY logging.conf pyproject.toml __init__.py ./
 

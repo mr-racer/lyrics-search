@@ -37,9 +37,14 @@ demo.html
 # notebooks
 /notebooks
 # node
-/node_modules
-package.json
-package-lock.json
+node_modules/
+# Root-level node tooling (none in this Python repo) stays ignored, but the
+# frontend/ Vite manifest + lockfile MUST be tracked (Docker `npm ci` needs
+# them), so anchor these rules to the repo root only.
+/package.json
+/package-lock.json
+# Pre-Vite monolith kept locally for quick rollback; git history already has it.
+frontend/index.html.bak
 
 # cache
 /cache

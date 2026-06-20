@@ -4,6 +4,9 @@ cache
 weights
 qdrant_storage
 frontend/covers
+# Built inside the frontend-build stage; backup of the pre-Vite monolith.
+frontend/dist
+frontend/index.html.bak
 
 # ── VCS / tooling / local-only ──────────────────────────────────────────────
 .git

@@ -41,7 +41,11 @@ from .dependencies import get_current_user
 from .sse_utils import event_stream
 
 logger = logging.getLogger(__name__)
-FRONTEND_INDEX = Path(__file__).parent.parent.parent / "frontend" / "index.html"
+# Tier 0: the frontend is now a Vite build. We serve the compiled assets from
+# frontend/dist/ (produced by `npm run build`), not the source tree. covers/
+# stays at frontend/covers (a runtime volume) and is served by its own routes.
+FRONTEND_DIST = Path(__file__).parent.parent.parent / "frontend" / "dist"
+FRONTEND_INDEX = FRONTEND_DIST / "index.html"
 COVERS_DIR = Path(__file__).parent.parent.parent / "frontend" / "covers"
 
 
@@ -346,8 +350,8 @@ def create_app() -> FastAPI:
     # SPA catch-all — must be LAST so it doesn't shadow API routes
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
-        # Try exact static file first
-        file_path = Path(__file__).parent.parent.parent / "frontend" / full_path
+        # Try exact static file first (hashed JS/CSS assets from the Vite build)
+        file_path = FRONTEND_DIST / full_path
         if file_path.exists() and file_path.is_file():
             return FileResponse(file_path)
         # SPA fallback → index.html
