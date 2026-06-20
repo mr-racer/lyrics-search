@@ -8251,7 +8251,7 @@ function IndexingModal({
             <li>{lang==='ru'?'Artist Bio — биография для каждого артиста':'Artist Bio — bio per artist'}</li>
           </ul>
           <p style={{ fontSize: 11, color: isDark?'#777':'#888', marginTop: 12 }}>
-            {lang==='ru'?'Это можно сделать позже в Settings → AI Indexing.':'You can run this later in Settings → AI Indexing.'}
+            {lang==='ru'?'Это можно сделать позже в Настройках → ИИ-обогащение.':'You can run this later in Settings → AI enrichment.'}
           </p>
           <div style={{ display: 'flex', gap: 10, marginTop: 24 }}>
             <button
@@ -8291,7 +8291,7 @@ function IndexingModal({
           animation:'scaleIn 0.3s cubic-bezier(.22,.9,.3,1)',
         }}>
         <div className="mono" style={{ fontSize:'17px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'12px' }}>
-          {lang==='ru'?'ДОБАВЛЕНИЕ МУЗЫКИ':'Adding music'} · {collectionName}
+          {lang==='ru'?'ДОБАВЛЕНИЕ МУЗЫКИ':'ADDING MUSIC'} · {collectionName}
         </div>
         <div className="serif" style={{ fontSize:'37px', lineHeight:'1', letterSpacing:'-0.02em', color:c.text, marginBottom:'30px' }}>
           {errorMessage
@@ -8917,7 +8917,7 @@ function InstanceAISettings({ isDark, lang, showToast }) {
       <div style={{ fontSize: 11, color: c.textMuted, lineHeight: 1.5, margin: '8px 2px 16px' }}>
         {ru
           ? 'Точность поиска по словам внутри песен. Применяется к новым библиотекам участников; уже добавленные не меняются.'
-          : "How precisely members search words inside songs. Applied to new libraries; already-added collections are unchanged."}
+          : "How precisely members search words inside songs. Applied to new libraries; already-added libraries are unchanged."}
       </div>
 
       <button onClick={save} disabled={busy} className="cta-v3" style={{
