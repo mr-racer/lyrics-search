@@ -2907,7 +2907,7 @@ function FactsRail({ trackId, isDark, lang, accent, variant = "landing" }) {
   const TYPE_META = {
     song:   { label: lang==='ru'?'О ПЕСНЕ':'ABOUT SONG',     color: 'oklch(60% 0.18 270)' },
     artist: { label: lang==='ru'?'АРТИСТ':'ARTIST',          color: 'oklch(70% 0.13 75)'  },
-    misc:   { label: lang==='ru'?'ИЗ КОЛЛЕКЦИИ':'COLLECTION', color: c.textMuted          },
+    misc:   { label: lang==='ru'?'ИЗ БИБЛИОТЕКИ':'LIBRARY', color: c.textMuted          },
   };
 
   // Fetch facts on track change
@@ -7113,7 +7113,7 @@ function PlaylistDetailView({ playlistId, lang, onClose, onPlayTrack, navigateTo
           background: 'rgba(255,180,80,.05)', border: '1px solid rgba(255,180,80,.18)',
           color: 'rgba(255,200,140,.7)', margin: '12px 0',
         }}>
-          ⚠ {detail.missing_track_ids.length} {lang === 'ru' ? 'ТРЕК(А) НЕ НАЙДЕНЫ В ТЕКУЩЕЙ КОЛЛЕКЦИИ — СКРЫТЫ, НО НЕ УДАЛЕНЫ. РЕИНДЕКСАЦИЯ ВЕРНЁТ ИХ' : 'TRACK(S) NOT FOUND IN CURRENT COLLECTION — HIDDEN, NOT REMOVED. RE-INDEX TO RESTORE'}
+          ⚠ {detail.missing_track_ids.length} {lang === 'ru' ? 'ТРЕК(А) НЕ НАЙДЕНЫ В ТЕКУЩЕЙ БИБЛИОТЕКЕ — СКРЫТЫ, НО НЕ УДАЛЕНЫ. ПОВТОРНОЕ ДОБАВЛЕНИЕ ВЕРНЁТ ИХ' : 'TRACK(S) NOT FOUND IN CURRENT LIBRARY — HIDDEN, NOT REMOVED. RE-ADD MUSIC TO RESTORE'}
         </div>
       )}
 
@@ -8162,7 +8162,7 @@ function IndexingProgress({ stepStatus, stageProgress, lang, c, isDark }) {
       )}
       <div style={grooveStyle} />
       {renderSection(
-        lang==='ru' ? 'ЛОКАЛЬНАЯ ИНДЕКСАЦИЯ' : 'LOCAL INDEXING',
+        lang==='ru' ? 'ЛОКАЛЬНАЯ МУЗЫКА' : 'LOCAL MUSIC',
         localStages
       )}
       {renderSection(null, finalStages)}
@@ -8291,7 +8291,7 @@ function IndexingModal({
           animation:'scaleIn 0.3s cubic-bezier(.22,.9,.3,1)',
         }}>
         <div className="mono" style={{ fontSize:'17px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'12px' }}>
-          {lang==='ru'?'ИНДЕКСАЦИЯ':'INDEXING'} · {collectionName}
+          {lang==='ru'?'ДОБАВЛЕНИЕ МУЗЫКИ':'Adding music'} · {collectionName}
         </div>
         <div className="serif" style={{ fontSize:'37px', lineHeight:'1', letterSpacing:'-0.02em', color:c.text, marginBottom:'30px' }}>
           {errorMessage
@@ -10015,7 +10015,7 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
               <button onClick={startUpload} className="ske-accent"
                 style={{ width:'100%', marginTop:'14px', padding:'12px 20px', borderRadius:'12px',
                   fontSize:'14px', fontWeight:'600', letterSpacing:'0.08em', cursor:'pointer' }}>
-                {lang==='ru'?'▶ ЗАГРУЗИТЬ И ПРОИНДЕКСИРОВАТЬ':'▶ UPLOAD & INDEX'}
+                {lang==='ru'?'▶ ЗАГРУЗИТЬ И ДОБАВИТЬ':'▶ Upload & add'}
               </button>
             )}
             {anyUploading && (
@@ -10327,7 +10327,7 @@ function OnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
               cursor: indexing||!folderPath.trim() ? 'not-allowed' : 'pointer',
               display:'flex', alignItems:'center', justifyContent:'center', gap:'8px',
             }}>
-            {indexing ? <><Spinner size={14} color="white" /> {lang==='ru'?'ИДЁТ ИНДЕКСАЦИЯ':'INDEXING'}</> : (lang==='ru'?'▶ НАЧАТЬ ИНДЕКСАЦИЮ':'▶ START INDEXING')}
+            {indexing ? <><Spinner size={14} color="white" /> {lang==='ru'?'ИДЁТ ОБРАБОТКА':'Adding music…'}</> : (lang==='ru'?'▶ ДОБАВИТЬ МУЗЫКУ':'▶ Add music')}
           </button>
 
           {error && <div style={{ marginTop:'14px', padding:'10px 14px', borderRadius:'10px', background:c.redBg, color:c.red, fontSize:'14px' }}>{error}</div>}
