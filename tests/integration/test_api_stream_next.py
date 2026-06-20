@@ -467,6 +467,45 @@ class TestAIEndpointsRegistered:
         assert resp.status_code == 502
 
 
+class TestTasteVibeRoute:
+    """GET /recommend/taste-vibe: on a cache miss with AI available the phrase
+    must be generated SYNCHRONOUSLY (not deferred to a background task) so the
+    hero shows the AI line on the first request. Service funcs are patched, so
+    the fake Qdrant is never actually read."""
+
+    def test_generates_synchronously_when_ai_available(self, client):
+        from unittest.mock import AsyncMock, patch
+        from app.api.routes import recommend as rec_route
+
+        with patch.object(rec_route.recsys_ai_service, "taste_vibe_cached_or_fallback",
+                          return_value={"phrase": "детерминированная",
+                                        "source": "fallback", "needs_generation": True}), \
+             patch.object(rec_route.recsys_ai_service, "generate_taste_vibe",
+                          new=AsyncMock(return_value={"phrase": "AI вайб", "source": "ai"})) as gen, \
+             patch.object(rec_route.settings_service, "ai_available", return_value=True):
+            resp = client.get("/api/v1/recommend/taste-vibe", params={"lang": "ru"})
+
+        assert resp.status_code == 200
+        assert resp.json() == {"phrase": "AI вайб", "source": "ai"}
+        gen.assert_awaited_once()
+
+    def test_deterministic_when_ai_unavailable(self, client):
+        from unittest.mock import AsyncMock, patch
+        from app.api.routes import recommend as rec_route
+
+        with patch.object(rec_route.recsys_ai_service, "taste_vibe_cached_or_fallback",
+                          return_value={"phrase": "детерминированная",
+                                        "source": "fallback", "needs_generation": True}), \
+             patch.object(rec_route.recsys_ai_service, "generate_taste_vibe",
+                          new=AsyncMock()) as gen, \
+             patch.object(rec_route.settings_service, "ai_available", return_value=False):
+            resp = client.get("/api/v1/recommend/taste-vibe", params={"lang": "ru"})
+
+        assert resp.status_code == 200
+        assert resp.json() == {"phrase": "детерминированная", "source": "fallback"}
+        gen.assert_not_awaited()
+
+
 class TestSimilar:
     def test_returns_neighbors_with_seed_excluded(self, client):
         resp = client.get("/api/v1/recommend/similar",

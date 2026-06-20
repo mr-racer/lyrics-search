@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.domain.models import (
     AIPlaylistIn,
@@ -188,18 +188,18 @@ def stream_profile(
 
 
 @router.get("/taste-vibe")
-def taste_vibe(
+async def taste_vibe(
     request: Request,
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     lang: str = Query("en", min_length=2, max_length=5),
 ) -> dict:
     """One short "wave" phrase describing the listener's current taste, for the
     For-You hero (replaces a concrete song title).
 
-    Returns a fresh cached AI phrase when available; otherwise an instant
-    deterministic phrase and — when AI is enabled — schedules generation so the
-    next load gets the LLM version. Never blocks the hero on the LLM.
+    Returns a fresh cached AI phrase when available. On a cache miss, if AI is
+    enabled, the LLM phrase is generated SYNCHRONOUSLY (and cached) so the hero
+    shows the real AI line on first load — no «one navigation behind» lag. When
+    AI is off, or the LLM fails, returns the instant deterministic phrase.
     Shape: ``{"phrase": str | None, "source": "ai" | "fallback" | None}``.
     """
     db_client = request.app.state.db_client
@@ -214,10 +214,14 @@ def taste_vibe(
         logger.exception("[taste-vibe] read path failed")
         return {"phrase": None, "source": None}
     if result.pop("needs_generation", False) and settings_service.ai_available():
-        background_tasks.add_task(
-            recsys_ai_service.generate_taste_vibe,
-            qdrant_client=db_client.qdrant, collection_name=derived, lang=lang,
-        )
+        try:
+            generated = await recsys_ai_service.generate_taste_vibe(
+                qdrant_client=db_client.qdrant, collection_name=derived, lang=lang,
+            )
+            if generated and generated.get("phrase"):
+                return generated
+        except Exception:
+            logger.exception("[taste-vibe] synchronous generation failed")
     return result
 
 
