@@ -1,6 +1,7 @@
 """Integration tests for similarity_service file I/O."""
 
 import json
+import os
 from pathlib import Path
 
 from app.services.similarity_service import save_top_pairs, load_top_pairs
@@ -80,3 +81,57 @@ class TestLoadTopPairsStructure:
         result = load_top_pairs("keys_col")
         for key in ("similar", "dissimilar", "collection_name", "computed_at"):
             assert key in result
+
+
+class TestLoadTopPairsIndex:
+    def _seed(self, tmp_path, monkeypatch):
+        import app.services.similarity_service as mod
+        monkeypatch.setattr(mod, "CACHE_DIR", tmp_path)
+        mod.clear_load_memo()
+        similar = [{
+            "song": "A - x", "track_id": "t1", "cover_art_path": None,
+            "top_similar": [
+                {"name": "B - y", "track_id": "t2", "cover_art_path": None, "score": 90.0},
+            ],
+        }]
+        dissimilar = [{
+            "song": "A - x", "track_id": "t1", "cover_art_path": None,
+            "top_dissimilar": [
+                {"name": "C - z", "track_id": "t3", "cover_art_path": None, "score": 5.0},
+            ],
+        }]
+        mod.save_top_pairs(similar, dissimilar, "idx_col")
+        return mod
+
+    def test_index_maps_track_to_both_lists(self, tmp_path, monkeypatch):
+        mod = self._seed(tmp_path, monkeypatch)
+        idx = mod.load_top_pairs_index("idx_col")
+        assert idx is not None
+        assert idx["t1"]["similar"][0]["track_id"] == "t2"
+        assert idx["t1"]["dissimilar"][0]["track_id"] == "t3"
+
+    def test_index_returns_none_for_missing_file(self, tmp_path, monkeypatch):
+        import app.services.similarity_service as mod
+        monkeypatch.setattr(mod, "CACHE_DIR", tmp_path)
+        mod.clear_load_memo()
+        assert mod.load_top_pairs_index("nope") is None
+
+    def test_index_invalidates_on_mtime_change(self, tmp_path, monkeypatch):
+        mod = self._seed(tmp_path, monkeypatch)
+        first = mod.load_top_pairs_index("idx_col")
+        assert "t1" in first
+        # Rewrite the cache with a different track_id and an explicitly newer mtime.
+        mod.save_top_pairs(
+            [{"song": "Q - w", "track_id": "t9", "cover_art_path": None,
+              "top_similar": [{"name": "R - e", "track_id": "t8",
+                               "cover_art_path": None, "score": 77.0}]}],
+            [{"song": "Q - w", "track_id": "t9", "cover_art_path": None,
+              "top_dissimilar": []}],
+            "idx_col",
+        )
+        path = tmp_path / "idx_col.json"
+        future = path.stat().st_mtime + 100
+        os.utime(path, (future, future))
+        second = mod.load_top_pairs_index("idx_col")
+        assert "t9" in second
+        assert "t1" not in second

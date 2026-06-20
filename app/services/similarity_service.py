@@ -205,11 +205,17 @@ def save_top_pairs(similar: List[dict], dissimilar: List[dict], collection_name:
 _LOAD_MEMO: dict[str, tuple[float, dict]] = {}
 _LOAD_MEMO_MAX = 8
 
+# Derived index memo: {track_id: {"similar": [...], "dissimilar": [...]}}, built
+# over the already-parsed top-pairs file and invalidated by the same mtime. Lets
+# the per-track player endpoint do an O(1) lookup instead of scanning the lists.
+_INDEX_MEMO: dict[str, tuple[float, dict]] = {}
+
 
 def clear_load_memo() -> None:
-    """Drop the parsed-file memo (recompute invalidates by mtime; tests call this
-    for isolation)."""
+    """Drop the parsed-file + index memos (recompute invalidates by mtime; tests
+    call this for isolation)."""
     _LOAD_MEMO.clear()
+    _INDEX_MEMO.clear()
 
 
 def load_top_pairs(collection_name: str) -> Optional[dict]:
@@ -234,6 +240,42 @@ def load_top_pairs(collection_name: str) -> Optional[dict]:
     while len(_LOAD_MEMO) > _LOAD_MEMO_MAX:
         _LOAD_MEMO.pop(next(iter(_LOAD_MEMO)))
     return data
+
+
+def load_top_pairs_index(collection_name: str) -> Optional[dict]:
+    """Return {track_id: {"similar": [...], "dissimilar": [...]}} for O(1) lookup.
+
+    Built over the memoized parsed file and cached in ``_INDEX_MEMO``, keyed by the
+    same file mtime — a recompute rewrites the file, so a stale index is never
+    served. Returns None when the collection has no cache file.
+    """
+    path = CACHE_DIR / f"{collection_name}.json"
+    key = str(path)
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        _INDEX_MEMO.pop(key, None)
+        return None
+    hit = _INDEX_MEMO.get(key)
+    if hit is not None and hit[0] == mtime:
+        return hit[1]
+    data = load_top_pairs(collection_name)
+    if data is None:
+        _INDEX_MEMO.pop(key, None)
+        return None
+    index: dict = {}
+    for entry in data.get("similar", []):
+        tid = entry.get("track_id")
+        if tid is not None:
+            index.setdefault(tid, {})["similar"] = entry.get("top_similar", [])
+    for entry in data.get("dissimilar", []):
+        tid = entry.get("track_id")
+        if tid is not None:
+            index.setdefault(tid, {})["dissimilar"] = entry.get("top_dissimilar", [])
+    _INDEX_MEMO[key] = (mtime, index)
+    while len(_INDEX_MEMO) > _LOAD_MEMO_MAX:
+        _INDEX_MEMO.pop(next(iter(_INDEX_MEMO)))
+    return index
 
 
 async def analyze_collection(
