@@ -14016,6 +14016,52 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     }
   };
 
+  // Auto-advance when a track ends while the user is NOT on the player screen
+  // (PlayerSection's own 'ended' listener only attaches when section==='player').
+  const advancePlaybackOffPlayer = async () => {
+    const list = playerPlaylist;
+    const cur = playerTrack;
+    if (!cur) return;
+    const idx = list.findIndex(h => ((h && h.track) ? h.track : h).track_id === cur.track_id);
+    const nextHit = idx >= 0 ? list[idx + 1] : null;
+    if (nextHit) {
+      const t = (nextHit.track) ? nextHit.track : nextHit;
+      audio.setSrc(buildStreamUrl(t.track_id), { trackId: t.track_id });
+      setTimeout(() => audio.play && audio.play(), 50);
+      handleTrackChange(t);
+      return;
+    }
+    // Exhausted: top up, then advance to the first fresh track.
+    let fresh = [];
+    if (streamActiveRef.current) {
+      fresh = await fetchStreamChunk();
+      if (fresh.length) setPlayerPlaylist(prev => [...prev, ...fresh]);
+    } else {
+      await ensureAutoplayQueue(cur);  // appends to playerPlaylist
+    }
+    const firstFresh = fresh[0];
+    if (firstFresh) {
+      const t = firstFresh.track ? firstFresh.track : firstFresh;
+      audio.setSrc(buildStreamUrl(t.track_id), { trackId: t.track_id });
+      setTimeout(() => audio.play && audio.play(), 50);
+      handleTrackChange(t);
+    }
+    // (non-stream ensureAutoplayQueue path: the appended tail will be picked up on
+    //  the next render's playerPlaylist; if nothing was appended, playback stops —
+    //  same terminal behaviour as today.)
+  };
+
+  // Off-player auto-advance. On the player screen, PlayerSection owns the 'ended'
+  // listener (it receives `audio`); everywhere else attach ours so a finished
+  // track on Home / "For You" still rolls to the next one.
+  useEffect(() => {
+    const el = audio?.audioRef?.current;
+    if (!el || section === 'player') return;
+    const onEnded = () => { advancePlaybackOffPlayer(); };
+    el.addEventListener('ended', onEnded);
+    return () => el.removeEventListener('ended', onEnded);
+  }, [section, audio?.audioRef, playerTrack?.track_id, playerPlaylist]);
+
   // Stats for landing
   useEffect(() => {
     if (appState !== 'ready') return;
