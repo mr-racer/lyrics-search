@@ -35,15 +35,15 @@ You are a music editor and an expert in curating rare trivia. You will receive a
 YOUR TASK:
 1. Evaluate each fact. Ignore the trivial ones (standard chart positions, release dates, ordinary awards, boring biographical info).
 2. Select only the most obscure, paradoxical, or unusual facts (weird studio habits, strange incidents, hidden technical or lyrical details).
-3. Condense the selected facts as much as possible without losing the core meaning. Make them punchy and concise.
+3. Lightly shorten each selected fact so it reads cleanly, but DO NOT lose key information — keep the names, places, numbers, and context that make it interesting. Aim for one natural, readable sentence, never a telegraphic fragment.
 4. Return the result STRICTLY as a valid JSON.
-
+{subject_clause}
 JSON FORMAT:
 {{
   "selected_facts": [
     {{
       "reasoning": "Brief explanation (1-2 words) of why the fact is interesting",
-      "short_fact": "Condensed, punchy, and interesting fact"
+      "short_fact": "Trimmed but information-rich fact"
     }}
   ]
 }}
@@ -57,6 +57,16 @@ RULES:
 PROCEED WITH THIS FACTS:
 {facts}
 """.strip()
+
+# Injected into the prompt for SONG-scope batches only. The listener already
+# sees which song is playing, so repeating its title in every fact is noise —
+# tell the model to swap the title for a neutral "this song" reference.
+_SONG_SUBJECT_CLAUSE = (
+    "\nCONTEXT: All of these facts are about the song \"{title}\", which the "
+    "listener is already looking at. Do NOT repeat the song's title in your "
+    "output — replace any mention of it with «Эта песня» when writing in "
+    "Russian, or \"this song\" when writing in English.\n"
+)
 
 # def _build_user_prompt(*, facts: list[str], lang: str) -> str:
 #     facts_payload = [{"id": i + 1, "text": t} for i, t in enumerate(facts)]
@@ -97,14 +107,24 @@ def _parse_llm_response(raw: str) -> list[dict[str, Any]]:
 async def _process_one_scope(
     *, scope: str, scope_key: str, facts: list[str],
     collection_name: str, lang: str,
+    subject_title: str | None = None,
     llm_base_url: str | None = None, llm_model: str | None = None,
 ) -> tuple[int, int]:
     """Process one scope (song or artist) — batched LLM calls + persist.
+
+    ``subject_title`` is the song title for song-scope batches (used to tell
+    the model to strip the redundant title from each fact). It is None for
+    artist scope, where there is no single subject title.
 
     Returns (n_kept, n_batch_failures).
     """
     # if len(facts) < 2:
     #     return (0, 0)
+
+    subject_clause = (
+        _SONG_SUBJECT_CLAUSE.format(title=subject_title)
+        if subject_title else ""
+    )
 
     kept: list[str] = []
     n_failures = 0
@@ -114,7 +134,9 @@ async def _process_one_scope(
         facts_to_prompt = str()
         for fact in batch:
             facts_to_prompt += f"- {fact}\n"
-        user = _FACTS_REFINE_PROMPT.format(facts=facts_to_prompt, lang=lang)
+        user = _FACTS_REFINE_PROMPT.format(
+            facts=facts_to_prompt, lang=lang, subject_clause=subject_clause,
+        )
         try:
             raw = await ask_llm(
                 user,
@@ -184,6 +206,7 @@ async def run(job, db_client, llm) -> None:
                     _, fail = await _process_one_scope(
                         scope="song", scope_key=song_slug, facts=song_facts,
                         collection_name=job.collection_name, lang=job.lang,
+                        subject_title=title_text,
                         llm_base_url=job.llm_base_url, llm_model=job.llm_model,
                     )
                     n_failed += fail

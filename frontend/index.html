@@ -1254,9 +1254,21 @@
       background: rgba(255,255,255,0.12);
       color: rgba(255,255,255,0.95);
     }
+    /* Disabled = "no facts in this scope". The bare 0.32 dim read as merely
+       inactive, so users kept clicking it. Strike-through + a muted hatch make
+       "nothing here" unmistakable without a tooltip. */
     .facts-scope-toggle > button:disabled {
       cursor: not-allowed;
-      opacity: 0.32;
+      opacity: 0.5;
+      color: rgba(255,255,255,0.32);
+      text-decoration: line-through;
+      text-decoration-thickness: 1px;
+      text-decoration-color: rgba(255,255,255,0.4);
+      text-underline-offset: 1px;
+    }
+    body[data-theme="light"] .facts-scope-toggle > button:disabled {
+      color: rgba(22,22,32,0.32);
+      text-decoration-color: rgba(22,22,32,0.4);
     }
     .facts-scope-toggle > button:not(:disabled):hover {
       color: rgba(255,255,255,0.85);
@@ -1281,6 +1293,94 @@
     body[data-theme="light"] .fact-nav-btn:hover { color: rgba(22,22,32,0.9); background: rgba(22,22,32,0.06); }
     body[data-theme="light"] .facts-scope-toggle > button:not(:disabled):hover {
       color: rgba(22,22,32,0.82);
+    }
+
+    /* ── Hint badge ───────────────────────────────────────────────────────
+       A small embossed "i" that reveals a skeuomorphic tooltip on hover/focus.
+       Reusable: callers size the dot (--hint-size) relative to whatever it
+       annotates. The pop scales with the viewport via clamp()/vw so it stays
+       readable on a phone and never overwhelms a 4K screen. */
+    .hint-badge { position: relative; display: inline-flex; align-items: center; }
+    .hint-badge__dot {
+      display: inline-flex; align-items: center; justify-content: center;
+      border-radius: 50%; cursor: help; box-sizing: border-box;
+      font-family: 'Playfair Display', Georgia, serif;
+      font-style: italic; font-weight: 600; line-height: 1;
+      color: rgba(255,255,255,0.80);
+      background: linear-gradient(158deg, rgba(255,255,255,0.18), rgba(255,255,255,0.03));
+      border: 1px solid rgba(255,255,255,0.18);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.5),
+                  inset 0 -2px 4px rgba(0,0,0,0.28),
+                  0 2px 5px rgba(0,0,0,0.30);
+      transition: transform .25s cubic-bezier(.22,.9,.3,1), box-shadow .25s ease, color .2s ease;
+    }
+    .hint-badge:hover .hint-badge__dot,
+    .hint-badge:focus-visible .hint-badge__dot {
+      transform: translateY(-1px) scale(1.07); color: #fff;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.6),
+                  inset 0 -2px 5px rgba(0,0,0,0.30),
+                  0 4px 12px rgba(124,91,255,0.35);
+    }
+    .hint-badge:focus, .hint-badge:focus-visible { outline: none; }
+    body[data-theme="light"] .hint-badge__dot {
+      color: rgba(40,32,60,0.75);
+      background: linear-gradient(158deg, rgba(255,255,255,0.95), rgba(228,224,240,0.7));
+      border-color: rgba(40,30,80,0.16);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.95),
+                  inset 0 -2px 4px rgba(40,30,80,0.14),
+                  0 2px 5px rgba(40,30,80,0.18);
+    }
+    body[data-theme="light"] .hint-badge:hover .hint-badge__dot,
+    body[data-theme="light"] .hint-badge:focus-visible .hint-badge__dot {
+      color: oklch(46% 0.19 280);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,1),
+                  inset 0 -2px 5px rgba(40,30,80,0.16),
+                  0 4px 12px rgba(124,91,255,0.28);
+    }
+    .hint-badge__pop {
+      position: absolute; bottom: calc(100% + 11px); left: 50%;
+      transform: translate(-50%, 7px) scale(.9); transform-origin: bottom center;
+      opacity: 0; pointer-events: none; z-index: 40;
+      width: max-content; max-width: min(62vw, 290px);
+      padding: 11px 13px 12px; border-radius: 14px;
+      font-family: 'Geist', system-ui, sans-serif; font-weight: 400;
+      font-size: clamp(11px, 1.4vw, 13px); line-height: 1.5;
+      text-align: left; color: rgba(244,243,250,0.94);
+      background: linear-gradient(168deg, rgba(54,52,68,0.97), rgba(34,33,44,0.97));
+      border: 1px solid rgba(255,255,255,0.14);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.18),
+                  0 14px 34px rgba(0,0,0,0.5),
+                  0 3px 10px rgba(0,0,0,0.4);
+      backdrop-filter: blur(16px) saturate(1.1);
+      -webkit-backdrop-filter: blur(16px) saturate(1.1);
+      transition: opacity .24s ease, transform .34s cubic-bezier(.34,1.4,.5,1);
+    }
+    .hint-badge__pop strong { color: #fff; font-weight: 600; }
+    .hint-badge:hover .hint-badge__pop,
+    .hint-badge:focus-within .hint-badge__pop {
+      opacity: 1; transform: translate(-50%, 0) scale(1); pointer-events: auto;
+    }
+    /* downward nub — colour matches the pop's bottom edge */
+    .hint-badge__pop::after {
+      content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+      width: 0; height: 0; border: 7px solid transparent;
+      border-top-color: rgba(34,33,44,0.97);
+      filter: drop-shadow(0 3px 2px rgba(0,0,0,0.22));
+    }
+    body[data-theme="light"] .hint-badge__pop {
+      color: rgba(40,33,58,0.95);
+      background: linear-gradient(168deg, rgba(255,255,255,0.98), rgba(238,235,247,0.98));
+      border-color: rgba(40,30,80,0.12);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.95),
+                  0 14px 30px rgba(40,30,70,0.22),
+                  0 3px 10px rgba(40,30,70,0.16);
+    }
+    body[data-theme="light"] .hint-badge__pop strong { color: #1a1430; }
+    body[data-theme="light"] .hint-badge__pop::after { border-top-color: rgba(241,238,249,0.98); }
+    @media (prefers-reduced-motion: reduce) {
+      .hint-badge__dot { transition: color .2s ease; }
+      .hint-badge:hover .hint-badge__dot { transform: none; }
+      .hint-badge__pop { transition: opacity .2s ease; }
     }
 
     /* Mono-label hint above the cover row — shown for the first 3 cover
@@ -1866,6 +1966,16 @@
     .fy-hybrid:hover .fy-bg1{animation-duration:3.4s}.fy-hybrid:hover .fy-bg2{animation-duration:4s}.fy-hybrid:hover .fy-bg3{animation-duration:4.6s}.fy-hybrid:hover .fy-bg4{animation-duration:3.7s}
     .fy-hybrid:hover .fy-ring{opacity:1;animation-duration:2.4s}
     .fy-hybrid:hover .fy-halo{animation:fyHaloOut 1s ease-out infinite}
+    /* Live state: the wave is actually playing. Persist the lively hover motion
+       (bright fast ring, drifting blobs, breathing halo) so the orb visibly
+       reads as "playing now", not just hovered. Transform is untouched so the
+       hover scale still works on top. */
+    .fy-hybrid.fy-playing .fy-ring{opacity:1;animation-duration:2.2s}
+    .fy-hybrid.fy-playing .fy-halo{animation:fyHaloOut 1.5s ease-out infinite}
+    .fy-hybrid.fy-playing .fy-bg1{animation-duration:3.2s}.fy-hybrid.fy-playing .fy-bg2{animation-duration:3.8s}.fy-hybrid.fy-playing .fy-bg3{animation-duration:4.2s}.fy-hybrid.fy-playing .fy-bg4{animation-duration:3.5s}
+    @media (prefers-reduced-motion: reduce){
+      .fy-hybrid.fy-playing .fy-halo{animation:none}
+    }
     /* ── Artist-hero aurora: drifting album-colour blobs for the no-photo state.
        Reuses the For-You fyBlobA-D keyframes (their translate %s are relative to
        each blob's own box, so they scale up to hero size). The container masks the
@@ -2647,6 +2757,14 @@ function useMediaSession({ currentTrack, isPlaying, audioRef, onPlay, onPause, o
   }, [audioRef, currentTrack?.track_id]);
 }
 
+// Single-owner flag for the Space shortcut. PlayerSection sets this true while
+// mounted so its own keydown handler (which adds the cover flash) is the sole
+// toggler; the global handler below then acts only as a fallback (e.g. on the
+// home screen, where PlayerSection is unmounted). Without this, BOTH handlers
+// fired on one Space press and toggled twice — net no-op playback while the
+// icon still flashed. See PlayerSection's "_playerOwnsSpace" effect.
+let _playerOwnsSpace = false;
+
 // ─── useGlobalKeyboardShortcuts — document-level playback + nav shortcuts ───
 function useGlobalKeyboardShortcuts({ audio, onNavToSection, onToggleLyrics, onCloseLyrics }) {
   useEffect(() => {
@@ -2656,10 +2774,12 @@ function useGlobalKeyboardShortcuts({ audio, onNavToSection, onToggleLyrics, onC
       const tag = (t && t.tagName) || '';
       if (tag === 'INPUT' || tag === 'TEXTAREA' || (t && t.isContentEditable)) return;
 
-      // Space: play/pause
+      // Space: play/pause. Defer to PlayerSection's own handler when it's
+      // mounted (it adds the cover flash) so we don't toggle twice; act as the
+      // global fallback only when the player isn't mounted (home screen).
       if (e.code === 'Space') {
         e.preventDefault();
-        audio?.togglePlay?.();
+        if (!_playerOwnsSpace) audio?.togglePlay?.();
         return;
       }
 
@@ -3507,7 +3627,7 @@ function Skel({ w, h, r, isDark, style }) {
   );
 }
 
-function ForYouHero({ isDark, lang, onStartStream, navigateToArtist }) {
+function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigateToArtist }) {
   const c = useColors(isDark);
   const [profile, setProfile] = useState(null);
   const [vibe, setVibe] = useState(null);          // { phrase, source } | null
@@ -3567,6 +3687,17 @@ function ForYouHero({ isDark, lang, onStartStream, navigateToArtist }) {
   };
 
   const startStream = () => { if (onStartStream) onStartStream(); };
+  // For-You orb behaviour. When the live queue IS the wave (streamActive), the
+  // orb becomes a play/pause control for it (no re-navigation). Otherwise — an
+  // empty queue, or one the user hand-picked — a click starts a fresh wave
+  // (which throws into the player and plays). See App.startStream / streamActive.
+  const isPlaying = !!(audio && audio.isPlaying);
+  const waveLive = !!streamActive;          // the wave is the active queue
+  const wavePlaying = waveLive && isPlaying; // …and it's actually playing now
+  const handleOrb = () => {
+    if (waveLive) { if (audio && audio.togglePlay) audio.togglePlay(); }
+    else { startStream(); }
+  };
   const phrase = vibe && vibe.phrase;
 
   const heroGlass = isDark
@@ -3641,25 +3772,36 @@ function ForYouHero({ isDark, lang, onStartStream, navigateToArtist }) {
           <div style={{ display:'flex', alignItems:'center', gap:'clamp(16px,1.6vw,26px)' }}>
             <div style={{ width:98, height:98, flex:'none', display:'grid', placeItems:'center' }}>
               <div style={{ transform:'scale(1.5)' }}>
-                <div className="fy-hybrid tint-irid" onMouseEnter={() => setHoverCtl(true)} onMouseLeave={() => setHoverCtl(false)}
-                     onClick={startStream} role="button" aria-label={lang==='ru'?'Включить ваш поток':'Start your stream'}>
+                <div className={`fy-hybrid tint-irid${wavePlaying ? ' fy-playing' : ''}`} onMouseEnter={() => setHoverCtl(true)} onMouseLeave={() => setHoverCtl(false)}
+                     onClick={handleOrb} role="button"
+                     aria-label={wavePlaying ? (lang==='ru'?'Поставить волну на паузу':'Pause your stream')
+                                 : waveLive ? (lang==='ru'?'Продолжить волну':'Resume your stream')
+                                 : (lang==='ru'?'Включить ваш поток':'Start your stream')}>
                   <span className="fy-ring" />
                   <span className="fy-clip"><span className="fy-blob fy-bg1" /><span className="fy-blob fy-bg2" /><span className="fy-blob fy-bg3" /><span className="fy-blob fy-bg4" /></span>
                   <span className="fy-glasscap" />
-                  <span className="fy-glyph">▶</span>
+                  {wavePlaying
+                    ? <span className="fy-glyph" style={{ marginLeft: 0 }}><svg width="15" height="15" viewBox="0 0 24 24" fill="#fff"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg></span>
+                    : <span className="fy-glyph">▶</span>}
                   <span className="fy-halo" />
                 </div>
               </div>
             </div>
             <div style={{ minWidth:0, maxWidth:300 }}>
               <div className="mono" style={{ fontSize:'clamp(11px,0.9vw,13px)', letterSpacing:'.18em', color:hoverCtl?(isDark?'#f3ecff':'#2c2440'):c.text, transition:'color .3s', cursor:'pointer' }}
-                   onClick={startStream}>
-                {lang==='ru'?'ВКЛЮЧИТЬ ВАШ ПОТОК':'START YOUR STREAM'}
+                   onClick={handleOrb}>
+                {wavePlaying ? (lang==='ru'?'ВОЛНА ИГРАЕТ':'YOUR STREAM IS LIVE')
+                 : waveLive ? (lang==='ru'?'ВОЛНА НА ПАУЗЕ':'STREAM PAUSED')
+                 : (lang==='ru'?'ВКЛЮЧИТЬ ВАШ ПОТОК':'START YOUR STREAM')}
               </div>
               <div style={{ fontSize:'clamp(11px,0.78vw,12px)', color:c.textMuted, marginTop:6, lineHeight:1.45 }}>
-                {hasProfile
-                  ? (lang==='ru' ? 'Включите волну, собранную под ваш вкус — она подстроится под реакции' : 'Start a wave tuned to your taste — it adapts to your reactions')
-                  : (lang==='ru' ? 'Режим разведки — начнём с неизученного и подстроимся' : 'Exploration mode — we start from the unknown and adapt')}
+                {waveLive
+                  ? (wavePlaying
+                      ? (lang==='ru' ? 'Нажмите, чтобы поставить волну на паузу' : 'Tap to pause your stream')
+                      : (lang==='ru' ? 'Нажмите, чтобы продолжить волну' : 'Tap to resume your stream'))
+                  : hasProfile
+                    ? (lang==='ru' ? 'Включите волну, собранную под ваш вкус — она подстроится под реакции' : 'Start a wave tuned to your taste — it adapts to your reactions')
+                    : (lang==='ru' ? 'Режим разведки — начнём с неизученного и подстроимся' : 'Exploration mode — we start from the unknown and adapt')}
               </div>
             </div>
           </div>
@@ -3979,7 +4121,7 @@ function LibraryPill({ stats, isDark, lang, onClick }) {
 // ─── HeaderNowPlaying — compact quick-resume player pill in the landing header.
 // Sits beside the Library pill; null when nothing is loaded. The full player
 // (scrub, like, queue) opens on a click of the cover/title.
-function HeaderNowPlaying({ track, audio, isDark, lang, onOpenPlayer }) {
+function HeaderNowPlaying({ track, audio, isDark, lang, onOpenPlayer, playlist, onTrackChange }) {
   const c = useColors(isDark);
   const currentTime = useCurrentTime();
   const [hover, setHover] = useState(false);
@@ -3987,10 +4129,30 @@ function HeaderNowPlaying({ track, audio, isDark, lang, onOpenPlayer }) {
   const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0;
   const cover = homeCoverUrl(track && track.cover_art_path);
   const isPlaying = !!(audio && audio.isPlaying);
+
+  // Prev/next wiring — unwrap HIT[] → flat tracks and locate the current one,
+  // exactly like MiniPlaybackPopout. onTrackChange propagates the chosen
+  // neighbour up to App.playerTrack, which drives the actual setSrc + play.
+  const flatTracks = (playlist || []).map(h => (h && h.track) ? h.track : h);
+  const curIdx = track ? flatTracks.findIndex(t => t && t.track_id === track.track_id) : -1;
+  const canPrev = curIdx > 0;
+  const canNext = curIdx >= 0 && curIdx < flatTracks.length - 1;
+  const goPrev = () => { if (canPrev && onTrackChange) onTrackChange(flatTracks[curIdx - 1]); };
+  const goNext = () => { if (canNext && onTrackChange) onTrackChange(flatTracks[curIdx + 1]); };
+
   if (!track) return null;
+
+  // Small round control. `lead` = the central play/pause (slightly larger);
+  // prev/next dim + go not-allowed at the ends of the queue.
+  const ctrlBtnStyle = (enabled, lead) => ({
+    width: lead ? 32 : 28, height: lead ? 32 : 28, borderRadius: '50%',
+    flex: 'none', display: 'grid', placeItems: 'center', color: c.text,
+    opacity: enabled ? 1 : 0.32, cursor: enabled ? 'pointer' : 'not-allowed',
+  });
+
   return (
     <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
-      style={{ display:'flex', alignItems:'center', gap:10, padding:'6px 10px 6px 6px', borderRadius:14, maxWidth:300,
+      style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 8px 6px 6px', borderRadius:14, maxWidth:390,
         border:`1px solid ${hover ? c.borderStrong : c.border}`,
         background: isDark ? (hover?'rgba(255,255,255,.07)':'rgba(255,255,255,.04)') : (hover?'rgba(255,255,255,.92)':'rgba(255,255,255,.6)'),
         backdropFilter:'blur(16px)', WebkitBackdropFilter:'blur(16px)',
@@ -4000,24 +4162,50 @@ function HeaderNowPlaying({ track, audio, isDark, lang, onOpenPlayer }) {
         style={{ width:34, height:34, borderRadius:9, overflow:'hidden', flex:'none', cursor:'pointer', background:'#241d38' }}>
         {cover && <img src={cover} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />}
       </div>
-      <div onClick={onOpenPlayer} style={{ width:150, minWidth:0, cursor:'pointer' }}>
+      <div onClick={onOpenPlayer} style={{ width:128, minWidth:0, cursor:'pointer' }}>
         <div style={{ fontSize:12.5, fontWeight:600, color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title || '—'}</div>
         <div style={{ position:'relative', height:3, borderRadius:2, marginTop:4, background:isDark?'rgba(255,255,255,.12)':'rgba(0,0,0,.12)' }}>
           <div style={{ position:'absolute', left:0, top:0, bottom:0, width:`${progress*100}%`, borderRadius:2, background:'oklch(62% 0.18 275)' }} />
         </div>
       </div>
+      <button className={ske('btn', isDark)} onClick={goPrev} disabled={!canPrev}
+        title={lang==='ru'?'Предыдущий':'Previous'} style={ctrlBtnStyle(canPrev, false)}>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="19,4 8,12 19,20"/><rect x="5" y="4" width="2" height="16"/></svg>
+      </button>
       <button className={ske('btn', isDark)} onClick={() => audio && audio.togglePlay && audio.togglePlay()}
         title={isPlaying ? (lang==='ru'?'Пауза':'Pause') : (lang==='ru'?'Играть':'Play')}
-        style={{ width:32, height:32, borderRadius:'50%', flex:'none', display:'grid', placeItems:'center', color:c.text }}>
+        style={ctrlBtnStyle(true, true)}>
         {isPlaying
           ? <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
           : <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" style={{ marginLeft:2 }}><polygon points="6,4 20,12 6,20"/></svg>}
+      </button>
+      <button className={ske('btn', isDark)} onClick={goNext} disabled={!canNext}
+        title={lang==='ru'?'Следующий':'Next'} style={ctrlBtnStyle(canNext, false)}>
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,4 16,12 5,20"/><rect x="17" y="4" width="2" height="16"/></svg>
       </button>
     </div>
   );
 }
 
-function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLibrary, stats, playerTrack, playerPlaylist, onTrackChange, onPlayTrack, onStartStream, audio, navigateToArtist }) {
+// ─── HintBadge — embossed "i" + skeuomorphic hover/focus tooltip ────────────
+// Reusable affordance for explaining an unobvious UI element. `size` is the dot
+// diameter in px (callers scale it relative to whatever it annotates); the
+// tooltip itself scales with the viewport in CSS. Keyboard-reachable (tabIndex)
+// so the explanation isn't mouse-only. `label` is the tooltip body (string or
+// JSX with <strong>); `ariaLabel` is the screen-reader summary.
+function HintBadge({ size = 20, label, ariaLabel }) {
+  const px = Math.max(14, size);
+  return (
+    <span className="hint-badge" tabIndex={0} role="note"
+      aria-label={ariaLabel || (typeof label === 'string' ? label : 'Info')}>
+      <span className="hint-badge__dot" aria-hidden="true"
+        style={{ width: px, height: px, fontSize: Math.max(10, Math.round(px * 0.58)) }}>i</span>
+      <span className="hint-badge__pop" role="tooltip">{label}</span>
+    </span>
+  );
+}
+
+function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLibrary, stats, playerTrack, playerPlaylist, onTrackChange, onPlayTrack, onStartStream, streamActive, audio, navigateToArtist }) {
   const c = useColors(isDark);
 
   // «Эфир»: one airy screen. The rail cards (artist of the day + something new)
@@ -4055,14 +4243,22 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLi
         position:'relative', display:'flex', alignItems:'center', justifyContent:'space-between', gap:16,
         padding:'clamp(18px,2.4vh,26px) clamp(20px,3vw,40px)', flexWrap:'wrap',
       }}>
-        <div style={{ display:'flex', alignItems:'center', gap:'14px' }}>
+        <div style={{ display:'flex', alignItems:'center', gap:'14px', flex:'1 1 0', minWidth:0 }}>
           <BrandMark size={42} isDark={isDark} />
           <div className="serif" style={{ fontSize:'clamp(26px,2.6vw,34px)', lineHeight:'0.95', letterSpacing:'-0.02em' }}>
             Musi<i style={{ color: 'oklch(62% 0.2 275)' }}>X</i>
           </div>
         </div>
-        <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}>
-          <HeaderNowPlaying track={playerTrack} audio={audio} isDark={isDark} lang={lang} onOpenPlayer={() => onNav('player')} />
+        {/* Centered mini-player — its own header zone (flanked by two equal
+            flex:1 0 zones) so it sits in the middle of the bar instead of
+            crammed against the Library pill. Collapses to null when nothing
+            is playing, leaving the brand/controls layout untouched. */}
+        <div style={{ display:'flex', justifyContent:'center', flex:'0 1 auto', minWidth:0 }}>
+          <HeaderNowPlaying track={playerTrack} audio={audio} isDark={isDark} lang={lang}
+            playlist={playerPlaylist} onTrackChange={onTrackChange}
+            onOpenPlayer={() => onNav('player')} />
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap', flex:'1 1 0', minWidth:0, justifyContent:'flex-end' }}>
           <LibraryPill stats={stats} isDark={isDark} lang={lang} onClick={() => onNav('library')} />
           <button onClick={() => onNav('search')} title={lang==='ru'?'Поиск':'Search'} className={ske('btn', isDark)}
             style={{ width:38, height:38, borderRadius:'50%', display:'grid', placeItems:'center', color:c.textMuted }}>
@@ -4076,7 +4272,8 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLi
       <div style={{ position:'relative', flex:'1 0 auto', display:'flex', flexDirection:'column', justifyContent:'center' }}>
         <div className="efir-main" style={{ position:'relative' }}>
           <ForYouHero isDark={isDark} lang={lang}
-                      onStartStream={onStartStream} navigateToArtist={navigateToArtist} />
+                      onStartStream={onStartStream} streamActive={streamActive} audio={audio}
+                      navigateToArtist={navigateToArtist} />
           <div className="efir-rail">
             <FeaturedArtistCard isDark={isDark} lang={lang} navigateToArtist={navigateToArtist} />
             <DiscoverNewCard isDark={isDark} lang={lang}
@@ -11414,6 +11611,13 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
   const [isHovering, setIsHovering] = useState(false);
   const artWrapRef = useRef(null);
 
+  // Tilt magnitude. The same ±1 normalized pointer offset barely reads on a
+  // small screen (the cover is physically tiny there), so bump the rotation
+  // ~30% (10°→13°) below ~820px to keep the 3D parallax legible. Computed once
+  // per mount — the section remounts on nav, which covers resizes in practice
+  // (same rationale as spectrumBarCount above).
+  const tiltGain = useMemo(() => ((window.innerWidth || 1280) <= 820 ? 13 : 10), []);
+
   // Audio-reactive spectrum: hook into the shared <audio> via AnalyserNode
   // and extract a dominant color from the current cover. Both feed the
   // mirrored SpectrumBars that flank the cover row during playback.
@@ -11899,6 +12103,15 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
     } catch (e) { console.error('Failed to set reaction:', e); }
   };
 
+  // Claim Space ownership while this section is mounted so the global shortcut
+  // handler defers to the local handler below (which adds the cover flash).
+  // Mount-only ([] deps) so the flag never flickers on a re-render — a flicker
+  // would briefly let both handlers fire and re-introduce the double-toggle.
+  useEffect(() => {
+    _playerOwnsSpace = true;
+    return () => { _playerOwnsSpace = false; };
+  }, []);
+
   useEffect(() => {
     const handler = (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
@@ -12055,7 +12268,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                     style={{
                       transform: lyricsMode || outgoingTrack
                         ? 'none'
-                        : `rotateY(${tilt.y * 10}deg) rotateX(${-tilt.x * 10}deg) scale(${isHovering ? 1.04 : 1})`,
+                        : `rotateY(${tilt.y * tiltGain}deg) rotateX(${-tilt.x * tiltGain}deg) scale(${isHovering ? 1.04 : 1})`,
                     }}
                   >
                     <div
@@ -12226,15 +12439,24 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                 data-active={liked === 'dislike' ? 'dislike' : ''}
                 aria-pressed={liked === 'dislike'}
                 onClick={() => setReaction('dislike')}
-                title={lang === 'ru' ? 'Пропустить' : 'Skip'}
+                title={lang === 'ru' ? 'Не нравится' : 'Dislike'}
               >
+                {/* Broken heart — same silhouette as Like for kinship, but a
+                    zigzag crack splits it so dislike never reads as like. The
+                    crack is drawn twice: a wide panel-colored backing carves a
+                    real gap through the filled heart (active state), and a thin
+                    currentColor line keeps the crack visible while unfilled. */}
                 <svg width="18" height="18" viewBox="0 0 24 24"
                   fill={liked === 'dislike' ? 'currentColor' : 'none'}
                   stroke="currentColor" strokeWidth="2"
                   strokeLinecap="round" strokeLinejoin="round">
                   <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
-                  <polyline points="13 5 10.5 9.5 13.5 12 10 16"
-                    fill="none" stroke={isDark ? '#0B0E14' : '#f4f5fa'} strokeWidth="1.8"/>
+                  {liked === 'dislike' && (
+                    <polyline points="12 5.4 9.9 9.2 13.6 12.2 10.4 15.6 12 20.4"
+                      fill="none" stroke={isDark ? '#0B0E14' : '#f4f5fa'} strokeWidth="2.8"/>
+                  )}
+                  <polyline points="12 5.4 9.9 9.2 13.6 12.2 10.4 15.6 12 20.4"
+                    fill="none" stroke="currentColor" strokeWidth="1.5"/>
                 </svg>
                 {burstFor === 'dislike' && <span className="player-icon-burst player-icon-burst--dislike" />}
               </button>
@@ -12291,20 +12513,29 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
               const iconFilter = isDark
                 ? 'brightness(0) invert(1) opacity(0.65)'
                 : 'brightness(0) opacity(0.5)';
+              const losslessW = coverPx ? Math.max(80, Math.min(150, Math.round(coverPx * 0.26))) : 128;
+              // Badge rendered height ≈ width × 64/215. Size the hint dot to
+              // ~64% of that so the "i" reads as a balanced companion to the mark.
+              const hintSize = Math.max(16, Math.round(losslessW * 0.19));
+              const losslessLabel = lang === 'ru'
+                ? <span><strong>Lossless</strong> — звук без потерь: трек играет в точности как студийный файл, без сжатия и без потери деталей.</span>
+                : <span><strong>Lossless</strong> — bit-perfect audio: this track plays exactly like the studio file, with no compression and no lost detail.</span>;
               return (
-                <div style={{ display:'flex', justifyContent:'center', padding:'0 20px' }}>
+                <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:9, padding:'0 20px' }}>
                   <img
                     src={LOSSLESS_LOGO_SRC}
                     alt="Lossless"
                     title={isFlac ? 'FLAC · Lossless' : `ALAC · ${currentTrack.bitrate_kbps} kbps`}
                     style={{
                       height: 'auto',
-                      width: coverPx ? Math.max(80, Math.min(150, Math.round(coverPx * 0.26))) : 128,
+                      width: losslessW,
                       filter: iconFilter,
                       userSelect: 'none',
                       pointerEvents: 'none',
                     }}
                   />
+                  <HintBadge size={hintSize} label={losslessLabel}
+                    ariaLabel={lang === 'ru' ? 'Что такое Lossless' : 'What Lossless means'} />
                 </div>
               );
             })()}
@@ -13570,6 +13801,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
   const handlePlayTrack = (track, results) => {
     // Any manual play exits stream mode — the user took the wheel.
     streamActiveRef.current = false;
+    setStreamActive(false);
     // Search/Recommend pass HIT shape ({ track:{track_id,title,...}, score, matched_on }).
     // playerTrack must be FLAT so LandingPlayer / NowPlayingPebble / MiniPlaybackPopout /
     // PlayerSection.findIndex (which compares h.track.track_id === initialTrack.track_id)
@@ -13643,6 +13875,22 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     }
   };
 
+  // Home mini-player prev/next. On the home screen PlayerSection is unmounted,
+  // so its [initialTrack] effect (which normally drives setSrc + play) never
+  // fires — changing playerTrack alone would update the strip but not the
+  // audio. Drive the element directly here (same pattern as playTrackAt), then
+  // hand off to handleTrackChange for the shared bookkeeping (playerTrack sync
+  // + stream prefetch).
+  const handleHomeTrackChange = (track) => {
+    if (!track || !track.track_id) return;
+    if (audio) {
+      markPlaybackInteracted(audio.audioRef?.current);
+      audio.setSrc(buildStreamUrl(track.track_id), { trackId: track.track_id });
+      setTimeout(() => audio.play && audio.play(), 50);
+    }
+    handleTrackChange(track);
+  };
+
   // ── Stream mode («Поток») ──────────────────────────────────────────────
   // Stateless personalized radio: GET /recommend/stream/next rebuilds the
   // taste profile from playback_events + reactions on every call. The
@@ -13650,6 +13898,11 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
   // strong signal (like/dislike/skip) so adaptation is felt immediately.
   const streamActiveRef = useRef(false);
   const streamFetchingRef = useRef(false);
+  // Reactive mirror of streamActiveRef for the UI (the ref alone is invisible
+  // to render). Drives the For-You orb's play/pause icon + animation: the orb
+  // must know whether the live queue IS the wave. Kept in lockstep with the ref
+  // at every write-site below.
+  const [streamActive, setStreamActive] = useState(false);
 
   const fetchStreamChunk = async ({ excludeQueue = true } = {}) => {
     if (streamFetchingRef.current) return [];
@@ -13685,9 +13938,11 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
 
   const startStream = async () => {
     streamActiveRef.current = true;
+    setStreamActive(true);
     const hits = await fetchStreamChunk({ excludeQueue: false });
     if (!hits.length) {
       streamActiveRef.current = false;
+      setStreamActive(false);
       showToast(lang === 'ru' ? 'Библиотека пуста — добавьте или проиндексируйте музыку' : 'Library is empty — add or index your music');
       return;
     }
@@ -13806,9 +14061,10 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
           stats={stats}
           playerTrack={playerTrack}
           playerPlaylist={playerPlaylist}
-          onTrackChange={handleTrackChange}
+          onTrackChange={handleHomeTrackChange}
           onPlayTrack={handlePlayTrack}
           onStartStream={startStream}
+          streamActive={streamActive}
           audio={audio}
           navigateToArtist={navigateToArtist}
         />
