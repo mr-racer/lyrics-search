@@ -2467,7 +2467,14 @@ function useAudioPlayer() {
     // buffer trim): do NOT reset the in-flight listen accumulator — that would
     // silently drop the seconds heard (and the interacted mark) mid-listen.
     if (el && meta && el.dataset.playbackTrackId === String(meta.trackId || '')) {
-      setCurrentSrc(src);
+      // Keep the existing src if only the rotating ?st= stream token changed.
+      // buildStreamUrl bakes a refresh-able token into the URL, so re-pointing
+      // the SAME track with a freshly-minted token would change the <audio>
+      // src string and reload the media from 0 — that's the "pressing like
+      // sometimes restarts the song" bug (a reaction rebuilds the playlist,
+      // which re-runs this effect for the already-playing head track).
+      setCurrentSrc(prev =>
+        (prev && prev.split('?')[0] === src.split('?')[0]) ? prev : src);
       return;
     }
     // Switching to a different track ends the previous listen — flush it.
