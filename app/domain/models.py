@@ -257,6 +257,9 @@ class PlaybackEventIn(BaseModel):
     # Stream RecSys idle rule: did the user touch any control during this track
     # (like/skip/pause/seek)? None = client doesn't report it (legacy frontend).
     interacted: bool | None = None
+    # influence=False → event is stored for anti-repeat but excluded from the
+    # "For You" taste profile (e.g. hand-queued tracks, Task 5 _noInfluence).
+    influence: bool = True
 
 
 class PlaybackEventOut(BaseModel):

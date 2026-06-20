@@ -19,6 +19,7 @@ def record_event(
     played_sec: float,
     total_dur: float | None,
     interacted: bool | None = None,
+    influence: bool = True,
 ) -> int:
     """Persist a playback event. Returns the new row id."""
     return MetadataDB.record_playback_event(
@@ -28,6 +29,7 @@ def record_event(
         played_sec=played_sec,
         total_dur=total_dur,
         interacted=interacted,
+        influence=influence,
     )
 
 

@@ -52,6 +52,7 @@ async def record_playback_event(
         played_sec=req.played_sec,
         total_dur=req.total_dur,
         interacted=req.interacted,
+        influence=req.influence,
     )
     return PlaybackEventOut(id=new_id)
 

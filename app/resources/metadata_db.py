@@ -394,6 +394,12 @@ class MetadataDB:
             "interacted": "INTEGER",
         })
 
+        # Per-event influence flag: hand-queued tracks (Task 5 _noInfluence) must
+        # not shape the taste profile. Default 1 = legacy rows treated as influencing.
+        cls._ensure_columns(conn, "playback_events", {
+            "influence": "INTEGER NOT NULL DEFAULT 1",
+        })
+
         # Phase B: per-user settings live as columns on the (Phase A) users
         # table — model selection + CLAP toggle, keyed by users.id. Additive so
         # it coexists with the auth columns regardless of migration order.
@@ -1236,6 +1242,7 @@ class MetadataDB:
         played_sec: float,
         total_dur: float | None,
         interacted: bool | None = None,
+        influence: bool = True,
     ) -> int:
         """Insert a playback event. Returns the new row id.
 
@@ -1244,6 +1251,9 @@ class MetadataDB:
         ``played_sec / total_dur < 0.30`` (so a short track played to completion
         is not falsely flagged). When ``total_dur`` is missing, falls back to
         the absolute 30-second threshold alone.
+
+        ``influence=False`` marks events that should NOT shape the taste profile
+        (e.g. hand-queued tracks). They are still stored for anti-repeat purposes.
         """
         if total_dur and total_dur > 0.0:
             # Both signals required to count as a skip — short play AND short ratio.
@@ -1254,11 +1264,12 @@ class MetadataDB:
         conn = cls._connect()
         cur = conn.execute(
             "INSERT INTO playback_events "
-            "(session_id, collection_name, track_id, played_sec, total_dur, skipped_early, interacted) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(session_id, collection_name, track_id, played_sec, total_dur, skipped_early, interacted, influence) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (session_id, collection_name, track_id, played_sec, total_dur,
              1 if skipped_early else 0,
-             None if interacted is None else (1 if interacted else 0)),
+             None if interacted is None else (1 if interacted else 0),
+             1 if influence else 0),
         )
         conn.commit()
         return int(cur.lastrowid)
@@ -1276,7 +1287,7 @@ class MetadataDB:
         from datetime import datetime as _dt
         conn = cls._connect()
         rows = conn.execute(
-            """SELECT track_id, played_sec, total_dur, played_at, session_id, interacted
+            """SELECT track_id, played_sec, total_dur, played_at, session_id, interacted, influence
                FROM playback_events
                WHERE collection_name = ?
                ORDER BY id DESC LIMIT ?""",
@@ -1297,6 +1308,7 @@ class MetadataDB:
                 "played_at": played_at,
                 "session_id": r[4],
                 "interacted": None if r[5] is None else bool(r[5]),
+                "influence": True if r[6] is None else bool(r[6]),
             })
         return out
 

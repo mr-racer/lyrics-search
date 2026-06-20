@@ -64,7 +64,7 @@ def test_playback_events_ignores_supplied_collection():
     captured = {}
 
     def fake_record(*, session_id, collection_name, track_id, played_sec, total_dur,
-                    interacted=None):
+                    interacted=None, influence=True):
         captured["collection_name"] = collection_name
         return 1
 

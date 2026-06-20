@@ -70,6 +70,10 @@ class PlaybackSignal:
 
     ``interacted=None`` means the client didn't report the flag (legacy events
     predating the column) — treated as interacted so old history still counts.
+
+    ``influence=True`` (default) means this event contributes to the taste
+    profile. Hand-queued tracks set ``influence=False`` so they are kept for
+    anti-repeat but excluded from the "For You" profile aggregation.
     """
     track_id: str
     played_sec: float
@@ -77,6 +81,7 @@ class PlaybackSignal:
     played_at: datetime
     session_id: str
     interacted: bool | None = None
+    influence: bool = True
 
 
 def _clap_vector(point):
@@ -902,12 +907,17 @@ def next_chunk(
         session_reactions = []
 
     # 3. Profiles + blend.
+    # Filter to influencing events for taste-profile only; keep full lists for
+    # anti-repeat (session_played, negative_track_ids, n_session_signals).
+    influencing = [s for s in signals if getattr(s, "influence", True)]
+    influencing_session = [s for s in session_events if getattr(s, "influence", True)]
+
     long_weights = combine_weights(
-        aggregate_event_weights(signals, now),
+        aggregate_event_weights(influencing, now),
         aggregate_reaction_weights(reactions, now),
     )
     session_weights = combine_weights(
-        aggregate_event_weights(session_events, now),
+        aggregate_event_weights(influencing_session, now),
         aggregate_reaction_weights(session_reactions, now),
     )
     n_session_signals = count_session_signals(session_events, session_reactions)
