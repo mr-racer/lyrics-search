@@ -17,6 +17,7 @@ from typing import Iterable
 
 from app.domain.models import AutoplayQueueDiagnostics, AutoplayQueueResponse, TrackMetadata
 from app.resources.metadata_db import MetadataDB
+from app.resources.qdrant_utils import PAYLOAD_EXCLUDE_LYRICS
 
 
 def _point_to_track(pt) -> TrackMetadata:
@@ -173,7 +174,7 @@ def next_queue(
         query=seed_vec,
         using="clap",
         limit=k,
-        with_payload=True,
+        with_payload=PAYLOAD_EXCLUDE_LYRICS,
     ).points
 
     # 3. Reactions lookup (single batched query).

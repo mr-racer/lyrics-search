@@ -1791,29 +1791,21 @@ class LibraryService:
         """Return a deterministically-sorted list of (slug, name) for every
         distinct artist in the collection (slug-deduped)."""
         from app.services.artist_split import artist_slugs, split_artists
+        from app.resources.qdrant_utils import light_points
         seen: dict[str, str] = {}  # slug -> name (first seen)
-        offset = None
-        while True:
-            try:
-                points, offset = qdrant_client.scroll(
-                    collection_name=collection_name, limit=256, offset=offset,
-                    with_payload=True, with_vectors=False,
-                )
-            except Exception:
-                break
-            for pt in points:
-                payload = pt.payload or {}
-                name = (payload.get("artist") or "").strip()
-                if not name:
-                    continue
-                slugs = payload.get("artist_slugs")
-                names = payload.get("artists")
-                if not slugs or not names:
-                    slugs = artist_slugs(name)
-                    names = split_artists(name)
-                for i, slug in enumerate(slugs):
-                    display = names[i] if i < len(names) else slug
-                    seen.setdefault(slug, display)
-            if offset is None or not points:
-                break
+        # Shared lyrics-free light scroll (cached per collection) — the artist
+        # fields are part of the light payload, so this reuses the same scan the
+        # explore pool / axis playlist warm.
+        for _tid, payload in light_points(qdrant_client, collection_name):
+            name = (payload.get("artist") or "").strip()
+            if not name:
+                continue
+            slugs = payload.get("artist_slugs")
+            names = payload.get("artists")
+            if not slugs or not names:
+                slugs = artist_slugs(name)
+                names = split_artists(name)
+            for i, slug in enumerate(slugs):
+                display = names[i] if i < len(names) else slug
+                seen.setdefault(slug, display)
         return sorted(seen.items())

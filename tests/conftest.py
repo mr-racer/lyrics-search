@@ -29,6 +29,21 @@ def pytest_configure(config):
     Package.setup = _patched_setup
 
 
+@pytest.fixture(autouse=True)
+def _clear_light_payload_cache():
+    """Reset the per-collection light-payload cache before each test.
+
+    ``app.resources.qdrant_utils.light_points`` memoises a full-collection
+    scroll keyed by collection name with a 90s TTL. Tests reuse collection
+    names (e.g. "c") with different fake clients, so without this the second
+    case would read the first case's cached points. Cheap and isolating.
+    """
+    from app.resources.qdrant_utils import invalidate_light_cache
+    invalidate_light_cache()
+    yield
+    invalidate_light_cache()
+
+
 @pytest.fixture
 def sample_track():
     """A standard track metadata dict for unit tests."""

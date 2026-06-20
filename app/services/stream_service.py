@@ -20,6 +20,7 @@ from datetime import datetime
 import numpy as np
 
 from app.resources.metadata_db import MetadataDB
+from app.resources.qdrant_utils import PAYLOAD_EXCLUDE_LYRICS, light_points
 
 logger = logging.getLogger(__name__)
 
@@ -501,7 +502,7 @@ def pool_anchor_candidates(
                 query=list(anchor.vector),
                 using="clap",
                 limit=k,
-                with_payload=True,
+                with_payload=PAYLOAD_EXCLUDE_LYRICS,
             ).points
         except Exception:
             logger.exception("[stream] anchor search failed for %s", anchor.track_id)
@@ -583,34 +584,17 @@ def pool_explore_candidates(
 ) -> list[StreamCandidate]:
     """Pool B: low-play-count unreacted tracks, stratified over axis bins,
     not too close to negative anchors. Sonic Descriptor clusters are NOT used."""
-    # 1. Scroll payloads (no vectors — cheap even for thousands of tracks).
-    points: list = []
-    offset = None
-    try:
-        while len(points) < scroll_cap:
-            batch, offset = qdrant_client.scroll(
-                collection_name=collection_name,
-                limit=min(512, scroll_cap - len(points)),
-                with_payload=True,
-                with_vectors=False,
-                offset=offset,
-            )
-            points.extend(batch)
-            if offset is None or not batch:
-                break
-    except Exception:
-        logger.exception("[stream] explore scroll failed")
-        return []
+    # 1. Light, lyrics-free payloads from the shared per-collection cache
+    #    (card fields + sonic_axes only). Capped to bound the scoring loop.
+    points = light_points(qdrant_client, collection_name)[:scroll_cap]
 
     payload_by_id: dict[str, dict] = {}
     eligible: list[tuple[str, dict[str, float] | None]] = []
-    for p in points:
-        tid = str(p.id)
+    for tid, payload in points:
         if tid in excluded or tid in reacted_ids:
             continue
         if play_counts.get(tid, 0) > EXPLORE_MAX_PLAY_COUNT:
             continue
-        payload = p.payload or {}
         payload_by_id[tid] = payload
         z = z_scores_for_axes(payload.get("sonic_axes"), axis_stats, axis_names)
         eligible.append((tid, z))
@@ -825,7 +809,7 @@ def _retrieve_track_data(
     try:
         pts = qdrant_client.retrieve(
             collection_name=collection_name, ids=track_ids,
-            with_payload=True, with_vectors=["clap"],
+            with_payload=PAYLOAD_EXCLUDE_LYRICS, with_vectors=["clap"],
         )
     except Exception:
         logger.exception("[stream] track data retrieve failed")
@@ -1167,7 +1151,7 @@ def similar_tracks(
             query=list(seed_vec),
             using="clap",
             limit=k,
-            with_payload=True,
+            with_payload=PAYLOAD_EXCLUDE_LYRICS,
         ).points
     except Exception:
         logger.exception("[similar] CLAP search failed for %s", seed_track_id)
@@ -1312,36 +1296,20 @@ def axis_playlist(
 
     targets = {a: float(axis_targets.get(a, 0.0)) for a in AXIS_NAMES}
 
-    points: list = []
-    offset = None
-    try:
-        while len(points) < AXIS_PLAYLIST_SCROLL_CAP:
-            batch, offset = qdrant_client.scroll(
-                collection_name=collection_name,
-                limit=min(512, AXIS_PLAYLIST_SCROLL_CAP - len(points)),
-                with_payload=True,
-                with_vectors=False,
-                offset=offset,
-            )
-            points.extend(batch)
-            if offset is None or not batch:
-                break
-    except Exception:
-        logger.exception("[axis-playlist] scroll failed")
-        return {"tracks": [], "diagnostics": {"reason": "scroll_failed", "scanned": 0}}
+    # Shared per-collection cache of lyrics-free light payloads; cap to bound
+    # the scoring loop (this ranks the whole library against the radar knobs).
+    points = light_points(qdrant_client, collection_name)[:AXIS_PLAYLIST_SCROLL_CAP]
 
-    candidate_ids = [str(p.id) for p in points]
+    candidate_ids = [tid for tid, _ in points]
     reactions = MetadataDB.get_reactions_for_tracks(collection_name, candidate_ids)
     dislikes = {tid for tid, r in reactions.items() if r == "dislike"}
     play_counts = MetadataDB.get_play_counts_by_track(collection_name)
 
     out: list[StreamCandidate] = []
     skipped_no_axes = 0
-    for p in points:
-        tid = str(p.id)
+    for tid, payload in points:
         if tid in dislikes:
             continue
-        payload = p.payload or {}
         z = z_scores_for_axes(payload.get("sonic_axes"), axis_stats, AXIS_NAMES)
         if z is None:
             skipped_no_axes += 1

@@ -13,6 +13,7 @@ from app.api.dependencies import get_current_user
 from app.api.helpers import derive_collection_for_user
 from app.domain.models import ArtistAggregate, ArtistAlbum, TrackMetadata, User
 from app.resources.metadata_db import MetadataDB
+from app.resources.qdrant_utils import PAYLOAD_EXCLUDE_LYRICS
 from app.services.artist_facts_service import _slugify as _slugify_artist
 from app.services.artist_split import split_artists, artist_slugs, name_for_slug
 from app.services._payload_coerce import coerce_float, coerce_year
@@ -113,7 +114,8 @@ def build_artist_aggregate(db, collection: str, canonical_slug: str, lang: str) 
         try:
             points, offset = db.qdrant.scroll(
                 collection_name=collection, limit=64, offset=offset,
-                with_payload=True, with_vectors=False, scroll_filter=flt,
+                with_payload=PAYLOAD_EXCLUDE_LYRICS, with_vectors=False,
+                scroll_filter=flt,
             )
         except Exception as e:
             logger.warning("[artists] scroll failed: %s", e)
