@@ -18,6 +18,7 @@ from typing import Iterable
 from app.domain.models import AutoplayQueueDiagnostics, AutoplayQueueResponse, TrackMetadata
 from app.resources.metadata_db import MetadataDB
 from app.resources.qdrant_utils import PAYLOAD_EXCLUDE_LYRICS
+from app.services._payload_coerce import coerce_float
 
 
 def _point_to_track(pt) -> TrackMetadata:
@@ -63,6 +64,11 @@ def _apply_filters(
             continue
         if tid in dislikes:
             dropped_disliked += 1
+            continue
+
+        dur = coerce_float((pt.payload or {}).get("duration"))
+        if dur is not None and 0.0 < dur < 30.0:
+            dropped_excluded += 1
             continue
 
         # Diversity: if the last 2 entries share the artist with this candidate, demote.

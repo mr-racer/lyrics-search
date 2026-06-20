@@ -21,6 +21,7 @@ import numpy as np
 
 from app.resources.metadata_db import MetadataDB
 from app.resources.qdrant_utils import PAYLOAD_EXCLUDE_LYRICS, light_points
+from app.services._payload_coerce import coerce_float
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,16 @@ H_IMPLICIT_DAYS = 30.0  # playback events, from played_at
 # Idle rule (design §3): after IDLE_STREAK consecutive no-interaction tracks,
 # subsequent events stop moving the profile until the user acts again.
 IDLE_STREAK = 5
+
+# Minimum track duration for recommendation surfaces (intros/interludes filter).
+MIN_TRACK_DURATION_SEC = 30.0  # drop intros/interludes from recs & similar rails
+
+
+def _duration_ok(payload) -> bool:
+    """True unless the track's duration is KNOWN and shorter than 30s.
+    Missing/zero duration is kept (avoid dropping real songs with absent tags)."""
+    d = coerce_float((payload or {}).get("duration"))
+    return d is None or d <= 0.0 or d >= MIN_TRACK_DURATION_SEC
 
 
 @dataclass(frozen=True)
@@ -969,6 +980,7 @@ def next_chunk(
             play_counts=play_counts, axis_stats=axis_stats,
             negative_vectors=negative_vectors, axis_names=AXIS_NAMES, rng=rng,
         )
+        explore_cands = [c for c in explore_cands if _duration_ok(c.payload)]
 
     liked_cands: list[StreamCandidate] = []
     if liked_quota > 0 and liked_ids:
@@ -991,6 +1003,7 @@ def next_chunk(
             for t in sampled
             if t in liked_payloads
         ]
+        liked_cands = [c for c in liked_cands if _duration_ok(c.payload)]
 
     recent_artists = [
         (payloads.get(s.track_id) or {}).get("artist", "").strip().lower()
@@ -1006,6 +1019,7 @@ def next_chunk(
             play_counts=play_counts, recency_hours=recency_hours,
             axis_stats=axis_stats, axis_names=AXIS_NAMES,
         )
+        cands = [c for c in cands if _duration_ok(c.payload)]
         return cands
 
     # 8. Pass 1 — fresh only: today's behaviour (anchor + explore + liked).
@@ -1050,7 +1064,7 @@ def next_chunk(
         _, stale_payloads = _retrieve_track_data(
             qdrant_client, collection_name, stale[:need])
         for tid in stale[:need]:
-            if tid in stale_payloads:
+            if tid in stale_payloads and _duration_ok(stale_payloads[tid]):
                 fallback_used = True
                 chunk.append(StreamCandidate(
                     track_id=tid, payload=stale_payloads[tid], pool="replay"))
@@ -1166,9 +1180,9 @@ def similar_tracks(
     out: list[StreamCandidate] = []
     for h in hits:
         tid = str(h.id)
-        if tid in excluded or tid in dislikes:
-            continue
         payload = h.payload or {}
+        if tid in excluded or tid in dislikes or not _duration_ok(payload):
+            continue
         cos = float(h.score or 0.0)
         cand_z = z_scores_for_axes(payload.get("sonic_axes"), axis_stats, AXIS_NAMES)
         axis_closeness = axis_match_score(cand_z, seed_z, 1.0, AXIS_NAMES)
