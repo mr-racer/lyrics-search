@@ -3844,7 +3844,7 @@ function DiscoverNewCard({ isDark, lang, onPick, navigateToArtist }) {
     let alive = true;
     Promise.allSettled([
       apiFetch(`/library/rediscover`),
-      apiFetch(`/library/top-pairs`),
+      apiFetch(`/library/top-pairs?sample=24`),
     ]).then(([rd, tp]) => {
       if (!alive) return;
       const out = [];

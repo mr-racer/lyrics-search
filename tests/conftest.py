@@ -39,9 +39,12 @@ def _clear_light_payload_cache():
     case would read the first case's cached points. Cheap and isolating.
     """
     from app.resources.qdrant_utils import invalidate_light_cache
+    from app.services.similarity_service import clear_load_memo
     invalidate_light_cache()
+    clear_load_memo()
     yield
     invalidate_light_cache()
+    clear_load_memo()
 
 
 @pytest.fixture

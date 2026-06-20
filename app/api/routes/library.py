@@ -653,10 +653,20 @@ async def get_stats(
 async def get_top_pairs(
     request: Request,
     current_user: User = Depends(get_current_user),
+    sample: int | None = Query(
+        None, ge=1, le=200,
+        description="If set, return only a random sample of this many "
+                    "`dissimilar` entries (top-level fields only, `similar` "
+                    "omitted). The home «Something new» card needs a handful, "
+                    "not the whole matrix — this keeps the response in KB, not MB.",
+    ),
 ) -> dict:
     """Get cached top-similar and top-dissimilar track pairs.
 
-    Returns cached data if available, otherwise empty lists.
+    Returns cached data if available, otherwise empty lists. With ``sample`` the
+    response is trimmed to a small random ``dissimilar`` slice (the only thing
+    the home discovery card consumes); without it the full cached matrix is
+    returned for backward compatibility.
 
     Returns:
         {
@@ -714,9 +724,28 @@ async def get_top_pairs(
     # Load cached pairs
     cached = load_top_pairs(target_col)
     if cached:
+        similar = cached.get("similar", [])
+        dissimilar = cached.get("dissimilar", [])
+        if sample is not None:
+            # The home «Something new» card uses only a few distinct `dissimilar`
+            # tracks (top-level fields), never `similar` nor the nested neighbor
+            # arrays. Ship a small random sample instead of the whole matrix —
+            # 10 MB → a few KB, with fresh variety on each load.
+            pool = dissimilar
+            if len(pool) > sample:
+                pool = random.sample(pool, sample)
+            dissimilar = [
+                {
+                    "song": e.get("song"),
+                    "track_id": e.get("track_id"),
+                    "cover_art_path": e.get("cover_art_path"),
+                }
+                for e in pool
+            ]
+            similar = []
         return {
-            "similar": cached.get("similar", []),
-            "dissimilar": cached.get("dissimilar", []),
+            "similar": similar,
+            "dissimilar": dissimilar,
             "collection_name": cached.get("collection_name"),
             "computed_at": cached.get("computed_at"),
             "qdrant_available": True,

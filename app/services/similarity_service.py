@@ -134,6 +134,20 @@ def save_top_pairs(similar: List[dict], dissimilar: List[dict], collection_name:
     return str(path)
 
 
+# Parsed-file memo: the top-pairs JSON is large (the full similar/dissimilar
+# matrix), so re-reading+parsing it on every /library/top-pairs hit is wasteful.
+# Keyed by absolute path (CACHE_DIR is monkeypatched in tests) and invalidated by
+# mtime — a recompute rewrites the file, so a stale parse is never served.
+_LOAD_MEMO: dict[str, tuple[float, dict]] = {}
+_LOAD_MEMO_MAX = 8
+
+
+def clear_load_memo() -> None:
+    """Drop the parsed-file memo (recompute invalidates by mtime; tests call this
+    for isolation)."""
+    _LOAD_MEMO.clear()
+
+
 def load_top_pairs(collection_name: str) -> Optional[dict]:
     """Load cached top pairs for a collection.
 
@@ -141,10 +155,21 @@ def load_top_pairs(collection_name: str) -> Optional[dict]:
         Dict with 'similar', 'dissimilar', 'collection_name', 'computed_at' — or None if not cached.
     """
     path = CACHE_DIR / f"{collection_name}.json"
-    if not path.exists():
+    key = str(path)
+    try:
+        mtime = path.stat().st_mtime
+    except OSError:
+        _LOAD_MEMO.pop(key, None)
         return None
+    hit = _LOAD_MEMO.get(key)
+    if hit is not None and hit[0] == mtime:
+        return hit[1]
     with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+        data = json.load(f)
+    _LOAD_MEMO[key] = (mtime, data)
+    while len(_LOAD_MEMO) > _LOAD_MEMO_MAX:
+        _LOAD_MEMO.pop(next(iter(_LOAD_MEMO)))
+    return data
 
 
 async def analyze_collection(
