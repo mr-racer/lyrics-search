@@ -5807,7 +5807,7 @@ function AxisRadar({ values, targets, isDark, lang, size }) {
   );
 }
 
-function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream }) {
+function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream, visible }) {
   const c = useColors(isDark);
   const aiOn = !!(aiStatus && aiStatus.aiActive);
   const llmKw = () => ({
@@ -5876,37 +5876,55 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream }
   const [profileLoading, setProfileLoading] = useState(true);
   const [targets, setTargets] = useState({});
   const [knobsDirty, setKnobsDirty] = useState(false);
+  // Mirror of knobsDirty readable inside the (lang/visible)-keyed fetch effect
+  // without adding it as a dep — lets a re-fetch avoid clobbering unsaved knobs.
+  const knobsDirtyRef = useRef(false);
   const [axisBusy, setAxisBusy] = useState(false);
   const [axisTracks, setAxisTracks] = useState(null);   // hits | null
   const [portraitBusy, setPortraitBusy] = useState(false);
+  // Auto-fill of missing island names at the user (AI on). autoEnriching drives
+  // the per-island shimmer; enrichAttempted (lang::trackIds) guards the effect
+  // from re-triggering on its own setProfile.
+  const [autoEnriching, setAutoEnriching] = useState(false);
+  const enrichAttempted = useRef(null);
 
   const profileAxisValues = profile && profile.axes
     ? Object.fromEntries(RECSYS_AXES.map(a => [a, (profile.axes[a] && profile.axes[a].z) || 0]))
     : null;
   const islands = (profile && profile.islands) || [];
 
+  // Re-fetch the long-term profile whenever the tab is (re)shown so islands,
+  // anchors and axes stay current. Kept-alive sections only re-fetch on a
+  // visible→true transition (the section never unmounts within non-home nav) —
+  // mirrors LibrarySection. profileLoading is left untouched on re-fetch, so
+  // stale data is replaced in place without a skeleton flash.
   useEffect(() => {
+    if (visible === false) return;
     let alive = true;
     apiFetch(`/recommend/profile?lang=${encodeURIComponent(lang)}`)
       .then(r => {
         if (!alive || !r) return;
         setProfile(r);
-        if (r.axes) {
+        // Don't clobber unsaved knob edits on a re-fetch; seed the knob targets
+        // from the profile's axes only when the user hasn't touched them.
+        if (r.axes && !knobsDirtyRef.current) {
           setTargets(Object.fromEntries(RECSYS_AXES.map(a => [a, (r.axes[a] && r.axes[a].z) || 0])));
         }
       })
       .catch(() => {})
       .finally(() => { if (alive) setProfileLoading(false); });
     return () => { alive = false; };
-  }, []);
+  }, [lang, visible]);
 
   const setKnob = (axis, v) => {
     setTargets(prev => ({ ...prev, [axis]: v }));
     setKnobsDirty(true);
+    knobsDirtyRef.current = true;
   };
   const resetKnobs = () => {
     if (profileAxisValues) setTargets({ ...profileAxisValues });
     setKnobsDirty(false);
+    knobsDirtyRef.current = false;
     setAxisTracks(null);
   };
   const buildAxisPlaylist = async () => {
@@ -5940,6 +5958,40 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream }
     } catch (e) { /* LLM down — keep whatever we had */ }
     finally { setPortraitBusy(false); }
   };
+
+  // When AI is on and any island lacks an LLM name, generate names (+ portrait)
+  // now via the same endpoint regenPortrait uses, and merge them in. The server
+  // returns name=null (never a stale name — its cache is invalidated by the
+  // islands hash) when cold or after the taste drifted, so we never show a
+  // stale label: either the fresh name or a shimmer. Guarded by a per-set key so
+  // the setProfile below can't loop us. Re-runs for a new island set / language.
+  useEffect(() => {
+    if (!aiOn) return;
+    const isls = (profile && profile.islands) || [];
+    if (!isls.length) return;
+    if (!isls.some(i => !i.name)) return;
+    const key = lang + '::' + isls.map(i => i.track_id).join('|');
+    if (enrichAttempted.current === key) return;
+    enrichAttempted.current = key;
+    let alive = true;
+    setAutoEnriching(true);
+    apiFetch('/recommend/profile/ai-enrich', {
+      method: 'POST', body: JSON.stringify({ lang, ...llmKw() }),
+    })
+      .then(res => {
+        if (!alive || !res) return;
+        setProfile(prev => prev ? {
+          ...prev,
+          portrait: res.portrait || prev.portrait,
+          islands: (prev.islands || []).map(i => ({
+            ...i, name: (res.island_names && res.island_names[i.track_id]) || i.name,
+          })),
+        } : prev);
+      })
+      .catch(() => {})
+      .finally(() => { if (alive) setAutoEnriching(false); });
+    return () => { alive = false; };
+  }, [profile, aiOn, lang]);
 
   const islandRadio = async (isl) => {
     try {
@@ -6291,7 +6343,11 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream }
                         </div>
                         <div className="serif" style={{ fontSize:'15px', lineHeight:1.15, color:c.text,
                           display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden' }}>
-                          {isl.name || ((isl.tracks && isl.tracks[0]) ? `${isl.tracks[0].artist}` : (lang==='ru'?`Остров ${idx+1}`:`Island ${idx+1}`))}
+                          {isl.name
+                            ? isl.name
+                            : (autoEnriching && aiOn)
+                              ? <Skel w={'80%'} h={15} r={6} isDark={isDark} />
+                              : ((isl.tracks && isl.tracks[0]) ? `${isl.tracks[0].artist}` : (lang==='ru'?`Остров ${idx+1}`:`Island ${idx+1}`))}
                         </div>
                         <div className="mono" style={{ fontSize:'10px', letterSpacing:'0.14em', color:c.textSubtle, marginTop:'5px' }}>
                           {(isl.tracks || []).length} {lang==='ru'?'ЯКОРЕЙ':'ANCHORS'} · ▶
