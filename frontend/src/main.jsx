@@ -2148,11 +2148,14 @@ function HeaderNowPlaying({ track, audio, isDark, lang, onOpenPlayer, playlist, 
 // diameter in px (callers scale it relative to whatever it annotates); the
 // tooltip itself scales with the viewport in CSS. Keyboard-reachable (tabIndex)
 // so the explanation isn't mouse-only. `label` is the tooltip body (string or
-// JSX with <strong>); `ariaLabel` is the screen-reader summary.
-function HintBadge({ size = 20, label, ariaLabel }) {
+// JSX with <strong>); `ariaLabel` is the screen-reader summary. `placement`
+// flips the tooltip below the dot ('down') for badges that sit at the top edge
+// of an overflow:hidden container, where an upward pop would be clipped.
+function HintBadge({ size = 20, label, ariaLabel, placement = 'up' }) {
   const px = Math.max(14, size);
   return (
-    <span className="hint-badge" tabIndex={0} role="note"
+    <span className={`hint-badge${placement === 'down' ? ' hint-badge--down' : ''}`}
+      tabIndex={0} role="note"
       aria-label={ariaLabel || (typeof label === 'string' ? label : 'Info')}>
       <span className="hint-badge__dot" aria-hidden="true"
         style={{ width: px, height: px, fontSize: Math.max(10, Math.round(px * 0.58)) }}>i</span>
@@ -4971,6 +4974,22 @@ function CatalogResults({ hits, loading, onOpen, isDark, lang }) {
     ? (t === 'song' ? 'Песня' : t === 'album' ? 'Альбом' : 'Исполнитель')
     : (t === 'song' ? 'Song' : t === 'album' ? 'Album' : 'Artist');
 
+  // Per-type row tint. Songs stay neutral; albums get a pastel violet wash,
+  // artists a pastel teal that complements the violet and keeps text legible.
+  // Low-alpha oklch tints read as a soft wash over both light and dark themes,
+  // so the foreground stays c.text either way.
+  const tint = (t) => {
+    if (t === 'album') return {
+      bg: 'oklch(70% 0.11 295 / 0.14)', border: 'oklch(72% 0.13 295 / 0.34)',
+      glow: 'oklch(62% 0.2 295 / 0.30)', ring: 'oklch(72% 0.13 295 / 0.42)',
+    };
+    if (t === 'artist') return {
+      bg: 'oklch(74% 0.09 200 / 0.15)', border: 'oklch(74% 0.11 200 / 0.36)',
+      glow: 'oklch(64% 0.13 200 / 0.30)', ring: 'oklch(74% 0.11 200 / 0.42)',
+    };
+    return { bg: 'rgba(255,255,255,.04)', border: c.border, glow: null, ring: null };
+  };
+
   if (!hits.length) {
     return (
       <div className="lib-tab-pane" style={{ padding:'28px', textAlign:'center', color:c.textDim }}>
@@ -4993,6 +5012,7 @@ function CatalogResults({ hits, loading, onOpen, isDark, lang }) {
               ? h.artist
               : (h.track_count != null ? `${h.track_count} ${lang === 'ru' ? 'треков' : 'tracks'}` : ''));
         const key = `${h.type}-${h.track_id || h.artist_slug || ''}-${h.album || h.title || ''}-${i}`;
+        const tn = tint(h.type);
         return (
           <div
             key={key}
@@ -5000,8 +5020,9 @@ function CatalogResults({ hits, loading, onOpen, isDark, lang }) {
             onClick={() => onOpen(h)}
             style={{
               display:'flex', alignItems:'center', gap:'12px', cursor:'pointer',
-              background:'rgba(255,255,255,.04)', border:`1px solid ${c.border}`,
+              background:tn.bg, border:`1px solid ${tn.border}`,
               borderRadius:'12px', padding:'10px 14px',
+              ...(tn.glow ? { '--lift-glow': tn.glow, '--lift-ring': tn.ring } : {}),
             }}
           >
             <div style={{
@@ -10805,6 +10826,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                 label={lang === 'ru'
                   ? <span>Треки в очереди можно двигать — <strong>зажмите и перетаскивайте</strong>. А ещё тут видно следующие треки в рекомендациях: смотрите, как они меняются от ваших действий.</span>
                   : <span>Reorder the queue — <strong>press and drag</strong> any track. You can also see what's coming up in recommendations, and how it shifts as you listen.</span>}
+                placement="down"
                 ariaLabel={lang === 'ru' ? 'Как работает очередь' : 'How the queue works'}
               />
             </div>

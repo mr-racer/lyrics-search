@@ -1396,6 +1396,26 @@
       border-top-color: rgba(34,33,44,0.97);
       filter: drop-shadow(0 3px 2px rgba(0,0,0,0.22));
     }
+    /* Downward variant — pop opens below the dot. Used where the badge sits at
+       the top edge of an overflow:hidden container (e.g. the queue header),
+       where an upward pop would be clipped. */
+    .hint-badge--down .hint-badge__pop {
+      bottom: auto; top: calc(100% + 11px);
+      transform: translate(-50%, -7px) scale(.9); transform-origin: top center;
+    }
+    .hint-badge--down:hover .hint-badge__pop,
+    .hint-badge--down:focus-within .hint-badge__pop {
+      transform: translate(-50%, 0) scale(1);
+    }
+    /* nub flips to point upward, colour matches the pop's top edge */
+    .hint-badge--down .hint-badge__pop::after {
+      top: auto; bottom: 100%;
+      border-top-color: transparent; border-bottom-color: rgba(54,52,68,0.97);
+      filter: drop-shadow(0 -3px 2px rgba(0,0,0,0.22));
+    }
+    body[data-theme="light"] .hint-badge--down .hint-badge__pop::after {
+      border-bottom-color: rgba(255,255,255,0.98);
+    }
     body[data-theme="light"] .hint-badge__pop {
       color: rgba(40,33,58,0.95);
       background: linear-gradient(168deg, rgba(255,255,255,0.98), rgba(238,235,247,0.98));
