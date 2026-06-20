@@ -1430,6 +1430,91 @@
       .hint-badge__pop { transition: opacity .2s ease; }
     }
 
+    /* ── Lift-on-hover row (reuses the welcome FeatureCard feel) ──────────
+       A list row that rises slightly and casts a tinted glow on hover.
+       --lift-glow sets the shadow colour; defaults to the purple accent.
+       The inset ring rides on TOP of any inline border so it doesn't fight
+       a border-color set via style={}. */
+    .lift-row {
+      transition: transform .25s cubic-bezier(.2,.7,.2,1), box-shadow .25s ease;
+      will-change: transform;
+    }
+    .lift-row:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 16px 34px -8px var(--lift-glow, rgba(124,92,255,0.30)),
+                  inset 0 0 0 1px var(--lift-ring, rgba(154,133,255,0.38));
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .lift-row { transition: box-shadow .25s ease; }
+      .lift-row:hover { transform: none; }
+    }
+
+    /* ── Queue/contrast hint tooltip — a small bubble that fades in over a
+       hoverable row. Anchored to the row (which sets position:relative). ── */
+    .q-tip {
+      position: absolute; left: 50%; bottom: calc(100% + 8px);
+      transform: translate(-50%, 6px) scale(.94); transform-origin: bottom center;
+      opacity: 0; pointer-events: none; z-index: 30;
+      width: max-content; max-width: 200px;
+      padding: 7px 11px; border-radius: 10px;
+      font-family: 'Geist', system-ui, sans-serif; font-weight: 500;
+      font-size: 11.5px; line-height: 1.35; text-align: center;
+      color: rgba(244,243,250,0.96);
+      background: linear-gradient(168deg, rgba(54,52,68,0.98), rgba(34,33,44,0.98));
+      border: 1px solid rgba(255,255,255,0.14);
+      box-shadow: 0 12px 28px rgba(0,0,0,0.5), 0 2px 8px rgba(0,0,0,0.4);
+      backdrop-filter: blur(14px) saturate(1.1);
+      -webkit-backdrop-filter: blur(14px) saturate(1.1);
+      transition: opacity .2s ease, transform .3s cubic-bezier(.34,1.4,.5,1);
+    }
+    .q-tip::after {
+      content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
+      width: 0; height: 0; border: 6px solid transparent;
+      border-top-color: rgba(34,33,44,0.98);
+    }
+    .sim-card:hover .q-tip { opacity: 1; transform: translate(-50%, 0) scale(1); }
+    body[data-theme="light"] .q-tip {
+      color: rgba(40,33,58,0.95);
+      background: linear-gradient(168deg, rgba(255,255,255,0.98), rgba(238,235,247,0.98));
+      border-color: rgba(40,30,80,0.12);
+      box-shadow: 0 12px 26px rgba(40,30,70,0.22), 0 2px 8px rgba(40,30,70,0.16);
+    }
+    body[data-theme="light"] .q-tip::after { border-top-color: rgba(241,238,249,0.98); }
+    @media (prefers-reduced-motion: reduce) {
+      .q-tip { transition: opacity .2s ease; }
+    }
+
+    /* ── Player album-art buffering veil ─────────────────────────────────
+       Sits inside .player-art-front so it inherits the rounded corners and
+       flips with the cover. Fades in fast while the track is still loading
+       (m4a transcode, stream warm-up), blurring the cover behind a spinner,
+       then fades out the moment audio starts. */
+    .player-art-buffering {
+      position: absolute; inset: 0;
+      z-index: 2;  /* above cover image + blur overlay, below the shine sweep */
+      display: flex; align-items: center; justify-content: center;
+      border-radius: inherit; pointer-events: none;
+      opacity: 0;
+      background: rgba(8,8,12,0.18);
+      backdrop-filter: blur(7px) saturate(0.9);
+      -webkit-backdrop-filter: blur(7px) saturate(0.9);
+      transition: opacity .22s ease;
+    }
+    .player-art-buffering.is-on { opacity: 1; }
+    .player-art-spinner {
+      width: clamp(34px, 26%, 64px); height: clamp(34px, 26%, 64px);
+      border-radius: 50%;
+      border: 3px solid rgba(255,255,255,0.22);
+      border-top-color: rgba(255,255,255,0.92);
+      box-shadow: 0 2px 10px rgba(0,0,0,0.35);
+      animation: artSpin 0.8s linear infinite;
+    }
+    @keyframes artSpin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      .player-art-buffering { transition: opacity .22s ease; }
+      .player-art-spinner { animation-duration: 1.6s; }
+    }
+
     /* Mono-label hint above the cover row — shown for the first 3 cover
        clicks (localStorage-backed), then fades out gracefully. */
     .player-art-hint {
@@ -1669,8 +1754,20 @@
       .player-playlist-item.q-dropped { animation: none; }
     }
 
-    .sim-card { transition: background 0.15s ease; border-radius: 10px; }
-    .sim-card:hover { background: rgba(255,255,255,0.06); }
+    .sim-card {
+      position: relative; border-radius: 10px;
+      transition: transform .22s cubic-bezier(.2,.7,.2,1), box-shadow .22s ease, background 0.15s ease;
+      will-change: transform;
+    }
+    .sim-card:hover {
+      background: rgba(255,255,255,0.06);
+      transform: translateY(-3px);
+      box-shadow: 0 12px 26px -7px var(--sim-glow, rgba(124,92,255,0.30));
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .sim-card { transition: box-shadow .22s ease, background .15s ease; }
+      .sim-card:hover { transform: none; }
+    }
 
     /* Control icon buttons */
     .player-ctrl-btn {
@@ -2564,6 +2661,7 @@ function useCurrentTime() {
 function useAudioPlayer() {
   const audioRef = useRef(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isBuffering, setIsBuffering] = useState(false);
   const [currentSrc, setCurrentSrc] = useState(null);
   const [duration, setDuration] = useState(0);
 
@@ -2596,6 +2694,9 @@ function useAudioPlayer() {
       el.dataset.playNoInfluence = meta.noInfluence ? '1' : '0';
       resetPlaySession(el);
     }
+    // New media: show the buffering veil until 'canplay'/'playing' clears it
+    // (covers m4a transcode + stream warm-up where 'waiting' may not fire).
+    setIsBuffering(true);
     setCurrentSrc(src);
   }, []);
 
@@ -2683,7 +2784,18 @@ function useAudioPlayer() {
       // and pausing is not the end of a listen (the user may resume). Emitting
       // here is exactly what used to double-count on resume→end.
       setIsPlaying(false);
+      setIsBuffering(false);
     });
+    // Buffering signal — the cover veil + spinner key off this. 'waiting' and
+    // 'stalled' fire while the media element is starved (m4a transcode, stream
+    // warm-up); 'playing'/'canplay' clear it the instant audio actually flows.
+    el.addEventListener('waiting',      () => setIsBuffering(true));
+    el.addEventListener('stalled',      () => setIsBuffering(true));
+    el.addEventListener('playing',      () => setIsBuffering(false));
+    el.addEventListener('canplay',      () => setIsBuffering(false));
+    el.addEventListener('canplaythrough', () => setIsBuffering(false));
+    el.addEventListener('ended',        () => setIsBuffering(false));
+    el.addEventListener('error',        () => setIsBuffering(false));
     // Browser-close / tab-hide safety net — sendBeacon survives unload. We flush
     // only on real page teardown (pagehide), NOT on visibilitychange: audio keeps
     // playing (and accumulating) in a backgrounded tab, so flushing on tab-switch
@@ -2694,7 +2806,7 @@ function useAudioPlayer() {
 
   return {
     audioRef, initAudio,
-    isPlaying, currentSrc, duration,
+    isPlaying, isBuffering, currentSrc, duration,
     play, pause, togglePlay, seek, setSrc, setVolume,
     // NOTE: currentTime is intentionally NOT here. Use useCurrentTime() for
     // display, or read audioRef.current?.currentTime in event handlers.
@@ -7157,6 +7269,7 @@ function CatalogResults({ hits, loading, onOpen, isDark, lang }) {
         return (
           <div
             key={key}
+            className="lift-row"
             onClick={() => onOpen(h)}
             style={{
               display:'flex', alignItems:'center', gap:'12px', cursor:'pointer',
@@ -7176,10 +7289,14 @@ function CatalogResults({ hits, loading, onOpen, isDark, lang }) {
             </div>
             <div style={{ flex:1, minWidth:0 }}>
               <div style={{ color:c.text, fontWeight:600, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{primary}</div>
-              <div style={{ color:c.textDim, fontSize:'13px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{secondary}</div>
+              <div style={{ color:c.textMuted, fontSize:'13px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{secondary}</div>
             </div>
-            <div style={{ color:c.textDim, fontSize:'11px', textTransform:'uppercase', letterSpacing:'.5px', flex:'0 0 auto' }}>
-              {badge(h.type)} {typeLabel(h.type)}
+            <div style={{
+              color:c.textMuted, fontSize:'11px', textTransform:'uppercase', letterSpacing:'.5px',
+              flex:'0 0 auto', display:'flex', alignItems:'center', gap:'7px', textAlign:'right',
+            }}>
+              <span>{typeLabel(h.type)}</span>
+              <span style={{ fontSize:'14px', width:'1.2em', textAlign:'center', flexShrink:0 }}>{badge(h.type)}</span>
             </div>
           </div>
         );
@@ -11568,10 +11685,11 @@ function PlayerAmbient({ track, isDark }) {
 // the memoized top-pairs cache. Renders nothing when there is no data (the
 // analysis hasn't run, or the track isn't in the cache) or while the AI chat
 // drawer is open. A click queues the track to play NEXT (not replace, not end).
-function SimilarityColumn({ accent, label, items, tint, isDark, onQueueNext }) {
+function SimilarityColumn({ accent, label, items, tint, glow, isDark, lang, onQueueNext }) {
   const text   = isDark ? '#FFFFFF' : '#161620';
   const muted  = isDark ? '#9BA1B0' : 'rgba(22,22,32,0.62)';
   const subtle = isDark ? 'rgba(255,255,255,0.30)' : 'rgba(22,22,32,0.42)';
+  const queueTip = lang === 'ru' ? 'Нажмите, чтобы добавить в очередь' : 'Click to add to the queue';
   return (
     <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
       <div style={{
@@ -11589,11 +11707,13 @@ function SimilarityColumn({ accent, label, items, tint, isDark, onQueueNext }) {
           key={t.track_id || i}
           className="sim-card"
           onClick={() => onQueueNext(t)}
-          title={(t.title || '') + ' — ' + (t.artist || '')}
+          aria-label={(t.title || '') + ' — ' + (t.artist || '') + ' · ' + queueTip}
           style={{
+            '--sim-glow': glow,
             display: 'flex', alignItems: 'center', gap: 10, padding: '6px 8px',
             cursor: 'pointer', background: tint, borderLeft: `2px solid ${accent}`,
           }}>
+          <span className="q-tip">{queueTip}</span>
           <AlbumCover title={t.title} artist={t.artist} size={38} isDark={isDark} coverPath={t.cover_art_path} radius={8} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{
@@ -11644,7 +11764,9 @@ function SimilarityRail({ trackId, lang, isDark, drawerOpen, onQueueNext }) {
           label={lang === 'ru' ? 'ПОХОЖИЕ' : 'SIMILAR'}
           items={data.similar}
           tint={isDark ? 'rgba(52,211,153,0.06)' : 'rgba(52,211,153,0.08)'}
+          glow="rgba(52,211,153,0.38)"
           isDark={isDark}
+          lang={lang}
           onQueueNext={onQueueNext}
         />
         <SimilarityColumn
@@ -11652,7 +11774,9 @@ function SimilarityRail({ trackId, lang, isDark, drawerOpen, onQueueNext }) {
           label={lang === 'ru' ? 'КОНТРАСТ' : 'CONTRAST'}
           items={data.dissimilar}
           tint={isDark ? 'rgba(245,158,11,0.06)' : 'rgba(245,158,11,0.08)'}
+          glow="rgba(245,158,11,0.40)"
           isDark={isDark}
+          lang={lang}
           onQueueNext={onQueueNext}
         />
       </div>
@@ -11930,6 +12054,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
 
   // Derive playback state from shared audio hook
   const isPlaying = audio?.isPlaying ?? false;
+  const isBuffering = audio?.isBuffering ?? false;
   // Subscribe to external time store — PlayerSection's progress UI rebuilds
   // ~4×/sec, but the rest of the app no longer re-renders on each tick.
   const currentTime = useCurrentTime();
@@ -12616,6 +12741,16 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                           <div key={`blur-${playFeedbackKey}`}
                             className="player-art-blur-overlay" />
                         )}
+                        {/* Buffering veil — blurs the cover behind a spinner
+                            while audio is still loading. Always mounted (when a
+                            track is up) so it can fade BOTH in and out; the
+                            .is-on class drives the opacity. */}
+                        {currentTrack && (
+                          <div className={`player-art-buffering${isBuffering ? ' is-on' : ''}`}
+                            aria-hidden={!isBuffering}>
+                            <span className="player-art-spinner" />
+                          </div>
+                        )}
                         {/* Shine — halved alpha (was 0.22 → 0.11) per request */}
                         <div
                           className="player-art-shine"
@@ -12933,8 +13068,18 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
               fontFamily: "'JetBrains Mono', ui-monospace, monospace",
               marginBottom: 10,
               flexShrink: 0,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
             }}>
-              {lang === 'ru' ? 'ОЧЕРЕДЬ' : 'QUEUE'} · {playlist.length} {lang === 'ru' ? 'ТРЕКОВ' : 'TRACKS'}
+              <span>{lang === 'ru' ? 'ОЧЕРЕДЬ' : 'QUEUE'} · {playlist.length} {lang === 'ru' ? 'ТРЕКОВ' : 'TRACKS'}</span>
+              <HintBadge
+                size={15}
+                label={lang === 'ru'
+                  ? <span>Треки в очереди можно двигать — <strong>зажмите и перетаскивайте</strong>. А ещё тут видно следующие треки в рекомендациях: смотрите, как они меняются от ваших действий.</span>
+                  : <span>Reorder the queue — <strong>press and drag</strong> any track. You can also see what's coming up in recommendations, and how it shifts as you listen.</span>}
+                ariaLabel={lang === 'ru' ? 'Как работает очередь' : 'How the queue works'}
+              />
             </div>
             <div ref={queueScrollRef} className="player-scroll" style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
               {playlist.length === 0 ? (
