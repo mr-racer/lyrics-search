@@ -1233,8 +1233,10 @@ def long_term_profile(*, qdrant_client, collection_name: str, now: datetime | No
         if dt is not None:
             reactions.append(ReactionSignal(track_id=tid, reaction=reaction, updated_at=dt))
 
+    influencing = [s for s in signals if getattr(s, "influence", True)]
+
     long_weights = combine_weights(
-        aggregate_event_weights(signals, now),
+        aggregate_event_weights(influencing, now),
         aggregate_reaction_weights(reactions, now),
     )
     n_signals = len(signals) + len(reactions)
