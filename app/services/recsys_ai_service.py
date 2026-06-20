@@ -47,11 +47,12 @@ Language for ALL output strings: {lang_name}.
 Input: the listener's taste islands (clusters of tracks they demonstrably love, with weights) and their sound-axis profile (z-scores: energy, vocal_lead, spacious, experimental, brightness, acousticness).
 
 Write:
-1. "portrait" — 2-4 sentences about what this person actually loves in music. Be concrete: name sounds, moods, scenes, contrasts between their islands. NEVER use filler like "eclectic taste", "diverse listener", "music lover", "wide range". If the data shows a contradiction (e.g. loves both harsh noise and soft folk) — say it, contradictions are the interesting part.
-2. "island_names" — a punchy 1-4 word name for EACH island, in the listener's language. Name the SOUND, not the artist (e.g. "Ночной синтвейв", not "Группа X"). Use the member tracks as evidence.
+1. "headline" — a punchy 2-4 word title for this listener's overall taste, in their language. Name the SOUND/mood, never an artist (e.g. "Поздний неон с тёплым низом"). This is the page's hero title.
+2. "portrait" — 2-4 sentences about what this person actually loves in music. Be concrete: name sounds, moods, scenes, contrasts between their islands. NEVER use filler like "eclectic taste", "diverse listener", "music lover", "wide range". If the data shows a contradiction (e.g. loves both harsh noise and soft folk) — say it, contradictions are the interesting part.
+3. "island_names" — a punchy 1-4 word name for EACH island, in the listener's language. Name the SOUND, not the artist (e.g. "Ночной синтвейв", not "Группа X"). Use the member tracks as evidence.
 
 Output ONLY minified JSON, no prose, no fences:
-{{"portrait": "...", "island_names": {{"<island_track_id>": "...", ...}}}}"""
+{{"headline": "...", "portrait": "...", "island_names": {{"<island_track_id>": "...", ...}}}}"""
 
 
 def profile_source_hash(islands: list[dict]) -> str:
@@ -106,7 +107,7 @@ async def enrich_profile(
         qdrant_client=qdrant_client, collection_name=collection_name,
     )
     if not profile["islands"]:
-        return {"portrait": None, "island_names": {}, "islands": []}
+        return {"portrait": None, "island_names": {}, "headline": None, "islands": []}
 
     raw = await ask_llm(
         _enrich_user_prompt(profile),
@@ -117,6 +118,7 @@ async def enrich_profile(
         parse_json=True,
     )
     portrait = (raw.get("portrait") or "").strip() or None
+    headline = (raw.get("headline") or "").strip() or None
     valid_ids = {i["track_id"] for i in profile["islands"]}
     island_names = {
         k: str(v).strip()
@@ -124,7 +126,7 @@ async def enrich_profile(
         if k in valid_ids and str(v).strip()
     }
 
-    content = {"portrait": portrait, "island_names": island_names}
+    content = {"portrait": portrait, "island_names": island_names, "headline": headline}
     MetadataDB.set_recsys_llm_text(
         collection_name, PROFILE_ENRICH_KIND, lang,
         profile_source_hash(profile["islands"]), content,

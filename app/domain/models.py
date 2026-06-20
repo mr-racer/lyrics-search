@@ -527,6 +527,7 @@ class StreamProfileResponse(BaseModel):
     n_signals: int
     islands: List[ProfileIsland]
     portrait: Optional[str] = None     # cached LLM listener portrait (AI mode)
+    headline: Optional[str] = None     # cached short hero title (AI mode)
     axis_stats_source: Optional[str] = None
     liked_share: float = 0.3           # persisted slider position (default 30%)
 
@@ -557,6 +558,7 @@ class ProfileEnrichResponse(BaseModel):
     """LLM listener portrait + island names (also persisted server-side)."""
     portrait: Optional[str] = None
     island_names: Dict[str, str] = Field(default_factory=dict)
+    headline: Optional[str] = None     # short hero title (AI mode)
 
 
 class AIPlaylistIn(BaseModel):

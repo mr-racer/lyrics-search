@@ -181,6 +181,7 @@ def stream_profile(
         n_signals=result["n_signals"],
         islands=islands,
         portrait=enrich.get("portrait"),
+        headline=enrich.get("headline"),
         axis_stats_source=result["axis_stats_source"],
         liked_share=stored_share if stored_share is not None else 0.3,
     )
@@ -244,6 +245,7 @@ async def profile_ai_enrich(
         raise HTTPException(status_code=502, detail=f"LLM enrichment failed: {e}")
     return ProfileEnrichResponse(
         portrait=result["portrait"], island_names=result["island_names"],
+        headline=result.get("headline"),
     )
 
 
