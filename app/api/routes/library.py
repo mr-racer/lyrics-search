@@ -561,49 +561,40 @@ async def get_stats(
     # Distinct albums, keyed case-insensitively on the title — mirrors how
     # /library/albums groups, so the landing's "N albums" matches the library.
     album_keys: set[str] = set()
-    offset = None
 
+    # Shared lyrics-free light scroll, cached per collection (same scan the
+    # albums grid / home page warm) — avoids a second whole-library re-scroll
+    # on every library entry.
+    from app.resources.qdrant_utils import light_points
     try:
-        while True:
-            results, next_offset = qdrant.scroll(
-                collection_name=target_col,
-                offset=offset,
-                limit=250,
-                with_payload=["genre", "duration", "duration_range", "artist", "year", "album"],
-                with_vectors=False,
-            )
-            for point in results:
-                pl = point.payload or {}
-                genre = pl.get("genre")
-                if genre and str(genre).strip():
-                    genre_counter[str(genre).strip()] += 1
-                # Prefer the new bucket field `duration_range`; fall back to the
-                # legacy clobbered `duration` only if it's still a range string
-                # (pre-fix indexes). Numeric `duration` is the real seconds and
-                # has no place in a bucket histogram.
-                bucket = pl.get("duration_range")
-                if bucket is None:
-                    raw = pl.get("duration")
-                    if isinstance(raw, str) and "-" in raw:
-                        bucket = raw
-                if bucket and str(bucket).strip():
-                    duration_counter[str(bucket).strip()] += 1
-                artist = pl.get("artist")
-                if artist and str(artist).strip():
-                    artist_counter[str(artist).strip()] += 1
-                album = pl.get("album")
-                if album and str(album).strip():
-                    album_keys.add(str(album).strip().lower())
-                year = pl.get("year")
-                try:
-                    yi = int(year) if year is not None else None
-                except (TypeError, ValueError):
-                    yi = None
-                if yi and 1900 <= yi <= 2100:
-                    year_counter[yi] += 1
-            if next_offset is None or not results:
-                break
-            offset = next_offset
+        for _tid, pl in light_points(qdrant, target_col):
+            genre = pl.get("genre")
+            if genre and str(genre).strip():
+                genre_counter[str(genre).strip()] += 1
+            # Prefer the new bucket field `duration_range`; fall back to the
+            # legacy clobbered `duration` only if it's still a range string
+            # (pre-fix indexes). Numeric `duration` is the real seconds and
+            # has no place in a bucket histogram.
+            bucket = pl.get("duration_range")
+            if bucket is None:
+                raw = pl.get("duration")
+                if isinstance(raw, str) and "-" in raw:
+                    bucket = raw
+            if bucket and str(bucket).strip():
+                duration_counter[str(bucket).strip()] += 1
+            artist = pl.get("artist")
+            if artist and str(artist).strip():
+                artist_counter[str(artist).strip()] += 1
+            album = pl.get("album")
+            if album and str(album).strip():
+                album_keys.add(str(album).strip().lower())
+            year = pl.get("year")
+            try:
+                yi = int(year) if year is not None else None
+            except (TypeError, ValueError):
+                yi = None
+            if yi and 1900 <= yi <= 2100:
+                year_counter[yi] += 1
     except Exception:
         logger.debug("[LibraryService] stats: scroll failed (partial stats returned)")
 

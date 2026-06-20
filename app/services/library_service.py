@@ -1291,70 +1291,57 @@ class LibraryService:
                 albums=[], collection_name=collection_name, qdrant_available=True,
             )
 
-        # Group tracks by album_title (case-insensitive key, preserves first-seen casing)
+        # Group tracks by album_title (case-insensitive key, preserves first-seen casing).
+        # Shared lyrics-free light scroll, cached per collection (same scan the
+        # home page / landing stats warm) — no per-request whole-library re-scroll.
+        from app.resources.qdrant_utils import light_points
         groups: dict[str, dict] = {}
-        offset = None
         try:
-            while True:
-                results, next_offset = qdrant_client.scroll(
-                    collection_name=collection_name,
-                    offset=offset,
-                    limit=250,
-                    with_payload=[
-                        "album", "artist", "title", "year", "duration",
-                        "genre", "cover_art_path",
-                    ],
-                    with_vectors=False,
-                )
-                for pt in results:
-                    pl = pt.payload or {}
-                    album = (pl.get("album") or "").strip()
-                    if not album:
-                        continue
-                    key = album.lower()
-                    g = groups.setdefault(key, {
-                        "display_title": album,
-                        "artist_counter": Counter(),
-                        "year_counter": Counter(),
-                        "genre_counter": Counter(),
-                        "tracks": [],
-                        "total_duration": 0.0,
-                        "first_cover": None,
-                    })
-                    artist = (pl.get("artist") or "").strip()
-                    g["artist_counter"][artist] += 1
-                    yr = pl.get("year")
-                    try:
-                        yi = int(yr) if yr is not None else None
-                    except (TypeError, ValueError):
-                        yi = None
-                    if yi:
-                        g["year_counter"][yi] += 1
-                    genre = (pl.get("genre") or "").strip()
-                    if genre:
-                        g["genre_counter"][genre] += 1
-                    dur_raw = pl.get("duration") or 0
-                    try:
-                        dur_float = float(dur_raw)
-                    except (TypeError, ValueError):
-                        dur_float = None
-                    if dur_float is not None:
-                        g["total_duration"] += dur_float
-                    if g["first_cover"] is None:
-                        g["first_cover"] = pl.get("cover_art_path")
-                    g["tracks"].append(AlbumTrack(
-                        track_id=str(pt.id) if hasattr(pt, "id") else "",
-                        title=pl.get("title") or "—",
-                        artist=artist or "—",
-                        duration=dur_float,
-                        year=yi,
-                        cover_art_path=pl.get("cover_art_path"),
-                    ))
-                if next_offset is None or not results:
-                    break
-                offset = next_offset
+            for tid, pl in light_points(qdrant_client, collection_name):
+                album = (pl.get("album") or "").strip()
+                if not album:
+                    continue
+                key = album.lower()
+                g = groups.setdefault(key, {
+                    "display_title": album,
+                    "artist_counter": Counter(),
+                    "year_counter": Counter(),
+                    "genre_counter": Counter(),
+                    "tracks": [],
+                    "total_duration": 0.0,
+                    "first_cover": None,
+                })
+                artist = (pl.get("artist") or "").strip()
+                g["artist_counter"][artist] += 1
+                yr = pl.get("year")
+                try:
+                    yi = int(yr) if yr is not None else None
+                except (TypeError, ValueError):
+                    yi = None
+                if yi:
+                    g["year_counter"][yi] += 1
+                genre = (pl.get("genre") or "").strip()
+                if genre:
+                    g["genre_counter"][genre] += 1
+                dur_raw = pl.get("duration") or 0
+                try:
+                    dur_float = float(dur_raw)
+                except (TypeError, ValueError):
+                    dur_float = None
+                if dur_float is not None:
+                    g["total_duration"] += dur_float
+                if g["first_cover"] is None:
+                    g["first_cover"] = pl.get("cover_art_path")
+                g["tracks"].append(AlbumTrack(
+                    track_id=tid,
+                    title=pl.get("title") or "—",
+                    artist=artist or "—",
+                    duration=dur_float,
+                    year=yi,
+                    cover_art_path=pl.get("cover_art_path"),
+                ))
         except Exception:
-            logger.exception("get_albums: scroll loop aborted on collection=%s", collection_name)
+            logger.exception("get_albums: aggregation aborted on collection=%s", collection_name)
 
         albums = []
         for key, g in groups.items():

@@ -39,14 +39,16 @@ logger = logging.getLogger(__name__)
 # everything else (producer, label, samples, track/disc numbers, …) stays.
 PAYLOAD_EXCLUDE_LYRICS = models.PayloadSelectorExclude(exclude=["lyrics"])
 
-# Canonical "light" payload for recsys/home full-collection scans: card fields
-# for display + ``sonic_axes`` for scoring + the artist-split fields the
-# distinct-artist enumeration needs. NO lyrics. One cached scroll per
-# collection serves the explore pool, the axis playlist and "artist of the day".
+# Canonical "light" payload for recsys/home/library full-collection scans: card
+# fields for display + ``sonic_axes`` for scoring + the artist-split fields the
+# distinct-artist enumeration needs + ``duration_range`` for the stats
+# histogram. NO lyrics. One cached scroll per collection serves the explore
+# pool, axis playlist, "artist of the day", the library albums grid and the
+# landing-stats panel.
 LIGHT_PAYLOAD_FIELDS = [
     "title", "artist", "artists", "artist_slugs", "primary_artist_slug",
-    "album", "year", "genre", "duration", "file_path", "cover_art_path",
-    "sonic_axes",
+    "album", "year", "genre", "duration", "duration_range",
+    "file_path", "cover_art_path", "sonic_axes",
 ]
 
 # Cache: collection_name -> (monotonic_ts, point_count, [(id, payload), ...]).
