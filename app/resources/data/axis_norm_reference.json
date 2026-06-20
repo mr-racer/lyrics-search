@@ -1,21 +1,21 @@
 {
   "version": "6aa6d60c09d7",
-  "n": 5370,
-  "source_collection": "Full",
+  "n": 5629,
+  "source_collection": "acct_4c91330ba5f84fe2ab3bf9b94ce255fe",
   "mean": {
-    "energy": 0.17389904914520946,
-    "vocal_lead": 0.05268120609875942,
-    "spacious": 0.2329063696896673,
-    "experimental": -0.056752255087409664,
-    "brightness": 0.04055165290473518,
-    "acousticness": -0.10494563395818227
+    "energy": 0.175392693027852,
+    "vocal_lead": 0.04703157107637119,
+    "spacious": 0.22612988959638367,
+    "experimental": -0.05758360038342861,
+    "brightness": 0.04154211690092731,
+    "acousticness": -0.1077711247916961
   },
   "std": {
-    "energy": 0.19531874742404615,
-    "vocal_lead": 0.15689688874082106,
-    "spacious": 0.11467909039199493,
-    "experimental": 0.11678112198242542,
-    "brightness": 0.11848314999200263,
-    "acousticness": 0.13486505380701067
+    "energy": 0.19791027793584323,
+    "vocal_lead": 0.158632141899775,
+    "spacious": 0.11411032732675604,
+    "experimental": 0.1176976604601205,
+    "brightness": 0.11947767370377697,
+    "acousticness": 0.1373850751664813
   }
 }
