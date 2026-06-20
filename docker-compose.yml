@@ -14,6 +14,16 @@ services:
       # (the app falls back to a dev JWT secret + disabled LLM until then).
       - path: .env
         required: false
+    # Reach an LLM (LM Studio / Ollama / OpenAI-compat) running on the HOST.
+    # Docker Desktop (Mac/Windows) provides `host.docker.internal` for free, but
+    # the Linux engine does NOT — without this mapping the container resolving an
+    # admin-configured `http://host.docker.internal:<port>/v1` fails with
+    # "[Errno -2] Name or service not known". `host-gateway` is a special value
+    # (Docker 20.10+) that resolves to the host's gateway IP.
+    # NOTE: the host LLM must listen on 0.0.0.0 (not just 127.0.0.1), or the
+    # container reaches the host but the port refuses the connection.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       # Reach Qdrant by service name over the Compose network. Set here too so
       # it holds even without a .env file.
