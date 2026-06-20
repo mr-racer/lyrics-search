@@ -164,3 +164,58 @@ class TestBuildTrackPairs:
                     "cover_art_path": None, "score": float(i)} for i in range(5)]
         res = build_track_pairs(similar, [], {}, top_k=3)
         assert len(res["similar"]) == 3
+
+    def test_drops_same_album_from_similar_only(self):
+        from app.services.similarity_service import build_track_pairs
+        similar = [
+            {"track_id": "a", "name": "X - a", "cover_art_path": None, "score": 90.0},
+            {"track_id": "b", "name": "X - b", "cover_art_path": None, "score": 80.0},
+        ]
+        dissimilar = [
+            {"track_id": "c", "name": "X - c", "cover_art_path": None, "score": 5.0},
+        ]
+        payloads = {
+            "a": {"title": "a", "artist": "X", "album": "Same", "duration": 200},
+            "b": {"title": "b", "artist": "X", "album": "Other", "duration": 200},
+            "c": {"title": "c", "artist": "X", "album": "Same", "duration": 200},
+        }
+        res = build_track_pairs(
+            similar, dissimilar, payloads, top_k=3,
+            seed_album="same", drop_same_album_similar=True, min_duration=30.0,
+        )
+        sim_ids = [t["track_id"] for t in res["similar"]]
+        assert sim_ids == ["b"]                       # "a" dropped (same album)
+        assert res["dissimilar"][0]["track_id"] == "c"  # contrast keeps same album
+
+    def test_drops_short_tracks(self):
+        from app.services.similarity_service import build_track_pairs
+        similar = [
+            {"track_id": "s", "name": "X - s", "cover_art_path": None, "score": 90.0},
+            {"track_id": "l", "name": "X - l", "cover_art_path": None, "score": 80.0},
+        ]
+        payloads = {
+            "s": {"title": "s", "artist": "X", "album": "A", "duration": 10},
+            "l": {"title": "l", "artist": "X", "album": "A", "duration": 200},
+        }
+        res = build_track_pairs(similar, [], payloads, top_k=3, min_duration=30.0)
+        assert [t["track_id"] for t in res["similar"]] == ["l"]
+
+    def test_backfills_to_top_k_after_filtering(self):
+        from app.services.similarity_service import build_track_pairs
+        similar = [
+            {"track_id": f"t{i}", "name": f"X - {i}", "cover_art_path": None, "score": float(90 - i)}
+            for i in range(6)
+        ]
+        payloads = {
+            "t0": {"title": "0", "artist": "X", "album": "Seed", "duration": 200},  # same album → drop
+            "t1": {"title": "1", "artist": "X", "album": "B", "duration": 200},
+            "t2": {"title": "2", "artist": "X", "album": "C", "duration": 5},        # short → drop
+            "t3": {"title": "3", "artist": "X", "album": "D", "duration": 200},
+            "t4": {"title": "4", "artist": "X", "album": "E", "duration": 200},
+            "t5": {"title": "5", "artist": "X", "album": "F", "duration": 200},
+        }
+        res = build_track_pairs(
+            similar, [], payloads, top_k=3,
+            seed_album="seed", drop_same_album_similar=True, min_duration=30.0,
+        )
+        assert [t["track_id"] for t in res["similar"]] == ["t1", "t3", "t4"]

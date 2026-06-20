@@ -788,18 +788,19 @@ async def get_top_pairs_for_track(
     if not entry:
         return empty
 
-    sim = entry.get("similar", [])[:3]
-    diss = entry.get("dissimilar", [])[:3]
+    sim = entry.get("similar", [])
+    diss = entry.get("dissimilar", [])
     neighbor_ids = list({
         n.get("track_id") for n in (sim + diss) if n.get("track_id")
     })
+    retrieve_ids = list({*neighbor_ids, track_id})
 
     payload_by_id: dict = {}
-    if neighbor_ids:
+    if retrieve_ids:
         try:
             points = db_client.qdrant.retrieve(
                 collection_name=derived,
-                ids=neighbor_ids,
+                ids=retrieve_ids,
                 with_payload=True,
                 with_vectors=False,
             )
@@ -807,7 +808,11 @@ async def get_top_pairs_for_track(
         except Exception:
             payload_by_id = {}
 
-    result = build_track_pairs(sim, diss, payload_by_id, top_k=3)
+    result = build_track_pairs(
+        sim, diss, payload_by_id, top_k=3,
+        seed_album=payload_by_id.get(track_id, {}).get("album"),
+        drop_same_album_similar=True, min_duration=30.0,
+    )
     return {
         "available": True,
         "similar": result["similar"],

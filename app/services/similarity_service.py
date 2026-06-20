@@ -118,6 +118,10 @@ def build_track_pairs(
     dissimilar_neighbors: List[dict],
     payload_by_id: Dict[str, dict],
     top_k: int = 3,
+    *,
+    seed_album: Optional[str] = None,
+    drop_same_album_similar: bool = False,
+    min_duration: float = 0.0,
 ) -> dict:
     """Enrich the top-K neighbour lists with live Qdrant payload + cache score.
 
@@ -129,13 +133,35 @@ def build_track_pairs(
     Returns {"similar": [<dict>], "dissimilar": [<dict>]} — each item has keys
     track_id, title, artist, album, genre, cover_art_path, duration_sec,
     file_path, producer, label, samples, year, score.
+
+    Optional filtering (applied before the top_k cap):
+    - ``seed_album`` + ``drop_same_album_similar=True``: drop same-album neighbours
+      from the similar list only (contrast keeps same-album).
+    - ``min_duration``: drop neighbours whose duration is between 0 and min_duration
+      (exclusive). Missing/zero durations are treated as "unknown" and kept.
     """
-    def _enrich(neighbors: List[dict]) -> List[dict]:
+    seed_alb = (seed_album or "").strip().lower()
+
+    def _too_short(pl):
+        if not min_duration:
+            return False
+        d = coerce_float((pl or {}).get("duration"))
+        return d is not None and 0.0 < d < min_duration
+
+    def _same_album(pl):
+        a = ((pl or {}).get("album") or "").strip().lower()
+        return bool(a) and bool(seed_alb) and a == seed_alb
+
+    def _enrich(neighbors: List[dict], *, is_similar: bool) -> List[dict]:
         out: List[dict] = []
-        for nb in neighbors[:top_k]:
+        for nb in neighbors:                       # no pre-slice — filter then cap
             tid = nb.get("track_id")
             pl = payload_by_id.get(tid) if tid is not None else None
             if pl is not None:
+                if _too_short(pl):
+                    continue
+                if is_similar and drop_same_album_similar and _same_album(pl):
+                    continue
                 out.append({
                     "track_id": str(tid),
                     "title": pl.get("title") or "",
@@ -171,9 +197,14 @@ def build_track_pairs(
                     "year": None,
                     "score": nb.get("score"),
                 })
+            if len(out) >= top_k:
+                break
         return out
 
-    return {"similar": _enrich(similar_neighbors), "dissimilar": _enrich(dissimilar_neighbors)}
+    return {
+        "similar": _enrich(similar_neighbors, is_similar=True),
+        "dissimilar": _enrich(dissimilar_neighbors, is_similar=False),
+    }
 
 
 def save_top_pairs(similar: List[dict], dissimilar: List[dict], collection_name: str) -> str:
@@ -331,8 +362,11 @@ async def analyze_collection(
         vec = pt.vector.get("clap") if isinstance(pt.vector, dict) else None
         if vec is None:
             continue
-        vectors_map[pt.id] = vec
         pl = pt.payload or {}
+        dur = coerce_float(pl.get("duration"))
+        if dur is not None and 0.0 < dur < 30.0:
+            continue
+        vectors_map[pt.id] = vec
         artist = pl.get("artist", "Unknown")
         title = pl.get("title", "Unknown")
         id2name[pt.id] = f"{artist} - {title}"
@@ -365,11 +399,11 @@ async def analyze_collection(
 
     if progress_callback:
         await progress_callback(
-            IndexStage.ANALYSIS, 0, 1, "Подбор топ-5 пар..."
+            IndexStage.ANALYSIS, 0, 1, "Подбор топ-12 пар..."
         )
 
     # ── Step 3: Extract top pairs ──
-    similar, dissimilar = get_top_pairs(dist_matrix, ids, id2name, id2payload, top_k=5)
+    similar, dissimilar = get_top_pairs(dist_matrix, ids, id2name, id2payload, top_k=12)
 
     # ── Step 4: Save to cache ──
     cache_path = save_top_pairs(similar, dissimilar, collection_name)
