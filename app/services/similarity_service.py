@@ -10,6 +10,7 @@ import numpy as np
 from sklearn.metrics import pairwise_distances
 
 from .job_tracker import IndexStage
+from app.services._payload_coerce import coerce_float, coerce_year
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +111,69 @@ def get_top_pairs(
         )
 
     return similar, dissimilar
+
+
+def build_track_pairs(
+    similar_neighbors: List[dict],
+    dissimilar_neighbors: List[dict],
+    payload_by_id: Dict[str, dict],
+    top_k: int = 3,
+) -> dict:
+    """Enrich the top-K neighbour lists with live Qdrant payload + cache score.
+
+    Each neighbour comes from the cache as {track_id, name, cover_art_path, score}.
+    We prefer the live ``payload_by_id`` (clean title/artist/genre, full fields for
+    queue parity) and fall back to splitting the cached ``name`` ("Artist - Title"
+    on the first " - ") when a track was deleted since the analysis ran.
+
+    Returns {"similar": [<dict>], "dissimilar": [<dict>]} — each item has keys
+    track_id, title, artist, album, genre, cover_art_path, duration_sec,
+    file_path, producer, label, samples, year, score.
+    """
+    def _enrich(neighbors: List[dict]) -> List[dict]:
+        out: List[dict] = []
+        for nb in neighbors[:top_k]:
+            tid = nb.get("track_id")
+            pl = payload_by_id.get(tid) if tid is not None else None
+            if pl is not None:
+                out.append({
+                    "track_id": str(tid),
+                    "title": pl.get("title") or "",
+                    "artist": pl.get("artist") or "",
+                    "album": pl.get("album"),
+                    "genre": pl.get("genre"),
+                    "cover_art_path": pl.get("cover_art_path") or nb.get("cover_art_path"),
+                    "duration_sec": coerce_float(pl.get("duration")) or 0.0,
+                    "file_path": pl.get("file_path") or "",
+                    "producer": pl.get("producer"),
+                    "label": pl.get("label"),
+                    "samples": pl.get("samples"),
+                    "year": coerce_year(pl.get("year")),
+                    "score": nb.get("score"),
+                })
+            else:
+                name = nb.get("name") or ""
+                artist, sep, title = name.partition(" - ")
+                if not sep:  # no separator → treat the whole string as the title
+                    artist, title = "", name
+                out.append({
+                    "track_id": str(tid) if tid is not None else "",
+                    "title": title,
+                    "artist": artist,
+                    "album": None,
+                    "genre": None,
+                    "cover_art_path": nb.get("cover_art_path"),
+                    "duration_sec": 0.0,
+                    "file_path": "",
+                    "producer": None,
+                    "label": None,
+                    "samples": None,
+                    "year": None,
+                    "score": nb.get("score"),
+                })
+        return out
+
+    return {"similar": _enrich(similar_neighbors), "dissimilar": _enrich(dissimilar_neighbors)}
 
 
 def save_top_pairs(similar: List[dict], dissimilar: List[dict], collection_name: str) -> str:

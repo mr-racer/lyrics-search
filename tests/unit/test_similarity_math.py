@@ -116,3 +116,51 @@ class TestGetTopPairs:
             dist_matrix, ids, id2name, id2payload, top_k=top_k
         )
         assert "song" in similar[0]["song"].lower()
+
+
+class TestBuildTrackPairs:
+    def test_enriches_from_payload_and_keeps_score(self):
+        from app.services.similarity_service import build_track_pairs
+
+        similar = [
+            {"track_id": "t2", "name": "B - y", "cover_art_path": "c2", "score": 92.3},
+        ]
+        dissimilar = [
+            {"track_id": "t3", "name": "C - z", "cover_art_path": "c3", "score": 8.1},
+        ]
+        payloads = {
+            "t2": {"title": "y", "artist": "B", "genre": "pop",
+                   "cover_art_path": "c2", "duration": 100, "file_path": "/m/2.mp3"},
+            "t3": {"title": "z", "artist": "C", "genre": "metal",
+                   "cover_art_path": "c3", "duration": 200, "file_path": "/m/3.mp3"},
+        }
+        res = build_track_pairs(similar, dissimilar, payloads, top_k=3)
+        assert res["similar"][0]["track_id"] == "t2"
+        assert res["similar"][0]["title"] == "y"
+        assert res["similar"][0]["artist"] == "B"
+        assert res["similar"][0]["genre"] == "pop"
+        assert res["similar"][0]["score"] == 92.3
+        assert res["dissimilar"][0]["artist"] == "C"
+        assert res["dissimilar"][0]["score"] == 8.1
+
+    def test_falls_back_to_name_split_when_payload_missing(self):
+        from app.services.similarity_service import build_track_pairs
+
+        similar = [{"track_id": "gone", "name": "The Artist - A Song - Live",
+                    "cover_art_path": "cg", "score": 50.0}]
+        res = build_track_pairs(similar, [], {}, top_k=3)
+        item = res["similar"][0]
+        # name = "{artist} - {title}" -> split on FIRST " - "
+        assert item["artist"] == "The Artist"
+        assert item["title"] == "A Song - Live"
+        assert item["cover_art_path"] == "cg"
+        assert item["genre"] is None
+        assert item["score"] == 50.0
+
+    def test_caps_at_top_k(self):
+        from app.services.similarity_service import build_track_pairs
+
+        similar = [{"track_id": f"t{i}", "name": f"A{i} - B{i}",
+                    "cover_art_path": None, "score": float(i)} for i in range(5)]
+        res = build_track_pairs(similar, [], {}, top_k=3)
+        assert len(res["similar"]) == 3
