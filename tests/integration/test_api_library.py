@@ -43,6 +43,17 @@ class TestLibraryTopPairs:
             assert data["qdrant_available"] is False
             assert data["similar"] == []
 
+    def test_top_pairs_for_track_unavailable_when_qdrant_down(self):
+        app = create_app()
+        with TestClient(app) as c:
+            authenticate_test_client(c, app)
+            resp = c.get("/api/v1/library/top-pairs/some-track-id")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["available"] is False
+            assert data["similar"] == []
+            assert data["dissimilar"] == []
+
 
 class TestLibraryBrowse:
     def test_browse_returns_empty_when_qdrant_down(self):

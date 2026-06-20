@@ -106,6 +106,19 @@ def smoke_live_endpoints():
             sys.exit(1)
         print(f"[OK] /api/v1/library/collections accepts JWT (status={r.status_code})")
 
+        # ── per-track top-pairs route: wired + shaped even with an empty cache ──
+        r = c.get("/api/v1/library/top-pairs/nonexistent-track-id",
+                  headers={"Authorization": f"Bearer {token}"})
+        if r.status_code != 200:
+            print(f"[FAIL] /library/top-pairs/{{id}}: expected 200, got {r.status_code} {r.text}")
+            sys.exit(1)
+        body = r.json()
+        if not ({"available", "similar", "dissimilar"} <= set(body)
+                and isinstance(body["similar"], list) and isinstance(body["dissimilar"], list)):
+            print(f"[FAIL] /library/top-pairs/{{id}} shape: {body}")
+            sys.exit(1)
+        print(f"[OK] /api/v1/library/top-pairs/{{id}} wired (available={body['available']})")
+
 
 if __name__ == "__main__":
     smoke_babel_parse()

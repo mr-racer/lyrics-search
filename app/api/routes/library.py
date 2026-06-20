@@ -20,7 +20,7 @@ from app.api.helpers import derive_collection_for_user, member_index_root, path_
 from app.services.library_service import LibraryService
 from app.services import uploads_service
 from app.services._magic_sniff import sniff_audio_mime
-from app.services.similarity_service import load_top_pairs
+from app.services.similarity_service import load_top_pairs, load_top_pairs_index, build_track_pairs
 
 router = APIRouter(prefix="/library", tags=["Library"])
 
@@ -758,6 +758,60 @@ async def get_top_pairs(
         "collection_name": target_col,
         "computed_at": None,
         "qdrant_available": True,
+    }
+
+
+@router.get("/top-pairs/{track_id}")
+async def get_top_pairs_for_track(
+    track_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Top-3 sonically similar + top-3 contrasting neighbours for ONE track.
+
+    Reads the memoized CLAP top-pairs cache (a few KB out, never the full
+    matrix) and enriches the neighbours with live payload via a single Qdrant
+    retrieve. ``available`` is False when Qdrant is down or the cache has no
+    entry for this track (e.g. the similarity analysis has not been run, or the
+    track was indexed after it). The player hides the block on ``available:false``.
+    """
+    empty = {"available": False, "similar": [], "dissimilar": []}
+    db_client = request.app.state.db_client
+    if db_client is None or db_client.qdrant is None:
+        return empty
+
+    derived = derive_collection_for_user(current_user)
+    index = load_top_pairs_index(derived)
+    if not index:
+        return empty
+    entry = index.get(track_id)
+    if not entry:
+        return empty
+
+    sim = entry.get("similar", [])[:3]
+    diss = entry.get("dissimilar", [])[:3]
+    neighbor_ids = list({
+        n.get("track_id") for n in (sim + diss) if n.get("track_id")
+    })
+
+    payload_by_id: dict = {}
+    if neighbor_ids:
+        try:
+            points = db_client.qdrant.retrieve(
+                collection_name=derived,
+                ids=neighbor_ids,
+                with_payload=True,
+                with_vectors=False,
+            )
+            payload_by_id = {str(p.id): (p.payload or {}) for p in points}
+        except Exception:
+            payload_by_id = {}
+
+    result = build_track_pairs(sim, diss, payload_by_id, top_k=3)
+    return {
+        "available": True,
+        "similar": result["similar"],
+        "dissimilar": result["dissimilar"],
     }
 
 
