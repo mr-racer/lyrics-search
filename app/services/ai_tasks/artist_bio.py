@@ -64,6 +64,15 @@ async def run(job, db_client, llm) -> None:
                 if not artist_name:
                     artist_name = (p.get("artist") or "").strip() or artist_slug
 
+                # Skip if bio already cached for this artist+collection+lang.
+                existing = MetadataDB.get_artist_bio(
+                    artist_slug, job.collection_name, job.lang,
+                )
+                if existing is not None:
+                    n_done += 1
+                    MetadataDB.update_ai_job(job_id=job.job_id, n_done=n_done)
+                    continue
+
                 audiodb_data = MetadataDB.get_artist_audiodb(artist_slug, job.collection_name)
                 seed_bio = (audiodb_data or {}).get("audiodb_bio")
 
