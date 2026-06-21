@@ -11247,7 +11247,9 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef }) {
           <img src={cutout} alt="" className="atlas-cutout" style={{
             position:'absolute', right:36, top:44, bottom:34, maxWidth:'44%',
             objectFit:'contain', objectPosition:'top right', zIndex:1,
-            filter:'drop-shadow(0 16px 38px rgba(0,0,0,0.5))',
+            // No drop-shadow: it would paint a blurred black silhouette into the
+            // cutout's transparent margins, graying the otherwise-clear backdrop.
+            // Depth comes from the light-burst/flare behind the figure instead.
             WebkitMaskImage:'linear-gradient(180deg, #000 0%, #000 92%, transparent 100%)',
             maskImage:'linear-gradient(180deg, #000 0%, #000 92%, transparent 100%)',
           }} />
