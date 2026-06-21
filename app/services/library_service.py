@@ -22,6 +22,7 @@ from ..resources.metadata_db import MetadataDB
 from ..resources.model_registry import ModelRegistry
 from ..resources.db_client import DbClient
 from .artist_facts_service import fetch_facts_for_artists
+from .artist_split import split_artists, normalize_artist_name
 from .indexing_service import IndexingService, scan_folder
 from .job_tracker import JobTracker, IndexStage, IndexStatus
 from .similarity_service import analyze_collection
@@ -280,10 +281,19 @@ class LibraryService:
         )
 
         collection_name = f"acct_{account_id}"
-        unique_artists = sorted({
+        # Split raw artist tags into individual participants, normalize and dedupe.
+        # A track with "Calvin Harris, Dua Lipa" yields two separate artists
+        # for facts/AudioDB lookup, each stored under its own slug.
+        raw_artists = {
             (info.get("artist") or "").strip()
             for info in indexed_data.values()
             if (info.get("artist") or "").strip()
+        }
+        unique_artists = sorted({
+            norm_name
+            for raw in raw_artists
+            for name in split_artists(raw)
+            if (norm_name := normalize_artist_name(name))
         })
         unique_songs = sorted({
             ((info.get("artist") or "").strip(), (info.get("title") or "").strip())
@@ -600,10 +610,16 @@ class LibraryService:
 
             # ── Stage FACTS: SongFacts (artists + songs) ──────────────────────
             logger.info("[LibraryService] Stage FACTS: fetching song facts")
-            unique_artists = sorted({
+            raw_artists_folder = {
                 info.get("artist", "").strip()
                 for info in processed_files.values()
                 if info.get("artist", "").strip()
+            }
+            unique_artists = sorted({
+                norm_name
+                for raw in raw_artists_folder
+                for name in split_artists(raw)
+                if (norm_name := normalize_artist_name(name))
             })
             unique_songs = sorted({
                 (info.get("artist", "").strip(), info.get("title", "").strip())
