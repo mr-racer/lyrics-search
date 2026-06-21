@@ -192,47 +192,72 @@ async def run(job, db_client, llm) -> None:
             song_slug = get_song_facts_key(artist_name, title_text) if (artist_name and title_text) else ""
             artist_slug = _slugify_artist(artist_name) if artist_name else ""
 
-            did_work = False
+            handled = False   # at least one scope was processed or cached
+            both_skipped = False  # both scopes had no raw facts
 
             # Song facts — keyed by song_slug so search_service can merge
             # refined facts into TrackHit.song_facts using the same slug
             # that load_all_song_facts_for_collection() uses as dict key.
             if song_slug:
-                try:
-                    song_facts = MetadataDB.get_song_facts(song_slug, job.collection_name)
-                except Exception:
-                    song_facts = []
-                if song_facts:
-                    _, fail = await _process_one_scope(
-                        scope="song", scope_key=song_slug, facts=song_facts,
-                        collection_name=job.collection_name, lang=job.lang,
-                        subject_title=title_text,
-                        llm_base_url=job.llm_base_url, llm_model=job.llm_model,
-                    )
-                    n_failed += fail
-                    did_work = True
+                # Skip if refined facts already cached for this song+lang.
+                # None means "never run"; [] means "AI ran, judged nothing interesting".
+                existing = MetadataDB.get_refined_facts(
+                    scope="song", scope_key=song_slug,
+                    collection_name=job.collection_name, lang=job.lang,
+                )
+                if existing is None:
+                    try:
+                        song_facts = MetadataDB.get_song_facts(song_slug, job.collection_name)
+                    except Exception:
+                        song_facts = []
+                    if song_facts:
+                        _, fail = await _process_one_scope(
+                            scope="song", scope_key=song_slug, facts=song_facts,
+                            collection_name=job.collection_name, lang=job.lang,
+                            subject_title=title_text,
+                            llm_base_url=job.llm_base_url, llm_model=job.llm_model,
+                        )
+                        n_failed += fail
+                        handled = True
+                    else:
+                        both_skipped = True
+                else:
+                    handled = True
 
             # Artist facts — once per artist.
             if artist_slug and artist_slug not in seen_artist_slugs:
                 seen_artist_slugs.add(artist_slug)
-                try:
-                    art_facts = MetadataDB.get_artist_facts(artist_slug, job.collection_name)
-                except Exception:
-                    art_facts = []
-                if art_facts:
-                    _, fail = await _process_one_scope(
-                        scope="artist", scope_key=artist_slug, facts=art_facts,
-                        collection_name=job.collection_name, lang=job.lang,
-                        llm_base_url=job.llm_base_url, llm_model=job.llm_model,
-                    )
-                    n_failed += fail
-                    did_work = True
+                # Skip if refined facts already cached for this artist+lang.
+                existing = MetadataDB.get_refined_facts(
+                    scope="artist", scope_key=artist_slug,
+                    collection_name=job.collection_name, lang=job.lang,
+                )
+                if existing is None:
+                    try:
+                        art_facts = MetadataDB.get_artist_facts(artist_slug, job.collection_name)
+                    except Exception:
+                        art_facts = []
+                    if art_facts:
+                        _, fail = await _process_one_scope(
+                            scope="artist", scope_key=artist_slug, facts=art_facts,
+                            collection_name=job.collection_name, lang=job.lang,
+                            llm_base_url=job.llm_base_url, llm_model=job.llm_model,
+                        )
+                        n_failed += fail
+                        handled = True
+                    else:
+                        both_skipped = True
+                else:
+                    handled = True
 
-            if did_work:
+            # Per-track accounting (mirrors sonic_vibe: one increment per track).
+            if handled:
                 n_done += 1
-            else:
-                # No facts (song or artist) — nothing to refine for this track.
+            elif song_slug or artist_slug:
+                # Track has at least one slug but neither scope had facts.
                 n_skipped += 1
+            # No slug at all — uncounted, doesn't affect progress.
+
             MetadataDB.update_ai_job(
                 job_id=job.job_id,
                 n_done=n_done, n_failed=n_failed, n_skipped=n_skipped,
