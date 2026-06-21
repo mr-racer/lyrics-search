@@ -272,6 +272,30 @@ _SCHEMA_SQL: Tuple[str, ...] = (
     )""",
     "CREATE INDEX IF NOT EXISTS idx_tas_slug_collection ON track_artist_slugs(artist_slug, collection_name)",
     "CREATE INDEX IF NOT EXISTS idx_tm_album ON track_metadata(album, collection_name)",
+    # Yandex Music import: one row per account holding the (encrypted) OAuth
+    # token so re-imports / enrichment don't require re-login. The token blob is
+    # Fernet-encrypted by app.services.yandex.token_store — never store plaintext.
+    """CREATE TABLE IF NOT EXISTS yandex_accounts (
+        account_id  TEXT PRIMARY KEY REFERENCES users(id),
+        enc_token   TEXT NOT NULL,
+        yandex_uid  TEXT,
+        expires_at  REAL,
+        linked_at   REAL NOT NULL
+    )""",
+    # Yandex Music import: dedup + per-track report. (account_id, yandex_track_id)
+    # is unique so a re-run skips already-imported tracks; status/reason drive the
+    # end-of-job report (skipped tracks with their reason).
+    """CREATE TABLE IF NOT EXISTS yandex_imports (
+        account_id       TEXT NOT NULL REFERENCES users(id),
+        yandex_track_id  TEXT NOT NULL,
+        upload_id        TEXT,
+        track_id         TEXT,
+        status           TEXT NOT NULL,
+        reason           TEXT,
+        imported_at      REAL NOT NULL,
+        PRIMARY KEY (account_id, yandex_track_id)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_yandex_imports_account ON yandex_imports (account_id, status)",
 )
 
 
@@ -2360,6 +2384,91 @@ class MetadataDB:
         )
         conn.commit()
         return cursor.rowcount or 0
+
+    # ─── Yandex Music import CRUD ──────────────────────────────────────────
+    @classmethod
+    def save_yandex_account(
+        cls, *, account_id: str, enc_token: str,
+        yandex_uid: str | None = None, expires_at: float | None = None,
+    ) -> None:
+        """Upsert the encrypted Yandex token for an account (re-link overwrites)."""
+        import time
+        conn = cls._connect()
+        conn.execute(
+            """INSERT INTO yandex_accounts
+                 (account_id, enc_token, yandex_uid, expires_at, linked_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(account_id) DO UPDATE SET
+                 enc_token = excluded.enc_token,
+                 yandex_uid = excluded.yandex_uid,
+                 expires_at = excluded.expires_at,
+                 linked_at = excluded.linked_at""",
+            (account_id, enc_token, yandex_uid, expires_at, time.time()),
+        )
+        conn.commit()
+
+    @classmethod
+    def get_yandex_account(cls, account_id: str) -> dict | None:
+        conn = cls._connect()
+        row = conn.execute(
+            """SELECT account_id, enc_token, yandex_uid, expires_at, linked_at
+               FROM yandex_accounts WHERE account_id = ?""",
+            (account_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "account_id": row[0], "enc_token": row[1], "yandex_uid": row[2],
+            "expires_at": row[3], "linked_at": row[4],
+        }
+
+    @classmethod
+    def delete_yandex_account(cls, account_id: str) -> bool:
+        """Unlink: drop the stored token. Returns True if a row was removed."""
+        conn = cls._connect()
+        cur = conn.execute(
+            "DELETE FROM yandex_accounts WHERE account_id = ?", (account_id,),
+        )
+        conn.commit()
+        return (cur.rowcount or 0) > 0
+
+    @classmethod
+    def get_imported_yandex_track_ids(cls, account_id: str) -> set[str]:
+        """Return yandex_track_ids already imported (any non-skipped/failed status).
+
+        Used to dedup a re-import: a track that previously downloaded or indexed
+        is skipped; a prior 'skipped'/'failed' row is retried.
+        """
+        conn = cls._connect()
+        rows = conn.execute(
+            """SELECT yandex_track_id FROM yandex_imports
+               WHERE account_id = ? AND status IN ('downloaded', 'indexed')""",
+            (account_id,),
+        ).fetchall()
+        return {r[0] for r in rows}
+
+    @classmethod
+    def upsert_yandex_import(
+        cls, *, account_id: str, yandex_track_id: str, status: str,
+        upload_id: str | None = None, track_id: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        """Record/update the import outcome for one Yandex track."""
+        import time
+        conn = cls._connect()
+        conn.execute(
+            """INSERT INTO yandex_imports
+                 (account_id, yandex_track_id, upload_id, track_id, status, reason, imported_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(account_id, yandex_track_id) DO UPDATE SET
+                 upload_id = COALESCE(excluded.upload_id, yandex_imports.upload_id),
+                 track_id = COALESCE(excluded.track_id, yandex_imports.track_id),
+                 status = excluded.status,
+                 reason = excluded.reason,
+                 imported_at = excluded.imported_at""",
+            (account_id, yandex_track_id, upload_id, track_id, status, reason, time.time()),
+        )
+        conn.commit()
 
     # ─── Phase A: Invites CRUD ─────────────────────────────────────────────
     @classmethod

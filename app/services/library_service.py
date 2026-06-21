@@ -261,6 +261,125 @@ class LibraryService:
             _INDEX_SEMAPHORE.release()
             self.finish_job(account_id=account_id)
 
+    # ── Yandex Music import (download phase → existing upload indexing) ──────
+
+    def enqueue_yandex_import(
+        self, *, account_id: str, source, lang: str = "ru",
+    ) -> str:
+        """Start a Yandex import job (download phase). Returns the JobTracker job_id.
+
+        Mirrors ``enqueue_upload_indexing``'s per-account slot semantics: a second
+        import (or upload) for the SAME account while one is RUNNING raises 409.
+        When the download phase finishes, the runner releases the slot and hands
+        the downloaded files to the normal ``enqueue_upload_indexing`` flow.
+        """
+        from fastapi import HTTPException
+
+        existing = self.get_account_job_id(account_id)
+        if existing:
+            cur = self._job_tracker.get_job(existing)
+            if cur and cur.overall_status == IndexStatus.RUNNING:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"indexing already in progress for this account (job={existing})",
+                )
+            self.finish_job(account_id)  # stale entry left by a crashed job
+
+        collection_name = f"acct_{account_id}"
+        job = self._job_tracker.create_job(
+            folder_path=f"<yandex:{source}>",
+            collection_name=collection_name,
+        )
+        if not self.try_start_job(account_id=account_id, job_id=job.job_id):
+            self._job_tracker.remove_completed_job(job.job_id)
+            raise HTTPException(
+                status_code=409,
+                detail="indexing already in progress for this account",
+            )
+        job.overall_status = IndexStatus.RUNNING
+        asyncio.create_task(
+            self._run_yandex_import_job(job, account_id, source, lang)
+        )
+        return job.job_id
+
+    async def _run_yandex_import_job(self, job, account_id: str, source, lang: str = "ru"):
+        """Download phase runner: download Yandex tracks, then chain into upload indexing."""
+        from app.services.yandex import importer
+
+        await asyncio.to_thread(_INDEX_SEMAPHORE.acquire)
+        upload_ids: list[str] = []
+        report: dict = {}
+        download_failed = False
+        try:
+            loop = asyncio.get_running_loop()
+
+            def _progress(done: int, total: int, message: str):
+                asyncio.run_coroutine_threadsafe(
+                    self._notify_progress(job, {
+                        "overall_status": IndexStatus.RUNNING.value,
+                        "stage": "download", "current": done, "total": total,
+                        "message": message,
+                    }),
+                    loop,
+                )
+
+            upload_ids, report = await loop.run_in_executor(
+                None,
+                lambda: importer.download_source(account_id, source, on_progress=_progress),
+            )
+            # Persist the skipped-tracks report on the job so a status endpoint can
+            # surface it (it also lives in yandex_imports for durability).
+            job.yandex_report = report
+        except importer.YandexNotLinkedError:
+            download_failed = True
+            job.overall_status = IndexStatus.FAILED
+            job.error_message = "yandex account not linked"
+            await self._notify_progress(job, {
+                "overall_status": IndexStatus.FAILED.value, "error": job.error_message,
+            })
+        except Exception as e:
+            download_failed = True
+            logger.exception("[LibraryService] yandex import download phase failed")
+            job.overall_status = IndexStatus.FAILED
+            job.error_message = str(e)
+            await self._notify_progress(job, {
+                "overall_status": IndexStatus.FAILED.value, "error": str(e),
+            })
+        finally:
+            # Release BEFORE chaining: enqueue_upload_indexing claims the same
+            # per-account slot + semaphore for the indexing phase.
+            _INDEX_SEMAPHORE.release()
+            self.finish_job(account_id=account_id)
+
+        if download_failed:
+            return
+
+        # Mark the download job done; the indexing phase is a separate job the
+        # frontend follows via /library/status (spec §7.2).
+        skipped_n = len(report.get("skipped", []))
+        job.overall_status = IndexStatus.COMPLETED
+        await self._notify_progress(job, {
+            "overall_status": IndexStatus.COMPLETED.value,
+            "message": (
+                f"Скачано {report.get('downloaded', 0)} треков"
+                + (f", пропущено {skipped_n}" if skipped_n else "")
+            ),
+            "yandex_report": report,
+        })
+
+        if upload_ids:
+            from app.services.settings_service import settings_service
+            try:
+                self.enqueue_upload_indexing(
+                    account_id=account_id, upload_ids=upload_ids,
+                    text_model=settings_service.embed_model(), lang=lang,
+                )
+            except Exception:
+                logger.exception(
+                    "[LibraryService] failed to start indexing after yandex download "
+                    "(files are in pending_uploads; user can retry batch-commit)",
+                )
+
     async def _enrich_uploads(self, job, account_id: str, indexed_data: dict, lang: str = "ru") -> None:
         """Post-index enrichment for server-mode uploads (the folder flow's FACTS
         stage, which uploads previously skipped entirely).

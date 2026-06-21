@@ -362,6 +362,16 @@ class IndexingService:
         data: dict[str, dict] = {}
         upload_by_key: dict[str, str] = {}   # "Artist — Title" -> upload_id
 
+        # Feature #2: build ONE Yandex enrichment client for this batch (account
+        # token if linked, else anonymous), reused across all files. Best-effort —
+        # if the yandex package/credentials are unavailable, enrichment no-ops.
+        enrich_client = None
+        try:
+            from app.services.yandex.enrichment import client_for_account
+            enrich_client = client_for_account(account_id)
+        except Exception:
+            logger.debug("[index_uploads] enrichment client unavailable", exc_info=True)
+
         # The pre-embedding scan (per-file tag read + ONLINE lyrics fetch) is the
         # slow part of an upload job, and it is network-bound — so we fan it out
         # across a thread pool (mirroring scan_and_enrich_folder) instead of
@@ -380,7 +390,7 @@ class IndexingService:
             if not file_path.exists():
                 return row, None, f"file missing on disk: {file_path}"
             try:
-                info = process_file(file_path, False)
+                info = process_file(file_path, False, enrich_client=enrich_client)
             except Exception as e:
                 logger.exception("[index_uploads] metadata read failed for %s", file_path)
                 return row, None, str(e)
