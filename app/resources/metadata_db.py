@@ -2657,7 +2657,11 @@ class MetadataDB:
                WHERE tas.artist_slug = ? AND tm.collection_name = ?""",
             (artist_slug, collection_name),
         ).fetchall()
-        cols = [d[0] for d in conn.description]
+        cols = ["collection_name", "track_id", "title", "artist", "artists",
+                "artist_slugs", "primary_artist_slug", "album", "year",
+                "genre", "duration", "file_path", "cover_art_path",
+                "producer", "label", "track_number", "disc_number",
+                "bitrate_kbps", "sonic_tags", "sonic_axes"]
         result = []
         for row in rows:
             d = dict(zip(cols, row))
