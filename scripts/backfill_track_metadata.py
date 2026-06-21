@@ -19,6 +19,11 @@ import logging
 import sys
 import time
 
+# Ensure the project root (parent of scripts/) is on sys.path so that
+# `from app.*` imports work when run as `python scripts/backfill_track_metadata.py`
+# inside the Docker container (WORKDIR /app, script lives at /app/scripts/).
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent))
+
 from qdrant_client import QdrantClient
 
 from app.resources.metadata_db import MetadataDB
