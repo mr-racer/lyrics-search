@@ -1,5 +1,8 @@
 """Clone an existing account — copy Qdrant collection + SQLite metadata to a new user.
 
+If the target email already exists, the existing account is automatically deleted
+(SQLite rows, Qdrant collection, cache files) before the clone proceeds.
+
 Creates a brand-new user (member) whose library is an exact copy of an existing
 account's collection. Playback history, recommendations, playlists, and pending
 uploads are NOT copied — the new user starts fresh on those.
@@ -98,11 +101,16 @@ DB_PATH = Path(
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://localhost:6333").rstrip("/")
 TOKEN_TTL_SECONDS = 30 * 24 * 3600
 
-# Tables that are scoped by collection_name and need the name updated.
-# NOTE: track_reactions, collection_settings, sonic_vibes are intentionally
-# excluded — the new account starts with a clean taste profile (no likes,
-# no taste islands, no recommendation settings carried over).
-COPY_WITH_NEW_COLLECTION = []
+# Tables scoped by collection_name — cleaned up when removing an existing
+# target account so clone_account can proceed.
+_DELETE_ACCOUNT_TABLES = [
+    "track_reactions",
+    "sonic_vibes",
+    "collection_settings",
+    "playback_events",
+    "recsys_llm_texts",
+    "ai_indexing_jobs",
+]
 
 # Tables keyed by slug — INSERT OR IGNORE (slug is unique PK, shared across collections).
 # The artists/songs tables have a collection_name column but slug is the PK.
@@ -128,16 +136,48 @@ def _resolve_source_user(conn: sqlite3.Connection, email: str) -> tuple[str, str
     return user_id, f"acct_{user_id}"
 
 
-def _check_target_email(conn: sqlite3.Connection, email: str) -> None:
-    row = conn.execute(
-        "SELECT id FROM users WHERE email = ?", (email.lower().strip(),)
-    ).fetchone()
-    if row is not None:
-        print(
-            f"[ERROR] Target email {email!r} is already registered (user_id={row[0]})",
-            file=sys.stderr,
+def _delete_existing_account(
+    conn: sqlite3.Connection,
+    client: QdrantClient,
+    user_id: str,
+    collection: str,
+) -> None:
+    """Fully remove an existing account (SQLite + Qdrant + cache)."""
+    _ts(f"Deleting existing account {collection!r}...")
+
+    # SQLite: all collection-scoped tables
+    for table in _DELETE_ACCOUNT_TABLES:
+        cur = conn.execute(
+            f"DELETE FROM {table} WHERE collection_name = ?", (collection,)
         )
-        sys.exit(1)
+        if cur.rowcount:
+            _ts(f"Deleted {cur.rowcount} rows from {table}")
+
+    # Playlists (and playlist_tracks via CASCADE)
+    cur = conn.execute(
+        "DELETE FROM playlists WHERE collection_name = ?", (collection,)
+    )
+    if cur.rowcount:
+        _ts(f"Deleted {cur.rowcount} playlists")
+
+    # User row
+    conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    _ts("Deleted user row")
+
+    conn.commit()
+
+    # Similarity cache
+    cache_file = Path(__file__).resolve().parent.parent / "cache" / "top_pairs" / f"{collection}.json"
+    if cache_file.exists():
+        cache_file.unlink()
+        _ts(f"Deleted {cache_file}")
+
+    # Qdrant collection
+    try:
+        client.delete_collection(collection_name=collection)
+        _ts(f"Deleted Qdrant collection {collection!r}")
+    except Exception as e:
+        _ts(f"Could not delete Qdrant collection {collection!r}: {e}")
 
 
 def _create_target_user(
@@ -323,8 +363,10 @@ def _copy_sqlite_tables(
                 )
             counts[table] = len(rows)
 
-    # ── Collection-scoped tables (reactions, settings, vibes) ──
-    for table in COPY_WITH_NEW_COLLECTION:
+    # ── Collection-scoped tables — none copied (clean taste profile) ──
+    # COPY_WITH_NEW_COLLECTION is intentionally empty; the loop below is kept
+    # for extensibility but currently copies nothing.
+    for table in []:
         _ts(f"Processing SQLite table {table!r} (collection-scoped)...")
         source_cols = _get_table_columns(conn, table)
         if dry_run:
@@ -469,14 +511,6 @@ def main(argv: list[str] | None = None) -> int:
         source_id, source_col = _resolve_source_user(conn, args.source_email)
         print(f"\nSource: user_id={source_id}, collection={source_col}")
 
-        # ── Check target email ──
-        _check_target_email(conn, args.target_email)
-
-        # ── Generate new user ID ──
-        new_id = uuid.uuid4().hex
-        target_col = f"acct_{new_id}"
-        print(f"Target: user_id={new_id}, collection={target_col}")
-
         # ── Connect to Qdrant ──
         try:
             qdrant = QdrantClient(url=QDRANT_URL, trust_env=False)
@@ -495,6 +529,27 @@ def main(argv: list[str] | None = None) -> int:
             print(f"\n[ERROR] Cannot connect to Qdrant at {QDRANT_URL}: {e}", file=sys.stderr)
             print("Make sure Qdrant is running.", file=sys.stderr)
             return 1
+
+        # ── Ensure target slot is free (delete existing account if needed) ──
+        # In dry-run mode, just check; in execute mode, actually delete.
+        existing_row = conn.execute(
+            "SELECT id FROM users WHERE email = ?", (args.target_email.lower().strip(),)
+        ).fetchone()
+        if existing_row:
+            existing_id = existing_row[0]
+            existing_col = f"acct_{existing_id}"
+            print(f"\n[WARN] Target email {args.target_email!r} already exists (user_id={existing_id})")
+            if args.yes:
+                print("  Deleting existing account before cloning...\n")
+                _delete_existing_account(conn, qdrant, existing_id, existing_col)
+                print("  Existing account removed.\n")
+            else:
+                print("  (Will delete existing account when --yes is provided)\n")
+
+        # ── Generate new user ID ──
+        new_id = uuid.uuid4().hex
+        target_col = f"acct_{new_id}"
+        print(f"Target: user_id={new_id}, collection={target_col}")
 
         # ── DRY RUN SUMMARY ──
         if not args.yes:
@@ -522,7 +577,7 @@ def main(argv: list[str] | None = None) -> int:
 
         # ── EXECUTE ──
         _ts("=" * 50)
-        print("\n[1/5] Creating new user in SQLite...", flush=True)
+        print("\n[1/4] Creating new user in SQLite...", flush=True)
         _ts("Creating user in SQLite...")
         try:
             _create_target_user(conn, args.target_email, args.target_password, new_id)
@@ -532,7 +587,7 @@ def main(argv: list[str] | None = None) -> int:
             raise
         _ts(f"User created: {new_id}")
 
-        print("[2/5] Copying Qdrant collection...", flush=True)
+        print("[2/4] Copying Qdrant collection...", flush=True)
         _ts("Starting Qdrant copy...")
         qdrant_count = _copy_qdrant_collection(qdrant, source_col, target_col, dry_run=False)
         _ts(f"Qdrant copy complete: {qdrant_count} points")
