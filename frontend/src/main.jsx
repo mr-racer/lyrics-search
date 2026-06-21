@@ -1969,7 +1969,7 @@ function DiscoverNewCard({ isDark, lang, onPick, navigateToArtist }) {
   useEffect(() => {
     if (!cur || !cur.track_id || cur.track_id in factMap) return;
     let alive = true;
-    apiFetch(`/metadata/tracks/${encodeURIComponent(cur.track_id)}/facts`)
+    apiFetch(`/metadata/tracks/${encodeURIComponent(cur.track_id)}/facts?lang=${encodeURIComponent(lang)}`)
       .then(f => {
         const fact = (f && ((f.song_facts && f.song_facts[0]) || (f.artist_facts && f.artist_facts[0]))) || null;
         if (alive) setFactMap(prev => ({ ...prev, [cur.track_id]: fact }));
@@ -11502,22 +11502,36 @@ function AtlasAlbumCard({ album, artistName, isDark, lang, onOpen, width }) {
 function AtlasAlbumStrip({ albums, artistName, isDark, lang, onOpen }) {
   const c = useColors(isDark);
   const wrapRef = useRef(null);
+  const scrollRef = useRef(null);
   const [wrapW, setWrapW] = useState(0);
+  const [nav, setNav] = useState({ atStart: true, atEnd: false });
+  const recompute = () => {
+    const el = scrollRef.current; if (!el) return;
+    setNav({
+      atStart: el.scrollLeft <= 4,
+      atEnd: el.scrollLeft + el.clientWidth >= el.scrollWidth - 6,
+    });
+  };
   useEffect(() => {
     const measure = () => { if (wrapRef.current) setWrapW(wrapRef.current.clientWidth); };
     measure();
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
   }, []);
+  // Re-read scroll edges whenever the rail width or the album set changes.
+  useEffect(() => { recompute(); }, [wrapW, albums.length]);
 
-  const CARD = 172, GAP = 28, CAP_H = 64, AXIS_H = 34;
-  const dated = albums.filter(a => a.year);
+  const CARD = 172, GAP = 28, CAP_H = 64, AXIS_H = 44;
+  // Breathing room around the absolutely-placed cards so the hover lift/rotate
+  // (and the vinyl that slides out) isn't clipped at the rail's left edge.
+  const PAD_X = 24, PAD_TOP = 16;
+  const dated = albums.filter(a => a.year).slice().sort((a, b) => a.year - b.year);
   const undated = albums.filter(a => !a.year);
   const years = dated.map(a => a.year);
   const minY = years.length ? Math.min(...years) : 0;
   const maxY = years.length ? Math.max(...years) : 0;
-  // Timeline needs ≥3 dated albums and an actual year spread; otherwise the
-  // proportional axis degenerates and a plain airy row reads better.
+  // Timeline needs ≥3 dated albums and an actual year spread; otherwise a plain
+  // airy wrap reads better than a one-note axis.
   const timeline = dated.length >= 3 && maxY > minY;
 
   const kicker = (
@@ -11539,50 +11553,87 @@ function AtlasAlbumStrip({ albums, artistName, isDark, lang, onOpen }) {
     );
   }
 
-  // X positions proportional to year, clamped left→right so cards never collide.
-  const usable = Math.max(wrapW, albums.length * (CARD + GAP));
-  const reserve = undated.length * (CARD + GAP);
-  const axisW = Math.max(CARD, usable - CARD - reserve);
-  const xs = [];
-  dated.forEach((a, i) => {
-    let x = ((a.year - minY) / (maxY - minY)) * axisW;
-    if (i > 0) x = Math.max(x, xs[i-1] + CARD + GAP);
-    xs.push(x);
-  });
-  let cursor = xs.length ? xs[xs.length-1] + CARD + GAP : 0;
-  undated.forEach(() => { xs.push(cursor); cursor += CARD + GAP; });
+  // Even pitch: albums sit chronologically left→right at a fixed step. Release
+  // dates set the ORDER, never the gap — so reissues and dry spells read the same.
+  const STEP = CARD + GAP;
   const ordered = [...dated, ...undated];
-  const totalW = Math.max(usable, xs[xs.length-1] + CARD);
-  const axisY = CARD + CAP_H;
+  const xs = ordered.map((_, i) => PAD_X + i * STEP);
+  const lastX = xs.length ? xs[xs.length - 1] : PAD_X;
+  const totalW = lastX + CARD + PAD_X;
+  const axisY = PAD_TOP + CARD + CAP_H;
   const tickColor = isDark ? 'rgba(187,168,255,0.5)' : 'rgba(110,80,220,0.45)';
+  const scrolls = totalW > wrapW + 2;
+
+  const nudge = (dir) => {
+    const el = scrollRef.current; if (!el) return;
+    el.scrollBy({ left: dir * STEP * 2, behavior: 'smooth' });
+  };
+  // No visible scrollbar and a plain wheel mouse can't scroll sideways — so map
+  // vertical wheel intent onto the horizontal rail.
+  const onWheel = (e) => {
+    const el = scrollRef.current; if (!el) return;
+    if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+    if (el.scrollWidth <= el.clientWidth) return;
+    el.scrollLeft += e.deltaY;
+    e.preventDefault();
+  };
+  const arrowStyle = (off) => ({
+    width:30, height:30, borderRadius:'50%', display:'grid', placeItems:'center',
+    cursor: off ? 'default' : 'pointer', fontSize:14, color:c.textMuted,
+    opacity: off ? 0.35 : 1, ...atlasGlass(isDark),
+  });
 
   return (
     <div ref={wrapRef}>
-      <div style={{ marginBottom:16 }}>{kicker}</div>
-      <div className="atlas-shelf" style={{ overflowX:'auto', paddingBottom:6 }}>
-        <div style={{ position:'relative', width:totalW, height:axisY + AXIS_H }}>
-          {ordered.map((a, i) => (
-            <div key={a.title} style={{ position:'absolute', left:xs[i], top:0 }}>
-              <AtlasAlbumCard album={a} artistName={artistName} isDark={isDark} lang={lang} onOpen={onOpen} width={CARD} />
-            </div>
-          ))}
-          {/* time axis + ticks */}
-          <div aria-hidden="true" style={{
-            position:'absolute', left:0, width:totalW, top:axisY + 10, height:1,
-            background: isDark
-              ? 'linear-gradient(90deg, rgba(187,168,255,0.45), rgba(187,168,255,0.08))'
-              : 'linear-gradient(90deg, rgba(110,80,220,0.4), rgba(110,80,220,0.06))',
-          }} />
-          {ordered.map((a, i) => (
-            <Fragment key={`tick-${a.title}`}>
-              <span aria-hidden="true" style={{ position:'absolute', left:xs[i] + CARD/2, top:axisY + 5, width:1, height:6, background:tickColor }} />
-              <span className="mono" style={{
-                position:'absolute', left:xs[i] + CARD/2, top:axisY + 16, transform:'translateX(-50%)',
-                fontSize:9.5, letterSpacing:'0.14em', color:c.textMuted,
-              }}>{a.year || '—'}</span>
-            </Fragment>
-          ))}
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:16 }}>
+        {kicker}
+        {scrolls && (
+          <div style={{ display:'flex', gap:6 }}>
+            <button onClick={() => nudge(-1)} disabled={nav.atStart} style={arrowStyle(nav.atStart)}>‹</button>
+            <button onClick={() => nudge(1)} disabled={nav.atEnd} style={arrowStyle(nav.atEnd)}>›</button>
+          </div>
+        )}
+      </div>
+      <div style={{ position:'relative' }}>
+        <div ref={scrollRef} className="atlas-shelf" onScroll={recompute} onWheel={onWheel}
+             style={{ overflowX:'auto' }}>
+          <div style={{ position:'relative', width:totalW, height:axisY + AXIS_H }}>
+            {ordered.map((a, i) => (
+              <div key={a.title} style={{ position:'absolute', left:xs[i], top:PAD_TOP }}>
+                <AtlasAlbumCard album={a} artistName={artistName} isDark={isDark} lang={lang} onOpen={onOpen} width={CARD} />
+              </div>
+            ))}
+            {/* time axis + glowing year ticks */}
+            <div aria-hidden="true" style={{
+              position:'absolute', left:PAD_X, width:Math.max(0, totalW - PAD_X * 2), top:axisY + 12, height:1,
+              background: isDark
+                ? 'linear-gradient(90deg, rgba(187,168,255,0.45), rgba(187,168,255,0.08))'
+                : 'linear-gradient(90deg, rgba(110,80,220,0.4), rgba(110,80,220,0.06))',
+            }} />
+            {ordered.map((a, i) => (
+              <Fragment key={`tick-${a.title}`}>
+                <span aria-hidden="true" style={{ position:'absolute', left:xs[i] + CARD/2, top:axisY + 6, width:1, height:7, background:tickColor }} />
+                <span className="mono" style={{
+                  position:'absolute', left:xs[i] + CARD/2, top:axisY + 16, transform:'translateX(-50%)',
+                  fontSize:13, fontWeight:600, letterSpacing:'0.06em', whiteSpace:'nowrap',
+                  padding:'2px 9px', borderRadius:9,
+                  color: isDark ? '#ece4ff' : '#4326a8',
+                  background: isDark ? 'rgba(124,91,255,0.18)' : 'rgba(124,91,255,0.10)',
+                  boxShadow: isDark
+                    ? '0 0 16px rgba(124,91,255,0.55), inset 0 0 0 1px rgba(187,168,255,0.45)'
+                    : '0 0 12px rgba(124,91,255,0.28), inset 0 0 0 1px rgba(124,91,255,0.30)',
+                  textShadow: isDark ? '0 0 10px rgba(187,168,255,0.55)' : 'none',
+                }}>{a.year || '—'}</span>
+              </Fragment>
+            ))}
+          </div>
         </div>
+        {scrolls && !nav.atEnd && (
+          <div aria-hidden="true" style={{
+            position:'absolute', right:0, top:0, bottom:0, width:64, pointerEvents:'none',
+            background:`linear-gradient(90deg, transparent, ${c.bg})`,
+          }} />
+        )}
       </div>
     </div>
   );
