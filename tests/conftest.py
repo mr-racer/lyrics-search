@@ -10,6 +10,16 @@ from _pytest.python import Package
 sys.modules.setdefault("laion_clap", types.ModuleType("laion_clap"))
 sys.modules.setdefault("musicbrainzngs", types.ModuleType("musicbrainzngs"))
 
+_torch_stub = types.ModuleType("torch")
+_torch_stub.cuda = types.SimpleNamespace(is_available=lambda: False)
+_torch_stub.device = lambda x: "cpu"
+_torch_stub.Tensor = object  # dummy for scipy is_torch_array check
+sys.modules.setdefault("torch", _torch_stub)
+
+_st_stub = types.ModuleType("sentence_transformers")
+_st_stub.SentenceTransformer = object  # dummy; never instantiated in unit tests
+sys.modules.setdefault("sentence_transformers", _st_stub)
+
 
 def pytest_configure(config):
     """Patch Package.setup to skip importing the project root __init__.py.

@@ -19,11 +19,40 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from pathlib import Path
 
 from app.services.artist_facts_service import _slugify
 
 _RULES_PATH = Path(__file__).with_name("artist_split_rules.json")
+
+
+def normalize_artist_name(name: str) -> str:
+    """Normalize artist name: Unicode equivalents, collapse whitespace.
+
+    Handles the common ID3/MP3 tag issues:
+    - NFKC normalization (™→TM, ﬁ→fi, etc.)
+    - Unicode dash variants → ASCII hyphen
+    - Unicode quotes → ASCII equivalents (preserved, not deleted)
+    - Collapse whitespace (NBSP, zero-width, etc.)
+
+    This is applied BEFORE slug generation and external API calls so that
+    "Guns N' Roses" (with curly quote) and "Guns N' Roses" (straight)
+    produce the same slug and search query.
+    """
+    if not name:
+        return ""
+    s = unicodedata.normalize("NFKC", name)
+    # Dash variants → ASCII hyphen
+    s = re.sub(r"[‐‑‒–—―−]", "-", s)
+    # Unicode quotes → ASCII equivalents (preserved for display)
+    s = s.replace("\u2018", "'").replace("\u2019", "'")
+    s = s.replace("\u201B", "'").replace("\u201A", ",")
+    s = s.replace("\u201C", '"').replace("\u201D", '"')
+    s = s.replace("\u201E", '"')
+    # Collapse all whitespace variants (NBSP, zero-width, etc.) into single space
+    s = " ".join(s.split())
+    return s.strip()
 
 # Word separators are only honored when surrounded by whitespace, so names
 # like "SBTRKT" / "Charli XCX" / "MGMT" are never torn apart.
@@ -47,8 +76,12 @@ _KNOWN_GROUPS, _ALIASES = _load_rules()
 
 
 def split_artists(raw: str | None) -> list[str]:
-    """['Kanye West', 'Sia'] from 'Kanye West, Sia'. Primary first, deduped."""
-    norm = " ".join((raw or "").split())
+    """['Kanye West', 'Sia'] from 'Kanye West, Sia'. Primary first, deduped.
+
+    Applies ``normalize_artist_name`` before splitting so that Unicode dashes
+    and quotes in source metadata do not produce garbled participant names.
+    """
+    norm = normalize_artist_name(raw or "")
     if not norm:
         return []
     # Known-group protection only fires when the WHOLE string is a known group.
