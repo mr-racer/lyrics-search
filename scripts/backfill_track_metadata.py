@@ -16,6 +16,7 @@ Requires Qdrant to be running and accessible via QDRANT_URL env var
 
 import argparse
 import logging
+import os
 import sys
 import time
 
@@ -74,7 +75,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=500, help="Scroll batch size (default: 500)")
     args = parser.parse_args()
 
-    qdrant_url = None  # use default or QDRANT_URL env
+    qdrant_url = os.environ.get("QDRANT_URL")  # reads http://qdrant:6333 in Docker Compose
     try:
         client = QdrantClient(url=qdrant_url)
     except Exception as e:
