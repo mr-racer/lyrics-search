@@ -842,6 +842,31 @@ class MetadataDB:
 
         return cls._join_facts_by_slug(rows)
 
+    @classmethod
+    def count_facts_for_collection(cls, collection_name: str) -> int:
+        """Return the total number of raw facts (artist + song) for a collection.
+
+        Used by the ``refined_facts`` AI task to set ``n_total`` to the actual
+        number of facts that will be fed into the LLM, rather than a
+        misleading track count.
+        """
+        conn = cls._connect()
+        # Artist facts scoped to collection via the artists table
+        artist_row = conn.execute(
+            "SELECT COUNT(*) FROM artist_facts af "
+            "JOIN artists a ON a.slug = af.artist_slug "
+            "WHERE a.collection_name = ? AND af.lang = 'en'",
+            (collection_name,),
+        ).fetchone()
+        # Song facts scoped to collection via the songs table
+        song_row = conn.execute(
+            "SELECT COUNT(*) FROM song_facts sf "
+            "JOIN songs s ON s.slug = sf.song_slug "
+            "WHERE s.collection_name = ? AND sf.lang = 'en'",
+            (collection_name,),
+        ).fetchone()
+        return (artist_row[0] or 0) + (song_row[0] or 0)
+
     # ── Random facts ──
 
     @classmethod

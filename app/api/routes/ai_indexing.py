@@ -44,13 +44,63 @@ class CacheResetResponse(BaseModel):
     deleted_rows: int
 
 
-def _count_eligible(db_client, collection_name: str) -> int:
-    """Return n_total for the job — how many tracks the task will scan.
+def _count_eligible(db_client, collection_name: str, task_type: str) -> int:
+    """Return n_total for the job — how many items the task will process.
 
-    Counts ALL points in the collection. Individual tasks (sonic_vibe,
-    refined_facts) may further skip tracks at run time based on their own
-    eligibility rules.
+    The count depends on the task type:
+
+    - **sonic_vibe**: number of tracks in the collection (one vibe per track).
+    - **artist_bio**: number of distinct artists in the collection.
+    - **refined_facts**: total number of raw facts (song + artist) that will be
+      fed into the LLM.
     """
+    if task_type == "sonic_vibe":
+        try:
+            info = db_client.qdrant.count(
+                collection_name=collection_name, exact=True
+            )
+            return int(info.count)
+        except Exception:
+            return 0
+
+    if task_type == "artist_bio":
+        # Count distinct artists by scanning Qdrant payloads — same logic as
+        # artist_bio.run uses to collect artist_slugs from each point.
+        try:
+            from app.services.artist_split import artist_slugs
+            seen: set[str] = set()
+            offset = None
+            while True:
+                points, offset = db_client.qdrant.scroll(
+                    collection_name=collection_name,
+                    limit=256,
+                    offset=offset,
+                    with_payload=["artist", "artist_slugs"],
+                    with_vectors=False,
+                )
+                if not points:
+                    break
+                for pt in points:
+                    p = pt.payload or {}
+                    slugs = p.get("artist_slugs") or []
+                    if not slugs:
+                        raw = (p.get("artist") or "").strip()
+                        if raw:
+                            slugs = artist_slugs(raw)
+                    seen.update(slugs)
+                if offset is None:
+                    break
+            return len(seen)
+        except Exception:
+            return 0
+
+    if task_type == "refined_facts":
+        try:
+            return MetadataDB.count_facts_for_collection(collection_name)
+        except Exception:
+            return 0
+
+    # Fallback for unknown task types — count tracks
     try:
         info = db_client.qdrant.count(collection_name=collection_name, exact=True)
         return int(info.count)
@@ -73,7 +123,7 @@ async def start_job(
 
     derived = derive_collection_for_user(current_user)
 
-    n_total = _count_eligible(db_client, derived)
+    n_total = _count_eligible(db_client, derived, task_type)
     try:
         job_id = ai_indexing_service.start_job(
             task_type=task_type,

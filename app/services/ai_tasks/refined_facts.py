@@ -218,10 +218,17 @@ async def run(job, db_client, llm) -> None:
                             llm_base_url=job.llm_base_url, llm_model=job.llm_model,
                         )
                         n_failed += fail
+                        n_done += len(song_facts)
                         handled = True
                     else:
                         both_skipped = True
                 else:
+                    # Cached — count the raw facts that were already processed
+                    try:
+                        song_facts = MetadataDB.get_song_facts(song_slug, job.collection_name)
+                    except Exception:
+                        song_facts = []
+                    n_done += len(song_facts)
                     handled = True
 
             # Artist facts — once per artist.
@@ -244,16 +251,21 @@ async def run(job, db_client, llm) -> None:
                             llm_base_url=job.llm_base_url, llm_model=job.llm_model,
                         )
                         n_failed += fail
+                        n_done += len(art_facts)
                         handled = True
                     else:
                         both_skipped = True
                 else:
+                    # Cached — count the raw facts that were already processed
+                    try:
+                        art_facts = MetadataDB.get_artist_facts(artist_slug, job.collection_name)
+                    except Exception:
+                        art_facts = []
+                    n_done += len(art_facts)
                     handled = True
 
-            # Per-track accounting (mirrors sonic_vibe: one increment per track).
-            if handled:
-                n_done += 1
-            elif song_slug or artist_slug:
+            # Per-track accounting: n_done now tracks facts, not tracks.
+            if not handled and (song_slug or artist_slug):
                 # Track has at least one slug but neither scope had facts.
                 n_skipped += 1
             # No slug at all — uncounted, doesn't affect progress.
