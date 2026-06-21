@@ -21,6 +21,7 @@ import requests
 
 from app.resources.metadata_db import MetadataDB
 from app.services.artist_facts_service import _slugify as _slugify_artist
+from app.services.artist_split import normalize_artist_name
 from app.services.proxy_config import get_proxy
 
 logger = logging.getLogger(__name__)
@@ -46,11 +47,15 @@ def _canonical_artist_name(artist: str) -> str:
 
 
 def _audiodb_slug(canonical_artist: str) -> str:
-    """Lowercase + drop URL-unsafe punctuation + join words with '+'.
+    """Lowercase + normalize Unicode dashes + drop URL-unsafe punctuation + join words with '+'.
 
     Caller is expected to pass the canonical name (apply _canonical_artist_name first).
+    Unicode dash variants are converted to ASCII hyphen before processing so that
+    "My–Band" and "My-Band" produce the same slug.
     """
     s = canonical_artist.lower()
+    # Unicode dash variants → ASCII hyphen
+    s = re.sub(r"[‐‑‒–—―−]", "-", s)
     # Drop punctuation. `+` is dropped because we use it as the separator below.
     s = re.sub(r"[,.'`\"!?\\/&()+]", "", s)
     # Collapse whitespace + dashes + underscores into single space, then join with +.
@@ -159,7 +164,8 @@ async def fetch_audiodb_for_artist(artist: str, collection_name: str) -> None:
     Deezer fallback: when AudioDB yields no downloadable image (artist unknown,
     or both image downloads failed), picture_xl from Deezer fills thumb_path.
     """
-    canonical = _canonical_artist_name(artist)
+    # Normalize Unicode equivalents before canonicalizing and slugifying.
+    canonical = _canonical_artist_name(normalize_artist_name(artist))
     slug = _slugify_artist(canonical)
     existing = MetadataDB.get_artist_audiodb(slug, collection_name)
     if existing and existing.get("audiodb_fetched_at"):
@@ -231,7 +237,7 @@ async def fetch_audiodb_for_artists(
     the canonical 'Dua Lipa') so the UI shows what the user has."""
     canonical_to_first_seen: dict[str, str] = {}
     for a in artists:
-        canon = _canonical_artist_name(a)
+        canon = _canonical_artist_name(normalize_artist_name(a))
         canonical_to_first_seen.setdefault(canon, a)
     unique_canonicals = list(canonical_to_first_seen.keys())
 

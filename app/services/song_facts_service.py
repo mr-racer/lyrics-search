@@ -33,12 +33,16 @@ def _slugify(text: str) -> str:
     most importantly U+2019 (RIGHT SINGLE QUOTATION MARK '), which the
     original regex missed and which produced broken songfacts.com URLs
     for any track with a possessive (e.g. "We're Good", "Don't Start Now").
+    Also normalizes Unicode dash variants to ASCII hyphen so that
+    "My–Band" and "My-Band" produce the same slug.
     """
+    # Unicode dash variants → ASCII hyphen
+    cleaned_title = re.sub(r"[‐‑‒–—―−]", "-", text)
     cleaned_title = re.sub(
-        "['`,?!‘’‚‛“”„‟′″ʼ«»]",
-        '', text,
+        "['`,?!''‚‛""„‟′″ʼ«»]",
+        '', cleaned_title,
     )
-    brackets_delete_pattern = r'^(.+?)\s*\(.*'
+    brackets_delete_pattern = r'^(.+?)\s*\(.+'
     cleaned_title = re.sub(brackets_delete_pattern, r'\1', cleaned_title)
 
     return "-".join(cleaned_title.lower().split())
