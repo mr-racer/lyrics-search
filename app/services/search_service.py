@@ -449,9 +449,12 @@ class SearchService:
             if raw_lyrics.strip():
                 lyrics = raw_lyrics.replace("\n", " ").strip()
 
-            # Facts from cache
+            # Facts from cache — use primary_artist_slug from payload (computed
+            # at index time via artist_split) so that a track with
+            # "Calvin Harris, Dua Lipa" looks up facts under "calvin-harris",
+            # not the combined slug.
             artist = payload.get("artist", "Unknown")
-            artist_slug = _slugify_artist(artist)
+            artist_slug = payload.get("primary_artist_slug") or _slugify_artist(artist)
             artist_facts = facts_cache.get(artist_slug)
 
             song_title = payload.get("title", "Unknown")
