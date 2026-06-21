@@ -19,7 +19,7 @@ from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from app.services.llm_client import _get_client
+from app.services.llm_client import _get_client, resolve_model
 from app.services.proxy_config import get_proxy_url
 
 logger = logging.getLogger(__name__)
@@ -225,7 +225,7 @@ def _create_agent(
     seed_bio: str | None = None,
 ) -> Agent:
     """Создаёт pydantic_ai Agent, подключённый к OpenAI-совместимому серверу."""
-    resolved_model = (model_name or os.getenv("LLM_MODEL", "openai/gpt-oss-20b")).strip()
+    resolved_model = resolve_model(model_name)
     openai_client = _get_client(base_url)
     provider = OpenAIProvider(openai_client=openai_client)
     pydantic_model = OpenAIModel(resolved_model, provider=provider)
