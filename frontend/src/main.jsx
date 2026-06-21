@@ -11133,13 +11133,29 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef }) {
         // Crisp portrait scaled by HEIGHT (not stretched to full width, which on
         // wide screens cropped it to a thin slice). The whole figure stays visible;
         // the bottom ~20% softly blurs out behind the dock/facts header.
+        //
+        // Two-layer treatment (YouTube-style soft edges): a blurred, zoomed
+        // backdrop fills the hero, and the main photo sits on top with a
+        // combined mask that fades the top, bottom, AND side edges so nothing
+        // overlaps the breadcrumbs or hard-cuts at the viewport edge.
         <Fragment>
+          {/* blurred backdrop — shows through the faded edges of the main photo */}
+          <img src={backdrop} alt="" aria-hidden="true" style={{
+            position:'absolute', top:'-10%', left:'-5%', width:'110%', height:'120%',
+            objectFit:'cover', objectPosition:'50% 40%',
+            filter:`blur(28px) ${isDark ? 'brightness(0.7) saturate(1.1)' : 'brightness(0.85) saturate(1.05)'}`,
+          }} />
+          {/* main photo — fades at top, bottom, and sides to reveal the backdrop */}
           <img src={backdrop} alt="" aria-hidden="true" style={{
             position:'absolute', top:0, left:'50%', transform:'translateX(-50%)',
             height:'100%', width:'auto', maxWidth:'none',
             filter: isDark ? 'brightness(0.92) saturate(1.04)' : 'saturate(1.02)',
-            WebkitMaskImage:'linear-gradient(180deg, #000 0%, #000 84%, transparent 100%)',
-            maskImage:'linear-gradient(180deg, #000 0%, #000 84%, transparent 100%)',
+            WebkitMaskImage:
+              'linear-gradient(180deg, transparent 0%, #000 10%, #000 84%, transparent 100%), ' +
+              'linear-gradient(90deg, transparent 0%, #000 12%, #000 88%, transparent 100%)',
+            maskImage:
+              'linear-gradient(180deg, transparent 0%, #000 10%, #000 84%, transparent 100%), ' +
+              'linear-gradient(90deg, transparent 0%, #000 12%, #000 88%, transparent 100%)',
           }} />
           {/* frosted veil that blurs the lower edge as it slides under the header */}
           <div aria-hidden="true" style={{
