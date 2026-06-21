@@ -25,14 +25,24 @@ REQUEST_TIMEOUT = 10  # seconds
 
 
 def _slugify(artist: str) -> str:
-    """'The Weeknd' -> 'the-weeknd'"""
-    # Normalize all dash variants to ASCII hyphen.
-    cleaned_artist = re.sub(r'[‐‑‒–—―−]', '-', artist)
-    # Strip noisy punctuation (apostrophes — straight + curly, quotes, +, &, .)
-    # so that artists like "Guns N' Roses" produce a stable slug regardless
-    # of which apostrophe codepoint shows up in source metadata.
+    """'The Weeknd' -> 'the-weeknd'
+
+    Normalizes Unicode equivalents (NFKC, dash variants, curly quotes) before
+    slug generation, so that "Guns N' Roses" and "Guns N' Roses" produce the
+    same slug regardless of source metadata. Mirrors the normalization in
+    artist_split.normalize_artist_name to avoid a circular import.
+    """
+    import unicodedata
+    s = unicodedata.normalize("NFKC", artist)
+    s = re.sub(r"[‐‑‒–—―−]", "-", s)
+    s = s.replace("\u2018", "'").replace("\u2019", "'")
+    s = s.replace("\u201B", "'").replace("\u201A", ",")
+    s = s.replace("\u201C", '"').replace("\u201D", '"')
+    s = s.replace("\u201E", '"')
+    cleaned_artist = " ".join(s.split())
+    # Strip noisy punctuation (apostrophes, quotes, +, &, .)
     cleaned_artist = re.sub(
-        "[+&.'`‘’‚‛“”„‟′″ʼ«»]",
+        "[+&.'`''‚‛""„‟′″ʼ«»]",
         '', cleaned_artist,
     )
     return "-".join(cleaned_artist.lower().split())
