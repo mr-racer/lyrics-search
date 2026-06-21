@@ -7,7 +7,6 @@ from collections import defaultdict
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from qdrant_client import models
 
 from app.api.dependencies import get_current_user
 from app.api.helpers import derive_collection_for_user
@@ -90,22 +89,46 @@ def _album_track_sort_key(tracks: list[TrackMetadata]) -> list[TrackMetadata]:
     return sorted(tracks, key=lambda t: (t.title or "").lower())
 
 
-def build_artist_aggregate(db, collection: str, canonical_slug: str, lang: str) -> ArtistAggregate:
-    """Build the Atlas aggregate for one artist. Shared by GET /artists/{slug}
-    and GET /library/featured-artist. Raises HTTPException(404) if unknown."""
-    # Resolve canonical artist name from SQLite (slug → name)
-    conn = MetadataDB.get()
-    row = conn.execute(
-        "SELECT name FROM artists WHERE slug = ?", (canonical_slug,),
-    ).fetchone()
+def _track_from_row(row: dict) -> TrackMetadata:
+    """Map a SQLite track_metadata row dict to TrackMetadata."""
+    names = row.get("artists")
+    slugs = row.get("artist_slugs")
+    raw = row.get("artist") or ""
+    if not names or not slugs:
+        from app.services.artist_split import split_artists, artist_slugs as _artist_slugs
+        names = split_artists(raw)
+        slugs = _artist_slugs(raw)
+    primary = row.get("primary_artist_slug") or (slugs[0] if slugs else None)
+    return TrackMetadata(
+        track_id=row.get("track_id") or "",
+        title=row.get("title") or "",
+        artist=raw,
+        artists=names or None,
+        primary_artist_slug=primary,
+        album=row.get("album"),
+        year=row.get("year"),
+        genre=row.get("genre"),
+        duration_sec=_coerce_float(row.get("duration")),
+        file_path=row.get("file_path") or "",
+        cover_art_path=row.get("cover_art_path"),
+        producer=row.get("producer"),
+        label=row.get("label"),
+        track_number=row.get("track_number"),
+        disc_number=row.get("disc_number"),
+    )
 
-    # Server-side filter by participant slug (keyword index). The per-point
-    # membership guard below keeps this correct against test doubles that
-    # ignore scroll_filter, and against any point carrying extra slugs.
-    flt = models.Filter(must=[
-        models.FieldCondition(
+
+def _tracks_from_qdrant(db, collection: str, canonical_slug: str) -> list[TrackMetadata]:
+    """Fallback: scroll Qdrant to collect tracks for an artist.
+
+    Used when SQLite track_metadata is empty (pre-backfill) or on error.
+    """
+    from qdrant_client import models as qm
+
+    flt = qm.Filter(must=[
+        qm.FieldCondition(
             key="artist_slugs",
-            match=models.MatchValue(value=canonical_slug),
+            match=qm.MatchValue(value=canonical_slug),
         )
     ])
     artist_tracks: list[TrackMetadata] = []
@@ -133,6 +156,28 @@ def build_artist_aggregate(db, collection: str, canonical_slug: str, lang: str) 
             artist_tracks.append(_track_from_payload(str(pt.id), p))
         if offset is None:
             break
+    return artist_tracks
+
+
+def build_artist_aggregate(db, collection: str, canonical_slug: str, lang: str) -> ArtistAggregate:
+    """Build the Atlas aggregate for one artist. Shared by GET /artists/{slug}
+    and GET /library/featured-artist. Raises HTTPException(404) if unknown."""
+    # Resolve canonical artist name from SQLite (slug -> name)
+    conn = MetadataDB.get()
+    row = conn.execute(
+        "SELECT name FROM artists WHERE slug = ?", (canonical_slug,),
+    ).fetchone()
+
+    # Try SQLite track_metadata first (fast indexed query)
+    sqlite_tracks = MetadataDB.get_tracks_for_artist(collection, canonical_slug)
+
+    if sqlite_tracks:
+        artist_tracks = [_track_from_row(r) for r in sqlite_tracks]
+    else:
+        # Fallback: scroll Qdrant (pre-backfill or missing data)
+        logger.info("[artists] no track_metadata for %s in %s — falling back to Qdrant scroll",
+                     canonical_slug, collection)
+        artist_tracks = _tracks_from_qdrant(db, collection, canonical_slug)
 
     if not artist_tracks and not row:
         raise HTTPException(status_code=404, detail=f"unknown artist: {canonical_slug}")
