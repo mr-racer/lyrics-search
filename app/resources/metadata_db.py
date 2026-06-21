@@ -233,6 +233,45 @@ _SCHEMA_SQL: Tuple[str, ...] = (
         created_at         REAL NOT NULL
     )""",
     "CREATE INDEX IF NOT EXISTS idx_pending_uploads_account_status ON pending_uploads (account_id, status)",
+    # ── Track metadata mirror (SQLite copy of Qdrant payload card fields) ──
+    # Populated during indexing / upload so the artist-aggregate endpoint can
+    # read from a single indexed SQL query instead of paginating through Qdrant.
+    # JSON-like fields (artists, artist_slugs, sonic_tags, sonic_axes) are stored
+    # as TEXT (json.dumps).  artist_slugs also gets a join table for fast lookup.
+    """CREATE TABLE IF NOT EXISTS track_metadata (
+        collection_name       TEXT NOT NULL,
+        track_id              TEXT NOT NULL,
+        title                 TEXT NOT NULL,
+        artist                TEXT NOT NULL,
+        artists               TEXT,           -- JSON array
+        artist_slugs          TEXT,           -- JSON array (also in join table)
+        primary_artist_slug   TEXT,
+        album                 TEXT,
+        year                  INTEGER,
+        genre                 TEXT,
+        duration              REAL,
+        file_path             TEXT,
+        cover_art_path        TEXT,
+        producer              TEXT,
+        label                 TEXT,
+        track_number          INTEGER,
+        disc_number           INTEGER,
+        bitrate_kbps          INTEGER,
+        sonic_tags            TEXT,           -- JSON array
+        sonic_axes            TEXT,           -- JSON object
+        created_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (collection_name, track_id)
+    )""",
+    """CREATE TABLE IF NOT EXISTS track_artist_slugs (
+        collection_name TEXT NOT NULL,
+        track_id        TEXT NOT NULL,
+        artist_slug     TEXT NOT NULL,
+        PRIMARY KEY (collection_name, track_id, artist_slug),
+        FOREIGN KEY (collection_name, track_id)
+            REFERENCES track_metadata(collection_name, track_id) ON DELETE CASCADE
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_tas_slug_collection ON track_artist_slugs(artist_slug, collection_name)",
+    "CREATE INDEX IF NOT EXISTS idx_tm_album ON track_metadata(album, collection_name)",
 )
 
 
@@ -2472,3 +2511,225 @@ class MetadataDB:
                     (key, value, updated_at),
                 )
         conn.commit()
+
+    # ── Track metadata mirror (SQLite copy of Qdrant payload) ──
+
+    @classmethod
+    def upsert_track_metadata(cls, collection_name: str, track_id: str, payload: dict) -> None:
+        """INSERT OR REPLACE a track's card metadata + artist slug join rows.
+
+        Called during indexing / upload for every track so the artist-aggregate
+        endpoint can read from SQLite instead of paginating Qdrant.
+        """
+        conn = cls._connect()
+        conn.execute(
+            """INSERT INTO track_metadata
+                (collection_name, track_id, title, artist, artists, artist_slugs,
+                 primary_artist_slug, album, year, genre, duration, file_path,
+                 cover_art_path, producer, label, track_number, disc_number,
+                 bitrate_kbps, sonic_tags, sonic_axes)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(collection_name, track_id) DO UPDATE SET
+                 title=excluded.title, artist=excluded.artist,
+                 artists=excluded.artists, artist_slugs=excluded.artist_slugs,
+                 primary_artist_slug=excluded.primary_artist_slug,
+                 album=excluded.album, year=excluded.year, genre=excluded.genre,
+                 duration=excluded.duration, file_path=excluded.file_path,
+                 cover_art_path=excluded.cover_art_path,
+                 producer=excluded.producer, label=excluded.label,
+                 track_number=excluded.track_number, disc_number=excluded.disc_number,
+                 bitrate_kbps=excluded.bitrate_kbps,
+                 sonic_tags=excluded.sonic_tags, sonic_axes=excluded.sonic_axes""",
+            (
+                collection_name, track_id,
+                payload.get("title") or "",
+                payload.get("artist") or "",
+                json.dumps(payload.get("artists") or []),
+                json.dumps(payload.get("artist_slugs") or []),
+                payload.get("primary_artist_slug"),
+                payload.get("album"),
+                payload.get("year"),
+                payload.get("genre"),
+                payload.get("duration"),
+                payload.get("file_path"),
+                payload.get("cover_art_path"),
+                payload.get("producer"),
+                payload.get("label"),
+                payload.get("track_number"),
+                payload.get("disc_number"),
+                payload.get("bitrate_kbps"),
+                json.dumps(payload.get("sonic_tags") or []),
+                json.dumps(payload.get("sonic_axes") or {}),
+            ),
+        )
+        # Update join table: delete old slugs, insert new ones
+        conn.execute(
+            "DELETE FROM track_artist_slugs WHERE collection_name = ? AND track_id = ?",
+            (collection_name, track_id),
+        )
+        for slug in (payload.get("artist_slugs") or []):
+            conn.execute(
+                "INSERT OR IGNORE INTO track_artist_slugs (collection_name, track_id, artist_slug) VALUES (?, ?, ?)",
+                (collection_name, track_id, slug),
+            )
+        conn.commit()
+
+    @classmethod
+    def upsert_track_metadata_bulk(cls, collection_name: str, rows: list) -> None:
+        """Bulk upsert multiple tracks in one transaction.
+
+        ``rows`` is a list of ``(track_id, payload_dict)`` tuples.
+        """
+        conn = cls._connect()
+        try:
+            for track_id, payload in rows:
+                conn.execute(
+                    """INSERT INTO track_metadata
+                        (collection_name, track_id, title, artist, artists, artist_slugs,
+                         primary_artist_slug, album, year, genre, duration, file_path,
+                         cover_art_path, producer, label, track_number, disc_number,
+                         bitrate_kbps, sonic_tags, sonic_axes)
+                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                      ON CONFLICT(collection_name, track_id) DO UPDATE SET
+                        title=excluded.title, artist=excluded.artist,
+                        artists=excluded.artists, artist_slugs=excluded.artist_slugs,
+                        primary_artist_slug=excluded.primary_artist_slug,
+                        album=excluded.album, year=excluded.year, genre=excluded.genre,
+                        duration=excluded.duration, file_path=excluded.file_path,
+                        cover_art_path=excluded.cover_art_path,
+                        producer=excluded.producer, label=excluded.label,
+                        track_number=excluded.track_number, disc_number=excluded.disc_number,
+                        bitrate_kbps=excluded.bitrate_kbps,
+                        sonic_tags=excluded.sonic_tags, sonic_axes=excluded.sonic_axes""",
+                    (
+                        collection_name, track_id,
+                        payload.get("title") or "",
+                        payload.get("artist") or "",
+                        json.dumps(payload.get("artists") or []),
+                        json.dumps(payload.get("artist_slugs") or []),
+                        payload.get("primary_artist_slug"),
+                        payload.get("album"),
+                        payload.get("year"),
+                        payload.get("genre"),
+                        payload.get("duration"),
+                        payload.get("file_path"),
+                        payload.get("cover_art_path"),
+                        payload.get("producer"),
+                        payload.get("label"),
+                        payload.get("track_number"),
+                        payload.get("disc_number"),
+                        payload.get("bitrate_kbps"),
+                        json.dumps(payload.get("sonic_tags") or []),
+                        json.dumps(payload.get("sonic_axes") or {}),
+                    ),
+                )
+                conn.execute(
+                    "DELETE FROM track_artist_slugs WHERE collection_name = ? AND track_id = ?",
+                    (collection_name, track_id),
+                )
+                for slug in (payload.get("artist_slugs") or []):
+                    conn.execute(
+                        "INSERT OR IGNORE INTO track_artist_slugs (collection_name, track_id, artist_slug) VALUES (?, ?, ?)",
+                        (collection_name, track_id, slug),
+                    )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    @classmethod
+    def get_tracks_for_artist(cls, collection_name: str, artist_slug: str) -> list[dict]:
+        """Return all tracks where artist_slug matches — single indexed query.
+
+        Returns rows as dicts with column names as keys. Empty list when no tracks.
+        """
+        conn = cls._connect()
+        rows = conn.execute(
+            """SELECT tm.collection_name, tm.track_id, tm.title, tm.artist, tm.artists,
+                      tm.artist_slugs, tm.primary_artist_slug, tm.album, tm.year,
+                      tm.genre, tm.duration, tm.file_path, tm.cover_art_path,
+                      tm.producer, tm.label, tm.track_number, tm.disc_number,
+                      tm.bitrate_kbps, tm.sonic_tags, tm.sonic_axes
+               FROM track_metadata tm
+               INNER JOIN track_artist_slugs tas
+                   ON tas.collection_name = tm.collection_name
+                   AND tas.track_id = tm.track_id
+               WHERE tas.artist_slug = ? AND tm.collection_name = ?""",
+            (artist_slug, collection_name),
+        ).fetchall()
+        cols = [d[0] for d in conn.description]
+        result = []
+        for row in rows:
+            d = dict(zip(cols, row))
+            # Deserialize JSON fields
+            for field in ("artists", "artist_slugs", "sonic_tags"):
+                val = d.get(field)
+                if isinstance(val, str):
+                    try:
+                        d[field] = json.loads(val)
+                    except (json.JSONDecodeError, TypeError):
+                        d[field] = []
+                else:
+                    d[field] = d.get(field) or []
+            val = d.get("sonic_axes")
+            if isinstance(val, str):
+                try:
+                    d["sonic_axes"] = json.loads(val)
+                except (json.JSONDecodeError, TypeError):
+                    d["sonic_axes"] = {}
+            result.append(d)
+        return result
+
+    @classmethod
+    def clear_track_metadata(cls, collection_name: str) -> None:
+        """Remove all track metadata for a collection (called before reindex)."""
+        conn = cls._connect()
+        conn.execute("DELETE FROM track_metadata WHERE collection_name = ?", (collection_name,))
+        conn.execute("DELETE FROM track_artist_slugs WHERE collection_name = ?", (collection_name,))
+        conn.commit()
+
+    @classmethod
+    def get_track_count_for_collection(cls, collection_name: str) -> int:
+        """Return the number of tracks stored in track_metadata for a collection."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT COUNT(*) FROM track_metadata WHERE collection_name = ?",
+            (collection_name,),
+        ).fetchone()
+        return row[0] if row else 0
+
+    @classmethod
+    def get_track_by_id(cls, collection_name: str, track_id: str) -> dict | None:
+        """Return a single track by track_id, or None."""
+        conn = cls._connect()
+        row = conn.execute(
+            """SELECT title, artist, artists, artist_slugs, primary_artist_slug,
+                      album, year, genre, duration, file_path, cover_art_path,
+                      producer, label, track_number, disc_number, bitrate_kbps,
+                      sonic_tags, sonic_axes
+               FROM track_metadata
+               WHERE collection_name = ? AND track_id = ?""",
+            (collection_name, track_id),
+        ).fetchone()
+        if row is None:
+            return None
+        cols = ["title", "artist", "artists", "artist_slugs", "primary_artist_slug",
+                "album", "year", "genre", "duration", "file_path", "cover_art_path",
+                "producer", "label", "track_number", "disc_number", "bitrate_kbps",
+                "sonic_tags", "sonic_axes"]
+        d = dict(zip(cols, row))
+        d["track_id"] = track_id
+        for field in ("artists", "artist_slugs", "sonic_tags"):
+            val = d.get(field)
+            if isinstance(val, str):
+                try:
+                    d[field] = json.loads(val)
+                except (json.JSONDecodeError, TypeError):
+                    d[field] = []
+        val = d.get("sonic_axes")
+        if isinstance(val, str):
+            try:
+                d["sonic_axes"] = json.loads(val)
+            except (json.JSONDecodeError, TypeError):
+                d["sonic_axes"] = {}
+        return d
