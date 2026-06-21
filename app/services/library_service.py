@@ -1295,7 +1295,58 @@ class LibraryService:
         sort: str = "alphabetical",
     ) -> LibraryAlbumsResponse:
         """Group all tracks in the collection by album_title, derive primary
-        artist via majority vote, return AlbumSummary list."""
+        artist via majority vote, return AlbumSummary list.
+
+        Tries SQLite first (fast indexed query). Falls back to Qdrant scroll
+        if SQLite tables are empty (pre-backfill deploy).
+        """
+        # ── Fast path: read from SQLite ──
+        try:
+            sqlite_albums = MetadataDB.get_library_albums_from_sqlite(collection_name)
+            if sqlite_albums:
+                logger.info(
+                    "[LibraryService] get_albums: %d albums from SQLite (%s)",
+                    len(sqlite_albums), collection_name,
+                )
+                return LibraryAlbumsResponse(
+                    albums=[
+                        AlbumSummary(
+                            album_title=a["album"],
+                            primary_artist="—",
+                            primary_artist_slug="—",
+                            feat_artists=[],
+                            year=a["year"],
+                            year_range=None,
+                            cover_art_path=a["cover_art_path"],
+                            track_count=a["track_count"],
+                            duration_seconds=int(sum(
+                                t["duration"] or 0 for t in a["tracks"]
+                            )),
+                            top_genres=[],
+                            tracks=[
+                                AlbumTrack(
+                                    track_id=t["track_id"],
+                                    title=t["title"],
+                                    artist=t["artist"],
+                                    duration=t["duration"],
+                                    year=t["year"],
+                                    cover_art_path=t["cover_art_path"],
+                                )
+                                for t in a["tracks"]
+                            ],
+                        )
+                        for a in sqlite_albums
+                    ],
+                    collection_name=collection_name,
+                    qdrant_available=True,
+                )
+        except Exception:
+            logger.warning(
+                "[LibraryService] SQLite album lookup failed, falling back to Qdrant",
+                exc_info=True,
+            )
+
+        # ── Fallback: scroll Qdrant (pre-backfill or error) ──
         try:
             cols = qdrant_client.get_collections().collections
         except Exception:
@@ -1308,8 +1359,6 @@ class LibraryService:
             )
 
         # Group tracks by album_title (case-insensitive key, preserves first-seen casing).
-        # Shared lyrics-free light scroll, cached per collection (same scan the
-        # home page / landing stats warm) — no per-request whole-library re-scroll.
         from app.resources.qdrant_utils import light_points
         groups: dict[str, dict] = {}
         try:
@@ -1792,13 +1841,30 @@ class LibraryService:
     @classmethod
     def list_distinct_artist_slugs(cls, *, qdrant_client, collection_name: str):
         """Return a deterministically-sorted list of (slug, name) for every
-        distinct artist in the collection (slug-deduped)."""
+        distinct artist in the collection (slug-deduped).
+
+        Tries SQLite first (fast indexed query). Falls back to Qdrant scroll
+        if SQLite tables are empty (pre-backfill deploy).
+        """
+        # ── Fast path: read from SQLite ──
+        try:
+            sqlite_result = MetadataDB.get_distinct_artist_slugs_from_sqlite(collection_name)
+            if sqlite_result:
+                logger.info(
+                    "[LibraryService] list_distinct_artist_slugs: %d artists from SQLite (%s)",
+                    len(sqlite_result), collection_name,
+                )
+                return [(a["slug"], a["name"]) for a in sqlite_result]
+        except Exception:
+            logger.warning(
+                "[LibraryService] SQLite artist slug lookup failed, falling back to Qdrant",
+                exc_info=True,
+            )
+
+        # ── Fallback: scroll Qdrant (pre-backfill or error) ──
         from app.services.artist_split import artist_slugs, split_artists
         from app.resources.qdrant_utils import light_points
         seen: dict[str, str] = {}  # slug -> name (first seen)
-        # Shared lyrics-free light scroll (cached per collection) — the artist
-        # fields are part of the light payload, so this reuses the same scan the
-        # explore pool / axis playlist warm.
         for _tid, payload in light_points(qdrant_client, collection_name):
             name = (payload.get("artist") or "").strip()
             if not name:

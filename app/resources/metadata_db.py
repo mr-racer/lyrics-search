@@ -2512,6 +2512,105 @@ class MetadataDB:
                 )
         conn.commit()
 
+    # ── Library aggregation from SQLite ──
+
+    @classmethod
+    def get_distinct_artist_slugs_from_sqlite(cls, collection_name: str) -> list[dict]:
+        """Return list of {slug, name, track_count, album_count} for all artists
+        in a collection, read from track_artist_slugs + track_metadata.
+
+        Returns [] if the tables are empty (pre-backfill).
+        """
+        conn = cls._connect()
+        rows = conn.execute(
+            """
+            SELECT
+                tas.artist_slug,
+                MAX(tm.artist) AS artist_name,
+                COUNT(DISTINCT tas.track_id) AS track_count,
+                COUNT(DISTINCT tm.album) AS album_count
+            FROM track_artist_slugs tas
+            JOIN track_metadata tm
+                ON tas.collection_name = tm.collection_name
+               AND tas.track_id = tm.track_id
+            WHERE tas.collection_name = ?
+            GROUP BY tas.artist_slug
+            ORDER BY track_count DESC
+            """,
+            (collection_name,),
+        ).fetchall()
+        return [
+            {
+                "slug": r[0],
+                "name": r[1] or r[0],
+                "track_count": r[2],
+                "album_count": r[3],
+            }
+            for r in rows
+        ]
+
+    @classmethod
+    def get_library_albums_from_sqlite(cls, collection_name: str) -> list[dict]:
+        """Return list of {album, track_count, year, cover_art_path, tracks}
+        for all albums in a collection, read from track_metadata.
+
+        Each ``tracks`` entry is a list of dicts with:
+        track_id, title, artist, duration, year, cover_art_path.
+
+        Returns [] if the table is empty (pre-backfill).
+        """
+        conn = cls._connect()
+
+        # Single query: all tracks grouped by album, with album-level aggregates.
+        # We fetch every row and group in Python to avoid complex window functions.
+        rows = conn.execute(
+            """
+            SELECT album, title, artist, duration, year, cover_art_path,
+                   track_id
+            FROM track_metadata
+            WHERE collection_name = ? AND album IS NOT NULL AND album != ''
+            ORDER BY album, track_id
+            """,
+            (collection_name,),
+        ).fetchall()
+
+        if not rows:
+            return []
+
+        # Group by album (case-insensitive key, preserves first-seen casing)
+        groups: dict[str, dict] = {}
+        for album, title, artist, duration, year, cover_art_path, track_id in rows:
+            key = album.lower()
+            if key not in groups:
+                groups[key] = {
+                    "album": album,
+                    "track_count": 0,
+                    "year": year,
+                    "cover_art_path": cover_art_path,
+                    "tracks": [],
+                }
+            g = groups[key]
+            g["track_count"] += 1
+            # Use MAX(year) across tracks
+            if year and (not g["year"] or year > g["year"]):
+                g["year"] = year
+            # Use first non-NULL cover_art_path
+            if not g["cover_art_path"] and cover_art_path:
+                g["cover_art_path"] = cover_art_path
+            g["tracks"].append({
+                "track_id": track_id,
+                "title": title or "—",
+                "artist": artist or "—",
+                "duration": duration,
+                "year": year,
+                "cover_art_path": cover_art_path,
+            })
+
+        # Sort: year DESC, then album name
+        result = list(groups.values())
+        result.sort(key=lambda a: (-(a["year"] or 0), a["album"]))
+        return result
+
     # ── Track metadata mirror (SQLite copy of Qdrant payload) ──
 
     @classmethod
