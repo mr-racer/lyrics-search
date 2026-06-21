@@ -13,9 +13,8 @@ import logging
 
 from app.resources.metadata_db import MetadataDB
 from app.services import ai_indexing_service
-from app.services.artist_facts_service import _slugify as _slugify_artist
 from app.services.artist_split import (
-    split_artists, normalize_artist_name, name_for_slug,
+    artist_slugs, name_for_slug,
 )
 from app.services.llm_web_search import web_research_bio
 
@@ -46,15 +45,13 @@ async def run(job, db_client, llm) -> None:
             p = pt.payload or {}
 
             # Prefer artist_slugs from payload (split at index time); fallback
-            # to splitting the raw "artist" tag ourselves.
+            # to splitting the raw "artist" tag ourselves — uses artist_slugs()
+            # which includes alias resolution, matching the indexing path.
             slugs = p.get("artist_slugs") or []
             if not slugs:
                 raw = (p.get("artist") or "").strip()
                 if raw:
-                    slugs = [
-                        _slugify_artist(normalize_artist_name(name))
-                        for name in split_artists(raw)
-                    ]
+                    slugs = artist_slugs(raw)
 
             for artist_slug in slugs:
                 if not artist_slug or artist_slug in seen_artist_slugs:

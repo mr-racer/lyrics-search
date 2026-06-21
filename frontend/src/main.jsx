@@ -11153,9 +11153,11 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef }) {
             WebkitMaskImage:
               'linear-gradient(180deg, transparent 0%, #000 10%, #000 84%, transparent 100%), ' +
               'linear-gradient(90deg, transparent 0%, #000 12%, #000 88%, transparent 100%)',
+            WebkitMaskComposite: 'source-in intersect',
             maskImage:
               'linear-gradient(180deg, transparent 0%, #000 10%, #000 84%, transparent 100%), ' +
               'linear-gradient(90deg, transparent 0%, #000 12%, #000 88%, transparent 100%)',
+            maskComposite: 'intersect',
           }} />
           {/* frosted veil that blurs the lower edge as it slides under the header */}
           <div aria-hidden="true" style={{

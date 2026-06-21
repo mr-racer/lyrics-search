@@ -7,6 +7,7 @@ A fallback to the legacy ``.txt`` cache is kept for backward compatibility.
 import asyncio
 import logging
 import re
+import unicodedata
 from html import unescape
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
@@ -32,7 +33,6 @@ def _slugify(artist: str) -> str:
     same slug regardless of source metadata. Mirrors the normalization in
     artist_split.normalize_artist_name to avoid a circular import.
     """
-    import unicodedata
     s = unicodedata.normalize("NFKC", artist)
     s = re.sub(r"[‐‑‒–—―−]", "-", s)
     s = s.replace("\u2018", "'").replace("\u2019", "'")
