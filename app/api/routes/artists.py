@@ -221,7 +221,18 @@ def build_artist_aggregate(db, collection: str, canonical_slug: str, lang: str) 
         ))
     albums.sort(key=lambda a: (a.year or 9999, a.title))
 
-    facts = MetadataDB.get_artist_facts(canonical_slug, collection)
+    # Prefer refined facts (from AI Indexing) when present; fall back to
+    # originals only when no refined row exists for this artist. `is not None`
+    # is critical — an explicit [] from refined (AI ran, kept nothing) must
+    # short-circuit instead of falling back. Keyed by the same slug the
+    # refined_facts task writes under (_slugify_artist of the artist name).
+    refined_facts = MetadataDB.get_refined_facts(
+        scope="artist", scope_key=canonical_slug, collection_name=collection, lang=lang,
+    )
+    facts = (
+        refined_facts if refined_facts is not None
+        else MetadataDB.get_artist_facts(canonical_slug, collection)
+    )
     bio = MetadataDB.get_artist_bio(canonical_slug, collection, lang)
     primary_genre = next((t.genre for t in artist_tracks if t.genre), None)
 
