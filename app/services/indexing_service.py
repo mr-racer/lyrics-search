@@ -214,6 +214,8 @@ class IndexingService:
             batch = data[i: i + batch_size]
             vecs = text_vecs[i: i + batch_size]
             points = []
+            # Collect (point_id, payload) for SQLite upsert
+            sqlite_rows: list[tuple[str, dict]] = []
             for song_info, vec in zip(batch, vecs):
                 vector = {
                     "bm25": models.Document(
@@ -250,13 +252,21 @@ class IndexingService:
                     if axes:
                         payload["sonic_axes"] = axes
 
+                point_id = uuid.uuid4().hex
                 points.append(models.PointStruct(
-                    id=uuid.uuid4().hex,
+                    id=point_id,
                     vector=vector,
                     payload=payload,
                 ))
+                sqlite_rows.append((point_id, payload))
 
             client.upsert(collection_name=coll, points=points)
+
+            # Mirror payload to SQLite track_metadata (best-effort)
+            try:
+                MetadataDB.upsert_track_metadata_bulk(coll, sqlite_rows)
+            except Exception:
+                logger.warning("[IndexingService] SQLite bulk upsert failed — non-fatal")
 
         if clap_map:
             logger.info(
@@ -501,6 +511,12 @@ class IndexingService:
 
         self._create_collection(clap_paths=paths)
         total = len(filtered)
+
+        # Clear old SQLite track_metadata before upserting new data
+        try:
+            MetadataDB.clear_track_metadata(str(self.engine.collection_name))
+        except Exception:
+            logger.warning("[IndexingService] failed to clear old track_metadata — non-fatal")
 
         # Pass 1: encode all lyrics at once
         if progress_callback:
