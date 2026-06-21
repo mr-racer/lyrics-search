@@ -2551,14 +2551,23 @@ class MetadataDB:
 
     @classmethod
     def get_library_albums_from_sqlite(cls, collection_name: str) -> list[dict]:
-        """Return list of {album, track_count, year, cover_art_path, tracks}
-        for all albums in a collection, read from track_metadata.
+        """Return per-album aggregates for a collection, read from track_metadata.
 
-        Each ``tracks`` entry is a list of dicts with:
-        track_id, title, artist, duration, year, cover_art_path.
+        Each album dict carries: album, track_count, primary_artist,
+        feat_artists (raw names), top_genres, year, year_range, cover_art_path,
+        and ``tracks`` (list of {track_id, title, artist, duration, year,
+        cover_art_path}).
+
+        ``primary_artist`` / ``feat_artists`` / ``year`` / ``year_range`` /
+        ``top_genres`` mirror the Qdrant ``get_albums`` aggregation exactly
+        (majority vote on the raw ``artist`` tag, min/max year), so the SQLite
+        fast-path and the Qdrant fallback produce identical cards. The slug for
+        each artist name is derived in the service layer.
 
         Returns [] if the table is empty (pre-backfill).
         """
+        from collections import Counter
+
         conn = cls._connect()
 
         # Single query: all tracks grouped by album, with album-level aggregates.
@@ -2566,7 +2575,7 @@ class MetadataDB:
         rows = conn.execute(
             """
             SELECT album, title, artist, duration, year, cover_art_path,
-                   track_id
+                   track_id, genre
             FROM track_metadata
             WHERE collection_name = ? AND album IS NOT NULL AND album != ''
             ORDER BY album, track_id
@@ -2579,24 +2588,30 @@ class MetadataDB:
 
         # Group by album (case-insensitive key, preserves first-seen casing)
         groups: dict[str, dict] = {}
-        for album, title, artist, duration, year, cover_art_path, track_id in rows:
+        for album, title, artist, duration, year, cover_art_path, track_id, genre in rows:
             key = album.lower()
             if key not in groups:
                 groups[key] = {
                     "album": album,
                     "track_count": 0,
-                    "year": year,
                     "cover_art_path": cover_art_path,
                     "tracks": [],
+                    "_artist_counter": Counter(),
+                    "_year_counter": Counter(),
+                    "_genre_counter": Counter(),
                 }
             g = groups[key]
             g["track_count"] += 1
-            # Use MAX(year) across tracks
-            if year and (not g["year"] or year > g["year"]):
-                g["year"] = year
             # Use first non-NULL cover_art_path
             if not g["cover_art_path"] and cover_art_path:
                 g["cover_art_path"] = cover_art_path
+            artist_name = (artist or "").strip()
+            g["_artist_counter"][artist_name] += 1
+            if year:
+                g["_year_counter"][year] += 1
+            gn = (genre or "").strip()
+            if gn:
+                g["_genre_counter"][gn] += 1
             g["tracks"].append({
                 "track_id": track_id,
                 "title": title or "—",
@@ -2606,9 +2621,49 @@ class MetadataDB:
                 "cover_art_path": cover_art_path,
             })
 
-        # Sort: year DESC, then album name
-        result = list(groups.values())
-        result.sort(key=lambda a: (-(a["year"] or 0), a["album"]))
+        # Finalise album-level aggregates (majority-vote primary, year/range).
+        result = []
+        for g in groups.values():
+            artists = g.pop("_artist_counter")
+            primary = sorted(
+                artists.items(), key=lambda kv: (-kv[1], kv[0])
+            )[0][0] if artists else "—"
+            feat = [
+                a for a, _ in sorted(
+                    [(a, c) for a, c in artists.items() if a != primary],
+                    key=lambda kv: (-kv[1], kv[0]),
+                )
+            ]
+            year_counter = g.pop("_year_counter")
+            year = None
+            year_range = None
+            if year_counter:
+                ys = list(year_counter.elements())
+                ymin, ymax = min(ys), max(ys)
+                if ymin == ymax:
+                    year = ymin
+                else:
+                    year_range = f"{ymin}—{ymax}"
+            genre_counter = g.pop("_genre_counter")
+            g["primary_artist"] = primary or "—"
+            g["feat_artists"] = feat
+            g["top_genres"] = [gn for gn, _ in genre_counter.most_common(3)]
+            g["year"] = year
+            g["year_range"] = year_range
+            result.append(g)
+
+        # Sort: year DESC (year_range albums sort by their min year), then album.
+        def _year_key(a):
+            if a["year"]:
+                return a["year"]
+            if a["year_range"]:
+                try:
+                    return int(a["year_range"].split("—")[0])
+                except (ValueError, IndexError):
+                    return 0
+            return 0
+
+        result.sort(key=lambda a: (-_year_key(a), a["album"]))
         return result
 
     # ── Track metadata mirror (SQLite copy of Qdrant payload) ──
@@ -2792,6 +2847,25 @@ class MetadataDB:
         conn.commit()
 
     @classmethod
+    def delete_track_metadata(cls, collection_name: str, track_id: str) -> None:
+        """Remove a single track from the mirror (track_metadata + slug join).
+
+        Called when a track is deleted from Qdrant so the SQLite mirror — now the
+        source of truth for the albums grid, artist pages, recommendations,
+        stats and catalog search — doesn't keep serving a ghost row.
+        """
+        conn = cls._connect()
+        conn.execute(
+            "DELETE FROM track_metadata WHERE collection_name = ? AND track_id = ?",
+            (collection_name, track_id),
+        )
+        conn.execute(
+            "DELETE FROM track_artist_slugs WHERE collection_name = ? AND track_id = ?",
+            (collection_name, track_id),
+        )
+        conn.commit()
+
+    @classmethod
     def get_track_count_for_collection(cls, collection_name: str) -> int:
         """Return the number of tracks stored in track_metadata for a collection."""
         conn = cls._connect()
@@ -2800,6 +2874,109 @@ class MetadataDB:
             (collection_name,),
         ).fetchone()
         return row[0] if row else 0
+
+    @staticmethod
+    def _duration_range_buckets(durations: list) -> list[str]:
+        """IQR-based duration bucket label per input duration.
+
+        Mirrors ``app.resources.qdrant_payload.prepare_metadata`` so the SQLite
+        light-points path reproduces the same six-bucket histogram the indexer
+        baked into the Qdrant payload. Non-numeric durations map to ``""``.
+        """
+        import numpy as np
+
+        nums = [d for d in durations if isinstance(d, (int, float))]
+        if not nums:
+            return ["" for _ in durations]
+        arr = np.array(nums, dtype=float)
+        p25 = np.percentile(arr, 25)
+        p50 = np.percentile(arr, 50)
+        p75 = np.percentile(arr, 75)
+        iqr = p50 - p25
+        lower = p25 - 1.5 * iqr
+        upper = p75 + 1.5 * iqr
+        max_dur = float(arr.max())
+        labels = [
+            f"0-{int(round(lower))}",
+            f"{int(round(lower))}-{int(round(p25))}",
+            f"{int(round(p25))}-{int(round(p50))}",
+            f"{int(round(p50))}-{int(round(p75))}",
+            f"{int(round(p75))}-{int(round(upper))}",
+            f"{int(round(upper))}-{int(max_dur)}",
+        ]
+
+        def _label(d):
+            if not isinstance(d, (int, float)):
+                return ""
+            if d < lower:
+                return labels[0]
+            if d < p25:
+                return labels[1]
+            if d < p50:
+                return labels[2]
+            if d <= p75:
+                return labels[3]
+            if d <= upper:
+                return labels[4]
+            return labels[5]
+
+        return [_label(d) for d in durations]
+
+    @classmethod
+    def get_light_points(cls, collection_name: str) -> list:
+        """SQLite-backed equivalent of ``qdrant_utils.light_points``.
+
+        Returns ``[(track_id, payload_dict)]`` where each payload carries the
+        same keys as ``LIGHT_PAYLOAD_FIELDS`` (card fields + ``sonic_axes``),
+        read from the ``track_metadata`` mirror instead of a full Qdrant scroll.
+        ``duration_range`` is recomputed over this collection's durations so the
+        library stats histogram keeps working without a Qdrant round-trip.
+
+        Returns ``[]`` when the mirror is empty (pre-backfill) so callers can
+        fall back to a Qdrant scroll.
+        """
+        conn = cls._connect()
+        rows = conn.execute(
+            """SELECT track_id, title, artist, artists, artist_slugs,
+                      primary_artist_slug, album, year, genre, duration,
+                      file_path, cover_art_path, sonic_axes
+               FROM track_metadata WHERE collection_name = ?""",
+            (collection_name,),
+        ).fetchall()
+        if not rows:
+            return []
+
+        def _json_or(val, default):
+            if isinstance(val, str):
+                try:
+                    return json.loads(val)
+                except (json.JSONDecodeError, TypeError):
+                    return default
+            return val if val is not None else default
+
+        buckets = cls._duration_range_buckets([r[9] for r in rows])
+        out = []
+        for r, bucket in zip(rows, buckets):
+            (track_id, title, artist, artists, artist_slugs, primary_artist_slug,
+             album, year, genre, duration, file_path, cover_art_path,
+             sonic_axes) = r
+            payload = {
+                "title": title or "",
+                "artist": artist or "",
+                "artists": _json_or(artists, []),
+                "artist_slugs": _json_or(artist_slugs, []),
+                "primary_artist_slug": primary_artist_slug,
+                "album": album,
+                "year": year,
+                "genre": genre,
+                "duration": duration,
+                "duration_range": bucket,
+                "file_path": file_path,
+                "cover_art_path": cover_art_path,
+                "sonic_axes": _json_or(sonic_axes, {}),
+            }
+            out.append((str(track_id), payload))
+        return out
 
     @classmethod
     def get_track_by_id(cls, collection_name: str, track_id: str) -> dict | None:
@@ -2836,3 +3013,77 @@ class MetadataDB:
             except (json.JSONDecodeError, TypeError):
                 d["sonic_axes"] = {}
         return d
+
+    @classmethod
+    def get_browse_rows(cls, collection_name: str, limit: int | None = None) -> list[dict]:
+        """Lightweight rows for the /library/browse search: track_id + title +
+        artist + album + cover_art_path, read from the mirror.
+
+        ``limit`` caps the no-query "first N" mode; omit it (None) for the
+        scored-search mode that needs every row. Returns [] when the mirror is
+        empty so the route can fall back to a Qdrant scroll.
+        """
+        conn = cls._connect()
+        sql = ("SELECT track_id, title, artist, album, cover_art_path "
+               "FROM track_metadata WHERE collection_name = ?")
+        params: tuple = (collection_name,)
+        if limit is not None:
+            sql += " LIMIT ?"
+            params = (collection_name, limit)
+        rows = conn.execute(sql, params).fetchall()
+        return [
+            {
+                "track_id": str(r[0]),
+                "title": r[1] or "",
+                "artist": r[2] or "",
+                "album": r[3] or "",
+                "cover_art_path": r[4],
+            }
+            for r in rows
+        ]
+
+    @classmethod
+    def get_track_ids_for_collection(cls, collection_name: str) -> list[str]:
+        """All track_ids stored in the mirror for a collection (no payload).
+
+        Mirrors the id-only Qdrant scroll the rediscover picker did. Returns []
+        when the mirror is empty so the caller can fall back to Qdrant.
+        """
+        conn = cls._connect()
+        rows = conn.execute(
+            "SELECT track_id FROM track_metadata WHERE collection_name = ?",
+            (collection_name,),
+        ).fetchall()
+        return [str(r[0]) for r in rows]
+
+    @classmethod
+    def get_year_facets_from_sqlite(cls, collection_name: str | None = None) -> dict:
+        """Decade-bucket counts from the mirror's ``year`` column, keyed exactly
+        like the Qdrant ``year_range`` payload (``f"{decade}-{decade+9}"``).
+
+        Aggregates a single collection, or all collections when
+        ``collection_name`` is None. Returns {} when the mirror is empty so the
+        route can fall back to a Qdrant scroll.
+        """
+        from collections import Counter
+
+        conn = cls._connect()
+        if collection_name is not None:
+            rows = conn.execute(
+                "SELECT year FROM track_metadata "
+                "WHERE collection_name = ? AND year IS NOT NULL",
+                (collection_name,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT year FROM track_metadata WHERE year IS NOT NULL",
+            ).fetchall()
+        counter: Counter[str] = Counter()
+        for (year,) in rows:
+            try:
+                y = int(year)
+            except (TypeError, ValueError):
+                continue
+            decade = (y // 10) * 10
+            counter[f"{decade}-{decade + 9}"] += 1
+        return dict(counter)

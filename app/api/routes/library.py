@@ -46,6 +46,25 @@ def _score_query(q_words: list[str], q_full: str, value: str) -> float:
     return s
 
 
+def _relevance(q_words: list, q_full: str, title: str, artist: str, album: str) -> float:
+    """Weighted title/artist/album relevance for /library/browse. Shared by the
+    SQLite fast-path and the Qdrant fallback so both rank identically."""
+    score = (
+        _score_query(q_words, q_full, title) * 3.0
+        + _score_query(q_words, q_full, artist) * 2.5
+        + _score_query(q_words, q_full, album) * 1.5
+    )
+    # Multi-word bonus: extra +1 per additional matching word (beyond first).
+    match_count = sum(
+        1 for w in q_words
+        for v in (title, artist, album)
+        if w in (v or "").lower()
+    )
+    if match_count > 1:
+        score += (match_count - 1) * 1.0
+    return score
+
+
 @router.get("/browse")
 async def browse_tracks(
     request: Request = None,
@@ -68,6 +87,26 @@ async def browse_tracks(
     has_query = q is not None and len(q.strip()) >= 2
     q_full = q.strip().lower() if has_query else ""
     q_words = list(set(q_full.split())) if has_query else []
+
+    # ── Fast path: read from the SQLite mirror (no Qdrant scroll) ──
+    try:
+        from app.resources.metadata_db import MetadataDB
+        if not has_query:
+            rows = MetadataDB.get_browse_rows(derived, limit=limit)
+            if rows:
+                return rows
+        else:
+            rows = MetadataDB.get_browse_rows(derived)
+            if rows:
+                scored = []
+                for r in rows:
+                    score = _relevance(q_words, q_full, r["title"], r["artist"], r["album"])
+                    if score > 0:
+                        scored.append({**r, "score": round(score, 2)})
+                scored.sort(key=lambda x: -x["score"])
+                return scored[:limit]
+    except Exception:
+        logger.debug("[LibraryService] browse: SQLite lookup failed, falling back to Qdrant", exc_info=True)
 
     # Collection is ALWAYS the caller's derived account collection.
     try:
@@ -131,20 +170,7 @@ async def browse_tracks(
                 artist = pl.get("artist") or ""
                 album = pl.get("album") or ""
 
-                score = (
-                    _score_query(q_words, q_full, title) * 3.0
-                    + _score_query(q_words, q_full, artist) * 2.5
-                    + _score_query(q_words, q_full, album) * 1.5
-                )
-
-                # Multi-word bonus: extra +1 per additional matching word (beyond first)
-                match_count = sum(
-                    1 for w in q_words
-                    for v in (title, artist, album)
-                    if w in (v or "").lower()
-                )
-                if match_count > 1:
-                    score += (match_count - 1) * 1.0
+                score = _relevance(q_words, q_full, title, artist, album)
 
                 if score <= 0:
                     continue
@@ -1116,6 +1142,17 @@ async def delete_track(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"qdrant delete failed: {e}")
 
+    # Drop the SQLite mirror row + slug join so the albums grid / artist pages /
+    # recommendations / stats (all SQLite-backed now) stop serving a ghost, then
+    # invalidate the cached light index so the change surfaces immediately.
+    try:
+        from app.resources.metadata_db import MetadataDB
+        from app.resources.qdrant_utils import invalidate_light_cache
+        MetadataDB.delete_track_metadata(collection_name, track_id)
+        invalidate_light_cache(collection_name)
+    except Exception:
+        logger.warning("[delete_track] SQLite mirror cleanup failed for %s", track_id, exc_info=True)
+
     # Delete the physical file (idempotent — missing is fine).
     try:
         Path(file_path).unlink(missing_ok=True)
@@ -1203,6 +1240,21 @@ async def get_year_facets(
     """
     if request is None or request.app.state.db_client is None:
         return {"year_ranges": []}
+
+    # ── Fast path: SQLite mirror (decade buckets from the `year` column) ──
+    try:
+        from app.resources.metadata_db import MetadataDB
+        MetadataDB.init()
+        sqlite_counts = MetadataDB.get_year_facets_from_sqlite(collection_name)
+        if sqlite_counts:
+            counter = Counter(sqlite_counts)
+            return {
+                "year_ranges": [
+                    {"value": v, "count": n} for v, n in counter.most_common(top_k)
+                ],
+            }
+    except Exception:
+        logger.debug("[year-facets] SQLite lookup failed, falling back to Qdrant", exc_info=True)
 
     qdrant = request.app.state.db_client.qdrant
     counter: Counter = Counter()

@@ -1300,6 +1300,29 @@ class LibraryService:
         Tries SQLite first (fast indexed query). Falls back to Qdrant scroll
         if SQLite tables are empty (pre-backfill deploy).
         """
+        # Shared ordering for both the SQLite fast-path and the Qdrant fallback,
+        # so the `sort` query param behaves identically regardless of source.
+        def _year_for_sort(a: "AlbumSummary") -> int:
+            if a.year:
+                return a.year
+            if a.year_range:
+                try:
+                    return int(a.year_range.split("—")[0])
+                except (ValueError, IndexError):
+                    return 0
+            return 0
+
+        def _apply_sort(albums: list) -> list:
+            if sort == "year_desc":
+                albums.sort(key=lambda a: -_year_for_sort(a))
+            elif sort == "year_asc":
+                albums.sort(key=lambda a: _year_for_sort(a) or 9999)
+            elif sort == "track_count_desc":
+                albums.sort(key=lambda a: -a.track_count)
+            else:
+                albums.sort(key=lambda a: a.album_title.lower())
+            return albums
+
         # ── Fast path: read from SQLite ──
         try:
             sqlite_albums = MetadataDB.get_library_albums_from_sqlite(collection_name)
@@ -1309,20 +1332,23 @@ class LibraryService:
                     len(sqlite_albums), collection_name,
                 )
                 return LibraryAlbumsResponse(
-                    albums=[
+                    albums=_apply_sort([
                         AlbumSummary(
                             album_title=a["album"],
-                            primary_artist="—",
-                            primary_artist_slug="—",
-                            feat_artists=[],
+                            primary_artist=a["primary_artist"],
+                            primary_artist_slug=_slugify_artist_for_album(a["primary_artist"]),
+                            feat_artists=[
+                                ArtistRef(name=n, slug=_slugify_artist_for_album(n))
+                                for n in a["feat_artists"]
+                            ],
                             year=a["year"],
-                            year_range=None,
+                            year_range=a["year_range"],
                             cover_art_path=a["cover_art_path"],
                             track_count=a["track_count"],
                             duration_seconds=int(sum(
                                 t["duration"] or 0 for t in a["tracks"]
                             )),
-                            top_genres=[],
+                            top_genres=a["top_genres"],
                             tracks=[
                                 AlbumTrack(
                                     track_id=t["track_id"],
@@ -1336,7 +1362,7 @@ class LibraryService:
                             ],
                         )
                         for a in sqlite_albums
-                    ],
+                    ]),
                     collection_name=collection_name,
                     qdrant_available=True,
                 )
@@ -1444,28 +1470,9 @@ class LibraryService:
                 tracks=g["tracks"],
             ))
 
-        # Sort
-        def _year_for_sort(a):
-            if a.year:
-                return a.year
-            if a.year_range:
-                try:
-                    return int(a.year_range.split("—")[0])
-                except (ValueError, IndexError):
-                    return 0
-            return 0
-
-        if sort == "year_desc":
-            albums.sort(key=lambda a: -_year_for_sort(a))
-        elif sort == "year_asc":
-            albums.sort(key=lambda a: _year_for_sort(a) or 9999)
-        elif sort == "track_count_desc":
-            albums.sort(key=lambda a: -a.track_count)
-        else:
-            albums.sort(key=lambda a: a.album_title.lower())
-
         return LibraryAlbumsResponse(
-            albums=albums, collection_name=collection_name, qdrant_available=True,
+            albums=_apply_sort(albums), collection_name=collection_name,
+            qdrant_available=True,
         )
 
     @classmethod
@@ -1521,19 +1528,22 @@ class LibraryService:
         from app.domain.models import HomeTrack, RediscoverResponse
         from app.services._payload_coerce import coerce_float, coerce_year
 
-        library_ids: list[str] = []
-        offset = None
-        while True:
-            try:
-                points, offset = qdrant_client.scroll(
-                    collection_name=collection_name, limit=256, offset=offset,
-                    with_payload=False, with_vectors=False,
-                )
-            except Exception:
-                break
-            library_ids.extend(str(p.id) for p in points)
-            if offset is None or not points:
-                break
+        # Fast path: track ids from the SQLite mirror; fall back to an id-only
+        # Qdrant scroll when the mirror is empty (pre-backfill).
+        library_ids: list[str] = MetadataDB.get_track_ids_for_collection(collection_name)
+        if not library_ids:
+            offset = None
+            while True:
+                try:
+                    points, offset = qdrant_client.scroll(
+                        collection_name=collection_name, limit=256, offset=offset,
+                        with_payload=False, with_vectors=False,
+                    )
+                except Exception:
+                    break
+                library_ids.extend(str(p.id) for p in points)
+                if offset is None or not points:
+                    break
         if not library_ids:
             return RediscoverResponse(collection_name=collection_name)
 
@@ -1549,26 +1559,31 @@ class LibraryService:
             chosen = random.choice(pool)
             last_played, never_played = recency.get(chosen), False
 
-        try:
-            pts = qdrant_client.retrieve(
-                collection_name=collection_name, ids=[chosen],
-                with_payload=True, with_vectors=False,
-            )
-        except Exception:
-            pts = []
-        if not pts:
-            return RediscoverResponse(collection_name=collection_name)
+        # Chosen track's card metadata: SQLite mirror first, Qdrant retrieve as
+        # fallback (pre-backfill / mirror miss).
+        row = MetadataDB.get_track_by_id(collection_name, chosen)
+        if row is None:
+            try:
+                pts = qdrant_client.retrieve(
+                    collection_name=collection_name, ids=[chosen],
+                    with_payload=True, with_vectors=False,
+                )
+            except Exception:
+                pts = []
+            if not pts:
+                return RediscoverResponse(collection_name=collection_name)
+            row = pts[0].payload or {}
+            row["track_id"] = str(pts[0].id)
 
-        p = pts[0].payload or {}
         track = HomeTrack(
-            track_id=str(pts[0].id),
-            title=p.get("title") or "—",
-            artist=p.get("artist") or "—",
-            album=p.get("album"),
-            year=coerce_year(p.get("year")),
-            duration=coerce_float(p.get("duration")),
-            cover_art_path=p.get("cover_art_path"),
-            genre=p.get("genre"),
+            track_id=str(row.get("track_id") or chosen),
+            title=row.get("title") or "—",
+            artist=row.get("artist") or "—",
+            album=row.get("album"),
+            year=coerce_year(row.get("year")),
+            duration=coerce_float(row.get("duration")),
+            cover_art_path=row.get("cover_art_path"),
+            genre=row.get("genre"),
         )
         return RediscoverResponse(
             track=track, last_played=last_played, never_played=never_played,

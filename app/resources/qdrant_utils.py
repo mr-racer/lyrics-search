@@ -56,6 +56,12 @@ _LIGHT_CACHE: dict[str, tuple[float, int, list[tuple[str, dict]]]] = {}
 _LIGHT_CACHE_LOCK = threading.Lock()
 LIGHT_CACHE_TTL = 90.0  # seconds a cached scroll is trusted without re-checking
 
+# Parallel cache for the SQLite-backed fast path (track_metadata mirror). Kept
+# separate from the Qdrant scroll cache so the two sources never cross-pollute;
+# both are cleared together by invalidate_light_cache().
+_SQLITE_LIGHT_CACHE: dict[str, tuple[float, int, list[tuple[str, dict]]]] = {}
+_SQLITE_LIGHT_LOCK = threading.Lock()
+
 
 def light_points(client, collection_name: str, *, batch_size: int = 512) -> list[tuple[str, dict]]:
     """Full-collection ``[(id, light_payload)]`` (lyrics stripped), cached per
@@ -66,7 +72,17 @@ def light_points(client, collection_name: str, *, batch_size: int = 512) -> list
     payload transfer): an unchanged point count keeps the cache for another
     window, a changed count (tracks added/removed/reindexed) forces a re-scroll.
     On a scroll error the last good cache is served if present, else ``[]``.
+
+    Fast path: when the SQLite ``track_metadata`` mirror is populated for this
+    collection (post-backfill / normal indexing), the light payloads are served
+    from there with NO Qdrant I/O — this is what collapses the 20+ scroll burst
+    on the stream/home/library/search surfaces. The Qdrant scroll below is the
+    fallback for pre-backfill collections (empty mirror).
     """
+    sqlite_pts = _sqlite_light_points(collection_name)
+    if sqlite_pts:
+        return sqlite_pts
+
     now = time.monotonic()
     with _LIGHT_CACHE_LOCK:
         entry = _LIGHT_CACHE.get(collection_name)
@@ -89,6 +105,48 @@ def light_points(client, collection_name: str, *, batch_size: int = 512) -> list
             time.monotonic(), count if count is not None else len(fresh), fresh,
         )
     return fresh
+
+
+def _sqlite_light_points(collection_name: str) -> list[tuple[str, dict]]:
+    """Cached read of the SQLite ``track_metadata`` mirror (card fields +
+    ``sonic_axes``). Returns ``[]`` when the mirror is empty so ``light_points``
+    falls back to a Qdrant scroll.
+
+    Same TTL + count-revalidation contract as the Qdrant cache, but the cheap
+    revalidation count comes from SQLite (``COUNT(*)``) — so a warm collection
+    never touches Qdrant here.
+    """
+    now = time.monotonic()
+    with _SQLITE_LIGHT_LOCK:
+        entry = _SQLITE_LIGHT_CACHE.get(collection_name)
+    if entry is not None:
+        ts, count, pts = entry
+        if now - ts < LIGHT_CACHE_TTL:
+            return pts
+        cur = _sqlite_count(collection_name)
+        if cur is not None and cur == count:
+            with _SQLITE_LIGHT_LOCK:
+                _SQLITE_LIGHT_CACHE[collection_name] = (now, count, pts)
+            return pts
+
+    try:
+        from app.resources.metadata_db import MetadataDB
+        pts = MetadataDB.get_light_points(collection_name)
+    except Exception:
+        logger.exception("[sqlite] light points read failed for %s", collection_name)
+        return entry[2] if entry is not None else []
+
+    with _SQLITE_LIGHT_LOCK:
+        _SQLITE_LIGHT_CACHE[collection_name] = (time.monotonic(), len(pts), pts)
+    return pts
+
+
+def _sqlite_count(collection_name: str) -> int | None:
+    try:
+        from app.resources.metadata_db import MetadataDB
+        return MetadataDB.get_track_count_for_collection(collection_name)
+    except Exception:
+        return None
 
 
 def _scroll_light(client, collection_name: str, *, batch_size: int) -> list[tuple[str, dict]] | None:
@@ -131,6 +189,11 @@ def invalidate_light_cache(collection_name: str | None = None) -> None:
             _LIGHT_CACHE.clear()
         else:
             _LIGHT_CACHE.pop(collection_name, None)
+    with _SQLITE_LIGHT_LOCK:
+        if collection_name is None:
+            _SQLITE_LIGHT_CACHE.clear()
+        else:
+            _SQLITE_LIGHT_CACHE.pop(collection_name, None)
 
 
 def scroll_all(client, collection_name: str, *, batch_size: int = 256, **scroll_kwargs) -> Iterator:
