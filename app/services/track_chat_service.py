@@ -20,6 +20,7 @@ Schema notes (metadata_db.py verified):
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional
 
 from app.domain.models import TrackChatContext
@@ -27,6 +28,27 @@ from app.domain.models import TrackChatContext
 logger = logging.getLogger(__name__)
 
 _LANG_NAMES = {"ru": "Russian", "en": "English"}
+
+# ─── Context budget (song-facts trimming) ─────────────────────────────────────
+# The whole player-chat prompt is capped at ~_max_prompt_tokens(). Song facts are
+# the single elastic component: lyrics + chat history go in full, facts are packed
+# shortest-first into whatever budget remains (see _pack_facts / answer_track_chat).
+# Tunable via env so a deployment can raise/lower it without code changes.
+_DEFAULT_MAX_PROMPT_TOKENS = 32_000
+CHARS_PER_TOKEN = 4  # crude estimate — no tokenizer dependency
+
+
+def _max_prompt_tokens() -> int:
+    """Prompt token budget, read from env at call time (deploy/test friendly)."""
+    try:
+        return int(os.getenv("TRACK_CHAT_MAX_PROMPT_TOKENS", str(_DEFAULT_MAX_PROMPT_TOKENS)))
+    except (TypeError, ValueError):
+        return _DEFAULT_MAX_PROMPT_TOKENS
+
+
+def _est_tokens(text: str) -> int:
+    """Rough token estimate (chars / CHARS_PER_TOKEN). Good enough for trimming."""
+    return (len(text or "") + CHARS_PER_TOKEN - 1) // CHARS_PER_TOKEN
 
 
 def _reply_lang_directive(lang: Optional[str]) -> str:
@@ -47,9 +69,12 @@ TRACK_CHAT_PROMPT = """
 You are a music expert helping a listener understand a track they're playing.
 
 You have full lyrics, metadata, and curated raw facts about the song below.
-Use the `web_search` tool ONLY when the user's question cannot be answered from this context — e.g., samples in the track, production trivia, controversy, chart history.
 
-If `web_search` returns nothing useful, say so honestly. Don't invent facts.
+By DEFAULT, reach for the `web_search` tool on any FACTUAL question that goes beyond plain interpretation of the lyrics in front of you — production and recording, samples and interpolations, chart history, controversy, collaborators, or the real-world meaning of a place / person / event named in the song. When a fact isn't already in the context below, search the web rather than answer from memory.
+
+Do NOT search for purely interpretive questions whose answer is visible in the lyrics themselves.
+
+If `web_search` returns nothing useful, say so plainly and answer only what you are confident about from the lyrics and the facts. Never invent facts, dates, numbers, or sources.
 
 When discussing the lyrics, quote the exact phrase the user is asking about. Be specific, not generic.
 
@@ -64,7 +89,9 @@ LYRIC_EXPLAIN_PROMPT = """
 You are explaining a single lyric line from a song the listener is hearing.
 
 Focus on that line. Refer to surrounding lines only when essential.
-Use the `web_search` tool only when the line references something concrete (a place, person, event) that isn't in the provided facts.
+Use the `web_search` tool whenever the line references something concrete (a place, person, event, or work) that isn't already in the provided facts — prefer checking over guessing. Skip search for purely figurative lines.
+
+If `web_search` returns nothing useful, say so and answer only what you are confident about. Don't invent.
 
 {lang_directive} Answer in 2-4 sentences.
 
@@ -79,8 +106,9 @@ SELECTED LINE:
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 
-def resolve_song_facts(title: str, artist: str) -> str:
-    """Look up raw song_facts.fact rows for (artist, title). Returns joined text or "".
+def resolve_song_facts_list(title: str, artist: str) -> list[str]:
+    """Look up raw song_facts.fact rows for (artist, title). Returns a list of
+    individual facts (one per row), or [].
 
     Reads from the `song_facts` table directly — NOT the refined-facts variant.
 
@@ -92,7 +120,7 @@ def resolve_song_facts(title: str, artist: str) -> str:
     regardless of which collection the track belongs to.
     """
     if not title or not artist:
-        return ""
+        return []
     try:
         from app.resources.metadata_db import MetadataDB
         from app.services.song_facts_service import get_song_facts_key
@@ -103,11 +131,43 @@ def resolve_song_facts(title: str, artist: str) -> str:
             "SELECT fact FROM song_facts WHERE song_slug = ? AND lang = 'en' ORDER BY id",
             (song_slug,),
         ).fetchall()
-        if rows:
-            return "\n\n".join(r[0] for r in rows if r[0])
+        return [r[0] for r in rows if r[0]]
     except Exception as exc:
         logger.warning("[track_chat] resolve_song_facts failed: %s", exc)
-    return ""
+    return []
+
+
+def resolve_song_facts(title: str, artist: str) -> str:
+    """Raw song facts joined into one block (back-compat string form)."""
+    return "\n\n".join(resolve_song_facts_list(title, artist))
+
+
+def _select_facts(facts: list[str], token_budget: int) -> list[str]:
+    """Pick facts shortest-first until ``token_budget`` is exhausted; the fattest
+    facts are dropped. Returns the kept facts in their ORIGINAL order so the
+    block still reads naturally.
+
+    Rationale: a single bloated fact can eat the whole window — preferring the
+    leanest facts keeps the *most* facts inside the budget.
+    """
+    if token_budget <= 0:
+        return []
+    indexed = [(i, f) for i, f in enumerate(facts) if f and f.strip()]
+    kept_idx: list[int] = []
+    used = 0
+    SEP_TOKENS = 2  # overhead of the "\n\n" separator between facts
+    for i, f in sorted(indexed, key=lambda p: len(p[1])):  # shortest first
+        cost = _est_tokens(f) + SEP_TOKENS
+        if used + cost > token_budget:
+            break  # sorted ascending → everything after is at least as long
+        kept_idx.append(i)
+        used += cost
+    return [facts[i] for i in sorted(kept_idx)]
+
+
+def _pack_facts(facts: list[str], token_budget: int) -> str:
+    """String form of :func:`_select_facts` — facts joined into one block."""
+    return "\n\n".join(_select_facts(facts, token_budget))
 
 
 def build_track_context_block(
@@ -140,9 +200,31 @@ def build_track_context_block(
 from pydantic_ai import Agent  # noqa: E402
 
 
+def _to_message_history(history) -> list:
+    """Convert ChatMessage[] (role/content) into pydantic-ai message_history.
+
+    user → ModelRequest(UserPromptPart); assistant → ModelResponse(TextPart).
+    Empty / content-less turns are skipped. System parts are intentionally
+    omitted — the agent's own system_prompt (facts + lyrics) applies to the run.
+    """
+    from pydantic_ai.messages import (
+        ModelRequest, ModelResponse, UserPromptPart, TextPart,
+    )
+    out: list = []
+    for m in history or []:
+        content = (getattr(m, "content", None) or "").strip()
+        if not content:
+            continue
+        if getattr(m, "role", None) == "assistant":
+            out.append(ModelResponse(parts=[TextPart(content=content)]))
+        else:
+            out.append(ModelRequest(parts=[UserPromptPart(content=content)]))
+    return out
+
+
 async def _run_agent(agent, message: str, system_prompt: str, history: list):
     """Run a pydantic-ai agent. Extracted as a function for ease of mocking in tests."""
-    return await agent.run(message)
+    return await agent.run(message, message_history=history or None)
 
 
 def create_track_chat_agent(
@@ -171,10 +253,13 @@ def create_track_chat_agent(
 
     @agent.tool_plain
     async def web_search(query: str) -> str:
-        """Search the web for facts not in the provided track context.
+        """Search the web for facts about the track that aren't in the provided context.
 
-        Use ONLY when the user's question cannot be answered from the track
-        context (lyrics + facts + meta). Examples of when to call:
+        Call this BY DEFAULT for any factual question that isn't pure lyric
+        interpretation — production trivia, samples, chart positions, controversy,
+        history, collaborators, or the real-world meaning of a place / person /
+        event named in the song. When in doubt about a fact, search instead of
+        guessing. Examples:
         - "What songs does this sample?"
         - "What was the controversy around this song?"
         - "Chart position when released?"
@@ -183,7 +268,7 @@ def create_track_chat_agent(
             query: A focused web search query (3-8 words).
 
         Returns:
-            Formatted search results (titles, snippets, URLs).
+            Formatted search results (titles, snippets, URLs), or a 'no results' marker.
         """
         state["web_search_calls"] += 1
         try:
@@ -206,28 +291,44 @@ async def answer_track_chat(req):
     if req.mode == "lyric_explain" and not req.selected_line:
         raise ValueError("selected_line is required for mode='lyric_explain'")
 
-    # Resolve raw facts and build the context block
-    song_facts = resolve_song_facts(req.track_context.title, req.track_context.artist)
-    block = build_track_context_block(req.track_context, song_facts)
-
-    # Choose prompt and fill placeholders
+    ctx = req.track_context
     directive = _reply_lang_directive(getattr(req, "lang", None))
-    if req.mode == "song":
-        system_prompt = TRACK_CHAT_PROMPT.format(
-            track_context_block=block, lang_directive=directive,
-        )
-    else:
-        system_prompt = LYRIC_EXPLAIN_PROMPT.format(
+
+    def _compose(facts_str: str) -> str:
+        """Fill the mode's prompt template with the given (already-packed) facts."""
+        block = build_track_context_block(ctx, facts_str)
+        if req.mode == "song":
+            return TRACK_CHAT_PROMPT.format(
+                track_context_block=block, lang_directive=directive,
+            )
+        return LYRIC_EXPLAIN_PROMPT.format(
             track_context_block=block,
             selected_line=req.selected_line,
             lang_directive=directive,
         )
 
+    # History goes in full (user's choice); facts are the single elastic
+    # component — packed shortest-first into whatever budget is left over.
+    facts_list = resolve_song_facts_list(ctx.title, ctx.artist)
+    history = _to_message_history(req.history)
+
+    history_tokens = sum(_est_tokens(getattr(m, "content", "")) for m in (req.history or []))
+    fixed_tokens = _est_tokens(_compose("")) + _est_tokens(req.message) + history_tokens
+    facts_budget = max(0, _max_prompt_tokens() - fixed_tokens)
+    kept_facts = _select_facts(facts_list, facts_budget)
+    packed_facts = "\n\n".join(kept_facts)
+
+    if facts_list:
+        logger.info(
+            "[track_chat] facts: kept %d/%d (~%d tok, budget %d; prompt ~%d, hist ~%d)",
+            len(kept_facts), len(facts_list), _est_tokens(packed_facts), facts_budget,
+            fixed_tokens - history_tokens, history_tokens,
+        )
+
+    system_prompt = _compose(packed_facts)
+
     # Build agent (per-request — simpler than thread-safety analysis)
     agent, state = create_track_chat_agent(req.llm_base_url, req.llm_model, system_prompt)
-
-    # First-pass: ignore req.history (multi-turn agent history is a follow-up).
-    history: list = []
 
     result = await _run_agent(agent, req.message, system_prompt, history)
     message = getattr(result, "output", "") or ""

@@ -232,3 +232,136 @@ async def test_answer_track_chat_lyric_explain_requires_selected_line(db):
     )
     with pytest.raises(ValueError, match="selected_line"):
         await track_chat_service.answer_track_chat(req)
+
+
+# ─── Token budget + fact packing ──────────────────────────────────────────────
+
+def test_est_tokens_is_ceil_chars_over_four():
+    from app.services.track_chat_service import _est_tokens
+    assert _est_tokens("") == 0
+    assert _est_tokens("abcd") == 1
+    assert _est_tokens("abcde") == 2  # ceil(5/4)
+
+
+def test_select_facts_keeps_shortest_first_in_original_order():
+    from app.services.track_chat_service import _select_facts, _est_tokens
+    facts = ["x" * 400, "short one", "y" * 800, "tiny"]
+    # budget fits only the two lean facts (each + 2 separator tokens)
+    budget = _est_tokens("short one") + _est_tokens("tiny") + 4
+    kept = _select_facts(facts, budget)
+    # leanest survive; the two fat ones are dropped
+    assert kept == ["short one", "tiny"]  # original order, not length order
+
+
+def test_select_facts_zero_or_negative_budget_returns_empty():
+    from app.services.track_chat_service import _select_facts
+    assert _select_facts(["a", "b"], 0) == []
+    assert _select_facts(["a", "b"], -5) == []
+
+
+def test_pack_facts_joins_kept_with_blank_line():
+    from app.services.track_chat_service import _pack_facts
+    assert _pack_facts(["a", "b"], 10_000) == "a\n\nb"
+    assert _pack_facts([], 10_000) == ""
+
+
+def test_resolve_song_facts_list_returns_list_when_missing(db):
+    from app.services.track_chat_service import resolve_song_facts_list
+    assert resolve_song_facts_list(title="Nope", artist="Nobody") == []
+
+
+# ─── Multi-turn history → pydantic-ai message_history ─────────────────────────
+
+def test_to_message_history_maps_roles_and_skips_blanks():
+    from app.services.track_chat_service import _to_message_history
+    from app.domain.models import ChatMessage
+    from pydantic_ai.messages import ModelRequest, ModelResponse
+
+    out = _to_message_history([
+        ChatMessage(role="user", content="hi"),
+        ChatMessage(role="assistant", content="hello"),
+        ChatMessage(role="user", content="   "),   # blank → skipped
+    ])
+    assert len(out) == 2
+    assert isinstance(out[0], ModelRequest)
+    assert isinstance(out[1], ModelResponse)
+
+
+def test_to_message_history_empty_input():
+    from app.services.track_chat_service import _to_message_history
+    assert _to_message_history([]) == []
+    assert _to_message_history(None) == []
+
+
+@pytest.mark.asyncio
+async def test_answer_track_chat_forwards_history_to_agent(db, monkeypatch):
+    """req.history must reach _run_agent as a non-empty message_history."""
+    from app.services import track_chat_service
+    captured = {}
+
+    async def fake_run_agent(agent, message, system_prompt, history):
+        captured["history"] = history
+        return _MockAgentResult("ok")
+
+    monkeypatch.setattr(track_chat_service, "_run_agent", fake_run_agent)
+
+    from app.domain.models import TrackChatContext, TrackChatRequest, ChatMessage
+    req = TrackChatRequest(
+        track_context=TrackChatContext(
+            title="T", artist="A", album=None, year=None, genre=None, full_lyrics="l",
+        ),
+        mode="song",
+        message="hi",
+        history=[
+            ChatMessage(role="user", content="prev question"),
+            ChatMessage(role="assistant", content="prev answer"),
+        ],
+    )
+    await track_chat_service.answer_track_chat(req)
+    assert captured["history"] and len(captured["history"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_answer_track_chat_budget_gates_facts(db, monkeypatch):
+    """Ample budget → fact present in the prompt; tiny budget → fact trimmed out."""
+    from app.services import track_chat_service
+    from app.resources.metadata_db import MetadataDB
+    from app.services.song_facts_service import get_song_facts_key
+
+    song_slug = get_song_facts_key("Beach House", "Levitation")
+    MetadataDB.upsert_artist("beach-house", "Beach House", "test_col")
+    MetadataDB.upsert_song(song_slug, "Levitation", "beach-house", "test_col")
+    conn = MetadataDB._connect()
+    conn.execute(
+        "INSERT INTO song_facts (song_slug, lang, fact, source) VALUES (?, 'en', ?, 'x')",
+        (song_slug, "MARKER_FACT released 2015."),
+    )
+    conn.commit()
+
+    captured = []
+
+    async def fake_run_agent(agent, message, system_prompt, history):
+        captured.append(system_prompt)
+        return _MockAgentResult("ok")
+
+    monkeypatch.setattr(track_chat_service, "_run_agent", fake_run_agent)
+
+    from app.domain.models import TrackChatContext, TrackChatRequest
+
+    def make_req():
+        return TrackChatRequest(
+            track_context=TrackChatContext(
+                title="Levitation", artist="Beach House",
+                album=None, year=None, genre=None, full_lyrics="la",
+            ),
+            mode="song", message="when released?",
+        )
+
+    monkeypatch.setenv("TRACK_CHAT_MAX_PROMPT_TOKENS", "100000")
+    await track_chat_service.answer_track_chat(make_req())
+    assert "MARKER_FACT" in captured[-1]
+
+    # Budget smaller than the prompt scaffold itself → no room for any fact
+    monkeypatch.setenv("TRACK_CHAT_MAX_PROMPT_TOKENS", "10")
+    await track_chat_service.answer_track_chat(make_req())
+    assert "MARKER_FACT" not in captured[-1]

@@ -282,6 +282,28 @@ def _answer_lang_directive(lang: str | None) -> str:
     )
 
 
+def _history_preamble(history) -> str:
+    """Compact transcript of the prior conversation, prepended to the prompts that
+    interpret the user's intent (planner / scorer / answer). Lets follow-ups like
+    "а побыстрее?" or "у того же артиста" resolve against the previous turn.
+    Returns '' when there is no prior history."""
+    if not history:
+        return ""
+    lines: list[str] = []
+    for m in history:
+        who = "Assistant" if getattr(m, "role", "") == "assistant" else "User"
+        text = (getattr(m, "content", None) or "").strip()
+        if text:
+            lines.append(f"{who}: {text}")
+    if not lines:
+        return ""
+    return (
+        "PRIOR CONVERSATION (oldest first; the user's new message continues it):\n"
+        + "\n".join(lines)
+        + "\n\n"
+    )
+
+
 @router.post("/")
 async def chat(
     req: ChatRequest,
@@ -348,6 +370,10 @@ async def chat(
         "temperature": 0.3,
     }
 
+    # Prior conversation, prepended to intent-interpreting prompts so follow-ups
+    # ("а побыстрее?", "у того же артиста") resolve against the previous turn.
+    pre = _history_preamble(req.history)
+
     # ── Planner path (Phase 2: PydanticAI-based) ──────────────────────────
     # When planner_enabled=True, skip old classification and use the
     # PydanticAI PlannerAgent to classify, extract filters, and generate
@@ -381,7 +407,7 @@ async def chat(
                 resolved_filters=resolved_filters_str,
                 search_filter_query=search_filter_query_str,
             )
-            plan = await planner(req.message, filled_prompt)
+            plan = await planner(req.message, pre + filled_prompt)
 
             planner_classification = {
                 "type": plan.query_type,
@@ -415,7 +441,7 @@ async def chat(
                     resolved_filters=resolved_filters_str,
                     search_filter_query=search_filter_query_str,
                 )
-                plan = await planner(req.message, filled_prompt2)
+                plan = await planner(req.message, pre + filled_prompt2)
 
                 logger.info(
                     "[chat/planner/2] action=%s  filters=%s  queries=%s",
@@ -634,7 +660,7 @@ async def chat(
                 )
                 logger.debug("[chat] Scorer prompt (attempt %d): context has %d chars",
                              attempt, len(context))
-                score = await scorer_fn(req.message, _answer_lang_directive(req.lang) + filled)
+                score = await scorer_fn(req.message, _answer_lang_directive(req.lang) + pre + filled)
 
                 action = score.action
                 if action == "search" and score.queries:
@@ -665,7 +691,7 @@ async def chat(
             try:
                 result: dict = await ask_llm(
                     req.message,
-                    system_prompt=_answer_lang_directive(req.lang) + filled,
+                    system_prompt=_answer_lang_directive(req.lang) + pre + filled,
                     parse_json=True,
                     **llm_kw,
                 )
