@@ -2273,3 +2273,55 @@
     .ob-indet{position:absolute;top:0;bottom:0;width:38%;border-radius:3px;background:linear-gradient(90deg,transparent,oklch(68% .17 272),transparent);animation:obIndet 1.3s ease-in-out infinite;}
     @keyframes obIndet{0%{left:-40%}100%{left:100%}}
     @media (prefers-reduced-motion:reduce){.ob-indet{animation:none;left:0;width:100%;opacity:.5}}
+
+    /* ════════════════════════════════════════════════════════════════════════
+       MOBILE — Phase 1 (≤768px). Spec: docs/superpowers/specs/2026-06-24-
+       mobile-responsive-design.md. Pairs with the JS shell swap in main.jsx
+       (useIsMobile / BottomTabBar / MiniPlayerBar): structural layout (bottom
+       nav, mini-player, full-screen player) lives in JS; this block handles
+       sizing, the cover fix, and a don't-break overflow guard.
+       ════════════════════════════════════════════════════════════════════════ */
+    @media (max-width: 768px) {
+      /* ── Disappearing-cover fix ──────────────────────────────────────────
+         The cover was sized from viewport HEIGHT (clamp(220px, 60vh, 640px)),
+         so on a portrait phone the 1:1 square grew wider than the screen and
+         the 3D-flipped art clipped out of the overflow:hidden viewport — that
+         is the "cover disappears" symptom. Size from WIDTH so it always fits.
+         !important because JS sets an inline width (coverPx) on this element. */
+      .player-art-wrap {
+        width: min(80vw, 56vh) !important;
+        max-width: min(80vw, 56vh) !important;
+        perspective: 1000px;
+      }
+
+      /* ── Don't-break guard (heavy Phase-2 screens) ───────────────────────
+         Recsys / atlas / efir are desktop-first and can push fixed-width
+         content past the viewport. Bound the scroll area so the page reflows
+         vertically. max-width (not overflow-x:hidden) is deliberate — it keeps
+         the recsys "islands" horizontal carousels scrollable. */
+      .app-main-area { max-width: 100vw; }
+      .app-main-area > * { max-width: 100vw; }
+
+      /* ── Scale: trim oversized desktop spacing on class-based surfaces ────
+         Much player/search chrome is inline-styled and unreachable from CSS;
+         those are tuned iteratively against a real device. These are the safe,
+         high-traffic class-based wins (smaller cards, tighter gutters/pills). */
+      .search-grid {
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 12px;
+        padding: 0 14px;
+      }
+      .panel-v3 { border-radius: 12px; }
+      .pill-v3 { padding: 6px 11px; font-size: 11px; }
+    }
+
+    /* ── Touch devices: neutralise mouse-only / battery-heavy 3D ────────────
+       The mouse-tilt never fires without a pointer, and the vinyl entry/exit
+       on track change is the heavy preserve-3d that provoked the cover
+       clipping. Disable both; the cover↔lyrics flip is a separate one-shot
+       layer and is left intact. */
+    @media (hover: none), (pointer: coarse) {
+      .player-art-tilt { transform: none !important; }
+      .player-art-outgoing--next, .player-art-outgoing--prev,
+      .player-art-entry--next, .player-art-entry--prev { animation: none !important; }
+    }

@@ -11974,6 +11974,126 @@ function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
 }
 
 // ─── App ──────────────────────────────────────────────────────────────────────
+// ─── useIsMobile — runtime viewport detection (Phase 1 mobile shell) ──────────
+// Client detection happens in the browser, not via server-side User-Agent: the
+// shell swaps to a bottom tab bar + mini-player + full-screen player below 768px
+// and reacts live to rotate / resize / split-screen.
+// Spec: docs/superpowers/specs/2026-06-24-mobile-responsive-design.md
+function useIsMobile() {
+  const MQ = '(max-width: 768px)';
+  const [mobile, setMobile] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia(MQ).matches);
+  useEffect(() => {
+    const mql = window.matchMedia(MQ);
+    const onChange = e => setMobile(e.matches);
+    mql.addEventListener('change', onChange);
+    setMobile(mql.matches);  // sync in case the breakpoint flipped before mount
+    return () => mql.removeEventListener('change', onChange);
+  }, []);
+  return mobile;
+}
+
+// ─── BottomTabBar — mobile bottom navigation ──────────────────────────────────
+// Replaces FloatingIconNav on phones. Four destinations; the player is reached
+// through MiniPlayerBar, not a tab. Rendered as a flex child in the App column so
+// it reserves its own height (content never hides behind it); safe-area inset
+// keeps it clear of the notch/home-indicator.
+function BottomTabBar({ section, onNav, isDark, lang }) {
+  const c = useColors(isDark);
+  const accent = 'oklch(60% 0.18 270)';
+  const inactive = isDark ? 'rgba(238,238,243,0.52)' : 'rgba(22,22,32,0.5)';
+  const items = [
+    { id:'home', label: lang==='ru'?'Главная':'Home',
+      icon:(a)=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={a?2.1:1.8} strokeLinecap="round" strokeLinejoin="round"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v10h14V10"/></svg> },
+    { id:'search', label: lang==='ru'?'Поиск':'Search',
+      icon:(a)=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={a?2.1:1.8} strokeLinecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg> },
+    { id:'library', label: lang==='ru'?'Библиотека':'Library',
+      icon:(a)=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={a?2.1:1.8} strokeLinecap="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></svg> },
+    { id:'recommend', label: lang==='ru'?'Рекомендации':'For You',
+      icon:(a)=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={a?2.1:1.8} strokeLinecap="round" strokeLinejoin="round"><path d="M12 2 15 8l6 1-4.5 4.5L18 20l-6-3-6 3 1.5-6.5L3 9l6-1z"/></svg> },
+  ];
+  const barBg = isDark
+    ? 'linear-gradient(180deg, rgba(22,22,28,0.97), rgba(14,14,19,0.98))'
+    : 'linear-gradient(180deg, rgba(255,255,255,0.97), rgba(244,243,249,0.98))';
+  const topBorder = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(22,22,32,0.10)';
+  return (
+    <nav className="mobile-tabbar" style={{
+      flexShrink:0, display:'flex', alignItems:'stretch', background: barBg,
+      borderTop:`1px solid ${topBorder}`,
+      backdropFilter:'blur(18px) saturate(1.1)', WebkitBackdropFilter:'blur(18px) saturate(1.1)',
+      paddingBottom:'env(safe-area-inset-bottom, 0px)', zIndex:30,
+    }}>
+      {items.map(item => {
+        const active = section === item.id;
+        return (
+          <button key={item.id} onClick={()=>onNav(item.id)} title={item.label}
+            style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center',
+              justifyContent:'center', gap:3, padding:'8px 2px 7px', background:'transparent',
+              border:0, cursor:'pointer', color: active ? accent : inactive,
+              transition:'color .18s ease', minWidth:0 }}>
+            <span style={{ display:'flex' }}>{item.icon(active)}</span>
+            <span style={{ fontFamily:"'JetBrains Mono', ui-monospace, monospace", fontWeight:600,
+              fontSize:9, letterSpacing:'0.03em', whiteSpace:'nowrap', overflow:'hidden',
+              textOverflow:'ellipsis', maxWidth:'100%' }}>{item.label}</span>
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+// ─── MiniPlayerBar — mobile persistent now-playing strip above the tab bar ────
+// Reuses the cover-URL convention from MiniPlaybackPopout. Tapping the strip opens
+// the full-screen player; the play/pause button toggles playback in place.
+function MiniPlayerBar({ track, audio, isDark, lang, onOpen }) {
+  const c = useColors(isDark);
+  const rawCover = (track && (track.cover_art_path || track.coverArt)) || null;
+  const cover = rawCover ? (rawCover.startsWith('http') ? rawCover : `${API}${rawCover}`) : null;
+  const title = track?.title || '—';
+  const artist = track?.artist || '';
+  const isPlaying = !!(audio && audio.isPlaying);
+  const currentTime = useCurrentTime();
+  const duration = audio?.duration || 0;
+  const progress = duration > 0 ? Math.min(1, currentTime / duration) : 0;
+
+  const barBg = isDark
+    ? 'linear-gradient(180deg, rgba(30,30,38,0.97), rgba(24,24,30,0.98))'
+    : 'linear-gradient(180deg, rgba(255,255,255,0.97), rgba(247,246,251,0.98))';
+  const topBorder = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(22,22,32,0.08)';
+  const coverBg = isDark ? '#1a1a22' : '#f0eff5';
+  const accent = 'oklch(60% 0.18 270)';
+
+  return (
+    <div className="mobile-miniplayer" onClick={onOpen} style={{
+      flexShrink:0, display:'flex', alignItems:'center', gap:10, padding:'7px 12px',
+      background: barBg, borderTop:`1px solid ${topBorder}`,
+      backdropFilter:'blur(18px) saturate(1.1)', WebkitBackdropFilter:'blur(18px) saturate(1.1)',
+      cursor:'pointer', position:'relative', zIndex:31,
+    }}>
+      <div style={{ position:'absolute', top:0, left:0, height:2, width:`${progress*100}%`,
+        background:accent, borderRadius:'0 2px 2px 0', transition:'width .2s linear' }} />
+      <div style={{ width:46, height:46, borderRadius:9, overflow:'hidden', background:coverBg,
+        flexShrink:0, display:'grid', placeItems:'center' }}>
+        {cover
+          ? <img src={cover} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />
+          : <span className="serif-display" style={{ color:'#d4a55a', fontSize:20, fontStyle:'normal' }}>{title[0]?.toUpperCase() || '?'}</span>}
+      </div>
+      <div style={{ flex:1, minWidth:0, display:'flex', flexDirection:'column', gap:2 }}>
+        <div style={{ fontSize:13, fontWeight:600, color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{title}</div>
+        <div style={{ fontSize:11, color:c.textMuted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{artist}</div>
+      </div>
+      <button title={isPlaying ? (lang==='ru'?'Пауза':'Pause') : (lang==='ru'?'Играть':'Play')}
+        onClick={(e)=>{ e.stopPropagation(); audio?.togglePlay?.(); }}
+        style={{ flexShrink:0, width:40, height:40, borderRadius:20, display:'grid',
+          placeItems:'center', background:'transparent', border:0, color:c.text, cursor:'pointer' }}>
+        {isPlaying
+          ? <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+          : <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><polygon points="7 4 19 12 7 20 7 4"/></svg>}
+      </button>
+    </div>
+  );
+}
+
 function App({ instanceMode = 'sharing', onLogout = () => {} }) {
   const [isDark, setDark] = useState(() => (localStorage.getItem('musix_theme') || 'dark') === 'dark');
   const [lang, setLang]   = useState(() => localStorage.getItem('musix_lang') || 'ru');
@@ -11995,6 +12115,20 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     setActiveArtistSlug(slug);
     setSection('artist');
   }, []);
+
+  // Mobile shell (Phase 1): below 768px the layout swaps to a bottom tab bar +
+  // mini-player + full-screen player overlay. The player reuses the existing
+  // 'player' section; mobilePrevSectionRef remembers which tab to return to when
+  // the full-screen player is dismissed.
+  const isMobile = useIsMobile();
+  const mobilePrevSectionRef = useRef('library');
+  const openMobilePlayer = useCallback(() => {
+    setSection(s => { if (s !== 'player') mobilePrevSectionRef.current = s; return 'player'; });
+  }, []);
+  const closeMobilePlayer = useCallback(() => {
+    setSection(mobilePrevSectionRef.current || 'library');
+  }, []);
+
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [themeAnim, setThemeAnim] = useState(false);
   const [appState, setAppState] = useState('checking');
@@ -12425,13 +12559,17 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
 
   return (
     <div className={themeAnim ? 'theme-transition theme-fade' : ''} style={{
-      display:'flex', width:'100vw', height:'100vh', overflow:'hidden', background: c.bg,
+      display:'flex', flexDirection: isMobile ? 'column' : 'row',
+      width:'100vw', height:'100vh', overflow:'hidden', background: c.bg,
       position: 'relative',
     }}>
       {/* Full-bleed ambient wash for the player view — sits behind the
           transparent floating nav AND the section content so the blurred-cover
           glow no longer cuts off at the rail's edge. */}
       {section === 'player' && <PlayerAmbient track={playerTrack} isDark={isDark} />}
+      <div className="app-main-area" style={{
+        flex:1, minWidth:0, minHeight:0, display:'flex', position:'relative',
+      }}>
       {section === 'home' ? (
         <LandingScreen
           isDark={isDark} lang={lang}
@@ -12451,6 +12589,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
         />
       ) : (
         <Fragment>
+          {!isMobile && (
           <FloatingIconNav
             section={section}
             onNav={setSection}
@@ -12462,6 +12601,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
             playlist={playerPlaylist}
             onTrackChange={handleTrackChange}
           />
+          )}
           {/* Render all sections; visibility toggled (NOT display:none) to preserve audio across navigation */}
           {Object.entries(sectionMap).map(([id, Comp]) => (
             <div key={id} style={{
@@ -12503,6 +12643,27 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
             </div>
           ))}
         </Fragment>
+      )}
+        {isMobile && section === 'player' && (
+          <button onClick={closeMobilePlayer}
+            aria-label={lang==='ru'?'Свернуть плеер':'Minimize player'}
+            title={lang==='ru'?'Свернуть':'Close'} style={{
+              position:'absolute', top:'calc(env(safe-area-inset-top, 0px) + 10px)', left:12, zIndex:50,
+              width:40, height:40, borderRadius:20, display:'grid', placeItems:'center',
+              background: isDark ? 'rgba(20,20,26,0.55)' : 'rgba(255,255,255,0.62)',
+              backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)',
+              border:`1px solid ${isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.10)'}`,
+              color: c.text, cursor:'pointer',
+            }}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+        )}
+      </div>
+      {isMobile && section !== 'player' && playerTrack && (
+        <MiniPlayerBar track={playerTrack} audio={audio} isDark={isDark} lang={lang} onOpen={openMobilePlayer} />
+      )}
+      {isMobile && section !== 'player' && (
+        <BottomTabBar section={section} onNav={setSection} isDark={isDark} lang={lang} />
       )}
 
       {settingsOpen && (
