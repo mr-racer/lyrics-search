@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections import Counter
 
 import numpy as np
 
@@ -27,8 +26,30 @@ logger = logging.getLogger(__name__)
 _CACHE: dict[tuple[str, str], tuple[int, object]] = {}
 _LOCK = threading.Lock()
 
-_DISPLAY_FIELDS = ["title", "artist", "genre", "cover_art_path"]
+_DISPLAY_FIELDS = ["title", "artist", "sonic_axes", "cover_art_path"]
 _MIN_TRACKS = 8
+
+# Each sonic axis is BIPOLAR; an island is labelled by the pole (high|low) it
+# leans toward, z-scored against the project's reference axis stats (see build()).
+_AXIS_WORDS = {
+    "ru": {
+        "energy": ("Энергичная", "Спокойная"),
+        "vocal_lead": ("Вокальная", "Инструментальная"),
+        "spacious": ("Просторная", "Камерная"),
+        "experimental": ("Экспериментальная", "Ровная"),
+        "brightness": ("Яркая", "Тёмная"),
+        "acousticness": ("Акустичная", "Электронная"),
+    },
+    "en": {
+        "energy": ("Energetic", "Calm"),
+        "vocal_lead": ("Vocal", "Instrumental"),
+        "spacious": ("Spacious", "Intimate"),
+        "experimental": ("Experimental", "Steady"),
+        "brightness": ("Bright", "Dark"),
+        "acousticness": ("Acoustic", "Electronic"),
+    },
+}
+_Z_THRESHOLD = 0.5   # how far a cluster must lean (in σ) from the library to earn a word
 
 
 def invalidate(collection_name: str | None = None) -> None:
@@ -132,7 +153,59 @@ def build(*, qdrant_client, collection_name: str, lang: str = "en"):
     k = int(min(8, max(3, round(n / 40))))
     labels, C = _kmeans(coords, k, seed=0)
 
-    mixed = "Разное" if lang == "ru" else "Mixed"
+    # ── Sonic naming ──────────────────────────────────────────────────────
+    # Z-score each track's axes with the SAME blended reference stats the
+    # recommendations radar uses (collection stats shrunk toward the bundled
+    # reference) — no per-library mean/std recomputed here. Then label each
+    # island by the 1-2 axes whose mean z most exceeds the threshold.
+    from app.resources.clap_features import (
+        AXIS_NAMES, blend_axis_stats, load_axis_norm_reference,
+    )
+    from app.resources.metadata_db import MetadataDB
+
+    words = _AXIS_WORDS.get(lang, _AXIS_WORDS["en"])
+    baseline = "Разное" if lang == "ru" else "Mixed"
+    axis_stats = blend_axis_stats(
+        MetadataDB.get_axis_norm_stats(collection_name), load_axis_norm_reference(),
+    )
+    a_mean = (axis_stats or {}).get("mean") or {}
+    a_std = (axis_stats or {}).get("std") or {}
+
+    na = len(AXIS_NAMES)
+    Z = np.full((n, na), np.nan, dtype=np.float64)   # per-track z (NaN = no signal)
+    if axis_stats:
+        for i in range(n):
+            sa = disp[i].get("sonic_axes")
+            if not isinstance(sa, dict):
+                continue
+            for ai, an in enumerate(AXIS_NAMES):
+                raw = sa.get(an)
+                if not isinstance(raw, (int, float)):
+                    continue
+                s = a_std.get(an, 0.0)
+                Z[i, ai] = (raw - a_mean.get(an, 0.0)) / s if s > 1e-9 else 0.0
+    finite = np.isfinite(Z)
+
+    def _island_name(mask):
+        fm = finite[mask]
+        ccnt = fm.sum(0)
+        if int(ccnt.sum()) == 0:
+            return baseline
+        czm = np.where(ccnt > 0, np.where(fm, Z[mask], 0.0).sum(0) / np.maximum(ccnt, 1), 0.0)
+        order = [int(a) for a in np.argsort(-np.abs(czm))]
+        strong = [a for a in order if ccnt[a] > 0 and abs(czm[a]) >= _Z_THRESHOLD]
+        if not strong:
+            return baseline
+
+        def _w(a):
+            hi, lo = words[AXIS_NAMES[a]]
+            return hi if czm[a] >= 0 else lo
+
+        if len(strong) >= 2:
+            sep = " и " if lang == "ru" else " & "
+            return f"{_w(strong[0])}{sep}{_w(strong[1]).lower()}"
+        return _w(strong[0])
+
     clusters = []
     for j in range(C.shape[0]):
         mask = labels == j
@@ -140,12 +213,7 @@ def build(*, qdrant_client, collection_name: str, lang: str = "en"):
         if size == 0:
             continue
         members = [ids[i] for i in range(n) if labels[i] == j]
-        gen = Counter(
-            (disp[i].get("genre") or "").strip()
-            for i in range(n)
-            if labels[i] == j and (disp[i].get("genre") or "").strip()
-        )
-        name = gen.most_common(1)[0][0] if gen else mixed
+        name = _island_name(mask)
         pts = coords[mask]
         d = ((pts - C[j]) ** 2).sum(1)
         spread = float(np.sqrt(d.mean())) if size else 0.1
