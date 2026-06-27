@@ -2196,6 +2196,102 @@ class MetadataDB:
         conn.commit()
         return cur.rowcount > 0
 
+    # ── Owner admin: per-account stats + full account deletion ─────────────
+    @classmethod
+    def account_stats(cls, collection_name: str) -> Dict[str, float]:
+        """Library summary for one account's collection: track count, total
+        seconds listened, and liked-track count. Cheap COUNT/SUM scans — fine for
+        the small member rosters a personal server has. Reads SQLite only, so it
+        works even when Qdrant is down."""
+        conn = cls._connect()
+        songs = conn.execute(
+            "SELECT COUNT(*) FROM track_metadata WHERE collection_name = ?",
+            (collection_name,),
+        ).fetchone()[0]
+        listened = conn.execute(
+            "SELECT COALESCE(SUM(played_sec), 0) FROM playback_events WHERE collection_name = ?",
+            (collection_name,),
+        ).fetchone()[0]
+        likes = conn.execute(
+            "SELECT COUNT(*) FROM track_reactions "
+            "WHERE collection_name = ? AND reaction = 'like'",
+            (collection_name,),
+        ).fetchone()[0]
+        return {
+            "songs": int(songs or 0),
+            "listened_sec": float(listened or 0.0),
+            "likes": int(likes or 0),
+        }
+
+    @classmethod
+    def list_account_cover_paths(cls, collection_name: str) -> list[str]:
+        """Distinct non-empty ``cover_art_path`` values for an account's tracks.
+        Captured BEFORE deletion so the reference-counted cover cleanup knows
+        which files to re-check afterwards."""
+        conn = cls._connect()
+        rows = conn.execute(
+            "SELECT DISTINCT cover_art_path FROM track_metadata "
+            "WHERE collection_name = ? AND cover_art_path IS NOT NULL "
+            "AND cover_art_path != ''",
+            (collection_name,),
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    @classmethod
+    def cover_reference_count(cls, cover_art_path: str) -> int:
+        """How many track rows (across ALL accounts) still reference this cover.
+        Called after an account's rows are deleted: 0 ⇒ the cover file is now an
+        orphan and safe to unlink; >0 ⇒ another account shares it — keep the
+        file. This is what makes cover cleanup safe despite content-addressed
+        (hash-named) covers being shared between accounts."""
+        conn = cls._connect()
+        return conn.execute(
+            "SELECT COUNT(*) FROM track_metadata WHERE cover_art_path = ?",
+            (cover_art_path,),
+        ).fetchone()[0]
+
+    @classmethod
+    def delete_account_data(cls, user_id: str, collection_name: str) -> None:
+        """Remove ALL data belonging to one account, in a single transaction.
+
+        Two scoping keys: most tables key on ``collection_name`` (= acct_{id});
+        the upload / Yandex tables key on ``account_id`` (= user_id). FK cascades
+        (foreign_keys=ON, set per connection) handle child rows —
+        track_metadata→track_artist_slugs, playlists→playlist_tracks, and
+        users→invites(created_by). ``invites.consumed_by`` is ON DELETE SET NULL,
+        so the invite this member used survives as an already-consumed row.
+
+        Deliberately does NOT touch the global, slug-keyed knowledge base
+        (artists / songs / artist_facts / song_facts / refined_facts): those are
+        shared across accounts; their ``collection_name`` is provenance only.
+
+        Atomic: any failure rolls the whole thing back — never a half-deleted
+        account.
+        """
+        conn = cls._connect()
+        by_collection = (
+            "track_reactions", "collection_settings", "playback_events",
+            "ai_indexing_jobs", "sonic_vibes", "artist_bios",
+            "recsys_llm_texts", "playlists", "track_metadata",
+        )
+        by_account = ("pending_uploads", "yandex_accounts", "yandex_imports")
+        try:
+            for tbl in by_collection:
+                conn.execute(
+                    f"DELETE FROM {tbl} WHERE collection_name = ?",
+                    (collection_name,),
+                )
+            for tbl in by_account:
+                conn.execute(
+                    f"DELETE FROM {tbl} WHERE account_id = ?",
+                    (user_id,),
+                )
+            conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
     @classmethod
     def list_users_with_invite(cls) -> list[dict]:
         """All users with the invite code each registered through (LEFT JOIN on

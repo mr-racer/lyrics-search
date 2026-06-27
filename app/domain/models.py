@@ -779,6 +779,10 @@ class InviteResponse(BaseModel):
     expires_at: float
     consumed: bool
     consumed_at: Optional[float] = None
+    # Full registration URL (PUBLIC_BASE_URL or LAN-IP fallback + invite hash),
+    # built server-side so the link works behind a reverse proxy. None on older
+    # servers — the client then falls back to window.location.origin.
+    link: Optional[str] = None
 
 
 # ── Instance settings (owner-only; server-mode onboarding) ──────────────────
@@ -814,10 +818,22 @@ class InstanceSettingsPatch(BaseModel):
 
 class MemberResponse(BaseModel):
     """One row of GET /admin/members (owner-only). ``invite_code`` is the code a
-    member registered with (None for the owner / pre-invite accounts)."""
+    member registered with (None for the owner / pre-invite accounts). The stats
+    triplet summarizes that account's library (collection ``acct_{id}``): how many
+    tracks, total seconds listened, and how many liked tracks."""
     id: str
     email: str
     role: Literal["owner", "member"]
     created_at: float
     last_login_at: Optional[float] = None
     invite_code: Optional[str] = None
+    songs: int = 0
+    listened_sec: float = 0.0
+    likes: int = 0
+
+
+class DeleteAccountRequest(BaseModel):
+    """Body of DELETE /admin/accounts/{user_id}. ``confirm_email`` must match the
+    target's email — a defense-in-depth guard so a UI bug can't wipe the wrong
+    account on a bare path id."""
+    confirm_email: str

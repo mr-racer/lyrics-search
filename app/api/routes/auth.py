@@ -27,13 +27,17 @@ router = APIRouter(prefix="/auth", tags=["Auth"])
 
 
 def _to_invite_response(inv) -> InviteResponse:
-    """Map domain Invite → public InviteResponse (drops created_by)."""
+    """Map domain Invite → public InviteResponse (drops created_by). ``link`` is
+    the full registration URL, built from the server-resolved public base URL so
+    it works behind a reverse proxy."""
+    from app.services.public_url import invite_url
     return InviteResponse(
         code=inv.code,
         created_at=inv.created_at,
         expires_at=inv.expires_at,
         consumed=inv.consumed_at is not None,
         consumed_at=inv.consumed_at,
+        link=invite_url(inv.code),
     )
 
 

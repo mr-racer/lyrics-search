@@ -202,3 +202,22 @@ def drop_transcoded_for_tracks(account_id: str, track_ids: Iterable[str]) -> int
             except OSError as e:
                 logger.warning("[audio_streaming] failed to remove %s: %s", p, e)
     return n
+
+
+def drop_account_transcodes(account_id: str) -> bool:
+    """Remove an account's ENTIRE transcoded-cache directory
+    (``cache/transcoded/<account_id>/``). Used when deleting an account outright,
+    where enumerating individual track ids (e.g. via Qdrant) may be impossible if
+    the collection is already gone. Scoped to the account's own namespace, so it
+    can never touch another account's cache. Returns True if a directory was
+    removed."""
+    import shutil
+    account_dir = _CACHE_DIR / account_id
+    if not account_dir.exists():
+        return False
+    try:
+        shutil.rmtree(account_dir)
+        return True
+    except OSError as e:
+        logger.warning("[audio_streaming] failed to remove cache dir %s: %s", account_dir, e)
+        return False

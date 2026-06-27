@@ -6553,6 +6553,16 @@ function inviteLink(code) {
   return `${window.location.origin}/#/register?invite=${code}`;
 }
 
+// Human-friendly listening duration. No tech jargon — just hours/minutes.
+function fmtListenDuration(sec, ru) {
+  const s = Math.max(0, Math.round(sec || 0));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h > 0) return ru ? `${h} ч ${m} мин` : `${h}h ${m}m`;
+  if (m > 0) return ru ? `${m} мин` : `${m} min`;
+  return ru ? `${s} сек` : `${s} sec`;
+}
+
 function InvitesPanel({ lang, showToast, hideHeader, reloadKey }) {
   const [invites, setInvites] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -6568,8 +6578,11 @@ function InvitesPanel({ lang, showToast, hideHeader, reloadKey }) {
 
   useEffect(() => { reload(); }, [reload, reloadKey]);
 
-  const copyLink = (code) => {
-    navigator.clipboard?.writeText(inviteLink(code)).catch(() => {});
+  const copyLink = (iv) => {
+    // Prefer the server-built link (PUBLIC_BASE_URL / LAN-IP — works behind a
+    // reverse proxy); fall back to the browser origin for older servers.
+    const url = (iv && iv.link) || inviteLink(iv.code);
+    navigator.clipboard?.writeText(url).catch(() => {});
     showToast(lang === 'ru' ? 'Ссылка-приглашение скопирована' : 'Invite link copied');
   };
 
@@ -6577,7 +6590,7 @@ function InvitesPanel({ lang, showToast, hideHeader, reloadKey }) {
     setCreating(true);
     try {
       const inv = await apiFetch('/auth/invites', { method: 'POST' });
-      copyLink(inv.code);   // copy the full link, not just the bare code
+      copyLink(inv);   // copy the full link, not just the bare code
       reload();
     } catch (err) {
       showToast(String(err.message || err));
@@ -6632,7 +6645,7 @@ function InvitesPanel({ lang, showToast, hideHeader, reloadKey }) {
               </div>
             </div>
             <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-              <button onClick={() => copyLink(iv.code)}
+              <button onClick={() => copyLink(iv)}
                 style={{
                   fontSize: 11, padding: '4px 10px', borderRadius: 6,
                   background: 'rgba(124,91,255,0.12)', color: '#bba8ff',
@@ -6656,48 +6669,108 @@ function InvitesPanel({ lang, showToast, hideHeader, reloadKey }) {
   );
 }
 
-// Owner-only roster (server mode). Shows who registered and via which invite —
-// backed by GET /admin/members.
-function MembersPanel({ lang, showToast, hideHeader }) {
-  const [members, setMembers] = useState([]);
-  const [loading, setLoading] = useState(false);
+// Owner-only roster (server mode). Presentational: members + loading come from
+// the parent (OwnerAdminDashboard owns the fetch so the stats summary can read
+// the same data). Per-row stats + a guarded delete flow live here.
+function MembersPanel({ members, loading, onReload, lang, showToast, hideHeader }) {
+  const ru = lang === 'ru';
+  const [confirmId, setConfirmId] = useState('');   // member row showing the confirm box
+  const [confirmText, setConfirmText] = useState('');
+  const [deletingId, setDeletingId] = useState('');
 
-  useEffect(() => {
-    setLoading(true);
-    apiFetch('/admin/members')
-      .then(setMembers)
-      .catch(err => showToast(String(err.message || err)))
-      .finally(() => setLoading(false));
-  }, [showToast]);
+  const startConfirm = (id) => { setConfirmId(id); setConfirmText(''); };
+  const cancelConfirm = () => { setConfirmId(''); setConfirmText(''); };
+
+  const doDelete = async (m) => {
+    if (deletingId) return;
+    setDeletingId(m.id);
+    try {
+      await apiFetch(`/admin/accounts/${encodeURIComponent(m.id)}`, {
+        method: 'DELETE',
+        body: JSON.stringify({ confirm_email: confirmText.trim() }),
+      });
+      showToast(ru ? `Аккаунт ${m.email} удалён` : `Account ${m.email} deleted`);
+      cancelConfirm();
+      onReload && onReload();
+    } catch (err) {
+      showToast(String(err.message || err));
+    } finally {
+      setDeletingId('');
+    }
+  };
 
   return (
     <div style={hideHeader ? { paddingTop: 2 } : { padding: '16px 0', borderTop: '1px solid rgba(255,255,255,0.05)' }}>
       {!hideHeader && (
         <div className="mono" style={{ fontSize: 11, letterSpacing: '0.18em', color: 'rgba(238,238,243,.5)', marginBottom: 10 }}>
-          {lang === 'ru' ? 'УЧАСТНИКИ' : 'MEMBERS'}{members.length > 0 ? ` · ${members.length}` : ''}
+          {ru ? 'УЧАСТНИКИ' : 'MEMBERS'}{members.length > 0 ? ` · ${members.length}` : ''}
         </div>
       )}
-      {loading && <div style={{ fontSize: 12, color: '#666' }}>{lang === 'ru' ? 'Загрузка…' : 'Loading…'}</div>}
+      {loading && <div style={{ fontSize: 12, color: '#666' }}>{ru ? 'Загрузка…' : 'Loading…'}</div>}
       {!loading && members.length === 0 && (
-        <div style={{ fontSize: 12, color: '#666' }}>{lang === 'ru' ? 'Пока только вы' : 'Just you so far'}</div>
+        <div style={{ fontSize: 12, color: '#666' }}>{ru ? 'Пока только вы' : 'Just you so far'}</div>
       )}
       {members.map(m => {
         const joined = m.created_at ? new Date(m.created_at * 1000).toLocaleDateString() : '';
+        const isOwner = m.role === 'owner';
+        const confirming = confirmId === m.id;
+        const matches = confirmText.trim().toLowerCase() === (m.email || '').toLowerCase();
         return (
-          <div key={m.id} style={{
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-            padding: '8px 0', borderBottom: '1px solid rgba(255,255,255,0.03)',
-          }}>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 13, color: '#eee', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.email}</div>
-              <div style={{ fontSize: 11, color: '#666', marginTop: 2 }}>
-                {m.role === 'owner'
-                  ? (lang === 'ru' ? 'владелец' : 'owner')
-                  : (lang === 'ru' ? `участник · с ${joined}` : `member · since ${joined}`)}
+          <div key={m.id} style={{ padding: '10px 0', borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: 13, color: '#eee', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.email}</div>
+                <div style={{ fontSize: 11, color: '#666', marginTop: 2 }}>
+                  {isOwner
+                    ? (ru ? 'владелец' : 'owner')
+                    : (ru ? `участник · с ${joined}` : `member · since ${joined}`)}
+                </div>
+                <div style={{ fontSize: 11, color: '#8a8a93', marginTop: 4, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                  <span>♪ {m.songs || 0}</span>
+                  <span>⏱ {fmtListenDuration(m.listened_sec, ru)}</span>
+                  <span>♥ {m.likes || 0}</span>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
+                {m.invite_code && (
+                  <span className="mono" style={{ fontSize: 10, color: '#777' }}>{m.invite_code}</span>
+                )}
+                {!isOwner && !confirming && (
+                  <button onClick={() => startConfirm(m.id)}
+                    style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, background: 'transparent',
+                      color: '#ff9090', border: '1px solid rgba(255,80,80,0.25)', cursor: 'pointer' }}>
+                    {ru ? 'Удалить' : 'Delete'}
+                  </button>
+                )}
               </div>
             </div>
-            {m.invite_code && (
-              <span className="mono" style={{ fontSize: 10, color: '#777', flexShrink: 0, marginLeft: 10 }}>{m.invite_code}</span>
+            {confirming && (
+              <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 8,
+                background: 'rgba(255,80,80,0.07)', border: '1px solid rgba(255,80,80,0.2)' }}>
+                <div style={{ fontSize: 11.5, color: '#ffb0b0', lineHeight: 1.5, marginBottom: 8 }}>
+                  {ru
+                    ? 'Удалит всё безвозвратно: песни, прослушивания, лайки, загруженные файлы. Введите email для подтверждения:'
+                    : 'Permanently removes everything: songs, plays, likes, uploaded files. Type the email to confirm:'}
+                </div>
+                <input value={confirmText} onChange={e => setConfirmText(e.target.value)}
+                  placeholder={m.email} autoFocus
+                  style={{ width: '100%', padding: '7px 10px', borderRadius: 7, fontSize: 12, boxSizing: 'border-box',
+                    border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(0,0,0,0.3)', color: '#eee', outline: 'none', marginBottom: 8 }} />
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button disabled={!matches || deletingId === m.id} onClick={() => doDelete(m)}
+                    style={{ fontSize: 12, padding: '6px 14px', borderRadius: 7, border: 'none',
+                      cursor: (matches && deletingId !== m.id) ? 'pointer' : 'not-allowed',
+                      background: matches ? 'oklch(58% 0.21 25)' : 'rgba(255,80,80,0.15)',
+                      color: matches ? '#fff' : '#ff9090', opacity: deletingId === m.id ? 0.6 : 1 }}>
+                    {deletingId === m.id ? (ru ? 'Удаление…' : 'Deleting…') : (ru ? 'Удалить навсегда' : 'Delete permanently')}
+                  </button>
+                  <button onClick={cancelConfirm}
+                    style={{ fontSize: 12, padding: '6px 14px', borderRadius: 7, background: 'transparent',
+                      color: '#999', border: '1px solid rgba(255,255,255,0.1)', cursor: 'pointer' }}>
+                    {ru ? 'Отмена' : 'Cancel'}
+                  </button>
+                </div>
+              </div>
             )}
           </div>
         );
@@ -6740,7 +6813,9 @@ function InstanceAISettings({ isDark, lang, showToast }) {
       const sbool = (k, dflt) => {
         const v = s[k] && s[k].value;
         if (v == null) return dflt;
-        return String(v).toLowerCase() === 'true';
+        // Backend emits bool settings as '1'/'0' (not 'true'/'false'), so accept
+        // the common truthy spellings — otherwise a saved-ON toggle reads OFF.
+        return ['1', 'true', 'yes', 'on'].includes(String(v).trim().toLowerCase());
       };
       setBaseUrl(sval('LLM_BASE_URL'));
       setModel(sval('LLM_MODEL'));
@@ -6886,15 +6961,36 @@ function OwnerAdminDashboard({ onLogout }) {
   const handleTheme = () => setDark(d => { const n = !d; localStorage.setItem('musix_theme', n ? 'dark' : 'light'); return n; });
   const toggleLang = () => setLang(l => { const n = l === 'ru' ? 'en' : 'ru'; localStorage.setItem('musix_lang', n); return n; });
   const email = localStorage.getItem('musix_user_email') || '';
-  const [editAi, setEditAi] = useState(false);
   const [invBump, setInvBump] = useState(0);   // bump → InvitesPanel reloads after a callout-created invite
   const [calloutBusy, setCalloutBusy] = useState(false);
+
+  // Members are fetched here (not inside MembersPanel) so the stats-summary card
+  // and the roster share one source. Reload via a bump counter — depending on a
+  // (re-created-every-render) showToast in the effect would loop forever.
+  const [members, setMembers] = useState([]);
+  const [membersLoading, setMembersLoading] = useState(false);
+  const [membersBump, setMembersBump] = useState(0);
+  const reloadMembers = () => setMembersBump(b => b + 1);
+  useEffect(() => {
+    let alive = true;
+    setMembersLoading(true);
+    apiFetch('/admin/members')
+      .then(d => { if (alive) setMembers(d); })
+      .catch(e => { if (alive) setToast(String(e.message || e)); })
+      .finally(() => { if (alive) setMembersLoading(false); });
+    return () => { alive = false; };
+  }, [membersBump]);
+  const totals = members.reduce((a, m) => ({
+    songs: a.songs + (m.songs || 0),
+    listened: a.listened + (m.listened_sec || 0),
+    likes: a.likes + (m.likes || 0),
+  }), { songs: 0, listened: 0, likes: 0 });
   const createInviteFromCallout = async () => {
     if (calloutBusy) return;
     setCalloutBusy(true);
     try {
       const inv = await apiFetch('/auth/invites', { method: 'POST' });
-      try { await navigator.clipboard?.writeText(inviteLink(inv.code)); } catch (e) {}
+      try { await navigator.clipboard?.writeText(inv.link || inviteLink(inv.code)); } catch (e) {}
       showToast(ru ? 'Приглашение создано — ссылка скопирована' : 'Invite created — link copied');
       setInvBump(b => b + 1);
     } catch (e) { showToast(String(e.message || e)); }
@@ -6972,35 +7068,43 @@ function OwnerAdminDashboard({ onLogout }) {
           </button>
         </div>
 
-        {/* three sections, side by side */}
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:14, alignItems:'start' }}>
-          <div className="ob-glass" style={{ padding: '18px 20px' }}>
-            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10 }}>
-              <div className="serif" style={{ fontSize: 17, fontWeight: 600 }}>
-                {ru ? 'Настройки системы' : 'System settings'}
-              </div>
-              <button onClick={() => setEditAi(v => !v)}
-                style={{ background:'transparent', border:'none', color:'#c3b8ff', fontSize:12.5, textDecoration:'underline', cursor:'pointer', flexShrink:0 }}>
-                {editAi ? (ru ? 'Свернуть' : 'Collapse') : (ru ? 'Изменить →' : 'Edit →')}
-              </button>
-            </div>
-            {editAi ? (
-              <div style={{ marginTop: 16 }}>
-                <InstanceAISettings isDark={isDark} lang={lang} showToast={showToast} />
-              </div>
-            ) : (
-              <div style={{ fontSize: 12.5, color: c.textMuted, lineHeight: 1.5, marginTop: 8 }}>
-                {ru ? 'Модель поиска по текстам и гуру (AI) — применяются ко всем участникам.'
-                    : 'Lyrics-search model and guru (AI) — applied to all members.'}
-              </div>
-            )}
+        {/* instance stats summary — totals across all accounts */}
+        <div className="ob-glass" style={{ padding: '16px 20px', marginBottom: 14 }}>
+          <div className="mono" style={{ fontSize: 11, letterSpacing: '0.18em', color: 'rgba(238,238,243,.5)', marginBottom: 12 }}>
+            {ru ? 'СВОДКА' : 'OVERVIEW'}
           </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
+            {[
+              { label: ru ? 'Аккаунтов' : 'Accounts', value: members.length },
+              { label: ru ? 'Всего песен' : 'Total songs', value: totals.songs },
+              { label: ru ? 'Прослушано' : 'Listened', value: fmtListenDuration(totals.listened, ru) },
+              { label: ru ? 'Лайков' : 'Likes', value: totals.likes },
+            ].map((s, i) => (
+              <div key={i} style={{ minWidth: 0 }}>
+                <div className="serif" style={{ fontSize: 24, fontWeight: 600, letterSpacing: '-0.01em',
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.value}</div>
+                <div style={{ fontSize: 11.5, color: c.textMuted, marginTop: 2 }}>{s.label}</div>
+              </div>
+            ))}
+          </div>
+        </div>
 
+        {/* system settings — always open, full width */}
+        <div className="ob-glass" style={{ padding: '18px 22px', marginBottom: 14 }}>
+          <div className="serif" style={{ fontSize: 17, fontWeight: 600, marginBottom: 16 }}>
+            {ru ? 'Настройки системы' : 'System settings'}
+          </div>
+          <InstanceAISettings isDark={isDark} lang={lang} showToast={showToast} />
+        </div>
+
+        {/* members + invites side by side */}
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(2, 1fr)', gap:14, alignItems:'start' }}>
           <div className="ob-glass" style={{ padding: '18px 20px' }}>
             <div className="serif" style={{ fontSize: 17, fontWeight: 600, marginBottom: 4 }}>
               {ru ? 'Участники' : 'Members'}
             </div>
-            <MembersPanel lang={lang} showToast={showToast} hideHeader />
+            <MembersPanel members={members} loading={membersLoading} onReload={reloadMembers}
+              lang={lang} showToast={showToast} hideHeader />
           </div>
 
           <div className="ob-glass" style={{ padding: '18px 20px' }}>
