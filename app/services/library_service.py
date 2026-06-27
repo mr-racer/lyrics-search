@@ -377,6 +377,15 @@ class LibraryService:
                 )
 
         job.overall_status = IndexStatus.COMPLETED
+        # Persist the handoff on the job (not just in the transient event) so a
+        # LATE SSE subscriber — one that connects after the download already
+        # finished — still gets indexing_job_id in the stream's initial
+        # get_progress_summary() snapshot. Without this, a fast/deduped download
+        # races the EventSource: the live completion event is delivered to zero
+        # subscribers and the late connector sees completed WITHOUT the handoff,
+        # navigating away while indexing is still running in the background.
+        if indexing_job_id:
+            job.indexing_job_id = indexing_job_id
         completion = {
             "overall_status": IndexStatus.COMPLETED.value,
             "message": (

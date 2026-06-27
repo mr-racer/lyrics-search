@@ -7788,8 +7788,22 @@ function YandexImportFlow({ isDark, lang, onDone, onBack }) {
         if (data.yandex_report) setReport(data.yandex_report);
         if (data.overall_status === 'completed') {
           evt.close();
-          if (data.indexing_job_id) setIndexingJobId(data.indexing_job_id);
-          else { setNoIndex(true); setTimeout(onDone, 1800); }
+          if (data.indexing_job_id) {
+            setIndexingJobId(data.indexing_job_id);
+          } else {
+            // Race fallback: if we subscribed after the download already finished,
+            // the live handoff event may have been missed (and the backend snapshot
+            // didn't carry it on an older build). Ask the account's current job
+            // directly — after download it's the indexing job that's now running.
+            apiFetch('/import/yandex/status').then(s => {
+              const jid = s && s.job_id;
+              if (jid && jid !== downloadJobId && s.overall_status !== 'completed') {
+                setIndexingJobId(jid);
+              } else {
+                setNoIndex(true); setTimeout(onDone, 1800);
+              }
+            }).catch(() => { setNoIndex(true); setTimeout(onDone, 1800); });
+          }
         } else if (data.overall_status === 'failed') {
           evt.close();
           setProgErr(data.error || data.message || (ru ? 'Импорт не удался' : 'Import failed'));
