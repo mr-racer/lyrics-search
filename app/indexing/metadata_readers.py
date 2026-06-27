@@ -188,6 +188,38 @@ def get_mp3_metadata(filepath: str) -> dict:
     }
 
 
+def read_embedded_lyrics(filepath: Path) -> str | None:
+    """Return lyrics embedded in the file's tags, or None.
+
+    Lets Yandex-imported tracks (which carry lyrics written by the import
+    downloader) skip the online lyrics fetch. Reads USLT (MP3), ``LYRICS``/
+    ``lyrics`` (FLAC/Vorbis), and ``©lyr`` (MP4/M4A). Best-effort: any read
+    error returns None so the caller falls back to the online fetchers.
+    """
+    suffix = filepath.suffix.lower()
+    try:
+        if suffix == ".flac":
+            val = FLAC(str(filepath)).get("lyrics") or FLAC(str(filepath)).get("LYRICS")
+            text = val[0] if val else None
+        elif suffix == ".m4a":
+            val = MP4(str(filepath)).tags.get("\xa9lyr") if MP4(str(filepath)).tags else None
+            text = val[0] if val else None
+        elif suffix == ".mp3":
+            from mutagen.id3 import ID3, ID3NoHeaderError
+            try:
+                id3 = ID3(str(filepath))
+            except ID3NoHeaderError:
+                return None
+            frames = id3.getall("USLT")
+            text = frames[0].text if frames else None
+        else:
+            return None
+    except Exception:
+        return None
+    text = (text or "").strip()
+    return text or None
+
+
 def get_metadata(filepath: Path) -> dict | None:
     """Dispatch to format-specific readers; return None on failure."""
     try:

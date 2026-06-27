@@ -7670,6 +7670,321 @@ function MemberIndexing({ ru, c, isDark, jobId, onDone }) {
   );
 }
 
+// Yandex Music import, embedded in the onboarding "Music" step. Self-contained
+// state machine: auth (device flow) → sources (multi-select) → progress (download
+// then the normal indexing wizard). Talks to the /import/yandex/* endpoints and,
+// for the indexing phase, reuses MemberIndexing on the indexing_job_id the backend
+// hands back in the download job's completion event.
+function YandexImportFlow({ isDark, lang, onDone, onBack }) {
+  const c = useColors(isDark);
+  const ru = lang === 'ru';
+  const [step, setStep] = useState('auth');     // 'auth' | 'sources' | 'progress'
+  const [authErr, setAuthErr] = useState(null);
+  const [session, setSession] = useState(null); // {session_id, user_code, verification_url}
+
+  // ── Auth: device flow ────────────────────────────────────────────────────
+  const startAuth = useCallback(async () => {
+    setAuthErr(null);
+    setSession(null);
+    try {
+      const res = await apiFetch('/import/yandex/auth/start', { method: 'POST' });
+      if (res.status === 'authorized') { setStep('sources'); return; }
+      setSession(res);
+    } catch (e) {
+      setAuthErr(e.message);
+    }
+  }, []);
+
+  // On mount: skip auth if already linked, else kick off the device flow.
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch('/import/yandex')
+      .then(res => { if (!cancelled) { if (res && res.linked) setStep('sources'); else startAuth(); } })
+      .catch(() => { if (!cancelled) startAuth(); });
+    return () => { cancelled = true; };
+  }, [startAuth]);
+
+  // Poll the device session until authorized / expired / error.
+  useEffect(() => {
+    if (step !== 'auth' || !session?.session_id) return;
+    let stop = false;
+    const tick = async () => {
+      try {
+        const s = await apiFetch(`/import/yandex/auth/status?session_id=${encodeURIComponent(session.session_id)}`);
+        if (stop) return;
+        if (s.status === 'authorized') { setStep('sources'); return; }
+        if (s.status === 'expired' || s.status === 'error') {
+          setAuthErr(s.error || (s.status === 'expired' ? (ru ? 'Код истёк' : 'Code expired') : (ru ? 'Ошибка входа' : 'Login error')));
+          return;
+        }
+        if (s.user_code && !session.user_code) setSession(prev => ({ ...prev, ...s }));
+      } catch (e) { /* transient — keep polling */ }
+    };
+    const id = setInterval(tick, 2000);
+    return () => { stop = true; clearInterval(id); };
+  }, [step, session?.session_id, session?.user_code, ru]);
+
+  // ── Sources: list + multi-select ─────────────────────────────────────────
+  const [sources, setSources] = useState(null);  // null = loading
+  const [srcErr, setSrcErr] = useState(null);
+  const [selected, setSelected] = useState(() => new Set());
+
+  useEffect(() => {
+    if (step !== 'sources') return;
+    let cancelled = false;
+    setSources(null);
+    setSrcErr(null);
+    apiFetch('/import/yandex/playlists')
+      .then(res => { if (!cancelled) setSources(res.sources || []); })
+      .catch(e => {
+        if (cancelled) return;
+        if (/not linked/i.test(e.message) || /401/.test(e.message)) { setStep('auth'); startAuth(); }
+        else setSrcErr(e.message);
+      });
+    return () => { cancelled = true; };
+  }, [step, startAuth]);
+
+  const srcKey = (s) => (s === 'likes' ? 'likes' : `kind:${s.kind}`);
+  const toggle = (key) => setSelected(prev => {
+    const next = new Set(prev);
+    next.has(key) ? next.delete(key) : next.add(key);
+    return next;
+  });
+
+  // ── Progress: start import + follow the download job ──────────────────────
+  const [downloadJobId, setDownloadJobId] = useState(null);
+  const [dl, setDl] = useState({ current: 0, total: 0, message: '' });
+  const [indexingJobId, setIndexingJobId] = useState(null);
+  const [report, setReport] = useState(null);
+  const [progErr, setProgErr] = useState(null);
+  const [noIndex, setNoIndex] = useState(false);  // download done, nothing to index
+
+  const startImport = async () => {
+    const chosen = (sources || []).filter(s => selected.has(srcKey(s.source)));
+    const body = chosen.map(s => (s.source === 'likes' ? { source: 'likes' } : { kind: s.source.kind }));
+    if (!body.length) return;
+    setProgErr(null);
+    setStep('progress');
+    try {
+      const res = await apiFetch('/import/yandex/start', {
+        method: 'POST',
+        body: JSON.stringify({ sources: body, lang }),
+      });
+      setDownloadJobId(res.job_id);
+    } catch (e) {
+      setProgErr(e.message);
+    }
+  };
+
+  useEffect(() => {
+    if (!downloadJobId) return;
+    const evt = new EventSource(`${API}/index/progress/${downloadJobId}`);
+    evt.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.stage === 'download') {
+          setDl({ current: data.current ?? 0, total: data.total ?? 0, message: data.message || '' });
+        }
+        if (data.yandex_report) setReport(data.yandex_report);
+        if (data.overall_status === 'completed') {
+          evt.close();
+          if (data.indexing_job_id) {
+            setIndexingJobId(data.indexing_job_id);
+          } else {
+            // Race fallback: if we subscribed after the download already finished,
+            // the live handoff event may have been missed (and the backend snapshot
+            // didn't carry it on an older build). Ask the account's current job
+            // directly — after download it's the indexing job that's now running.
+            apiFetch('/import/yandex/status').then(s => {
+              const jid = s && s.job_id;
+              if (jid && jid !== downloadJobId && s.overall_status !== 'completed') {
+                setIndexingJobId(jid);
+              } else {
+                setNoIndex(true); setTimeout(onDone, 1800);
+              }
+            }).catch(() => { setNoIndex(true); setTimeout(onDone, 1800); });
+          }
+        } else if (data.overall_status === 'failed') {
+          evt.close();
+          setProgErr(data.error || data.message || (ru ? 'Импорт не удался' : 'Import failed'));
+        }
+      } catch (err) {}
+    };
+    evt.onerror = () => { /* EventSource auto-reconnects; ignore transient drops */ };
+    return () => evt.close();
+  }, [downloadJobId, onDone, ru]);
+
+  // ── Render ────────────────────────────────────────────────────────────────
+  const kicker = (txt) => (
+    <div className="mono" style={{ fontSize:'11px', color:c.textSubtle, letterSpacing:'0.24em', textTransform:'uppercase', marginBottom:'8px' }}>{txt}</div>
+  );
+  const backLink = onBack && (
+    <button onClick={onBack} className={ske('btn', isDark)}
+      style={{ marginTop:'16px', padding:'8px 16px', borderRadius:'9px', fontSize:'13px', color:c.textMuted, cursor:'pointer' }}>
+      ← {ru ? 'Назад' : 'Back'}
+    </button>
+  );
+
+  if (step === 'progress' && indexingJobId) {
+    return <MemberIndexing ru={ru} c={c} isDark={isDark} jobId={indexingJobId} onDone={onDone} />;
+  }
+
+  if (step === 'progress') {
+    const pct = dl.total > 0 ? Math.round(100 * dl.current / dl.total) : 0;
+    return (
+      <div className="ob-glass" style={{ padding:'26px 28px' }}>
+        {kicker(ru ? 'Яндекс · Импорт' : 'Yandex · Import')}
+        <h2 className="serif" style={{ fontSize:'26px', letterSpacing:'-0.02em', marginBottom:'16px' }}>
+          {progErr ? (ru ? 'Что-то пошло не так' : 'Something went wrong')
+            : noIndex ? (ru ? 'Готово' : 'Done')
+            : (ru ? 'Скачиваем из Яндекса…' : 'Downloading from Yandex…')}
+        </h2>
+        {progErr ? (
+          <>
+            <div style={{ padding:'10px 14px', borderRadius:'10px', background:c.redBg, color:c.red, fontSize:'13px' }}>{progErr}</div>
+            {backLink}
+          </>
+        ) : (
+          <>
+            <OBStageBar c={c} label={ru ? 'Скачивание' : 'Download'}
+              state={noIndex ? 'done' : 'running'} pct={noIndex ? 100 : pct}
+              indeterminate={dl.total === 0 && !noIndex} />
+            {dl.message && !noIndex && (
+              <div style={{ fontSize:'12.5px', color:c.textMuted, marginTop:'8px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{dl.message}</div>
+            )}
+            {report && (
+              <div style={{ marginTop:'14px', fontSize:'13px', color:c.textMuted }}>
+                {ru ? 'Скачано' : 'Downloaded'}: <b style={{ color:c.text }}>{report.downloaded}</b>
+                {report.already > 0 && <> · {ru ? 'уже было' : 'already'}: {report.already}</>}
+                {report.skipped?.length > 0 && (
+                  <details style={{ marginTop:'8px' }}>
+                    <summary style={{ cursor:'pointer', color:c.textSubtle }}>
+                      {ru ? 'Пропущено' : 'Skipped'}: {report.skipped.length}
+                    </summary>
+                    <div style={{ maxHeight:'140px', overflow:'auto', marginTop:'6px' }}>
+                      {report.skipped.map((s, i) => (
+                        <div key={i} style={{ fontSize:'12px', padding:'3px 0', color:c.textSubtle }}>
+                          {s.artist} — {s.title}: {s.reason}
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                )}
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    );
+  }
+
+  if (step === 'sources') {
+    const count = selected.size;
+    return (
+      <div className="ob-glass" style={{ padding:'26px 28px' }}>
+        {kicker(ru ? 'Яндекс · Шаг 2' : 'Yandex · Step 2')}
+        <h2 className="serif" style={{ fontSize:'28px', letterSpacing:'-0.02em', marginBottom:'6px' }}>
+          {ru ? <>Что <i style={{ color:'oklch(62% 0.2 275)' }}>импортировать</i></> : <>What to <i style={{ color:'oklch(62% 0.2 275)' }}>import</i></>}
+        </h2>
+        <p style={{ fontSize:'13.5px', color:c.textMuted, lineHeight:1.6, marginBottom:'18px' }}>
+          {ru ? 'Выберите один или несколько источников.' : 'Pick one or more sources.'}
+        </p>
+        {sources === null && !srcErr && (
+          <div style={{ textAlign:'center', padding:'30px', color:c.textMuted }}><Spinner size={16} /> {ru ? 'Загрузка…' : 'Loading…'}</div>
+        )}
+        {srcErr && (
+          <div style={{ padding:'10px 14px', borderRadius:'10px', background:c.redBg, color:c.red, fontSize:'13px' }}>{srcErr}</div>
+        )}
+        {sources && sources.length > 0 && (
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill, minmax(200px, 1fr))', gap:'12px' }}>
+            {sources.map((s) => {
+              const key = srcKey(s.source);
+              const on = selected.has(key);
+              return (
+                <button key={key} onClick={() => toggle(key)}
+                  className="ob-glass"
+                  style={{ display:'flex', alignItems:'center', gap:'12px', padding:'12px', borderRadius:'14px',
+                    cursor:'pointer', textAlign:'left',
+                    border:`2px solid ${on ? 'oklch(62% 0.2 275)' : c.border}`,
+                    boxShadow: on ? '0 0 0 3px oklch(62% 0.2 275 / 0.18)' : 'none' }}>
+                  {s.cover
+                    ? <img src={s.cover} alt="" style={{ width:'48px', height:'48px', borderRadius:'8px', objectFit:'cover', flexShrink:0 }} />
+                    : <div style={{ width:'48px', height:'48px', borderRadius:'8px', flexShrink:0,
+                        background:'linear-gradient(135deg, oklch(62% 0.2 275), oklch(55% 0.2 320))',
+                        display:'flex', alignItems:'center', justifyContent:'center', fontSize:'22px' }}>{s.source === 'likes' ? '♥' : '♪'}</div>}
+                  <div style={{ minWidth:0, flex:1 }}>
+                    <div style={{ fontSize:'13.5px', fontWeight:'600', color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{s.title}</div>
+                    <div style={{ fontSize:'12px', color:c.textSubtle, marginTop:'2px' }}>{s.track_count} {ru ? 'треков' : 'tracks'}</div>
+                  </div>
+                  <div style={{ width:'20px', height:'20px', borderRadius:'6px', flexShrink:0,
+                    border:`2px solid ${on ? 'oklch(62% 0.2 275)' : c.border}`,
+                    background: on ? 'oklch(62% 0.2 275)' : 'transparent',
+                    display:'flex', alignItems:'center', justifyContent:'center', color:'#fff', fontSize:'13px' }}>{on ? '✓' : ''}</div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {sources && sources.length === 0 && (
+          <div style={{ fontSize:'13px', color:c.textMuted }}>{ru ? 'Источники не найдены.' : 'No sources found.'}</div>
+        )}
+        <div style={{ display:'flex', gap:'10px', alignItems:'center', marginTop:'18px' }}>
+          <button onClick={startImport} disabled={count === 0} className="ske-accent"
+            style={{ padding:'12px 22px', borderRadius:'12px', fontSize:'14px', fontWeight:'600', letterSpacing:'0.06em',
+              cursor: count === 0 ? 'not-allowed' : 'pointer', opacity: count === 0 ? 0.5 : 1 }}>
+            {ru ? `▶ Импортировать ${count || ''}` : `▶ Import ${count || ''}`}
+          </button>
+          {onBack && (
+            <button onClick={onBack} className={ske('btn', isDark)}
+              style={{ padding:'12px 18px', borderRadius:'12px', fontSize:'13px', color:c.textMuted, cursor:'pointer' }}>
+              {ru ? 'Назад' : 'Back'}
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // step === 'auth'
+  return (
+    <div className="ob-glass" style={{ padding:'26px 28px' }}>
+      {kicker(ru ? 'Яндекс · Шаг 1' : 'Yandex · Step 1')}
+      <h2 className="serif" style={{ fontSize:'28px', letterSpacing:'-0.02em', marginBottom:'6px' }}>
+        {ru ? <>Войдите в <i style={{ color:'oklch(62% 0.2 275)' }}>Яндекс</i></> : <>Sign in to <i style={{ color:'oklch(62% 0.2 275)' }}>Yandex</i></>}
+      </h2>
+      {authErr ? (
+        <>
+          <div style={{ padding:'10px 14px', borderRadius:'10px', background:c.redBg, color:c.red, fontSize:'13px', margin:'10px 0' }}>{authErr}</div>
+          <button onClick={startAuth} className="ske-accent"
+            style={{ padding:'11px 22px', borderRadius:'10px', fontSize:'14px', fontWeight:'600', cursor:'pointer' }}>
+            {ru ? 'Попробовать снова' : 'Try again'}
+          </button>
+        </>
+      ) : !session?.user_code ? (
+        <div style={{ textAlign:'center', padding:'24px', color:c.textMuted }}><Spinner size={16} /> {ru ? 'Получаем код…' : 'Getting a code…'}</div>
+      ) : (
+        <>
+          <p style={{ fontSize:'13.5px', color:c.textMuted, lineHeight:1.6, margin:'8px 0 16px' }}>
+            {ru ? 'Откройте страницу Яндекса и введите код:' : 'Open the Yandex page and enter the code:'}
+          </p>
+          <div className="mono" style={{ fontSize:'34px', fontWeight:'700', letterSpacing:'0.18em', textAlign:'center',
+            padding:'16px', borderRadius:'14px', background: isDark ? 'rgba(255,255,255,.05)' : 'rgba(0,0,0,.04)', color:c.text, marginBottom:'16px' }}>
+            {session.user_code}
+          </div>
+          <a href={session.verification_url} target="_blank" rel="noreferrer" className="ske-accent"
+            style={{ display:'inline-block', padding:'12px 24px', borderRadius:'12px', fontSize:'14px', fontWeight:'600', cursor:'pointer', textDecoration:'none' }}>
+            {ru ? 'Открыть Яндекс ↗' : 'Open Yandex ↗'}
+          </a>
+          <div style={{ display:'flex', alignItems:'center', gap:'8px', marginTop:'16px', fontSize:'12.5px', color:c.textSubtle }}>
+            <Spinner size={13} /> {ru ? 'Ждём подтверждения…' : 'Waiting for confirmation…'}
+          </div>
+        </>
+      )}
+      {backLink}
+    </div>
+  );
+}
+
 function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
   const c = useColors(isDark);
   const [files, setFiles] = useState([]);
@@ -7680,6 +7995,7 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
   const [showWizard, setShowWizard] = useState(false);
   const [memberIndexRoot, setMemberIndexRoot] = useState(null);
   const [indexingFolder, setIndexingFolder] = useState(false);
+  const [mode, setMode] = useState('pick');   // 'pick' (upload) | 'yandex' (import)
   const ru = lang === 'ru';
   const uid = (typeof localStorage !== 'undefined' && localStorage.getItem('musix_user_id')) || '';
   // Marketing welcome shows once per account on first onboarding, then never.
@@ -7854,6 +8170,8 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
           <div style={{ flex:1, position:'relative', zIndex:1, minWidth:0 }}>
         {showWizard && jobId ? (
           <MemberIndexing ru={ru} c={c} isDark={isDark} jobId={jobId} onDone={onDone} />
+        ) : mode === 'yandex' ? (
+          <YandexImportFlow isDark={isDark} lang={lang} onDone={onDone} onBack={() => setMode('pick')} />
         ) : (
         <div>
         <div className="mono" style={{ fontSize:'11px', color:c.textSubtle, letterSpacing:'0.24em', textTransform:'uppercase', marginBottom:'8px' }}>
@@ -7906,6 +8224,25 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
             </label>
           </div>
         </div>
+
+        <button onClick={() => setMode('yandex')} disabled={anyUploading||committing}
+          className="ob-glass"
+          style={{ width:'100%', marginTop:'14px', padding:'16px 20px', borderRadius:'14px',
+            display:'flex', alignItems:'center', gap:'14px', cursor: anyUploading||committing ? 'not-allowed' : 'pointer',
+            opacity: anyUploading||committing ? 0.5 : 1, textAlign:'left' }}>
+          <div style={{ width:'44px', height:'44px', borderRadius:'11px', flexShrink:0,
+            background:'linear-gradient(135deg, #ffcc00, #ff5c5c)', color:'#1a1a1a',
+            display:'flex', alignItems:'center', justifyContent:'center', fontSize:'24px', fontWeight:'800' }}>Я</div>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontSize:'14px', fontWeight:'600', color:c.text }}>
+              {ru ? 'Импорт из Яндекс.Музыки' : 'Import from Yandex Music'}
+            </div>
+            <div style={{ fontSize:'12.5px', color:c.textMuted, marginTop:'2px' }}>
+              {ru ? '«Мне нравится» и плейлисты — со всеми тегами и обложками' : 'Liked tracks & playlists — with tags and covers'}
+            </div>
+          </div>
+          <div style={{ fontSize:'18px', color:c.textSubtle, flexShrink:0 }}>→</div>
+        </button>
 
         {memberIndexRoot && (
           <div className="ob-glass" style={{ marginTop:'14px', padding:'16px 20px', borderRadius:'14px' }}>

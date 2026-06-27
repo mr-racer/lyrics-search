@@ -179,7 +179,7 @@ class JobTracker:
                 stage_percent = (stage_progress.current / stage_progress.total) * 100
                 overall_percent += weight * stage_percent
         
-        return {
+        summary = {
             "job_id": job.job_id,
             "overall_status": job.overall_status.value,
             "overall_percent": min(100, int(overall_percent)),
@@ -198,3 +198,12 @@ class JobTracker:
             "created_at": job.created_at,
             "updated_at": job.updated_at,
         }
+        # Yandex import handoff (set on the download job): expose to LATE SSE
+        # subscribers via the stream's initial snapshot, not just the live event.
+        indexing_job_id = getattr(job, "indexing_job_id", None)
+        if indexing_job_id:
+            summary["indexing_job_id"] = indexing_job_id
+        yandex_report = getattr(job, "yandex_report", None)
+        if yandex_report is not None:
+            summary["yandex_report"] = yandex_report
+        return summary

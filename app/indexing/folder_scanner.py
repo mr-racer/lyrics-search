@@ -14,15 +14,25 @@ from tqdm.auto import tqdm
 
 from .audio_optimization import optimize_m4a_for_streaming
 from .lyrics_fetchers import get_lyrics
-from .metadata_readers import get_metadata, normalize_genre
+from .metadata_readers import get_metadata, normalize_genre, read_embedded_lyrics
 
 logger = logging.getLogger(__name__)
 
 
-def process_file(filepath: Path, better_lyrics_quality: bool) -> dict | None:
+def process_file(
+    filepath: Path,
+    better_lyrics_quality: bool,
+    *,
+    enrich_client=None,
+) -> dict | None:
     """Load metadata, enrich online where needed, then fetch lyrics.
 
     For M4A files, optimizes the file first to enable HTTP Range requests.
+
+    ``enrich_client``: optional Yandex client used by the metadata-enrichment
+    stage (feature #2). Built once per job by the caller (account token if
+    linked, else anonymous) and passed in; ``None`` lets enrichment lazily fall
+    back to a shared anonymous client.
 
     Returns:
         Full metadata dict or None if the track should be skipped.
@@ -36,7 +46,20 @@ def process_file(filepath: Path, better_lyrics_quality: bool) -> dict | None:
         logger.info("[scan] skip (missing title/artist): %s", filepath.name)
         return None
 
-    lyrics = get_lyrics(meta["title"], meta["artist"], better_lyrics_quality)
+    # Feature #2: backfill empty fields (album/year/genre) from the Yandex
+    # catalog BEFORE genre normalisation, so an enriched genre gets normalised
+    # too. Best-effort — never raises.
+    try:
+        from app.services.yandex.enrichment import enrich_metadata
+        meta = enrich_metadata(meta, client=enrich_client)
+    except Exception:
+        logger.debug("[scan] enrichment unavailable for %s", filepath.name, exc_info=True)
+
+    # Prefer lyrics embedded in the file (e.g. written by the Yandex import
+    # downloader) over an online fetch — matches the "embed Yandex data" choice.
+    lyrics = read_embedded_lyrics(filepath)
+    if not lyrics:
+        lyrics = get_lyrics(meta["title"], meta["artist"], better_lyrics_quality)
     if not lyrics:
         logger.info("[scan] no lyrics: %s — %s", meta['artist'], meta['title'])
 
