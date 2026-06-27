@@ -103,3 +103,21 @@ def test_not_linked_raises(monkeypatch):
     token_store.delete_token("u1")
     with pytest.raises(importer.YandexNotLinkedError):
         importer.download_source("u1", "likes")
+
+
+def test_multi_source_merges_and_dedups(monkeypatch):
+    # "likes" has tracks 1,2; a playlist has 2,3 — track 2 overlaps and must be
+    # downloaded once. Result: 3 unique tracks across the two sources.
+    def _resolve(client, source):
+        if source == "likes":
+            return [_track(1, "One"), _track(2, "Two")]
+        return [_track(2, "Two"), _track(3, "Three")]   # playlist, overlaps on 2
+    monkeypatch.setattr(importer.playlists, "resolve_tracks", _resolve)
+    monkeypatch.setattr(importer.downloader, "download_track", _fake_download_factory())
+
+    upload_ids, report = importer.download_sources("u1", ["likes", {"kind": 99}])
+
+    assert report["total"] == 3            # 1,2,3 — not 4
+    assert report["downloaded"] == 3
+    assert len(upload_ids) == 3
+    assert MetadataDB.get_imported_yandex_track_ids("u1") == {"1", "2", "3"}

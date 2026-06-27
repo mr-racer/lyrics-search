@@ -94,10 +94,28 @@ async def list_playlists(current_user: User = Depends(get_current_user)) -> dict
 
 # ── Start import ───────────────────────────────────────────────────────────
 
-class _ImportStart(BaseModel):
+class _ImportSource(BaseModel):
+    # One selected source: either {"source": "likes"} or {"kind": <int>}.
     source: str | None = None   # "likes"
     kind: int | None = None     # a playlist kind
+
+
+class _ImportStart(BaseModel):
+    # Preferred: a list of selected sources (multi-select). Legacy single
+    # source/kind at the top level is still accepted and normalized below.
+    sources: list[_ImportSource] | None = None
+    source: str | None = None   # "likes"  (legacy single)
+    kind: int | None = None     # a playlist kind (legacy single)
     lang: str = "ru"
+
+
+def _normalize_source(item: _ImportSource):
+    """Turn one request item into the runner's source value, or None if invalid."""
+    if item.kind is not None:
+        return {"kind": item.kind}
+    if item.source == "likes":
+        return "likes"
+    return None
 
 
 @router.post("/start")
@@ -106,23 +124,28 @@ async def start_import(
     request: Request,
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """Start an import job (download phase → existing upload indexing)."""
+    """Start an import job (download phase → existing upload indexing).
+
+    Accepts ``sources: [{source|kind}, ...]`` (multi-select); a legacy single
+    ``source``/``kind`` at the top level is normalized into a one-item list.
+    """
     if not token_store.is_linked(current_user.id):
         raise HTTPException(status_code=409, detail="yandex account not linked")
 
-    if req.kind is not None:
-        source = {"kind": req.kind}
-    elif req.source == "likes":
-        source = "likes"
-    else:
-        raise HTTPException(status_code=400, detail="provide source='likes' or kind=<int>")
+    raw_items = req.sources if req.sources else [_ImportSource(source=req.source, kind=req.kind)]
+    sources = [s for s in (_normalize_source(i) for i in raw_items) if s is not None]
+    if not sources:
+        raise HTTPException(
+            status_code=400,
+            detail="provide sources=[{source:'likes'}|{kind:<int>}, ...]",
+        )
 
     service: LibraryService = request.app.state.library_service
     if service is None:
         raise HTTPException(status_code=503, detail="Library service unavailable")
 
     job_id = service.enqueue_yandex_import(
-        account_id=current_user.id, source=source, lang=(req.lang or "ru").strip().lower(),
+        account_id=current_user.id, sources=sources, lang=(req.lang or "ru").strip().lower(),
     )
     return {"job_id": job_id}
 

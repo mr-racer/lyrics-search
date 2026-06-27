@@ -264,9 +264,12 @@ class LibraryService:
     # ── Yandex Music import (download phase → existing upload indexing) ──────
 
     def enqueue_yandex_import(
-        self, *, account_id: str, source, lang: str = "ru",
+        self, *, account_id: str, sources: list, lang: str = "ru",
     ) -> str:
         """Start a Yandex import job (download phase). Returns the JobTracker job_id.
+
+        ``sources`` is a list of selected sources, each ``"likes"`` or
+        ``{"kind": <int>}`` — they are merged (deduped by track id) into one job.
 
         Mirrors ``enqueue_upload_indexing``'s per-account slot semantics: a second
         import (or upload) for the SAME account while one is RUNNING raises 409.
@@ -287,7 +290,7 @@ class LibraryService:
 
         collection_name = f"acct_{account_id}"
         job = self._job_tracker.create_job(
-            folder_path=f"<yandex:{source}>",
+            folder_path=f"<yandex:{len(sources)} sources>",
             collection_name=collection_name,
         )
         if not self.try_start_job(account_id=account_id, job_id=job.job_id):
@@ -298,11 +301,11 @@ class LibraryService:
             )
         job.overall_status = IndexStatus.RUNNING
         asyncio.create_task(
-            self._run_yandex_import_job(job, account_id, source, lang)
+            self._run_yandex_import_job(job, account_id, sources, lang)
         )
         return job.job_id
 
-    async def _run_yandex_import_job(self, job, account_id: str, source, lang: str = "ru"):
+    async def _run_yandex_import_job(self, job, account_id: str, sources: list, lang: str = "ru"):
         """Download phase runner: download Yandex tracks, then chain into upload indexing."""
         from app.services.yandex import importer
 
@@ -325,7 +328,7 @@ class LibraryService:
 
             upload_ids, report = await loop.run_in_executor(
                 None,
-                lambda: importer.download_source(account_id, source, on_progress=_progress),
+                lambda: importer.download_sources(account_id, sources, on_progress=_progress),
             )
             # Persist the skipped-tracks report on the job so a status endpoint can
             # surface it (it also lives in yandex_imports for durability).
@@ -354,23 +357,16 @@ class LibraryService:
         if download_failed:
             return
 
-        # Mark the download job done; the indexing phase is a separate job the
-        # frontend follows via /library/status (spec §7.2).
+        # Chain into the EXISTING upload-indexing flow FIRST so we can hand its
+        # job_id to the frontend in the download job's completion event — letting
+        # the import UI switch deterministically from the download bar to the
+        # indexing wizard with no polling race (spec §3.2 of the frontend design).
         skipped_n = len(report.get("skipped", []))
-        job.overall_status = IndexStatus.COMPLETED
-        await self._notify_progress(job, {
-            "overall_status": IndexStatus.COMPLETED.value,
-            "message": (
-                f"Скачано {report.get('downloaded', 0)} треков"
-                + (f", пропущено {skipped_n}" if skipped_n else "")
-            ),
-            "yandex_report": report,
-        })
-
+        indexing_job_id = None
         if upload_ids:
             from app.services.settings_service import settings_service
             try:
-                self.enqueue_upload_indexing(
+                indexing_job_id = self.enqueue_upload_indexing(
                     account_id=account_id, upload_ids=upload_ids,
                     text_model=settings_service.embed_model(), lang=lang,
                 )
@@ -379,6 +375,19 @@ class LibraryService:
                     "[LibraryService] failed to start indexing after yandex download "
                     "(files are in pending_uploads; user can retry batch-commit)",
                 )
+
+        job.overall_status = IndexStatus.COMPLETED
+        completion = {
+            "overall_status": IndexStatus.COMPLETED.value,
+            "message": (
+                f"Скачано {report.get('downloaded', 0)} треков"
+                + (f", пропущено {skipped_n}" if skipped_n else "")
+            ),
+            "yandex_report": report,
+        }
+        if indexing_job_id:
+            completion["indexing_job_id"] = indexing_job_id
+        await self._notify_progress(job, completion)
 
     async def _enrich_uploads(self, job, account_id: str, indexed_data: dict, lang: str = "ru") -> None:
         """Post-index enrichment for server-mode uploads (the folder flow's FACTS

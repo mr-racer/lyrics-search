@@ -60,7 +60,43 @@ def download_source(
     *,
     on_progress: Optional[Callable[[int, int, str], None]] = None,
 ) -> tuple[list[str], dict]:
-    """Download every (not-yet-imported) track of ``source`` for ``account_id``.
+    """Download every (not-yet-imported) track of a SINGLE ``source``.
+
+    Thin wrapper around :func:`download_sources` kept for callers/tests that pass
+    one source ("likes" | {"kind": N}).
+    """
+    return download_sources(account_id, [source], on_progress=on_progress)
+
+
+def _resolve_merged_tracks(client, sources) -> list:
+    """Resolve every source and merge into one track list, deduped by track id.
+
+    A track that is both liked and in a selected playlist is downloaded once;
+    first occurrence wins (order-preserving across the sources list).
+    """
+    seen: set[str] = set()
+    merged: list = []
+    for source in sources:
+        for track in playlists.resolve_tracks(client, source):
+            tid = str(track.id)
+            if tid in seen:
+                continue
+            seen.add(tid)
+            merged.append(track)
+    return merged
+
+
+def download_sources(
+    account_id: str,
+    sources: list,
+    *,
+    on_progress: Optional[Callable[[int, int, str], None]] = None,
+) -> tuple[list[str], dict]:
+    """Download every (not-yet-imported) track across ``sources`` for ``account_id``.
+
+    ``sources`` is a list whose items are each ``"likes"`` or ``{"kind": <int>}``.
+    Tracks are merged with dedup by track id, so selecting «Мне нравится» plus a
+    playlist that overlaps it downloads each track once.
 
     Returns ``(upload_ids, report)`` where report is
     ``{total, downloaded, already, skipped:[{artist,title,reason}]}``.
@@ -71,7 +107,7 @@ def download_source(
         raise YandexNotLinkedError("yandex account not linked")
 
     client = build_client(blob["access_token"])
-    tracks = playlists.resolve_tracks(client, source)
+    tracks = _resolve_merged_tracks(client, sources)
 
     already = MetadataDB.get_imported_yandex_track_ids(account_id)
     pending = [t for t in tracks if str(t.id) not in already]
@@ -144,6 +180,6 @@ def download_source(
         "already": len(tracks) - total,
         "skipped": skipped,
     }
-    logger.info("[yandex/importer] account=%s source=%s report=%s",
-                account_id, source, {k: v for k, v in report.items() if k != "skipped"})
+    logger.info("[yandex/importer] account=%s sources=%s report=%s",
+                account_id, sources, {k: v for k, v in report.items() if k != "skipped"})
     return upload_ids, report
