@@ -130,6 +130,48 @@ def _extract_lyrics_for_song(context: str, song: str, artist: str) -> str:
     return ""
 
 
+def _match_best_hit(
+    hits: list[TrackHit], song: str | None, artist: str | None,
+) -> TrackHit | None:
+    """Resolve the LLM's named song (free-text title + artist) to a real hit.
+
+    The scorer copies ``song``/``artist`` out of the <context> block, which is
+    built from these same hits — so a normalized title (+ artist) comparison
+    maps the LLM's pick back to a concrete, playable TrackHit. Returns None when
+    no song was named or nothing matches, so the caller falls back to the
+    top-N retrieval list.
+    """
+    if not song:
+        return None
+
+    def _norm(s: str | None) -> str:
+        return " ".join((s or "").strip().casefold().split())
+
+    target_song = _norm(song)
+    target_artist = _norm(artist)
+    if not target_song:
+        return None
+
+    # Pass 1: title AND artist both match — most specific.
+    for h in hits:
+        if _norm(h.track.title) == target_song and (
+            not target_artist or _norm(h.track.artist) == target_artist
+        ):
+            return h
+    # Pass 2: title matches exactly — artist may be formatted differently
+    # (feat. credits, "&" vs "and", a different romanization).
+    for h in hits:
+        if _norm(h.track.title) == target_song:
+            return h
+    # Pass 3: one title contains the other — tolerates "(Remastered)" / "- Live"
+    # style suffixes the LLM may have dropped or added.
+    for h in hits:
+        ht = _norm(h.track.title)
+        if ht and (ht in target_song or target_song in ht):
+            return h
+    return None
+
+
 async def _run_searches(
     llm_queries: list[dict],
     service,
@@ -319,10 +361,14 @@ async def chat(
       "song":           str | null,    # identified song title (if confident)
       "artist":         str | null,    # identified artist
       "confidence":     "high"|"medium"|"low",
-      "hits":           [TrackHit…],   # all retrieved tracks (for the UI)
+      "best_hit":       TrackHit|null,  # the track the LLM named, resolved to a real hit
+      "hits":           [TrackHit…],   # all retrieved tracks (fallback list for the UI)
       "attempts":       int,           # how many LLM calls were made
       "classification": dict,          # result of call-1 (empty if prompt unset)
     }
+
+    When ``best_hit`` is set the UI shows just that one track (the LLM's pick)
+    instead of the top-N retrieval list; it falls back to ``hits`` otherwise.
     """
     service = request.app.state.search_service
     if service is None:
@@ -331,6 +377,7 @@ async def chat(
             "song":           None,
             "artist":         None,
             "confidence":     "low",
+            "best_hit":       None,
             "hits":           [],
             "attempts":       0,
             "classification": {},
@@ -593,6 +640,7 @@ async def chat(
                 "song":           best.track.title,
                 "artist":         best.track.artist,
                 "confidence":     "medium",
+                "best_hit":       best.model_dump(),
                 "hits":           [h.model_dump() for h in top5],
                 "attempts":       1,
                 "classification": classification,
@@ -602,6 +650,7 @@ async def chat(
                 "message":        "Не удалось найти треков по описанию звука. Попробуй уточнить настроение, инструменты, или стиль вокала.",
                 "song":           None,
                 "artist":         None,
+                "best_hit":       None,
                 "confidence":     "low",
                 "hits":           [],
                 "attempts":       1,
@@ -813,11 +862,18 @@ async def chat(
     # Sort retrieved hits by score descending
     all_hits.sort(key=lambda h: h.score, reverse=True)
 
+    # Resolve the LLM's named song back to a concrete hit so the UI can show
+    # exactly that track instead of the top-N retrieval list.
+    best_hit = _match_best_hit(
+        all_hits, final_result.get("song"), final_result.get("artist"),
+    )
+
     return {
         "message":        final_result.get("message", ""),
         "song":           final_result.get("song"),
         "artist":         final_result.get("artist"),
         "confidence":     final_result.get("confidence", "low"),
+        "best_hit":       best_hit.model_dump() if best_hit else None,
         "hits":           [h.model_dump() for h in all_hits[:10]],
         "attempts":       attempts_done,
         "classification": classification,
