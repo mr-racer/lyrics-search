@@ -6563,6 +6563,39 @@ function fmtListenDuration(sec, ru) {
   return ru ? `${s} сек` : `${s} sec`;
 }
 
+// Copy text to the clipboard, robust across browsing contexts. The async
+// Clipboard API (navigator.clipboard) exists ONLY in a SECURE context — HTTPS or
+// http://localhost — so it is undefined when the app is opened over plain HTTP at
+// a LAN IP (e.g. http://192.168.0.168:8000), exactly how a self-hosted server is
+// reached before a domain/HTTPS exists. Fall back to a hidden <textarea> +
+// execCommand('copy'), which still works on non-secure origins. Returns a
+// Promise<boolean> so callers can tell the user the truth (and offer the raw
+// link) when copying genuinely isn't possible.
+function copyTextToClipboard(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    return navigator.clipboard.writeText(text).then(() => true).catch(() => _legacyCopy(text));
+  }
+  return Promise.resolve(_legacyCopy(text));
+}
+function _legacyCopy(text) {
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed';
+    ta.style.top = '-9999px';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch (e) {
+    return false;
+  }
+}
+
 function InvitesPanel({ lang, showToast, hideHeader, reloadKey }) {
   const [invites, setInvites] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -6578,12 +6611,14 @@ function InvitesPanel({ lang, showToast, hideHeader, reloadKey }) {
 
   useEffect(() => { reload(); }, [reload, reloadKey]);
 
-  const copyLink = (iv) => {
+  const copyLink = async (iv) => {
     // Prefer the server-built link (PUBLIC_BASE_URL / LAN-IP — works behind a
     // reverse proxy); fall back to the browser origin for older servers.
     const url = (iv && iv.link) || inviteLink(iv.code);
-    navigator.clipboard?.writeText(url).catch(() => {});
-    showToast(lang === 'ru' ? 'Ссылка-приглашение скопирована' : 'Invite link copied');
+    const ok = await copyTextToClipboard(url);
+    showToast(ok
+      ? (lang === 'ru' ? 'Ссылка-приглашение скопирована' : 'Invite link copied')
+      : (lang === 'ru' ? `Скопируйте ссылку вручную: ${url}` : `Copy the link manually: ${url}`));
   };
 
   const onCreate = async () => {
@@ -6990,8 +7025,11 @@ function OwnerAdminDashboard({ onLogout }) {
     setCalloutBusy(true);
     try {
       const inv = await apiFetch('/auth/invites', { method: 'POST' });
-      try { await navigator.clipboard?.writeText(inv.link || inviteLink(inv.code)); } catch (e) {}
-      showToast(ru ? 'Приглашение создано — ссылка скопирована' : 'Invite created — link copied');
+      const url = inv.link || inviteLink(inv.code);
+      const ok = await copyTextToClipboard(url);
+      showToast(ok
+        ? (ru ? 'Приглашение создано — ссылка скопирована' : 'Invite created — link copied')
+        : (ru ? `Приглашение создано. Скопируйте ссылку вручную: ${url}` : `Invite created. Copy the link manually: ${url}`));
       setInvBump(b => b + 1);
     } catch (e) { showToast(String(e.message || e)); }
     finally { setCalloutBusy(false); }
