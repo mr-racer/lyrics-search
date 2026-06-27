@@ -1540,6 +1540,103 @@ class MetadataDB:
         ).fetchall()
         return {r[0]: int(r[1]) for r in rows}
 
+    @classmethod
+    def get_plays_by_local_day(
+        cls, collection_name: str, tz_offset_minutes: int = 0,
+    ) -> list[tuple[str, int]]:
+        """Return [(local_date 'YYYY-MM-DD', play_count), ...] ordered by date.
+
+        Counts every play event (skipped or not). ``played_at`` is UTC; the
+        caller's offset is applied as a SQLite datetime modifier (same pattern
+        as ``get_peak_hour``; coerced to int so it can't inject)."""
+        modifier = f"{int(tz_offset_minutes):+d} minutes"
+        conn = cls._connect()
+        rows = conn.execute(
+            """SELECT strftime('%Y-%m-%d', played_at, ?) AS d, COUNT(*) AS n
+               FROM playback_events
+               WHERE collection_name = ?
+               GROUP BY d ORDER BY d""",
+            (modifier, collection_name),
+        ).fetchall()
+        return [(r[0], int(r[1])) for r in rows if r[0]]
+
+    @classmethod
+    def get_plays_by_local_hour(
+        cls, collection_name: str, tz_offset_minutes: int = 0,
+    ) -> list[int]:
+        """Return a 24-element list of play counts per local hour (index 0-23)."""
+        modifier = f"{int(tz_offset_minutes):+d} minutes"
+        conn = cls._connect()
+        rows = conn.execute(
+            """SELECT CAST(strftime('%H', played_at, ?) AS INT) AS h, COUNT(*) AS n
+               FROM playback_events
+               WHERE collection_name = ?
+               GROUP BY h""",
+            (modifier, collection_name),
+        ).fetchall()
+        out = [0] * 24
+        for h, n in rows:
+            if h is not None and 0 <= int(h) <= 23:
+                out[int(h)] = int(n)
+        return out
+
+    @classmethod
+    def get_top_track_on_local_day(
+        cls, collection_name: str, day: str, tz_offset_minutes: int = 0,
+    ) -> tuple[str, int] | None:
+        """(track_id, plays) of the most-played non-skipped track on a local day."""
+        modifier = f"{int(tz_offset_minutes):+d} minutes"
+        conn = cls._connect()
+        row = conn.execute(
+            """SELECT track_id, COUNT(*) AS n
+               FROM playback_events
+               WHERE collection_name = ?
+                 AND strftime('%Y-%m-%d', played_at, ?) = ?
+                 AND skipped_early = 0
+               GROUP BY track_id ORDER BY n DESC LIMIT 1""",
+            (collection_name, modifier, day),
+        ).fetchone()
+        return (row[0], int(row[1])) if row else None
+
+    @classmethod
+    def get_track_completion_stats(
+        cls, collection_name: str,
+    ) -> list[tuple[str, int, float | None, float]]:
+        """Per-track engagement: [(track_id, plays, avg_completion|None, skip_rate)].
+
+        ``completion`` = played_sec / total_dur (clamped to 1.0), averaged only
+        over plays that have a known ``total_dur`` (NULLs ignored by AVG, so the
+        per-track value is None when no play was timed). ``skip_rate`` is the
+        fraction of plays flagged ``skipped_early``."""
+        conn = cls._connect()
+        rows = conn.execute(
+            """SELECT track_id,
+                      COUNT(*) AS plays,
+                      AVG(CASE WHEN total_dur IS NOT NULL AND total_dur > 0
+                               THEN min(played_sec * 1.0 / total_dur, 1.0) END) AS comp,
+                      AVG(skipped_early) AS skip_rate
+               FROM playback_events
+               WHERE collection_name = ?
+               GROUP BY track_id""",
+            (collection_name,),
+        ).fetchall()
+        return [
+            (r[0], int(r[1]), (None if r[2] is None else float(r[2])), float(r[3] or 0))
+            for r in rows
+        ]
+
+    @classmethod
+    def get_overall_completion(cls, collection_name: str) -> float | None:
+        """Library-wide mean play completion (0..1), or None if no timed plays."""
+        conn = cls._connect()
+        row = conn.execute(
+            """SELECT AVG(min(played_sec * 1.0 / total_dur, 1.0))
+               FROM playback_events
+               WHERE collection_name = ? AND total_dur IS NOT NULL AND total_dur > 0""",
+            (collection_name,),
+        ).fetchone()
+        return float(row[0]) if row and row[0] is not None else None
+
     # ── AI Indexing jobs (Plan 3 Task 11) ──
 
     @classmethod

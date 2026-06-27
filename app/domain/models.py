@@ -614,6 +614,45 @@ class ListeningStatsResponse(BaseModel):
     peak_hour: Optional[PeakHour] = None
 
 
+class RhythmDay(BaseModel):
+    date: str   # 'YYYY-MM-DD' in the user's local time
+    count: int
+
+
+class BusiestDay(BaseModel):
+    date: str
+    count: int
+    top_track: Optional[TopTrackBrief] = None
+
+
+class RhythmResponse(BaseModel):
+    """Listening rhythm for the Library stats tab: per-day calendar heatmap,
+    24h distribution, streaks and the busiest day. All times are bucketed in the
+    caller's local time via ``tz_offset_minutes``."""
+    days: List[RhythmDay] = []
+    by_hour: List[int] = []        # 24 ints, index = local hour 0-23
+    streak_current: int = 0
+    streak_best: int = 0
+    busiest_day: Optional[BusiestDay] = None
+
+
+class EngagementTrack(BaseModel):
+    track_id: str
+    title: str
+    artist: str
+    cover_art_path: Optional[str] = None
+    completion: float   # 0..1 mean play completion
+    plays: int
+
+
+class EngagementResponse(BaseModel):
+    """Honest-mirror engagement for the stats tab: how much you actually finish,
+    the tracks you replay-and-finish ("loved") vs launch-often-but-skip ("guilty")."""
+    overall_completion: float = 0.0   # 0..1 library-wide mean completion
+    loved: List[EngagementTrack] = []
+    guilty: List[EngagementTrack] = []
+
+
 # ─── Plan 19: Custom Playlists ───────────────────────────────────────────
 
 

@@ -1806,6 +1806,135 @@ class LibraryService:
             peak_hour=peak_hour,
         )
 
+    @classmethod
+    def get_rhythm(
+        cls, *, qdrant_client, collection_name: str, lang: str = "en",
+        tz_offset_minutes: int = 0,
+    ):
+        """Listening rhythm for the stats tab: per-day calendar, 24h histogram,
+        streaks and the busiest day. All bucketed in the user's local time."""
+        from datetime import date as _date, datetime, timezone, timedelta
+        from app.domain.models import (
+            RhythmResponse, RhythmDay, BusiestDay, TopTrackBrief,
+        )
+
+        day_rows = MetadataDB.get_plays_by_local_day(collection_name, tz_offset_minutes)
+        by_hour = MetadataDB.get_plays_by_local_hour(collection_name, tz_offset_minutes)
+        days = [RhythmDay(date=d, count=n) for d, n in day_rows]
+        counts_by_date = {d: n for d, n in day_rows}
+
+        # Best streak: longest run of consecutive calendar days with ≥1 play.
+        streak_best = 0
+        if counts_by_date:
+            parsed = sorted(_date.fromisoformat(d) for d in counts_by_date)
+            run = 1 if parsed else 0
+            streak_best = run
+            for i in range(1, len(parsed)):
+                run = run + 1 if (parsed[i] - parsed[i - 1]).days == 1 else 1
+                streak_best = max(streak_best, run)
+
+        # Current streak: consecutive days ending at the user's local today
+        # (with a one-day grace, so "haven't played yet today" doesn't reset it).
+        local_today = (
+            datetime.now(timezone.utc) + timedelta(minutes=int(tz_offset_minutes))
+        ).date()
+        streak_current = 0
+        anchor = local_today if local_today.isoformat() in counts_by_date else (
+            local_today - timedelta(days=1)
+        )
+        probe = anchor
+        while probe.isoformat() in counts_by_date:
+            streak_current += 1
+            probe = probe - timedelta(days=1)
+
+        # Busiest day + its top track (payload joined from Qdrant, like top_track).
+        busiest = None
+        if day_rows:
+            bd, bc = max(day_rows, key=lambda kv: kv[1])
+            top_track = None
+            top = MetadataDB.get_top_track_on_local_day(
+                collection_name, bd, tz_offset_minutes,
+            )
+            if top:
+                tid, plays = top
+                try:
+                    pts = qdrant_client.retrieve(
+                        collection_name=collection_name, ids=[tid],
+                        with_payload=["title", "artist"], with_vectors=False,
+                    )
+                except Exception:
+                    pts = []
+                if pts:
+                    pl = pts[0].payload or {}
+                    top_track = TopTrackBrief(
+                        track_id=tid,
+                        title=pl.get("title") or "—",
+                        artist=pl.get("artist") or "—",
+                        play_count=plays,
+                    )
+            busiest = BusiestDay(date=bd, count=bc, top_track=top_track)
+
+        return RhythmResponse(
+            days=days, by_hour=by_hour,
+            streak_current=streak_current, streak_best=streak_best,
+            busiest_day=busiest,
+        )
+
+    @classmethod
+    def get_engagement(
+        cls, *, qdrant_client, collection_name: str, lang: str = "en",
+    ):
+        """Honest-mirror engagement: overall completion + the tracks you
+        replay-and-finish ("loved") vs launch-often-but-skip ("guilty").
+        Thresholds are deliberately lenient so small libraries still surface
+        something; both lists cap at 8."""
+        from app.domain.models import EngagementResponse, EngagementTrack
+
+        rows = MetadataDB.get_track_completion_stats(collection_name)
+        overall = MetadataDB.get_overall_completion(collection_name)
+        timed = [r for r in rows if r[2] is not None]   # (tid, plays, comp, skip)
+
+        loved = sorted(
+            [r for r in timed if r[1] >= 2 and r[2] >= 0.7],
+            key=lambda r: (r[2], r[1]), reverse=True,
+        )[:8]
+        guilty = sorted(
+            [r for r in timed if r[1] >= 3 and r[2] <= 0.55],
+            key=lambda r: (r[1], -r[2]), reverse=True,
+        )[:8]
+
+        # Join display fields from Qdrant (no lyrics — light payload only).
+        want = {r[0] for r in loved} | {r[0] for r in guilty}
+        payloads: dict = {}
+        if want:
+            try:
+                pts = qdrant_client.retrieve(
+                    collection_name=collection_name, ids=list(want),
+                    with_payload=["title", "artist", "cover_art_path"],
+                    with_vectors=False,
+                )
+            except Exception:
+                pts = []
+            for p in pts:
+                payloads[str(p.id)] = p.payload or {}
+
+        def _mk(r):
+            pl = payloads.get(r[0], {})
+            return EngagementTrack(
+                track_id=r[0],
+                title=pl.get("title") or "—",
+                artist=pl.get("artist") or "—",
+                cover_art_path=pl.get("cover_art_path"),
+                completion=round(r[2], 3),
+                plays=r[1],
+            )
+
+        return EngagementResponse(
+            overall_completion=round(overall, 3) if overall is not None else 0.0,
+            loved=[_mk(r) for r in loved],
+            guilty=[_mk(r) for r in guilty],
+        )
+
     # ── Helpers ──
 
     # def _enrich_with_musicbrainz(

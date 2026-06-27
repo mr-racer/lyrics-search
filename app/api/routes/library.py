@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-from app.domain.models import ArtistAggregate, IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RediscoverResponse, User
+from app.domain.models import ArtistAggregate, IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RhythmResponse, EngagementResponse, RediscoverResponse, User
 from app.api.dependencies import get_current_user, require_mode
 from app.api.helpers import derive_collection_for_user, member_index_root, path_within_root
 from app.services.library_service import LibraryService
@@ -513,6 +513,45 @@ async def get_library_listening_stats(
         collection_name=derived,
         lang=lang,
         tz_offset_minutes=tz_offset_minutes,
+    )
+
+
+@router.get("/rhythm", response_model=RhythmResponse)
+async def get_library_rhythm(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    lang: str = Query("en", pattern="^(en|ru)$"),
+    tz_offset_minutes: int = Query(
+        0, ge=-840, le=840,
+        description="Client UTC offset in minutes (e.g. UTC+3 → 180) for local-day/hour bucketing",
+    ),
+) -> RhythmResponse:
+    derived = derive_collection_for_user(current_user)
+    db_client = request.app.state.db_client
+    if db_client is None or db_client.qdrant is None:
+        return RhythmResponse()
+    return LibraryService.get_rhythm(
+        qdrant_client=db_client.qdrant,
+        collection_name=derived,
+        lang=lang,
+        tz_offset_minutes=tz_offset_minutes,
+    )
+
+
+@router.get("/engagement", response_model=EngagementResponse)
+async def get_library_engagement(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    lang: str = Query("en", pattern="^(en|ru)$"),
+) -> EngagementResponse:
+    derived = derive_collection_for_user(current_user)
+    db_client = request.app.state.db_client
+    if db_client is None or db_client.qdrant is None:
+        return EngagementResponse()
+    return LibraryService.get_engagement(
+        qdrant_client=db_client.qdrant,
+        collection_name=derived,
+        lang=lang,
     )
 
 

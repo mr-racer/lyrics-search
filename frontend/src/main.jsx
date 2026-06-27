@@ -353,6 +353,50 @@ function useColors(isDark) {
 const ske = (kind, isDark) => `ske-${kind}-${isDark ? 'd' : 'l'}`;
 const brushed = (isDark) => `brushed-${isDark ? 'd' : 'l'}`;
 
+// Stable hue [0..360) from a string — the same genre/artist is always the same
+// colour (replaces the old arbitrary hue-by-index rainbow in the charts).
+const hueFromString = (s) => {
+  let h = 0;
+  const str = s || '';
+  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
+  return h % 360;
+};
+
+// Tracks the OS "reduce motion" setting. Every stats animation branches on this
+// so the redesign honours the same a11y contract as the rest of index.css.
+function usePrefersReducedMotion() {
+  const [reduced, setReduced] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia
+      ? window.matchMedia('(prefers-reduced-motion: reduce)').matches : false);
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const on = () => setReduced(mq.matches);
+    mq.addEventListener?.('change', on);
+    return () => mq.removeEventListener?.('change', on);
+  }, []);
+  return reduced;
+}
+
+// Eases a number 0 → value over `dur` ms (easeOutCubic). Jumps straight to the
+// value when reduced motion is on. Used by the "∑ listened" readout.
+function useCountUp(value, dur = 600, reduced = false) {
+  const [n, setN] = useState(reduced ? value : 0);
+  useEffect(() => {
+    if (reduced || !value) { setN(value || 0); return; }
+    let raf, t0 = null;
+    const tick = (t) => {
+      if (t0 == null) t0 = t;
+      const p = Math.min(1, (t - t0) / dur);
+      setN(value * (1 - Math.pow(1 - p, 3)));
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [value, dur, reduced]);
+  return n;
+}
+
 // ─── timeStore — module-level external store for audio currentTime ──────────
 // Audio elements fire 'timeupdate' ~4×/sec. If we stored currentTime in React
 // state, every tick would re-render the whole App tree (statistics jumping,
@@ -5073,12 +5117,13 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
   const [likedData, setLikedData] = useState(null);          // /library/liked-songs
   const [recentData, setRecentData] = useState(null);        // /playback/recent
   const [listenData, setListenData] = useState(null);        // /library/listening-stats
+  const [rhythmData, setRhythmData] = useState(null);        // /library/rhythm
+  const [engagementData, setEngagementData] = useState(null); // /library/engagement
   const [albumSort, setAlbumSort] = useState('alphabetical');
   const [recentSort, setRecentSort] = useState('last_played');
 
   // ── UI state ──────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState(() => localStorage.getItem('library_active_tab') || 'albums');
-  const [distOpen, setDistOpen] = useState(() => localStorage.getItem('library_distributions_open') === '1');
   const [albumModal, setAlbumModal] = useState(null);  // { album: AlbumSummary, originRect: DOMRect|null }
   const [likedMap, setLikedMap] = useState({});
   // playlistsListing is now provided by App-level usePlaylists (lifted in Plan 19 follow-up)
@@ -5107,7 +5152,6 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
   };
 
   useEffect(() => { localStorage.setItem('library_active_tab', activeTab); }, [activeTab]);
-  useEffect(() => { localStorage.setItem('library_distributions_open', distOpen ? '1' : '0'); }, [distOpen]);
 
   // ── Entrance animation epoch ──────────────────────────────────────────
   // The section stays mounted (visibility-toggled at App level), so CSS
@@ -5136,6 +5180,8 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
     // bucketing the peak hour in the user's own timezone.
     const tzOffset = -new Date().getTimezoneOffset();
     apiFetch(`/library/listening-stats?lang=${lang}&tz_offset_minutes=${tzOffset}`).then(setListenData).catch(() => setListenData(null));
+    apiFetch(`/library/rhythm?lang=${lang}&tz_offset_minutes=${tzOffset}`).then(setRhythmData).catch(() => setRhythmData(null));
+    apiFetch(`/library/engagement?lang=${lang}`).then(setEngagementData).catch(() => setEngagementData(null));
   }, [lang, visible]);
 
   // ── Effect 2: only albums (refires on sort change) ───────────────────
@@ -5196,12 +5242,6 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
 
           <div className="lib-rise">
             <LibraryHeroLine stats={stats} albumCount={albumsCount} isDark={isDark} lang={lang} />
-            <DistributionsToggle open={distOpen} onToggle={() => setDistOpen(o => !o)} isDark={isDark} lang={lang} />
-            {distOpen && <div style={{ marginTop:'14px' }}><DistributionsPanel stats={stats} isDark={isDark} lang={lang} /></div>}
-          </div>
-
-          <div className="lib-rise" style={{ '--lib-d':'0.1s' }}>
-            <ListeningWidgetsRow data={listenData} isDark={isDark} lang={lang} />
           </div>
 
           <div className="lib-rise" style={{ '--lib-d':'0.16s' }}>
@@ -5292,6 +5332,17 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
               navigateToArtist={navigateToArtist}
             />
           )}
+          {activeTab === 'stats' && (
+            <StatsTab
+              stats={stats}
+              listenData={listenData}
+              rhythm={rhythmData}
+              engagement={engagementData}
+              isDark={isDark} lang={lang}
+              onPlayTrack={onPlayTrack}
+              navigateToArtist={navigateToArtist}
+            />
+          )}
           </div>
           </React.Fragment>
           )}
@@ -5357,120 +5408,621 @@ function LibraryHeroLine({ stats, albumCount, isDark, lang }) {
     </div>
   );
 }
-function DistributionsToggle({ open, onToggle, isDark, lang }) {
-  const c = useColors(isDark);
+// ─── Statistics tab ───────────────────────────────────────────────────────
+// Empty-state hint shared by every distribution chart.
+function Empty({ lang }) {
+  return <div style={{ fontSize:11, fontStyle:'italic', opacity:0.5 }}>{lang==='ru'?'Нет данных':'No data'}</div>;
+}
+
+// Labelled seam between stats sections (reuses the .rec-div divider language).
+function StatsDivider({ label, hue }) {
+  const col = `oklch(70% 0.15 ${hue})`;
+  const ln = { background:`linear-gradient(90deg,transparent,oklch(70% 0.15 ${hue} / .45),transparent)` };
   return (
-    <button
-      onClick={onToggle}
-      className="mono"
-      style={{
-        margin: '0 auto',
-        display: 'flex', alignItems:'center', gap:'6px',
-        padding: '4px 14px',
-        fontSize: '10px', color: c.textMuted, letterSpacing:'0.12em',
-        background: 'rgba(255,255,255,.04)',
-        border: `1px solid ${c.border}`,
-        borderTop: 'none',
-        borderRadius: '0 0 10px 10px',
-        cursor: 'pointer',
-        transition: 'all 0.18s',
-      }}
-      onMouseEnter={e => e.currentTarget.style.color = c.text}
-      onMouseLeave={e => e.currentTarget.style.color = c.textMuted}
-    >
-      {lang==='ru' ? 'РАСПРЕДЕЛЕНИЯ' : 'DISTRIBUTIONS'} <span style={{ display:'inline-block', transform: open ? 'rotate(180deg)' : 'rotate(0)', transition:'transform 0.25s' }}>▾</span>
-    </button>
+    <div className="rec-div" style={{ margin:'6px 4px 0' }}>
+      <div className="rec-div__ln" style={ln} />
+      <div className="rec-div__lbl" style={{ color: col }}>
+        <span className="rec-div__nd" style={{ background: col, boxShadow:`0 0 8px ${col}` }} />
+        {label}
+      </div>
+      <div className="rec-div__ln" style={ln} />
+    </div>
   );
 }
-function DistributionsPanel({ stats, isDark, lang }) {
-  const c = useColors(isDark);
-  const decades = stats?.decades || [];
-  const maxDec = decades.reduce((m, d) => Math.max(m, d.count || 0), 0) || 1;
-  const peakDec = decades.reduce((p, d) => (d.count > (p?.count || 0) ? d : p), null);
-  const genres = (stats?.genres || []).slice(0, 5);
-  const maxGenre = genres.reduce((m, g) => Math.max(m, g.count || 0), 0) || 1;
-  const artists = (stats?.top_artists || []).slice(0, 5);
-  const maxArtist = artists.reduce((m, a) => Math.max(m, a.count || 0), 0) || 1;
-  const colLbl = { fontFamily:"'JetBrains Mono', monospace", fontSize:'9px', color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase', marginBottom:'10px' };
 
+// The whole "◷ Статистика" tab: readout metrics rail → collection map.
+// (Sonar / rhythm / engagement sections slot in above the distributions in
+// later phases.)
+function StatsTab({ stats, listenData, rhythm, engagement, isDark, lang, onPlayTrack, navigateToArtist }) {
   return (
-    <div style={{
-      background: isDark ? 'rgba(15,12,25,.5)' : 'rgba(255,255,255,.5)',
-      border: `1px solid ${c.border}`, borderRadius:'14px',
-      backdropFilter:'blur(20px)', WebkitBackdropFilter:'blur(20px)',
-      padding:'20px 24px',
-      display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:'30px',
-      animation: 'fadeIn 0.32s cubic-bezier(.22,.9,.3,1)',
-    }}>
-      {/* Decades */}
-      <div>
-        <div style={colLbl}>{lang==='ru' ? 'ПО ЭПОХАМ' : 'BY DECADE'}</div>
-        <div style={{ display:'flex', alignItems:'flex-end', gap:'5px', height:'90px' }}>
-          {decades.map((d, i) => {
-            const h = Math.round((d.count / maxDec) * 70);
-            const isPeak = peakDec && d.decade === peakDec.decade;
-            const hue = 40 + (i / Math.max(1, decades.length-1)) * 240;
-            return (
-              <div key={d.decade} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', gap:'3px' }}>
-                <div style={{
-                  width:'100%', height: `${h}px`, minHeight:'2px',
-                  borderRadius:'3px 3px 0 0',
-                  background: `linear-gradient(180deg, oklch(72% 0.16 ${hue}), oklch(56% 0.18 ${hue}))`,
-                  boxShadow: isPeak ? '0 0 8px oklch(70% 0.18 60 / 0.5)' : 'none',
-                }} />
-                <div className="mono" style={{ fontSize:'9px', color: isPeak ? c.amber : c.textSubtle, letterSpacing:'0.06em' }}>{d.decade}</div>
-                <div className="mono" style={{ fontSize:'9px', color: c.textSubtle }}>{d.count}</div>
-              </div>
-            );
-          })}
-          {decades.length === 0 && <div style={{ color:c.textSubtle, fontSize:11, fontStyle:'italic' }}>{lang==='ru'?'Нет данных':'No data'}</div>}
-        </div>
-      </div>
+    <div style={{ display:'flex', flexDirection:'column', gap:22 }}>
+      <ListeningWidgetsRow data={listenData} rhythm={rhythm} isDark={isDark} lang={lang}
+        onPlayTrack={onPlayTrack} navigateToArtist={navigateToArtist} />
+      <StatsDivider label={lang==='ru'?'ритм':'rhythm'} hue={150} />
+      <RhythmSection rhythm={rhythm} isDark={isDark} lang={lang} />
+      <StatsDivider label={lang==='ru'?'честное зеркало':'honest mirror'} hue={275} />
+      <EngagementSection engagement={engagement} isDark={isDark} lang={lang} onPlayTrack={onPlayTrack} />
+      <StatsDivider label={lang==='ru'?'карта коллекции':'collection map'} hue={75} />
+      <DistributionsPanel stats={stats} isDark={isDark} lang={lang} />
+    </div>
+  );
+}
 
-      {/* Top genres */}
-      <div>
-        <div style={colLbl}>{lang==='ru' ? 'ПО ЖАНРАМ · TOP 5' : 'BY GENRE · TOP 5'}</div>
-        {genres.map((g, i) => {
-          const hue = 270 + i * 12;
-          return (
-            <div key={g.genre} style={{ marginBottom:'8px' }}>
-              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', fontSize:'12px' }}>
-                <span style={{ color:c.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'65%' }}>{g.genre}</span>
-                <span className="mono" style={{ color:c.textMuted, fontSize:'11px' }}>{g.count} · {g.pct}%</span>
-              </div>
-              <div style={{ height:'5px', borderRadius:'3px', background:'rgba(255,255,255,.05)', overflow:'hidden', marginTop:'4px' }}>
-                <div style={{ height:'100%', width:`${Math.round((g.count/maxGenre)*100)}%`, background:`linear-gradient(90deg, oklch(60% 0.18 ${hue}), oklch(70% 0.16 ${hue+25}))`, borderRadius:'3px' }} />
-              </div>
-            </div>
-          );
-        })}
-        {genres.length === 0 && <div style={{ color:c.textSubtle, fontSize:11, fontStyle:'italic' }}>{lang==='ru'?'Нет данных':'No data'}</div>}
+// "By decade" as a filled ridgeline (replaces disconnected bars) with a
+// narrative caption on the peak era. Draws in left→right on mount.
+function EraRidgeline({ decades, isDark, lang, reduced, labelStyle }) {
+  const c = useColors(isDark);
+  const [drawn, setDrawn] = useState(reduced);
+  useEffect(() => {
+    if (reduced) { setDrawn(true); return; }
+    const id = requestAnimationFrame(() => setDrawn(true));
+    return () => cancelAnimationFrame(id);
+  }, [reduced]);
+  if (!decades.length) return (
+    <div><div style={labelStyle}>{lang==='ru'?'ПО ЭПОХАМ':'BY DECADE'}</div><Empty lang={lang} /></div>
+  );
+  const maxDec = decades.reduce((m,d)=>Math.max(m,d.count||0),0)||1;
+  const peak = decades.reduce((p,d)=>(d.count>(p?.count||0)?d:p), null);
+  const total = decades.reduce((s,d)=>s+(d.count||0),0)||1;
+  const W=640, H=120, padX=10, baseY=H-18, topPad=14, n=decades.length, hue=268;
+  const xAt = (i) => n===1 ? W/2 : padX + (i/(n-1))*(W-2*padX);
+  const yAt = (d) => baseY - (d.count/maxDec)*(baseY-topPad);
+  const pts = decades.map((d,i)=>[xAt(i), yAt(d)]);
+  const line = pts.map(([x,y],i)=>`${i?'L':'M'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+  const area = `${line} L${pts[n-1][0].toFixed(1)},${baseY} L${pts[0][0].toFixed(1)},${baseY} Z`;
+  const lineLen = 1500;
+  const peakPct = peak ? Math.round((peak.count/total)*100) : 0;
+  return (
+    <div>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:4 }}>
+        <div style={labelStyle}>{lang==='ru'?'ПО ЭПОХАМ':'BY DECADE'}</div>
+        {peak && <div style={{ fontSize:12, color:c.textMuted }}>
+          {lang==='ru'?'Ядро коллекции — ':'Core of your library — '}
+          <b style={{ color:c.amber, fontWeight:600 }}>{peak.decade}s · {peakPct}%</b>
+        </div>}
       </div>
-
-      {/* Top artists */}
-      <div>
-        <div style={colLbl}>{lang==='ru' ? 'ПО АРТИСТАМ · TOP 5' : 'BY ARTIST · TOP 5'}</div>
-        {artists.map((a, i) => {
-          const hue = 200 + i * 25;
-          return (
-            <div key={a.artist} style={{ marginBottom:'8px' }}>
-              <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', fontSize:'12px' }}>
-                <span style={{ color:c.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'65%' }}>{a.artist}</span>
-                <span className="mono" style={{ color:c.textMuted, fontSize:'11px' }}>{a.count} tracks</span>
-              </div>
-              <div style={{ height:'5px', borderRadius:'3px', background:'rgba(255,255,255,.05)', overflow:'hidden', marginTop:'4px' }}>
-                <div style={{ height:'100%', width:`${Math.round((a.count/maxArtist)*100)}%`, background:`linear-gradient(90deg, oklch(60% 0.18 ${hue}), oklch(70% 0.16 ${hue+25}))`, borderRadius:'3px' }} />
-              </div>
-            </div>
-          );
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height="120" preserveAspectRatio="none" style={{ display:'block', overflow:'visible' }}>
+        <defs>
+          <linearGradient id="ridgeFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={`oklch(66% 0.17 ${hue})`} stopOpacity="0.42" />
+            <stop offset="100%" stopColor={`oklch(66% 0.17 ${hue})`} stopOpacity="0.02" />
+          </linearGradient>
+        </defs>
+        <path d={area} fill="url(#ridgeFill)" style={{ opacity: drawn?1:0, transition: reduced?'none':'opacity .6s ease .2s' }} />
+        <path d={line} fill="none" stroke={`oklch(72% 0.16 ${hue})`} strokeWidth="2" strokeLinejoin="round"
+          vectorEffect="non-scaling-stroke" strokeDasharray={lineLen} strokeDashoffset={drawn?0:lineLen}
+          style={{ transition: reduced?'none':'stroke-dashoffset 0.9s cubic-bezier(.22,.9,.3,1)' }} />
+        {pts.map(([x,y],i)=>{
+          const isPk = peak && decades[i].decade===peak.decade;
+          return <circle key={i} cx={x} cy={y} r={isPk?4:2.4} fill={isPk?'#fff':`oklch(74% 0.15 ${hue})`}
+            style={{ filter: isPk?`drop-shadow(0 0 6px ${c.amber})`:'none', opacity: drawn?1:0,
+                     transition: reduced?'none':`opacity .4s ease ${(0.3+i*0.04).toFixed(2)}s` }} />;
         })}
-        {artists.length === 0 && <div style={{ color:c.textSubtle, fontSize:11, fontStyle:'italic' }}>{lang==='ru'?'Нет данных':'No data'}</div>}
+      </svg>
+      <div style={{ display:'flex', justifyContent:'space-between', marginTop:6 }}>
+        {decades.map((d)=>(
+          <div key={d.decade} className="mono" style={{ flex:1, textAlign:'center', fontSize:9,
+            color: peak&&d.decade===peak.decade?c.amber:c.textSubtle }}>{String(d.decade).slice(2)}s</div>
+        ))}
       </div>
     </div>
   );
 }
-function ListeningWidgetsRow({ data, isDark, lang }) {
+
+// "By genre" — carved grooves with a glass fill that grows in via meterTick.
+// Colour is hashed from the genre name (stable), top 6 + expander.
+function GenreBars({ genres, isDark, lang, reduced, labelStyle }) {
   const c = useColors(isDark);
+  const [expanded, setExpanded] = useState(false);
+  if (!genres.length) return (
+    <div><div style={labelStyle}>{lang==='ru'?'ПО ЖАНРАМ':'BY GENRE'}</div><Empty lang={lang} /></div>
+  );
+  const max = genres.reduce((m,g)=>Math.max(m,g.count||0),0)||1;
+  const shown = expanded ? genres : genres.slice(0,6);
+  return (
+    <div>
+      <div style={labelStyle}>{lang==='ru'?'ПО ЖАНРАМ':'BY GENRE'}</div>
+      {shown.map((g,i)=>{
+        const hue = hueFromString(g.genre), w = Math.round((g.count/max)*100);
+        return (
+          <div key={g.genre} style={{ marginBottom:10 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', fontSize:12, marginBottom:5 }}>
+              <span style={{ color:c.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'62%' }}>{g.genre}</span>
+              <span className="mono" style={{ color:c.textMuted, fontSize:11 }}>{g.count} · {g.pct}%</span>
+            </div>
+            <div className={ske('inset', isDark)} style={{ height:10, borderRadius:6, overflow:'hidden' }}>
+              <div style={{ height:'100%', width:`${w}%`, borderRadius:6, transformOrigin:'left',
+                background:`linear-gradient(90deg, oklch(58% 0.18 ${hue}), oklch(70% 0.17 ${hue+22}))`,
+                boxShadow:`inset 0 1px 1px rgba(255,255,255,.5), inset 0 -1px 1px rgba(0,0,0,.2), 0 0 8px -2px oklch(65% 0.18 ${hue})`,
+                animation: reduced?'none':'meterTick 0.55s cubic-bezier(.22,.9,.3,1) both',
+                animationDelay: reduced?'0s':`${(i*0.06).toFixed(2)}s` }} />
+            </div>
+          </div>
+        );
+      })}
+      {genres.length>6 && (
+        <button onClick={()=>setExpanded(e=>!e)} className="mono"
+          style={{ fontSize:10, color:c.textMuted, letterSpacing:'0.08em', marginTop:2 }}>
+          {expanded ? (lang==='ru'?'СВЕРНУТЬ':'LESS') : (lang==='ru'?`ЕЩЁ ${genres.length-6}`:`+${genres.length-6} MORE`)}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// "By artist" — tactile monogram chips (a different idiom from the bars so the
+// panel doesn't read as three identical lists). Covers/navigation land later.
+function ArtistMosaic({ artists, isDark, lang, labelStyle }) {
+  const c = useColors(isDark);
+  if (!artists.length) return (
+    <div><div style={labelStyle}>{lang==='ru'?'ПО АРТИСТАМ':'BY ARTIST'}</div><Empty lang={lang} /></div>
+  );
+  return (
+    <div>
+      <div style={labelStyle}>{lang==='ru'?'ПО АРТИСТАМ':'BY ARTIST'}</div>
+      <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+        {artists.map((a,i)=>{
+          const hue = hueFromString(a.artist);
+          const letter = (a.artist||'?').trim().charAt(0).toUpperCase() || '?';
+          return (
+            <div key={a.artist} style={{ display:'flex', alignItems:'center', gap:10, padding:'6px 8px', borderRadius:12,
+              background:'rgba(255,255,255,.04)', border:`1px solid ${c.border}`, transition:'transform .16s ease, background .16s ease' }}
+              onMouseEnter={e=>{ e.currentTarget.style.transform='translateY(-2px)'; e.currentTarget.style.background='rgba(255,255,255,.08)'; }}
+              onMouseLeave={e=>{ e.currentTarget.style.transform='translateY(0)'; e.currentTarget.style.background='rgba(255,255,255,.04)'; }}>
+              <div style={{ width:34, height:34, borderRadius:9, flex:'none', display:'grid', placeItems:'center',
+                color:'#fff', fontWeight:700, fontSize:15,
+                background:`linear-gradient(145deg, oklch(64% 0.16 ${hue}), oklch(50% 0.18 ${hue+20}))`,
+                boxShadow:'inset 0 1px 0 rgba(255,255,255,.3), 0 4px 10px -3px rgba(0,0,0,.5)' }}>{letter}</div>
+              <div style={{ minWidth:0, flex:1 }}>
+                <div style={{ fontSize:13, color:c.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{a.artist}</div>
+                <div className="mono" style={{ fontSize:10, color:c.textSubtle }}>{a.count} {lang==='ru'?'треков':'tracks'}</div>
+              </div>
+              <div className="mono" style={{ fontSize:11, color:c.textMuted }}>#{i+1}</div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// NEW fragment — "track length" from the previously-unused duration_buckets.
+function DurationBars({ buckets, isDark, lang, reduced, labelStyle }) {
+  const c = useColors(isDark);
+  if (!buckets.length) return (
+    <div><div style={labelStyle}>{lang==='ru'?'ДЛИНА ТРЕКА':'TRACK LENGTH'}</div><Empty lang={lang} /></div>
+  );
+  const max = buckets.reduce((m,b)=>Math.max(m,b.count||0),0)||1;
+  const fmtRange = (r) => {
+    const m = String(r).match(/(\d+)\s*-\s*(\d+)/);
+    if (m) return `${Math.round(+m[1]/60)}–${Math.round(+m[2]/60)} ${lang==='ru'?'мин':'min'}`;
+    return String(r);
+  };
+  const hue = 150;
+  return (
+    <div>
+      <div style={labelStyle}>{lang==='ru'?'ДЛИНА ТРЕКА':'TRACK LENGTH'}</div>
+      {buckets.map((b,i)=>{
+        const w = Math.round((b.count/max)*100);
+        return (
+          <div key={b.range||i} style={{ marginBottom:9 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', fontSize:11, marginBottom:4 }}>
+              <span style={{ color:c.textMuted }}>{fmtRange(b.range)}</span>
+              <span className="mono" style={{ color:c.textSubtle }}>{b.count}</span>
+            </div>
+            <div className={ske('inset', isDark)} style={{ height:8, borderRadius:5, overflow:'hidden' }}>
+              <div style={{ height:'100%', width:`${w}%`, borderRadius:5, transformOrigin:'left',
+                background:`linear-gradient(90deg, oklch(60% 0.13 ${hue}), oklch(72% 0.14 ${hue+15}))`,
+                boxShadow:'inset 0 1px 1px rgba(255,255,255,.4)',
+                animation: reduced?'none':'meterTick 0.55s cubic-bezier(.22,.9,.3,1) both',
+                animationDelay: reduced?'0s':`${(i*0.06).toFixed(2)}s` }} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Small 24h ring for the "peak" metric card. With by_hour it draws the whole
+// day's distribution as faint radial bars + a glowing peak; without it (Phase 1
+// fallback) it shows a single notch at the peak hour.
+function MiniPeakDial({ hour, byHour, isDark, reduced }) {
+  const c = useColors(isDark);
+  const has = Array.isArray(byHour) && byHour.length === 24 && byHour.some(v => v > 0);
+  if (hour == null && !has) return <div style={{ width:52, height:52, flex:'none' }} />;
+  const R=22, cx=26, cy=26;
+  const max = has ? Math.max(...byHour) : 1;
+  const peakHour = hour != null ? hour : byHour.indexOf(max);
+  const ang = (peakHour/24)*2*Math.PI - Math.PI/2;
+  const dx = cx + R*Math.cos(ang), dy = cy + R*Math.sin(ang);
+  return (
+    <svg width="52" height="52" viewBox="0 0 52 52" style={{ flex:'none' }}>
+      <circle cx={cx} cy={cy} r={R} fill="none" stroke={c.border} strokeWidth="1" />
+      {has
+        ? byHour.map((v,i)=>{
+            const a=(i/24)*2*Math.PI - Math.PI/2, inner=8, outer=8+(v/max)*(R-9);
+            const isPk=i===peakHour;
+            return <line key={i} x1={cx+inner*Math.cos(a)} y1={cy+inner*Math.sin(a)}
+              x2={cx+outer*Math.cos(a)} y2={cy+outer*Math.sin(a)}
+              stroke={isPk?'oklch(80% 0.14 80)':c.textSubtle} strokeWidth={isPk?2:1.4} strokeLinecap="round" />;
+          })
+        : Array.from({length:24},(_,i)=>{
+            const a=(i/24)*2*Math.PI - Math.PI/2, r1=R-(i%6===0?4:2);
+            return <line key={i} x1={cx+r1*Math.cos(a)} y1={cy+r1*Math.sin(a)} x2={cx+R*Math.cos(a)} y2={cy+R*Math.sin(a)} stroke={c.textSubtle} strokeWidth={i%6===0?1.2:0.6} />;
+          })}
+      <circle cx={dx} cy={dy} r="3.6" fill="#fff"
+        style={{ filter:'drop-shadow(0 0 5px oklch(75% 0.14 80))',
+                 transition: reduced?'none':'cx .6s cubic-bezier(.22,.9,.3,1), cy .6s cubic-bezier(.22,.9,.3,1)' }} />
+    </svg>
+  );
+}
+
+// Russian-aware plural picker. ru = [one, few, many]; en = [one, other].
+const plural = (n, lang, ru, en) => {
+  if (lang !== 'ru') return n === 1 ? en[0] : en[1];
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return ru[0];
+  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return ru[1];
+  return ru[2];
+};
+
+// 14-day trailing sparkline for the "∑ listened" readout.
+function Sparkline({ days, width=92, height=24, hue=145 }) {
+  const pts = useMemo(() => {
+    const map = new Map((days||[]).map(d => [d.date, d.count]));
+    const today = new Date(); today.setHours(0,0,0,0);
+    const vals = [];
+    for (let i=13;i>=0;i--){
+      const dt = new Date(today); dt.setDate(today.getDate()-i);
+      const iso = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
+      vals.push(map.get(iso) || 0);
+    }
+    return vals;
+  }, [days]);
+  const max = Math.max(1, ...pts);
+  const stepX = width/(pts.length-1);
+  const line = pts.map((v,i)=>`${i?'L':'M'}${(i*stepX).toFixed(1)},${(height-(v/max)*(height-3)-1).toFixed(1)}`).join(' ');
+  const area = `${line} L${width},${height} L0,${height} Z`;
+  const gid = `spk${hue}`;
+  return (
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} style={{ display:'block', flex:'none' }}>
+      <defs><linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stopColor={`oklch(72% 0.16 ${hue})`} stopOpacity="0.32" />
+        <stop offset="100%" stopColor={`oklch(72% 0.16 ${hue})`} stopOpacity="0" />
+      </linearGradient></defs>
+      <path d={area} fill={`url(#${gid})`} />
+      <path d={line} fill="none" stroke={`oklch(74% 0.16 ${hue})`} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
+// Glass readout chip used in the Rhythm section header (streak / busiest day).
+function RhythmReadout({ icon, value, label, isDark, hue, grow }) {
+  const c = useColors(isDark);
+  const glass = isDark ? {
+    background:'linear-gradient(165deg, rgba(255,255,255,0.13), rgba(255,255,255,0.03)), rgba(24,24,32,0.36)',
+    border:'1px solid rgba(255,255,255,0.13)',
+    boxShadow:'inset 0 1px 0 rgba(255,255,255,0.22), 0 10px 26px rgba(0,0,0,0.32)',
+  } : {
+    background:'linear-gradient(165deg, rgba(255,255,255,0.92), rgba(255,255,255,0.5)), rgba(244,243,250,0.4)',
+    border:'1px solid rgba(255,255,255,0.8)',
+    boxShadow:'inset 0 1px 0 rgba(255,255,255,0.95), 0 10px 26px rgba(46,36,86,0.12)',
+  };
+  return (
+    <div style={{ ...glass, flex: grow?'1 1 240px':'0 1 auto', display:'flex', alignItems:'center', gap:12,
+      padding:'12px 16px', borderRadius:14, minWidth:0, backdropFilter:'blur(14px) saturate(1.5)', WebkitBackdropFilter:'blur(14px) saturate(1.5)' }}>
+      <span style={{ fontSize:20, flex:'none' }}>{icon}</span>
+      <div style={{ minWidth:0 }}>
+        <div style={{ fontSize:16, fontWeight:600, color:c.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{value}</div>
+        <div className="mono" style={{ fontSize:9, letterSpacing:'0.12em', textTransform:'uppercase', color:`oklch(70% 0.13 ${hue})`, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{label}</div>
+      </div>
+    </div>
+  );
+}
+
+// 24h polar histogram — a tactile clock-dial of when you listen.
+function RhythmDial({ byHour, isDark, lang, reduced }) {
+  const c = useColors(isDark);
+  const arr = (byHour && byHour.length===24) ? byHour : new Array(24).fill(0);
+  const max = Math.max(1, ...arr);
+  const anyData = arr.some(v=>v>0);
+  const peak = anyData ? arr.indexOf(Math.max(...arr)) : 0;
+  const S=150, cx=S/2, cy=S/2, r0=34, r1=66;
+  return (
+    <svg width={S} height={S} viewBox={`0 0 ${S} ${S}`}>
+      <circle cx={cx} cy={cy} r={r1+6} fill="none" stroke={c.border} strokeWidth="1" />
+      <circle cx={cx} cy={cy} r={r0-4} fill="none" stroke={c.border} strokeWidth="1" />
+      {arr.map((v,i)=>{
+        const a=(i/24)*2*Math.PI - Math.PI/2;
+        const len = r0 + (v/max)*(r1-r0);
+        const isPk = anyData && i===peak;
+        return <line key={i} x1={cx+r0*Math.cos(a)} y1={cy+r0*Math.sin(a)} x2={cx+len*Math.cos(a)} y2={cy+len*Math.sin(a)}
+          stroke={isPk?'oklch(80% 0.14 80)':`oklch(${52+(v/max)*22}% ${(0.06+(v/max)*0.08).toFixed(3)} 150)`}
+          strokeWidth={4} strokeLinecap="round"
+          style={{ filter:isPk?'drop-shadow(0 0 5px oklch(80% 0.14 80))':'none',
+                   opacity: reduced?1:0, animation: reduced?'none':'fadeIn 0.4s ease both', animationDelay: reduced?'0s':`${(i*0.015).toFixed(3)}s` }} />;
+      })}
+      {[0,6,12,18].map(h=>{ const a=(h/24)*2*Math.PI-Math.PI/2, rr=r1+12;
+        return <text key={h} x={cx+rr*Math.cos(a)} y={cy+rr*Math.sin(a)+3} textAnchor="middle" className="mono" style={{ fontSize:8, fill:c.textSubtle }}>{h}</text>; })}
+      <text x={cx} y={cy-1} textAnchor="middle" style={{ fontSize:16, fontWeight:700, fill:c.text }}>{anyData?`${String(peak).padStart(2,'0')}:00`:'—'}</text>
+      <text x={cx} y={cy+12} textAnchor="middle" className="mono" style={{ fontSize:7, letterSpacing:'0.12em', fill:c.textSubtle }}>{lang==='ru'?'ПИК':'PEAK'}</text>
+    </svg>
+  );
+}
+
+// GitHub-style calendar heatmap of plays per day over the last ~year.
+function CalendarHeatmap({ days, isDark, lang, reduced }) {
+  const c = useColors(isDark);
+  const [hov, setHov] = useState(null);   // single repositioned tooltip
+  const cells = useMemo(() => {
+    const map = new Map((days||[]).map(d => [d.date, d.count]));
+    const max = (days||[]).reduce((m,d)=>Math.max(m,d.count||0),0) || 1;
+    const WEEKS=53;
+    const today=new Date(); today.setHours(0,0,0,0);
+    const end=new Date(today); end.setDate(end.getDate()+(6-today.getDay())); // align to Saturday
+    const total=WEEKS*7, out=[];
+    for (let i=total-1;i>=0;i--){
+      const dt=new Date(end); dt.setDate(end.getDate()-i);
+      const iso=`${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
+      const cnt=map.get(iso)||0, future=dt>today;
+      const level=cnt===0?0:Math.min(4, 1+Math.floor((cnt/max)*3.999));
+      out.push({iso,cnt,level,future});
+    }
+    return out;
+  }, [days]);
+  const color=(lvl)=> lvl===0 ? (isDark?'rgba(255,255,255,.06)':'rgba(0,0,0,.06)') : `oklch(${50+lvl*6}% ${(0.05+lvl*0.045).toFixed(3)} 150)`;
+  const fmtDate=(iso)=>{ try{ return new Date(iso+'T00:00:00').toLocaleDateString(lang==='ru'?'ru-RU':'en-US',{day:'numeric',month:'short'}); }catch{ return iso; } };
+  return (
+    <div style={{ position:'relative' }}>
+      <div className={ske('inset', isDark)} style={{ borderRadius:12, padding:10, overflowX:'auto' }}>
+        <div style={{ display:'grid', gridAutoFlow:'column', gridTemplateRows:'repeat(7, 11px)', gridAutoColumns:'11px', gap:3, width:'max-content' }}>
+          {cells.map((cell,i)=>(
+            <div key={cell.iso}
+              onMouseEnter={e=>{ if(!cell.future) setHov({iso:cell.iso, cnt:cell.cnt, x:e.clientX, y:e.clientY}); }}
+              onMouseMove={e=>setHov(h=> h && h.iso===cell.iso ? {...h, x:e.clientX, y:e.clientY} : h)}
+              onMouseLeave={()=>setHov(null)}
+              style={{ width:11, height:11, borderRadius:3,
+                background: cell.future?'transparent':color(cell.level),
+                boxShadow: cell.level>0?`inset 0 0 0 1px oklch(${50+cell.level*6}% ${(0.05+cell.level*0.045).toFixed(3)} 150 / .5)`:'none',
+                opacity: reduced?1:0,
+                animation: (reduced||cell.future)?'none':'scaleIn 0.3s ease both',
+                animationDelay: reduced?'0s':`${(Math.floor(i/7)*0.012).toFixed(3)}s`,
+                cursor: cell.future?'default':'pointer' }} />
+          ))}
+        </div>
+      </div>
+      <div style={{ display:'flex', alignItems:'center', gap:5, justifyContent:'flex-end', marginTop:6 }}>
+        <span className="mono" style={{ fontSize:8, color:c.textSubtle }}>{lang==='ru'?'меньше':'less'}</span>
+        {[0,1,2,3,4].map(l=> <span key={l} style={{ width:9, height:9, borderRadius:2, background:color(l) }} />)}
+        <span className="mono" style={{ fontSize:8, color:c.textSubtle }}>{lang==='ru'?'больше':'more'}</span>
+      </div>
+      {hov && (
+        <div className="mono" style={{ position:'fixed', left:hov.x+12, top:hov.y+12, zIndex:50, pointerEvents:'none',
+          padding:'6px 9px', borderRadius:8, fontSize:11, whiteSpace:'nowrap',
+          background:isDark?'rgba(20,18,30,0.95)':'rgba(255,255,255,0.97)', color:c.text,
+          border:`1px solid ${c.border}`, boxShadow:'0 8px 22px rgba(0,0,0,.35)' }}>
+          {fmtDate(hov.iso)} · {hov.cnt} {lang==='ru'?'плеев':'plays'}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// "Ритм" section: streak/busiest readout + year-pulse heatmap + 24h dial.
+function RhythmSection({ rhythm, isDark, lang }) {
+  const c = useColors(isDark);
+  const reduced = usePrefersReducedMotion();
+  const days = rhythm?.days || [];
+  const lbl = { fontFamily:"'JetBrains Mono', monospace", fontSize:9, color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase', marginBottom:10 };
+  if (!days.length) {
+    return (
+      <div className={brushed(isDark)} style={{ borderRadius:18, padding:'28px 24px', textAlign:'center' }}>
+        <div style={{ fontSize:14, color:c.textMuted, fontStyle:'italic' }}>
+          {lang==='ru' ? 'Заглядывай сюда — твой ритм проявится со временем' : 'Come back soon — your rhythm will appear over time'}
+        </div>
+      </div>
+    );
+  }
+  const dayWord = ['день','дня','дней'], dayWordEn = ['day','days'];
+  const busiest = rhythm?.busiest_day;
+  const fmtLong=(iso)=>{ try{ return new Date(iso+'T00:00:00').toLocaleDateString(lang==='ru'?'ru-RU':'en-US',{day:'numeric',month:'long'}); }catch{ return iso; } };
+  return (
+    <div className={brushed(isDark)} style={{ borderRadius:18, padding:'22px 24px', display:'flex', flexDirection:'column', gap:20,
+      animation: reduced?'none':'fadeIn 0.4s cubic-bezier(.22,.9,.3,1)' }}>
+      <div style={{ display:'flex', flexWrap:'wrap', gap:12 }}>
+        <RhythmReadout icon="🔥" isDark={isDark} hue={30}
+          value={`${rhythm.streak_current} ${plural(rhythm.streak_current, lang, dayWord, dayWordEn)}`}
+          label={lang==='ru'?'подряд сейчас':'current streak'} />
+        <RhythmReadout icon="🏆" isDark={isDark} hue={75}
+          value={`${rhythm.streak_best} ${plural(rhythm.streak_best, lang, dayWord, dayWordEn)}`}
+          label={lang==='ru'?'лучшая серия':'best streak'} />
+        {busiest && (
+          <RhythmReadout icon="⚡" isDark={isDark} hue={275} grow
+            value={fmtLong(busiest.date)}
+            label={busiest.top_track
+              ? `${busiest.count} ${lang==='ru'?'плеев':'plays'} · ${busiest.top_track.title}`
+              : `${busiest.count} ${lang==='ru'?'плеев':'plays'}`} />
+        )}
+      </div>
+      <div style={{ display:'flex', gap:24, alignItems:'flex-start', flexWrap:'wrap' }}>
+        <div style={{ flex:'1 1 420px', minWidth:0 }}>
+          <div style={lbl}>{lang==='ru'?'ПУЛЬС ГОДА':'YEAR PULSE'}</div>
+          <CalendarHeatmap days={days} isDark={isDark} lang={lang} reduced={reduced} />
+        </div>
+        <div style={{ flex:'0 0 auto', margin:'0 auto', textAlign:'center' }}>
+          <div style={lbl}>{lang==='ru'?'СУТКИ':'BY HOUR'}</div>
+          <RhythmDial byHour={rhythm?.by_hour} isDark={isDark} lang={lang} reduced={reduced} />
+        </div>
+      </div>
+    </div>
+  );
+}
+// Tactile semicircular VU gauge: carved track + glass dash-fill + glowing
+// needle. Fills/sweeps on first scroll into view (IntersectionObserver), so it
+// never animates off-screen.
+function SkeuoArcGauge({ value=0, hue=145, label, sub, isDark }) {
+  const c = useColors(isDark);
+  const ref = useRef(null);
+  const reduced = usePrefersReducedMotion();
+  const [shown, setShown] = useState(reduced);
+  useEffect(() => {
+    if (reduced) { setShown(true); return; }
+    const el = ref.current; if (!el) return;
+    const io = new IntersectionObserver(([e]) => { if (e.isIntersecting) { setShown(true); io.disconnect(); } }, { threshold: 0.4 });
+    io.observe(el); return () => io.disconnect();
+  }, [reduced]);
+  const pct = Math.max(0, Math.min(1, value));
+  const r=54, cx=64, cy=64, len = Math.PI * r;
+  const fill = shown ? pct : 0;
+  const a = Math.PI - pct*Math.PI;
+  const [hx, hy] = shown ? [cx + r*Math.cos(a), cy - r*Math.sin(a)] : [cx - r, cy];
+  return (
+    <div ref={ref} style={{ textAlign:'center', flex:'none' }}>
+      <svg viewBox="0 0 128 78" width="140" height="86">
+        <path d="M10,64 A54,54 0 0 1 118,64" fill="none"
+          stroke={isDark?'rgba(0,0,0,.5)':'rgba(40,30,60,.16)'} strokeWidth="9" strokeLinecap="round" />
+        <path d="M10,64 A54,54 0 0 1 118,64" fill="none"
+          stroke={`oklch(70% 0.17 ${hue})`} strokeWidth="9" strokeLinecap="round"
+          strokeDasharray={len} strokeDashoffset={len*(1-fill)}
+          style={{ transition: reduced?'none':'stroke-dashoffset 0.9s cubic-bezier(.22,.9,.3,1)',
+                   filter:`drop-shadow(0 0 6px oklch(70% 0.17 ${hue} / .5))` }} />
+        <circle cx={hx} cy={hy} r="4.5" fill="#fff"
+          style={{ filter:`drop-shadow(0 0 5px oklch(75% 0.18 ${hue}))`,
+                   transition: reduced?'none':'cx 0.9s cubic-bezier(.22,.9,.3,1), cy 0.9s cubic-bezier(.22,.9,.3,1)' }} />
+      </svg>
+      <div style={{ fontSize:26, fontWeight:700, color:c.text, marginTop:-10 }}>{Math.round(pct*100)}%</div>
+      {label && <div className="mono" style={{ fontSize:9, letterSpacing:'0.2em', textTransform:'uppercase', color:c.textSubtle }}>{label}</div>}
+      {sub && <div style={{ fontSize:12, color:c.textMuted, marginTop:2 }}>{sub}</div>}
+    </div>
+  );
+}
+
+// Small embossed completion dial for the "loved" list rows.
+function CompletionRing({ pct=0, size=36, hue=145, isDark }) {
+  const c = useColors(isDark);
+  const r=(size-6)/2, cc=size/2, len=2*Math.PI*r, p=Math.max(0,Math.min(1,pct));
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ flex:'none' }}>
+      <circle cx={cc} cy={cc} r={r} fill="none" stroke={isDark?'rgba(255,255,255,.1)':'rgba(0,0,0,.1)'} strokeWidth="3" />
+      <circle cx={cc} cy={cc} r={r} fill="none" stroke={`oklch(70% 0.16 ${hue})`} strokeWidth="3" strokeLinecap="round"
+        strokeDasharray={len} strokeDashoffset={len*(1-p)} transform={`rotate(-90 ${cc} ${cc})`}
+        style={{ filter:`drop-shadow(0 0 3px oklch(70% 0.16 ${hue} / .5))` }} />
+      <text x={cc} y={cc+3} textAnchor="middle" style={{ fontSize:9, fontWeight:700, fill:c.text }}>{Math.round(p*100)}</text>
+    </svg>
+  );
+}
+
+// Carved completion bar for the "guilty" list rows (low fill = rarely finished).
+function GuiltyBar({ pct=0, hue=30, isDark }) {
+  const c = useColors(isDark);
+  const w = Math.round(Math.max(0,Math.min(1,pct))*100);
+  return (
+    <div style={{ flex:'none', width:62, textAlign:'right' }}>
+      <div className={ske('inset', isDark)} style={{ height:7, borderRadius:5, overflow:'hidden' }}>
+        <div style={{ height:'100%', width:`${w}%`, borderRadius:5,
+          background:`linear-gradient(90deg, oklch(62% 0.16 ${hue}), oklch(72% 0.15 ${hue+10}))`,
+          boxShadow:'inset 0 1px 1px rgba(255,255,255,.4)' }} />
+      </div>
+      <div className="mono" style={{ fontSize:9, color:c.textSubtle, marginTop:3 }}>{w}%</div>
+    </div>
+  );
+}
+
+// One column of the honest-mirror panel (loved or guilty).
+function EngagementColumn({ title, tracks, variant, isDark, lang, onPlayTrack }) {
+  const c = useColors(isDark);
+  const lbl = { fontFamily:"'JetBrains Mono', monospace", fontSize:9, color:c.textSubtle, letterSpacing:'0.16em', textTransform:'uppercase', marginBottom:10 };
+  const hue = variant==='loved' ? 145 : 30;
+  return (
+    <div style={{ minWidth:0 }}>
+      <div style={lbl}>{title}</div>
+      {tracks.length === 0 ? <Empty lang={lang} /> : tracks.map((t)=>(
+        <div key={t.track_id}
+          onClick={()=>{ if (onPlayTrack) onPlayTrack({ track:{ track_id:t.track_id, title:t.title, artist:t.artist, cover_art_path:t.cover_art_path }, score:1 }, []); }}
+          style={{ display:'flex', alignItems:'center', gap:10, padding:'7px 8px', borderRadius:12, cursor:'pointer', transition:'background .15s ease' }}
+          onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,.06)'}
+          onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+          <AlbumCover title={t.title} artist={t.artist} size={40} isDark={isDark} coverPath={t.cover_art_path} radius={8} />
+          <div style={{ minWidth:0, flex:1 }}>
+            <div style={{ fontSize:13, color:c.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{t.title}</div>
+            <div style={{ fontSize:11, color:c.textMuted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{t.artist} · {t.plays} {lang==='ru'?'плеев':'plays'}</div>
+          </div>
+          {variant==='loved'
+            ? <CompletionRing pct={t.completion} size={36} hue={hue} isDark={isDark} />
+            : <GuiltyBar pct={t.completion} hue={hue} isDark={isDark} />}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// "Честное зеркало": overall completion VU + loved vs guilty columns.
+function EngagementSection({ engagement, isDark, lang, onPlayTrack }) {
+  const c = useColors(isDark);
+  const reduced = usePrefersReducedMotion();
+  const loved = engagement?.loved || [];
+  const guilty = engagement?.guilty || [];
+  const overall = engagement?.overall_completion || 0;
+  if (!loved.length && !guilty.length && !(overall > 0)) {
+    return (
+      <div className={brushed(isDark)} style={{ borderRadius:18, padding:'28px 24px', textAlign:'center' }}>
+        <div style={{ fontSize:14, color:c.textMuted, fontStyle:'italic' }}>
+          {lang==='ru' ? 'Послушай ещё немного — и зеркало покажет, что ты любишь по-настоящему' : 'Listen a little more — the mirror needs plays to reflect'}
+        </div>
+      </div>
+    );
+  }
+  const pct = Math.round(overall*100);
+  return (
+    <div className={brushed(isDark)} style={{ borderRadius:18, padding:'22px 24px', display:'flex', flexDirection:'column', gap:22,
+      animation: reduced?'none':'fadeIn 0.4s cubic-bezier(.22,.9,.3,1)' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:22, flexWrap:'wrap', justifyContent:'center' }}>
+        <SkeuoArcGauge value={overall} hue={145} isDark={isDark} label={lang==='ru'?'дослушано':'completion'} />
+        <div style={{ flex:'1 1 280px', minWidth:0 }}>
+          <div style={{ fontSize:18, color:c.text, fontWeight:600, lineHeight:1.3 }}>
+            {lang==='ru' ? `Ты дослушиваешь ${pct}% треков до конца` : `You finish ${pct}% of tracks`}
+          </div>
+          <div style={{ fontSize:13, color:c.textMuted, marginTop:6 }}>
+            {lang==='ru' ? 'Правда, которую обычное число прослушиваний прячет.' : 'The truth a plain play count hides.'}
+          </div>
+        </div>
+      </div>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:24 }}>
+        <EngagementColumn title={lang==='ru'?'ЛЮБИШЬ ПО-НАСТОЯЩЕМУ':'TRULY LOVED'} tracks={loved} variant="loved" isDark={isDark} lang={lang} onPlayTrack={onPlayTrack} />
+        <EngagementColumn title={lang==='ru'?'ВИНОВАТЫЕ СКИПЫ':'GUILTY SKIPS'} tracks={guilty} variant="guilty" isDark={isDark} lang={lang} onPlayTrack={onPlayTrack} />
+      </div>
+    </div>
+  );
+}
+
+function DistributionsPanel({ stats, isDark, lang }) {
+  const reduced = usePrefersReducedMotion();
+  const c = useColors(isDark);
+  const decades = stats?.decades || [];
+  const genres = stats?.genres || [];
+  const artists = (stats?.top_artists || []).slice(0, 5);
+  const durations = stats?.duration_buckets || [];
+  const colLbl = { fontFamily:"'JetBrains Mono', monospace", fontSize:'9px', color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase', marginBottom:'12px' };
+
+  return (
+    <div className={brushed(isDark)} style={{
+      borderRadius:'18px', padding:'22px 24px',
+      display:'flex', flexDirection:'column', gap:'26px',
+      animation: reduced ? 'none' : 'fadeIn 0.4s cubic-bezier(.22,.9,.3,1)',
+    }}>
+      <EraRidgeline decades={decades} isDark={isDark} lang={lang} reduced={reduced} labelStyle={colLbl} />
+      <div style={{ display:'grid', gridTemplateColumns:'1.1fr 1fr 0.9fr', gap:'30px' }}>
+        <GenreBars genres={genres} isDark={isDark} lang={lang} reduced={reduced} labelStyle={colLbl} />
+        <ArtistMosaic artists={artists} isDark={isDark} lang={lang} labelStyle={colLbl} />
+        <DurationBars buckets={durations} isDark={isDark} lang={lang} reduced={reduced} labelStyle={colLbl} />
+      </div>
+    </div>
+  );
+}
+function ListeningWidgetsRow({ data, rhythm, isDark, lang, onPlayTrack, navigateToArtist }) {
+  const c = useColors(isDark);
+  const reduced = usePrefersReducedMotion();
   const fmtDur = (sec) => {
     if (!sec) return '—';
     const h = Math.floor(sec / 3600);
@@ -5481,54 +6033,66 @@ function ListeningWidgetsRow({ data, isDark, lang }) {
   const top_track = data?.top_track;
   const top_artist = data?.top_artist;
   const peak = data?.peak_hour;
-  const widget = (lbl, val, sub, tint) => (
-    <div style={{
-      background: 'rgba(255,255,255,.04)',
-      border: `1px solid ${c.border}`,
-      borderRadius: '14px',
-      padding: '14px 16px',
-      backdropFilter:'blur(20px)',
-      display:'flex', flexDirection:'column', gap:'4px',
-    }}>
-      <div className="mono" style={{ fontSize:'9px', color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase' }}>{lbl}</div>
-      <div style={{ fontSize: typeof val === 'string' && val.length > 12 ? '13px' : '18px', color: tint || c.text, fontWeight: 500, lineHeight: 1.2 }}>{val}</div>
-      <div style={{ fontSize:'11px', color:c.textMuted }}>{sub || ' '}</div>
-    </div>
-  );
+  const animSec = useCountUp(data?.total_seconds_listened || 0, 700, reduced);
+
+  const lbl = (t) => <div className="mono" style={{ fontSize:9, color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase' }}>{t}</div>;
+  const card = { borderRadius:16, padding:'14px 16px', minHeight:96, display:'flex', flexDirection:'column', gap:6, border:`1px solid ${c.border}` };
+
   return (
-    <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:'12px' }}>
-      {widget(
-        lang==='ru' ? '∑ ПРОСЛУШАНО' : '∑ LISTENED',
-        fmtDur(data?.total_seconds_listened),
-        since ? (lang==='ru' ? `с ${since}` : `since ${since}`) : null,
-        'oklch(72% 0.18 145)'
-      )}
-      {widget(
-        lang==='ru' ? '★ ТОП-ТРЕК' : '★ TOP TRACK',
-        top_track?.title || '—',
-        top_track ? `${top_track.artist} · ${top_track.play_count} ${lang==='ru'?'плеев':'plays'}` : (lang==='ru'?'нет данных':'no data'),
-        'oklch(70% 0.18 275)'
-      )}
-      {widget(
-        lang==='ru' ? '★ ТОП-АРТИСТ' : '★ TOP ARTIST',
-        top_artist?.name || '—',
-        top_artist ? `${top_artist.play_count} ${lang==='ru'?'плеев':'plays'}` : null,
-        'oklch(75% 0.14 80)'
-      )}
-      {widget(
-        lang==='ru' ? '⌚ ПИК' : '⌚ PEAK HOUR',
-        peak ? `${String(peak.hour).padStart(2,'0')}:00` : '—',
-        peak?.label || null,
-        c.text
-      )}
+    <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:14 }}>
+      {/* ∑ listened — count-up readout */}
+      <div className={ske('display', isDark)} style={card}>
+        {lbl(lang==='ru'?'∑ ПРОСЛУШАНО':'∑ LISTENED')}
+        <div style={{ fontSize:22, color:'oklch(72% 0.18 145)', fontWeight:600, lineHeight:1.1 }}>{fmtDur(animSec)}</div>
+        <div style={{ display:'flex', alignItems:'flex-end', justifyContent:'space-between', gap:8 }}>
+          <span style={{ fontSize:11, color:c.textMuted }}>{since ? (lang==='ru'?`с ${since}`:`since ${since}`) : ' '}</span>
+          {rhythm?.days?.length ? <Sparkline days={rhythm.days} hue={145} /> : null}
+        </div>
+      </div>
+
+      {/* ★ top track — click to play */}
+      <button className={ske('display', isDark)} style={{ ...card, textAlign:'left', cursor: top_track?'pointer':'default' }}
+        onClick={() => { if (top_track && onPlayTrack) onPlayTrack({ track:{ track_id:top_track.track_id, title:top_track.title, artist:top_track.artist }, score:1 }, []); }}>
+        {lbl(lang==='ru'?'★ ТОП-ТРЕК':'★ TOP TRACK')}
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <div style={{ width:34, height:34, borderRadius:8, flex:'none', display:'grid', placeItems:'center', fontSize:15, color:'#fff',
+            background:'linear-gradient(145deg, oklch(64% 0.18 275), oklch(50% 0.2 290))', boxShadow:'inset 0 1px 0 rgba(255,255,255,.3)' }}>♪</div>
+          <div style={{ minWidth:0 }}>
+            <div style={{ fontSize:14, color:c.text, fontWeight:500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{top_track?.title || '—'}</div>
+            <div style={{ fontSize:11, color:c.textMuted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+              {top_track ? `${top_track.artist} · ${top_track.play_count} ${lang==='ru'?'плеев':'plays'}` : (lang==='ru'?'нет данных':'no data')}
+            </div>
+          </div>
+        </div>
+      </button>
+
+      {/* ★ top artist — click to open */}
+      <button className={ske('display', isDark)} style={{ ...card, textAlign:'left', cursor: top_artist?.slug?'pointer':'default' }}
+        onClick={() => { if (top_artist?.slug && navigateToArtist) navigateToArtist(top_artist.slug); }}>
+        {lbl(lang==='ru'?'★ ТОП-АРТИСТ':'★ TOP ARTIST')}
+        <div style={{ fontSize:(top_artist?.name||'').length>14?15:18, color:'oklch(75% 0.14 80)', fontWeight:600, lineHeight:1.15, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{top_artist?.name || '—'}</div>
+        <div style={{ fontSize:11, color:c.textMuted }}>{top_artist ? `${top_artist.play_count} ${lang==='ru'?'плеев':'plays'}` : ' '}</div>
+      </button>
+
+      {/* ⌚ peak hour — mini 24h dial */}
+      <div className={ske('display', isDark)} style={card}>
+        {lbl(lang==='ru'?'⌚ ПИК':'⌚ PEAK HOUR')}
+        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+          <MiniPeakDial hour={peak?.hour} byHour={rhythm?.by_hour} isDark={isDark} reduced={reduced} />
+          <div style={{ minWidth:0 }}>
+            <div style={{ fontSize:18, color:c.text, fontWeight:600 }}>{peak ? `${String(peak.hour).padStart(2,'0')}:00` : '—'}</div>
+            <div style={{ fontSize:11, color:c.textMuted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{peak?.label || ' '}</div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
 function LibraryTabsStrip({ active, onChange, counts, lang, isDark }) {
   const c = useColors(isDark);
   const tabs = lang === 'ru'
-    ? [['albums','▦ Альбомы', counts.albums], ['liked','♥ Любимые', counts.liked], ['recent','⟲ Недавние', counts.recent], ['playlists','♫ Плейлисты', counts.playlists]]
-    : [['albums','▦ Albums', counts.albums], ['liked','♥ Liked', counts.liked], ['recent','⟲ Recently', counts.recent], ['playlists','♫ Playlists', counts.playlists]];
+    ? [['albums','▦ Альбомы', counts.albums], ['liked','♥ Любимые', counts.liked], ['recent','⟲ Недавние', counts.recent], ['playlists','♫ Плейлисты', counts.playlists], ['stats','◷ Статистика', null]]
+    : [['albums','▦ Albums', counts.albums], ['liked','♥ Liked', counts.liked], ['recent','⟲ Recently', counts.recent], ['playlists','♫ Playlists', counts.playlists], ['stats','◷ Statistics', null]];
   return (
     <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
       {tabs.map(([id, label, n]) => {
@@ -5552,12 +6116,12 @@ function LibraryTabsStrip({ active, onChange, counts, lang, isDark }) {
             onMouseLeave={e => { if (!isActive) { e.currentTarget.style.background = 'rgba(255,255,255,.04)'; e.currentTarget.style.color = c.textMuted; e.currentTarget.style.transform = 'translateY(0)'; } }}
           >
             <span>{label}</span>
-            <span className="mono" style={{
+            {n != null && <span className="mono" style={{
               fontSize:10, padding:'2px 8px', borderRadius:9, letterSpacing:'0.04em',
               background: isActive ? 'rgba(255,255,255,.2)' : 'rgba(255,255,255,.06)',
               color: isActive ? '#fff' : c.textSubtle,
               transition:'all .25s',
-            }}>{n ?? 0}</span>
+            }}>{n}</span>}
           </button>
         );
       })}
