@@ -5421,7 +5421,7 @@ function StatsDivider({ label, hue }) {
   return (
     <div className="rec-div" style={{ margin:'6px 4px 0' }}>
       <div className="rec-div__ln" style={ln} />
-      <div className="rec-div__lbl" style={{ color: col }}>
+      <div className="rec-div__lbl" style={{ color: col, fontSize:'clamp(12px, 1.1vw, 14px)' }}>
         <span className="rec-div__nd" style={{ background: col, boxShadow:`0 0 8px ${col}` }} />
         {label}
       </div>
@@ -5438,9 +5438,9 @@ function StatsTab({ stats, listenData, rhythm, engagement, isDark, lang, onPlayT
     <div style={{ display:'flex', flexDirection:'column', gap:22 }}>
       <ListeningWidgetsRow data={listenData} rhythm={rhythm} isDark={isDark} lang={lang}
         onPlayTrack={onPlayTrack} navigateToArtist={navigateToArtist} />
-      <StatsDivider label={lang==='ru'?'ритм':'rhythm'} hue={150} />
+      <StatsDivider label={lang==='ru'?'таймлайн прослушиваний':'listening timeline'} hue={150} />
       <RhythmSection rhythm={rhythm} isDark={isDark} lang={lang} />
-      <StatsDivider label={lang==='ru'?'честное зеркало':'honest mirror'} hue={275} />
+      <StatsDivider label={lang==='ru'?'что ты дослушиваешь':'what you finish'} hue={275} />
       <EngagementSection engagement={engagement} isDark={isDark} lang={lang} onPlayTrack={onPlayTrack} />
       <StatsDivider label={lang==='ru'?'карта коллекции':'collection map'} hue={75} />
       <DistributionsPanel stats={stats} isDark={isDark} lang={lang} />
@@ -5464,47 +5464,56 @@ function EraRidgeline({ decades, isDark, lang, reduced, labelStyle }) {
   const maxDec = decades.reduce((m,d)=>Math.max(m,d.count||0),0)||1;
   const peak = decades.reduce((p,d)=>(d.count>(p?.count||0)?d:p), null);
   const total = decades.reduce((s,d)=>s+(d.count||0),0)||1;
-  const W=640, H=120, padX=10, baseY=H-18, topPad=14, n=decades.length, hue=268;
+  const W=640, H=150, padX=12, baseY=H-22, topPad=16, n=decades.length, hue=268;
   const xAt = (i) => n===1 ? W/2 : padX + (i/(n-1))*(W-2*padX);
   const yAt = (d) => baseY - (d.count/maxDec)*(baseY-topPad);
   const pts = decades.map((d,i)=>[xAt(i), yAt(d)]);
   const line = pts.map(([x,y],i)=>`${i?'L':'M'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
   const area = `${line} L${pts[n-1][0].toFixed(1)},${baseY} L${pts[0][0].toFixed(1)},${baseY} Z`;
-  const lineLen = 1500;
+  const lineLen = 1600;
   const peakPct = peak ? Math.round((peak.count/total)*100) : 0;
   return (
     <div>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:4 }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:6, gap:12, flexWrap:'wrap' }}>
         <div style={labelStyle}>{lang==='ru'?'ПО ЭПОХАМ':'BY DECADE'}</div>
-        {peak && <div style={{ fontSize:12, color:c.textMuted }}>
+        {peak && <div style={{ fontSize:'clamp(13px, 1.2vw, 15px)', color:c.textMuted }}>
           {lang==='ru'?'Ядро коллекции — ':'Core of your library — '}
-          <b style={{ color:c.amber, fontWeight:600 }}>{peak.decade}s · {peakPct}%</b>
+          <b style={{ color:c.amber, fontWeight:700 }}>{peak.decade}s · {peakPct}%</b>
         </div>}
       </div>
-      <svg viewBox={`0 0 ${W} ${H}`} width="100%" height="120" preserveAspectRatio="none" style={{ display:'block', overflow:'visible' }}>
-        <defs>
-          <linearGradient id="ridgeFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={`oklch(66% 0.17 ${hue})`} stopOpacity="0.42" />
-            <stop offset="100%" stopColor={`oklch(66% 0.17 ${hue})`} stopOpacity="0.02" />
-          </linearGradient>
-        </defs>
-        <path d={area} fill="url(#ridgeFill)" style={{ opacity: drawn?1:0, transition: reduced?'none':'opacity .6s ease .2s' }} />
-        <path d={line} fill="none" stroke={`oklch(72% 0.16 ${hue})`} strokeWidth="2" strokeLinejoin="round"
-          vectorEffect="non-scaling-stroke" strokeDasharray={lineLen} strokeDashoffset={drawn?0:lineLen}
-          style={{ transition: reduced?'none':'stroke-dashoffset 0.9s cubic-bezier(.22,.9,.3,1)' }} />
-        {pts.map(([x,y],i)=>{
-          const isPk = peak && decades[i].decade===peak.decade;
-          return <circle key={i} cx={x} cy={y} r={isPk?4:2.4} fill={isPk?'#fff':`oklch(74% 0.15 ${hue})`}
-            style={{ filter: isPk?`drop-shadow(0 0 6px ${c.amber})`:'none', opacity: drawn?1:0,
-                     transition: reduced?'none':`opacity .4s ease ${(0.3+i*0.04).toFixed(2)}s` }} />;
-        })}
-      </svg>
-      <div style={{ display:'flex', justifyContent:'space-between', marginTop:6 }}>
-        {decades.map((d)=>(
-          <div key={d.decade} className="mono" style={{ flex:1, textAlign:'center', fontSize:9,
-            color: peak&&d.decade===peak.decade?c.amber:c.textSubtle }}>{String(d.decade).slice(2)}s</div>
+      <div style={{ position:'relative' }}>
+        <svg viewBox={`0 0 ${W} ${H}`} width="100%" height="150" preserveAspectRatio="none" style={{ display:'block', overflow:'visible' }}>
+          <defs>
+            <linearGradient id="ridgeFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor={`oklch(66% 0.17 ${hue})`} stopOpacity="0.42" />
+              <stop offset="100%" stopColor={`oklch(66% 0.17 ${hue})`} stopOpacity="0.02" />
+            </linearGradient>
+          </defs>
+          {/* baseline axis + a vertical guide under each decade point (alignment) */}
+          <line x1="0" y1={baseY} x2={W} y2={baseY} stroke={c.border} strokeWidth="1" vectorEffect="non-scaling-stroke" />
+          {pts.map(([x],i)=>(
+            <line key={`g${i}`} x1={x} y1={topPad-8} x2={x} y2={baseY} stroke={c.border} strokeWidth="1"
+              vectorEffect="non-scaling-stroke" style={{ opacity:0.35 }} />
+          ))}
+          <path d={area} fill="url(#ridgeFill)" style={{ opacity: drawn?1:0, transition: reduced?'none':'opacity .6s ease .2s' }} />
+          <path d={line} fill="none" stroke={`oklch(72% 0.16 ${hue})`} strokeWidth="2.5" strokeLinejoin="round"
+            vectorEffect="non-scaling-stroke" strokeDasharray={lineLen} strokeDashoffset={drawn?0:lineLen}
+            style={{ transition: reduced?'none':'stroke-dashoffset 0.9s cubic-bezier(.22,.9,.3,1)' }} />
+          {pts.map(([x,y],i)=>{
+            const isPk = peak && decades[i].decade===peak.decade;
+            return <circle key={i} cx={x} cy={y} r={isPk?4:2.4} fill={isPk?'#fff':`oklch(74% 0.15 ${hue})`}
+              style={{ filter: isPk?`drop-shadow(0 0 6px ${c.amber})`:'none', opacity: drawn?1:0,
+                       transition: reduced?'none':`opacity .4s ease ${(0.3+i*0.04).toFixed(2)}s` }} />;
+          })}
+        </svg>
+        {/* decade labels pinned to the exact point x — fixes the axis/label drift */}
+        {decades.map((d,i)=>(
+          <div key={d.decade} className="mono" style={{ position:'absolute', top:'100%', marginTop:5,
+            left:`${(xAt(i)/W)*100}%`, transform:'translateX(-50%)', whiteSpace:'nowrap',
+            fontSize:'clamp(10px, 0.9vw, 12px)', color: peak&&d.decade===peak.decade?c.amber:c.textSubtle }}>{String(d.decade).slice(2)}s</div>
         ))}
       </div>
+      <div style={{ height:20 }} />
     </div>
   );
 }
@@ -5525,13 +5534,13 @@ function GenreBars({ genres, isDark, lang, reduced, labelStyle }) {
       {shown.map((g,i)=>{
         const hue = hueFromString(g.genre), w = Math.round((g.count/max)*100);
         return (
-          <div key={g.genre} style={{ marginBottom:10 }}>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', fontSize:12, marginBottom:5 }}>
-              <span style={{ color:c.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'62%' }}>{g.genre}</span>
-              <span className="mono" style={{ color:c.textMuted, fontSize:11 }}>{g.count} · {g.pct}%</span>
+          <div key={g.genre} style={{ marginBottom:13 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:6, gap:8 }}>
+              <span style={{ color:c.text, fontSize:'clamp(13px, 1.2vw, 15px)', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:'62%' }}>{g.genre}</span>
+              <span className="mono" style={{ color:c.textMuted, fontSize:'clamp(11px, 1vw, 13px)' }}>{g.count} · {g.pct}%</span>
             </div>
-            <div className={ske('inset', isDark)} style={{ height:10, borderRadius:6, overflow:'hidden' }}>
-              <div style={{ height:'100%', width:`${w}%`, borderRadius:6, transformOrigin:'left',
+            <div className={ske('inset', isDark)} style={{ height:12, borderRadius:7, overflow:'hidden' }}>
+              <div style={{ height:'100%', width:`${w}%`, borderRadius:7, transformOrigin:'left',
                 background:`linear-gradient(90deg, oklch(58% 0.18 ${hue}), oklch(70% 0.17 ${hue+22}))`,
                 boxShadow:`inset 0 1px 1px rgba(255,255,255,.5), inset 0 -1px 1px rgba(0,0,0,.2), 0 0 8px -2px oklch(65% 0.18 ${hue})`,
                 animation: reduced?'none':'meterTick 0.55s cubic-bezier(.22,.9,.3,1) both',
@@ -5542,7 +5551,7 @@ function GenreBars({ genres, isDark, lang, reduced, labelStyle }) {
       })}
       {genres.length>6 && (
         <button onClick={()=>setExpanded(e=>!e)} className="mono"
-          style={{ fontSize:10, color:c.textMuted, letterSpacing:'0.08em', marginTop:2 }}>
+          style={{ fontSize:'clamp(11px, 1vw, 12px)', color:c.textMuted, letterSpacing:'0.08em', marginTop:4 }}>
           {expanded ? (lang==='ru'?'СВЕРНУТЬ':'LESS') : (lang==='ru'?`ЕЩЁ ${genres.length-6}`:`+${genres.length-6} MORE`)}
         </button>
       )}
@@ -5560,24 +5569,24 @@ function ArtistMosaic({ artists, isDark, lang, labelStyle }) {
   return (
     <div>
       <div style={labelStyle}>{lang==='ru'?'ПО АРТИСТАМ':'BY ARTIST'}</div>
-      <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+      <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
         {artists.map((a,i)=>{
           const hue = hueFromString(a.artist);
           const letter = (a.artist||'?').trim().charAt(0).toUpperCase() || '?';
           return (
-            <div key={a.artist} style={{ display:'flex', alignItems:'center', gap:10, padding:'6px 8px', borderRadius:12,
+            <div key={a.artist} style={{ display:'flex', alignItems:'center', gap:12, padding:'9px 11px', borderRadius:13,
               background:'rgba(255,255,255,.04)', border:`1px solid ${c.border}`, transition:'transform .16s ease, background .16s ease' }}
               onMouseEnter={e=>{ e.currentTarget.style.transform='translateY(-2px)'; e.currentTarget.style.background='rgba(255,255,255,.08)'; }}
               onMouseLeave={e=>{ e.currentTarget.style.transform='translateY(0)'; e.currentTarget.style.background='rgba(255,255,255,.04)'; }}>
-              <div style={{ width:34, height:34, borderRadius:9, flex:'none', display:'grid', placeItems:'center',
-                color:'#fff', fontWeight:700, fontSize:15,
+              <div style={{ width:42, height:42, borderRadius:11, flex:'none', display:'grid', placeItems:'center',
+                color:'#fff', fontWeight:700, fontSize:'clamp(17px, 1.6vw, 20px)',
                 background:`linear-gradient(145deg, oklch(64% 0.16 ${hue}), oklch(50% 0.18 ${hue+20}))`,
                 boxShadow:'inset 0 1px 0 rgba(255,255,255,.3), 0 4px 10px -3px rgba(0,0,0,.5)' }}>{letter}</div>
               <div style={{ minWidth:0, flex:1 }}>
-                <div style={{ fontSize:13, color:c.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{a.artist}</div>
-                <div className="mono" style={{ fontSize:10, color:c.textSubtle }}>{a.count} {lang==='ru'?'треков':'tracks'}</div>
+                <div style={{ fontSize:'clamp(14px, 1.3vw, 16px)', color:c.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{a.artist}</div>
+                <div className="mono" style={{ fontSize:'clamp(11px, 1vw, 12.5px)', color:c.textSubtle }}>{a.count} {lang==='ru'?'треков':'tracks'}</div>
               </div>
-              <div className="mono" style={{ fontSize:11, color:c.textMuted }}>#{i+1}</div>
+              <div className="mono" style={{ fontSize:'clamp(12px, 1.1vw, 14px)', color:c.textMuted, fontWeight:700 }}>#{i+1}</div>
             </div>
           );
         })}
@@ -5605,13 +5614,13 @@ function DurationBars({ buckets, isDark, lang, reduced, labelStyle }) {
       {buckets.map((b,i)=>{
         const w = Math.round((b.count/max)*100);
         return (
-          <div key={b.range||i} style={{ marginBottom:9 }}>
-            <div style={{ display:'flex', justifyContent:'space-between', fontSize:11, marginBottom:4 }}>
-              <span style={{ color:c.textMuted }}>{fmtRange(b.range)}</span>
-              <span className="mono" style={{ color:c.textSubtle }}>{b.count}</span>
+          <div key={b.range||i} style={{ marginBottom:12 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', marginBottom:5, gap:8 }}>
+              <span style={{ color:c.textMuted, fontSize:'clamp(12px, 1.1vw, 14px)' }}>{fmtRange(b.range)}</span>
+              <span className="mono" style={{ color:c.textSubtle, fontSize:'clamp(11px, 1vw, 12px)' }}>{b.count}</span>
             </div>
-            <div className={ske('inset', isDark)} style={{ height:8, borderRadius:5, overflow:'hidden' }}>
-              <div style={{ height:'100%', width:`${w}%`, borderRadius:5, transformOrigin:'left',
+            <div className={ske('inset', isDark)} style={{ height:11, borderRadius:6, overflow:'hidden' }}>
+              <div style={{ height:'100%', width:`${w}%`, borderRadius:6, transformOrigin:'left',
                 background:`linear-gradient(90deg, oklch(60% 0.13 ${hue}), oklch(72% 0.14 ${hue+15}))`,
                 boxShadow:'inset 0 1px 1px rgba(255,255,255,.4)',
                 animation: reduced?'none':'meterTick 0.55s cubic-bezier(.22,.9,.3,1) both',
@@ -5621,40 +5630,6 @@ function DurationBars({ buckets, isDark, lang, reduced, labelStyle }) {
         );
       })}
     </div>
-  );
-}
-
-// Small 24h ring for the "peak" metric card. With by_hour it draws the whole
-// day's distribution as faint radial bars + a glowing peak; without it (Phase 1
-// fallback) it shows a single notch at the peak hour.
-function MiniPeakDial({ hour, byHour, isDark, reduced }) {
-  const c = useColors(isDark);
-  const has = Array.isArray(byHour) && byHour.length === 24 && byHour.some(v => v > 0);
-  if (hour == null && !has) return <div style={{ width:52, height:52, flex:'none' }} />;
-  const R=22, cx=26, cy=26;
-  const max = has ? Math.max(...byHour) : 1;
-  const peakHour = hour != null ? hour : byHour.indexOf(max);
-  const ang = (peakHour/24)*2*Math.PI - Math.PI/2;
-  const dx = cx + R*Math.cos(ang), dy = cy + R*Math.sin(ang);
-  return (
-    <svg width="52" height="52" viewBox="0 0 52 52" style={{ flex:'none' }}>
-      <circle cx={cx} cy={cy} r={R} fill="none" stroke={c.border} strokeWidth="1" />
-      {has
-        ? byHour.map((v,i)=>{
-            const a=(i/24)*2*Math.PI - Math.PI/2, inner=8, outer=8+(v/max)*(R-9);
-            const isPk=i===peakHour;
-            return <line key={i} x1={cx+inner*Math.cos(a)} y1={cy+inner*Math.sin(a)}
-              x2={cx+outer*Math.cos(a)} y2={cy+outer*Math.sin(a)}
-              stroke={isPk?'oklch(80% 0.14 80)':c.textSubtle} strokeWidth={isPk?2:1.4} strokeLinecap="round" />;
-          })
-        : Array.from({length:24},(_,i)=>{
-            const a=(i/24)*2*Math.PI - Math.PI/2, r1=R-(i%6===0?4:2);
-            return <line key={i} x1={cx+r1*Math.cos(a)} y1={cy+r1*Math.sin(a)} x2={cx+R*Math.cos(a)} y2={cy+R*Math.sin(a)} stroke={c.textSubtle} strokeWidth={i%6===0?1.2:0.6} />;
-          })}
-      <circle cx={dx} cy={dy} r="3.6" fill="#fff"
-        style={{ filter:'drop-shadow(0 0 5px oklch(75% 0.14 80))',
-                 transition: reduced?'none':'cx .6s cubic-bezier(.22,.9,.3,1), cy .6s cubic-bezier(.22,.9,.3,1)' }} />
-    </svg>
   );
 }
 
@@ -5698,7 +5673,8 @@ function Sparkline({ days, width=92, height=24, hue=145 }) {
 }
 
 // Glass readout chip used in the Rhythm section header (streak / busiest day).
-function RhythmReadout({ icon, value, label, isDark, hue, grow }) {
+// Optional `foot` adds a clarifying third line.
+function RhythmReadout({ icon, value, label, foot, isDark, hue, grow }) {
   const c = useColors(isDark);
   const glass = isDark ? {
     background:'linear-gradient(165deg, rgba(255,255,255,0.13), rgba(255,255,255,0.03)), rgba(24,24,32,0.36)',
@@ -5710,55 +5686,76 @@ function RhythmReadout({ icon, value, label, isDark, hue, grow }) {
     boxShadow:'inset 0 1px 0 rgba(255,255,255,0.95), 0 10px 26px rgba(46,36,86,0.12)',
   };
   return (
-    <div style={{ ...glass, flex: grow?'1 1 240px':'0 1 auto', display:'flex', alignItems:'center', gap:12,
-      padding:'12px 16px', borderRadius:14, minWidth:0, backdropFilter:'blur(14px) saturate(1.5)', WebkitBackdropFilter:'blur(14px) saturate(1.5)' }}>
-      <span style={{ fontSize:20, flex:'none' }}>{icon}</span>
+    <div style={{ ...glass, flex: grow?'1 1 280px':'0 1 auto', display:'flex', alignItems:'center', gap:14,
+      padding:'14px 18px', borderRadius:15, minWidth:0, backdropFilter:'blur(14px) saturate(1.5)', WebkitBackdropFilter:'blur(14px) saturate(1.5)' }}>
+      <span style={{ fontSize:'clamp(22px, 2.2vw, 28px)', flex:'none', lineHeight:1 }}>{icon}</span>
       <div style={{ minWidth:0 }}>
-        <div style={{ fontSize:16, fontWeight:600, color:c.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{value}</div>
-        <div className="mono" style={{ fontSize:9, letterSpacing:'0.12em', textTransform:'uppercase', color:`oklch(70% 0.13 ${hue})`, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{label}</div>
+        <div style={{ fontSize:'clamp(18px, 1.9vw, 23px)', fontWeight:700, color:c.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{value}</div>
+        <div className="mono" style={{ fontSize:'clamp(10px, 1vw, 12px)', letterSpacing:'0.1em', textTransform:'uppercase', color:`oklch(70% 0.13 ${hue})`, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{label}</div>
+        {foot && <div style={{ fontSize:'clamp(12px, 1.05vw, 13.5px)', color:c.textMuted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', marginTop:3 }}>{foot}</div>}
       </div>
     </div>
   );
 }
 
-// 24h polar histogram — a tactile clock-dial of when you listen.
+// 24h polar histogram — a tactile clock-dial of when you listen. The disc is
+// split into a cool night half (top) and a warm day half (bottom) so it's
+// obvious at a glance whether the peak falls in the day or the night.
 function RhythmDial({ byHour, isDark, lang, reduced }) {
   const c = useColors(isDark);
   const arr = (byHour && byHour.length===24) ? byHour : new Array(24).fill(0);
   const max = Math.max(1, ...arr);
   const anyData = arr.some(v=>v>0);
   const peak = anyData ? arr.indexOf(Math.max(...arr)) : 0;
-  const S=150, cx=S/2, cy=S/2, r0=34, r1=66;
+  const S=176, cx=S/2, cy=S/2, r0=42, r1=80;
+  const dayHue=95, nightHue=265;
+  const isDayHour = (h) => h>=6 && h<18;     // 06:00–18:00 = day
+  const R = r1+8;
+  const half = (top) => `M ${cx-R} ${cy} A ${R} ${R} 0 0 ${top?0:1} ${cx+R} ${cy} Z`;  // top half = night
   return (
-    <svg width={S} height={S} viewBox={`0 0 ${S} ${S}`}>
-      <circle cx={cx} cy={cy} r={r1+6} fill="none" stroke={c.border} strokeWidth="1" />
-      <circle cx={cx} cy={cy} r={r0-4} fill="none" stroke={c.border} strokeWidth="1" />
-      {arr.map((v,i)=>{
-        const a=(i/24)*2*Math.PI - Math.PI/2;
-        const len = r0 + (v/max)*(r1-r0);
-        const isPk = anyData && i===peak;
-        return <line key={i} x1={cx+r0*Math.cos(a)} y1={cy+r0*Math.sin(a)} x2={cx+len*Math.cos(a)} y2={cy+len*Math.sin(a)}
-          stroke={isPk?'oklch(80% 0.14 80)':`oklch(${52+(v/max)*22}% ${(0.06+(v/max)*0.08).toFixed(3)} 150)`}
-          strokeWidth={4} strokeLinecap="round"
-          style={{ filter:isPk?'drop-shadow(0 0 5px oklch(80% 0.14 80))':'none',
-                   opacity: reduced?1:0, animation: reduced?'none':'fadeIn 0.4s ease both', animationDelay: reduced?'0s':`${(i*0.015).toFixed(3)}s` }} />;
-      })}
-      {[0,6,12,18].map(h=>{ const a=(h/24)*2*Math.PI-Math.PI/2, rr=r1+12;
-        return <text key={h} x={cx+rr*Math.cos(a)} y={cy+rr*Math.sin(a)+3} textAnchor="middle" className="mono" style={{ fontSize:8, fill:c.textSubtle }}>{h}</text>; })}
-      <text x={cx} y={cy-1} textAnchor="middle" style={{ fontSize:16, fontWeight:700, fill:c.text }}>{anyData?`${String(peak).padStart(2,'0')}:00`:'—'}</text>
-      <text x={cx} y={cy+12} textAnchor="middle" className="mono" style={{ fontSize:7, letterSpacing:'0.12em', fill:c.textSubtle }}>{lang==='ru'?'ПИК':'PEAK'}</text>
-    </svg>
+    <div style={{ display:'inline-flex', flexDirection:'column', alignItems:'center', gap:8 }}>
+      <svg width={S} height={S} viewBox={`0 0 ${S} ${S}`} style={{ overflow:'visible' }}>
+        <path d={half(true)}  fill={`oklch(60% 0.12 ${nightHue})`} opacity={isDark?0.12:0.09} />
+        <path d={half(false)} fill={`oklch(72% 0.13 ${dayHue})`}  opacity={isDark?0.12:0.09} />
+        <line x1={cx-R} y1={cy} x2={cx+R} y2={cy} stroke={c.border} strokeWidth="1" />
+        <circle cx={cx} cy={cy} r={R} fill="none" stroke={c.border} strokeWidth="1" />
+        <circle cx={cx} cy={cy} r={r0-4} fill="none" stroke={c.border} strokeWidth="1" />
+        {arr.map((v,i)=>{
+          const a=(i/24)*2*Math.PI - Math.PI/2;
+          const len = r0 + (v/max)*(r1-r0);
+          const isPk = anyData && i===peak;
+          const bh = isDayHour(i)?dayHue:nightHue;
+          return <line key={i} x1={cx+r0*Math.cos(a)} y1={cy+r0*Math.sin(a)} x2={cx+len*Math.cos(a)} y2={cy+len*Math.sin(a)}
+            stroke={isPk?'oklch(82% 0.15 80)':`oklch(${56+(v/max)*20}% ${(0.08+(v/max)*0.08).toFixed(3)} ${bh})`}
+            strokeWidth={5} strokeLinecap="round"
+            style={{ filter:isPk?'drop-shadow(0 0 6px oklch(82% 0.15 80))':'none',
+                     opacity: reduced?1:0, animation: reduced?'none':'fadeIn 0.4s ease both', animationDelay: reduced?'0s':`${(i*0.015).toFixed(3)}s` }} />;
+        })}
+        {[0,6,12,18].map(h=>{ const a=(h/24)*2*Math.PI-Math.PI/2, rr=R+10;
+          return <text key={h} x={cx+rr*Math.cos(a)} y={cy+rr*Math.sin(a)+3.5} textAnchor="middle" className="mono" style={{ fontSize:10, fill:c.textSubtle }}>{h}</text>; })}
+        <text x={cx} y={cy-2} textAnchor="middle" style={{ fontSize:22, fontWeight:800, fill:c.text }}>{anyData?`${String(peak).padStart(2,'0')}:00`:'—'}</text>
+        <text x={cx} y={cy+15} textAnchor="middle" className="mono" style={{ fontSize:9, letterSpacing:'0.12em', fill:c.textSubtle }}>{lang==='ru'?'ПИК':'PEAK'}</text>
+      </svg>
+      <div style={{ display:'flex', gap:16, fontSize:'clamp(11px, 1vw, 12.5px)', color:c.textMuted }}>
+        <span style={{ display:'inline-flex', alignItems:'center', gap:6 }}><span style={{width:11,height:11,borderRadius:3,background:`oklch(72% 0.13 ${dayHue})`}} />{lang==='ru'?'☀ день':'☀ day'}</span>
+        <span style={{ display:'inline-flex', alignItems:'center', gap:6 }}><span style={{width:11,height:11,borderRadius:3,background:`oklch(60% 0.12 ${nightHue})`}} />{lang==='ru'?'☾ ночь':'☾ night'}</span>
+      </div>
+    </div>
   );
 }
 
-// GitHub-style calendar heatmap of plays per day over the last ~year.
+// GitHub-style calendar heatmap of plays per day over the last ~year, with
+// month labels along the top. The tooltip is positioned relative to the
+// component (not the viewport) so a transformed ancestor can't fling it across
+// the screen.
 function CalendarHeatmap({ days, isDark, lang, reduced }) {
   const c = useColors(isDark);
-  const [hov, setHov] = useState(null);   // single repositioned tooltip
-  const cells = useMemo(() => {
+  const [hov, setHov] = useState(null);
+  const wrapRef = useRef(null);
+  const CELL=12, GAP=3, PITCH=CELL+GAP, WEEKS=53;
+  const { cells, months } = useMemo(() => {
     const map = new Map((days||[]).map(d => [d.date, d.count]));
     const max = (days||[]).reduce((m,d)=>Math.max(m,d.count||0),0) || 1;
-    const WEEKS=53;
     const today=new Date(); today.setHours(0,0,0,0);
     const end=new Date(today); end.setDate(end.getDate()+(6-today.getDay())); // align to Saturday
     const total=WEEKS*7, out=[];
@@ -5767,42 +5764,64 @@ function CalendarHeatmap({ days, isDark, lang, reduced }) {
       const iso=`${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`;
       const cnt=map.get(iso)||0, future=dt>today;
       const level=cnt===0?0:Math.min(4, 1+Math.floor((cnt/max)*3.999));
-      out.push({iso,cnt,level,future});
+      out.push({iso,cnt,level,future,mon:dt.getMonth()});
     }
-    return out;
-  }, [days]);
+    const mons=[]; let prev=-1;
+    for (let col=0; col<WEEKS; col++){
+      const top=out[col*7];
+      if (top && top.mon!==prev){
+        mons.push({ col, label:new Date(top.iso+'T00:00:00').toLocaleDateString(lang==='ru'?'ru-RU':'en-US',{month:'short'}) });
+        prev=top.mon;
+      }
+    }
+    return { cells: out, months: mons };
+  }, [days, lang]);
   const color=(lvl)=> lvl===0 ? (isDark?'rgba(255,255,255,.06)':'rgba(0,0,0,.06)') : `oklch(${50+lvl*6}% ${(0.05+lvl*0.045).toFixed(3)} 150)`;
   const fmtDate=(iso)=>{ try{ return new Date(iso+'T00:00:00').toLocaleDateString(lang==='ru'?'ru-RU':'en-US',{day:'numeric',month:'short'}); }catch{ return iso; } };
+  const onCell=(cell,e)=>{
+    if (cell.future) return;
+    const r = wrapRef.current?.getBoundingClientRect();
+    setHov({ iso:cell.iso, cnt:cell.cnt, x: r? e.clientX-r.left : 0, y: r? e.clientY-r.top : 0 });
+  };
   return (
-    <div style={{ position:'relative' }}>
-      <div className={ske('inset', isDark)} style={{ borderRadius:12, padding:10, overflowX:'auto' }}>
-        <div style={{ display:'grid', gridAutoFlow:'column', gridTemplateRows:'repeat(7, 11px)', gridAutoColumns:'11px', gap:3, width:'max-content' }}>
-          {cells.map((cell,i)=>(
-            <div key={cell.iso}
-              onMouseEnter={e=>{ if(!cell.future) setHov({iso:cell.iso, cnt:cell.cnt, x:e.clientX, y:e.clientY}); }}
-              onMouseMove={e=>setHov(h=> h && h.iso===cell.iso ? {...h, x:e.clientX, y:e.clientY} : h)}
-              onMouseLeave={()=>setHov(null)}
-              style={{ width:11, height:11, borderRadius:3,
-                background: cell.future?'transparent':color(cell.level),
-                boxShadow: cell.level>0?`inset 0 0 0 1px oklch(${50+cell.level*6}% ${(0.05+cell.level*0.045).toFixed(3)} 150 / .5)`:'none',
-                opacity: reduced?1:0,
-                animation: (reduced||cell.future)?'none':'scaleIn 0.3s ease both',
-                animationDelay: reduced?'0s':`${(Math.floor(i/7)*0.012).toFixed(3)}s`,
-                cursor: cell.future?'default':'pointer' }} />
-          ))}
+    <div ref={wrapRef} style={{ position:'relative' }}>
+      <div className={ske('inset', isDark)} style={{ borderRadius:12, padding:'10px 12px', overflowX:'auto' }}>
+        <div style={{ width:'max-content' }}>
+          <div style={{ position:'relative', height:16, marginBottom:4, width:WEEKS*PITCH }}>
+            {months.map(m=>(
+              <span key={m.col} className="mono" style={{ position:'absolute', left:m.col*PITCH, top:0,
+                fontSize:'clamp(9px, 0.85vw, 11px)', color:c.textSubtle, whiteSpace:'nowrap' }}>{m.label}</span>
+            ))}
+          </div>
+          <div style={{ display:'grid', gridAutoFlow:'column', gridTemplateRows:`repeat(7, ${CELL}px)`, gridAutoColumns:`${CELL}px`, gap:GAP }}>
+            {cells.map((cell,i)=>(
+              <div key={cell.iso}
+                onMouseEnter={e=>onCell(cell,e)}
+                onMouseMove={e=>onCell(cell,e)}
+                onMouseLeave={()=>setHov(null)}
+                style={{ width:CELL, height:CELL, borderRadius:3,
+                  background: cell.future?'transparent':color(cell.level),
+                  boxShadow: cell.level>0?`inset 0 0 0 1px oklch(${50+cell.level*6}% ${(0.05+cell.level*0.045).toFixed(3)} 150 / .5)`:'none',
+                  opacity: reduced?1:0,
+                  animation: (reduced||cell.future)?'none':'scaleIn 0.3s ease both',
+                  animationDelay: reduced?'0s':`${(Math.floor(i/7)*0.012).toFixed(3)}s`,
+                  cursor: cell.future?'default':'pointer' }} />
+            ))}
+          </div>
         </div>
       </div>
-      <div style={{ display:'flex', alignItems:'center', gap:5, justifyContent:'flex-end', marginTop:6 }}>
-        <span className="mono" style={{ fontSize:8, color:c.textSubtle }}>{lang==='ru'?'меньше':'less'}</span>
-        {[0,1,2,3,4].map(l=> <span key={l} style={{ width:9, height:9, borderRadius:2, background:color(l) }} />)}
-        <span className="mono" style={{ fontSize:8, color:c.textSubtle }}>{lang==='ru'?'больше':'more'}</span>
+      <div style={{ display:'flex', alignItems:'center', gap:6, justifyContent:'flex-end', marginTop:8 }}>
+        <span className="mono" style={{ fontSize:'clamp(10px, 0.9vw, 12px)', color:c.textSubtle }}>{lang==='ru'?'меньше':'less'}</span>
+        {[0,1,2,3,4].map(l=> <span key={l} style={{ width:12, height:12, borderRadius:3, background:color(l) }} />)}
+        <span className="mono" style={{ fontSize:'clamp(10px, 0.9vw, 12px)', color:c.textSubtle }}>{lang==='ru'?'больше':'more'}</span>
       </div>
       {hov && (
-        <div className="mono" style={{ position:'fixed', left:hov.x+12, top:hov.y+12, zIndex:50, pointerEvents:'none',
-          padding:'6px 9px', borderRadius:8, fontSize:11, whiteSpace:'nowrap',
-          background:isDark?'rgba(20,18,30,0.95)':'rgba(255,255,255,0.97)', color:c.text,
+        <div className="mono" style={{ position:'absolute', zIndex:50, pointerEvents:'none',
+          left:Math.max(0, Math.min(hov.x+12, (wrapRef.current?.clientWidth||320)-160)), top:Math.max(0, hov.y-38),
+          padding:'7px 10px', borderRadius:8, fontSize:'clamp(11px, 1vw, 12.5px)', whiteSpace:'nowrap',
+          background:isDark?'rgba(20,18,30,0.97)':'rgba(255,255,255,0.98)', color:c.text,
           border:`1px solid ${c.border}`, boxShadow:'0 8px 22px rgba(0,0,0,.35)' }}>
-          {fmtDate(hov.iso)} · {hov.cnt} {lang==='ru'?'плеев':'plays'}
+          {fmtDate(hov.iso)} · {hov.cnt} {plural(hov.cnt, lang, ['плей','плея','плеев'], ['play','plays'])}
         </div>
       )}
     </div>
@@ -5814,7 +5833,7 @@ function RhythmSection({ rhythm, isDark, lang }) {
   const c = useColors(isDark);
   const reduced = usePrefersReducedMotion();
   const days = rhythm?.days || [];
-  const lbl = { fontFamily:"'JetBrains Mono', monospace", fontSize:9, color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase', marginBottom:10 };
+  const lbl = { fontFamily:"'JetBrains Mono', monospace", fontSize:'clamp(10px, 1vw, 12px)', color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase', marginBottom:12 };
   if (!days.length) {
     return (
       <div className={brushed(isDark)} style={{ borderRadius:18, padding:'28px 24px', textAlign:'center' }}>
@@ -5840,9 +5859,10 @@ function RhythmSection({ rhythm, isDark, lang }) {
         {busiest && (
           <RhythmReadout icon="⚡" isDark={isDark} hue={275} grow
             value={fmtLong(busiest.date)}
-            label={busiest.top_track
-              ? `${busiest.count} ${lang==='ru'?'плеев':'plays'} · ${busiest.top_track.title}`
-              : `${busiest.count} ${lang==='ru'?'плеев':'plays'}`} />
+            label={lang==='ru'?'самый активный день':'most active day'}
+            foot={busiest.top_track
+              ? `${busiest.count} ${plural(busiest.count, lang, ['прослушивание','прослушивания','прослушиваний'], ['play','plays'])} · ${lang==='ru'?'хит дня':'top'}: ${busiest.top_track.title}`
+              : `${busiest.count} ${plural(busiest.count, lang, ['прослушивание','прослушивания','прослушиваний'], ['play','plays'])}`} />
         )}
       </div>
       <div style={{ display:'flex', gap:24, alignItems:'flex-start', flexWrap:'wrap' }}>
@@ -5879,7 +5899,7 @@ function SkeuoArcGauge({ value=0, hue=145, label, sub, isDark }) {
   const [hx, hy] = shown ? [cx + r*Math.cos(a), cy - r*Math.sin(a)] : [cx - r, cy];
   return (
     <div ref={ref} style={{ textAlign:'center', flex:'none' }}>
-      <svg viewBox="0 0 128 78" width="140" height="86">
+      <svg viewBox="0 0 128 78" width="168" height="103">
         <path d="M10,64 A54,54 0 0 1 118,64" fill="none"
           stroke={isDark?'rgba(0,0,0,.5)':'rgba(40,30,60,.16)'} strokeWidth="9" strokeLinecap="round" />
         <path d="M10,64 A54,54 0 0 1 118,64" fill="none"
@@ -5891,24 +5911,24 @@ function SkeuoArcGauge({ value=0, hue=145, label, sub, isDark }) {
           style={{ filter:`drop-shadow(0 0 5px oklch(75% 0.18 ${hue}))`,
                    transition: reduced?'none':'cx 0.9s cubic-bezier(.22,.9,.3,1), cy 0.9s cubic-bezier(.22,.9,.3,1)' }} />
       </svg>
-      <div style={{ fontSize:26, fontWeight:700, color:c.text, marginTop:-10 }}>{Math.round(pct*100)}%</div>
-      {label && <div className="mono" style={{ fontSize:9, letterSpacing:'0.2em', textTransform:'uppercase', color:c.textSubtle }}>{label}</div>}
-      {sub && <div style={{ fontSize:12, color:c.textMuted, marginTop:2 }}>{sub}</div>}
+      <div style={{ fontSize:'clamp(28px, 3vw, 36px)', fontWeight:800, color:c.text, marginTop:-12 }}>{Math.round(pct*100)}%</div>
+      {label && <div className="mono" style={{ fontSize:'clamp(10px, 1vw, 12px)', letterSpacing:'0.2em', textTransform:'uppercase', color:c.textSubtle }}>{label}</div>}
+      {sub && <div style={{ fontSize:'clamp(12px, 1.05vw, 13.5px)', color:c.textMuted, marginTop:3 }}>{sub}</div>}
     </div>
   );
 }
 
 // Small embossed completion dial for the "loved" list rows.
-function CompletionRing({ pct=0, size=36, hue=145, isDark }) {
+function CompletionRing({ pct=0, size=42, hue=145, isDark }) {
   const c = useColors(isDark);
-  const r=(size-6)/2, cc=size/2, len=2*Math.PI*r, p=Math.max(0,Math.min(1,pct));
+  const r=(size-7)/2, cc=size/2, len=2*Math.PI*r, p=Math.max(0,Math.min(1,pct));
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ flex:'none' }}>
-      <circle cx={cc} cy={cc} r={r} fill="none" stroke={isDark?'rgba(255,255,255,.1)':'rgba(0,0,0,.1)'} strokeWidth="3" />
-      <circle cx={cc} cy={cc} r={r} fill="none" stroke={`oklch(70% 0.16 ${hue})`} strokeWidth="3" strokeLinecap="round"
+      <circle cx={cc} cy={cc} r={r} fill="none" stroke={isDark?'rgba(255,255,255,.1)':'rgba(0,0,0,.1)'} strokeWidth="3.5" />
+      <circle cx={cc} cy={cc} r={r} fill="none" stroke={`oklch(70% 0.16 ${hue})`} strokeWidth="3.5" strokeLinecap="round"
         strokeDasharray={len} strokeDashoffset={len*(1-p)} transform={`rotate(-90 ${cc} ${cc})`}
         style={{ filter:`drop-shadow(0 0 3px oklch(70% 0.16 ${hue} / .5))` }} />
-      <text x={cc} y={cc+3} textAnchor="middle" style={{ fontSize:9, fontWeight:700, fill:c.text }}>{Math.round(p*100)}</text>
+      <text x={cc} y={cc+4} textAnchor="middle" style={{ fontSize:11, fontWeight:700, fill:c.text }}>{Math.round(p*100)}</text>
     </svg>
   );
 }
@@ -5918,13 +5938,13 @@ function GuiltyBar({ pct=0, hue=30, isDark }) {
   const c = useColors(isDark);
   const w = Math.round(Math.max(0,Math.min(1,pct))*100);
   return (
-    <div style={{ flex:'none', width:62, textAlign:'right' }}>
-      <div className={ske('inset', isDark)} style={{ height:7, borderRadius:5, overflow:'hidden' }}>
+    <div style={{ flex:'none', width:74, textAlign:'right' }}>
+      <div className={ske('inset', isDark)} style={{ height:9, borderRadius:5, overflow:'hidden' }}>
         <div style={{ height:'100%', width:`${w}%`, borderRadius:5,
           background:`linear-gradient(90deg, oklch(62% 0.16 ${hue}), oklch(72% 0.15 ${hue+10}))`,
           boxShadow:'inset 0 1px 1px rgba(255,255,255,.4)' }} />
       </div>
-      <div className="mono" style={{ fontSize:9, color:c.textSubtle, marginTop:3 }}>{w}%</div>
+      <div className="mono" style={{ fontSize:'clamp(10px, 0.95vw, 12px)', color:c.textSubtle, marginTop:4 }}>{w}%</div>
     </div>
   );
 }
@@ -5932,7 +5952,7 @@ function GuiltyBar({ pct=0, hue=30, isDark }) {
 // One column of the honest-mirror panel (loved or guilty).
 function EngagementColumn({ title, tracks, variant, isDark, lang, onPlayTrack }) {
   const c = useColors(isDark);
-  const lbl = { fontFamily:"'JetBrains Mono', monospace", fontSize:9, color:c.textSubtle, letterSpacing:'0.16em', textTransform:'uppercase', marginBottom:10 };
+  const lbl = { fontFamily:"'JetBrains Mono', monospace", fontSize:'clamp(10px, 1vw, 12px)', color:c.textSubtle, letterSpacing:'0.14em', textTransform:'uppercase', marginBottom:12 };
   const hue = variant==='loved' ? 145 : 30;
   return (
     <div style={{ minWidth:0 }}>
@@ -5940,16 +5960,16 @@ function EngagementColumn({ title, tracks, variant, isDark, lang, onPlayTrack })
       {tracks.length === 0 ? <Empty lang={lang} /> : tracks.map((t)=>(
         <div key={t.track_id}
           onClick={()=>{ if (onPlayTrack) onPlayTrack({ track:{ track_id:t.track_id, title:t.title, artist:t.artist, cover_art_path:t.cover_art_path }, score:1 }, []); }}
-          style={{ display:'flex', alignItems:'center', gap:10, padding:'7px 8px', borderRadius:12, cursor:'pointer', transition:'background .15s ease' }}
+          style={{ display:'flex', alignItems:'center', gap:12, padding:'8px 9px', borderRadius:12, cursor:'pointer', transition:'background .15s ease' }}
           onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,.06)'}
           onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
-          <AlbumCover title={t.title} artist={t.artist} size={40} isDark={isDark} coverPath={t.cover_art_path} radius={8} />
+          <AlbumCover title={t.title} artist={t.artist} size={44} isDark={isDark} coverPath={t.cover_art_path} radius={9} />
           <div style={{ minWidth:0, flex:1 }}>
-            <div style={{ fontSize:13, color:c.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{t.title}</div>
-            <div style={{ fontSize:11, color:c.textMuted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{t.artist} · {t.plays} {lang==='ru'?'плеев':'plays'}</div>
+            <div style={{ fontSize:'clamp(14px, 1.3vw, 15.5px)', color:c.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{t.title}</div>
+            <div style={{ fontSize:'clamp(12px, 1vw, 13.5px)', color:c.textMuted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{t.artist} · {t.plays} {plural(t.plays, lang, ['плей','плея','плеев'], ['play','plays'])}</div>
           </div>
           {variant==='loved'
-            ? <CompletionRing pct={t.completion} size={36} hue={hue} isDark={isDark} />
+            ? <CompletionRing pct={t.completion} size={42} hue={hue} isDark={isDark} />
             : <GuiltyBar pct={t.completion} hue={hue} isDark={isDark} />}
         </div>
       ))}
@@ -5957,7 +5977,7 @@ function EngagementColumn({ title, tracks, variant, isDark, lang, onPlayTrack })
   );
 }
 
-// "Честное зеркало": overall completion VU + loved vs guilty columns.
+// "Что ты дослушиваешь": overall completion VU + loved vs guilty columns.
 function EngagementSection({ engagement, isDark, lang, onPlayTrack }) {
   const c = useColors(isDark);
   const reduced = usePrefersReducedMotion();
@@ -5967,30 +5987,30 @@ function EngagementSection({ engagement, isDark, lang, onPlayTrack }) {
   if (!loved.length && !guilty.length && !(overall > 0)) {
     return (
       <div className={brushed(isDark)} style={{ borderRadius:18, padding:'28px 24px', textAlign:'center' }}>
-        <div style={{ fontSize:14, color:c.textMuted, fontStyle:'italic' }}>
-          {lang==='ru' ? 'Послушай ещё немного — и зеркало покажет, что ты любишь по-настоящему' : 'Listen a little more — the mirror needs plays to reflect'}
+        <div style={{ fontSize:'clamp(13px, 1.2vw, 15px)', color:c.textMuted, fontStyle:'italic' }}>
+          {lang==='ru' ? 'Послушай ещё немного — и тут появится, что ты дослушиваешь до конца, а что бросаешь' : 'Listen a little more — your finish-vs-skip picture will appear here'}
         </div>
       </div>
     );
   }
   const pct = Math.round(overall*100);
   return (
-    <div className={brushed(isDark)} style={{ borderRadius:18, padding:'22px 24px', display:'flex', flexDirection:'column', gap:22,
+    <div className={brushed(isDark)} style={{ borderRadius:18, padding:'24px 26px', display:'flex', flexDirection:'column', gap:24,
       animation: reduced?'none':'fadeIn 0.4s cubic-bezier(.22,.9,.3,1)' }}>
-      <div style={{ display:'flex', alignItems:'center', gap:22, flexWrap:'wrap', justifyContent:'center' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:26, flexWrap:'wrap', justifyContent:'center' }}>
         <SkeuoArcGauge value={overall} hue={145} isDark={isDark} label={lang==='ru'?'дослушано':'completion'} />
-        <div style={{ flex:'1 1 280px', minWidth:0 }}>
-          <div style={{ fontSize:18, color:c.text, fontWeight:600, lineHeight:1.3 }}>
+        <div style={{ flex:'1 1 300px', minWidth:0 }}>
+          <div style={{ fontSize:'clamp(18px, 2vw, 24px)', color:c.text, fontWeight:700, lineHeight:1.25 }}>
             {lang==='ru' ? `Ты дослушиваешь ${pct}% треков до конца` : `You finish ${pct}% of tracks`}
           </div>
-          <div style={{ fontSize:13, color:c.textMuted, marginTop:6 }}>
+          <div style={{ fontSize:'clamp(13px, 1.1vw, 15px)', color:c.textMuted, marginTop:8 }}>
             {lang==='ru' ? 'Правда, которую обычное число прослушиваний прячет.' : 'The truth a plain play count hides.'}
           </div>
         </div>
       </div>
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:24 }}>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(260px, 1fr))', gap:'24px 32px' }}>
         <EngagementColumn title={lang==='ru'?'ЛЮБИШЬ ПО-НАСТОЯЩЕМУ':'TRULY LOVED'} tracks={loved} variant="loved" isDark={isDark} lang={lang} onPlayTrack={onPlayTrack} />
-        <EngagementColumn title={lang==='ru'?'ВИНОВАТЫЕ СКИПЫ':'GUILTY SKIPS'} tracks={guilty} variant="guilty" isDark={isDark} lang={lang} onPlayTrack={onPlayTrack} />
+        <EngagementColumn title={lang==='ru'?'ЧАЩЕ ВСЕГО БРОСАЕШЬ':'OFTEN SKIPPED'} tracks={guilty} variant="guilty" isDark={isDark} lang={lang} onPlayTrack={onPlayTrack} />
       </div>
     </div>
   );
@@ -6003,16 +6023,16 @@ function DistributionsPanel({ stats, isDark, lang }) {
   const genres = stats?.genres || [];
   const artists = (stats?.top_artists || []).slice(0, 5);
   const durations = stats?.duration_buckets || [];
-  const colLbl = { fontFamily:"'JetBrains Mono', monospace", fontSize:'9px', color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase', marginBottom:'12px' };
+  const colLbl = { fontFamily:"'JetBrains Mono', monospace", fontSize:'clamp(10px, 1vw, 12px)', color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase', marginBottom:'14px' };
 
   return (
     <div className={brushed(isDark)} style={{
-      borderRadius:'18px', padding:'22px 24px',
-      display:'flex', flexDirection:'column', gap:'26px',
+      borderRadius:'18px', padding:'24px 26px',
+      display:'flex', flexDirection:'column', gap:'30px',
       animation: reduced ? 'none' : 'fadeIn 0.4s cubic-bezier(.22,.9,.3,1)',
     }}>
       <EraRidgeline decades={decades} isDark={isDark} lang={lang} reduced={reduced} labelStyle={colLbl} />
-      <div style={{ display:'grid', gridTemplateColumns:'1.1fr 1fr 0.9fr', gap:'30px' }}>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(240px, 1fr))', gap:'30px 36px' }}>
         <GenreBars genres={genres} isDark={isDark} lang={lang} reduced={reduced} labelStyle={colLbl} />
         <ArtistMosaic artists={artists} isDark={isDark} lang={lang} labelStyle={colLbl} />
         <DurationBars buckets={durations} isDark={isDark} lang={lang} reduced={reduced} labelStyle={colLbl} />
@@ -6032,20 +6052,24 @@ function ListeningWidgetsRow({ data, rhythm, isDark, lang, onPlayTrack, navigate
   const since = data?.since ? new Date(data.since).toLocaleDateString(lang==='ru'?'ru-RU':'en-US', {month:'short', day:'numeric'}) : null;
   const top_track = data?.top_track;
   const top_artist = data?.top_artist;
-  const peak = data?.peak_hour;
   const animSec = useCountUp(data?.total_seconds_listened || 0, 700, reduced);
+  const playsWord = ['плей','плея','плеев'], playsWordEn = ['play','plays'];
 
-  const lbl = (t) => <div className="mono" style={{ fontSize:9, color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase' }}>{t}</div>;
-  const card = { borderRadius:16, padding:'14px 16px', minHeight:96, display:'flex', flexDirection:'column', gap:6, border:`1px solid ${c.border}` };
+  const lbl = (t) => <div className="mono" style={{ fontSize:'clamp(10px, 0.95vw, 12px)', color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase' }}>{t}</div>;
+  const card = { borderRadius:16, padding:'16px 18px', minHeight:104, display:'flex', flexDirection:'column', gap:8, border:`1px solid ${c.border}` };
+  const mono = (ch, hue1, hue2) => (
+    <div style={{ width:44, height:44, borderRadius:10, flex:'none', display:'grid', placeItems:'center', fontSize:20, color:'#fff',
+      background:`linear-gradient(145deg, ${hue1}, ${hue2})`, boxShadow:'inset 0 1px 0 rgba(255,255,255,.3)' }}>{ch}</div>
+  );
 
   return (
-    <div style={{ display:'grid', gridTemplateColumns:'repeat(4, 1fr)', gap:14 }}>
-      {/* ∑ listened — count-up readout */}
+    <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(220px, 1fr))', gap:14 }}>
+      {/* ∑ listened — count-up readout + 14-day sparkline */}
       <div className={ske('display', isDark)} style={card}>
         {lbl(lang==='ru'?'∑ ПРОСЛУШАНО':'∑ LISTENED')}
-        <div style={{ fontSize:22, color:'oklch(72% 0.18 145)', fontWeight:600, lineHeight:1.1 }}>{fmtDur(animSec)}</div>
+        <div style={{ fontSize:'clamp(24px, 2.8vw, 32px)', color:'oklch(72% 0.18 145)', fontWeight:700, lineHeight:1.05 }}>{fmtDur(animSec)}</div>
         <div style={{ display:'flex', alignItems:'flex-end', justifyContent:'space-between', gap:8 }}>
-          <span style={{ fontSize:11, color:c.textMuted }}>{since ? (lang==='ru'?`с ${since}`:`since ${since}`) : ' '}</span>
+          <span style={{ fontSize:'clamp(12px, 1vw, 13.5px)', color:c.textMuted }}>{since ? (lang==='ru'?`с ${since}`:`since ${since}`) : ' '}</span>
           {rhythm?.days?.length ? <Sparkline days={rhythm.days} hue={145} /> : null}
         </div>
       </div>
@@ -6054,13 +6078,12 @@ function ListeningWidgetsRow({ data, rhythm, isDark, lang, onPlayTrack, navigate
       <button className={ske('display', isDark)} style={{ ...card, textAlign:'left', cursor: top_track?'pointer':'default' }}
         onClick={() => { if (top_track && onPlayTrack) onPlayTrack({ track:{ track_id:top_track.track_id, title:top_track.title, artist:top_track.artist }, score:1 }, []); }}>
         {lbl(lang==='ru'?'★ ТОП-ТРЕК':'★ TOP TRACK')}
-        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-          <div style={{ width:34, height:34, borderRadius:8, flex:'none', display:'grid', placeItems:'center', fontSize:15, color:'#fff',
-            background:'linear-gradient(145deg, oklch(64% 0.18 275), oklch(50% 0.2 290))', boxShadow:'inset 0 1px 0 rgba(255,255,255,.3)' }}>♪</div>
+        <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+          {mono('♪', 'oklch(64% 0.18 275)', 'oklch(50% 0.2 290)')}
           <div style={{ minWidth:0 }}>
-            <div style={{ fontSize:14, color:c.text, fontWeight:500, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{top_track?.title || '—'}</div>
-            <div style={{ fontSize:11, color:c.textMuted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-              {top_track ? `${top_track.artist} · ${top_track.play_count} ${lang==='ru'?'плеев':'plays'}` : (lang==='ru'?'нет данных':'no data')}
+            <div style={{ fontSize:'clamp(15px, 1.5vw, 17px)', color:c.text, fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{top_track?.title || '—'}</div>
+            <div style={{ fontSize:'clamp(12px, 1vw, 13.5px)', color:c.textMuted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+              {top_track ? `${top_track.artist} · ${top_track.play_count} ${plural(top_track.play_count, lang, playsWord, playsWordEn)}` : (lang==='ru'?'нет данных':'no data')}
             </div>
           </div>
         </div>
@@ -6070,21 +6093,14 @@ function ListeningWidgetsRow({ data, rhythm, isDark, lang, onPlayTrack, navigate
       <button className={ske('display', isDark)} style={{ ...card, textAlign:'left', cursor: top_artist?.slug?'pointer':'default' }}
         onClick={() => { if (top_artist?.slug && navigateToArtist) navigateToArtist(top_artist.slug); }}>
         {lbl(lang==='ru'?'★ ТОП-АРТИСТ':'★ TOP ARTIST')}
-        <div style={{ fontSize:(top_artist?.name||'').length>14?15:18, color:'oklch(75% 0.14 80)', fontWeight:600, lineHeight:1.15, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{top_artist?.name || '—'}</div>
-        <div style={{ fontSize:11, color:c.textMuted }}>{top_artist ? `${top_artist.play_count} ${lang==='ru'?'плеев':'plays'}` : ' '}</div>
-      </button>
-
-      {/* ⌚ peak hour — mini 24h dial */}
-      <div className={ske('display', isDark)} style={card}>
-        {lbl(lang==='ru'?'⌚ ПИК':'⌚ PEAK HOUR')}
-        <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-          <MiniPeakDial hour={peak?.hour} byHour={rhythm?.by_hour} isDark={isDark} reduced={reduced} />
+        <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+          {mono('♫', 'oklch(70% 0.13 80)', 'oklch(58% 0.15 60)')}
           <div style={{ minWidth:0 }}>
-            <div style={{ fontSize:18, color:c.text, fontWeight:600 }}>{peak ? `${String(peak.hour).padStart(2,'0')}:00` : '—'}</div>
-            <div style={{ fontSize:11, color:c.textMuted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{peak?.label || ' '}</div>
+            <div style={{ fontSize:'clamp(15px, 1.6vw, 19px)', color:'oklch(75% 0.14 80)', fontWeight:700, lineHeight:1.15, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{top_artist?.name || '—'}</div>
+            <div style={{ fontSize:'clamp(12px, 1vw, 13.5px)', color:c.textMuted }}>{top_artist ? `${top_artist.play_count} ${plural(top_artist.play_count, lang, playsWord, playsWordEn)}` : ' '}</div>
           </div>
         </div>
-      </div>
+      </button>
     </div>
   );
 }
