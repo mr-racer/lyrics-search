@@ -653,6 +653,33 @@ class EngagementResponse(BaseModel):
     guilty: List[EngagementTrack] = []
 
 
+class TasteMapPoint(BaseModel):
+    track_id: str
+    x: float           # 2D projection, ~[-1, 1]
+    y: float
+    cluster: int       # cluster id (index into clusters[])
+    title: str
+    artist: str
+
+
+class TasteMapCluster(BaseModel):
+    id: int
+    name: str          # plain-language name (dominant genre of the cluster)
+    size: int
+    cx: float          # centroid in projection space
+    cy: float
+    spread: float      # rms radius of the cluster (for the bloom size)
+    sample_track_ids: List[str] = []
+
+
+class TasteMapResponse(BaseModel):
+    """«Сонар вкуса» — 2D projection of the library's audio vectors, grouped into
+    sonic islands. Points/clusters are precomputed server-side; the client just
+    paints them."""
+    points: List[TasteMapPoint] = []
+    clusters: List[TasteMapCluster] = []
+
+
 # ─── Plan 19: Custom Playlists ───────────────────────────────────────────
 
 

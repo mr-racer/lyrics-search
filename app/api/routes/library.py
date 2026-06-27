@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-from app.domain.models import ArtistAggregate, IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RhythmResponse, EngagementResponse, RediscoverResponse, User
+from app.domain.models import ArtistAggregate, IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RhythmResponse, EngagementResponse, TasteMapResponse, RediscoverResponse, User
 from app.api.dependencies import get_current_user, require_mode
 from app.api.helpers import derive_collection_for_user, member_index_root, path_within_root
 from app.services.library_service import LibraryService
@@ -555,6 +555,24 @@ async def get_library_engagement(
     )
 
 
+# Sync def (not async): PCA + k-means is CPU-bound, so let Starlette run it in a
+# threadpool instead of blocking the event loop. Result is cached per collection.
+@router.get("/taste-map", response_model=TasteMapResponse)
+def get_library_taste_map(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    lang: str = Query("en", pattern="^(en|ru)$"),
+) -> TasteMapResponse:
+    from app.services import taste_map_service
+    derived = derive_collection_for_user(current_user)
+    db_client = request.app.state.db_client
+    if db_client is None or db_client.qdrant is None:
+        return TasteMapResponse()
+    return taste_map_service.build(
+        qdrant_client=db_client.qdrant, collection_name=derived, lang=lang,
+    )
+
+
 # ── Library statistics ────────────────────────────────────────────────────────
 
 @router.get("/stats")
@@ -587,6 +605,8 @@ async def get_stats(
         "top_artists": [],
         "year_range": None,
         "decades": [],
+        "formats": [],
+        "lossless_pct": 0,
     }
 
     if db_client is None:
@@ -626,6 +646,14 @@ async def get_stats(
     # Distinct albums, keyed case-insensitively on the title — mirrors how
     # /library/albums groups, so the landing's "N albums" matches the library.
     album_keys: set[str] = set()
+    format_counter: Counter = Counter()
+    artist_slug_map: dict[str, str] = {}
+    fmt_labels = {
+        "flac": "FLAC", "mp3": "MP3", "m4a": "M4A", "aac": "AAC", "alac": "ALAC",
+        "wav": "WAV", "aiff": "AIFF", "aif": "AIFF", "ogg": "OGG", "oga": "OGG",
+        "opus": "OPUS", "wma": "WMA", "ape": "APE",
+    }
+    lossless_fmts = {"FLAC", "WAV", "AIFF", "ALAC", "APE"}
 
     # Shared lyrics-free light scroll, cached per collection (same scan the
     # albums grid / home page warm) — avoids a second whole-library re-scroll
@@ -649,10 +677,21 @@ async def get_stats(
                 duration_counter[str(bucket).strip()] += 1
             artist = pl.get("artist")
             if artist and str(artist).strip():
-                artist_counter[str(artist).strip()] += 1
+                a = str(artist).strip()
+                artist_counter[a] += 1
+                if a not in artist_slug_map:
+                    sl = pl.get("primary_artist_slug")
+                    if sl:
+                        artist_slug_map[a] = str(sl)
             album = pl.get("album")
             if album and str(album).strip():
                 album_keys.add(str(album).strip().lower())
+            fp = str(pl.get("file_path") or "")
+            base = fp.replace("\\", "/").rsplit("/", 1)[-1]
+            ext = base.rsplit(".", 1)[-1].lower() if "." in base else ""
+            fmt = fmt_labels.get(ext)
+            if fmt:
+                format_counter[fmt] += 1
             year = pl.get("year")
             try:
                 yi = int(year) if year is not None else None
@@ -679,9 +718,21 @@ async def get_stats(
     total_artists = sum(artist_counter.values()) or 1
     unique_artist_count = len(artist_counter)
     top_artists = [
-        {"artist": a, "count": c, "pct": round(c / total_artists * 100)}
+        {"artist": a, "count": c, "pct": round(c / total_artists * 100),
+         "slug": artist_slug_map.get(a)}
         for a, c in artist_counter.most_common(5)
     ]
+
+    total_fmt = sum(format_counter.values()) or 1
+    formats = [
+        {"format": f, "count": c, "pct": round(c / total_fmt * 100)}
+        for f, c in format_counter.most_common(6)
+    ]
+    lossless_pct = (
+        round(sum(c for f, c in format_counter.items() if f in lossless_fmts)
+              / total_fmt * 100)
+        if format_counter else 0
+    )
 
     year_range = None
     decades: list[dict] = []
@@ -708,6 +759,8 @@ async def get_stats(
         "top_artists": top_artists,
         "year_range": year_range,
         "decades": decades,
+        "formats": formats,
+        "lossless_pct": lossless_pct,
         "qdrant_available": True,
     }
 

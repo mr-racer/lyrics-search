@@ -5119,6 +5119,8 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
   const [listenData, setListenData] = useState(null);        // /library/listening-stats
   const [rhythmData, setRhythmData] = useState(null);        // /library/rhythm
   const [engagementData, setEngagementData] = useState(null); // /library/engagement
+  const [tasteMap, setTasteMap] = useState(null);            // /library/taste-map (lazy)
+  const [tasteMapLoading, setTasteMapLoading] = useState(false);
   const [albumSort, setAlbumSort] = useState('alphabetical');
   const [recentSort, setRecentSort] = useState('last_played');
 
@@ -5183,6 +5185,17 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
     apiFetch(`/library/rhythm?lang=${lang}&tz_offset_minutes=${tzOffset}`).then(setRhythmData).catch(() => setRhythmData(null));
     apiFetch(`/library/engagement?lang=${lang}`).then(setEngagementData).catch(() => setEngagementData(null));
   }, [lang, visible]);
+
+  // ── Taste map: lazy — only built/fetched the first time the Stats tab opens
+  // (PCA + clustering is heavy, so we don't pay for it on every Library visit).
+  useEffect(() => {
+    if (activeTab !== 'stats' || tasteMap || tasteMapLoading) return;
+    setTasteMapLoading(true);
+    apiFetch(`/library/taste-map?lang=${lang}`)
+      .then(d => setTasteMap(d || { points: [], clusters: [] }))
+      .catch(() => setTasteMap({ points: [], clusters: [] }))
+      .finally(() => setTasteMapLoading(false));
+  }, [activeTab, lang, tasteMap, tasteMapLoading]);
 
   // ── Effect 2: only albums (refires on sort change) ───────────────────
   useEffect(() => {
@@ -5338,6 +5351,8 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
               listenData={listenData}
               rhythm={rhythmData}
               engagement={engagementData}
+              tasteMap={tasteMap}
+              tasteMapLoading={tasteMapLoading}
               isDark={isDark} lang={lang}
               onPlayTrack={onPlayTrack}
               navigateToArtist={navigateToArtist}
@@ -5433,17 +5448,19 @@ function StatsDivider({ label, hue }) {
 // The whole "◷ Статистика" tab: readout metrics rail → collection map.
 // (Sonar / rhythm / engagement sections slot in above the distributions in
 // later phases.)
-function StatsTab({ stats, listenData, rhythm, engagement, isDark, lang, onPlayTrack, navigateToArtist }) {
+function StatsTab({ stats, listenData, rhythm, engagement, tasteMap, tasteMapLoading, isDark, lang, onPlayTrack, navigateToArtist }) {
   return (
     <div style={{ display:'flex', flexDirection:'column', gap:22 }}>
       <ListeningWidgetsRow data={listenData} rhythm={rhythm} isDark={isDark} lang={lang}
         onPlayTrack={onPlayTrack} navigateToArtist={navigateToArtist} />
+      <StatsDivider label={lang==='ru'?'сонар вкуса':'taste sonar'} hue={275} />
+      <SonarSection data={tasteMap} loading={tasteMapLoading} isDark={isDark} lang={lang} onPlayTrack={onPlayTrack} />
       <StatsDivider label={lang==='ru'?'таймлайн прослушиваний':'listening timeline'} hue={150} />
       <RhythmSection rhythm={rhythm} isDark={isDark} lang={lang} />
       <StatsDivider label={lang==='ru'?'что ты дослушиваешь':'what you finish'} hue={275} />
       <EngagementSection engagement={engagement} isDark={isDark} lang={lang} onPlayTrack={onPlayTrack} />
       <StatsDivider label={lang==='ru'?'карта коллекции':'collection map'} hue={75} />
-      <DistributionsPanel stats={stats} isDark={isDark} lang={lang} />
+      <DistributionsPanel stats={stats} isDark={isDark} lang={lang} navigateToArtist={navigateToArtist} />
     </div>
   );
 }
@@ -5561,7 +5578,7 @@ function GenreBars({ genres, isDark, lang, reduced, labelStyle }) {
 
 // "By artist" — tactile monogram chips (a different idiom from the bars so the
 // panel doesn't read as three identical lists). Covers/navigation land later.
-function ArtistMosaic({ artists, isDark, lang, labelStyle }) {
+function ArtistMosaic({ artists, isDark, lang, labelStyle, navigateToArtist }) {
   const c = useColors(isDark);
   if (!artists.length) return (
     <div><div style={labelStyle}>{lang==='ru'?'ПО АРТИСТАМ':'BY ARTIST'}</div><Empty lang={lang} /></div>
@@ -5573,8 +5590,10 @@ function ArtistMosaic({ artists, isDark, lang, labelStyle }) {
         {artists.map((a,i)=>{
           const hue = hueFromString(a.artist);
           const letter = (a.artist||'?').trim().charAt(0).toUpperCase() || '?';
+          const clickable = !!(a.slug && navigateToArtist);
           return (
-            <div key={a.artist} style={{ display:'flex', alignItems:'center', gap:12, padding:'9px 11px', borderRadius:13,
+            <div key={a.artist} onClick={()=>{ if (clickable) navigateToArtist(a.slug); }}
+              style={{ display:'flex', alignItems:'center', gap:12, padding:'9px 11px', borderRadius:13, cursor: clickable?'pointer':'default',
               background:'rgba(255,255,255,.04)', border:`1px solid ${c.border}`, transition:'transform .16s ease, background .16s ease' }}
               onMouseEnter={e=>{ e.currentTarget.style.transform='translateY(-2px)'; e.currentTarget.style.background='rgba(255,255,255,.08)'; }}
               onMouseLeave={e=>{ e.currentTarget.style.transform='translateY(0)'; e.currentTarget.style.background='rgba(255,255,255,.04)'; }}>
@@ -5878,6 +5897,160 @@ function RhythmSection({ rhythm, isDark, lang }) {
     </div>
   );
 }
+// "Сонар вкуса" wrapper — handles loading / empty / loaded states.
+function SonarSection({ data, loading, isDark, lang, onPlayTrack }) {
+  const c = useColors(isDark);
+  const hasData = data && Array.isArray(data.points) && data.points.length > 0;
+  return (
+    <div className={brushed(isDark)} style={{ borderRadius:18, padding:'24px 26px' }}>
+      {hasData
+        ? <TasteMapScope data={data} isDark={isDark} lang={lang} onPlayTrack={onPlayTrack} />
+        : (
+          <div style={{ textAlign:'center', padding:'34px 10px', color:c.textMuted, fontStyle:'italic', fontSize:'clamp(13px, 1.2vw, 15px)' }}>
+            {loading
+              ? (lang==='ru' ? 'Строю карту твоего звука…' : 'Mapping your sound…')
+              : (lang==='ru' ? 'Карта появится, когда в библиотеке наберётся больше треков' : 'The map appears once your library has more tracks')}
+          </div>
+        )}
+    </div>
+  );
+}
+
+// The sonar scope: the point cloud is painted IMPERATIVELY on <canvas> (outside
+// React's render) — thousands of tracks as DOM nodes would be fatal. React owns
+// only the glass legend + tooltip. The draw effect depends on data/theme, never
+// on hover/active (those are read from a ref inside the loop), so hovering never
+// tears down the rAF loop or the ResizeObserver.
+function TasteMapScope({ data, isDark, lang, onPlayTrack }) {
+  const c = useColors(isDark);
+  const reduced = usePrefersReducedMotion();
+  const wrapRef = useRef(null), canvasRef = useRef(null), drawRef = useRef(()=>{}), rafRef = useRef(0);
+  const stateRef = useRef({ hover:null, active:null, progress: reduced?1:0, size:0 });
+  const [hover, setHover] = useState(null);
+  const [active, setActive] = useState(null);
+  const points = data?.points || [];
+  const clusters = data?.clusters || [];
+  const hueOf = useMemo(() => {
+    const m = {}; clusters.forEach(cl => { m[cl.id] = hueFromString(cl.name || `c${cl.id}`); }); return m;
+  }, [clusters]);
+  const glass = isDark ? {
+    background:'linear-gradient(165deg, rgba(255,255,255,0.12), rgba(255,255,255,0.03)), rgba(20,20,28,0.55)',
+    border:'1px solid rgba(255,255,255,0.13)', boxShadow:'inset 0 1px 0 rgba(255,255,255,0.2), 0 12px 30px rgba(0,0,0,0.4)',
+    backdropFilter:'blur(16px) saturate(1.5)', WebkitBackdropFilter:'blur(16px) saturate(1.5)',
+  } : {
+    background:'linear-gradient(165deg, rgba(255,255,255,0.95), rgba(255,255,255,0.7)), rgba(245,244,250,0.6)',
+    border:'1px solid rgba(255,255,255,0.85)', boxShadow:'inset 0 1px 0 rgba(255,255,255,1), 0 12px 30px rgba(46,36,86,0.14)',
+    backdropFilter:'blur(16px) saturate(1.5)', WebkitBackdropFilter:'blur(16px) saturate(1.5)',
+  };
+
+  useEffect(()=>{ stateRef.current.active = active; }, [active]);
+  useEffect(()=>{ stateRef.current.hover = hover; }, [hover]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current, wrap = wrapRef.current;
+    if (!canvas || !wrap) return;
+    const ctx = canvas.getContext('2d');
+    const col = (id, a) => `oklch(70% 0.16 ${hueOf[id] ?? 0} / ${a})`;
+    const resize = () => {
+      const r = wrap.getBoundingClientRect();
+      const size = Math.max(120, r.width);
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      stateRef.current.size = size;
+      canvas.width = size*dpr; canvas.height = size*dpr;
+      canvas.style.width = size+'px'; canvas.style.height = size+'px';
+      ctx.setTransform(dpr,0,0,dpr,0,0);
+      drawRef.current();
+    };
+    drawRef.current = () => {
+      const st = stateRef.current, size = st.size; if (!size) return;
+      const cx=size/2, cy=size/2, R=size*0.46, prog=st.progress;
+      ctx.clearRect(0,0,size,size);
+      ctx.strokeStyle = isDark?'rgba(255,255,255,.05)':'rgba(0,0,0,.05)'; ctx.lineWidth=1;
+      [0.34,0.68,1].forEach(f=>{ ctx.beginPath(); ctx.arc(cx,cy,R*f,0,7); ctx.stroke(); });
+      ctx.beginPath(); ctx.moveTo(cx-R,cy); ctx.lineTo(cx+R,cy); ctx.moveTo(cx,cy-R); ctx.lineTo(cx,cy+R); ctx.stroke();
+      clusters.forEach(cl=>{
+        const px=cx+cl.cx*R, py=cy+cl.cy*R;
+        const dim = st.active!=null && st.active!==cl.id ? 0.22 : 1;
+        const rad = Math.max(24, (cl.spread||0.2)*R*1.5);
+        const g = ctx.createRadialGradient(px,py,0,px,py,rad);
+        g.addColorStop(0, col(cl.id, 0.20*dim)); g.addColorStop(1, col(cl.id, 0));
+        ctx.fillStyle=g; ctx.beginPath(); ctx.arc(px,py,rad,0,7); ctx.fill();
+      });
+      const hv = st.hover;
+      points.forEach(p=>{
+        const px=cx+p.x*R, py=cy+p.y*R;
+        const dim = st.active!=null && st.active!==p.cluster ? 0.15 : 1;
+        const isHov = hv && hv.track_id===p.track_id;
+        ctx.globalAlpha = dim*prog;
+        ctx.fillStyle = col(p.cluster, 0.9);
+        ctx.beginPath(); ctx.arc(px,py, isHov?5:2, 0, 7); ctx.fill();
+        if (isHov){ ctx.globalAlpha=dim; ctx.lineWidth=1.5; ctx.strokeStyle='#fff'; ctx.stroke(); }
+      });
+      ctx.globalAlpha=1;
+    };
+    const ro = new ResizeObserver(resize); ro.observe(wrap); resize();
+    if (!reduced){
+      const t0 = performance.now();
+      const tick = (t)=>{ const p=Math.min(1,(t-t0)/900); stateRef.current.progress=p; drawRef.current(); if(p<1) rafRef.current=requestAnimationFrame(tick); };
+      rafRef.current = requestAnimationFrame(tick);
+    } else { stateRef.current.progress=1; drawRef.current(); }
+    return ()=>{ cancelAnimationFrame(rafRef.current); ro.disconnect(); };
+  }, [points, clusters, hueOf, isDark, reduced]);
+
+  useEffect(()=>{ drawRef.current(); }, [active, hover]);
+
+  const pick = (e) => {
+    const st=stateRef.current, wrap=wrapRef.current; if(!wrap||!st.size) return null;
+    const r = wrap.getBoundingClientRect();
+    const mx=e.clientX-r.left, my=e.clientY-r.top, size=st.size, cx=size/2, cy=size/2, R=size*0.46;
+    let best=null, bd=12*12;
+    for (const p of points){ const px=cx+p.x*R, py=cy+p.y*R; const d=(px-mx)**2+(py-my)**2; if(d<bd){bd=d;best={p,px,py};} }
+    return best;
+  };
+  const onMove = (e) => {
+    const b = pick(e); const id = b?b.p.track_id:null;
+    setHover(h => (h?.track_id||null)===id ? h : (b ? { track_id:b.p.track_id, title:b.p.title, artist:b.p.artist, sx:b.px, sy:b.py } : null));
+  };
+  const onClick = (e) => { const b=pick(e); if (b && onPlayTrack) onPlayTrack({ track:{ track_id:b.p.track_id, title:b.p.title, artist:b.p.artist }, score:1 }, []); };
+
+  return (
+    <div>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:14, gap:12, flexWrap:'wrap' }}>
+        <div className="mono" style={{ fontSize:'clamp(10px, 1vw, 12px)', color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase' }}>{lang==='ru'?'КАРТА ТВОЕГО ЗВУКА':'MAP OF YOUR SOUND'}</div>
+        <div style={{ fontSize:'clamp(12px, 1.1vw, 14px)', color:c.textMuted }}>{points.length} {plural(points.length, lang, ['трек','трека','треков'], ['track','tracks'])} · {clusters.length} {plural(clusters.length, lang, ['район','района','районов'], ['region','regions'])}</div>
+      </div>
+      <div style={{ display:'flex', gap:20, alignItems:'flex-start', flexWrap:'wrap' }}>
+        <div ref={wrapRef} style={{ position:'relative', flex:'1 1 320px', maxWidth:520, aspectRatio:'1 / 1', minWidth:0 }}>
+          <canvas ref={canvasRef} onPointerMove={onMove} onPointerLeave={()=>setHover(null)} onClick={onClick}
+            style={{ position:'absolute', inset:0, width:'100%', height:'100%', borderRadius:'50%', cursor:'pointer' }} />
+          {hover && (
+            <div style={{ ...glass, position:'absolute', zIndex:3, pointerEvents:'none', borderRadius:12, padding:'7px 11px',
+              left:Math.min(hover.sx+10, (stateRef.current.size||320)-150), top:Math.max(0, hover.sy-44) }}>
+              <div style={{ fontSize:'clamp(12px, 1.1vw, 13.5px)', color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', maxWidth:160 }}>{hover.title}</div>
+              <div style={{ fontSize:'clamp(11px, 1vw, 12px)', color:c.textMuted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', maxWidth:160 }}>{hover.artist}</div>
+            </div>
+          )}
+        </div>
+        <div style={{ ...glass, flex:'0 1 230px', minWidth:170, padding:'12px 14px', borderRadius:16 }}>
+          <div className="mono" style={{ fontSize:'clamp(9px, 0.9vw, 11px)', color:c.textSubtle, letterSpacing:'0.16em', textTransform:'uppercase', marginBottom:10 }}>{lang==='ru'?'РАЙОНЫ':'REGIONS'}</div>
+          {[...clusters].sort((a,b)=>b.size-a.size).map(cl=>{
+            const on = active===cl.id;
+            return (
+              <button key={cl.id} onClick={()=>setActive(a=>a===cl.id?null:cl.id)}
+                style={{ display:'flex', alignItems:'center', gap:9, width:'100%', padding:'7px 4px', borderRadius:8,
+                  background: on?'rgba(124,91,255,.14)':'transparent', transition:'background .15s', textAlign:'left' }}>
+                <span style={{ width:11, height:11, borderRadius:3, flex:'none', background:`oklch(70% 0.16 ${hueOf[cl.id]??0})`, boxShadow:`0 0 8px oklch(70% 0.16 ${hueOf[cl.id]??0} / .6)` }} />
+                <span style={{ flex:1, minWidth:0, fontSize:'clamp(12px, 1.1vw, 14px)', color:c.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{cl.name}</span>
+                <span className="mono" style={{ fontSize:'clamp(10px, 0.9vw, 11px)', color:c.textSubtle }}>{cl.size}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Tactile semicircular VU gauge: carved track + glass dash-fill + glowing
 // needle. Fills/sweeps on first scroll into view (IntersectionObserver), so it
 // never animates off-screen.
@@ -6016,13 +6189,15 @@ function EngagementSection({ engagement, isDark, lang, onPlayTrack }) {
   );
 }
 
-function DistributionsPanel({ stats, isDark, lang }) {
+function DistributionsPanel({ stats, isDark, lang, navigateToArtist }) {
   const reduced = usePrefersReducedMotion();
   const c = useColors(isDark);
   const decades = stats?.decades || [];
   const genres = stats?.genres || [];
   const artists = (stats?.top_artists || []).slice(0, 5);
   const durations = stats?.duration_buckets || [];
+  const formats = stats?.formats || [];
+  const losslessPct = stats?.lossless_pct ?? 0;
   const colLbl = { fontFamily:"'JetBrains Mono', monospace", fontSize:'clamp(10px, 1vw, 12px)', color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase', marginBottom:'14px' };
 
   return (
@@ -6034,9 +6209,52 @@ function DistributionsPanel({ stats, isDark, lang }) {
       <EraRidgeline decades={decades} isDark={isDark} lang={lang} reduced={reduced} labelStyle={colLbl} />
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(240px, 1fr))', gap:'30px 36px' }}>
         <GenreBars genres={genres} isDark={isDark} lang={lang} reduced={reduced} labelStyle={colLbl} />
-        <ArtistMosaic artists={artists} isDark={isDark} lang={lang} labelStyle={colLbl} />
+        <ArtistMosaic artists={artists} isDark={isDark} lang={lang} labelStyle={colLbl} navigateToArtist={navigateToArtist} />
         <DurationBars buckets={durations} isDark={isDark} lang={lang} reduced={reduced} labelStyle={colLbl} />
+        <FormatBars formats={formats} losslessPct={losslessPct} isDark={isDark} lang={lang} reduced={reduced} labelStyle={colLbl} />
       </div>
+    </div>
+  );
+}
+
+// NEW (Phase 5) — "quality": file format distribution (lossless vs lossy), the
+// "I own these files" pride that streaming can't show. Derived from file
+// extension server-side.
+function FormatBars({ formats, losslessPct, isDark, lang, reduced, labelStyle }) {
+  const c = useColors(isDark);
+  if (!formats.length) return (
+    <div><div style={labelStyle}>{lang==='ru'?'КАЧЕСТВО':'QUALITY'}</div><Empty lang={lang} /></div>
+  );
+  const max = formats.reduce((m,f)=>Math.max(m,f.count||0),0)||1;
+  const LOSSLESS = ['FLAC','WAV','AIFF','ALAC','APE'];
+  return (
+    <div>
+      <div style={labelStyle}>{lang==='ru'?'КАЧЕСТВО':'QUALITY'}</div>
+      <div style={{ fontSize:'clamp(13px, 1.2vw, 15px)', color:c.text, marginBottom:13 }}>
+        <b style={{ color:'oklch(68% 0.16 150)', fontWeight:700 }}>{losslessPct}%</b> {lang==='ru'?'без потерь':'lossless'}
+      </div>
+      {formats.map((f,i)=>{
+        const w = Math.round((f.count/max)*100);
+        const lossless = LOSSLESS.includes(f.format);
+        const hue = lossless ? 150 : 50;
+        return (
+          <div key={f.format} style={{ marginBottom:12 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', marginBottom:5, gap:8 }}>
+              <span style={{ color:c.textMuted, fontSize:'clamp(12px, 1.1vw, 14px)' }}>
+                {f.format}{lossless && <span style={{ color:'oklch(68% 0.16 150)', marginLeft:6, fontSize:'0.85em' }}>✓</span>}
+              </span>
+              <span className="mono" style={{ color:c.textSubtle, fontSize:'clamp(11px, 1vw, 12px)' }}>{f.pct}%</span>
+            </div>
+            <div className={ske('inset', isDark)} style={{ height:11, borderRadius:6, overflow:'hidden' }}>
+              <div style={{ height:'100%', width:`${w}%`, borderRadius:6, transformOrigin:'left',
+                background:`linear-gradient(90deg, oklch(58% ${lossless?0.16:0.11} ${hue}), oklch(70% ${lossless?0.16:0.12} ${hue+12}))`,
+                boxShadow:'inset 0 1px 1px rgba(255,255,255,.4)',
+                animation: reduced?'none':'meterTick 0.55s cubic-bezier(.22,.9,.3,1) both',
+                animationDelay: reduced?'0s':`${(i*0.06).toFixed(2)}s` }} />
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
