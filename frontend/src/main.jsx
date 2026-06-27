@@ -1217,6 +1217,17 @@ function AlbumCover({ title='', artist='', size=44, isDark, coverPath, radius, f
       <div style={boxStyle}>
         <img
           src={imgSrc} alt=""
+          // Native lazy-load: the browser only fetches covers in/near the
+          // viewport. Sections stay mounted-but-hidden (visibility:hidden,
+          // width:0) across navigation, and an <img src> in a hidden section
+          // STILL downloads eagerly without this — so a 5000-album library
+          // (singles-heavy Yandex import) would fire 5000 cover requests the
+          // moment you leave Home, starving the audio stream on the same
+          // origin. loading="lazy" defers every off-screen/hidden cover so
+          // playback wins the connection pool. decoding="async" keeps decode
+          // off the main thread.
+          loading="lazy"
+          decoding="async"
           style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
           onError={e => {
             e.currentTarget.style.display = 'none';
