@@ -13,7 +13,9 @@ scikit-learn
 joblib
 transformers
 openai
-pydantic-ai
+# Cap below 2.0: pydantic-ai 2.0 removed OpenAIModel and reworked AgentRunResult,
+# which breaks app/services/llm_web_search.py. 1.x keeps OpenAIModel + result.output.
+pydantic-ai>=1.0,<2.0
 ddgs
 readability-lxml
 beautifulsoup4
