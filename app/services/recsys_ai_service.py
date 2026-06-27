@@ -40,18 +40,54 @@ def _lang_name(lang: str) -> str:
 
 # ── Profile enrichment: portrait + island names ─────────────────────────────
 
-_ENRICH_SYSTEM = """You write a short music-taste portrait for a music player and name the listener's taste clusters.
+_ENRICH_SYSTEM = """You write a grounded music-taste portrait for a music player and name the listener's taste clusters. Address the listener directly as "you" (ты). Describe, never flatter — no "great taste", no "you have an ear for". Never name any artist or song title in any output field.
 
 Language for ALL output strings: {lang_name}.
 
-Input: the listener's taste islands (clusters of tracks they demonstrably love, with weights) and their sound-axis profile (z-scores: energy, vocal_lead, spacious, experimental, brightness, acousticness).
+INPUT:
+- taste islands: clusters of tracks the listener demonstrably loves, each with a weight (how central it is to them) and its member tracks.
+- genres: the genre tags attached to the tracks. These are NAMED LABELS, not statistics — they are your most reliable, most concrete input. Render them naturally in {lang_name} (e.g. "шугейз", "трэп", "построк"), never dump raw English tags.
+- sound-axis profile: z-scores on 6 axes. A z-score is HOW FAR FROM AVERAGE this listener is:
+    energy        high = intense/driving      low = calm/restrained
+    vocal_lead    high = vocals up front       low = instrumental / texture-led
+    spacious      high = open/airy/reverberant low = dense/tight/packed
+    experimental  high = rough/unconventional  low = clean/conventional
+    brightness    high = bright/treble-forward low = dark/warm/low-end
+    acousticness  high = acoustic              low = electronic/produced
 
-Write:
-1. "headline" — a punchy 2-4 word title for this listener's overall taste, in their language. Name the SOUND/mood, never an artist (e.g. "Поздний неон с тёплым низом"). This is the page's hero title.
-2. "portrait" — 2-4 sentences about what this person actually loves in music. Be concrete: name sounds, moods, scenes, contrasts between their islands. NEVER use filler like "eclectic taste", "diverse listener", "music lover", "wide range". If the data shows a contradiction (e.g. loves both harsh noise and soft folk) — say it, contradictions are the interesting part.
-3. "island_names" — a punchy 1-4 word name for EACH island, in the listener's language. Name the SOUND, not the artist (e.g. "Ночной синтвейв", not "Группа X"). Use the member tracks as evidence.
+HOW TO COMBINE GENRES AND AXES (this is what makes phrases meaningful, not generic):
+- The GENRE says WHAT KIND of sound it is. The AXES say HOW it sounds — how intense, how dark, how rough. Each alone is vague; together they're precise. "hip-hop" alone = nothing. "hip-hop" + high experimental + low brightness = "dark, abrasive hip-hop". THAT is the kind of phrase to write.
+- Genres are also your safest grounding: prefer naming the actual genre over inventing an abstract descriptor when a genre fits.
+- But do NOT just list genres ("you like shoegaze, trap and folk"). A genre list is not a portrait. Genres SHARPEN the description; they are not the description.
+- If a single genre tag clearly contradicts everything else (axes + other genres + tracks), treat it as a possible mistag and don't build the portrait around it.
 
-Output ONLY minified JSON, no prose, no fences:
+READING THE AXES (this is what keeps you honest):
+- |z| < 0.5 → this axis is AVERAGE. Do NOT mention it. It is not a trait.
+- |z| around 1 → a real, describable tendency.
+- |z| ≥ 1.5 → a defining feature, lead with it.
+- Describe ONLY the axes that stand out. A listener defined by one strong axis gets a portrait about that one thing. Do not stretch to cover all six — inventing traits for flat axes is the main failure here.
+
+GROUNDING (most important):
+- Every claim must trace to the genres, the axes, or the islands. If the data doesn't show it, don't say it.
+- NEVER invent a scene, place, era, or setting. No "stadium", "late-night neon", "empty city", "basement". Those are not in the data — they are fiction. Describe the SOUND itself (dark, dense, rough, energetic, sparse...) and its GENRE, not an imagined place where it's playing.
+- No piles of near-synonyms. One precise adjective beats three vague ones ("dense, packed, thick, heavy" → pick one).
+
+WRITE THREE FIELDS:
+
+1. "headline" — 2-4 words naming this taste's single most defining quality, in {lang_name}. Meaningful and specific to THIS data, grounded in its genres and standout axes. A genre term may appear, but the headline describes the actual sound, not a mood-metaphor or a place.
+   GOOD: "Тёмная энергия без глянца" · "Плотный беспокойный построк"
+   BAD (invented scene / venue): "Поздний неон в пустом городе" · "Стадионный размах"
+
+2. "portrait" — 2-3 sentences, addressed as "you", about what this listener actually loves.
+   - Take ALL islands into account, but weight them: the heaviest island is the center of gravity, lighter ones are mentioned as where they also lean, not as equals.
+   - Look for the THROUGH-LINE — what the islands share even across different genres. Genres make this both easier to find and easier to verify: islands from the same sonic family (e.g. all abrasive, or all warm and acoustic) share a real, groundable thread. State it (e.g. "everything you reach for has a rough, unpolished edge, in rock and in hip-hop alike"). If the islands genuinely split into unrelated genres with nothing in common, name that split — the contrast is the honest story.
+   - Build it from the standout axes + the genres + the island character. Don't list genres; use them to be specific. No filler ("eclectic", "diverse listener", "music lover", "wide range").
+
+3. "island_names" — a 2-4 word name for EACH island, in {lang_name}, naming the SOUND of that cluster from its genre(s) + member tracks. A genre term may appear. Same grounding rules: describe the sonic character, don't invent a scene, never use an artist or song name.
+
+SPARSE DATA: if all axes are near zero AND there's no clear dominant genre AND basically one island, don't manufacture a personality from noise — keep the portrait to one honest sentence and say the picture is still forming (e.g. "продолжай слушать, и картина проявится чётче"). But note: flat axes with ONE clear dominant genre is NOT sparse — that genre is a real trait, describe it. Still fill headline and island_names, kept plain.
+
+OUTPUT: ONLY minified JSON, no prose, no fences:
 {{"headline": "...", "portrait": "...", "island_names": {{"<island_track_id>": "...", ...}}}}"""
 
 
@@ -76,11 +112,27 @@ def get_cached_enrichment(collection_name: str, lang: str, islands: list[dict]) 
     )
 
 
+def _distinct_genres(tracks: list[dict]) -> list[str]:
+    """Order-preserving distinct genre tags across an island's member tracks."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for m in tracks:
+        g = (m.get("genre") or "").strip()
+        if g and g.lower() not in seen:
+            seen.add(g.lower())
+            out.append(g)
+    return out
+
+
 def _enrich_user_prompt(profile: dict) -> str:
     lines = ["TASTE ISLANDS (strongest first):"]
     for i, isl in enumerate(profile["islands"], 1):
-        members = "; ".join(f"{m['artist']} — {m['title']}" for m in isl["tracks"])
-        lines.append(f"{i}. id={isl['track_id']} weight={isl['weight']}: {members}")
+        tracks = isl["tracks"]
+        genres = _distinct_genres(tracks)
+        members = "; ".join(f"{m['artist']} — {m['title']}" for m in tracks)
+        lines.append(f"{i}. id={isl['track_id']} weight={isl['weight']}")
+        lines.append(f"   genres: {', '.join(genres) if genres else '(no genre tags)'}")
+        lines.append(f"   tracks: {members}")
     axes = profile.get("axes")
     if axes:
         lines.append("\nSOUND AXES (z-scores, + = first pole):")
@@ -160,26 +212,28 @@ Rules:
 Output ONLY the phrase text — nothing else."""
 
 
-def _vibe_source_hash(islands: list[dict], recent_artists: list[str]) -> str:
+def _vibe_source_hash(islands: list[dict], recent: list[dict]) -> str:
     """Cache fingerprint: long-term island membership + short-term rotation.
 
-    Regenerates when either the stable islands OR the recent-artist bucket
+    Regenerates when either the stable islands OR the recent artist+genre bucket
     shifts, so the phrase tracks taste drift without churning on every play.
     """
     membership = sorted(
         sorted(m["track_id"] for m in isl.get("tracks", [])) for isl in islands
     )
-    blob = json.dumps({"islands": membership, "recent": sorted(recent_artists)})
+    rotation = sorted(f"{r['artist']}|{r.get('genre') or ''}" for r in recent)
+    blob = json.dumps({"islands": membership, "recent": rotation})
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
-def recent_rotation(qdrant_client, collection_name: str, *, limit: int = 6) -> list[str]:
-    """Top distinct artists the listener has played/liked most recently.
+def recent_rotation(qdrant_client, collection_name: str, *, limit: int = 6) -> list[dict]:
+    """Top distinct artists (with genre) the listener has played/liked recently.
 
     Short-term signal for the taste vibe. Reads the tail of playback_events +
-    recent likes, then resolves artist names from Qdrant payloads in one batched
-    retrieve. Best-effort: returns [] on any failure (the vibe still works on
-    long-term data alone).
+    recent likes, then resolves artist + genre from Qdrant payloads in one
+    batched retrieve. Returns ``[{"artist", "genre"}]`` (genre may be None),
+    most-recent first. Best-effort: returns [] on any failure (the vibe still
+    works on long-term data alone).
     """
     try:
         signals = MetadataDB.get_playback_signals(collection_name, limit=120)
@@ -212,35 +266,49 @@ def recent_rotation(qdrant_client, collection_name: str, *, limit: int = 6) -> l
     try:
         pts = qdrant_client.retrieve(
             collection_name=collection_name, ids=recent_ids,
-            with_payload=["artist"], with_vectors=False,
+            with_payload=["artist", "genre"], with_vectors=False,
         )
-        by_id = {str(p.id): (p.payload or {}).get("artist") for p in pts}
+        by_id = {str(p.id): (p.payload or {}) for p in pts}
     except Exception:
         by_id = {}
-    artists: list[str] = []
+    rotation: list[dict] = []
     seen_artists: set[str] = set()
     for tid in recent_ids:  # preserve recency order
-        a = (by_id.get(tid) or "").strip()
+        pl = by_id.get(tid) or {}
+        a = (pl.get("artist") or "").strip()
         if a and a.lower() not in seen_artists:
             seen_artists.add(a.lower())
-            artists.append(a)
-        if len(artists) >= limit:
+            rotation.append({"artist": a, "genre": (pl.get("genre") or "").strip() or None})
+        if len(rotation) >= limit:
             break
-    return artists
+    return rotation
 
 
-def _vibe_user_prompt(profile: dict, recent_artists: list[str]) -> str:
+def _vibe_user_prompt(profile: dict, recent: list[dict]) -> str:
     lines = ["LONG-TERM TASTE ISLANDS (strongest first):"]
-    for i, isl in enumerate(profile["islands"][:4], 1):
-        members = "; ".join(f"{m['artist']} — {m['title']}" for m in isl["tracks"][:3])
-        lines.append(f"{i}. weight={isl['weight']}: {members}")
+    for i, isl in enumerate(profile["islands"][:10], 1):
+        seen: set[tuple[str, str]] = set()
+        pairs: list[str] = []
+        for m in isl["tracks"][:5]:
+            artist = (m.get("artist") or "—").strip()
+            genre = (m.get("genre") or "").strip()
+            key = (artist.lower(), genre.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            pairs.append(artist + (f" [{genre}]" if genre else ""))
+        lines.append(f"{i}. weight={isl['weight']}: {'; '.join(pairs)}")
     axes = profile.get("axes")
     if axes:
         lines.append("\nSOUND AXES (z-score, + = first pole):")
         for name, ax in axes.items():
             lines.append(f"- {name}: {ax['z']} ({ax['level']})")
-    if recent_artists:
-        lines.append("\nSHORT-TERM ROTATION (most recent first): " + ", ".join(recent_artists))
+    if recent:
+        rot = ", ".join(
+            r["artist"] + (f" [{r['genre']}]" if r.get("genre") else "")
+            for r in recent
+        )
+        lines.append("\nSHORT-TERM ROTATION (most recent first): " + rot)
     else:
         lines.append("\nSHORT-TERM ROTATION: (not enough recent activity)")
     lines.append("\nWrite the one-phrase wave tagline:")
@@ -270,7 +338,7 @@ def _top_artists_from_islands(islands: list[dict], n: int = 2) -> list[str]:
     return out
 
 
-def deterministic_taste_vibe(profile: dict, recent_artists: list[str], lang: str) -> dict:
+def deterministic_taste_vibe(profile: dict, recent: list[dict], lang: str) -> dict:
     """Instant, no-LLM fallback phrase from island artists + recent rotation.
 
     Used when AI is disabled, and as the immediate response while the AI phrase
@@ -278,7 +346,7 @@ def deterministic_taste_vibe(profile: dict, recent_artists: list[str], lang: str
     song. Returns {"phrase", "source"}.
     """
     long_artists = _top_artists_from_islands(profile.get("islands", []), n=2)
-    lead = recent_artists[0] if recent_artists else (long_artists[0] if long_artists else None)
+    lead = recent[0]["artist"] if recent else (long_artists[0] if long_artists else None)
     base = long_artists[0] if long_artists else lead
     if not base:
         return {"phrase": None, "source": None}
@@ -296,12 +364,12 @@ def deterministic_taste_vibe(profile: dict, recent_artists: list[str], lang: str
 
 
 def get_cached_taste_vibe(
-    collection_name: str, lang: str, islands: list[dict], recent_artists: list[str],
+    collection_name: str, lang: str, islands: list[dict], recent: list[dict],
 ) -> dict | None:
     """Fresh cached AI phrase for the current islands+rotation, or None."""
     cached = MetadataDB.get_recsys_llm_text(
         collection_name, TASTE_VIBE_KIND, lang,
-        source_hash=_vibe_source_hash(islands, recent_artists),
+        source_hash=_vibe_source_hash(islands, recent),
     )
     if cached and cached.get("phrase"):
         return {"phrase": cached["phrase"], "source": cached.get("source", "ai")}

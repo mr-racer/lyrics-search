@@ -1208,7 +1208,7 @@ def similar_tracks(
 
 # ── Long-term taste profile surface (Recommend tab «центр вкуса») ──────────
 
-ISLANDS_MAX = 6           # taste islands shown in the profile
+ISLANDS_MAX = 10          # taste islands shown in the profile
 ISLAND_MEMBERS_MAX = 8    # covers per island (representative first)
 
 
@@ -1256,6 +1256,7 @@ def long_term_profile(*, qdrant_client, collection_name: str, now: datetime | No
                 "track_id": tid,
                 "title": p.get("title") or "—",
                 "artist": p.get("artist") or "—",
+                "genre": p.get("genre"),
                 "cover_art_path": p.get("cover_art_path"),
             })
         islands.append({
