@@ -1305,6 +1305,13 @@ function AlbumCover({ title='', artist='', size=44, isDark, coverPath, radius, f
 // ─── MOSAIC COVER ─────────────────────────────────────────────────────────────
 function MosaicCover({ trackIds = [], coverPaths = [], size = 220, radius = 12 }) {
   const n = Math.min(trackIds.length, 4);
+  // A numeric size is a fixed px square. A flexible size (e.g. '100%') would
+  // collapse to 0 height if we naively set height:'100%' and the parent has no
+  // defined height (the playlist card's relative wrapper is auto-height) — so
+  // for non-numeric sizes we enforce squareness with aspect-ratio instead.
+  const dim = typeof size === 'number'
+    ? { width: size, height: size }
+    : { width: size, aspectRatio: '1 / 1' };
   const tileStyle = (path) => ({
     backgroundImage: path ? `url(${API}${path})` : 'linear-gradient(135deg, rgba(124,91,255,.35) 0%, rgba(255,120,200,.25) 100%)',
     backgroundSize: 'cover',
@@ -1315,7 +1322,7 @@ function MosaicCover({ trackIds = [], coverPaths = [], size = 220, radius = 12 }
   if (n === 0) {
     return (
       <div style={{
-        width: size, height: size, borderRadius: radius, overflow: 'hidden',
+        ...dim, borderRadius: radius, overflow: 'hidden',
         background: 'linear-gradient(135deg, rgba(124,91,255,.22) 0%, rgba(255,120,200,.14) 100%)',
         display: 'grid', placeItems: 'center', color: 'rgba(255,255,255,.45)',
         fontSize: typeof size === 'number' ? Math.round(size * 0.34) : 36,
@@ -1324,7 +1331,7 @@ function MosaicCover({ trackIds = [], coverPaths = [], size = 220, radius = 12 }
   }
 
   const grid = {
-    width: size, height: size, borderRadius: radius, overflow: 'hidden',
+    ...dim, borderRadius: radius, overflow: 'hidden',
     display: 'grid', gap: 1, background: 'rgba(0,0,0,.4)',
   };
   if (n === 1) Object.assign(grid, { gridTemplateColumns: '1fr', gridTemplateRows: '1fr' });
@@ -4691,7 +4698,6 @@ function AddToPlaylistPopover({ trackId, anchor, onClose, listing, lang }) {
 // ─── PLAYLIST TRACK ROW (Task 18) ────────────────────────────────────────────
 function PlaylistTrackRow({ track, isDragging, onDragStart, onDragOver, onDragLeave, onDrop, onPlay, onArtist, onRemove, playlistId, listing, lang }) {
   const [liked, setLiked]       = React.useState(false);
-  const [popoverFor, setPopoverFor] = React.useState(null);
 
   React.useEffect(() => {
     apiFetch(`/search/tracks/${track.track_id}/reaction`).then(r => setLiked(r?.reaction === 'like')).catch(() => {});
@@ -4721,11 +4727,6 @@ function PlaylistTrackRow({ track, isDragging, onDragStart, onDragOver, onDragLe
         body: JSON.stringify({ reaction: next ? 'like' : null }),
       });
     } catch { setLiked(!next); }
-  };
-
-  const handleAdd = (e) => {
-    burst(e.currentTarget, 'add');
-    setPopoverFor({ track_id: track.track_id, anchor: e.currentTarget });
   };
 
   const handleRemove = (e) => {
@@ -4769,29 +4770,20 @@ function PlaylistTrackRow({ track, isDragging, onDragStart, onDragOver, onDragLe
       </div>
       <div />
       <div className="mono" style={{ fontSize: 12, color: 'rgba(238,238,243,.5)', textAlign: 'right' }}>{fmtDur(track.duration)}</div>
-      <div style={{ display: 'flex', gap: 4 }}>
-        <button className="player-icon-btn" data-active={liked ? 'like' : undefined} onClick={(e) => { e.stopPropagation(); handleLike(e); }} title={lang === 'ru' ? (liked ? 'Убрать лайк' : 'Лайкнуть') : (liked ? 'Unlike' : 'Like')}>{liked ? '♥' : '♡'}</button>
-        <button className="player-icon-btn" onClick={(e) => { e.stopPropagation(); handleAdd(e); }} title={lang === 'ru' ? 'Добавить в плейлист' : 'Add to playlist'}>＋</button>
-        <button className="player-icon-btn" onClick={(e) => { e.stopPropagation(); handleRemove(e); }} title={lang === 'ru' ? 'Убрать из плейлиста' : 'Remove from playlist'}>⨯</button>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button className="player-icon-btn" style={{ width: 40, height: 40, fontSize: 20 }} data-active={liked ? 'like' : undefined} onClick={(e) => { e.stopPropagation(); handleLike(e); }} title={lang === 'ru' ? (liked ? 'Убрать лайк' : 'Лайкнуть') : (liked ? 'Unlike' : 'Like')}>{liked ? '♥' : '♡'}</button>
+        <button className="player-icon-btn" style={{ width: 40, height: 40, fontSize: 22 }} onClick={(e) => { e.stopPropagation(); handleRemove(e); }} title={lang === 'ru' ? 'Убрать из плейлиста' : 'Remove from playlist'}>⨯</button>
       </div>
-      {popoverFor && (
-        <AddToPlaylistPopover
-          trackId={popoverFor.track_id}
-          anchor={popoverFor.anchor}
-          onClose={() => setPopoverFor(null)}
-          listing={listing}
-          lang={lang}
-        />
-      )}
     </div>
   );
 }
 
 // ─── PLAYLIST DETAIL VIEW (Task 17) ──────────────────────────────────────────
-function PlaylistDetailView({ playlistId, lang, onClose, onPlayTrack, navigateToArtist, listing }) {
+function PlaylistDetailView({ playlistId, lang, isDark, onClose, onPlayTrack, navigateToArtist, listing }) {
   const [detail, setDetail] = React.useState(null);
   const [error, setError] = React.useState(null);
   const [dragId, setDragId] = React.useState(null);
+  const reduced = usePrefersReducedMotion();
 
   const refetch = React.useCallback(async () => {
     try {
@@ -4880,6 +4872,7 @@ function PlaylistDetailView({ playlistId, lang, onClose, onPlayTrack, navigateTo
         border: '1px solid rgba(255,255,255,.07)',
         boxShadow: 'inset 0 1px 0 rgba(255,255,255,.12), 0 6px 24px rgba(0,0,0,.32)',
         marginBottom: 22,
+        animation: reduced ? undefined : 'fadeInUp 0.45s cubic-bezier(.22,.9,.3,1) both',
       }}>
         <MosaicCover trackIds={detail.tracks.slice(0,4).map(t => t.track_id)} coverPaths={detail.tracks.slice(0,4).map(t => t.cover_art_path)} size={240} radius={14} />
         <div style={{ display: 'flex', flexDirection: 'column', padding: '4px 0' }}>
@@ -4892,6 +4885,7 @@ function PlaylistDetailView({ playlistId, lang, onClose, onPlayTrack, navigateTo
             style={{
               fontFamily: "'Noto Serif Display', Georgia, serif", fontStyle: 'italic', fontWeight: 300,
               fontSize: 48, lineHeight: 1.05, letterSpacing: '-0.015em', margin: '0 0 14px',
+              color: isDark ? '#f1eeff' : '#241a3a',
               cursor: 'text', padding: 0, border: '1px solid transparent', borderRadius: 8, outline: 'none',
             }}
           >{detail.name}</h1>
@@ -4941,7 +4935,8 @@ function PlaylistDetailView({ playlistId, lang, onClose, onPlayTrack, navigateTo
         </div>
       )}
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6,
+        animation: reduced ? undefined : 'fadeInUp 0.5s cubic-bezier(.22,.9,.3,1) 0.09s both' }}>
         {(() => {
           // Build the HIT-shaped queue once per render so every row's onPlay
           // sends the SAME array — App.handlePlayTrack uses it both as the
@@ -4988,7 +4983,7 @@ function PlaylistsTab({ listing, activePlaylistId, onOpenPlaylist, onCloseDetail
     <PlaylistDetailView
       playlistId={activePlaylistId}
       lang={lang}
-
+      isDark={isDark}
       onClose={onCloseDetail}
       onPlayTrack={onPlayTrack}
       navigateToArtist={navigateToArtist}
@@ -6015,7 +6010,7 @@ function TasteMapScope({ data, isDark, lang, onPlayTrack }) {
         <div className="mono" style={{ fontSize:'clamp(10px, 1vw, 12px)', color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase' }}>{lang==='ru'?'КАРТА ТВОЕГО ЗВУКА':'MAP OF YOUR SOUND'}</div>
         <div style={{ fontSize:'clamp(12px, 1.1vw, 14px)', color:c.textMuted }}>{points.length} {plural(points.length, lang, ['трек','трека','треков'], ['track','tracks'])} · {clusters.length} {plural(clusters.length, lang, ['район','района','районов'], ['region','regions'])}</div>
       </div>
-      <div style={{ display:'flex', gap:'clamp(20px, 4vw, 52px)', alignItems:'center', flexWrap:'wrap', justifyContent:'space-between' }}>
+      <div style={{ display:'flex', gap:'clamp(20px, 4vw, 52px)', alignItems:'center', flexWrap:'wrap', justifyContent:'center' }}>
         <div ref={wrapRef} style={{ position:'relative', flex:'1 1 320px', maxWidth:460, aspectRatio:'1 / 1', minWidth:0 }}>
           <canvas ref={canvasRef} onPointerMove={onMove} onPointerLeave={()=>setHover(null)} onClick={onClick}
             style={{ position:'absolute', inset:0, width:'100%', height:'100%', cursor:'pointer' }} />
@@ -13542,7 +13537,16 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     // PlayerSection.findIndex (which compares h.track.track_id === initialTrack.track_id)
     // all work. playerPlaylist stays HIT[] because PlayerSection's right rail renders score/matched_on.
     const flatTrack = track && track.track ? track.track : track;
-    setPlayerPlaylist(results || []);
+    // Single-track entry points (stats widgets: song map, loved/skipped columns,
+    // top-track card) have no surrounding queue and pass results=[]. PlayerSection's
+    // start-playback effect bails when the playlist is empty (initialPlaylist.length
+    // === 0), so the track would never load or play — only the App-level cover blur
+    // (which reads playerTrack) would update. Synthesize a 1-item playlist from the
+    // track itself so the now-playing track is always present in the queue.
+    const queue = (results && results.length)
+      ? results
+      : (flatTrack?.track_id ? [(track && track.track) ? track : { track: flatTrack, score: 1 }] : []);
+    setPlayerPlaylist(queue);
     setPlayerTrack(flatTrack);
     setSection('player');
 
@@ -13553,7 +13557,6 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     // in one batch /metadata/tracks?ids= call so switching to any queue item
     // doesn't show partial metadata. Slim items are detected by undefined file_path
     // (Search/Recommend hits arrive with file_path populated and are skipped).
-    const queue = results || [];
     const slimIds = new Set();
     for (const h of queue) {
       const t = (h && h.track) ? h.track : h;
