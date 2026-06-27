@@ -12241,11 +12241,16 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
           </div>
 
           {/* AI Chat drawer — overlays ONLY the queue-chat-area wrapper
-              above. Slides up from bottom; FactsRail stays visible. */}
+              above. Slides up from bottom; FactsRail stays visible.
+              Pass lyricsTrack (not raw currentTrack) so the chat's track
+              context carries the on-demand fetched lyrics for non-search
+              sources — stream/autoplay/home strip lyrics from the payload,
+              so currentTrack.lyrics is empty there and the chat would
+              otherwise send no lyrics to the model. */}
           <AIChatDrawer
             isOpen={drawerOpen}
             onClose={() => setDrawerOpen(false)}
-            track={currentTrack}
+            track={lyricsTrack || currentTrack}
             lang={lang}
             isDark={isDark}
 
