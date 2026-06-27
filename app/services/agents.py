@@ -54,7 +54,10 @@ RULES:
 2. If <resolved_filters> is empty AND filters are needed → set action="request_filter" to look up valid DB values.
 3. If <resolved_filters> is NOT empty → select the best matching filter value from it (fuzzy match allowed, e.g. "канье уест" → "Kanye West"). If no match — set filters=null.
 4. You may only request filters ONCE per session. If <search_filter_query> already has content — skip request_filter.
-5. Generate 2–3 search queries in English (3–10 words each), ordered from most to least specific.
+5. Generate 2–3 search queries in English (3–10 words each), ordered from most to least specific. IMPORTANT — these queries search the user's LOCAL LIBRARY OF SONG LYRICS, NOT a web search engine. So:
+   - Write the actual words, themes, images, or mood the lyrics themselves would use — e.g. "broken heart leaving in the rain", "city lights lonely highway at night". Not a description of a search.
+   - NEVER include meta words like "lyrics", "song", "track", "music", "find", "search", or "about" — they never appear inside lyrics and only weaken the match.
+   - If an artist, album, or genre is already set in <resolved_filters>, do NOT repeat it in the query text — the filter already narrows the results. Put ONLY the relevant content of the user's request (the key words, themes, or mood they described) into the query.
 
 OUTPUT FORMAT:
 {{
