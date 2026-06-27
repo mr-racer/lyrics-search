@@ -593,12 +593,16 @@ class TopTrackBrief(BaseModel):
     title: str
     artist: str
     play_count: int
+    cover_art_path: Optional[str] = None
 
 
 class TopArtistBrief(BaseModel):
     name: str
     slug: str
     play_count: int
+    # The artist's AudioDB photo (thumb_path / cutout_path), reused as the avatar
+    # in the stats UI. None when nothing has been cached for the artist yet.
+    image: Optional[str] = None
 
 
 class PeakHour(BaseModel):
@@ -643,6 +647,12 @@ class EngagementTrack(BaseModel):
     cover_art_path: Optional[str] = None
     completion: float   # 0..1 mean play completion
     plays: int
+    # "Loved" list: how many times the track was played through to the end.
+    finish_count: int = 0
+    # "Skipped" list: how often it was abandoned early, and the typical number
+    # of seconds heard before the skip.
+    skip_count: int = 0
+    skip_seconds: Optional[float] = None
 
 
 class EngagementResponse(BaseModel):

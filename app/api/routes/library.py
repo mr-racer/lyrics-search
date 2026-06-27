@@ -717,9 +717,22 @@ async def get_stats(
 
     total_artists = sum(artist_counter.values()) or 1
     unique_artist_count = len(artist_counter)
+    # Reuse each artist's cached AudioDB photo (thumb/cutout) as the avatar —
+    # a cheap SQLite read per top artist, no network. None when never fetched.
+    def _artist_image(slug: str | None) -> str | None:
+        if not slug:
+            return None
+        from app.resources.metadata_db import MetadataDB
+        try:
+            ad = MetadataDB.get_artist_audiodb(slug, target_col) or {}
+        except Exception:
+            return None
+        return ad.get("thumb_path") or ad.get("cutout_path")
+
     top_artists = [
         {"artist": a, "count": c, "pct": round(c / total_artists * 100),
-         "slug": artist_slug_map.get(a)}
+         "slug": artist_slug_map.get(a),
+         "image": _artist_image(artist_slug_map.get(a))}
         for a, c in artist_counter.most_common(5)
     ]
 

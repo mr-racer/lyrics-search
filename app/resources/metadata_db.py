@@ -1626,6 +1626,47 @@ class MetadataDB:
         ]
 
     @classmethod
+    def get_engagement_detail_stats(
+        cls, collection_name: str,
+    ) -> list[tuple[str, int, float | None, int, int, float | None]]:
+        """Richer per-track engagement for the "what you finish / abandon" panel.
+
+        Returns ``[(track_id, plays, avg_completion|None, finish_count,
+        skip_count, avg_skip_sec|None)]`` where:
+
+          - ``finish_count`` = number of plays heard through to the end (≥90% of
+            a known duration). Plays without a timed duration can't be judged and
+            don't count.
+          - ``skip_count`` = number of plays flagged ``skipped_early``.
+          - ``avg_skip_sec`` = mean seconds heard before those early skips (None
+            when the track was never skipped early)."""
+        conn = cls._connect()
+        rows = conn.execute(
+            """SELECT track_id,
+                      COUNT(*) AS plays,
+                      AVG(CASE WHEN total_dur IS NOT NULL AND total_dur > 0
+                               THEN min(played_sec * 1.0 / total_dur, 1.0) END) AS comp,
+                      SUM(CASE WHEN total_dur IS NOT NULL AND total_dur > 0
+                                AND played_sec >= 0.9 * total_dur
+                               THEN 1 ELSE 0 END) AS finishes,
+                      SUM(CASE WHEN skipped_early = 1 THEN 1 ELSE 0 END) AS skips,
+                      AVG(CASE WHEN skipped_early = 1 THEN played_sec END) AS avg_skip_sec
+               FROM playback_events
+               WHERE collection_name = ?
+               GROUP BY track_id""",
+            (collection_name,),
+        ).fetchall()
+        return [
+            (
+                r[0], int(r[1]),
+                (None if r[2] is None else float(r[2])),
+                int(r[3] or 0), int(r[4] or 0),
+                (None if r[5] is None else float(r[5])),
+            )
+            for r in rows
+        ]
+
+    @classmethod
     def get_overall_completion(cls, collection_name: str) -> float | None:
         """Library-wide mean play completion (0..1), or None if no timed plays."""
         conn = cls._connect()

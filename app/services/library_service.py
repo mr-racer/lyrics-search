@@ -1766,6 +1766,7 @@ class LibraryService:
                     title=pl.get("title") or "—",
                     artist=pl.get("artist") or "—",
                     play_count=plays,
+                    cover_art_path=pl.get("cover_art_path"),
                 )
 
         # Top artist — aggregate non-skipped plays per artist by joining DB + payload
@@ -1775,22 +1776,37 @@ class LibraryService:
                 points = qdrant_client.retrieve(
                     collection_name=collection_name,
                     ids=list(counts_by_id.keys()),
-                    with_payload=["artist"],
+                    with_payload=["artist", "primary_artist_slug"],
                     with_vectors=False,
                 )
             except Exception:
                 points = []
             artist_counts: dict[str, int] = {}
+            # Per artist, remember the slug of their single most-played track so
+            # we can look up the artist's cached AudioDB photo for the avatar.
+            artist_best_slug: dict[str, tuple[int, str | None]] = {}
             for p in points:
-                a = (p.payload or {}).get("artist") or ""
-                if a:
-                    artist_counts[a] = artist_counts.get(a, 0) + counts_by_id.get(str(p.id), 0)
+                pl = p.payload or {}
+                a = pl.get("artist") or ""
+                if not a:
+                    continue
+                c = counts_by_id.get(str(p.id), 0)
+                artist_counts[a] = artist_counts.get(a, 0) + c
+                best = artist_best_slug.get(a)
+                if best is None or c > best[0]:
+                    artist_best_slug[a] = (c, pl.get("primary_artist_slug"))
             if artist_counts:
                 top_artist_name = max(artist_counts.items(), key=lambda kv: kv[1])[0]
+                slug = (
+                    artist_best_slug.get(top_artist_name, (0, None))[1]
+                    or _slugify_artist_for_album(top_artist_name)
+                )
+                ad = MetadataDB.get_artist_audiodb(slug, collection_name) or {}
                 top_artist = TopArtistBrief(
                     name=top_artist_name,
-                    slug=_slugify_artist_for_album(top_artist_name),
+                    slug=slug,
                     play_count=artist_counts[top_artist_name],
+                    image=ad.get("thumb_path") or ad.get("cutout_path"),
                 )
 
         peak_hour = None
@@ -1886,22 +1902,27 @@ class LibraryService:
     ):
         """Honest-mirror engagement: overall completion + the tracks you
         replay-and-finish ("loved") vs launch-often-but-skip ("guilty").
-        Thresholds are deliberately lenient so small libraries still surface
-        something; both lists cap at 8."""
+
+        "Loved" = the top 5 tracks you most often play through to the end,
+        ranked by finish count (a track finished only once doesn't qualify).
+        "Guilty" = the top 5 you bail on fastest: ranked by how few seconds you
+        typically hear before skipping, then by how often. A track must have
+        been skipped early at least 3 times, and only counts as a quick bail if
+        you usually drop it inside 10 seconds."""
         from app.domain.models import EngagementResponse, EngagementTrack
 
-        rows = MetadataDB.get_track_completion_stats(collection_name)
+        # rows: (track_id, plays, comp, finish_count, skip_count, avg_skip_sec)
+        rows = MetadataDB.get_engagement_detail_stats(collection_name)
         overall = MetadataDB.get_overall_completion(collection_name)
-        timed = [r for r in rows if r[2] is not None]   # (tid, plays, comp, skip)
 
         loved = sorted(
-            [r for r in timed if r[1] >= 2 and r[2] >= 0.7],
-            key=lambda r: (r[2], r[1]), reverse=True,
-        )[:8]
+            [r for r in rows if r[3] >= 2],
+            key=lambda r: (r[3], r[2] or 0.0), reverse=True,
+        )[:5]
         guilty = sorted(
-            [r for r in timed if r[1] >= 3 and r[2] <= 0.55],
-            key=lambda r: (r[1], -r[2]), reverse=True,
-        )[:8]
+            [r for r in rows if r[4] >= 3 and r[5] is not None and r[5] < 10.0],
+            key=lambda r: (r[5], -r[4]),
+        )[:5]
 
         # Join display fields from Qdrant (no lyrics — light payload only).
         want = {r[0] for r in loved} | {r[0] for r in guilty}
@@ -1925,8 +1946,11 @@ class LibraryService:
                 title=pl.get("title") or "—",
                 artist=pl.get("artist") or "—",
                 cover_art_path=pl.get("cover_art_path"),
-                completion=round(r[2], 3),
+                completion=round(r[2], 3) if r[2] is not None else 0.0,
                 plays=r[1],
+                finish_count=r[3],
+                skip_count=r[4],
+                skip_seconds=round(r[5], 1) if r[5] is not None else None,
             )
 
         return EngagementResponse(

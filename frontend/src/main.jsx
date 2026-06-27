@@ -5400,20 +5400,17 @@ function LibraryHeroLine({ stats, albumCount, isDark, lang }) {
   const genres = stats?.unique_genres ?? '—';
   const yr = stats?.year_range;
   const yearText = yr ? `${yr.min}—${yr.max}` : '—';
-  const dot = <span style={{ color: 'rgba(255,255,255,.18)', margin:'0 7px' }}>·</span>;
+  const dot = <span style={{ color: 'rgba(255,255,255,.18)', margin:'0 9px' }}>·</span>;
   return (
     <div style={{
-      background: 'linear-gradient(90deg, rgba(120,80,200,.15) 0%, rgba(120,80,200,.04) 60%, transparent 100%)',
+      background: 'linear-gradient(90deg, transparent 0%, rgba(120,80,200,.13) 50%, transparent 100%)',
       border: `1px solid ${c.border}`,
       borderRadius: '16px',
-      padding: '18px 24px',
+      padding: '17px 24px',
       backdropFilter: 'blur(20px)',
       WebkitBackdropFilter: 'blur(20px)',
     }}>
-      <div className="mono" style={{ fontSize:'10px', color:c.textSubtle, letterSpacing:'0.22em', textTransform:'uppercase' }}>
-        {lang==='ru' ? 'РАЗДЕЛ 03 · БИБЛИОТЕКА' : 'SECTION 03 · LIBRARY'}
-      </div>
-      <div className="mono" style={{ fontSize:'14px', color:c.textMuted, letterSpacing:'0.04em', marginTop:'6px' }}>
+      <div className="mono" style={{ fontSize:'clamp(13px, 1.3vw, 15px)', color:c.textMuted, letterSpacing:'0.04em', textAlign:'center' }}>
         <b style={{ color:c.text, fontWeight:600 }}>{total.toLocaleString ? total.toLocaleString() : total}</b> {lang==='ru' ? 'треков' : 'tracks'}
         {dot}<b style={{ color:c.text, fontWeight:600 }}>{albumCount}</b> {lang==='ru' ? 'альбомов' : 'albums'}
         {dot}<b style={{ color:c.text, fontWeight:600 }}>{artists}</b> {lang==='ru' ? 'артистов' : 'artists'}
@@ -5465,9 +5462,10 @@ function StatsTab({ stats, listenData, rhythm, engagement, tasteMap, tasteMapLoa
   );
 }
 
-// "By decade" as a filled ridgeline (replaces disconnected bars) with a
-// narrative caption on the peak era. Draws in left→right on mount.
-function EraRidgeline({ decades, isDark, lang, reduced, labelStyle }) {
+// "By decade" as proportional vertical bars — evenly distributed regardless of
+// how many decades there are, with the peak era highlighted and captioned.
+// (Replaces a stretched ridgeline that distorted under preserveAspectRatio.)
+function EraBars({ decades, isDark, lang, reduced, labelStyle }) {
   const c = useColors(isDark);
   const [drawn, setDrawn] = useState(reduced);
   useEffect(() => {
@@ -5481,56 +5479,40 @@ function EraRidgeline({ decades, isDark, lang, reduced, labelStyle }) {
   const maxDec = decades.reduce((m,d)=>Math.max(m,d.count||0),0)||1;
   const peak = decades.reduce((p,d)=>(d.count>(p?.count||0)?d:p), null);
   const total = decades.reduce((s,d)=>s+(d.count||0),0)||1;
-  const W=640, H=150, padX=12, baseY=H-22, topPad=16, n=decades.length, hue=268;
-  const xAt = (i) => n===1 ? W/2 : padX + (i/(n-1))*(W-2*padX);
-  const yAt = (d) => baseY - (d.count/maxDec)*(baseY-topPad);
-  const pts = decades.map((d,i)=>[xAt(i), yAt(d)]);
-  const line = pts.map(([x,y],i)=>`${i?'L':'M'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
-  const area = `${line} L${pts[n-1][0].toFixed(1)},${baseY} L${pts[0][0].toFixed(1)},${baseY} Z`;
-  const lineLen = 1600;
   const peakPct = peak ? Math.round((peak.count/total)*100) : 0;
+  const hue=268, H=140, GAP='clamp(6px, 1.4vw, 16px)';
   return (
     <div>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:6, gap:12, flexWrap:'wrap' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'baseline', marginBottom:14, gap:12, flexWrap:'wrap' }}>
         <div style={labelStyle}>{lang==='ru'?'ПО ЭПОХАМ':'BY DECADE'}</div>
         {peak && <div style={{ fontSize:'clamp(13px, 1.2vw, 15px)', color:c.textMuted }}>
           {lang==='ru'?'Ядро коллекции — ':'Core of your library — '}
           <b style={{ color:c.amber, fontWeight:700 }}>{peak.decade}s · {peakPct}%</b>
         </div>}
       </div>
-      <div style={{ position:'relative' }}>
-        <svg viewBox={`0 0 ${W} ${H}`} width="100%" height="150" preserveAspectRatio="none" style={{ display:'block', overflow:'visible' }}>
-          <defs>
-            <linearGradient id="ridgeFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={`oklch(66% 0.17 ${hue})`} stopOpacity="0.42" />
-              <stop offset="100%" stopColor={`oklch(66% 0.17 ${hue})`} stopOpacity="0.02" />
-            </linearGradient>
-          </defs>
-          {/* baseline axis + a vertical guide under each decade point (alignment) */}
-          <line x1="0" y1={baseY} x2={W} y2={baseY} stroke={c.border} strokeWidth="1" vectorEffect="non-scaling-stroke" />
-          {pts.map(([x],i)=>(
-            <line key={`g${i}`} x1={x} y1={topPad-8} x2={x} y2={baseY} stroke={c.border} strokeWidth="1"
-              vectorEffect="non-scaling-stroke" style={{ opacity:0.35 }} />
-          ))}
-          <path d={area} fill="url(#ridgeFill)" style={{ opacity: drawn?1:0, transition: reduced?'none':'opacity .6s ease .2s' }} />
-          <path d={line} fill="none" stroke={`oklch(72% 0.16 ${hue})`} strokeWidth="2.5" strokeLinejoin="round"
-            vectorEffect="non-scaling-stroke" strokeDasharray={lineLen} strokeDashoffset={drawn?0:lineLen}
-            style={{ transition: reduced?'none':'stroke-dashoffset 0.9s cubic-bezier(.22,.9,.3,1)' }} />
-          {pts.map(([x,y],i)=>{
-            const isPk = peak && decades[i].decade===peak.decade;
-            return <circle key={i} cx={x} cy={y} r={isPk?4:2.4} fill={isPk?'#fff':`oklch(74% 0.15 ${hue})`}
-              style={{ filter: isPk?`drop-shadow(0 0 6px ${c.amber})`:'none', opacity: drawn?1:0,
-                       transition: reduced?'none':`opacity .4s ease ${(0.3+i*0.04).toFixed(2)}s` }} />;
-          })}
-        </svg>
-        {/* decade labels pinned to the exact point x — fixes the axis/label drift */}
-        {decades.map((d,i)=>(
-          <div key={d.decade} className="mono" style={{ position:'absolute', top:'100%', marginTop:5,
-            left:`${(xAt(i)/W)*100}%`, transform:'translateX(-50%)', whiteSpace:'nowrap',
-            fontSize:'clamp(10px, 0.9vw, 12px)', color: peak&&d.decade===peak.decade?c.amber:c.textSubtle }}>{String(d.decade).slice(2)}s</div>
-        ))}
+      <div style={{ display:'flex', alignItems:'flex-end', gap:GAP, height:H }}>
+        {decades.map((d,i)=>{
+          const isPk = peak && d.decade===peak.decade;
+          const h = Math.max(4, Math.round((d.count/maxDec)*(H-24)));
+          const pc = isPk ? c.amber : `oklch(70% 0.16 ${hue})`;
+          return (
+            <div key={d.decade} style={{ flex:1, minWidth:0, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'flex-end', height:'100%' }}>
+              <div className="mono" style={{ fontSize:'clamp(10px, 0.95vw, 12.5px)', color:isPk?c.amber:c.textMuted, marginBottom:6, fontWeight:isPk?700:400 }}>{d.count}</div>
+              <div style={{ width:'100%', maxWidth:56, height: drawn?h:0, borderRadius:'7px 7px 3px 3px',
+                background:`linear-gradient(180deg, ${isPk?'oklch(80% 0.15 80)':`oklch(72% 0.17 ${hue})`}, ${isPk?'oklch(62% 0.16 58)':`oklch(54% 0.17 ${hue})`})`,
+                boxShadow:`inset 0 1px 0 rgba(255,255,255,.35), 0 0 14px -4px ${pc}`,
+                transition: reduced?'none':`height .7s cubic-bezier(.22,.9,.3,1) ${(i*0.05).toFixed(2)}s` }} />
+            </div>
+          );
+        })}
       </div>
-      <div style={{ height:20 }} />
+      <div style={{ display:'flex', gap:GAP, marginTop:8 }}>
+        {decades.map((d)=>{
+          const isPk = peak && d.decade===peak.decade;
+          return <div key={d.decade} className="mono" style={{ flex:1, minWidth:0, textAlign:'center',
+            fontSize:'clamp(10px, 0.9vw, 12px)', color:isPk?c.amber:c.textSubtle, fontWeight:isPk?700:400 }}>{String(d.decade).slice(2)}s</div>;
+        })}
+      </div>
     </div>
   );
 }
@@ -5588,8 +5570,6 @@ function ArtistMosaic({ artists, isDark, lang, labelStyle, navigateToArtist }) {
       <div style={labelStyle}>{lang==='ru'?'ПО АРТИСТАМ':'BY ARTIST'}</div>
       <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
         {artists.map((a,i)=>{
-          const hue = hueFromString(a.artist);
-          const letter = (a.artist||'?').trim().charAt(0).toUpperCase() || '?';
           const clickable = !!(a.slug && navigateToArtist);
           return (
             <div key={a.artist} onClick={()=>{ if (clickable) navigateToArtist(a.slug); }}
@@ -5597,10 +5577,7 @@ function ArtistMosaic({ artists, isDark, lang, labelStyle, navigateToArtist }) {
               background:'rgba(255,255,255,.04)', border:`1px solid ${c.border}`, transition:'transform .16s ease, background .16s ease' }}
               onMouseEnter={e=>{ e.currentTarget.style.transform='translateY(-2px)'; e.currentTarget.style.background='rgba(255,255,255,.08)'; }}
               onMouseLeave={e=>{ e.currentTarget.style.transform='translateY(0)'; e.currentTarget.style.background='rgba(255,255,255,.04)'; }}>
-              <div style={{ width:42, height:42, borderRadius:11, flex:'none', display:'grid', placeItems:'center',
-                color:'#fff', fontWeight:700, fontSize:'clamp(17px, 1.6vw, 20px)',
-                background:`linear-gradient(145deg, oklch(64% 0.16 ${hue}), oklch(50% 0.18 ${hue+20}))`,
-                boxShadow:'inset 0 1px 0 rgba(255,255,255,.3), 0 4px 10px -3px rgba(0,0,0,.5)' }}>{letter}</div>
+              <AlbumCover title={a.artist} artist={a.artist} coverPath={a.image} size={42} radius={11} isDark={isDark} />
               <div style={{ minWidth:0, flex:1 }}>
                 <div style={{ fontSize:'clamp(14px, 1.3vw, 16px)', color:c.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{a.artist}</div>
                 <div className="mono" style={{ fontSize:'clamp(11px, 1vw, 12.5px)', color:c.textSubtle }}>{a.count} {lang==='ru'?'треков':'tracks'}</div>
@@ -5728,15 +5705,21 @@ function RhythmDial({ byHour, isDark, lang, reduced }) {
   const peak = anyData ? arr.indexOf(Math.max(...arr)) : 0;
   const S=176, cx=S/2, cy=S/2, r0=42, r1=80;
   const dayHue=95, nightHue=265;
-  const isDayHour = (h) => h>=6 && h<18;     // 06:00–18:00 = day
+  const isDayHour = (h) => h>=4 && h<22;     // night = 22:00–04:00
   const R = r1+8;
-  const half = (top) => `M ${cx-R} ${cy} A ${R} ${R} 0 0 ${top?0:1} ${cx+R} ${cy} Z`;  // top half = night
+  // Day/night as true sectors anchored to the clock (midnight at top), so the
+  // shaded night arc spans exactly 22:00→04:00 rather than a fixed half.
+  const ang = (h) => (h/24)*2*Math.PI - Math.PI/2;
+  const pt = (h, rr=R) => `${(cx+rr*Math.cos(ang(h))).toFixed(2)} ${(cy+rr*Math.sin(ang(h))).toFixed(2)}`;
+  const wedge = (h0, h1) => {
+    const large = ((h1 - h0 + 24) % 24) > 12 ? 1 : 0;
+    return `M ${cx} ${cy} L ${pt(h0)} A ${R} ${R} 0 ${large} 1 ${pt(h1)} Z`;
+  };
   return (
     <div style={{ display:'inline-flex', flexDirection:'column', alignItems:'center', gap:8 }}>
       <svg width={S} height={S} viewBox={`0 0 ${S} ${S}`} style={{ overflow:'visible' }}>
-        <path d={half(true)}  fill={`oklch(60% 0.12 ${nightHue})`} opacity={isDark?0.12:0.09} />
-        <path d={half(false)} fill={`oklch(72% 0.13 ${dayHue})`}  opacity={isDark?0.12:0.09} />
-        <line x1={cx-R} y1={cy} x2={cx+R} y2={cy} stroke={c.border} strokeWidth="1" />
+        <path d={wedge(22, 4)} fill={`oklch(60% 0.12 ${nightHue})`} opacity={isDark?0.16:0.11} />
+        <path d={wedge(4, 22)} fill={`oklch(72% 0.13 ${dayHue})`}  opacity={isDark?0.12:0.09} />
         <circle cx={cx} cy={cy} r={R} fill="none" stroke={c.border} strokeWidth="1" />
         <circle cx={cx} cy={cy} r={r0-4} fill="none" stroke={c.border} strokeWidth="1" />
         {arr.map((v,i)=>{
@@ -5755,7 +5738,7 @@ function RhythmDial({ byHour, isDark, lang, reduced }) {
         <text x={cx} y={cy-2} textAnchor="middle" style={{ fontSize:22, fontWeight:800, fill:c.text }}>{anyData?`${String(peak).padStart(2,'0')}:00`:'—'}</text>
         <text x={cx} y={cy+15} textAnchor="middle" className="mono" style={{ fontSize:9, letterSpacing:'0.12em', fill:c.textSubtle }}>{lang==='ru'?'ПИК':'PEAK'}</text>
       </svg>
-      <div style={{ display:'flex', gap:16, fontSize:'clamp(11px, 1vw, 12.5px)', color:c.textMuted }}>
+      <div style={{ display:'flex', gap:16, marginTop:14, fontSize:'clamp(11px, 1vw, 12.5px)', color:c.textMuted }}>
         <span style={{ display:'inline-flex', alignItems:'center', gap:6 }}><span style={{width:11,height:11,borderRadius:3,background:`oklch(72% 0.13 ${dayHue})`}} />{lang==='ru'?'☀ день':'☀ day'}</span>
         <span style={{ display:'inline-flex', alignItems:'center', gap:6 }}><span style={{width:11,height:11,borderRadius:3,background:`oklch(60% 0.12 ${nightHue})`}} />{lang==='ru'?'☾ ночь':'☾ night'}</span>
       </div>
@@ -5771,7 +5754,7 @@ function CalendarHeatmap({ days, isDark, lang, reduced }) {
   const c = useColors(isDark);
   const [hov, setHov] = useState(null);
   const wrapRef = useRef(null);
-  const CELL=12, GAP=3, PITCH=CELL+GAP, WEEKS=53;
+  const GAP=3, WEEKS=53;
   const { cells, months } = useMemo(() => {
     const map = new Map((days||[]).map(d => [d.date, d.count]));
     const max = (days||[]).reduce((m,d)=>Math.max(m,d.count||0),0) || 1;
@@ -5804,21 +5787,21 @@ function CalendarHeatmap({ days, isDark, lang, reduced }) {
   };
   return (
     <div ref={wrapRef} style={{ position:'relative' }}>
-      <div className={ske('inset', isDark)} style={{ borderRadius:12, padding:'10px 12px', overflowX:'auto' }}>
-        <div style={{ width:'max-content' }}>
-          <div style={{ position:'relative', height:16, marginBottom:4, width:WEEKS*PITCH }}>
+      <div className={ske('inset', isDark)} style={{ borderRadius:12, padding:'10px 12px' }}>
+        <div style={{ width:'100%' }}>
+          <div style={{ position:'relative', height:16, marginBottom:4, width:'100%' }}>
             {months.map(m=>(
-              <span key={m.col} className="mono" style={{ position:'absolute', left:m.col*PITCH, top:0,
+              <span key={m.col} className="mono" style={{ position:'absolute', left:`${(m.col/WEEKS)*100}%`, top:0,
                 fontSize:'clamp(9px, 0.85vw, 11px)', color:c.textSubtle, whiteSpace:'nowrap' }}>{m.label}</span>
             ))}
           </div>
-          <div style={{ display:'grid', gridAutoFlow:'column', gridTemplateRows:`repeat(7, ${CELL}px)`, gridAutoColumns:`${CELL}px`, gap:GAP }}>
+          <div style={{ display:'grid', gridAutoFlow:'column', gridTemplateRows:'repeat(7, 1fr)',
+            gridTemplateColumns:`repeat(${WEEKS}, minmax(0, 1fr))`, gap:GAP, width:'100%', aspectRatio:`${WEEKS} / 7` }}>
             {cells.map((cell,i)=>(
               <div key={cell.iso}
                 onMouseEnter={e=>onCell(cell,e)}
-                onMouseMove={e=>onCell(cell,e)}
                 onMouseLeave={()=>setHov(null)}
-                style={{ width:CELL, height:CELL, borderRadius:3,
+                style={{ borderRadius:3,
                   background: cell.future?'transparent':color(cell.level),
                   boxShadow: cell.level>0?`inset 0 0 0 1px oklch(${50+cell.level*6}% ${(0.05+cell.level*0.045).toFixed(3)} 150 / .5)`:'none',
                   opacity: reduced?1:0,
@@ -5890,7 +5873,7 @@ function RhythmSection({ rhythm, isDark, lang }) {
           <CalendarHeatmap days={days} isDark={isDark} lang={lang} reduced={reduced} />
         </div>
         <div style={{ flex:'0 0 auto', margin:'0 auto', textAlign:'center' }}>
-          <div style={lbl}>{lang==='ru'?'СУТКИ':'BY HOUR'}</div>
+          <div style={{ ...lbl, marginBottom:22 }}>{lang==='ru'?'АКТИВНЫЕ ЧАСЫ':'ACTIVE HOURS'}</div>
           <RhythmDial byHour={rhythm?.by_hour} isDark={isDark} lang={lang} reduced={reduced} />
         </div>
       </div>
@@ -5987,6 +5970,19 @@ function TasteMapScope({ data, isDark, lang, onPlayTrack }) {
         if (isHov){ ctx.globalAlpha=dim; ctx.lineWidth=1.5; ctx.strokeStyle='#fff'; ctx.stroke(); }
       });
       ctx.globalAlpha=1;
+      // Soft square vignette: erase the outer rim to transparent so the cloud
+      // reads as a full square that dissolves at the edges — no circular crop,
+      // no hard border. destination-out fades existing pixels by the gradient's
+      // alpha, revealing the panel behind.
+      const fade = size*0.13;
+      ctx.globalCompositeOperation='destination-out';
+      const wipe=(x0,y0,x1,y1,rx,ry,rw,rh)=>{ const g=ctx.createLinearGradient(x0,y0,x1,y1);
+        g.addColorStop(0,'rgba(0,0,0,1)'); g.addColorStop(1,'rgba(0,0,0,0)'); ctx.fillStyle=g; ctx.fillRect(rx,ry,rw,rh); };
+      wipe(0,0,fade,0, 0,0,fade,size);                 // left
+      wipe(size,0,size-fade,0, size-fade,0,fade,size); // right
+      wipe(0,0,0,fade, 0,0,size,fade);                 // top
+      wipe(0,size,0,size-fade, 0,size-fade,size,fade); // bottom
+      ctx.globalCompositeOperation='source-over';
     };
     const ro = new ResizeObserver(resize); ro.observe(wrap); resize();
     if (!reduced){
@@ -6019,10 +6015,10 @@ function TasteMapScope({ data, isDark, lang, onPlayTrack }) {
         <div className="mono" style={{ fontSize:'clamp(10px, 1vw, 12px)', color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase' }}>{lang==='ru'?'КАРТА ТВОЕГО ЗВУКА':'MAP OF YOUR SOUND'}</div>
         <div style={{ fontSize:'clamp(12px, 1.1vw, 14px)', color:c.textMuted }}>{points.length} {plural(points.length, lang, ['трек','трека','треков'], ['track','tracks'])} · {clusters.length} {plural(clusters.length, lang, ['район','района','районов'], ['region','regions'])}</div>
       </div>
-      <div style={{ display:'flex', gap:20, alignItems:'flex-start', flexWrap:'wrap' }}>
-        <div ref={wrapRef} style={{ position:'relative', flex:'1 1 320px', maxWidth:520, aspectRatio:'1 / 1', minWidth:0 }}>
+      <div style={{ display:'flex', gap:'clamp(20px, 4vw, 52px)', alignItems:'center', flexWrap:'wrap', justifyContent:'space-between' }}>
+        <div ref={wrapRef} style={{ position:'relative', flex:'1 1 320px', maxWidth:460, aspectRatio:'1 / 1', minWidth:0 }}>
           <canvas ref={canvasRef} onPointerMove={onMove} onPointerLeave={()=>setHover(null)} onClick={onClick}
-            style={{ position:'absolute', inset:0, width:'100%', height:'100%', borderRadius:'50%', cursor:'pointer' }} />
+            style={{ position:'absolute', inset:0, width:'100%', height:'100%', cursor:'pointer' }} />
           {hover && (
             <div style={{ ...glass, position:'absolute', zIndex:3, pointerEvents:'none', borderRadius:12, padding:'7px 11px',
               left:Math.min(hover.sx+10, (stateRef.current.size||320)-150), top:Math.max(0, hover.sy-44) }}>
@@ -6031,17 +6027,17 @@ function TasteMapScope({ data, isDark, lang, onPlayTrack }) {
             </div>
           )}
         </div>
-        <div style={{ ...glass, flex:'0 1 230px', minWidth:170, padding:'12px 14px', borderRadius:16 }}>
+        <div style={{ ...glass, flex:'0 1 300px', minWidth:220, padding:'14px 16px', borderRadius:16 }}>
           <div className="mono" style={{ fontSize:'clamp(9px, 0.9vw, 11px)', color:c.textSubtle, letterSpacing:'0.16em', textTransform:'uppercase', marginBottom:10 }}>{lang==='ru'?'РАЙОНЫ':'REGIONS'}</div>
           {[...clusters].sort((a,b)=>b.size-a.size).map(cl=>{
             const on = active===cl.id;
             return (
               <button key={cl.id} onClick={()=>setActive(a=>a===cl.id?null:cl.id)}
-                style={{ display:'flex', alignItems:'center', gap:9, width:'100%', padding:'7px 4px', borderRadius:8,
+                style={{ display:'flex', alignItems:'center', gap:10, width:'100%', padding:'7px 6px', borderRadius:8,
                   background: on?'rgba(124,91,255,.14)':'transparent', transition:'background .15s', textAlign:'left' }}>
                 <span style={{ width:11, height:11, borderRadius:3, flex:'none', background:`oklch(70% 0.16 ${hueOf[cl.id]??0})`, boxShadow:`0 0 8px oklch(70% 0.16 ${hueOf[cl.id]??0} / .6)` }} />
-                <span style={{ flex:1, minWidth:0, fontSize:'clamp(12px, 1.1vw, 14px)', color:c.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{cl.name}</span>
-                <span className="mono" style={{ fontSize:'clamp(10px, 0.9vw, 11px)', color:c.textSubtle }}>{cl.size}</span>
+                <span style={{ flex:1, minWidth:0, fontSize:'clamp(12px, 1.1vw, 14px)', color:c.text, lineHeight:1.25, wordBreak:'break-word' }}>{cl.name}</span>
+                <span className="mono" style={{ fontSize:'clamp(10px, 0.9vw, 11px)', color:c.textSubtle, flex:'none' }}>{cl.size}</span>
               </button>
             );
           })}
@@ -6106,31 +6102,39 @@ function CompletionRing({ pct=0, size=42, hue=145, isDark }) {
   );
 }
 
-// Carved completion bar for the "guilty" list rows (low fill = rarely finished).
-function GuiltyBar({ pct=0, hue=30, isDark }) {
+// "Guilty" rows show the honest number: how many seconds you typically hear
+// before bailing, and how often you've done it.
+function SkipTimeReadout({ seconds, count, hue=30, isDark, lang }) {
   const c = useColors(isDark);
-  const w = Math.round(Math.max(0,Math.min(1,pct))*100);
+  const s = seconds == null ? '—' : (Math.round(seconds * 10) / 10);
+  const sU = lang==='ru' ? 'с' : 's';
   return (
-    <div style={{ flex:'none', width:74, textAlign:'right' }}>
-      <div className={ske('inset', isDark)} style={{ height:9, borderRadius:5, overflow:'hidden' }}>
-        <div style={{ height:'100%', width:`${w}%`, borderRadius:5,
-          background:`linear-gradient(90deg, oklch(62% 0.16 ${hue}), oklch(72% 0.15 ${hue+10}))`,
-          boxShadow:'inset 0 1px 1px rgba(255,255,255,.4)' }} />
+    <div style={{ flex:'none', textAlign:'right', minWidth:58 }}>
+      <div style={{ fontSize:'clamp(15px, 1.5vw, 18px)', fontWeight:700, lineHeight:1.05, whiteSpace:'nowrap', color:`oklch(74% 0.15 ${hue})` }}>≈{s}{sU}</div>
+      <div className="mono" style={{ fontSize:'clamp(10px, 0.95vw, 12px)', color:c.textSubtle, marginTop:3, whiteSpace:'nowrap' }}>
+        {count}× {lang==='ru'?'скип':'skip'}
       </div>
-      <div className="mono" style={{ fontSize:'clamp(10px, 0.95vw, 12px)', color:c.textSubtle, marginTop:4 }}>{w}%</div>
     </div>
   );
 }
 
 // One column of the honest-mirror panel (loved or guilty).
-function EngagementColumn({ title, tracks, variant, isDark, lang, onPlayTrack }) {
+function EngagementColumn({ title, tracks, variant, isDark, lang, onPlayTrack, emptyText }) {
   const c = useColors(isDark);
   const lbl = { fontFamily:"'JetBrains Mono', monospace", fontSize:'clamp(10px, 1vw, 12px)', color:c.textSubtle, letterSpacing:'0.14em', textTransform:'uppercase', marginBottom:12 };
   const hue = variant==='loved' ? 145 : 30;
   return (
     <div style={{ minWidth:0 }}>
       <div style={lbl}>{title}</div>
-      {tracks.length === 0 ? <Empty lang={lang} /> : tracks.map((t)=>(
+      {tracks.length === 0
+        ? <div style={{ fontSize:'clamp(12px, 1.1vw, 13.5px)', color:c.textMuted, fontStyle:'italic', padding:'4px 2px' }}>{emptyText || (lang==='ru'?'Статистика ещё не набралась':'Not enough data yet')}</div>
+        : tracks.map((t)=>{
+        const sub = variant==='loved'
+          ? (lang==='ru'
+              ? `${t.artist} · дослушано ${t.finish_count} ${plural(t.finish_count, lang, ['раз','раза','раз'], ['time','times'])}`
+              : `${t.artist} · finished ${t.finish_count}×`)
+          : t.artist;
+        return (
         <div key={t.track_id}
           onClick={()=>{ if (onPlayTrack) onPlayTrack({ track:{ track_id:t.track_id, title:t.title, artist:t.artist, cover_art_path:t.cover_art_path }, score:1 }, []); }}
           style={{ display:'flex', alignItems:'center', gap:12, padding:'8px 9px', borderRadius:12, cursor:'pointer', transition:'background .15s ease' }}
@@ -6139,13 +6143,14 @@ function EngagementColumn({ title, tracks, variant, isDark, lang, onPlayTrack })
           <AlbumCover title={t.title} artist={t.artist} size={44} isDark={isDark} coverPath={t.cover_art_path} radius={9} />
           <div style={{ minWidth:0, flex:1 }}>
             <div style={{ fontSize:'clamp(14px, 1.3vw, 15.5px)', color:c.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{t.title}</div>
-            <div style={{ fontSize:'clamp(12px, 1vw, 13.5px)', color:c.textMuted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{t.artist} · {t.plays} {plural(t.plays, lang, ['плей','плея','плеев'], ['play','plays'])}</div>
+            <div style={{ fontSize:'clamp(12px, 1vw, 13.5px)', color:c.textMuted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{sub}</div>
           </div>
           {variant==='loved'
             ? <CompletionRing pct={t.completion} size={42} hue={hue} isDark={isDark} />
-            : <GuiltyBar pct={t.completion} hue={hue} isDark={isDark} />}
+            : <SkipTimeReadout seconds={t.skip_seconds} count={t.skip_count} hue={hue} isDark={isDark} lang={lang} />}
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -6206,7 +6211,7 @@ function DistributionsPanel({ stats, isDark, lang, navigateToArtist }) {
       display:'flex', flexDirection:'column', gap:'30px',
       animation: reduced ? 'none' : 'fadeIn 0.4s cubic-bezier(.22,.9,.3,1)',
     }}>
-      <EraRidgeline decades={decades} isDark={isDark} lang={lang} reduced={reduced} labelStyle={colLbl} />
+      <EraBars decades={decades} isDark={isDark} lang={lang} reduced={reduced} labelStyle={colLbl} />
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(240px, 1fr))', gap:'30px 36px' }}>
         <GenreBars genres={genres} isDark={isDark} lang={lang} reduced={reduced} labelStyle={colLbl} />
         <ArtistMosaic artists={artists} isDark={isDark} lang={lang} labelStyle={colLbl} navigateToArtist={navigateToArtist} />
@@ -6261,11 +6266,12 @@ function FormatBars({ formats, losslessPct, isDark, lang, reduced, labelStyle })
 function ListeningWidgetsRow({ data, rhythm, isDark, lang, onPlayTrack, navigateToArtist }) {
   const c = useColors(isDark);
   const reduced = usePrefersReducedMotion();
+  const hU = lang==='ru' ? 'ч' : 'h', mU = lang==='ru' ? 'м' : 'm';
   const fmtDur = (sec) => {
     if (!sec) return '—';
     const h = Math.floor(sec / 3600);
     const m = Math.floor((sec % 3600) / 60);
-    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+    return h > 0 ? `${h}${hU} ${m}${mU}` : `${m}${mU}`;
   };
   const since = data?.since ? new Date(data.since).toLocaleDateString(lang==='ru'?'ru-RU':'en-US', {month:'short', day:'numeric'}) : null;
   const top_track = data?.top_track;
@@ -6275,29 +6281,26 @@ function ListeningWidgetsRow({ data, rhythm, isDark, lang, onPlayTrack, navigate
 
   const lbl = (t) => <div className="mono" style={{ fontSize:'clamp(10px, 0.95vw, 12px)', color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase' }}>{t}</div>;
   const card = { borderRadius:16, padding:'16px 18px', minHeight:104, display:'flex', flexDirection:'column', gap:8, border:`1px solid ${c.border}` };
-  const mono = (ch, hue1, hue2) => (
-    <div style={{ width:44, height:44, borderRadius:10, flex:'none', display:'grid', placeItems:'center', fontSize:20, color:'#fff',
-      background:`linear-gradient(145deg, ${hue1}, ${hue2})`, boxShadow:'inset 0 1px 0 rgba(255,255,255,.3)' }}>{ch}</div>
-  );
 
   return (
     <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(220px, 1fr))', gap:14 }}>
-      {/* ∑ listened — count-up readout + 14-day sparkline */}
-      <div className={ske('display', isDark)} style={card}>
-        {lbl(lang==='ru'?'∑ ПРОСЛУШАНО':'∑ LISTENED')}
-        <div style={{ fontSize:'clamp(24px, 2.8vw, 32px)', color:'oklch(72% 0.18 145)', fontWeight:700, lineHeight:1.05 }}>{fmtDur(animSec)}</div>
-        <div style={{ display:'flex', alignItems:'flex-end', justifyContent:'space-between', gap:8 }}>
-          <span style={{ fontSize:'clamp(12px, 1vw, 13.5px)', color:c.textMuted }}>{since ? (lang==='ru'?`с ${since}`:`since ${since}`) : ' '}</span>
-          {rhythm?.days?.length ? <Sparkline days={rhythm.days} hue={145} /> : null}
+      {/* total listened — label on the left, count-up readout pushed right */}
+      <div className={ske('display', isDark)} style={{ ...card, flexDirection:'row', alignItems:'center', justifyContent:'space-between', gap:14 }}>
+        <div style={{ minWidth:0, display:'flex', flexDirection:'column', gap:6 }}>
+          <div className="mono" style={{ fontSize:'clamp(10px, 0.95vw, 12px)', color:c.textSubtle, letterSpacing:'0.12em', textTransform:'uppercase', lineHeight:1.3 }}>
+            {lang==='ru'?'Суммарно прослушано':'Total listened'}
+          </div>
+          {since ? <span style={{ fontSize:'clamp(12px, 1vw, 13.5px)', color:c.textMuted }}>{lang==='ru'?`с ${since}`:`since ${since}`}</span> : null}
         </div>
+        <div style={{ fontSize:'clamp(24px, 2.8vw, 32px)', color:'oklch(72% 0.18 145)', fontWeight:700, lineHeight:1.05, whiteSpace:'nowrap', flex:'none' }}>{fmtDur(animSec)}</div>
       </div>
 
       {/* ★ top track — click to play */}
       <button className={ske('display', isDark)} style={{ ...card, textAlign:'left', cursor: top_track?'pointer':'default' }}
         onClick={() => { if (top_track && onPlayTrack) onPlayTrack({ track:{ track_id:top_track.track_id, title:top_track.title, artist:top_track.artist }, score:1 }, []); }}>
         {lbl(lang==='ru'?'★ ТОП-ТРЕК':'★ TOP TRACK')}
-        <div style={{ display:'flex', alignItems:'center', gap:12 }}>
-          {mono('♪', 'oklch(64% 0.18 275)', 'oklch(50% 0.2 290)')}
+        <div style={{ display:'flex', alignItems:'center', gap:12, flex:1 }}>
+          <AlbumCover title={top_track?.title || ''} artist={top_track?.artist || ''} coverPath={top_track?.cover_art_path} size={44} radius={10} isDark={isDark} />
           <div style={{ minWidth:0 }}>
             <div style={{ fontSize:'clamp(15px, 1.5vw, 17px)', color:c.text, fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{top_track?.title || '—'}</div>
             <div style={{ fontSize:'clamp(12px, 1vw, 13.5px)', color:c.textMuted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
@@ -6311,8 +6314,8 @@ function ListeningWidgetsRow({ data, rhythm, isDark, lang, onPlayTrack, navigate
       <button className={ske('display', isDark)} style={{ ...card, textAlign:'left', cursor: top_artist?.slug?'pointer':'default' }}
         onClick={() => { if (top_artist?.slug && navigateToArtist) navigateToArtist(top_artist.slug); }}>
         {lbl(lang==='ru'?'★ ТОП-АРТИСТ':'★ TOP ARTIST')}
-        <div style={{ display:'flex', alignItems:'center', gap:12 }}>
-          {mono('♫', 'oklch(70% 0.13 80)', 'oklch(58% 0.15 60)')}
+        <div style={{ display:'flex', alignItems:'center', gap:12, flex:1 }}>
+          <AlbumCover title={top_artist?.name || ''} artist={top_artist?.name || ''} coverPath={top_artist?.image} size={44} radius={10} isDark={isDark} />
           <div style={{ minWidth:0 }}>
             <div style={{ fontSize:'clamp(15px, 1.6vw, 19px)', color:'oklch(75% 0.14 80)', fontWeight:700, lineHeight:1.15, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{top_artist?.name || '—'}</div>
             <div style={{ fontSize:'clamp(12px, 1vw, 13.5px)', color:c.textMuted }}>{top_artist ? `${top_artist.play_count} ${plural(top_artist.play_count, lang, playsWord, playsWordEn)}` : ' '}</div>
