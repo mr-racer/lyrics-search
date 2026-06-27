@@ -70,9 +70,15 @@ def test_skip_track_without_tags_and_facts():
     assert MetadataDB.get_sonic_vibe("t1", "music", "en") is None
 
 
-def test_generates_and_caches_when_tags_present():
-    """Tags + LLM response → phrase cached."""
+def test_generates_and_caches_when_facts_present():
+    """Facts + a non-SKIP LLM line → phrase cached."""
     import asyncio
+    from app.services.song_facts_service import get_song_facts_key
+
+    MetadataDB.add_song_facts_batch(
+        get_song_facts_key("B", "A"), "music",
+        ["Recorded in one night in a hotel room before a flight"], source="test",
+    )
 
     job = JobState(
         job_id="job-1", task_type="sonic_vibe", collection_name="music",
@@ -92,13 +98,13 @@ def test_generates_and_caches_when_tags_present():
     with patch(
         "app.services.ai_tasks.sonic_vibe.ask_llm",
         new_callable=AsyncMock,
-        return_value="A neon-lit drift through the late eighties.",
+        return_value="Recorded in one night, hours before a flight.",
     ):
         asyncio.run(sonic_vibe.run(job, db_client, llm=None))
 
     cached = MetadataDB.get_sonic_vibe("t1", "music", "en")
     assert cached is not None
-    assert "neon" in cached["phrase"]
+    assert "one night" in cached["phrase"]
 
 
 def test_skip_track_already_cached():
@@ -129,3 +135,61 @@ def test_skip_track_already_cached():
 
     cached = MetadataDB.get_sonic_vibe("t1", "music", "en")
     assert cached["phrase"] == "already cached phrase"  # not overwritten
+
+
+def test_skip_response_leaves_slot_empty():
+    """Facts present but the LLM answers SKIP → LLM is called, nothing persisted."""
+    import asyncio
+    from app.services.song_facts_service import get_song_facts_key
+
+    MetadataDB.add_song_facts_batch(
+        get_song_facts_key("B", "A"), "music",
+        ["The song is about heartbreak"], source="test",
+    )
+
+    job = JobState(
+        job_id="job-1", task_type="sonic_vibe", collection_name="music",
+        lang="en", n_total=1,
+    )
+    qdrant = MagicMock()
+    pt = MagicMock()
+    pt.id = "t1"
+    pt.payload = {"track_id": "t1", "title": "A", "artist": "B"}
+    qdrant.scroll.return_value = ([pt], None)
+    db_client = MagicMock()
+    db_client.qdrant = qdrant
+
+    with patch(
+        "app.services.ai_tasks.sonic_vibe.ask_llm",
+        new_callable=AsyncMock, return_value="SKIP",
+    ) as mock_llm:
+        asyncio.run(sonic_vibe.run(job, db_client, llm=None))
+        mock_llm.assert_called_once()  # facts existed → the model was consulted
+
+    assert MetadataDB.get_sonic_vibe("t1", "music", "en") is None  # SKIP → no vibe
+
+
+def test_tags_without_facts_are_skipped():
+    """Tags alone are no longer enough — no facts means no LLM call, no vibe."""
+    import asyncio
+
+    job = JobState(
+        job_id="job-1", task_type="sonic_vibe", collection_name="music",
+        lang="en", n_total=1,
+    )
+    qdrant = MagicMock()
+    pt = MagicMock()
+    pt.id = "t1"
+    pt.payload = {
+        "track_id": "t1", "title": "A", "artist": "B",
+        "sonic_tags_json": json.dumps(["dreamy", "synth"]),
+    }
+    qdrant.scroll.return_value = ([pt], None)
+    db_client = MagicMock()
+    db_client.qdrant = qdrant
+
+    with patch("app.services.ai_tasks.sonic_vibe.ask_llm", new_callable=AsyncMock) as mock_llm:
+        asyncio.run(sonic_vibe.run(job, db_client, llm=None))
+        mock_llm.assert_not_called()
+
+    assert MetadataDB.get_sonic_vibe("t1", "music", "en") is None
