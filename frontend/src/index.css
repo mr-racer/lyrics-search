@@ -673,6 +673,10 @@
     .lib-album-sub   { font-size: 14px; }
     .player-progress-row { padding: 0 20px; }
     .player-actions-row  { padding: 0 20px; }
+    /* App shell height: dvh (dynamic viewport) so the bottom tab bar / mini-player
+       aren't hidden behind a mobile browser's bottom URL bar. 100vh is the
+       fallback for browsers without dvh support. */
+    .app-shell { height: 100vh; height: 100dvh; }
 
     /* ── Artist Atlas v2 ──────────────────────────────────────── */
     /* Hidden scrollbars for the facts shelf + albums timeline strip */
@@ -2306,8 +2310,8 @@
          is the "cover disappears" symptom. Size from WIDTH so it always fits.
          !important because JS sets an inline width (coverPx) on this element. */
       .player-art-wrap {
-        width: min(80vw, 56vh) !important;
-        max-width: min(80vw, 56vh) !important;
+        width: min(92vw, 62vh) !important;
+        max-width: min(92vw, 62vh) !important;
         perspective: 1000px;
       }
 

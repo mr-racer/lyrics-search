@@ -11084,6 +11084,8 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [liked, setLiked] = useState(null);
   const [hoveredQueueIdx, setHoveredQueueIdx] = useState(-1);
+  const isMobile = useIsMobile();             // mobile player: full-width cover, queue drawer
+  const [queueOpen, setQueueOpen] = useState(false);  // mobile queue slide-up drawer
 
   // Derived: current track from playlist + index. Declared HERE (not later)
   // so useEffects below see the real value, not the hoisted-var undefined.
@@ -11679,7 +11681,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
 
       {/* Main content area — top padding gives the cover breathing room from
           the (now collapsed) section header bar. */}
-      <div style={{ flex:1, display:'flex', overflow:'hidden', padding:'clamp(24px, 5vh, 56px) 32px 24px', gap:'28px', position:'relative' }}>
+      <div style={{ flex:1, display:'flex', flexDirection: isMobile ? 'column' : 'row', overflow: isMobile ? 'auto' : 'hidden', padding: isMobile ? '10px 12px 24px' : 'clamp(24px, 5vh, 56px) 32px 24px', gap: isMobile ? 14 : 28, position:'relative' }}>
 
         {/* ════════════════ LEFT: Player ════════════════
             justifyContent:center keeps the cover+controls visually centered
@@ -11687,11 +11689,11 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
             outside the constrained-width inner wrapper so prev/next side
             buttons can flank the cover in the column's empty horizontal slack. */}
         <div className="player-fade-in" ref={playerColRef} style={{
-          flex:1, minWidth:0,
+          flex: isMobile ? '0 0 auto' : 1, minWidth:0,
           display:'flex', flexDirection:'column',
-          alignItems:'center', justifyContent:'center',
+          alignItems:'center', justifyContent: isMobile ? 'flex-start' : 'center',
           gap:'clamp(14px, 2vh, 24px)', position:'relative', zIndex:1,
-          overflow:'hidden', padding:'clamp(8px, 2vh, 24px) 0',
+          overflow: isMobile ? 'visible' : 'hidden', padding:'clamp(8px, 2vh, 24px) 0',
         }}>
 
           {/* First-3-clicks hint above the cover row. Stays in the DOM so the
@@ -11736,6 +11738,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
               isPlaying={isPlaying}
               barCount={spectrumBarCount}
             />
+            {!isMobile && (
             <button
               type="button" className="player-side-btn"
               onClick={prevTrack} disabled={currentIndex <= 0}
@@ -11746,6 +11749,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                 <polyline points="15 18 9 12 15 6"/>
               </svg>
             </button>
+            )}
 
             {/* Album art: flip card + vinyl-stack transition. Clicking toggles
                 play and flashes the glassy feedback indicator. */}
@@ -11869,6 +11873,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
               )}
             </div>
 
+            {!isMobile && (
             <button
               type="button" className="player-side-btn"
               onClick={nextTrack} disabled={currentIndex >= playlist.length - 1}
@@ -11879,6 +11884,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                 <polyline points="9 18 15 12 9 6"/>
               </svg>
             </button>
+            )}
           </div>
 
           {/* Controls + meta column, constrained to cover width. The cover-row
@@ -11956,6 +11962,26 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
               </div>
             </div>
 
+            {/* Mobile transport — the cover-flanking prev/next are hidden on phones
+                so the cover can go near-full-width; play = this row or cover tap. */}
+            {isMobile && currentTrack && (
+              <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:30, padding:'2px 0' }}>
+                <button type="button" className="player-side-btn" onClick={prevTrack} disabled={currentIndex <= 0} aria-label={lang==='ru'?'Предыдущий':'Previous'}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+                </button>
+                <button type="button" className="player-side-btn" style={{ width:66, height:66 }}
+                  onClick={() => { markPlaybackInteracted(audio?.audioRef?.current); audio?.togglePlay?.(); }}
+                  aria-label={isPlaying ? (lang==='ru'?'Пауза':'Pause') : (lang==='ru'?'Играть':'Play')}>
+                  {isPlaying
+                    ? <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+                    : <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><polygon points="7 4 19 12 7 20 7 4"/></svg>}
+                </button>
+                <button type="button" className="player-side-btn" onClick={nextTrack} disabled={currentIndex >= playlist.length - 1} aria-label={lang==='ru'?'Следующий':'Next'}>
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                </button>
+              </div>
+            )}
+
             {/* Action icons — like / dislike / lyrics / ask AI */}
             <div className="player-actions-row" style={{ display:'flex', justifyContent:'center', gap:4 }}>
               <button
@@ -12026,7 +12052,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
               {aiStatus?.aiActive && (
                 <button
                   type="button" className="player-icon-btn"
-                  onClick={() => setDrawerOpen(true)}
+                  onClick={() => { if (isMobile) setQueueOpen(true); setDrawerOpen(true); }}
                   title={lang === 'ru' ? 'Спросить AI' : 'Ask AI'}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
@@ -12092,16 +12118,16 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
             facts+queue cards don't sit awkwardly at the top with empty space
             beneath. When the queue has items, it grows + scrolls normally. */}
         <div style={{
-          flex: '0 0 min(40%, 620px)',
-          maxWidth: 'min(40%, 620px)',
+          flex: isMobile ? '0 0 auto' : '0 0 min(40%, 620px)',
+          maxWidth: isMobile ? '100%' : 'min(40%, 620px)',
           display: 'flex',
           flexDirection: 'column',
           justifyContent: playlist.length === 0 ? 'center' : 'flex-start',
-          gap: 18,
-          overflow: 'hidden',
+          gap: isMobile ? 12 : 18,
+          overflow: isMobile ? 'visible' : 'hidden',
           position: 'relative',
           zIndex: 1,
-          padding: 'clamp(24px, 5vh, 56px) 4px 16px',
+          padding: isMobile ? '4px 2px 8px' : 'clamp(24px, 5vh, 56px) 4px 16px',
           minHeight: 0,
         }}>
 
@@ -12114,8 +12140,39 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
             variant="player"
           />
 
-          {/* Separator between facts and queue */}
-          <div style={{ borderTop: `1px solid ${isDark ? '#2a2a32' : 'rgba(22,22,32,0.08)'}` }} />
+          {/* Separator between facts and queue (desktop only) */}
+          {!isMobile && <div style={{ borderTop: `1px solid ${isDark ? '#2a2a32' : 'rgba(22,22,32,0.08)'}` }} />}
+
+          {/* Mobile: facts stay above; this button opens the queue full-screen */}
+          {isMobile && (
+            <button type="button" onClick={() => setQueueOpen(true)}
+              style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10, width:'100%', minHeight:48, padding:'0 16px', borderRadius:14, cursor:'pointer', color:pText,
+                background: isDark ? 'rgba(255,255,255,.05)' : 'rgba(22,22,32,.04)',
+                border:`1px solid ${isDark ? 'rgba(255,255,255,.08)' : 'rgba(22,22,32,.10)'}` }}>
+              <span style={{ fontFamily:"'JetBrains Mono', ui-monospace, monospace", fontSize:11, letterSpacing:'0.16em' }}>{lang==='ru'?'ОЧЕРЕДЬ':'QUEUE'} · {playlist.length}</span>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+          )}
+
+          {/* Queue + Similarity: inline on desktop (display:contents = zero layout
+              change); a full-screen slide-up drawer on mobile (translateY toggle). */}
+          <div style={isMobile ? {
+            position:'fixed', inset:0, zIndex:80,
+            display:'flex', flexDirection:'column', gap:14,
+            padding:'10px 14px calc(14px + env(safe-area-inset-bottom, 0px))',
+            background: isDark ? 'rgba(14,14,20,0.98)' : 'rgba(248,247,252,0.98)',
+            backdropFilter:'blur(20px)', WebkitBackdropFilter:'blur(20px)',
+            transform: queueOpen ? 'translateY(0)' : 'translateY(100%)',
+            transition:'transform .3s cubic-bezier(.22,.9,.3,1)', overflow:'hidden',
+          } : { display:'contents' }}>
+            {isMobile && (
+              <div style={{ display:'flex', justifyContent:'flex-end', flexShrink:0 }}>
+                <button type="button" onClick={() => setQueueOpen(false)} aria-label={lang==='ru'?'Закрыть':'Close'}
+                  style={{ width:40, height:40, borderRadius:'50%', display:'grid', placeItems:'center', background:'transparent', border:0, cursor:'pointer', color:pText }}>
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                </button>
+              </div>
+            )}
 
           {/* Queue + Chat overlay area — anchors AIChatDrawer's absolute
               positioning so the drawer overlays ONLY this region, leaving
@@ -12305,6 +12362,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
             drawerOpen={drawerOpen}
             onQueueNext={onQueueNext}
           />
+          </div>
         </div>
       </div>
 
@@ -13905,9 +13963,9 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
   const ActiveSection = sectionMap[section];
 
   return (
-    <div className={themeAnim ? 'theme-transition theme-fade' : ''} style={{
+    <div className={`app-shell${themeAnim ? ' theme-transition theme-fade' : ''}`} style={{
       display:'flex', flexDirection: isMobile ? 'column' : 'row',
-      width:'100vw', height:'100vh', overflow:'hidden', background: c.bg,
+      width:'100vw', overflow:'hidden', background: c.bg,
       position: 'relative',
     }}>
       {/* Full-bleed ambient wash for the player view — sits behind the
