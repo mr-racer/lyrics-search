@@ -1,19 +1,52 @@
 """Tests for Pydantic domain models."""
 
 import pytest
+from pydantic import ValidationError
 
 from app.domain.models import (
+    AIEnabledRequest,
+    AlbumSummary,
+    ArtistAggregate,
+    ArtistAlbum,
+    AuthResponse,
     ChatMessage,
     ChatRequest,
     ChatResponse,
     Fact,
+    HomeTrack,
     IndexProgress,
     IndexRequest,
+    InstanceConfigResponse,
+    Invite,
+    InviteResponse,
+    LibraryAlbumsResponse,
+    LikedSongTrack,
+    LikedSongsResponse,
+    ListeningStatsResponse,
+    LLMStatusRequest,
+    LLMStatusResponse,
+    LoginRequest,
+    PeakHour,
+    PlaylistCreate,
+    PlaylistDetail,
+    PlaylistReorderRequest,
+    PlaylistSummary,
+    PlaylistTrack,
+    PlaylistTrackAdd,
+    PlaylistUpdate,
+    PlaylistsResponse,
+    RecentTrack,
+    RecentTracksResponse,
+    RediscoverResponse,
+    RegisterRequest,
     SearchFilters,
     SearchRequest,
     SearchResponse,
+    TopArtistBrief,
+    TopTrackBrief,
     TrackHit,
     TrackMetadata,
+    User,
 )
 
 
@@ -241,3 +274,250 @@ class TestTrackChatModels:
         r = TrackChatResponse(message="hello", web_search_used=False)
         assert r.message == "hello"
         assert r.web_search_used is False
+
+
+# --- merged from test_ai_mode_models.py -----------------------------------
+
+
+class TestAiModeModels:
+    """Unit tests for AI Mode pydantic models."""
+
+    def test_llm_status_request_all_fields_optional(self):
+        req = LLMStatusRequest()
+        assert req.base_url is None
+        assert req.model is None
+        req = LLMStatusRequest(base_url="http://localhost:1234/v1", model="x")
+        assert req.base_url == "http://localhost:1234/v1"
+
+    def test_llm_status_response_required_available_field(self):
+        r = LLMStatusResponse(available=True)
+        assert r.available is True
+        assert r.error is None
+        r = LLMStatusResponse(available=False, error="connection refused")
+        assert r.error == "connection refused"
+
+    def test_ai_enabled_request_required_bool(self):
+        r = AIEnabledRequest(enabled=True)
+        assert r.enabled is True
+        r = AIEnabledRequest(enabled=False)
+        assert r.enabled is False
+
+
+# --- merged from test_artist_models.py ------------------------------------
+
+
+def _mk_track(track_id: str, title: str, year: int, album: str = "X") -> TrackMetadata:
+    return TrackMetadata(
+        track_id=track_id, title=title, artist="Dua Lipa",
+        album=album, year=year, duration_sec=180.0,
+        file_path=f"/music/{track_id}.flac",
+    )
+
+
+class TestArtistModels:
+    """Unit tests for ArtistAggregate / ArtistAlbum pydantic models."""
+
+    def test_artist_album_minimal(self):
+        album = ArtistAlbum(title="Future Nostalgia", year=2020, tracks=[])
+        assert album.title == "Future Nostalgia"
+        assert album.cover_art_path is None  # optional
+        assert album.liked_track_count == 0  # default when no reactions
+
+    def test_artist_album_liked_track_count_set(self):
+        album = ArtistAlbum(title="Future Nostalgia", year=2020, tracks=[],
+                            liked_track_count=3)
+        assert album.liked_track_count == 3
+        assert album.model_dump()["liked_track_count"] == 3
+
+    def test_artist_aggregate_with_bio(self):
+        agg = ArtistAggregate(
+            slug="dua-lipa", name="Dua Lipa", genre="pop",
+            track_count=3, album_count=1,
+            decade_range="2020s", bio="From London…",
+            facts=["a", "b"],
+            albums=[ArtistAlbum(title="Future Nostalgia", year=2020,
+                                 cover_art_path="/covers/x.jpg",
+                                 tracks=[_mk_track("t1", "Physical", 2020)])],
+        )
+        assert agg.bio == "From London…"
+        assert agg.albums[0].tracks[0].title == "Physical"
+
+    def test_artist_aggregate_no_bio(self):
+        """bio=None must round-trip via .model_dump (frontend gates Bio tab on null)."""
+        agg = ArtistAggregate(
+            slug="x", name="X", track_count=0, album_count=0,
+            facts=[], albums=[],
+        )
+        assert agg.bio is None
+        assert agg.model_dump()["bio"] is None
+
+
+# --- merged from test_auth_models.py --------------------------------------
+
+
+class TestAuthModels:
+    """Pydantic model contracts for Phase A auth."""
+
+    def test_user_round_trip(self):
+        u = User(id="uid-1", email="x@y.z", role="owner",
+                 created_at=1700000000.0, last_login_at=None)
+        assert u.id == "uid-1"
+        assert u.role == "owner"
+        assert "password_hash" not in u.model_dump()  # never exposed
+
+    def test_user_role_must_be_owner_or_member(self):
+        with pytest.raises(ValidationError):
+            User(id="x", email="x@y.z", role="admin", created_at=1.0, last_login_at=None)
+
+    def test_invite_round_trip(self):
+        inv = Invite(code="abcdefghij12", created_by="uid-1",
+                     created_at=1.0, expires_at=2.0,
+                     consumed_by=None, consumed_at=None)
+        assert inv.code == "abcdefghij12"
+
+    def test_instance_config_response_modes(self):
+        assert InstanceConfigResponse(mode="sharing").mode == "sharing"
+        assert InstanceConfigResponse(mode="server").mode == "server"
+        with pytest.raises(ValidationError):
+            InstanceConfigResponse(mode="other")
+
+    def test_login_request_requires_both_fields(self):
+        with pytest.raises(ValidationError):
+            LoginRequest(email="x@y.z")
+
+    def test_register_request_requires_invite_code(self):
+        with pytest.raises(ValidationError):
+            RegisterRequest(email="x@y.z", password="pw12345678")
+
+    def test_auth_response_carries_token_and_user(self):
+        ar = AuthResponse(
+            token="jwt.token.here",
+            user=User(id="u", email="x@y.z", role="owner",
+                      created_at=1.0, last_login_at=None),
+        )
+        assert ar.token.startswith("jwt.")
+
+    def test_invite_response_omits_consumer_when_open(self):
+        ir = InviteResponse(
+            code="abcdefghij12", created_at=1.0, expires_at=2.0,
+            consumed=False, consumed_at=None,
+        )
+        assert ir.consumed is False
+
+
+# --- merged from test_home_models.py --------------------------------------
+
+
+class TestHomeModels:
+    def test_home_track_minimal(self):
+        t = HomeTrack(track_id="1", title="T", artist="A")
+        assert t.album is None and t.cover_art_path is None
+
+    def test_rediscover_response_defaults(self):
+        r = RediscoverResponse(collection_name="c")
+        assert r.track is None and r.never_played is False and r.last_played is None
+
+
+# --- merged from test_library_overhaul_models.py --------------------------
+
+
+class TestLibraryOverhaulModels:
+    """Tests that the Library Overhaul response models parse and serialise cleanly."""
+
+    def test_album_summary_minimal(self):
+        a = AlbumSummary(
+            album_title="In Rainbows",
+            primary_artist="Radiohead",
+            primary_artist_slug="radiohead",
+            feat_artists=[],
+            year=2007,
+            cover_art_path=None,
+            track_count=1,
+            duration_seconds=237,
+            top_genres=["art rock"],
+            tracks=[],
+        )
+        assert a.year_range is None
+        assert a.feat_artists == []
+
+    def test_album_summary_with_year_range(self):
+        a = AlbumSummary(
+            album_title="Live 2003",
+            primary_artist="Sigur Rós",
+            primary_artist_slug="sigur-ros",
+            feat_artists=[],
+            year=None,
+            year_range="2002—2003",
+            cover_art_path=None,
+            track_count=3,
+            duration_seconds=900,
+            top_genres=["post-rock"],
+            tracks=[],
+        )
+        assert a.year is None
+        assert a.year_range == "2002—2003"
+
+    def test_listening_stats_empty(self):
+        r = ListeningStatsResponse(
+            total_seconds_listened=0,
+            since=None,
+            top_track=None,
+            top_artist=None,
+            peak_hour=None,
+        )
+        assert r.total_seconds_listened == 0
+
+
+# --- merged from test_playlist_models.py ----------------------------------
+
+
+class TestPlaylistModels:
+    """Smoke tests for Plan 19 Pydantic models."""
+
+    def test_playlist_summary_minimal(self):
+        s = PlaylistSummary(
+            id=1, name="Mix", description=None,
+            track_count=0, cover_track_ids=[], cover_art_paths=[],
+            created_at="2026-05-21T10:00:00", updated_at="2026-05-21T10:00:00",
+        )
+        assert s.contains_track is None
+        assert s.cover_track_ids == []
+
+    def test_playlist_summary_with_contains_track(self):
+        s = PlaylistSummary(
+            id=1, name="Mix", description=None,
+            track_count=2, cover_track_ids=["t1", "t2"], cover_art_paths=["/c1", "/c2"],
+            created_at="x", updated_at="y", contains_track=True,
+        )
+        assert s.contains_track is True
+
+    def test_playlist_track_required_fields(self):
+        t = PlaylistTrack(track_id="x", position=1, added_at="z", title="A", artist="B")
+        assert t.album is None and t.duration is None
+
+    def test_playlist_detail_with_missing_track_ids(self):
+        d = PlaylistDetail(
+            id=1, name="M", description=None, collection_name="c",
+            tracks=[], missing_track_ids=["orphan1"],
+            created_at="x", updated_at="y",
+        )
+        assert d.missing_track_ids == ["orphan1"]
+
+    def test_playlist_create_requires_name(self):
+        with pytest.raises(ValidationError):
+            PlaylistCreate(collection_name="c", name="", description=None)
+
+    def test_playlist_create_strips_name_whitespace(self):
+        p = PlaylistCreate(collection_name="c", name="  Mix  ", description=None)
+        assert p.name == "Mix"
+
+    def test_playlist_update_allows_both_none(self):
+        PlaylistUpdate(name=None, description=None)
+
+    def test_playlist_reorder_request_accepts_list_of_strings(self):
+        r = PlaylistReorderRequest(track_ids=["a", "b", "c"])
+        assert r.track_ids == ["a", "b", "c"]
+
+    def test_playlists_response_wraps_list(self):
+        r = PlaylistsResponse(playlists=[], collection_name="c")
+        assert r.collection_name == "c"

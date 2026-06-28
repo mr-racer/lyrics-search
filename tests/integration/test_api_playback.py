@@ -1,4 +1,4 @@
-"""Integration test for POST /playback/events."""
+"""Integration tests for the playback API (POST /playback/events, GET /playback/recent)."""
 
 import json
 import pytest
@@ -21,6 +21,14 @@ def client(tmp_path, monkeypatch):
     authenticate_test_client(c, app)
     yield c
     MetadataDB._reset_for_tests()
+
+
+def _app_with_fixed_user(user_id: str = "user-T"):
+    """Return a fresh app with get_current_user overridden to a fixed user."""
+    app = create_app()
+    fixed = SimpleNamespace(id=user_id, email="t@x")
+    app.dependency_overrides[pb_route.get_current_user] = lambda: fixed
+    return app
 
 
 def test_post_playback_event_inserts_row(client):
@@ -88,3 +96,38 @@ def test_playback_events_ignores_supplied_collection():
         assert captured["collection_name"] == "acct_user-A"
     finally:
         playback_service.record_event = orig
+
+
+class TestPlaybackRecent:
+    """Integration tests for GET /api/v1/playback/recent."""
+
+    def test_recent_returns_empty_when_qdrant_down(self):
+        """D-soft: collection_name param is accepted but ignored; server derives
+        from JWT. Response echoes the derived collection, not the supplied one."""
+        app = _app_with_fixed_user("user-T")
+        with TestClient(app) as c:
+            authenticate_test_client(c, app)
+            resp = c.get("/api/v1/playback/recent", params={"collection_name": "x"})
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["tracks"] == []
+            # Derived collection, NOT the supplied "x"
+            assert body["collection_name"] == "acct_user-T"
+
+    def test_recent_validates_limit_bounds(self):
+        app = _app_with_fixed_user()
+        with TestClient(app) as c:
+            authenticate_test_client(c, app)
+            resp = c.get("/api/v1/playback/recent", params={"collection_name": "x", "limit": 999})
+            assert resp.status_code == 422
+
+    def test_recent_no_collection_name_uses_derived(self):
+        """D-soft: collection_name is now optional; omitting it still works and
+        returns the derived collection from JWT."""
+        app = _app_with_fixed_user("user-T")
+        with TestClient(app) as c:
+            authenticate_test_client(c, app)
+            resp = c.get("/api/v1/playback/recent")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["collection_name"] == "acct_user-T"

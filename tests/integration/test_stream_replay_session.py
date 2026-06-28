@@ -14,7 +14,7 @@ from unittest.mock import MagicMock
 from app.api.main import app
 from app.resources.metadata_db import MetadataDB
 from ._auth_helper import authenticate_test_client
-from .test_api_stream_next import FakeQdrant, N_PER_CLUSTER
+from .test_api_stream import FakeQdrant, N_PER_CLUSTER
 
 N_CHUNKS = 6
 CHUNK_N = 3
