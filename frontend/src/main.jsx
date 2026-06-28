@@ -17,6 +17,48 @@ function slugifyArtistName(name) {
   return (name || '').toLowerCase().trim().split(/\s+/).join('-');
 }
 
+// Renders a track's artist credit with each participant individually clickable.
+// Uses backend-provided `artist_refs` (aligned {name, slug} per participant) so a
+// collaboration like "Calvin Harris, Dua Lipa" links EACH artist to their own
+// page — primary first, then "feat." the rest. Falls back to the raw `artist`
+// string (navigating to the primary slug) when artist_refs is absent, so older
+// or un-enriched surfaces still work and never 404 on a combined slug.
+function ArtistCredit({ track, navigateToArtist, lang, color = '#bba8ff', stopProp = true }) {
+  const refs = (track && Array.isArray(track.artist_refs)) ? track.artist_refs : [];
+  const go = (slug) => (e) => {
+    if (stopProp) e.stopPropagation();
+    if (slug && navigateToArtist) navigateToArtist(slug);
+  };
+  const linkStyle = { color, cursor: navigateToArtist ? 'pointer' : 'default' };
+  const title = navigateToArtist ? (lang === 'ru' ? 'Открыть страницу артиста' : 'Open artist page') : undefined;
+  if (refs.length > 0) {
+    return (
+      <>
+        {refs.map((r, i) => (
+          <Fragment key={`${r.slug}-${i}`}>
+            {i === 1 ? ' feat. ' : i > 1 ? ', ' : ''}
+            <span onClick={go(r.slug)} style={linkStyle} title={title}>{r.name}</span>
+          </Fragment>
+        ))}
+      </>
+    );
+  }
+  const name = (track && track.artist) || '';
+  const slug = (track && track.primary_artist_slug) || slugifyArtistName(name);
+  return <span onClick={go(slug)} style={linkStyle} title={title}>{name}</span>;
+}
+
+// Best-effort primary-artist slug for click-only targets (avatars, chips) where
+// there's no room to list individual participants. Prefers the canonical
+// per-participant slug so collaborations resolve to a real page, never a
+// combined slug that 404s.
+function primaryArtistSlug(track) {
+  if (track && Array.isArray(track.artist_refs) && track.artist_refs.length) {
+    return track.artist_refs[0].slug;
+  }
+  return (track && track.primary_artist_slug) || slugifyArtistName(track && track.artist);
+}
+
 // ─── Phase A: Auth helpers ─────────────────────────────────────────────────
 function getStoredToken() {
   return localStorage.getItem('musix_token') || '';
@@ -1833,7 +1875,7 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
                   const src = homeCoverUrl(t.cover_art_path);
                   return (
                     <div key={t.track_id || i} title={`${t.title || ''}${t.artist ? ' — ' + t.artist : ''}`}
-                         onClick={() => t.artist && navigateToArtist && navigateToArtist(slugifyArtistName(t.artist))}
+                         onClick={() => { const s = primaryArtistSlug(t); if (s && navigateToArtist) navigateToArtist(s); }}
                          style={{ width:30, height:30, borderRadius:8, overflow:'hidden', marginLeft: i ? -9 : 0, cursor:'pointer',
                                   position:'relative', zIndex: 10 - i, background:'#241d38',
                                   border:`1.5px solid ${isDark ? '#26262d' : '#fff'}`, boxShadow:'0 4px 10px rgba(0,0,0,.35)' }}>
@@ -2092,8 +2134,9 @@ function DiscoverNewCard({ isDark, lang, onPick, navigateToArtist }) {
           <div className="serif" style={{ fontSize:18, fontWeight:300, color:c.text, marginTop:7, lineHeight:1.25, cursor:'pointer' }}
                onClick={() => onPick && onPick(cur)}>{cur.title}</div>
           {cur.artist ? (
-            <div style={{ fontSize:12.5, color:c.textMuted, marginTop:3, cursor:'pointer' }}
-                 onClick={() => navigateToArtist && navigateToArtist(slugifyArtistName(cur.artist))}>{cur.artist}</div>
+            <div style={{ fontSize:12.5, color:c.textMuted, marginTop:3 }}>
+              <ArtistCredit track={cur} navigateToArtist={navigateToArtist} lang={lang} color={c.textMuted} />
+            </div>
           ) : null}
           {fact && <div className="serif" style={{ fontStyle:'italic', fontSize:14, color:c.text, opacity:.86, marginTop:14, lineHeight:1.5, maxWidth:340,
             display:'-webkit-box', WebkitLineClamp:3, WebkitBoxOrient:'vertical', overflow:'hidden' }}>❝ {fact} ❞</div>}
@@ -3244,15 +3287,9 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
                   <AlbumCover title={hit.track?.title||''} artist={hit.track?.artist||''} size={42} isDark={isDark} coverPath={hit.track?.cover_art_path} />
                   <div style={{ flex:1, minWidth:0 }}>
                     <div style={{ fontSize:'14px', fontWeight:'600', color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{hit.track?.title||'—'}</div>
-                    <div
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        const slug = slugifyArtistName(hit.track?.artist);
-                        if (slug && navigateToArtist) navigateToArtist(slug);
-                      }}
-                      style={{ fontSize:'13px', color:c.textMuted, cursor: 'pointer', display: 'inline-block' }}
-                      title={lang==='ru'?'Открыть страницу артиста':'Open artist page'}
-                    >{hit.track?.artist||'—'}</div>
+                    <div style={{ fontSize:'13px', color:c.textMuted, display: 'inline-block' }}>
+                      <ArtistCredit track={hit.track} navigateToArtist={navigateToArtist} lang={lang} color={c.textMuted} />
+                    </div>
                   </div>
                   <div className="mono" style={{ padding:'3px 8px', borderRadius:'16px', fontSize:'12px',
                     background: c.accentBg, color: c.accent, flexShrink:0 }}>
@@ -3496,15 +3533,7 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
                           </div>
                           <div style={{ fontSize:'13px', color:c.textMuted, marginTop:'3px',
                             whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-                            <span
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                const slug = slugifyArtistName(hit.track?.artist);
-                                if (slug && navigateToArtist) navigateToArtist(slug);
-                              }}
-                              style={{ cursor: 'pointer' }}
-                              title={lang==='ru'?'Открыть страницу артиста':'Open artist page'}
-                            >{hit.track?.artist||'—'}</span>{hit.track?.year ? ` · ${hit.track?.year}` : ''}
+                            <ArtistCredit track={hit.track} navigateToArtist={navigateToArtist} lang={lang} color={c.textMuted} />{hit.track?.year ? ` · ${hit.track?.year}` : ''}
                           </div>
                           {hit.track?.genre && (
                             <div className="mono" style={{ fontSize:'11px', color:c.textSubtle, marginTop:'6px', letterSpacing:'0.1em' }}>
@@ -4367,7 +4396,7 @@ function AlbumsGridTab({ albums, sort, onSortChange, onAlbumOpen, isDark, lang, 
 }
 
 // ─── LIBRARY GLASSY ROW (shared by Liked + Recently) ──────────────────────────
-function LibraryGlassyRow({ track, when, playCount, isDark, lang, onClick, onArtistClick, onAlbumClick, onToggleLike, isLiked, isCurrent, onAddToPlaylist }) {
+function LibraryGlassyRow({ track, when, playCount, isDark, lang, onClick, navigateToArtist, onAlbumClick, onToggleLike, isLiked, isCurrent, onAddToPlaylist }) {
   const c = useColors(isDark);
   const fmtDur = (s) => {
     if (!s) return '—';
@@ -4400,7 +4429,7 @@ function LibraryGlassyRow({ track, when, playCount, isDark, lang, onClick, onArt
       <div style={{ minWidth:0 }}>
         <div style={{ color:c.text, fontSize:'17px', fontWeight:500, letterSpacing:'-0.01em', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title}</div>
         <div style={{ color:c.textMuted, fontSize:'14px', marginTop:'2px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-          <span onClick={(e) => { e.stopPropagation(); onArtistClick && onArtistClick(track.artist); }} style={{ color:'#bba8ff', cursor:'pointer' }}>{track.artist}</span>
+          <ArtistCredit track={track} navigateToArtist={navigateToArtist} lang={lang} />
           {track.album && (<>
             <span style={{ color:c.textSubtle, margin:'0 7px' }}>·</span>
             <span onClick={(e) => { e.stopPropagation(); onAlbumClick && onAlbumClick(track.album); }} style={{ color:'#a8b8c8', cursor:'pointer' }}>{track.album}</span>
@@ -4461,7 +4490,7 @@ function LikedSongsTab({ tracks, isDark, lang, onPlayTrack, navigateToArtist, on
             isLiked={likedMap[t.track_id] !== false}
             isCurrent={t.track_id === currentTrackId}
             onClick={() => onPlayTrack && onPlayTrack({ track: t }, tracks.map(tt => ({ track: tt })))}
-            onArtistClick={(name) => { const slug = slugifyArtistName(name); if (slug && navigateToArtist) navigateToArtist(slug); }}
+            navigateToArtist={navigateToArtist}
             onAlbumClick={(name) => onAlbumClick && onAlbumClick(name)}
             onToggleLike={onToggleLike}
             onAddToPlaylist={onAddToPlaylist}
@@ -4533,7 +4562,7 @@ function RecentlyPlayedTab({ tracks, sort, onSortChange, isDark, lang, onPlayTra
             isLiked={!!likedMap[t.track_id]}
             isCurrent={t.track_id === currentTrackId}
             onClick={() => onPlayTrack && onPlayTrack({ track: t }, tracks.map(tt => ({ track: tt })))}
-            onArtistClick={(name) => { const slug = slugifyArtistName(name); if (slug && navigateToArtist) navigateToArtist(slug); }}
+            navigateToArtist={navigateToArtist}
             onAlbumClick={(name) => onAlbumClick && onAlbumClick(name)}
             onToggleLike={onToggleLike}
             onAddToPlaylist={onAddToPlaylist}
@@ -4692,7 +4721,7 @@ function AddToPlaylistPopover({ trackId, anchor, onClose, listing, lang }) {
 }
 
 // ─── PLAYLIST TRACK ROW (Task 18) ────────────────────────────────────────────
-function PlaylistTrackRow({ track, isDragging, onDragStart, onDragOver, onDragLeave, onDrop, onPlay, onArtist, onRemove, playlistId, listing, lang }) {
+function PlaylistTrackRow({ track, isDragging, onDragStart, onDragOver, onDragLeave, onDrop, onPlay, navigateToArtist, onRemove, playlistId, listing, lang }) {
   const [liked, setLiked]       = React.useState(false);
 
   React.useEffect(() => {
@@ -4760,7 +4789,7 @@ function PlaylistTrackRow({ track, isDragging, onDragStart, onDragOver, onDragLe
       <div style={{ minWidth: 0 }}>
         <div style={{ fontSize: 15, color: '#eeeef3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', letterSpacing: '-0.005em' }}>{track.title}</div>
         <div style={{ fontSize: 12, color: 'rgba(238,238,243,.55)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          <span onClick={(e) => { e.stopPropagation(); onArtist(); }} style={{ color: '#bba8ff', cursor: 'pointer' }}>{track.artist}</span>
+          <ArtistCredit track={track} navigateToArtist={navigateToArtist} lang={lang} />
           {track.album && (<>{' · '}{track.album}</>)}
         </div>
       </div>
@@ -4948,7 +4977,7 @@ function PlaylistDetailView({ playlistId, lang, isDark, onClose, onPlayTrack, na
               onDragLeave={onDragLeave}
               onDrop={onDrop(t.track_id)}
               onPlay={() => onPlayTrack({ track: t }, queue)}
-              onArtist={() => navigateToArtist && navigateToArtist(t.artist)}
+              navigateToArtist={navigateToArtist}
               onRemove={() => onRemoveTrack(t.track_id)}
               playlistId={playlistId}
               listing={listing}
@@ -11952,18 +11981,12 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                   {currentTrack.title}
                 </div>
                 <div
-                  onClick={() => {
-                    const slug = slugifyArtistName(currentTrack.artist);
-                    if (slug && navigateToArtist) navigateToArtist(slug);
-                  }}
                   style={{
                     fontSize:'clamp(14px, 1.75vh, 20px)', color:pTextMuted, marginTop:'6px', fontWeight:'400',
-                    cursor: navigateToArtist ? 'pointer' : 'default',
                     display: 'inline-block',
                   }}
-                  title={navigateToArtist ? (lang==='ru'?'Открыть страницу артиста':'Open artist page') : undefined}
                 >
-                  {currentTrack.artist}
+                  <ArtistCredit track={currentTrack} navigateToArtist={navigateToArtist} lang={lang} color={pTextMuted} />
                 </div>
                 {currentTrack.album && (
                   <div style={{ fontSize:'clamp(12px, 1.4vh, 16px)', color:pTextSubtle, marginTop:'3px' }}>

@@ -137,3 +137,22 @@ def name_for_slug(raw: str | None, slug: str) -> str | None:
         if _ALIASES.get(_slugify(name), _slugify(name)) == slug:
             return name
     return None
+
+
+def artist_refs(raw: str | None) -> list[dict]:
+    """Aligned ``[{"name", "slug"}]`` participants for a raw artist tag.
+
+    Pairs each canonical slug (``artist_slugs``: deduped, alias-resolved) with
+    its display name via ``name_for_slug``, so name and slug always describe the
+    SAME participant. Zipping ``split_artists`` with ``artist_slugs`` would
+    misalign when aliases collapse (e.g. "Ye, Kanye West" → 2 names but 1 slug).
+
+    Returns a list of plain dicts so it coerces directly into a Pydantic
+    ``list[ArtistRef]`` field on track models — letting the frontend render each
+    collaborator as its own clickable link to the right artist page.
+    """
+    out: list[dict] = []
+    for slug in artist_slugs(raw):
+        name = name_for_slug(raw, slug) or slug.replace("-", " ").title()
+        out.append({"name": name, "slug": slug})
+    return out

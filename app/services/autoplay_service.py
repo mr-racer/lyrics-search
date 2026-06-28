@@ -19,6 +19,7 @@ from app.domain.models import AutoplayQueueDiagnostics, AutoplayQueueResponse, T
 from app.resources.metadata_db import MetadataDB
 from app.resources.qdrant_utils import PAYLOAD_EXCLUDE_LYRICS
 from app.services._payload_coerce import coerce_float
+from app.services.artist_split import artist_refs as _artist_refs
 
 
 def _point_to_track(pt) -> TrackMetadata:
@@ -33,6 +34,7 @@ def _point_to_track(pt) -> TrackMetadata:
         file_path=p.get("file_path") or "",
         duration_sec=p.get("duration_sec") or 0.0,
         genre=p.get("genre"),
+        artist_refs=_artist_refs(p.get("artist", "")),
     )
 
 

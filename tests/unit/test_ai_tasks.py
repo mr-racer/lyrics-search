@@ -185,6 +185,41 @@ class TestRefinedFacts:
         n = MetadataDB.delete_refined_facts("music")
         assert n == 2
 
+    @pytest.mark.asyncio
+    async def test_run_refines_each_participant_of_collaboration_separately(self):
+        """A multi-artist track must store refined facts under EACH participant's
+        canonical slug (calvin-harris, dua-lipa) — not under a combined slug.
+
+        The artist page queries refined facts by the per-participant canonical
+        slug, so a collaboration whose refined facts land under a combined slug
+        is never matched and silently falls back to raw/un-refined facts. This
+        mirrors artist_bio.run, which already splits via artist_slugs.
+        """
+        _seed_facts("calvin-harris", "c", ["A weird studio habit of Calvin's"])
+        _seed_facts("dua-lipa", "c", ["An unusual incident at a Dua Lipa show"])
+        points = [FakePoint("p1", {
+            "artist": "Calvin Harris, Dua Lipa",
+            "artist_slugs": ["calvin-harris", "dua-lipa"],
+            "title": "One Kiss",
+        })]
+        llm_json = json.dumps({"selected_facts": [
+            {"reasoning": "weird", "short_fact": "A refined, interesting fact."}
+        ]})
+        with patch("app.services.ai_tasks.refined_facts.ask_llm",
+                   new_callable=AsyncMock, return_value=llm_json):
+            await refined_facts.run(
+                _make_job(collection="c", lang="en"), FakeDb(points), None,
+            )
+
+        assert MetadataDB.get_refined_facts(
+            scope="artist", scope_key="calvin-harris",
+            collection_name="c", lang="en",
+        ) is not None
+        assert MetadataDB.get_refined_facts(
+            scope="artist", scope_key="dua-lipa",
+            collection_name="c", lang="en",
+        ) is not None
+
 
 class TestSonicVibe:
     """Tests for the Sonic Vibe AI task."""

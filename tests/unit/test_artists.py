@@ -1,7 +1,7 @@
 """Consolidated artist tests: splitter, payload build, payload->track surfacing."""
 
 from app.services.artist_split import (
-    split_artists, artist_slugs, primary_artist, name_for_slug,
+    split_artists, artist_slugs, primary_artist, name_for_slug, artist_refs,
 )
 from app.services.indexing_service import _build_payload_for_upsert
 from app.api.routes.artists import _track_from_payload
@@ -70,6 +70,40 @@ class TestSlugsAndFalseInclusion:
         # The whole point: 'ye' is a distinct slug, never a substring match.
         assert "ye" not in artist_slugs("Kanye West")
         assert "ye" not in artist_slugs("Yeah Yeah Yeahs")
+
+
+class TestArtistRefs:
+    """artist_refs pairs each canonical slug with its display name, aligned —
+    used to render per-participant clickable artist credits on track rows."""
+
+    def test_aligned_name_slug_pairs(self):
+        assert artist_refs("Kanye West, Sia") == [
+            {"name": "Kanye West", "slug": "kanye-west"},
+            {"name": "Sia", "slug": "sia"},
+        ]
+
+    def test_feat_collaborator_named(self):
+        assert artist_refs("Dua Lipa x Angele") == [
+            {"name": "Dua Lipa", "slug": "dua-lipa"},
+            {"name": "Angele", "slug": "angele"},
+        ]
+
+    def test_alias_collapse_stays_aligned(self):
+        # "Ye" and "Kanye West" both resolve to kanye-west; dedup to ONE ref
+        # whose name is the first tagged participant. Zipping split_artists with
+        # artist_slugs would misalign here (2 names vs 1 slug).
+        assert artist_refs("Ye, Kanye West") == [
+            {"name": "Ye", "slug": "kanye-west"},
+        ]
+
+    def test_cyrillic(self):
+        assert artist_refs("Король и Шут") == [
+            {"name": "Король и Шут", "slug": "король-и-шут"},
+        ]
+
+    def test_empty_and_none(self):
+        assert artist_refs("") == []
+        assert artist_refs(None) == []
 
 
 class TestNameForSlug:

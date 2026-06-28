@@ -12,6 +12,14 @@ class Fact(BaseModel):
     source: str | None = None
 
 
+class ArtistRef(BaseModel):
+    """A single participant (display name + canonical slug) — used both for
+    album feat lists and per-track artist credits so each collaborator links to
+    their own artist page."""
+    name: str
+    slug: str
+
+
 class TrackMetadata(BaseModel):
     """Метаданные трека."""
     track_id: str  # хэш file_path или UUID, стабильный между рестартами
@@ -33,6 +41,10 @@ class TrackMetadata(BaseModel):
     # Canonical participants derived from the raw `artist` string at index time.
     artists: list[str] | None = None
     primary_artist_slug: str | None = None
+    # Aligned name+slug pairs per participant — lets the UI render each
+    # collaborator as its own clickable link. Populated by serializers via
+    # artist_split.artist_refs(); empty when unknown.
+    artist_refs: list[ArtistRef] = Field(default_factory=list)
     # Real position in the release, from file tags — drives album track ordering.
     track_number: int | None = None
     disc_number: int | None = None
@@ -372,11 +384,6 @@ class AIEnabledRequest(BaseModel):
 
 # ── Library Overhaul (Phase 6 sub-plan #1) ──
 
-class ArtistRef(BaseModel):
-    name: str
-    slug: str
-
-
 class AlbumTrack(BaseModel):
     """Lightweight track inside an AlbumSummary — covers what AlbumModal renders."""
     track_id: str
@@ -417,6 +424,7 @@ class LikedSongTrack(BaseModel):
     cover_art_path: Optional[str] = None
     genre: Optional[str] = None
     liked_at: str   # ISO datetime
+    artist_refs: list[ArtistRef] = Field(default_factory=list)
 
 
 class LikedSongsResponse(BaseModel):
@@ -435,6 +443,7 @@ class RecentTrack(BaseModel):
     genre: Optional[str] = None
     last_played: str   # ISO datetime
     play_count: int
+    artist_refs: list[ArtistRef] = Field(default_factory=list)
 
 
 class RecentTracksResponse(BaseModel):
@@ -452,6 +461,7 @@ class HomeTrack(BaseModel):
     duration: Optional[float] = None
     cover_art_path: Optional[str] = None
     genre: Optional[str] = None
+    artist_refs: list[ArtistRef] = Field(default_factory=list)
 
 
 class RediscoverResponse(BaseModel):
@@ -704,6 +714,7 @@ class PlaylistTrack(BaseModel):
     year: Optional[int] = None
     duration: Optional[float] = None
     cover_art_path: Optional[str] = None
+    artist_refs: list[ArtistRef] = Field(default_factory=list)
 
 
 class PlaylistSummary(BaseModel):

@@ -30,6 +30,7 @@ from app.api.helpers import derive_collection_for_user
 from app.resources.metadata_db import MetadataDB
 from app.services import autoplay_service, recsys_ai_service, stream_service
 from app.services._payload_coerce import coerce_float, coerce_year
+from app.services.artist_split import artist_refs as _artist_refs
 from app.services.settings_service import settings_service
 
 logger = logging.getLogger(__name__)
@@ -82,6 +83,7 @@ def _candidate_to_stream_track(c: "stream_service.StreamCandidate") -> StreamTra
         anchor_track_id=c.anchor_track_id,
         axis_match=c.axis_match,
         score=round(c.score, 4) if c.score is not None else None,
+        artist_refs=_artist_refs(p.get("artist")),
     )
 
 
@@ -292,6 +294,7 @@ async def ai_playlist_route(
             cover_art_path=t.get("cover_art_path"),
             reason=t.get("reason"),
             source_tool=t.get("tool"),
+            artist_refs=_artist_refs(t.get("artist")),
         )
         for t in result["tracks"]
     ]

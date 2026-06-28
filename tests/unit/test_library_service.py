@@ -212,6 +212,39 @@ class TestAlbums:
         assert "art rock" in a.top_genres
         assert {t.track_id for t in a.tracks} == {"r1", "r2", "r3"}
 
+    def test_get_albums_splits_collaboration_into_primary_and_feat(self):
+        """An album whose tracks are all tagged "A, B" must surface A as the
+        primary artist and B as a feat participant — not the whole "A, B" tag as
+        one un-clickable primary. Each gets its own canonical slug so the artist
+        page resolves."""
+        points = [
+            _mk_point({"album": "Collab LP", "artist": "Calvin Harris, Dua Lipa",
+                       "title": "One Kiss", "year": 2018, "duration": 215}, point_id="c1"),
+            _mk_point({"album": "Collab LP", "artist": "Calvin Harris, Dua Lipa",
+                       "title": "Another", "year": 2018, "duration": 200}, point_id="c2"),
+        ]
+        qdrant = _stub_qdrant(points)
+        res = LibraryService.get_albums(qdrant_client=qdrant, collection_name="test_col")
+        a = res.albums[0]
+        assert a.primary_artist == "Calvin Harris"
+        assert a.primary_artist_slug == "calvin-harris"
+        assert [f.name for f in a.feat_artists] == ["Dua Lipa"]
+        assert [f.slug for f in a.feat_artists] == ["dua-lipa"]
+
+    def test_get_albums_cyrillic_artist_gets_nonempty_slug(self):
+        """Cyrillic artist names must produce a non-empty canonical slug
+        (regression: the old album slugify stripped all non-ASCII → empty slug
+        → the Russian artist page never opened)."""
+        points = [
+            _mk_point({"album": "Шут", "artist": "Король и Шут",
+                       "title": "Лесник", "year": 1997, "duration": 180}, point_id="k1"),
+        ]
+        qdrant = _stub_qdrant(points)
+        res = LibraryService.get_albums(qdrant_client=qdrant, collection_name="test_col")
+        a = res.albums[0]
+        assert a.primary_artist == "Король и Шут"
+        assert a.primary_artist_slug == "король-и-шут"
+
     def test_get_albums_emits_year_range_when_tracks_span_years(self):
         points = [
             _mk_point({"album": "Live 2003", "artist": "Sigur Rós", "title": "x",
@@ -292,6 +325,19 @@ class TestAlbumsSqlite:
         assert a.track_count == 3
         assert a.year == 2007
         assert "art rock" in a.top_genres
+
+    def test_sqlite_albums_split_collaboration_primary_and_feat(self, temp_db):
+        """SQLite fast-path must split a collaboration tag the same way the
+        Qdrant fallback does: "A, B" → primary A (+ canonical slug) + feat B."""
+        _upsert("t1", album="Collab", artist="Calvin Harris, Dua Lipa",
+                artist_slugs=["calvin-harris", "dua-lipa"], title="One Kiss",
+                year=2018, duration=215)
+        res = LibraryService.get_albums(qdrant_client=_empty_qdrant(), collection_name="c")
+        a = res.albums[0]
+        assert a.primary_artist == "Calvin Harris"
+        assert a.primary_artist_slug == "calvin-harris"
+        assert [f.name for f in a.feat_artists] == ["Dua Lipa"]
+        assert [f.slug for f in a.feat_artists] == ["dua-lipa"]
 
     def test_sqlite_albums_emit_year_range_when_spanning_years(self, temp_db):
         _upsert("t1", album="Live", artist="Sigur Ros", artist_slugs=["sigur-ros"],
@@ -406,6 +452,19 @@ class TestLiked:
         })
         res = LibraryService.get_liked_songs(qdrant_client=qdrant, collection_name="test_col")
         assert [t.track_id for t in res.tracks] == ["t1"]
+
+    def test_get_liked_songs_populates_artist_refs_for_collab(self):
+        """Each liked track carries aligned per-participant artist_refs so the UI
+        can render each collaborator as its own clickable artist link."""
+        MetadataDB.set_reaction(track_id="t1", collection_name="test_col", reaction="like")
+        qdrant = _stub_qdrant_retrieve({
+            "t1": {"title": "One Kiss", "artist": "Calvin Harris, Dua Lipa", "duration": 200},
+        })
+        res = LibraryService.get_liked_songs(qdrant_client=qdrant, collection_name="test_col")
+        refs = res.tracks[0].artist_refs
+        assert [(r.name, r.slug) for r in refs] == [
+            ("Calvin Harris", "calvin-harris"), ("Dua Lipa", "dua-lipa"),
+        ]
 
     def test_get_liked_songs_empty_when_no_likes(self):
         qdrant = _stub_qdrant_retrieve({})

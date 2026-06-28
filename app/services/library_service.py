@@ -4,7 +4,6 @@ import asyncio
 import hashlib
 import logging
 import os
-import re
 import threading
 import time
 from collections import Counter
@@ -21,7 +20,10 @@ from ..resources.metadata_db import MetadataDB
 from ..resources.model_registry import ModelRegistry
 from ..resources.db_client import DbClient
 from .artist_facts_service import fetch_facts_for_artists
-from .artist_split import split_artists, normalize_artist_name
+from .artist_split import (
+    split_artists, normalize_artist_name, primary_artist, artist_slugs,
+    artist_refs as _artist_refs,
+)
 from .index_pipeline import IndexPipeline
 from .job_tracker import JobTracker, IndexStage, IndexStatus
 from .similarity_service import analyze_collection
@@ -41,9 +43,76 @@ MAX_PARALLEL_INDEXING_JOBS = int(os.environ.get("MAX_PARALLEL_INDEXING_JOBS", "2
 _INDEX_SEMAPHORE = threading.BoundedSemaphore(MAX_PARALLEL_INDEXING_JOBS)
 
 
-def _slugify_artist_for_album(name: str) -> str:
-    """Same slug logic frontend uses (lowercase, non-alnum → '-', strip)."""
-    return re.sub(r'[^a-z0-9]+', '-', (name or '').lower()).strip('-')
+def _slug_of_artist(name: str) -> str:
+    """Canonical, Cyrillic-safe slug for a single artist name.
+
+    Routes through ``artist_slugs`` (the same path used at index time and by the
+    artist page), so the slug matches what ``track_artist_slugs`` stores and what
+    ``GET /artists/{slug}`` resolves to. The old implementation used
+    ``[^a-z0-9]+`` which stripped every non-ASCII character, turning any Cyrillic
+    name into an empty slug — the Russian artist page then never opened.
+    """
+    slugs = artist_slugs(name)
+    return slugs[0] if slugs else ""
+
+
+def _album_artist_credit(primary_raw: str, feat_raws: list[str]):
+    """Derive an album's display credit from its raw artist tags.
+
+    ``primary_raw`` is the album's majority raw ``artist`` tag — which may itself
+    be a collaboration like "Calvin Harris, Dua Lipa". ``feat_raws`` are the
+    other distinct raw tags on the album. Returns
+    ``(primary_name, primary_slug, feat_refs)`` where the primary is the LEADING
+    participant of the majority tag and ``feat_refs`` is every OTHER participant
+    across all tags (deduped, canonical slugs).
+
+    This splits a single collaboration tag into primary + feat instead of
+    treating the whole "A, B" string as one un-clickable primary that resolves
+    to a non-existent combined slug.
+    """
+    primary_name = primary_artist(primary_raw) or (primary_raw or "").strip() or "—"
+    primary_slug = _slug_of_artist(primary_name)
+    seen = {primary_slug} if primary_slug else set()
+    feats: list[ArtistRef] = []
+    for raw in [primary_raw, *feat_raws]:
+        for name in split_artists(raw):
+            slug = _slug_of_artist(name)
+            if not slug or slug in seen:
+                continue
+            seen.add(slug)
+            feats.append(ArtistRef(name=name, slug=slug))
+    return primary_name, primary_slug, feats
+
+
+def _album_summary_from_sqlite(a: dict) -> AlbumSummary:
+    """Build an AlbumSummary from a get_library_albums_from_sqlite aggregate,
+    splitting collaboration tags into a primary + feat credit (canonical slugs)."""
+    primary_name, primary_slug, feats = _album_artist_credit(
+        a["primary_artist"], a.get("feat_artists") or [],
+    )
+    return AlbumSummary(
+        album_title=a["album"],
+        primary_artist=primary_name,
+        primary_artist_slug=primary_slug,
+        feat_artists=feats,
+        year=a["year"],
+        year_range=a["year_range"],
+        cover_art_path=a["cover_art_path"],
+        track_count=a["track_count"],
+        duration_seconds=int(sum(t["duration"] or 0 for t in a["tracks"])),
+        top_genres=a["top_genres"],
+        tracks=[
+            AlbumTrack(
+                track_id=t["track_id"],
+                title=t["title"],
+                artist=t["artist"],
+                duration=t["duration"],
+                year=t["year"],
+                cover_art_path=t["cover_art_path"],
+            )
+            for t in a["tracks"]
+        ],
+    )
 
 
 def _label_peak_hour(hour: int, lang: str) -> str:
@@ -1268,35 +1337,7 @@ class LibraryService:
                 )
                 return LibraryAlbumsResponse(
                     albums=_apply_sort([
-                        AlbumSummary(
-                            album_title=a["album"],
-                            primary_artist=a["primary_artist"],
-                            primary_artist_slug=_slugify_artist_for_album(a["primary_artist"]),
-                            feat_artists=[
-                                ArtistRef(name=n, slug=_slugify_artist_for_album(n))
-                                for n in a["feat_artists"]
-                            ],
-                            year=a["year"],
-                            year_range=a["year_range"],
-                            cover_art_path=a["cover_art_path"],
-                            track_count=a["track_count"],
-                            duration_seconds=int(sum(
-                                t["duration"] or 0 for t in a["tracks"]
-                            )),
-                            top_genres=a["top_genres"],
-                            tracks=[
-                                AlbumTrack(
-                                    track_id=t["track_id"],
-                                    title=t["title"],
-                                    artist=t["artist"],
-                                    duration=t["duration"],
-                                    year=t["year"],
-                                    cover_art_path=t["cover_art_path"],
-                                )
-                                for t in a["tracks"]
-                            ],
-                        )
-                        for a in sqlite_albums
+                        _album_summary_from_sqlite(a) for a in sqlite_albums
                     ]),
                     collection_name=collection_name,
                     qdrant_available=True,
@@ -1372,12 +1413,17 @@ class LibraryService:
         albums = []
         for key, g in groups.items():
             artists = g["artist_counter"]
-            primary_artist = sorted(
+            primary_raw = sorted(
                 artists.items(), key=lambda kv: (-kv[1], kv[0])
             )[0][0] if artists else "—"
-            feat = sorted(
-                [(a, c) for a, c in artists.items() if a != primary_artist],
-                key=lambda kv: (-kv[1], kv[0])
+            feat_raws = [
+                a for a, _ in sorted(
+                    [(a, c) for a, c in artists.items() if a != primary_raw],
+                    key=lambda kv: (-kv[1], kv[0]),
+                )
+            ]
+            primary_name, primary_slug, feat_refs = _album_artist_credit(
+                primary_raw, feat_raws,
             )
             year_range = None
             year = None
@@ -1390,12 +1436,9 @@ class LibraryService:
                     year_range = f"{ymin}—{ymax}"
             albums.append(AlbumSummary(
                 album_title=g["display_title"],
-                primary_artist=primary_artist,
-                primary_artist_slug=_slugify_artist_for_album(primary_artist),
-                feat_artists=[
-                    ArtistRef(name=a, slug=_slugify_artist_for_album(a))
-                    for a, _ in feat
-                ],
+                primary_artist=primary_name,
+                primary_artist_slug=primary_slug,
+                feat_artists=feat_refs,
                 year=year,
                 year_range=year_range,
                 cover_art_path=g["first_cover"],
@@ -1449,6 +1492,7 @@ class LibraryService:
                 cover_art_path=pl.get("cover_art_path"),
                 genre=pl.get("genre"),
                 liked_at=liked_at_by_id.get(str(p.id), ""),
+                artist_refs=_artist_refs(pl.get("artist")),
             ))
 
         # Preserve like-order: re-sort by liked_at DESC (Qdrant.retrieve may not preserve)
@@ -1519,6 +1563,7 @@ class LibraryService:
             duration=coerce_float(row.get("duration")),
             cover_art_path=row.get("cover_art_path"),
             genre=row.get("genre"),
+            artist_refs=_artist_refs(row.get("artist")),
         )
         return RediscoverResponse(
             track=track, last_played=last_played, never_played=never_played,
@@ -1597,7 +1642,7 @@ class LibraryService:
                 top_artist_name = max(artist_counts.items(), key=lambda kv: kv[1])[0]
                 slug = (
                     artist_best_slug.get(top_artist_name, (0, None))[1]
-                    or _slugify_artist_for_album(top_artist_name)
+                    or _slug_of_artist(top_artist_name)
                 )
                 ad = MetadataDB.get_artist_audiodb(slug, collection_name) or {}
                 top_artist = TopArtistBrief(

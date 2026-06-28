@@ -17,10 +17,12 @@ from app.resources.metadata_db import MetadataDB
 from app.services import ai_indexing_service
 from app.services.llm_client import ask_llm
 from app.services.song_facts_service import get_song_facts_key
-# Use the SAME slugify that artist_facts_service used when saving to DB,
-# otherwise a name like "Guns N' Roses" resolves to a different slug here
-# than in storage and we miss its facts.
-from app.services.artist_facts_service import _slugify as _slugify_artist
+# Split collaborations into per-participant canonical slugs, exactly as the
+# indexing path and the artist_bio task do, so refined facts land under the
+# same slug the artist page queries. (artist_slugs uses artist_facts_service's
+# _slugify internally, so "Guns N' Roses" resolves to the same slug as in
+# storage; it also alias-resolves and dedupes.)
+from app.services.artist_split import artist_slugs
 
 logger = logging.getLogger(__name__)
 
@@ -190,10 +192,16 @@ async def run(job, db_client, llm) -> None:
             artist_name = (p.get("artist") or "").strip()
             title_text = (p.get("title") or "").strip()
             song_slug = get_song_facts_key(artist_name, title_text) if (artist_name and title_text) else ""
-            artist_slug = _slugify_artist(artist_name) if artist_name else ""
+            # Per-participant canonical slugs. Prefer the slugs computed at index
+            # time (payload); fall back to splitting the raw tag ourselves. A
+            # collaboration "Calvin Harris, Dua Lipa" yields two slugs so each
+            # artist's facts are refined under their OWN page slug.
+            participant_slugs = (
+                p.get("artist_slugs")
+                or (artist_slugs(artist_name) if artist_name else [])
+            )
 
             handled = False   # at least one scope was processed or cached
-            both_skipped = False  # both scopes had no raw facts
 
             # Song facts — keyed by song_slug so search_service can merge
             # refined facts into TrackHit.song_facts using the same slug
@@ -220,8 +228,6 @@ async def run(job, db_client, llm) -> None:
                         n_failed += fail
                         n_done += len(song_facts)
                         handled = True
-                    else:
-                        both_skipped = True
                 else:
                     # Cached — count the raw facts that were already processed
                     try:
@@ -231,8 +237,10 @@ async def run(job, db_client, llm) -> None:
                     n_done += len(song_facts)
                     handled = True
 
-            # Artist facts — once per artist.
-            if artist_slug and artist_slug not in seen_artist_slugs:
+            # Artist facts — once per participant (collaborations split above).
+            for artist_slug in participant_slugs:
+                if not artist_slug or artist_slug in seen_artist_slugs:
+                    continue
                 seen_artist_slugs.add(artist_slug)
                 # Skip if refined facts already cached for this artist+lang.
                 existing = MetadataDB.get_refined_facts(
@@ -253,8 +261,6 @@ async def run(job, db_client, llm) -> None:
                         n_failed += fail
                         n_done += len(art_facts)
                         handled = True
-                    else:
-                        both_skipped = True
                 else:
                     # Cached — count the raw facts that were already processed
                     try:
@@ -265,8 +271,8 @@ async def run(job, db_client, llm) -> None:
                     handled = True
 
             # Per-track accounting: n_done now tracks facts, not tracks.
-            if not handled and (song_slug or artist_slug):
-                # Track has at least one slug but neither scope had facts.
+            if not handled and (song_slug or participant_slugs):
+                # Track has at least one slug but no scope had facts.
                 n_skipped += 1
             # No slug at all — uncounted, doesn't affect progress.
 

@@ -14,6 +14,7 @@ from app.domain.models import (
 )
 from app.resources.metadata_db import MetadataDB
 from app.services._payload_coerce import coerce_float, coerce_year
+from app.services.artist_split import artist_refs as _artist_refs
 
 
 # ─── Exceptions ──────────────────────────────────────────────────────────
@@ -138,6 +139,7 @@ def get(playlist_id: int, *, qdrant) -> PlaylistDetail:
             year=coerce_year(pl.get("year")),
             duration=coerce_float(pl.get("duration")),
             cover_art_path=pl.get("cover_art_path"),
+            artist_refs=_artist_refs(pl.get("artist")),
         ))
     return PlaylistDetail(
         id=row["id"],
