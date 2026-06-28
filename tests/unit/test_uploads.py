@@ -493,7 +493,7 @@ class TestIndexUploadsConcurrency:
         # drops to "failed" and never reaches _fit_impl.
         barrier = threading.Barrier(n, timeout=5)
 
-        def fake_process_file(file_path, better):
+        def fake_process_file(file_path, better, *, enrich_client=None):
             barrier.wait()
             stem = Path(file_path).stem
             return {"title": f"Song {stem}", "artist": f"Artist {stem}", "lyrics": "la"}

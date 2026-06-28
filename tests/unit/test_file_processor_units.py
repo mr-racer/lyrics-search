@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.indexing.lyrics_fetchers import get_lyrics
-from app.indexing.folder_scanner import process_file
+from app.indexing.folder_scanner import process_file, read_tags_only, fetch_online_lyrics
 
 
 class TestGetLyrics:
@@ -129,3 +129,57 @@ class TestProcessFile:
         })
         result = process_file(f, better_lyrics_quality=False)
         assert result is None
+
+
+class TestReadTagsOnly:
+    """Tag-read pass for IndexPipeline: reads embedded lyrics but NEVER fetches
+    online (that is deferred to the pipeline's network lane)."""
+
+    def _meta(self, **over):
+        m = {"title": "Song", "artist": "Artist", "album": "Album",
+             "year": 2020, "genre": "Pop", "duration": 200}
+        m.update(over)
+        return m
+
+    def test_never_calls_online_lyrics(self, tmp_path, mocker):
+        f = tmp_path / "t.flac"
+        f.touch()
+        mocker.patch("app.indexing.folder_scanner.get_metadata", return_value=self._meta())
+        mocker.patch("app.indexing.folder_scanner.read_embedded_lyrics", return_value="")
+        gl = mocker.patch("app.indexing.folder_scanner.get_lyrics")
+        info = read_tags_only(f)
+        gl.assert_not_called()
+        assert info["lyrics"] == ""          # empty → pipeline fetches it later
+        assert info["file_path"] == str(f)
+
+    def test_prefers_embedded_lyrics(self, tmp_path, mocker):
+        f = tmp_path / "t.flac"
+        f.touch()
+        mocker.patch("app.indexing.folder_scanner.get_metadata", return_value=self._meta())
+        mocker.patch("app.indexing.folder_scanner.read_embedded_lyrics",
+                     return_value="Embedded text")
+        gl = mocker.patch("app.indexing.folder_scanner.get_lyrics")
+        info = read_tags_only(f)
+        gl.assert_not_called()
+        assert info["lyrics"] == "Embedded text"   # embedded → skips the network
+
+    def test_returns_none_without_title_or_artist(self, tmp_path, mocker):
+        f = tmp_path / "t.flac"
+        f.touch()
+        mocker.patch("app.indexing.folder_scanner.read_embedded_lyrics", return_value="")
+        mocker.patch("app.indexing.folder_scanner.get_metadata",
+                     return_value=self._meta(title=""))
+        assert read_tags_only(f) is None
+        mocker.patch("app.indexing.folder_scanner.get_metadata",
+                     return_value=self._meta(artist=""))
+        assert read_tags_only(f) is None
+
+
+class TestFetchOnlineLyrics:
+    def test_returns_fetched_text(self, mocker):
+        mocker.patch("app.indexing.folder_scanner.get_lyrics", return_value="words")
+        assert fetch_online_lyrics({"title": "T", "artist": "A"}, False) == "words"
+
+    def test_empty_string_when_none(self, mocker):
+        mocker.patch("app.indexing.folder_scanner.get_lyrics", return_value=None)
+        assert fetch_online_lyrics({"title": "T", "artist": "A"}, False) == ""

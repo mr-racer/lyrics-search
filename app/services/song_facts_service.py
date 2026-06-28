@@ -24,6 +24,21 @@ _SONG_FACTS_CACHE_DIR = Path(__file__).resolve().parent.parent.parent / "cache" 
 REQUEST_TIMEOUT = 10
 
 
+def _artist_query(artist: str) -> str:
+    """Reduce a raw artist tag to the PRIMARY performer for song-facts lookup.
+
+    songfacts.com lists each song under one page keyed by the primary performer,
+    so a collab tag like "DNCE, Nicki Minaj" must query ``/facts/dnce/{song}``,
+    not ``/facts/dnce-nicki-minaj/{song}`` (which 404s). Lazy import keeps this
+    module free of an import-order dependency on ``artist_split``.
+    """
+    try:
+        from app.services.artist_split import primary_artist
+        return primary_artist(artist) or artist
+    except Exception:
+        return artist
+
+
 def _slugify(text: str) -> str:
     """'All Falls Down' -> 'all-falls-down'
 
@@ -50,7 +65,7 @@ def _slugify(text: str) -> str:
 
 def _fetch_song_facts_html(artist: str, song: str) -> Optional[str]:
     """GET songfacts.com/facts/{artist}/{song} and return text, or None."""
-    slug_artist = _slugify(artist)
+    slug_artist = _slugify(_artist_query(artist))
     slug_song = _slugify(song)
     url = f"https://www.songfacts.com/facts/{slug_artist}/{slug_song}"
     try:
@@ -85,13 +100,17 @@ def _parse_song_facts(html_string: str) -> List[str]:
 def _legacy_song_facts_path(collection_name: str, artist: str, song: str) -> Path:
     """Return path to legacy cached song-facts file for a collection + song."""
     coll_dir = _SONG_FACTS_CACHE_DIR / collection_name
-    safe_name = f"{_slugify(artist)}-{_slugify(song)}"
+    safe_name = f"{_slugify(_artist_query(artist))}-{_slugify(song)}"
     return coll_dir / f"{safe_name}.txt"
 
 
 def get_song_facts_key(artist: str, song: str) -> str:
-    """Build the cache-key for a song (matches file stem / DB slug)."""
-    return f"{_slugify(artist)}-{_slugify(song)}"
+    """Build the cache-key for a song (matches file stem / DB slug).
+
+    The artist component is reduced to the PRIMARY performer (see ``_artist_query``)
+    so the cache key matches the URL actually fetched for collab tracks.
+    """
+    return f"{_slugify(_artist_query(artist))}-{_slugify(song)}"
 
 
 def get_cached_song_facts(collection_name: str, artist: str, song: str) -> Optional[str]:

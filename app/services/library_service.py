@@ -9,21 +9,20 @@ import threading
 import time
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Optional
 
 from ..domain.models import (
     AlbumSummary,
     AlbumTrack,
     ArtistRef,
     LibraryAlbumsResponse,
-    TrackMetadata,
 )
 from ..resources.metadata_db import MetadataDB
 from ..resources.model_registry import ModelRegistry
 from ..resources.db_client import DbClient
 from .artist_facts_service import fetch_facts_for_artists
 from .artist_split import split_artists, normalize_artist_name
-from .indexing_service import IndexingService, scan_folder
+from .index_pipeline import IndexPipeline
 from .job_tracker import JobTracker, IndexStage, IndexStatus
 from .similarity_service import analyze_collection
 from .song_facts_service import fetch_facts_for_songs
@@ -199,56 +198,83 @@ class LibraryService:
                 engine._vector_dim = None
                 ModelRegistry.get_text_model(text_model)  # warm cache
 
-            indexing = IndexingService(engine)
+            collection_name = f"acct_{account_id}"
+            loop = asyncio.get_running_loop()
 
-            loop = asyncio.get_event_loop()
-            def _sync_cb(stage, current, total, message):
-                # _on_index_progress takes an explicit job (Phase B) — pass it.
+            def _pipeline_progress(stage, current, total, message, **kw):
+                # scan → LYRICS, lyrics → DENSE, audio → AUDIO (see _on_index_progress).
+                # Thread-safe: the pipeline fires this from its GPU/lyrics executors.
                 asyncio.run_coroutine_threadsafe(
                     self._on_index_progress(job, stage, current, total, message), loop,
                 )
 
-            # index_uploads sets+restores engine.collection_name = acct_<id>
-            # internally via fit_with_progress, so we don't mutate it here.
-            # indexed_data collects this batch's "Artist — Title" -> info so the
-            # FACTS/enrichment stage below can run on exactly these tracks.
-            indexed_data: dict = {}
-            await asyncio.get_running_loop().run_in_executor(
-                None,
-                lambda: indexing.index_uploads(
-                    account_id=account_id, upload_rows=rows, progress_callback=_sync_cb,
-                    indexed_sink=indexed_data,
-                ),
+            # Build the Yandex enrichment client once (account token if linked, else
+            # anonymous) for the metadata backfill during tag-read.
+            enrich_client = None
+            try:
+                from app.services.yandex.enrichment import client_for_account
+                enrich_client = client_for_account(account_id)
+            except Exception:
+                logger.debug("[upload] enrichment client unavailable", exc_info=True)
+
+            # Stage 0 — local tag-read (NO online lyrics; embedded/Yandex text is
+            # read here and skips the network). Marks rows 'indexing', extracts
+            # covers, fails unidentifiable rows.
+            tracks, upload_by_key = await self._tagread_upload_rows(
+                account_id, rows, enrich_client, _pipeline_progress,
+            )
+            if not tracks:
+                logger.info("[upload] nothing indexable for account=%s", account_id)
+                job.overall_status = IndexStatus.COMPLETED
+                await self._notify_progress(job, {
+                    "overall_status": IndexStatus.COMPLETED.value,
+                    "message": "Нет треков для индексации",
+                })
+                return
+
+            # FACTS / bio / images run CONCURRENTLY with the encode pipeline — they
+            # need only artist+title (already in `tracks`), so they overlap the
+            # lyrics fetch and CLAP/dense GPU work instead of trailing them.
+            facts_task = asyncio.create_task(
+                self._fetch_facts_batch(job, collection_name, tracks, lang),
+                name="upload-facts",
             )
 
-            # Persist which text model this collection was indexed with so
-            # future searches resolve the matching vector_name
-            # (collection_settings → user → default).
+            # Encode pipeline: lyrics fetch ‖ (CLAP → dense) → upsert.
+            pipeline = IndexPipeline(engine)
+            _, track_ids = await pipeline.run(
+                tracks, collection_name, better_lyrics_quality=False,
+                progress=_pipeline_progress, resolve_track_ids=True,
+            )
+
+            # Wait for FACTS before AI (the AI tasks consume facts/bio as input).
             try:
-                MetadataDB.set_collection_text_model(f"acct_{account_id}", text_model)
+                await facts_task
+            except Exception:
+                logger.exception("[enrich] upload FACTS task failed (tracks already indexed)")
+
+            # Persist which text model this collection was indexed with so future
+            # searches resolve the matching vector_name.
+            try:
+                MetadataDB.set_collection_text_model(collection_name, text_model)
             except Exception as e:
                 logger.warning(
                     "[LibraryService] failed to persist collection_settings: %s", e,
                 )
 
-            # Server-mode enrichment: FACTS (song/artist facts + AudioDB bio +
-            # artist images), then — if the LLM is reachable — the AI tasks,
-            # awaited. This mirrors the folder flow's FACTS stage which uploads
-            # previously skipped entirely (no bios/facts/images in server mode).
-            # Awaited here on purpose: overall_status only flips to COMPLETED once
-            # enrichment finishes, and the frontend gates player entry on it.
+            # Stamp pending_uploads.track_id from the resolved point ids.
+            self._apply_upload_track_ids(upload_by_key, track_ids)
+
+            # AI tasks (after facts + upsert); awaited so COMPLETED gates player entry.
             try:
-                await self._enrich_uploads(job, account_id, indexed_data, lang)
+                await self._run_ai_tasks(collection_name, len(tracks), lang)
             except Exception:
-                logger.exception(
-                    "[enrich] upload enrichment failed for account=%s (tracks already indexed)",
-                    account_id,
-                )
+                logger.exception("[enrich] upload AI tasks failed (tracks already indexed)")
 
             job.overall_status = IndexStatus.COMPLETED
             await self._notify_progress(job, {
                 "overall_status": IndexStatus.COMPLETED.value,
-                "message": f"Загружено {len(rows)} треков",
+                "message": f"Загружено {len(tracks)} треков",
             })
         except Exception as e:
             logger.exception("[LibraryService] upload indexing job %s failed", job.job_id)
@@ -398,26 +424,91 @@ class LibraryService:
             completion["indexing_job_id"] = indexing_job_id
         await self._notify_progress(job, completion)
 
-    async def _enrich_uploads(self, job, account_id: str, indexed_data: dict, lang: str = "ru") -> None:
-        """Post-index enrichment for server-mode uploads (the folder flow's FACTS
-        stage, which uploads previously skipped entirely).
+    async def _tagread_upload_rows(self, account_id: str, rows: list, enrich_client, progress):
+        """Local tag-read (NO online lyrics) for upload rows.
 
-        Runs song facts, artist facts and AudioDB biography + artist images for
-        the just-indexed batch, then — only if the LLM is reachable — the AI
-        tasks (sonic_vibe, refined_facts, artist_bio) resolved against instance
-        settings. The AI tasks are awaited so the upload job reports COMPLETED
-        only after everything finishes (the frontend gates player entry on it).
+        Returns ``("Artist — Title" -> meta, "Artist — Title" -> upload_id)``.
+        Embedded/Yandex lyrics are read here (so they skip the pipeline's network
+        lane); online lyrics for the rest are fetched inside IndexPipeline. Marks
+        every row 'indexing', extracts cover art, and fails rows with no
+        title/artist or a missing file. Tag reads fan out across a thread pool —
+        the per-file work (mutagen + m4a optimize + cover) is I/O-bound.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+        from app.indexing.cover_art import save_cover_art
+        from app.indexing.folder_scanner import read_tags_only
+
+        for r in rows:
+            MetadataDB.update_pending_upload_status(r["upload_id"], status="indexing")
+
+        total = len(rows)
+        if progress:
+            progress("scan", 0, total, "Чтение метаданных и обложек...")
+
+        def _read_one(row):
+            file_path = Path(row["storage_path"])
+            if not file_path.exists():
+                return row, None, f"file missing on disk: {file_path}"
+            try:
+                info = read_tags_only(file_path, enrich_client=enrich_client)
+            except Exception as e:
+                logger.exception("[upload] tag read failed for %s", file_path)
+                return row, None, str(e)
+            if not info or not info.get("title") or not info.get("artist"):
+                return row, None, "missing title/artist in metadata tags"
+            try:
+                info["cover_art_path"] = save_cover_art(str(file_path), row["sha256"][:16])
+            except Exception as e:
+                logger.warning("[upload] cover extraction failed for %s: %s", file_path, e)
+                info["cover_art_path"] = None
+            return row, info, None
+
+        loop = asyncio.get_running_loop()
+        workers = min(8, total) or 1
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="upl-tagread") as ex:
+            results = await asyncio.gather(*[
+                loop.run_in_executor(ex, _read_one, row) for row in rows
+            ])
+
+        data: dict[str, dict] = {}
+        upload_by_key: dict[str, str] = {}
+        for row, info, error in results:
+            if error is not None:
+                MetadataDB.update_pending_upload_status(
+                    row["upload_id"], status="failed", error=error,
+                )
+                continue
+            key = f"{info['artist']} — {info['title']}"
+            data[key] = info
+            upload_by_key[key] = row["upload_id"]
+        return data, upload_by_key
+
+    def _apply_upload_track_ids(self, upload_by_key: dict, track_ids: dict) -> None:
+        """Stamp pending_uploads.track_id from the pipeline's resolved point ids."""
+        for key, upload_id in upload_by_key.items():
+            tid = track_ids.get(key)
+            if tid:
+                MetadataDB.update_pending_upload_status(
+                    upload_id, status="done", track_id=tid,
+                )
+            else:
+                MetadataDB.update_pending_upload_status(
+                    upload_id, status="failed",
+                    error="track did not appear in Qdrant after upsert",
+                )
+
+    async def _fetch_facts_batch(self, job, collection_name: str, indexed_data: dict, lang: str = "ru") -> None:
+        """FACTS stage shared by the upload and folder flows — song/artist facts +
+        AudioDB biography + artist images. Launched CONCURRENTLY with the encode
+        pipeline (it needs only artist+title), so it overlaps the lyrics fetch and
+        the GPU passes. Collab tags are split into individual artists ('DNCE, Nicki
+        Minaj' → two artist lookups); song facts use the primary artist.
         """
         if not indexed_data:
             return
 
         from app.services.audiodb_service import fetch_audiodb_for_artists
-        from app.services import ai_indexing_service
-        from app.services.llm_client import (
-            is_llm_available, resolve_base_url, resolve_model,
-        )
 
-        collection_name = f"acct_{account_id}"
         # Split raw artist tags into individual participants, normalize and dedupe.
         # A track with "Calvin Harris, Dua Lipa" yields two separate artists
         # for facts/AudioDB lookup, each stored under its own slug.
@@ -526,7 +617,17 @@ class LibraryService:
             stage_facts.found, facts_total, collection_name,
         )
 
-        # ── Auto AI-indexing — only when the LLM is actually reachable ────────
+    async def _run_ai_tasks(self, collection_name: str, n_total: int, lang: str = "ru") -> None:
+        """Auto AI-indexing (sonic_vibe / refined_facts / artist_bio) for a
+        just-indexed batch — only when the LLM is reachable. Awaited by the runner
+        AFTER facts + upsert, so COMPLETED gates player entry (the frontend relies
+        on it), and so the AI tasks see the facts/bio they consume.
+        """
+        from app.services import ai_indexing_service
+        from app.services.llm_client import (
+            is_llm_available, resolve_base_url, resolve_model,
+        )
+
         if not await is_llm_available():
             logger.info(
                 "[enrich] LLM unreachable — skipping auto AI-indexing (collection=%s)",
@@ -536,7 +637,6 @@ class LibraryService:
 
         base_url = resolve_base_url()
         model = resolve_model()
-        n_total = len(indexed_data)
         logger.info(
             "[enrich] LLM reachable (base_url=%s model=%s) — auto AI-indexing %s",
             base_url, model, collection_name,
@@ -673,315 +773,49 @@ class LibraryService:
 
             loop = asyncio.get_event_loop()
 
-            # ── Stage LYRICS: scan files, read tags, fetch lyrics ─────────────
-            logger.info("[LibraryService] Stage LYRICS: scanning and fetching lyrics")
+            # ── Stage LYRICS: tag-read (online lyrics fetched by the pipeline) ──
+            logger.info("[LibraryService] Stage LYRICS: reading tags + covers")
             stage_lyrics = job.stages[IndexStage.LYRICS]
             stage_lyrics.status = IndexStatus.RUNNING
             stage_lyrics.started_at = time.time()
-            stage_lyrics.message = "Поиск текстов песен..."
+            stage_lyrics.message = "Чтение тегов..."
 
-            await self._notify_progress(job, {
-                "stage": IndexStage.LYRICS.value,
-                "stage_status": IndexStatus.RUNNING.value,
-                "message": stage_lyrics.message,
-                "current": 0,
-            })
-
-            # Scan for total count
             audio_files = [
                 p for p in Path(folder_path).rglob("*")
                 if p.suffix.lower() in (".flac", ".m4a", ".mp3")
             ]
             stage_lyrics.total = len(audio_files)
-
             await self._notify_progress(job, {
                 "stage": IndexStage.LYRICS.value,
-                "total": len(audio_files),
-                "message": f"Найдено {len(audio_files)} файлов",
-            })
-
-            logger.info("[LibraryService] Starting folder scan (IndexingService.scan_folder)...")
-
-            async def on_lyrics_progress(current: int, total: int, message: str, details: dict = None):
-                stage_lyrics.current = current
-                stage_lyrics.total = total
-                stage_lyrics.message = message
-                if details:
-                    if details.get("found") is not None:
-                        stage_lyrics.found = details["found"]
-                    if details.get("not_found") is not None:
-                        stage_lyrics.not_found = details["not_found"]
-                eta = (details or {}).get("eta_seconds") or job.calculate_eta_seconds(IndexStage.LYRICS)
-                notify_data = {
-                    "stage": IndexStage.LYRICS.value,
-                    "current": current,
-                    "total": total,
-                    "message": message,
-                    "eta_seconds": eta,
-                }
-                await self._notify_progress(job, notify_data)
-
-            # Direct scan — FileProcessor is being retired; scan_folder is the new entry point.
-            processed_files = await asyncio.to_thread(
-                scan_folder,
-                folder_path,
-                better_lyrics_quality,
-                lambda c, t, m, d=None: asyncio.run_coroutine_threadsafe(
-                    on_lyrics_progress(c, t, m, d), loop
-                ),
-            )
-
-            track_count = len(processed_files)
-            logger.info("[LibraryService] Folder scan done, processed %d tracks", track_count)
-            stage_lyrics.status = IndexStatus.COMPLETED
-            stage_lyrics.current = track_count
-            stage_lyrics.completed_at = time.time()
-            stage_lyrics.message = f"Обработано {track_count} треков"
-
-            await self._notify_progress(job, {
-                "stage": IndexStage.LYRICS.value,
-                "stage_status": IndexStatus.COMPLETED.value,
-                "current": stage_lyrics.total,
-                "message": stage_lyrics.message,
-            })
-
-            # ── Stage FACTS: SongFacts (artists + songs) ──────────────────────
-            logger.info("[LibraryService] Stage FACTS: fetching song facts")
-            raw_artists_folder = {
-                info.get("artist", "").strip()
-                for info in processed_files.values()
-                if info.get("artist", "").strip()
-            }
-            unique_artists = sorted({
-                norm_name
-                for raw in raw_artists_folder
-                for name in split_artists(raw)
-                if (norm_name := normalize_artist_name(name))
-            })
-            unique_songs = sorted({
-                (info.get("artist", "").strip(), info.get("title", "").strip())
-                for info in processed_files.values()
-                if info.get("artist", "").strip() and info.get("title", "").strip()
-            })
-            # Each unique artist contributes TWO units of work: songfacts + audiodb.
-            facts_total = len(unique_artists) * 2 + len(unique_songs)
-
-            stage_facts = job.stages[IndexStage.FACTS]
-            stage_facts.status = IndexStatus.RUNNING
-            stage_facts.started_at = time.time()
-            stage_facts.total = facts_total
-            stage_facts.message = "Поиск фактов..."
-
-            await self._notify_progress(job, {
-                "stage": IndexStage.FACTS.value,
                 "stage_status": IndexStatus.RUNNING.value,
-                "message": stage_facts.message,
-                "current": 0,
-                "total": facts_total,
+                "message": f"Найдено {len(audio_files)} файлов",
+                "current": 0, "total": len(audio_files),
             })
 
-            # Check if all facts are cached — skip if so
-            facts_all_cached = True
-            for artist in unique_artists:
-                from .artist_facts_service import get_cached_facts
-                if not get_cached_facts(collection_name, artist):
-                    facts_all_cached = False
-                    break
-            if facts_all_cached:
-                for _, song in unique_songs:
-                    from .song_facts_service import get_cached_song_facts
-                    if not get_cached_song_facts(collection_name, _, song):
-                        facts_all_cached = False
-                        break
+            # Local tag-read (NO online lyrics): embedded text is read here and
+            # skips the network; covers are extracted now (the indexing payload
+            # needs them). The IndexPipeline then fetches online lyrics for the
+            # rest — overlapped with CLAP/dense — and drives the LYRICS stage to
+            # COMPLETED via its "scan" progress (see _on_index_progress).
+            processed_files = await asyncio.to_thread(self._tagread_folder, audio_files)
+            track_count = len(processed_files)
+            logger.info("[LibraryService] Tag-read done, %d identifiable tracks", track_count)
+            stage_lyrics.message = f"Прочитано {track_count} треков"
+            await self._notify_progress(job, {
+                "stage": IndexStage.LYRICS.value,
+                "message": stage_lyrics.message, "current": 0, "total": track_count,
+            })
 
-            # Shared state across facts branches + the unconditional audiodb step.
-            # Declared here so the audiodb block (which runs regardless of the
-            # facts cache short-circuit) can update progress + record errors.
-            facts_progress = {"artists": 0, "songs": 0, "audiodb": 0}
-            facts_found = {"artists": 0, "songs": 0, "audiodb": 0}
-            facts_state = {"error": None}
-            artist_facts_result: Dict[str, str] = {}
-            song_facts_result: Dict[str, str] = {}
-            audiodb_result: Dict[str, Any] = {}
-
-            def on_audiodb_progress(current: int, total: int, label: str, found: bool):
-                facts_progress["audiodb"] = current
-                if found:
-                    facts_found["audiodb"] += 1
-                combined = sum(facts_progress.values())
-                stage_facts.current = combined
-                stage_facts.found = sum(facts_found.values())
-                stage_facts.not_found = max(0, facts_total - stage_facts.found)
-                stage_facts.message = f"AudioDB: {label}"
-                eta = job.calculate_eta_seconds(IndexStage.FACTS)
-                asyncio.create_task(self._notify_progress(job, {
-                    "stage": IndexStage.FACTS.value,
-                    "current": combined,
-                    "total": facts_total,
-                    "message": stage_facts.message,
-                    "found": stage_facts.found,
-                    "not_found": stage_facts.not_found,
-                    "eta_seconds": eta,
-                }))
-
-            if facts_all_cached and facts_total > 0:
-                logger.info("[LibraryService] All facts cached, skipping FACTS fetches")
-                # Stage stays RUNNING; audiodb still runs unconditionally below.
-                stage_facts.message = "Факты из кеша"
-                await self._notify_progress(job, {
-                    "stage": IndexStage.FACTS.value,
-                    "current": 0,
-                    "total": facts_total,
-                    "message": stage_facts.message,
-                })
-            elif facts_total == 0:
-                # No artists/songs at all — nothing for audiodb either.
-                stage_facts.status = IndexStatus.COMPLETED
-                stage_facts.message = "Нет данных"
-
-                await self._notify_progress(job, {
-                    "stage": IndexStage.FACTS.value,
-                    "stage_status": IndexStatus.COMPLETED.value,
-                    "message": stage_facts.message,
-                })
-            else:
-                # Launch facts fetches with progress callbacks
-                def on_artist_facts_progress(current: int, total: int, label: str, found: bool):
-                    facts_progress["artists"] = current
-                    if found:
-                        facts_found["artists"] += 1
-                    combined = sum(facts_progress.values())
-                    stage_facts.current = combined
-                    stage_facts.found = sum(facts_found.values())
-                    stage_facts.not_found = max(0, facts_total - stage_facts.found)
-                    stage_facts.message = f"Факты: {label}"
-                    eta = job.calculate_eta_seconds(IndexStage.FACTS)
-                    asyncio.create_task(self._notify_progress(job, {
-                        "stage": IndexStage.FACTS.value,
-                        "current": combined,
-                        "total": facts_total,
-                        "message": stage_facts.message,
-                        "found": stage_facts.found,
-                        "not_found": stage_facts.not_found,
-                        "eta_seconds": eta,
-                    }))
-
-                def on_song_facts_progress(current: int, total: int, label: str, found: bool):
-                    facts_progress["songs"] = current
-                    if found:
-                        facts_found["songs"] += 1
-                    combined = sum(facts_progress.values())
-                    stage_facts.current = combined
-                    stage_facts.found = sum(facts_found.values())
-                    stage_facts.not_found = max(0, facts_total - stage_facts.found)
-                    stage_facts.message = f"Факты: {label}"
-                    eta = job.calculate_eta_seconds(IndexStage.FACTS)
-                    asyncio.create_task(self._notify_progress(job, {
-                        "stage": IndexStage.FACTS.value,
-                        "current": combined,
-                        "total": facts_total,
-                        "message": stage_facts.message,
-                        "found": stage_facts.found,
-                        "not_found": stage_facts.not_found,
-                        "eta_seconds": eta,
-                    }))
-
-                try:
-                    facts_task = asyncio.create_task(
-                        fetch_facts_for_artists(
-                            unique_artists, collection_name,
-                            progress_callback=on_artist_facts_progress,
-                        ),
-                        name="artist-facts",
-                    )
-                    song_facts_task = asyncio.create_task(
-                        fetch_facts_for_songs(
-                            unique_songs, collection_name,
-                            progress_callback=on_song_facts_progress,
-                        ),
-                        name="song-facts",
-                    )
-                    logger.info("[LibraryService] Launched facts fetch for %d artists, %d songs",
-                                len(unique_artists), len(unique_songs))
-
-                    # Await facts (runs parallel to encoding, cached to disk)
-                    try:
-                        artist_facts_result = await asyncio.wait_for(facts_task, timeout=60)
-                        logger.info("[LibraryService] Artist facts fetched: %d found", len(artist_facts_result))
-                    except (asyncio.TimeoutError, Exception) as e:
-                        logger.warning("[LibraryService] Artist facts fetch timed out or failed: %s", e)
-                        facts_task.cancel()
-                        if not facts_state["error"]:
-                            facts_state["error"] = str(e)
-
-                    try:
-                        song_facts_result = await asyncio.wait_for(song_facts_task, timeout=120)
-                        logger.info("[LibraryService] Song facts fetched: %d found", len(song_facts_result))
-                    except (asyncio.TimeoutError, Exception) as e:
-                        logger.warning("[LibraryService] Song facts fetch timed out or failed: %s", e)
-                        song_facts_task.cancel()
-                        if not facts_state["error"]:
-                            facts_state["error"] = str(e)
-                except Exception as e:
-                    logger.warning("[LibraryService] Facts stage failed (non-critical): %s", e)
-                    facts_state["error"] = str(e)
-
-            # AudioDB enrichment runs independently of the facts cache check —
-            # idempotent per-artist via audiodb_fetched_at, so re-running on a
-            # fully-cached collection just confirms no new work is needed.
-            if unique_artists:
-                from app.services.audiodb_service import fetch_audiodb_for_artists
-                audiodb_task = asyncio.create_task(
-                    fetch_audiodb_for_artists(
-                        unique_artists, collection_name,
-                        progress_callback=on_audiodb_progress,
-                    ),
-                    name="audiodb-enrich",
-                )
-                try:
-                    audiodb_result = await asyncio.wait_for(audiodb_task, timeout=300)
-                    logger.info("[LibraryService] AudioDB enrichment fetched: %d artists",
-                                sum(1 for v in (audiodb_result or {}).values() if v))
-                except (asyncio.TimeoutError, Exception) as e:
-                    logger.warning("[LibraryService] AudioDB enrichment timed out or failed: %s", e)
-                    audiodb_task.cancel()
-                    audiodb_result = {}
-                    if not facts_state["error"]:
-                        facts_state["error"] = str(e)
-
-            # Emit a single COMPLETED notify covering facts + audiodb (unless
-            # facts_total == 0, which already marked the stage complete above).
-            if facts_total > 0:
-                audiodb_found_count = sum(1 for v in (audiodb_result or {}).values() if v)
-                facts_found_total = (
-                    len(artist_facts_result) + len(song_facts_result) + audiodb_found_count
-                )
-                facts_not_found = max(0, facts_total - facts_found_total)
-
-                stage_facts.status = IndexStatus.COMPLETED
-                stage_facts.current = facts_total
-                stage_facts.completed_at = time.time()
-                stage_facts.found = facts_found_total
-                stage_facts.not_found = facts_not_found
-                if facts_state["error"]:
-                    stage_facts.message = f"Частично: {facts_state['error']}"
-                elif facts_all_cached and audiodb_found_count == 0:
-                    stage_facts.message = "Факты из кеша"
-                else:
-                    stage_facts.message = (
-                        f"Факты: {facts_found_total} найдено из {facts_total}"
-                    )
-
-                await self._notify_progress(job, {
-                    "stage": IndexStage.FACTS.value,
-                    "stage_status": IndexStatus.COMPLETED.value,
-                    "current": stage_facts.current,
-                    "total": facts_total,
-                    "message": stage_facts.message,
-                    "found": facts_found_total,
-                    "not_found": facts_not_found,
-                    "stage_error": facts_state["error"],
-                })
+            # ── Stage FACTS: launched CONCURRENTLY with encoding ───────────────
+            # Facts/bio/images need only artist+title (already read), so they run
+            # in parallel with the lyrics fetch + CLAP/dense and are awaited after
+            # the encode pipeline (before ANALYSIS). _fetch_facts_batch owns the
+            # FACTS stage lifecycle (RUNNING → COMPLETED) + progress.
+            logger.info("[LibraryService] Stage FACTS: launching concurrent fetch")
+            facts_task = asyncio.create_task(
+                self._fetch_facts_batch(job, collection_name, processed_files),
+                name="folder-facts",
+            )
 
             # ── Stage METADATA: MusicBrainz enrichment ────────────────────────
             logger.info("[LibraryService] Stage METADATA: MusicBrainz enrichment")
@@ -1068,62 +902,41 @@ class LibraryService:
                 "message": stage_meta.message,
             })
 
-            # ── Convert to TrackMetadata ──────────────────────────────────────
-            logger.info("[LibraryService] Converting to TrackMetadata...")
-            tracks = self._metadata_to_tracks(processed_files)
-            logger.info("[LibraryService] Converted %d tracks to TrackMetadata", len(tracks))
-
-            # ── Stage DENSE + AUDIO: vector encoding ──────────────────────────
-            logger.info("[LibraryService] Stage DENSE/AUDIO: vector encoding")
+            # ── Stage DENSE + AUDIO: encode via the concurrent pipeline ────────
+            # processed_files already carries covers + numeric duration (tag-read),
+            # so it feeds IndexPipeline directly — no TrackMetadata round-trip. The
+            # pipeline fetches online lyrics (its "scan" stage → LYRICS) overlapped
+            # with CLAP (→ AUDIO) then dense (→ DENSE).
+            logger.info("[LibraryService] Stage DENSE/AUDIO: encoding via IndexPipeline")
+            track_count = len(processed_files)
 
             stage_dense = job.stages[IndexStage.DENSE]
             stage_dense.status = IndexStatus.RUNNING
             stage_dense.started_at = time.time()
-            stage_dense.total = len(tracks)
+            stage_dense.total = track_count
             stage_dense.message = "Кодирование текстов (dense)..."
 
             stage_audio = job.stages[IndexStage.AUDIO]
             stage_audio.status = IndexStatus.RUNNING
             stage_audio.started_at = time.time()
-            stage_audio.total = len(tracks)
+            stage_audio.total = track_count
             stage_audio.message = "CLAP-кодирование аудио..."
 
             await self._notify_progress(job, {
                 "stage": IndexStage.DENSE.value,
                 "stage_status": IndexStatus.RUNNING.value,
-                "message": stage_dense.message,
-                "current": 0,
-                "total": len(tracks),
+                "message": stage_dense.message, "current": 0, "total": track_count,
             })
             await self._notify_progress(job, {
                 "stage": IndexStage.AUDIO.value,
                 "stage_status": IndexStatus.RUNNING.value,
-                "message": stage_audio.message,
-                "current": 0,
-                "total": len(tracks),
+                "message": stage_audio.message, "current": 0, "total": track_count,
             })
 
-            if self.db_client and tracks:
-                logger.info("[LibraryService] Starting IndexingService.fit_with_progress...")
-
-                # Phase B: select the text model for THIS indexing batch without
-                # hand-assigning the engine's resolved-model objects. ModelRegistry
-                # is the single source of truth and caches loads across callers.
-                #
-                # We update the lightweight engine.model_name hint (IndexingService
-                # reads engine.vector_name / engine.vector_dim / engine.model to
-                # create the collection and encode batches) and INVALIDATE the
-                # engine's lazy cache so the next access reloads the correct model
-                # via _ensure_model() → ModelRegistry (a cache hit). Setting the
-                # cache to None is invalidation, not the search-path mutation the
-                # class docstring warns about — search() is stateless and no longer
-                # reads these fields.
-                #
-                # Residual limitation (acceptable per spec §6.2): two concurrent
-                # indexing jobs for DIFFERENT models on the shared engine could
-                # still interleave these writes. Spec pins one text model per
-                # collection and the Task-8 semaphore bounds parallelism; Phase C
-                # removes the shared-engine indexing path entirely.
+            if self.db_client and processed_files:
+                # Select the text model for THIS batch (ModelRegistry is the cache;
+                # invalidate the engine's lazy hints so the next access reloads the
+                # right model). Same residual concurrent-models caveat as before.
                 engine = self.db_client.search_engine
                 if text_model and text_model != engine.model_name:
                     logger.info("[LibraryService] Setting batch text model: %s -> %s",
@@ -1134,48 +947,25 @@ class LibraryService:
                     engine._vector_dim = None
                     ModelRegistry.get_text_model(text_model)  # warm cache
 
-                # Convert TrackMetadata list → dict[str, dict] for IndexingService.
-                index_data: dict[str, dict] = {}
-                for track in tracks:
-                    key = f"{track.artist} — {track.title}"
-                    index_data[key] = {
-                        "title":          track.title,
-                        "artist":         track.artist,
-                        "album":          track.album,
-                        "year":           track.year,
-                        "genre":          track.genre,
-                        "duration":       int(track.duration_sec) if track.duration_sec else 0,
-                        "lyrics":         track.lyrics or "",
-                        "file_path":      track.file_path,
-                        "cover_art_path": track.cover_art_path,
-                        "producer":       track.producer,
-                        "label":          track.label,
-                        "samples":        track.samples,
-                        "sampled_by":     track.sampled_by,
-                    }
+                loop = asyncio.get_event_loop()
 
-                # Bridge async progress callback into the sync executor call.
-                _loop = asyncio.get_event_loop()
-                def _sync_index_cb(stage, current, total, message):
+                def _pipeline_cb(stage, current, total, message, **kw):
+                    # scan → LYRICS (online fetch), lyrics → DENSE, audio → AUDIO.
+                    # Thread-safe: fired from the pipeline's GPU/lyrics executors.
                     asyncio.run_coroutine_threadsafe(
-                        self._on_index_progress(job, stage, current, total, message), _loop
+                        self._on_index_progress(job, stage, current, total, message), loop,
                     )
 
-                indexing = IndexingService(engine)
-                await asyncio.get_running_loop().run_in_executor(
-                    None,
-                    lambda: indexing.fit_with_progress(
-                        index_data,
-                        path=None,
-                        collection_name=collection_name,
-                        progress_callback=_sync_index_cb,
-                    ),
+                pipeline = IndexPipeline(engine)
+                await pipeline.run(
+                    processed_files, collection_name,
+                    better_lyrics_quality=better_lyrics_quality,
+                    progress=_pipeline_cb, resolve_track_ids=False,
                 )
-                logger.info("[LibraryService] IndexingService.fit_with_progress done")
+                logger.info("[LibraryService] IndexPipeline.run done")
 
-                # ── Sonic Descriptor hook: per-track tags + class for freshly indexed tracks.
-                # Scrolls the collection once and invokes ``index_track_descriptor`` per point.
-                # Wrapped in try/except so indexing never fails if Sonic Descriptor has a bug.
+                # ── Sonic Descriptor hook: per-track tags + class for new tracks.
+                # Scrolls the collection once; wrapped so a bug never fails the index.
                 try:
                     if self.sonic_descriptor_service is not None and self.db_client is not None:
                         await asyncio.to_thread(
@@ -1189,12 +979,20 @@ class LibraryService:
                     )
             else:
                 logger.warning("[LibraryService] Skipping indexing: db_client=%s, tracks=%d",
-                              self.db_client is not None, len(tracks))
-                # Mark both as completed if skipped
-                for stage in (IndexStage.DENSE, IndexStage.AUDIO):
+                              self.db_client is not None, len(processed_files))
+                # No pipeline ran → close LYRICS (the pipeline's "scan" usually
+                # completes it) plus DENSE/AUDIO so no stage is stuck RUNNING.
+                for stage in (IndexStage.LYRICS, IndexStage.DENSE, IndexStage.AUDIO):
                     sp = job.stages[stage]
                     sp.status = IndexStatus.COMPLETED
                     sp.completed_at = time.time()
+
+            # FACTS were launched concurrently with encoding — await before ANALYSIS
+            # so the job doesn't report COMPLETED while facts are still writing.
+            try:
+                await facts_task
+            except Exception:
+                logger.exception("[LibraryService] folder FACTS task failed (tracks indexed)")
 
             # ── Stage ANALYSIS: Similarity analysis ───────────────────────────
             logger.info("[LibraryService] Stage ANALYSIS: similarity analysis")
@@ -1212,7 +1010,7 @@ class LibraryService:
             stage_analysis.message = "Анализ схожих и разных треков..."
 
             try:
-                if self.db_client and tracks:
+                if self.db_client and processed_files:
                     await analyze_collection(
                         qdrant_client=self.db_client.qdrant,
                         collection_name=collection_name,
@@ -2058,66 +1856,51 @@ class LibraryService:
     #         if progress_callback:
     #             progress_callback(idx, total, f"{artist} — {title}", enriched, not_enriched)
 
-    def _metadata_to_tracks(self, metadata: dict) -> List[TrackMetadata]:
-        """Convert FileProcessor metadata dict to TrackMetadata list.
+    def _tagread_folder(self, audio_files, *, enrich_client=None) -> dict:
+        """Tag-read every file (NO online lyrics) + extract covers → key→meta dict.
 
-        FileProcessor returns items with:
-          - year: int | None  (not a range string)
-          - duration: int     (raw seconds, not "MM:SS")
+        The folder-flow counterpart of the upload flow's ``_tagread_upload_rows``:
+        defers the online lyrics fetch to IndexPipeline, reads embedded text here
+        (so it skips the network), and extracts covers (the indexing payload needs
+        them). Returns ``"Artist — Title" -> meta`` with a numeric ``duration``
+        (default 0) so ``prepare_metadata`` keeps the track.
+        Runs in a worker thread (``asyncio.to_thread`` caller); fans file reads out
+        across an inner pool since each is I/O-bound (mutagen + m4a optimize).
         """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         from app.indexing.cover_art import save_cover_art
+        from app.indexing.folder_scanner import read_tags_only
 
-        tracks = []
-        for key, info in metadata.items():
-            file_path = info.get("file_path", "")
-            track_id = self._compute_track_id(file_path)
-
-            # year is already int|None from app.indexing.metadata_readers
-            year = info.get("year")
-            if isinstance(year, str):
-                # defensive: if somehow a string slipped in, parse first digits
+        def _read(fp):
+            info = read_tags_only(fp, enrich_client=enrich_client)
+            if not info:
+                return None
+            try:
+                info["duration"] = int(info.get("duration") or 0)
+            except (TypeError, ValueError):
+                info["duration"] = 0
+            track_id = self._compute_track_id(info.get("file_path") or "")
+            if info.get("file_path") and track_id:
                 try:
-                    year = int(str(year).split("-")[0])
-                except (ValueError, AttributeError):
-                    year = None
-
-            # duration is already int (seconds) from app.indexing.folder_scanner
-            raw_duration = info.get("duration", 0)
-            if isinstance(raw_duration, (int, float)):
-                duration_sec = float(raw_duration)
-            else:
-                # defensive: parse "MM:SS" string if somehow that's what we got
-                duration_sec = self._parse_duration(str(raw_duration))
-
-            # Extract and save cover art
-            cover_art_path = None
-            if file_path and track_id:
-                try:
-                    cover_art_path = save_cover_art(file_path, track_id)
+                    info["cover_art_path"] = save_cover_art(info["file_path"], track_id)
                 except Exception as e:
-                    logger.warning("[LibraryService] Cover art extraction failed for %s: %s", file_path, e)
+                    logger.warning("[LibraryService] cover extraction failed for %s: %s",
+                                   info["file_path"], e)
+                    info["cover_art_path"] = None
+            return info
 
-            track = TrackMetadata(
-                track_id=track_id,
-                title=info.get("title", ""),
-                artist=info.get("artist", ""),
-                album=info.get("album"),
-                year=year,
-                genre=info.get("genre"),
-                duration_sec=duration_sec,
-                file_path=file_path,
-                lyrics=info.get("lyrics"),
-                cover_art_path=cover_art_path,
-                producer=info.get("producer"),
-                label=info.get("label"),
-                samples=info.get("samples"),
-                sampled_by=info.get("sampled_by"),
-            )
-
-            if track.file_path:
-                tracks.append(track)
-
-        return tracks
+        results: dict[str, dict] = {}
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            futs = {ex.submit(_read, fp): fp for fp in audio_files}
+            for fut in as_completed(futs):
+                try:
+                    info = fut.result()
+                except Exception:
+                    logger.exception("[LibraryService] tag-read failed for %s", futs[fut])
+                    info = None
+                if info:
+                    results.setdefault(f"{info['artist']} — {info['title']}", info)
+        return results
 
     @staticmethod
     def _compute_track_id(file_path: str) -> str:
@@ -2127,21 +1910,6 @@ class LibraryService:
         else:
             logger.warning("[LibraryService] Error while resolving file path")
             return None
-
-    @staticmethod
-    def _parse_duration(duration_str: str) -> float:
-        """Parse 'MM:SS' or 'HH:MM:SS' to seconds."""
-        if not duration_str:
-            return 0.0
-        parts = duration_str.split(":")
-        try:
-            if len(parts) == 2:
-                return int(parts[0]) * 60 + int(parts[1])
-            elif len(parts) == 3:
-                return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
-        except (ValueError, IndexError):
-            pass
-        return 0.0
 
     @classmethod
     def list_distinct_artist_slugs(cls, *, qdrant_client, collection_name: str):

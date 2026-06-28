@@ -41,3 +41,32 @@ class TestSlugify:
         samples = ["The Weeknd", "Adele", "Billie Eilish", "Tame Impala"]
         for s in samples:
             assert artist_slugify(s) == song_slugify(s)
+
+
+class TestSongFactsPrimaryArtist:
+    """Song facts must query/cache under the PRIMARY artist for collab tags —
+    songfacts.com lists a song once, under its primary performer."""
+
+    def test_cache_key_uses_primary_artist(self):
+        from app.services.song_facts_service import get_song_facts_key
+        # "DNCE, Nicki Minaj" → primary is DNCE
+        assert get_song_facts_key("DNCE, Nicki Minaj", "Kissing Strangers") == \
+            "dnce-kissing-strangers"
+
+    def test_single_artist_key_unchanged(self):
+        from app.services.song_facts_service import get_song_facts_key
+        assert get_song_facts_key("Drake", "Hotline Bling") == "drake-hotline-bling"
+
+    def test_url_uses_primary_artist(self, mocker):
+        from app.services import song_facts_service as sf
+
+        captured = {}
+
+        def fake_get(url, timeout=None, proxies=None):
+            captured["url"] = url
+            raise sf.requests.RequestException("stop before network")
+
+        mocker.patch.object(sf.requests, "get", side_effect=fake_get)
+        sf._fetch_song_facts_html("DNCE, Nicki Minaj", "Kissing Strangers")
+        assert "/facts/dnce/" in captured["url"]
+        assert "dnce-nicki-minaj" not in captured["url"]

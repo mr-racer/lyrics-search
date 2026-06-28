@@ -110,7 +110,7 @@ def download_sources(
     tracks = _resolve_merged_tracks(client, sources)
 
     already = MetadataDB.get_imported_yandex_track_ids(account_id)
-    pending = [t for t in tracks if str(t.id) not in already]
+    not_imported = [t for t in tracks if str(t.id) not in already]
 
     throttle = Throttle(_THROTTLE_INTERVAL)
     media_root = uploads_service.media_root_default()
@@ -118,13 +118,32 @@ def download_sources(
 
     upload_ids: list[str] = []
     skipped: list[dict] = []
+
+    MetadataDB.init()
+
+    # Drop tracks with no title or artist BEFORE downloading — the indexing
+    # pipeline keys every track on "Artist — Title" and can do nothing with an
+    # unidentifiable file, so spending bandwidth on it is wasted. Yandex catalog
+    # entries almost always carry both; this is a safety net for podcast/edge
+    # items. Recorded as 'skipped' (distinct from 'already' imported).
+    pending = []
+    for t in not_imported:
+        artist, title = _track_label(t)
+        if not artist.strip() or not title.strip():
+            skipped.append({"artist": artist, "title": title, "reason": "no title/artist"})
+            MetadataDB.upsert_yandex_import(
+                account_id=account_id, yandex_track_id=str(t.id),
+                status="skipped", reason="no title/artist",
+            )
+            continue
+        pending.append(t)
+
     total = len(pending)
     done = 0
 
     def _work(track):
         return track, downloader.download_track(track, tmp_dir, throttle=throttle)
 
-    MetadataDB.init()
     workers = min(_DOWNLOAD_WORKERS, total) or 1
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {executor.submit(_work, t): t for t in pending}
@@ -177,7 +196,7 @@ def download_sources(
     report = {
         "total": len(tracks),
         "downloaded": len(upload_ids),
-        "already": len(tracks) - total,
+        "already": len(tracks) - len(not_imported),
         "skipped": skipped,
     }
     logger.info("[yandex/importer] account=%s sources=%s report=%s",

@@ -6,19 +6,17 @@ All search responsibilities live in ``app.resources.lyrics_search_engine.LyricsS
 
 Architecture:
 
-    folder_path
-        │
-        ▼
-    scan_folder() ─── delegates to app.indexing.folder_scanner.scan_and_enrich_folder
-        │
-        ▼
     dict[str, track_dict] (metadata + lyrics + file_path)
         │
         ▼
     IndexingService.fit(data, ...) ─┬─ prepare_metadata (qdrant_payload)
-                                    ├─ encode text + CLAP
+                                    ├─ encode CLAP + text (clap-first; see _fit_impl)
                                     ├─ _create_collection (drop + recreate target)
                                     └─ _upsert_in_batches (with sonic_tags enrichment)
+
+The concurrent folder/upload path lives in ``app.services.index_pipeline``; this
+module exposes the reusable encode/upsert stages it composes. ``index_uploads``
+remains as a synchronous batch-index entry point (used by maintenance scripts).
 """
 
 from __future__ import annotations
@@ -35,7 +33,6 @@ import torch
 from qdrant_client import models
 from tqdm.auto import tqdm
 
-from app.indexing.folder_scanner import scan_and_enrich_folder
 from app.resources.qdrant_utils import scroll_all
 from app.resources.clap_features import (
     AXIS_NAMES,
@@ -57,26 +54,6 @@ logger = logging.getLogger(__name__)
 # so threads (not processes) are the right tool; the lyrics APIs' rate limits
 # are respected by lyrics_fetchers' per-request time.sleep inside each thread.
 _UPLOAD_SCAN_WORKERS = 8
-
-
-# ─── Folder scan wrapper ─────────────────────────────────────────────────────
-
-def scan_folder(
-    folder_path: str,
-    better_lyrics_quality: bool = False,
-    progress_callback: Optional[Callable] = None,
-) -> dict:
-    """Walk a folder, read audio metadata, fetch lyrics, return a dict of processed tracks.
-
-    Thin wrapper around ``app.indexing.folder_scanner.scan_and_enrich_folder`` so that
-    consumers (LibraryService) can import a single ``indexing_service`` module without
-    crossing into the lower-level ``app.indexing`` package.
-    """
-    return scan_and_enrich_folder(
-        music_folder=folder_path,
-        better_lyrics_quality=better_lyrics_quality,
-        progress_callback=progress_callback,
-    )
 
 
 # ─── Qdrant payload builder ──────────────────────────────────────────────────
@@ -497,16 +474,21 @@ class IndexingService:
                 )
             return {}
 
-    def _fit_impl(
-        self,
-        data: dict,
-        path: str | None = None,
-        progress_callback: Optional[Callable] = None,
-    ) -> None:
+    # ─── Reusable encode/upsert stages (shared by _fit_impl + IndexPipeline) ──
+
+    def prepare(self, data: dict, path: str | None = None) -> tuple[list[dict], list]:
+        """Normalize + filter tracks and collect CLAP audio paths.
+
+        Returns ``(filtered, clap_paths)``. ``filtered`` is the canonical per-track
+        list (fresh dicts from ``prepare_metadata``) that EVERY downstream stage
+        keys off — encode_clap, encode_dense and upsert all read the SAME objects,
+        so the pipeline can write fetched lyrics into these dicts between the CLAP
+        and dense passes without any (artist, title) key drift.
+        """
         prepared = prepare_metadata(data)
         filtered = [s for s in prepared if len(s["lyrics"].split()) < 1500]
 
-        # CLAP paths: explicit override OR from track metadata
+        # CLAP paths: explicit folder override OR from per-track metadata.
         if path:
             paths = [
                 p for p in Path(path).rglob("*")
@@ -518,17 +500,86 @@ class IndexingService:
                 for s in filtered
                 if s.get("file_path") and Path(s["file_path"]).suffix.lower() in (".flac", ".m4a", ".mp3")
             ]
+        return filtered, paths
 
-        self._create_collection(clap_paths=paths)
-        total = len(filtered)
+    def encode_clap(
+        self,
+        clap_tracks: list[dict],
+        *,
+        progress_callback: Optional[Callable] = None,
+    ) -> tuple[dict, dict, dict]:
+        """CLAP audio pass → ``(clap_map, clap_chunks_map, sonic_axes_map)``.
 
-        # Clear old SQLite track_metadata before upserting new data
+        Needs only ``file_path``/``artist``/``title`` per track — NOT lyrics — so the
+        IndexPipeline runs this concurrently with the online-lyrics fetch. Vacates
+        the text model from the GPU first (text + CLAP can't share VRAM); the
+        original device is stashed on ``self._text_device`` and restored by
+        ``encode_dense``. On a CLAP error the text model is restored to the GPU
+        before re-raising, so a failed index never strands live search on the CPU.
+
+        Sonic axes (Stream RecSys) are projected from the pooled CLAP vectors while
+        the CLAP model is still loaded; raw scores go to the payload, z-scoring is
+        done at read time.
+        """
+        text_device = next(self.engine.model.parameters()).device
+        self._text_device = text_device
+
+        has_audio = any(
+            t.get("file_path") and Path(t["file_path"]).suffix.lower() in (".flac", ".m4a", ".mp3")
+            for t in clap_tracks
+        )
+        if not has_audio:
+            return {}, {}, {}
+
+        moved = False
+        if torch.cuda.is_available() and text_device.type == "cuda":
+            self.engine.model.to("cpu")
+            gc.collect()
+            torch.cuda.empty_cache()
+            moved = True
+
+        total = len(clap_tracks)
+
+        def _clap_cb(c, t):
+            if progress_callback:
+                progress_callback("audio", c, t, "Encoding audio (CLAP)...")
+
         try:
-            MetadataDB.clear_track_metadata(str(self.engine.collection_name))
+            if progress_callback:
+                progress_callback("audio", 0, total, "Encoding audio (CLAP)...")
+            clap_map, clap_chunks_map = _encode_clap(
+                clap_tracks,
+                self.engine.model_clap if self.engine.model_clap else None,
+                progress_callback=_clap_cb,
+            )
+            if progress_callback:
+                progress_callback("audio", total, total, "CLAP encoding done")
+            sonic_axes_map = self._compute_sonic_axes(clap_map)
+            return clap_map, clap_chunks_map, sonic_axes_map
         except Exception:
-            logger.warning("[IndexingService] failed to clear old track_metadata — non-fatal")
+            if moved and torch.cuda.is_available():
+                try:
+                    self.engine.model.to(text_device)
+                except Exception:
+                    logger.warning("[IndexingService] failed to restore text model to GPU after CLAP error")
+            raise
 
-        # Pass 1: encode all lyrics at once
+    def encode_dense(
+        self,
+        filtered: list[dict],
+        *,
+        progress_callback: Optional[Callable] = None,
+    ) -> np.ndarray:
+        """Dense lyrics pass → ``text_vecs``. Restores the text model to its GPU
+        device first (``encode_clap`` may have vacated it). Reads ``s["lyrics"]``,
+        so a caller that fetches lyrics after CLAP must have written them into the
+        same ``filtered`` dicts before calling this.
+        """
+        text_device = getattr(self, "_text_device", None)
+        if text_device is not None and text_device.type == "cuda" and torch.cuda.is_available():
+            self.engine.model.to(text_device)
+
+        total = len(filtered)
         if progress_callback:
             progress_callback("lyrics", 0, total, "Encoding lyrics...")
         text_vecs = self.engine.model.encode(
@@ -539,42 +590,53 @@ class IndexingService:
         )
         if progress_callback:
             progress_callback("lyrics", total, total, "Lyrics encoding done")
+        return text_vecs
 
-        # Vacate GPU before loading CLAP — remember original device to restore after.
-        text_device = next(self.engine.model.parameters()).device
-        if torch.cuda.is_available() and text_device.type == "cuda":
-            self.engine.model.to("cpu")
-            gc.collect()
-            torch.cuda.empty_cache()
+    # Public wrappers so IndexPipeline composes the stages without reaching into
+    # the "_"-prefixed internals.
+    def create_collection(self, clap_paths: list) -> None:
+        self._create_collection(clap_paths=clap_paths)
 
+    def upsert(
+        self,
+        data: list[dict],
+        text_vecs: np.ndarray,
+        clap_map: Optional[dict] = None,
+        clap_chunks_map: Optional[dict] = None,
+        sonic_axes_map: Optional[dict] = None,
+    ) -> None:
+        self._upsert_in_batches(
+            data, text_vecs, clap_map, clap_chunks_map, sonic_axes_map=sonic_axes_map,
+        )
+
+    def finalize_norms_and_prune(self, sonic_axes_map: Optional[dict]) -> None:
+        """Persist per-collection axis norm stats + prune orphaned track refs."""
+        self._persist_axis_norm_stats(sonic_axes_map)
+        self._prune_orphaned_track_refs()
+
+    def _fit_impl(
+        self,
+        data: dict,
+        path: str | None = None,
+        progress_callback: Optional[Callable] = None,
+    ) -> None:
+        filtered, paths = self.prepare(data, path)
+        self._create_collection(clap_paths=paths)
+
+        # Clear old SQLite track_metadata before upserting new data
         try:
-            # Pass 2: CLAP audio embeddings (GPU now free)
-            if paths:
-                if progress_callback:
-                    progress_callback("audio", 0, total, "Encoding audio (CLAP)...")
+            MetadataDB.clear_track_metadata(str(self.engine.collection_name))
+        except Exception:
+            logger.warning("[IndexingService] failed to clear old track_metadata — non-fatal")
 
-                def _clap_cb(c, t):
-                    if progress_callback:
-                        progress_callback("audio", c, t, "Encoding audio (CLAP)...")
-
-                clap_map, clap_chunks_map = _encode_clap(
-                    filtered,
-                    self.engine.model_clap if self.engine.model_clap else None,
-                    progress_callback=_clap_cb,
-                )
-                if progress_callback:
-                    progress_callback("audio", total, total, "CLAP encoding done")
-            else:
-                clap_map = {}
-                clap_chunks_map = {}
-
-            # Sonic axes (Stream RecSys): project pooled CLAP vectors onto the
-            # 6-axis prompt space while the CLAP model is still loaded. Raw
-            # scores go into the payload; z-scoring happens at read time.
-            sonic_axes_map = self._compute_sonic_axes(clap_map)
-        finally:
-            if text_device.type == "cuda" and torch.cuda.is_available():
-                self.engine.model.to(text_device)
+        # CLAP first (audio-only), then dense — they can't share the GPU. The
+        # IndexPipeline overlaps these with the network; here (sequential) only the
+        # order matters: encode_clap vacates the text model, encode_dense restores
+        # it before encoding lyrics.
+        clap_map, clap_chunks_map, sonic_axes_map = self.encode_clap(
+            filtered, progress_callback=progress_callback,
+        )
+        text_vecs = self.encode_dense(filtered, progress_callback=progress_callback)
 
         # Upsert (network IO — CPU model is fine)
         self._upsert_in_batches(
@@ -589,7 +651,7 @@ class IndexingService:
         # Fresh uuid4 point ids orphan the old reactions/playback events in
         # SQLite — drop those so «Поток» stops surfacing empty «—» 404 tracks.
         self._prune_orphaned_track_refs()
-        logger.info("[IndexingService] Indexing complete: %d tracks", total)
+        logger.info("[IndexingService] Indexing complete: %d tracks", len(filtered))
 
     def _prune_orphaned_track_refs(self) -> None:
         """Drop SQLite reactions/events pointing at now-deleted point ids.

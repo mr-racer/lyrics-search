@@ -105,6 +105,39 @@ def test_not_linked_raises(monkeypatch):
         importer.download_source("u1", "likes")
 
 
+def test_skips_tracks_without_title_or_artist(monkeypatch):
+    # A track with no title or no artist can't be identified by the pipeline
+    # (it keys on "Artist — Title") — drop it BEFORE downloading (no bandwidth).
+    ns = types.SimpleNamespace
+    tracks = [
+        _track(1, "Good", artist="A"),
+        _track(2, ""),                                  # no title
+        ns(id=3, title="NoArtist", artists=[]),         # no artist
+    ]
+    monkeypatch.setattr(importer.playlists, "resolve_tracks", lambda c, s: tracks)
+
+    downloaded_ids = []
+
+    def _dl(track, dest_dir: Path, *, throttle=None):
+        downloaded_ids.append(track.id)
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        p = dest_dir / f"{track.id}.mp3"
+        p.write_bytes(f"audio-{track.id}".encode())
+        return {"ok": True, "path": p, "codec": "mp3", "bitrate": 320}
+
+    monkeypatch.setattr(importer.downloader, "download_track", _dl)
+
+    upload_ids, report = importer.download_source("u1", "likes")
+
+    assert downloaded_ids == [1]              # 2 and 3 never downloaded
+    assert len(upload_ids) == 1
+    assert report["downloaded"] == 1
+    assert len(report["skipped"]) == 2
+    assert {s["reason"] for s in report["skipped"]} == {"no title/artist"}
+    # Only the valid track counts as imported; skipped ones are not.
+    assert MetadataDB.get_imported_yandex_track_ids("u1") == {"1"}
+
+
 def test_multi_source_merges_and_dedups(monkeypatch):
     # "likes" has tracks 1,2; a playlist has 2,3 — track 2 overlaps and must be
     # downloaded once. Result: 3 unique tracks across the two sources.
