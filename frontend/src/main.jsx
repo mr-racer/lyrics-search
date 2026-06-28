@@ -13797,10 +13797,20 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
         const byId = new Map();
         for (const t of full) { if (t && t.track_id) byId.set(t.track_id, t); }
         // Preserve any slim-shape extras (e.g. liked_at, added_at) by spreading slim first.
+        // Then overlay ONLY the non-empty fresh fields — a null/empty value from the
+        // enrichment endpoint must never clobber a populated slim one (e.g. album, year,
+        // or artist_refs the list-source already carried for a collaboration).
         const mergeOne = (slim) => {
           const fresh = byId.get(slim.track_id);
           if (!fresh) return slim;
-          return { ...slim, ...fresh, duration: fresh.duration_sec ?? slim.duration };
+          const merged = { ...slim };
+          for (const [k, v] of Object.entries(fresh)) {
+            const empty = v === null || v === undefined || v === ''
+              || (Array.isArray(v) && v.length === 0);
+            if (!empty) merged[k] = v;
+          }
+          merged.duration = fresh.duration_sec ?? slim.duration;
+          return merged;
         };
         setPlayerTrack(prev => (prev && byId.has(prev.track_id) ? mergeOne(prev) : prev));
         setPlayerPlaylist(prev => prev.map(h => {

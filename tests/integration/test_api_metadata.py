@@ -244,3 +244,49 @@ class TestFactsWithRefined:
         )
         body = resp.json()
         assert body["song_facts"] == []  # not original
+
+
+# ---------------------------------------------------------------------------
+# /metadata/tracks (batch) + /metadata/tracks/{id} — the player's queue-enrich
+# endpoints. They MUST return per-participant artist_refs so a collaboration
+# links each artist to their own page; a previous version omitted them, so the
+# frontend fell back to slugifying the whole raw tag ("Eminem, Nate Dogg" ->
+# "eminem,-nate-dogg") and the second artist 404'd.
+# ---------------------------------------------------------------------------
+class TestTrackMetadataArtistRefs:
+    def _app_with_track(self, payload: dict):
+        app = _make_app_with_fixed_user()
+        pt = SimpleNamespace(id="t1", payload=payload)
+        fake_qdrant = MagicMock()
+        fake_qdrant.retrieve.return_value = [pt]
+        app.state.db_client = MagicMock(qdrant=fake_qdrant)
+        return app
+
+    def test_batch_returns_split_artist_refs(self):
+        app = self._app_with_track({
+            "title": "Till I Collapse",
+            "artist": "Eminem, Nate Dogg",
+            "album": "The Eminem Show",
+            "year": 2002,
+        })
+        c = TestClient(app)
+        resp = c.get("/api/v1/metadata/tracks", params={"ids": "t1"})
+        assert resp.status_code == 200
+        track = resp.json()[0]
+        assert [r["slug"] for r in track["artist_refs"]] == ["eminem", "nate-dogg"]
+        assert track["primary_artist_slug"] == "eminem"
+        # album/year must survive so the player can show them
+        assert track["album"] == "The Eminem Show"
+        assert track["year"] == 2002
+
+    def test_single_returns_split_artist_refs(self):
+        app = self._app_with_track({
+            "title": "Till I Collapse",
+            "artist": "Eminem, Nate Dogg",
+        })
+        c = TestClient(app)
+        resp = c.get("/api/v1/metadata/tracks/t1")
+        assert resp.status_code == 200
+        track = resp.json()
+        assert [r["slug"] for r in track["artist_refs"]] == ["eminem", "nate-dogg"]
+        assert track["primary_artist_slug"] == "eminem"

@@ -17,9 +17,50 @@ from app.domain.models import TrackMetadata, User
 from app.resources.metadata_db import MetadataDB
 from app.services._payload_coerce import coerce_float, coerce_year
 from app.services.artist_facts_service import _slugify as _slugify_artist
+from app.services.artist_split import (
+    split_artists,
+    artist_slugs as _artist_slugs,
+    artist_refs as _artist_refs,
+)
 from app.services.song_facts_service import get_song_facts_key
 
 router = APIRouter(tags=["Metadata"])
+
+
+def _track_from_qdrant_payload(point_id: str, pl: dict) -> TrackMetadata:
+    """Build a COMPLETE TrackMetadata from a Qdrant payload for the player.
+
+    Crucially includes the per-participant artist fields (``artists``,
+    ``primary_artist_slug``, ``artist_refs``). The player merges this enrichment
+    over the slim list-source shape, so omitting ``artist_refs`` here would wipe
+    the refs a collaboration needs — the frontend would then slugify the whole
+    raw tag ("Eminem, Nate Dogg" -> "eminem,-nate-dogg") and 404 the 2nd artist.
+    Mirrors ``routes/artists._track_from_payload``.
+    """
+    raw = pl.get("artist") or ""
+    names = pl.get("artists") or split_artists(raw)
+    slugs = pl.get("artist_slugs") or _artist_slugs(raw)
+    primary = pl.get("primary_artist_slug") or (slugs[0] if slugs else None)
+    return TrackMetadata(
+        track_id=point_id,
+        title=pl.get("title") or "",
+        artist=raw,
+        artists=names or None,
+        primary_artist_slug=primary,
+        artist_refs=_artist_refs(raw),
+        album=pl.get("album"),
+        year=coerce_year(pl.get("year")),
+        genre=pl.get("genre"),
+        duration_sec=coerce_float(pl.get("duration")) or 0.0,
+        file_path=pl.get("file_path") or "",
+        lyrics=pl.get("lyrics"),
+        cover_art_path=pl.get("cover_art_path"),
+        producer=pl.get("producer"),
+        label=pl.get("label"),
+        samples=pl.get("samples"),
+        sampled_by=pl.get("sampled_by"),
+        bitrate_kbps=pl.get("bitrate_kbps"),
+    )
 
 
 # ── Request/Response models ──────────────────────────────────────────────────
@@ -224,24 +265,7 @@ def get_tracks_metadata_batch(
         raise HTTPException(status_code=502, detail="Qdrant retrieve failed")
     out: List[TrackMetadata] = []
     for p in points:
-        pl = p.payload or {}
-        out.append(TrackMetadata(
-            track_id=str(p.id),
-            title=pl.get("title") or "",
-            artist=pl.get("artist") or "",
-            album=pl.get("album"),
-            year=coerce_year(pl.get("year")),
-            genre=pl.get("genre"),
-            duration_sec=coerce_float(pl.get("duration")) or 0.0,
-            file_path=pl.get("file_path") or "",
-            lyrics=pl.get("lyrics"),
-            cover_art_path=pl.get("cover_art_path"),
-            producer=pl.get("producer"),
-            label=pl.get("label"),
-            samples=pl.get("samples"),
-            sampled_by=pl.get("sampled_by"),
-            bitrate_kbps=pl.get("bitrate_kbps"),
-        ))
+        out.append(_track_from_qdrant_payload(str(p.id), p.payload or {}))
     return out
 
 
@@ -272,25 +296,7 @@ def get_track_metadata(
         raise HTTPException(status_code=502, detail="Qdrant retrieve failed")
     if not points:
         raise HTTPException(status_code=404, detail="track not found")
-    pl = points[0].payload or {}
-    duration_sec = coerce_float(pl.get("duration")) or 0.0
-    return TrackMetadata(
-        track_id=track_id,
-        title=pl.get("title") or "",
-        artist=pl.get("artist") or "",
-        album=pl.get("album"),
-        year=coerce_year(pl.get("year")),
-        genre=pl.get("genre"),
-        duration_sec=duration_sec,
-        file_path=pl.get("file_path") or "",
-        lyrics=pl.get("lyrics"),
-        cover_art_path=pl.get("cover_art_path"),
-        producer=pl.get("producer"),
-        label=pl.get("label"),
-        samples=pl.get("samples"),
-        sampled_by=pl.get("sampled_by"),
-        bitrate_kbps=pl.get("bitrate_kbps"),
-    )
+    return _track_from_qdrant_payload(track_id, points[0].payload or {})
 
 
 # ── Sonic Vibe (Plan 3 Task 14) ──────────────────────────────────────────────
