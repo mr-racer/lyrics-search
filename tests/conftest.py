@@ -1,24 +1,31 @@
 """Shared fixtures for the MusiX test suite."""
 
+import os
 import pytest
 import sys
 import types
 from pathlib import Path
 from _pytest.python import Package
 
-# Stub heavy optional deps before any app.* module loads them.
-sys.modules.setdefault("laion_clap", types.ModuleType("laion_clap"))
+# musicbrainzngs is always stubbed — no test needs the real client.
 sys.modules.setdefault("musicbrainzngs", types.ModuleType("musicbrainzngs"))
 
-_torch_stub = types.ModuleType("torch")
-_torch_stub.cuda = types.SimpleNamespace(is_available=lambda: False)
-_torch_stub.device = lambda x: "cpu"
-_torch_stub.Tensor = object  # dummy for scipy is_torch_array check
-sys.modules.setdefault("torch", _torch_stub)
+# Stub heavy ML deps before any app.* module loads them — UNLESS this run is the
+# live-stack suite (tests/docker/), which needs the REAL torch / CLAP /
+# sentence-transformers and a reachable Qdrant. The docker runner exports
+# MUSIX_LIVE_STACK=1 (see scripts/run_docker_tests.sh).
+if not os.environ.get("MUSIX_LIVE_STACK"):
+    sys.modules.setdefault("laion_clap", types.ModuleType("laion_clap"))
 
-_st_stub = types.ModuleType("sentence_transformers")
-_st_stub.SentenceTransformer = object  # dummy; never instantiated in unit tests
-sys.modules.setdefault("sentence_transformers", _st_stub)
+    _torch_stub = types.ModuleType("torch")
+    _torch_stub.cuda = types.SimpleNamespace(is_available=lambda: False)
+    _torch_stub.device = lambda x: "cpu"
+    _torch_stub.Tensor = object  # dummy for scipy is_torch_array check
+    sys.modules.setdefault("torch", _torch_stub)
+
+    _st_stub = types.ModuleType("sentence_transformers")
+    _st_stub.SentenceTransformer = object  # dummy; never instantiated in unit tests
+    sys.modules.setdefault("sentence_transformers", _st_stub)
 
 
 def pytest_configure(config):
