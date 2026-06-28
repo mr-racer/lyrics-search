@@ -2711,7 +2711,7 @@ function ScoreBreakdownTooltip({ hit, breakdown, isDark, onPlay, onToggleLike, i
   return (
     <div className="panel-v3" style={{
       position:'absolute', top:'100%', left:'50%', transform:'translateX(-50%)',
-      marginTop:'8px', padding:'10px 12px', minWidth:'200px',
+      marginTop:'8px', padding:'10px 12px', minWidth:'200px', maxWidth:'calc(100vw - 28px)',
       zIndex:50, fontSize:'12px', color:c.text,
       boxShadow:'0 8px 24px rgba(0,0,0,0.32)',
     }}>
@@ -3319,7 +3319,7 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
              ═══════════════════════════════════════════════════════ */
           <div className="tab-enter" style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
             {/* Hero search bar */}
-            <div style={{ padding:'20px 32px 16px' }}>
+            <div style={{ padding:'20px clamp(14px,4vw,32px) 16px' }}>
               <div className="hero-bar panel-v3" style={{
                 borderRadius:'16px', padding:'6px', display:'flex', gap:'8px', alignItems:'center',
               }}>
@@ -3426,7 +3426,7 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
             {/* Results area */}
             <div style={{ flex:1, overflowY:'auto', padding:'0 0 24px' }}>
               {searchError && (
-                <div style={{ padding:'10px 32px', borderRadius:'10px', fontSize:'14px', margin:'0 20px',
+                <div style={{ padding:'10px clamp(14px,4vw,32px)', borderRadius:'10px', fontSize:'14px', margin:'0 20px',
                   background: c.redBg, color: c.red, border:`1px solid ${c.red.replace(')',' / 0.3)')}` }}>
                   {searchError}
                 </div>
@@ -3455,7 +3455,7 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
                 </div>
               ) : (
                 <>
-                  <div className="mono" style={{ padding:'8px 32px 12px', fontSize:'13px', color:c.textSubtle, letterSpacing:'0.22em' }}>
+                  <div className="mono" style={{ padding:'8px clamp(14px,4vw,32px) 12px', fontSize:'13px', color:c.textSubtle, letterSpacing:'0.22em' }}>
                     {results.length} {lang==='ru'?'НАЙДЕНО':'FOUND'}
                   </div>
                   {/* Grid of album cards */}
@@ -4021,7 +4021,7 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream, 
                 {aiOn ? (
                   <>
                     <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:'10px', margin:'2px 0 10px' }}>
-                      <div className="serif" style={{ fontSize:'30px', fontWeight:600, color:c.text }}>{heroHeadline}</div>
+                      <div className="serif" style={{ fontSize:'clamp(21px,5vw,30px)', fontWeight:600, color:c.text }}>{heroHeadline}</div>
                       <button onClick={regenPortrait} disabled={portraitBusy} title={lang==='ru'?'Обновить':'Refresh'}
                         style={{ border:'none', background:'transparent', cursor: portraitBusy?'wait':'pointer', color:c.textSubtle, fontSize:'15px', padding:'2px 6px' }}>
                         {portraitBusy ? '…' : '↺'}
@@ -4032,7 +4032,7 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream, 
                       : <div style={{ fontSize:'14px', color:c.textSubtle, fontStyle:'italic' }}>{(portraitBusy || autoEnriching) ? (lang==='ru'?'Собираю твой портрет…':'Writing your portrait…') : ''}</div>}
                   </>
                 ) : (
-                  <div className="serif" style={{ fontSize:'28px', fontWeight:600, color:c.text, margin:'2px 0 14px' }}>{lang==='ru'?'Карта твоего звука':'Your sound map'}</div>
+                  <div className="serif" style={{ fontSize:'clamp(20px,5vw,28px)', fontWeight:600, color:c.text, margin:'2px 0 14px' }}>{lang==='ru'?'Карта твоего звука':'Your sound map'}</div>
                 )}
 
                 <div style={{ display:'flex', justifyContent:'center', marginTop:'6px' }}>
@@ -4062,7 +4062,7 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream, 
           {/* ── 02 · ОСТРОВА ВКУСА ── */}
           {recDivider('islands', lang==='ru'?'острова вкуса':'taste islands')}
           <div className="rec-sec rec-bloom rec-bloom--islands">
-            <div className="serif" style={{ fontSize:'24px', fontWeight:600, color:c.text }}>{lang==='ru'?'Твои музыкальные острова':'Your taste islands'}</div>
+            <div className="serif" style={{ fontSize:'clamp(19px,4.5vw,24px)', fontWeight:600, color:c.text }}>{lang==='ru'?'Твои музыкальные острова':'Your taste islands'}</div>
             <div style={{ fontSize:'13.5px', color:c.textSubtle, marginTop:'6px' }}>{lang==='ru'?'Сгустки твоего вкуса. Нажми — польётся радио на основе острова.':'Clusters of your taste. Tap for a radio seeded by the island.'}</div>
             {islands.length ? (
               <div style={{ display:'flex', gap:'14px', overflowX:'auto', padding:'14px 2px 6px' }}>
@@ -4094,7 +4094,7 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream, 
             <>
               {recDivider('build', lang==='ru'?'собрать по желанию':'build by wish')}
               <div className="rec-sec rec-bloom rec-bloom--build">
-                <div className="serif" style={{ fontSize:'24px', fontWeight:600, color:c.text, marginBottom:'12px' }}>{lang==='ru'?'Опиши, что хочешь — соберу':'Describe what you want — I build it'}</div>
+                <div className="serif" style={{ fontSize:'clamp(19px,4.5vw,24px)', fontWeight:600, color:c.text, marginBottom:'12px' }}>{lang==='ru'?'Опиши, что хочешь — соберу':'Describe what you want — I build it'}</div>
                 <div className="rec-field" style={{ color:c.text }}>
                   <span style={{ fontSize:'17px' }}>✨</span>
                   <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)}
@@ -4126,9 +4126,9 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream, 
             <>
               {recDivider('build', lang==='ru'?'быстрые миксы':'quick mixes')}
               <div className="rec-sec rec-bloom rec-bloom--build">
-                <div className="serif" style={{ fontSize:'24px', fontWeight:600, color:c.text }}>{lang==='ru'?'Быстрые миксы':'Quick mixes'}</div>
+                <div className="serif" style={{ fontSize:'clamp(19px,4.5vw,24px)', fontWeight:600, color:c.text }}>{lang==='ru'?'Быстрые миксы':'Quick mixes'}</div>
                 <div style={{ fontSize:'13.5px', color:c.textSubtle, margin:'6px 0 12px' }}>{lang==='ru'?'Шесть готовых миксов по настроению — подберут похожее по звучанию.':'Six ready mixes by mood — they pull what sounds alike.'}</div>
-                <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(180px,1fr))', gap:'10px' }}>
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(clamp(140px,42vw,180px),1fr))', gap:'10px' }}>
                   {moodPresets.map(p => (
                     <div key={p.id} className={`rec-chip${activePreset===p.id?' rec-chip--on':''}`} style={{ color:c.text }} onClick={() => runPreset(p)}>
                       <span style={{ fontSize:'18px' }}>{p.icon}</span>{p.label}
@@ -4185,9 +4185,9 @@ function AlbumCard({ album, isDark, onClick, navigateToArtist, lang, index = 0 }
           background:'rgba(0,0,0,.7)', color:'#bba8ff', backdropFilter:'blur(6px)',
         }}>{album.track_count} {lang==='ru'?'тр':'tr'}</div>
       </div>
-      <div style={{ padding:'13px 15px 15px' }}>
-        <div style={{ fontSize:'15px', fontWeight:600, color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{album.album_title}</div>
-        <div style={{ fontSize:'14px', marginTop:'3px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+      <div className="lib-album-body">
+        <div className="lib-album-title" style={{ fontWeight:600, color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{album.album_title}</div>
+        <div className="lib-album-sub" style={{ marginTop:'3px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
           <span style={{ color:'#bba8ff', cursor:'pointer' }} onClick={onArtistClick(album.primary_artist_slug)} title={lang==='ru'?'Открыть страницу артиста':'Open artist'}>{album.primary_artist}</span>
           {album.feat_artists?.slice(0, 2).map(f => (
             <React.Fragment key={f.slug}>
@@ -4304,7 +4304,7 @@ function PlaylistsListView({ playlists, onOpen, onCreate, onPlayAll, lang }) {
           {playlists.length} {lang === 'ru' ? 'ПЛЕЙЛИСТОВ' : 'PLAYLISTS'}
         </span>
       </div>
-      <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fill, minmax(218px, 1fr))' }}>
+      <div className="lib-grid" style={{ '--lib-grid-min': '218px', '--lib-grid-gap': '16px' }}>
         <NewPlaylistTile onClick={onCreate} lang={lang} />
         {playlists.map(p => (
           <PlaylistCard key={p.id} playlist={p} onOpen={onOpen} onPlayAll={onPlayAll} lang={lang} />
@@ -4328,12 +4328,12 @@ function AlbumsGridTab({ albums, sort, onSortChange, onAlbumOpen, isDark, lang, 
   }
   return (
     <>
-      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'6px 2px 18px', fontSize:'13px' }}>
+      <div className="lib-sortrow" style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'6px 2px 18px', fontSize:'13px' }}>
         <span className="mono" style={{ color:c.textSubtle, letterSpacing:'0.06em' }}>{albums.length} {lang==='ru'?'альбомов':'albums'}</span>
-        <div style={{ display:'flex', gap:'6px' }}>
+        <div className="lib-sortpills" style={{ display:'flex', gap:'6px' }}>
           {sortOpts.map(o => (
             <button key={o.id} onClick={() => onSortChange(o.id)}
-              className="mono"
+              className="mono lib-sortpill"
               style={{
                 padding:'5px 13px', borderRadius:'14px', fontSize:'12px', cursor:'pointer',
                 background: sort===o.id ? 'rgba(120,80,200,.18)' : 'rgba(255,255,255,.04)',
@@ -4344,11 +4344,7 @@ function AlbumsGridTab({ albums, sort, onSortChange, onAlbumOpen, isDark, lang, 
           ))}
         </div>
       </div>
-      <div style={{
-        display:'grid',
-        gridTemplateColumns: 'repeat(auto-fill, minmax(216px, 1fr))',
-        gap:'22px',
-      }}>
+      <div className="lib-grid">
         {albums.map((a, i) => (
           <AlbumCard
             key={`${a.primary_artist_slug}-${a.album_title}`}
@@ -6322,6 +6318,54 @@ function ListeningWidgetsRow({ data, rhythm, isDark, lang, onPlayTrack, navigate
 }
 function LibraryTabsStrip({ active, onChange, counts, lang, isDark }) {
   const c = useColors(isDark);
+  // Mobile: collapse the wrapping text pills to an equal-width icon-only
+  // segmented control. useIsMobile() is read in-component (not threaded as a
+  // prop) to avoid the prop-drilling ReferenceError class of bug. Counts are
+  // dropped here — each tab's content shows its own count header.
+  const isMobile = useIsMobile();
+  if (isMobile) {
+    const labelFor = (id) => ((lang === 'ru')
+      ? { albums:'Альбомы', liked:'Любимые', recent:'Недавние', playlists:'Плейлисты', stats:'Статистика' }
+      : { albums:'Albums', liked:'Liked', recent:'Recently', playlists:'Playlists', stats:'Statistics' })[id];
+    const ICONS = {
+      albums: <><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></>,
+      liked: <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>,
+      recent: <><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></>,
+      playlists: <><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3.5" cy="6" r="1.3" fill="currentColor" stroke="none"/><circle cx="3.5" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="3.5" cy="18" r="1.3" fill="currentColor" stroke="none"/></>,
+      stats: <><line x1="6" y1="21" x2="6" y2="12"/><line x1="12" y1="21" x2="12" y2="4"/><line x1="18" y1="21" x2="18" y2="15"/></>,
+    };
+    const order = ['albums','liked','recent','playlists','stats'];
+    return (
+      <div style={{ display:'flex', gap:6, padding:'2px 0' }}>
+        {order.map(id => {
+          const isActive = active === id;
+          const label = labelFor(id);
+          return (
+            <button key={id} onClick={() => onChange(id)}
+              title={label} aria-label={label} aria-pressed={isActive}
+              style={{
+                flex:1, minWidth:0, minHeight:44,
+                display:'flex', alignItems:'center', justifyContent:'center',
+                borderRadius:12, cursor:'pointer',
+                background: isActive
+                  ? 'linear-gradient(180deg, oklch(64% 0.18 272) 0%, oklch(53% 0.2 276) 100%)'
+                  : 'rgba(255,255,255,.04)',
+                color: isActive ? '#fff' : c.textMuted,
+                border: `1px solid ${isActive ? 'rgba(124,91,255,.45)' : c.border}`,
+                boxShadow: isActive
+                  ? 'inset 0 1px 0 rgba(255,255,255,.28), 0 6px 18px rgba(124,91,255,.28)'
+                  : 'inset 0 1px 0 rgba(255,255,255,.04)',
+                transition:'all .25s cubic-bezier(.22,.9,.3,1)',
+              }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
+                {ICONS[id]}
+              </svg>
+            </button>
+          );
+        })}
+      </div>
+    );
+  }
   const tabs = lang === 'ru'
     ? [['albums','▦ Альбомы', counts.albums], ['liked','♥ Любимые', counts.liked], ['recent','⟲ Недавние', counts.recent], ['playlists','♫ Плейлисты', counts.playlists], ['stats','◷ Статистика', null]]
     : [['albums','▦ Albums', counts.albums], ['liked','♥ Liked', counts.liked], ['recent','⟲ Recently', counts.recent], ['playlists','♫ Playlists', counts.playlists], ['stats','◷ Statistics', null]];
@@ -7978,6 +8022,7 @@ function OwnerAdminDashboard({ onLogout }) {
 
 function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, onTheme, onLang, collections, userPoints, onLogout, instanceMode, showToast }) {
   const c = useColors(isDark);
+  const isMobile = useIsMobile();  // full-screen panel + tighter gutters on phones
   // 'light' | 'heavy' — derived from the legacy text_model localStorage key so
   // an earlier explicit heavy pick survives the UI change.
   const [modelTier, setModelTier] = useState(() =>
@@ -8150,7 +8195,7 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
     <div className="mono-label" style={{ color:c.textSubtle, marginBottom:7 }}>{text}</div>
   );
   const inputStyle = {
-    width:'100%', padding:'10px 13px', borderRadius:10,
+    width:'100%', minHeight:44, padding:'10px 13px', borderRadius:10,
     border:`1px solid ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.10)'}`,
     background: isDark ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.75)',
     color: c.text, fontSize:14, outline:'none', fontFamily:"'JetBrains Mono', monospace",
@@ -8166,7 +8211,7 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
       }} />
       <div className="grain" style={{
         position:'fixed', top:0, right:0, bottom:0, zIndex:91,
-        width:'min(540px, 92vw)', display:'flex', flexDirection:'column',
+        width: isMobile ? '100vw' : 'min(540px, 92vw)', display:'flex', flexDirection:'column',
         borderRadius:0, overflow:'hidden',
         background: isDark
           ? 'linear-gradient(180deg, rgba(24,24,32,0.92) 0%, rgba(14,14,20,0.95) 100%)'
@@ -8177,12 +8222,12 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
         boxShadow: isDark ? '-18px 0 50px rgba(0,0,0,0.5)' : '-18px 0 50px rgba(40,30,80,0.14)',
         animation:'slideRight 0.32s cubic-bezier(.22,.9,.3,1)',
       }}>
-        <div style={{ padding:'24px 28px 18px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+        <div style={{ padding:'24px clamp(16px,5vw,28px) 18px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
           <div>
             <div className="mono-label" style={{ color:c.textSubtle, marginBottom:6 }}>
               {lang==='ru'?'НАСТРОЙКИ':'SETTINGS'}
             </div>
-            <div className="serif" style={{ fontSize:'30px', lineHeight:'1', letterSpacing:'-0.02em', color:c.text }}>
+            <div className="serif" style={{ fontSize:'clamp(22px,6vw,30px)', lineHeight:'1', letterSpacing:'-0.02em', color:c.text }}>
               {lang==='ru'?'Студия':'Studio'} <i style={{ color:'oklch(62% 0.2 275)' }}>{lang==='ru'?'настроек':'tools'}</i>
             </div>
           </div>
@@ -8194,7 +8239,7 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
           </button>
         </div>
 
-        <div style={{ flex:1, overflowY:'auto', padding:'18px 28px 32px', display:'flex', flexDirection:'column', gap:18 }}>
+        <div style={{ flex:1, overflowY:'auto', padding:'18px clamp(16px,5vw,28px) 32px', display:'flex', flexDirection:'column', gap:18 }}>
 
           {/* ─── Account (Phase D — one account = one library; collection hidden) ─── */}
           <section className="panel-v3" style={{ padding:'18px 20px' }}>
@@ -11890,7 +11935,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
             )}
 
             {/* Progress bar */}
-            <div style={{ padding:'0 20px' }}>
+            <div className="player-progress-row">
               <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
                 <span style={{ color:pTextSubtle, fontFamily:"'JetBrains Mono', monospace", minWidth:'38px', textAlign:'right', fontSize:'11px' }}>
                   {fmt(currentTime)}
@@ -11912,7 +11957,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
             </div>
 
             {/* Action icons — like / dislike / lyrics / ask AI */}
-            <div style={{ display:'flex', justifyContent:'center', gap:4, padding:'0 20px' }}>
+            <div className="player-actions-row" style={{ display:'flex', justifyContent:'center', gap:4 }}>
               <button
                 type="button" className="player-icon-btn"
                 data-active={liked === 'like' ? 'like' : ''}
@@ -12417,9 +12462,10 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef }) {
     : [];
   const { colors: sampledColors } = useCoverPalette(coverUrls);
   const auroraCss = auroraStops(padPalette(sampledColors, hue, 3), isDark);
+  const isMobile = useIsMobile();
 
   return (
-    <div ref={heroRef} style={{ position:'relative', height: mode==='aurora' ? 'clamp(250px, 32vh, 320px)' : 'clamp(420px, 56vh, 600px)', overflow:'hidden' }}>
+    <div ref={heroRef} style={{ position:'relative', height: mode==='aurora' ? (isMobile ? 'clamp(190px, 26vh, 240px)' : 'clamp(250px, 32vh, 320px)') : (isMobile ? 'clamp(280px, 42vh, 360px)' : 'clamp(420px, 56vh, 600px)'), overflow:'hidden' }}>
       {mode === 'photo' ? (
         // Crisp portrait scaled by HEIGHT (not stretched to full width, which on
         // wide screens cropped it to a thin slice). The whole figure stays visible;
@@ -12646,9 +12692,10 @@ function AtlasBio({ bio, isDark, lang }) {
 
 function AtlasFactsShelf({ facts, isDark, lang }) {
   const c = useColors(isDark);
+  const isMobile = useIsMobile();
   const shelfRef = useRef(null);
   const [pos, setPos] = useState({ idx:0, atStart:true, atEnd:false });
-  const CARD_W = 300, GAP = 14;
+  const CARD_W = isMobile ? 168 : 300, GAP = 14;
   const recompute = () => {
     const el = shelfRef.current; if (!el) return;
     const idx = Math.round(el.scrollLeft / (CARD_W + GAP));
@@ -12664,7 +12711,7 @@ function AtlasFactsShelf({ facts, isDark, lang }) {
   };
   const showNav = facts.length > 3;
   const arrowStyle = (off) => ({
-    width:30, height:30, borderRadius:'50%', display:'grid', placeItems:'center',
+    width: isMobile ? 40 : 30, height: isMobile ? 40 : 30, borderRadius:'50%', display:'grid', placeItems:'center',
     cursor: off ? 'default' : 'pointer', fontSize:14, color:c.textMuted,
     opacity: off ? 0.35 : 1, ...atlasGlass(isDark),
   });
@@ -12812,7 +12859,8 @@ function AtlasAlbumStrip({ albums, artistName, isDark, lang, onOpen }) {
   // Re-read scroll edges whenever the rail width or the album set changes.
   useEffect(() => { recompute(); }, [wrapW, albums.length]);
 
-  const CARD = 172, GAP = 28, CAP_H = 64, AXIS_H = 44;
+  const isMobile = useIsMobile();
+  const CARD = isMobile ? 132 : 172, GAP = isMobile ? 16 : 28, CAP_H = 64, AXIS_H = 44;
   // Breathing room around the absolutely-placed cards so the hover lift/rotate
   // (and the vinyl that slides out) isn't clipped at the rail's left edge.
   const PAD_X = 24, PAD_TOP = 16;
@@ -12869,7 +12917,7 @@ function AtlasAlbumStrip({ albums, artistName, isDark, lang, onOpen }) {
     e.preventDefault();
   };
   const arrowStyle = (off) => ({
-    width:30, height:30, borderRadius:'50%', display:'grid', placeItems:'center',
+    width: isMobile ? 40 : 30, height: isMobile ? 40 : 30, borderRadius:'50%', display:'grid', placeItems:'center',
     cursor: off ? 'default' : 'pointer', fontSize:14, color:c.textMuted,
     opacity: off ? 0.35 : 1, ...atlasGlass(isDark),
   });

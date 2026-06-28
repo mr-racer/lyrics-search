@@ -657,6 +657,23 @@
       .lib-album-card:hover, .lib-album-card:hover .lib-album-cover { transform: none; }
     }
 
+    /* ── Library responsive primitives (Phase 1 mobile) ──────────────────
+       Desktop values live here as the class defaults, so desktop is
+       unchanged; the @media (max-width:768px) block narrows them on phones.
+       .lib-grid reads custom properties so the playlists grid can keep its
+       own desktop min/gap via inline --lib-grid-* overrides while sharing
+       the single mobile rule. */
+    .lib-grid {
+      display: grid;
+      gap: var(--lib-grid-gap, 22px);
+      grid-template-columns: repeat(auto-fill, minmax(var(--lib-grid-min, 216px), 1fr));
+    }
+    .lib-album-body  { padding: 13px 15px 15px; }
+    .lib-album-title { font-size: 15px; }
+    .lib-album-sub   { font-size: 14px; }
+    .player-progress-row { padding: 0 20px; }
+    .player-actions-row  { padding: 0 20px; }
+
     /* ── Artist Atlas v2 ──────────────────────────────────────── */
     /* Hidden scrollbars for the facts shelf + albums timeline strip */
     .atlas-shelf { scrollbar-width: none; -ms-overflow-style: none; }
@@ -2313,6 +2330,39 @@
       }
       .panel-v3 { border-radius: 12px; }
       .pill-v3 { padding: 6px 11px; font-size: 11px; }
+
+      /* ── Library: responsive grid + compact cards/controls ──────────── */
+      .lib-grid { --lib-grid-min: 150px; --lib-grid-gap: 12px; }  /* 2 cols on phones, 3 on wide/landscape */
+      .lib-album-body  { padding: 10px 11px 12px; }
+      .lib-album-title { font-size: 14px; }
+      .lib-album-sub   { font-size: 12.5px; }
+      .lib-sortpills {
+        flex-wrap: nowrap; overflow-x: auto; min-width: 0;  /* min-width:0 lets the flex child shrink so it scrolls instead of overflowing */
+        -webkit-overflow-scrolling: touch; scrollbar-width: none;
+      }
+      .lib-sortpill { flex-shrink: 0; }  /* keep pills full-size; the row scrolls */
+      .lib-sortpills::-webkit-scrollbar { display: none; }
+      .lib-sortpill { min-height: 44px; }  /* tap target; text stays compact */
+
+      /* ── Player: touch targets + comfier progress drag ──────────────── */
+      .player-icon-btn { width: 44px; height: 44px; }
+      .player-progress-row, .player-actions-row { padding: 0 14px; }
+      .player-progress::-webkit-slider-thumb { width: 18px; height: 18px; }
+      .player-progress::-moz-range-thumb { width: 18px; height: 18px; }
+
+      /* ── Recommend / For You: tighter gutters + bigger tap targets ───── */
+      .rec-sec { padding: 22px 14px 26px; }
+      .rec-island { min-width: 140px; }
+      .rec-field { padding: 12px 14px; font-size: 15px; }
+      .rec-go { padding: 12px 16px; }
+      .rec-playall { padding: 13px 20px; }
+      .rec-trk { padding: 9px 10px; gap: 11px; }
+      .rec-chip { padding: 12px; font-size: 14px; }
+    }
+
+    /* ── Small phones (≤380px): tighten the grid further ────────────────── */
+    @media (max-width: 380px) {
+      .lib-grid { --lib-grid-min: 132px; --lib-grid-gap: 10px; }
     }
 
     /* ── Touch devices: neutralise mouse-only / battery-heavy 3D ────────────
