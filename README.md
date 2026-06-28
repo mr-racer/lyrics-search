@@ -163,6 +163,23 @@ docker compose up -d     # start again later (no --build needed next time)
 > wheels — then run Step 4 again.
 
 <details>
+<summary>Verifying the live stack (real Qdrant + real models)</summary>
+
+Most tests mock Qdrant and stub the ML libraries, so `pytest` runs anywhere.
+A small live-stack suite under `tests/docker/` instead exercises the real
+thing — dense embeddings, a real Qdrant accepting and ranking them, and CLAP
+actually loading. Run it inside the running container:
+
+```bash
+docker compose up -d
+scripts/run_docker_tests.sh
+```
+
+First run downloads the embedding model (~1 GB) and the CLAP checkpoint
+(~2.3 GB) into the mounted volumes; later runs reuse them.
+</details>
+
+<details>
 <summary>Bare-metal (no Docker) — Windows dev</summary>
 
 ```bash

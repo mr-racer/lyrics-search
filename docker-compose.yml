@@ -52,6 +52,11 @@ services:
       - ./.env:/app/.env:ro                     # proxy_config reads HTTP_PROXY directly from .env
       # Named volume — keeps downloaded HF/CLAP models across rebuilds:
       - hf-cache:/app/.hf-cache
+      # Live-stack tests: the image excludes tests/ (.dockerignore), so bind the
+      # suite + pytest config read-only. scripts/run_docker_tests.sh execs
+      # `pytest tests/docker/` inside this container (real Qdrant + real models).
+      - ./tests:/app/tests:ro
+      - ./pytest.ini:/app/pytest.ini:ro
       # Index music WITHOUT copying it onto the server: bind-mount an external
       # folder (read-only) and index it in place ("by reference"). Pair this with
       # MEMBER_INDEX_ROOT below so members (not just the owner) can index it.
