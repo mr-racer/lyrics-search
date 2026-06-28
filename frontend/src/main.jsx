@@ -9242,7 +9242,13 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
       <div style={{ maxWidth:'900px', margin:'28px auto 64px', padding:'0 32px', position:'relative' }}>
         <div style={{ display:'flex', gap:24, position:'relative' }}>
           <DriftBackdrop />
-          <SetupRail ru={ru} steps={[{ key:'music', label: ru?'Музыка':'Music' }, { key:'done', label: ru?'Готово':'Done' }]} currentKey={showWizard ? 'done' : 'music'} />
+          <SetupRail ru={ru}
+            steps={[
+              { key:'source',   label: ru?'Источник музыки':'Music source' },
+              { key:'indexing', label: ru?'Индексация':'Indexing' },
+              { key:'done',     label: ru?'Готово':'Done' },
+            ]}
+            currentKey={showWizard ? 'indexing' : 'source'} />
           <div style={{ flex:1, position:'relative', zIndex:1, minWidth:0 }}>
         {showWizard && jobId ? (
           <MemberIndexing ru={ru} c={c} isDark={isDark} jobId={jobId} onDone={onDone} />
@@ -9600,7 +9606,11 @@ function OnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
   // Sharing mode — existing folder-index UI unchanged below.
 
   return (
-    <div className="grain" style={{
+    <div className="grain ob-root" style={{
+      '--ob-glass-bg': isDark ? 'rgba(255,255,255,.055)' : 'rgba(255,255,255,.62)',
+      '--ob-glass-sheen': isDark ? 'rgba(255,255,255,.12)' : 'rgba(255,255,255,.9)',
+      '--ob-glass-edge': isDark ? 'rgba(255,255,255,.18)' : 'rgba(0,0,0,.10)',
+      '--ob-blob1':'#7d5cff', '--ob-blob2':'#3aa0ff', '--ob-blob3':'#c061ff',
       width:'100vw', height:'100vh', overflow:'auto', position:'relative',
       background: isDark
         ? 'radial-gradient(ellipse at top, #15151b 0%, #0a0a0e 60%, #07070a 100%)'
@@ -9615,11 +9625,21 @@ function OnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
         <TopRightControls isDark={isDark} lang={lang} onLang={onLang} onTheme={onTheme} onSettings={() => {}} />
       </div>
 
-      <div style={{ maxWidth:'620px', margin:'40px auto 0', padding:'0 32px' }}>
+      <div style={{ maxWidth:'900px', margin:'28px auto 64px', padding:'0 32px', position:'relative' }}>
+        <div style={{ display:'flex', gap:24, position:'relative' }}>
+          <DriftBackdrop />
+          <SetupRail ru={lang==='ru'}
+            steps={[
+              { key:'source',   label: lang==='ru'?'Источник музыки':'Music source' },
+              { key:'indexing', label: lang==='ru'?'Индексация':'Indexing' },
+              { key:'done',     label: lang==='ru'?'Готово':'Done' },
+            ]}
+            currentKey={indexing ? 'indexing' : 'source'} />
+          <div style={{ flex:1, position:'relative', zIndex:1, minWidth:0 }}>
         <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.32em', marginBottom:'14px' }}>
           — {lang==='ru'?'ПЕРВЫЙ ЗАПУСК':'FIRST RUN'}
         </div>
-        <h1 className="serif" style={{ fontSize:'56px', lineHeight:'1.02', letterSpacing:'-0.025em', marginBottom:'18px' }}>
+        <h1 className="serif" style={{ fontSize:'clamp(38px,5vw,56px)', lineHeight:'1.02', letterSpacing:'-0.025em', marginBottom:'18px' }}>
           {lang==='ru' ? <>Добро <i style={{ color:'oklch(62% 0.2 275)' }}>пожаловать</i>.</> : <>Welcome <i style={{ color:'oklch(62% 0.2 275)' }}>aboard</i>.</>}
         </h1>
         <p style={{ fontSize:'15px', color:c.textMuted, lineHeight:'1.6', marginBottom:'34px' }}>
@@ -9674,6 +9694,8 @@ function OnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
           </button>
 
           {error && <div style={{ marginTop:'14px', padding:'10px 14px', borderRadius:'10px', background:c.redBg, color:c.red, fontSize:'14px' }}>{error}</div>}
+        </div>
+          </div>
         </div>
       </div>
 
@@ -14260,13 +14282,17 @@ const WIZ_TIERS = [
 // The first three steps are identical in both, so stepIndex stays correct while
 // mode is still null (welcome/account/mode).
 const stepsSharing = (ru) => [
-  { key:'accountMode', label: ru ? 'Аккаунт и режим' : 'Account & mode' },
-  { key:'music',       label: ru ? 'Музыка' : 'Music' },
+  // "accountMode" creates the owner AND picks the app mode — this is the only
+  // place the mode is chosen (owner, first-time setup); members never see it.
+  { key:'accountMode', label: ru ? 'Режим приложения' : 'App mode' },
+  { key:'music',       label: ru ? 'Источник музыки' : 'Music source' },
   { key:'ai',          label: ru ? 'Гуру (AI)' : 'Guru (AI)' },
-  { key:'indexing',    label: ru ? 'Готово' : 'Done' },
+  { key:'indexing',    label: ru ? 'Индексация' : 'Indexing' },
+  // Terminal step — lights up on the wizard's "All set" screen before entering.
+  { key:'done',        label: ru ? 'Готово' : 'Done' },
 ];
 const stepsServer = (ru) => [
-  { key:'accountMode', label: ru ? 'Аккаунт и режим' : 'Account & mode' },
+  { key:'accountMode', label: ru ? 'Режим приложения' : 'App mode' },
   { key:'policy',      label: ru ? 'Настройки системы' : 'System settings' },
 ];
 
@@ -14421,6 +14447,10 @@ function SetupWizard({ onComplete }) {
   const handleLang = (l) => { setLang(l); localStorage.setItem('musix_lang', l); };
 
   const railSteps = mode === 'server' ? stepsServer(ru) : stepsSharing(ru);
+  // Rail highlight: the indexing step splits visually into "Индексация" (running)
+  // and "Готово" (the wizard's "All set" screen, shown once everything finished).
+  const indexingFinished = indexDone && (!(aiConnected && enrichWithAi) || aiDone);
+  const railCurrentKey = step === 'indexing' && indexingFinished ? 'done' : step;
 
   // Server mode: owner configures instance policy instead of bringing music.
   const advanceFromSetup = () => setStep(mode === 'server' ? 'policy' : 'music');
@@ -15193,7 +15223,7 @@ function SetupWizard({ onComplete }) {
           {step === 'welcome' ? renderWelcome() : (
             <div style={{ position:'relative', display:'flex', gap:24 }}>
               <DriftBackdrop />
-              <SetupRail ru={ru} steps={railSteps} currentKey={step} />
+              <SetupRail ru={ru} steps={railSteps} currentKey={railCurrentKey} />
               <div style={{ flex:1, position:'relative', zIndex:1, minWidth:0 }}>
                 {step === 'accountMode' && renderAccountMode()}
                 {step === 'music'    && renderMusic()}
