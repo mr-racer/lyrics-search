@@ -78,10 +78,11 @@ GROUNDING (most important rule):
 - NEVER reconstruct a creation story, recording history, artist biography, or real-life event from the lyrics. If a question needs a real-world fact you don't have, and search turns up nothing, just say you don't have reliable info on that — that is a complete, acceptable answer. Do NOT fill the gap with plausible-sounding invention.
 - Never invent dates, numbers, names, or sources.
 
-WHEN TO SEARCH:
-- DEFAULT to `web_search` for factual questions beyond plain lyric interpretation: production and recording, samples and interpolations, chart history, controversy, collaborators, or the real meaning of a place / person / event named in the song — whenever the answer isn't already in the facts below.
-- Do NOT search for purely interpretive questions answerable from the lyrics in front of you.
-- If `web_search` returns nothing useful, say so plainly and answer only what you're confident about from the lyrics and the facts.
+WHEN TO SEARCH (do not skip this):
+- If a question asks for ANY real-world fact that isn't already in the facts above — how the song was written or recorded, how popular or successful it was when it came out, chart positions, awards, reviews and reception, samples or interpolations, collaborators, controversy, or the real meaning of a place / person / event named in it — you MUST call `web_search` BEFORE answering. Search first; never answer such a question from your own memory, and never say "I don't have info on that" before you've actually searched.
+- When the facts above only partly answer a factual question, search to fill the gap rather than hedging.
+- Only skip search for purely interpretive questions you can answer from the lyrics in front of you (what a line means, the mood, the themes).
+- After searching: ground your answer in what you found. Only if `web_search` genuinely returns nothing useful do you then say you don't have reliable info on that point.
 
 HOW TO ANSWER:
 - Lead with the actual answer. No warm-up thesis ("This song is a deeply personal, confessional work exploring…"). Just say what it's about.
@@ -89,6 +90,7 @@ HOW TO ANSWER:
 - Say each point once. No recap / "In summary" paragraph that repeats what you just said.
 - Don't default to a numbered list of themes. Use a list only if the song genuinely has several distinct threads worth separating — and keep it lean even then.
 - When the user asks about a specific line, answer about THAT line: quote it, explain it, stop. Don't re-analyze the whole song.
+- When your point leans on the actual words of the song, quote those exact lines as a Markdown blockquote — each line on its own row prefixed with `> ` — and then comment on them. Quote only the one or two lines you're actually discussing, never the whole song. Skip quoting when the question is factual and the lyrics aren't your basis.
 - Be concrete. Tie claims to specific words in the lyrics, not generic talk about identity, struggle, and inner demons.
 - Sound like a person talking, not a report being generated.
 
@@ -267,8 +269,15 @@ def create_track_chat_agent(
     """Build a pydantic-ai Agent with the web_search tool registered.
 
     Each request gets a fresh agent (cheap to construct), so the per-request
-    system_prompt is baked in at construction time. The agent returns plain
-    string output (free-form text reply).
+    prompt is baked in at construction time. The agent returns plain string
+    output (free-form text reply).
+
+    The prompt is passed as ``instructions=`` (NOT ``system_prompt=``). pydantic-ai
+    stores a ``system_prompt`` inside the message history and only emits it on the
+    FIRST turn (the one with no ``message_history``). Every follow-up DOES pass
+    ``message_history``, so a system_prompt would be silently dropped — the agent
+    would lose the track context, lyrics, facts, and search rules and start making
+    things up. ``instructions`` are re-sent on every run regardless of history.
 
     Returns:
         (agent, state) — state dict contains 'web_search_calls' counter.
@@ -277,7 +286,7 @@ def create_track_chat_agent(
     from app.services.llm_web_search import smart_web_search
 
     model = _create_pydantic_model(llm_base_url, llm_model)
-    agent = Agent(model, output_type=str, system_prompt=system_prompt)
+    agent = Agent(model, output_type=str, instructions=system_prompt)
 
     # Track tool invocations so we can report web_search_used
     state: dict = {"web_search_calls": 0}
@@ -287,13 +296,16 @@ def create_track_chat_agent(
     async def web_search(query: str) -> str:
         """Search the web for facts about the track that aren't in the provided context.
 
-        Call this BY DEFAULT for any factual question that isn't pure lyric
-        interpretation — production trivia, samples, chart positions, controversy,
-        history, collaborators, or the real-world meaning of a place / person /
-        event named in the song. When in doubt about a fact, search instead of
-        guessing. Examples:
+        Call this for ANY factual question that isn't pure lyric interpretation —
+        the song's creation/recording story, how popular or successful it was at
+        release, chart positions, awards, reviews and reception, samples and
+        interpolations, controversy, collaborators, or the real-world meaning of a
+        place / person / event named in the song. Always search before answering
+        such a question — do not rely on memory and do not decline before
+        searching. Examples:
+        - "How the song was made / story behind it?"
+        - "How popular was this song when it came out?"
         - "What songs does this sample?"
-        - "What was the controversy around this song?"
         - "Chart position when released?"
 
         Args:
@@ -314,6 +326,22 @@ def create_track_chat_agent(
             return "(web search unavailable)"
 
     return agent, state
+
+
+def _identity_note(ctx) -> str:
+    """A one-line "which track are we on" header, prepended to every user turn.
+
+    The full track context already lives in the run instructions, but restating
+    the identity inside the user message itself makes terse follow-ups ("история
+    создания?", "а год?") impossible to misread — the model can never drift onto
+    the wrong song just because the question stopped naming it.
+    """
+    parts = [f'"{ctx.title}"', f"by {ctx.artist}"]
+    if ctx.album:
+        parts.append(f'from the album "{ctx.album}"')
+    if ctx.year:
+        parts.append(f"({ctx.year})")
+    return "Track we're discussing: " + " ".join(parts)
 
 
 async def answer_track_chat(req):
@@ -362,7 +390,14 @@ async def answer_track_chat(req):
     # Build agent (per-request — simpler than thread-safety analysis)
     agent, state = create_track_chat_agent(req.llm_base_url, req.llm_model, system_prompt)
 
-    result = await _run_agent(agent, req.message, system_prompt, history)
+    # Restate the track identity inside the outgoing message so multi-turn
+    # follow-ups stay pinned to THIS song (lyric_explain is single-shot and
+    # already names the line, so it needs no header).
+    agent_message = req.message
+    if req.mode == "song":
+        agent_message = f"{_identity_note(ctx)}\n\n{req.message}"
+
+    result = await _run_agent(agent, agent_message, system_prompt, history)
     message = getattr(result, "output", "") or ""
     web_search_used = state["web_search_calls"] > 0
     return TrackChatResponse(message=message, web_search_used=web_search_used)

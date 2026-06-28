@@ -10421,10 +10421,37 @@ function SpectrumBars({ side, analyserRef, dataArrayRef, color, isPlaying, barCo
 }
 
 // ─── AIChatDrawer ────────────────────────────────────────────────────────────
+// Each chip stays SMALL — only `label` is shown on the pill. Clicking it drops the
+// full 1-2 sentence `prompt` into the input, where the user can read/edit before sending.
 const TRACK_CHAT_SUGGESTED_PROMPTS = [
-  { ru: 'О чём песня?', en: 'What is this song about?' },
-  { ru: 'История создания?', en: 'Story behind the song?' },
-  { ru: 'Какие песни семплирует?', en: 'What songs does it sample?' },
+  {
+    label: { ru: 'О чём песня?', en: "What's it about?" },
+    prompt: {
+      ru: 'О чём эта песня на самом деле? Расскажи простыми словами, как будто объясняешь другу.',
+      en: 'What is this song really about? Explain it in plain words, like you would to a friend.',
+    },
+  },
+  {
+    label: { ru: 'История', en: 'Backstory' },
+    prompt: {
+      ru: 'Расскажи историю создания этой песни и насколько популярной она была, когда вышла.',
+      en: 'Tell me the story behind this song and how big it was when it first came out.',
+    },
+  },
+  {
+    label: { ru: 'Сильные строчки', en: 'Key lines' },
+    prompt: {
+      ru: 'Разбери пару самых сильных строчек: есть ли в них отсылки или скрытый смысл?',
+      en: 'Break down a couple of the strongest lines — any references or hidden meaning in them?',
+    },
+  },
+  {
+    label: { ru: 'Семплы', en: 'Samples' },
+    prompt: {
+      ru: 'Какие песни семплировались в этом треке? Расскажи, откуда взяты семплы.',
+      en: 'What songs are sampled in this track? Tell me where the samples come from.',
+    },
+  },
 ];
 
 function AIChatDrawer({ isOpen, onClose, track, lang, isDark, showToast }) {
@@ -10474,8 +10501,8 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, showToast }) {
     }
   };
 
-  const handlePromptClick = (prompt) => {
-    setInput(lang === 'ru' ? prompt.ru : prompt.en);
+  const handlePromptClick = (p) => {
+    setInput(lang === 'ru' ? p.prompt.ru : p.prompt.en);
   };
 
   const handleClearChat = () => {
@@ -10584,8 +10611,9 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, showToast }) {
           {TRACK_CHAT_SUGGESTED_PROMPTS.map((p, i) => (
             <button key={i} onClick={() => handlePromptClick(p)}
               className="pill-v3"
+              title={lang === 'ru' ? p.prompt.ru : p.prompt.en}
               style={{ padding: '4px 10px', fontSize: '12px', cursor: 'pointer' }}>
-              {lang === 'ru' ? p.ru : p.en}
+              {lang === 'ru' ? p.label.ru : p.label.en}
             </button>
           ))}
         </div>
