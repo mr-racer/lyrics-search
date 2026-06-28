@@ -6783,19 +6783,19 @@ function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist,
 }
 
 
-// ─── Indexing progress (compact, 2 sections) ─────────────────────────────────
+// ─── Indexing progress (compact, flat chronological list) ────────────────────
 function IndexingProgress({ stepStatus, stageProgress, lang, c, isDark }) {
-  const internetStages = [
-    { key:'lyrics',   icon:'♪', labelRu:'Тексты',         labelEn:'Lyrics' },
-    { key:'facts',    icon:'★', labelRu:'Факты',         labelEn:'Facts' },
-    { key:'metadata', icon:'⌕', labelRu:'Теги и обложки',    labelEn:'Tags & covers' },
-  ];
-  const localStages = [
-    { key:'dense',    icon:'◆', labelRu:'Тексты песен', labelEn:'Lyrics' },
-    { key:'audio',    icon:'♫', labelRu:'Звучание',     labelEn:'Sound' },
-  ];
-  const finalStages = [
-    { key:'analysis', icon:'∿', labelRu:'Похожие треки', labelEn:'Similar tracks' },
+  // Flat, chronological order matching the real pipeline: lyrics fetch + CLAP
+  // (Звучание) start together at t=0, dense (Текстовый поиск) runs after lyrics,
+  // facts overlap, analysis last. `metadata` (MusicBrainz) is skipped server-side
+  // so it is not shown — covers are still read during the lyrics/tag pass. Same
+  // key order as WIZ_STAGE_LABELS so every indexing flow agrees.
+  const stages = [
+    { key:'lyrics',   icon:'♪', labelRu:'Тексты',          labelEn:'Lyrics' },
+    { key:'audio',    icon:'♫', labelRu:'Звучание',        labelEn:'Sound' },
+    { key:'dense',    icon:'◆', labelRu:'Текстовый поиск',  labelEn:'Text search' },
+    { key:'facts',    icon:'★', labelRu:'Факты',           labelEn:'Facts' },
+    { key:'analysis', icon:'∿', labelRu:'Похожие треки',   labelEn:'Similar tracks' },
   ];
 
   const CheckIcon = ({ size=16, color }) => (
@@ -6835,7 +6835,9 @@ function IndexingProgress({ stepStatus, stageProgress, lang, c, isDark }) {
         const prog = stageProgress && stageProgress[s.key];
         const pct = prog && prog.total && prog.total > 0 ? Math.max(0, Math.min(100, ((prog.current || 0) / prog.total) * 100)) : 0;
         const etaText = prog && prog.eta != null && prog.eta > 0 ? ` · ETA ${Math.round(prog.eta)}s` : '';
-        const labelText = prog && prog.total != null
+        // Single-step stages (analysis, total=1) carry no meaningful "X/Y" — show
+        // the working indicator only. Counter appears once total > 1.
+        const labelText = prog && prog.total != null && prog.total > 1
           ? `${prog.current || 0}/${prog.total}`
           : null;
 
@@ -6938,24 +6940,9 @@ function IndexingProgress({ stepStatus, stageProgress, lang, c, isDark }) {
     </div>
   );
 
-  const grooveStyle = {
-    padding: '6px 0',
-    borderTop: `1px solid ${isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.09)'}`,
-    borderBottom: `1px solid ${isDark ? 'rgba(255,255,255,0.025)' : 'rgba(0,0,0,0.04)'}`,
-  };
-
   return (
     <div style={{ display:'flex', flexDirection:'column', gap:'14px' }}>
-      {renderSection(
-        lang==='ru' ? 'ПОИСК ДАННЫХ В ИНТЕРНЕТЕ' : 'FETCHING DATA',
-        internetStages
-      )}
-      <div style={grooveStyle} />
-      {renderSection(
-        lang==='ru' ? 'ЛОКАЛЬНАЯ МУЗЫКА' : 'LOCAL MUSIC',
-        localStages
-      )}
-      {renderSection(null, finalStages)}
+      {renderSection(null, stages)}
     </div>
   );
 }
@@ -7062,6 +7049,30 @@ function IndexingModal({
               }}
             >{lang==='ru'?'Позже':'Later'}</button>
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (phase === 'ai-running') {
+    return (
+      <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onAiBootstrapLater?.(); }}>
+        <div className={ske('panel', isDark)} style={{ maxWidth: 540, padding: 28, borderRadius: 20, animation: 'scaleIn 0.3s cubic-bezier(.22,.9,.3,1)' }}>
+          <h2 className="serif" style={{ fontSize: 24, marginTop: 0, marginBottom: 6 }}>
+            ✨ {lang==='ru'?'ИИ-обогащение':'AI enrichment'}
+          </h2>
+          <p style={{ fontSize: 13, color: isDark?'#bbb':'#444', lineHeight: 1.5, marginBottom: 18 }}>
+            {lang==='ru'
+              ? 'Звучание песен, факты и биографии. Можно закрыть — обработка продолжится в фоне, прогресс виден в Настройках.'
+              : 'Song vibes, facts and bios. You can close — it keeps running in the background; progress stays in Settings.'}
+          </p>
+          <AiEnrichProgress ru={lang==='ru'} c={c} />
+          <button onClick={() => onAiBootstrapLater?.()} className="ske-accent" style={{
+            marginTop: 10, padding: '11px 22px', borderRadius: 12,
+            fontSize: 15, fontWeight: 600, letterSpacing: '0.05em',
+          }}>
+            {lang==='ru'?'ЗАКРЫТЬ':'CLOSE'}
+          </button>
         </div>
       </div>
     );
@@ -8038,7 +8049,7 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
   const [modalTrackCount, setModalTrackCount] = useState(null);
   const [modalError, setModalError] = useState(null);
   const [stageProgress, setStageProgress] = useState({});
-  const [indexPhase, setIndexPhase] = useState('ai-setup');  // 'ai-setup' | 'indexing' | 'ai-bootstrap'
+  const [indexPhase, setIndexPhase] = useState('ai-setup');  // 'ai-setup' | 'indexing' | 'ai-bootstrap' | 'ai-running'
   const [enabledForNewCollection, setEnabledForNewCollection] = useState(true);
 
   const [llmBaseUrl, setLlmBaseUrl] = useState(() => localStorage.getItem('llm_base_url') || '');
@@ -8500,14 +8511,14 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
             }}
             onAiSkip={() => { setEnabledForNewCollection(false); setIndexPhase('indexing'); startIndexing(false); }}
             onAiBootstrapRun={async () => {
-              const colName = collName.trim() || 'my_collection';
               const lang2 = lang || 'en';
-              // allSettled, not all — partial failure shouldn't silently abort the
-              // other tasks. We still close the modal but log each failure so it
-              // appears in DevTools.
               const tasks = ['sonic_vibe', 'refined_facts', 'artist_bio'];
               const llmBaseUrl = localStorage.getItem('llm_base_url') || undefined;
               const llmModel   = localStorage.getItem('llm_model')    || undefined;
+              // Switch to the live AI-progress view first, then fire the tasks.
+              // allSettled (not all) so one task's failure doesn't abort the others;
+              // AiEnrichProgress then polls /library/ai-index/status for the counts.
+              setIndexPhase('ai-running');
               const results = await Promise.allSettled(tasks.map(t =>
                 apiFetch(`/library/ai-index/${t}`, { method:'POST', body: JSON.stringify({
                   lang: lang2, llm_base_url: llmBaseUrl, llm_model: llmModel,
@@ -8517,7 +8528,6 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
               results.forEach((r, i) => {
                 if (r.status === 'rejected') console.error(`AI indexing task '${tasks[i]}' failed:`, r.reason);
               });
-              setShowModal(false);
             }}
             onAiBootstrapLater={() => setShowModal(false)}
           />
@@ -8564,12 +8574,13 @@ function computeStageEtas(stages, store, statusMap, ru, now) {
 // Reusable stage bar (member onboarding). `indeterminate` shows a moving shimmer
 // for stages with no granular progress (text search + the awaited AI phase);
 // `eta` is a short remaining-time string shown next to the … while running.
-function OBStageBar({ c, label, state, pct, indeterminate, eta }) {
+function OBStageBar({ c, label, state, pct, indeterminate, eta, count }) {
   return (
     <div style={{ marginBottom:12 }}>
       <div style={{ display:'flex', justifyContent:'space-between', marginBottom:4 }}>
         <span className="mono" style={{ fontSize:12, letterSpacing:'0.12em', color: state==='running' ? c.text : c.textSubtle }}>{label}</span>
         <span style={{ display:'flex', alignItems:'center', gap:8, fontSize:11, color: state==='failed' ? c.red : c.textSubtle }}>
+          {count && state==='running' && <span className="mono" style={{ fontVariantNumeric:'tabular-nums', opacity:.95 }}>{count}</span>}
           {eta && state==='running' && <span style={{ fontVariantNumeric:'tabular-nums', opacity:.85 }}>{eta}</span>}
           <span>{state==='done' ? '✓' : state==='failed' ? '✗' : state==='running' ? '…' : '·'}</span>
         </span>
@@ -8580,6 +8591,53 @@ function OBStageBar({ c, label, state, pct, indeterminate, eta }) {
           : <div style={{ height:'100%', width:`${pct||0}%`, transition:'width 0.4s', background: state==='done' ? 'oklch(63% 0.17 142)' : 'linear-gradient(90deg, oklch(65% 0.18 270), oklch(75% 0.17 280))' }} />}
       </div>
     </div>
+  );
+}
+
+// Live AI-enrichment progress, shared by every in-flow AI phase (member onboarding,
+// owner upload, folder "Run now"). Polls /library/ai-index/status — the same jobs
+// the auto AI tasks (_run_ai_tasks) and the manual POSTs register — and shows
+// n_done/n_total per task. The 3 tasks run back-to-back server-side, so at any
+// moment one is 'running' and the rest are 'queued'/'done'; each task's latest
+// status is rendered honestly. Polls continuously until unmounted — the parent
+// (SSE 'completed' or a Close button) controls the lifetime.
+const AI_ENRICH_STAGES = [
+  { key:'sonic_vibe',    ru:'Звучание песен',     en:'Song vibes' },
+  { key:'refined_facts', ru:'Углубление фактов',  en:'Deeper facts' },
+  { key:'artist_bio',    ru:'Биографии артистов', en:'Artist bios' },
+];
+
+function AiEnrichProgress({ ru, c }) {
+  const [status, setStatus] = useState({});
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const data = await apiFetch('/library/ai-index/status');
+        if (!cancelled) setStatus(data || {});
+      } catch { /* transient — keep polling */ }
+    };
+    tick();
+    const id = setInterval(tick, 3000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+  return (
+    <>
+      {AI_ENRICH_STAGES.map(s => {
+        const st = status[s.key] || null;
+        const raw = st && st.status;
+        const state = raw === 'done' ? 'done' : raw === 'failed' ? 'failed' : 'running';
+        const total = (st && st.n_total) || 0;
+        const done = (st && st.n_done) || 0;
+        const pct = total > 0 ? Math.min(100, Math.round(100 * done / total)) : 0;
+        const count = (state === 'running' && total > 0) ? `${done}/${total}` : null;
+        const indeterminate = state === 'running' && total <= 0;
+        return (
+          <OBStageBar key={s.key} c={c} label={ru ? s.ru : s.en}
+            state={state} pct={pct} count={count} indeterminate={indeterminate} />
+        );
+      })}
+    </>
   );
 }
 
@@ -8617,12 +8675,6 @@ function MemberIndexing({ ru, c, isDark, jobId, onDone }) {
     return () => evt.close();
   }, [jobId]);
 
-  const aiStages = [
-    { key:'artist_bio',    label: ru ? 'Биографии артистов' : 'Artist bios' },
-    { key:'refined_facts', label: ru ? 'Углубление фактов' : 'Deeper facts' },
-    { key:'sonic_vibe',    label: ru ? 'Звучание песен' : 'Song vibes' },
-  ];
-
   if (done) {
     return (
       <div className="ob-glass" style={{ padding:'30px 28px', textAlign:'center', boxShadow:'inset 0 1px 0 var(--ob-glass-sheen),0 12px 50px rgba(0,0,0,.28),0 0 70px rgba(95,208,138,.22)' }}>
@@ -8647,7 +8699,8 @@ function MemberIndexing({ ru, c, isDark, jobId, onDone }) {
             const st = stepStatus[k] || 'pending';
             const pr = stageProgress[k] || { current:0, total:0 };
             const pct = st === 'done' ? 100 : pr.total > 0 ? Math.round(100 * pr.current / pr.total) : 0;
-            return <OBStageBar key={k} c={c} label={ru ? WIZ_STAGE_LABELS[k].ru : WIZ_STAGE_LABELS[k].en} state={st} pct={pct} indeterminate={k==='dense'} eta={etas[k]} />;
+            const count = (st === 'running' && pr.total > 1) ? `${pr.current || 0}/${pr.total}` : null;
+            return <OBStageBar key={k} c={c} label={ru ? WIZ_STAGE_LABELS[k].ru : WIZ_STAGE_LABELS[k].en} state={st} pct={pct} count={count} eta={etas[k]} />;
           })}
           {aiWaiting && (
             <>
@@ -8655,7 +8708,7 @@ function MemberIndexing({ ru, c, isDark, jobId, onDone }) {
                 fontSize:'11px', letterSpacing:'0.2em', textTransform:'uppercase', color:'#c3b8ff' }}>
                 ✨ {ru ? 'С помощью гуру' : 'With the guru'}
               </div>
-              {aiStages.map(s => <OBStageBar key={s.key} c={c} label={s.label} state="running" indeterminate />)}
+              <AiEnrichProgress ru={ru} c={c} />
             </>
           )}
         </>
@@ -9308,6 +9361,7 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
 // job_id returned by /library/upload/batch-commit. The job lives in the same
 // shared JobTracker as the folder-scan flow, so the /index/progress stream works.
 function UploadIndexingWizard({ isDark, lang, jobId, onDone }) {
+  const c = useColors(isDark);
   const [stageProgress, setStageProgress] = useState({});
   const [stepStatus, setStepStatus] = useState({
     lyrics:'idle', facts:'idle', metadata:'idle', dense:'idle', audio:'idle', analysis:'idle',
@@ -9386,21 +9440,11 @@ function UploadIndexingWizard({ isDark, lang, jobId, onDone }) {
         }}>
           <div style={{ maxWidth:'620px', margin:'0 auto' }}>
             <div className="mono" style={{ display:'flex', alignItems:'center', gap:'8px', fontSize:'10px',
-              letterSpacing:'0.2em', textTransform:'uppercase', color:'#c3b8ff', marginBottom:'8px' }}>
+              letterSpacing:'0.2em', textTransform:'uppercase', color:'#c3b8ff', marginBottom:'10px' }}>
               <Spinner size={12} /> ✨ {lang==='ru' ? 'С помощью гуру' : 'With the guru'}
             </div>
-            <div style={{ display:'flex', gap:'18px', flexWrap:'wrap', fontSize:'12.5px' }}>
-              {[
-                lang==='ru'?'Биографии артистов':'Artist bios',
-                lang==='ru'?'Углубление фактов':'Deeper facts',
-                lang==='ru'?'Звучание песен':'Song vibes',
-              ].map((label, i) => (
-                <span key={i} style={{ display:'flex', alignItems:'center', gap:'6px', opacity:.85 }}>
-                  <span style={{ color:'oklch(62% 0.2 275)' }}>⟳</span>{label}
-                </span>
-              ))}
-            </div>
-            <div style={{ fontSize:'11px', color: isDark ? 'rgba(255,255,255,.45)' : 'rgba(0,0,0,.45)', marginTop:'8px' }}>
+            <AiEnrichProgress ru={lang==='ru'} c={c} />
+            <div style={{ fontSize:'11px', color: isDark ? 'rgba(255,255,255,.45)' : 'rgba(0,0,0,.45)', marginTop:'4px' }}>
               {lang==='ru' ? 'Не закрывайте страницу — плеер откроется автоматически.' : 'Keep this page open — the player opens automatically.'}
             </div>
           </div>
@@ -14176,18 +14220,18 @@ const stepsServer = (ru) => [
 ];
 
 // Stage keys come from the shared JobTracker (same SSE stream the existing
-// IndexingModal/UploadIndexingWizard consume). This object's KEY ORDER is the
-// display order only — the backend runs stages in its own order; each reported
-// key is just mapped to a label/bar. `dense` (text search) is shown right before
-// metadata and rendered as an indeterminate shimmer (its backend progress isn't
-// granular), so it also carries no ETA — see OBStageBar / computeStageEtas.
+// IndexingModal/UploadIndexingWizard consume). KEY ORDER = display order, kept
+// identical to IndexingProgress.stages so every indexing flow agrees: lyrics +
+// audio start together, dense after lyrics, facts overlap, analysis last. The
+// backend reports granular progress for every key here (including `dense` via
+// the "lyrics" → DENSE callback), so all show a real X/Y bar. `metadata`
+// (MusicBrainz) is skipped server-side and intentionally omitted.
 const WIZ_STAGE_LABELS = {
-  lyrics:   { ru: 'Тексты песен',     en: 'Lyrics' },
-  facts:    { ru: 'Факты и истории',  en: 'Facts & stories' },
-  dense:    { ru: 'Поиск по тексту',  en: 'Text search' },
-  metadata: { ru: 'Метаданные',       en: 'Metadata' },
-  audio:    { ru: 'Анализ звучания',  en: 'Sound analysis' },
-  analysis: { ru: 'Карта похожих',    en: 'Similarity map' },
+  lyrics:   { ru: 'Тексты',          en: 'Lyrics' },
+  audio:    { ru: 'Звучание',        en: 'Sound' },
+  dense:    { ru: 'Текстовый поиск',  en: 'Text search' },
+  facts:    { ru: 'Факты',           en: 'Facts' },
+  analysis: { ru: 'Похожие треки',   en: 'Similar tracks' },
 };
 
 // ─── Onboarding redesign: shared liquid-glass primitives ─────────────────
