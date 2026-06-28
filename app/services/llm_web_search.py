@@ -25,6 +25,12 @@ from app.services.proxy_config import get_proxy_url
 logger = logging.getLogger(__name__)
 logging.getLogger("readability.readability").setLevel(logging.ERROR)
 
+# Base URL of the local SearXNG instance. In Docker the app and SearXNG share a
+# Compose network, so the app must reach it by SERVICE NAME (`searxng:8080`) — the
+# container can't see the host-published `localhost:8088`. For bare-metal dev set
+# SEARXNG_URL=http://localhost:8088. Always a LOCAL service → never proxied.
+SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://searxng:8080").rstrip("/")
+
 try:
     from bs4 import BeautifulSoup
     from readability import Document
@@ -51,7 +57,7 @@ def search_searxng(query: str, max_results: int = 5) -> list[dict]:
         return []
     try:
         resp = httpx.get(
-            "http://localhost:8088/search",
+            f"{SEARXNG_URL}/search",
             params={
                 "q": query,
                 "format": "json",
@@ -61,7 +67,7 @@ def search_searxng(query: str, max_results: int = 5) -> list[dict]:
             headers={
                 "Accept": "application/json, text/javascript, */*",
                 "Accept-Language": "en-US,en;q=0.9",
-                "Referer": "http://localhost:8088/",
+                "Referer": f"{SEARXNG_URL}/",
                 "X-Forwarded-For": "127.0.0.1",
                 "X-Real-IP": "127.0.0.1",
                 "User-Agent": (
@@ -82,7 +88,7 @@ def search_searxng(query: str, max_results: int = 5) -> list[dict]:
             return search_ddg(query, max_results)
         return results
     except httpx.ConnectError:
-        logger.warning("[searxng] connection refused (localhost:8080 not running), falling back to DDG")
+        logger.warning("[searxng] connection refused (%s not reachable), falling back to DDG", SEARXNG_URL)
         return search_ddg(query, max_results)
     except httpx.TimeoutException:
         logger.warning("[searxng] timeout for query=%r, falling back to DDG", query)

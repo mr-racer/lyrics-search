@@ -28,6 +28,9 @@ services:
       # Reach Qdrant by service name over the Compose network. Set here too so
       # it holds even without a .env file.
       - QDRANT_URL=http://qdrant:6333
+      # Reach SearXNG by service name too — the host-published localhost:8088 is
+      # NOT visible from inside this container, only the internal 8080 port is.
+      - SEARXNG_URL=http://searxng:8080
       # ── Prevent HTTP_PROXY from leaking into container environment ──
       # docker-compose auto-loads .env into container env. Libraries like httpx
       # and QdrantClient auto-detect HTTP_PROXY from env and would route ALL
@@ -66,6 +69,8 @@ services:
     depends_on:
       qdrant:
         condition: service_healthy
+      searxng:
+        condition: service_started
     deploy:
       resources:
         reservations:
