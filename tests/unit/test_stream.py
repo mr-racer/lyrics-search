@@ -607,8 +607,9 @@ class TestLongTermProfile:
 
         assert out["n_signals"] == 5  # 3 events + 2 reactions
         assert out["confidence"] > 0.0
-        # t1+t2 merge into one island (cos≈1), t3 separate
-        assert len(out["islands"]) == 2
+        # t1+t2 merge into one island (cos≈1); t3 is a lone track and a
+        # single-song «island» is dropped — only the real cluster survives.
+        assert len(out["islands"]) == 1
         top = out["islands"][0]
         assert {m["track_id"] for m in top["tracks"]} == {"t1", "t2"}
         # axes: likes dominate at +1z → positive prefs with level labels

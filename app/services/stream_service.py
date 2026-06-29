@@ -1246,6 +1246,10 @@ def long_term_profile(*, qdrant_client, collection_name: str, now: datetime | No
     member_pool = [a.track_id for a in anchor_cands]
     vectors, payloads = _retrieve_track_data(qdrant_client, collection_name, member_pool)
     merged = merge_anchors(anchor_cands, vectors)
+    # An island is a *cluster* of taste, not a lone track: keep only merge
+    # groups that absorbed at least one near-duplicate, so no «остров» is ever
+    # built from a single song.
+    merged = [a for a in merged if len(a.members) >= 2]
     merged.sort(key=lambda a: a.weight, reverse=True)
     islands = []
     for a in merged[:ISLANDS_MAX]:
