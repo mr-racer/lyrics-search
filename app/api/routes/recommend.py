@@ -23,6 +23,8 @@ from app.domain.models import (
     StreamProfileResponse,
     StreamSettingsIn,
     StreamTrack,
+    TasteSignalIn,
+    TasteSignalOut,
     User,
 )
 from app.api.dependencies import get_current_user
@@ -143,6 +145,29 @@ def stream_settings(
     derived = derive_collection_for_user(current_user)
     MetadataDB.set_stream_liked_share(derived, body.liked_share)
     return {"liked_share": body.liked_share}
+
+
+@router.post("/taste-signal", response_model=TasteSignalOut)
+def taste_signal(
+    body: TasteSignalIn,
+    current_user: User = Depends(get_current_user),
+) -> TasteSignalOut:
+    """Record an огонёк/вода gesture for the user's collection.
+
+    fire = «давай побольше такого» — a strong ephemeral wave anchor on the
+    track's CLAP vector; water = «остудить» — a soft ephemeral demotion of the
+    track and its neighbors. Both fade over ~4h × 30→50 session tracks. The
+    collection is derived from the JWT (per-account isolation) — the client
+    cannot target another account's collection.
+    """
+    derived = derive_collection_for_user(current_user)
+    new_id = MetadataDB.record_taste_signal(
+        session_id=body.session_id,
+        collection_name=derived,
+        track_id=body.track_id,
+        kind=body.kind,
+    )
+    return TasteSignalOut(id=new_id)
 
 
 @router.get("/profile", response_model=StreamProfileResponse)

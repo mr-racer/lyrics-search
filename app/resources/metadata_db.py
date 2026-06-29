@@ -102,6 +102,24 @@ _SCHEMA_SQL: Tuple[str, ...] = (
           ON playback_events(session_id)""",
     """CREATE INDEX IF NOT EXISTS idx_playback_at
           ON playback_events(collection_name, played_at)""",
+    # Огонёк/Вода journal (2026-06-29 fire-wave recsys). Append-only: every fire
+    # or water gesture is one row. Aggregations derive ephemeral session anchors
+    # (the «волна»), the long-term island deposit, and the computed «favorites»
+    # rank that replaced heart-likes.
+    """CREATE TABLE IF NOT EXISTS taste_signals (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        collection_name TEXT    NOT NULL,
+        session_id      TEXT    NOT NULL,
+        track_id        TEXT    NOT NULL,
+        kind            TEXT    NOT NULL,
+        created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )""",
+    """CREATE INDEX IF NOT EXISTS idx_taste_signals_coll_created
+          ON taste_signals(collection_name, created_at)""",
+    """CREATE INDEX IF NOT EXISTS idx_taste_signals_session
+          ON taste_signals(session_id)""",
+    """CREATE INDEX IF NOT EXISTS idx_taste_signals_coll_track
+          ON taste_signals(collection_name, track_id)""",
     # AI Indexing (added in Plan 3 Task 11)
     """CREATE TABLE IF NOT EXISTS ai_indexing_jobs (
         job_id          TEXT PRIMARY KEY,
@@ -1411,6 +1429,52 @@ class MetadataDB:
             "WHERE collection_name = ?",
             (collection_name,),
         ).fetchall()
+        return [
+            (r[0], r[1],
+             r[2].isoformat() if hasattr(r[2], "isoformat") else str(r[2]))
+            for r in rows
+        ]
+
+    # ── Taste signals (огонёк/вода journal) ──
+
+    @classmethod
+    def record_taste_signal(
+        cls, *, session_id: str, collection_name: str, track_id: str, kind: str,
+    ) -> int:
+        """Append one огонёк/вода gesture (kind 'fire'|'water'). Returns row id."""
+        conn = cls._connect()
+        cur = conn.execute(
+            "INSERT INTO taste_signals (collection_name, session_id, track_id, kind) "
+            "VALUES (?, ?, ?, ?)",
+            (collection_name, session_id, track_id, kind),
+        )
+        conn.commit()
+        return int(cur.lastrowid)
+
+    @classmethod
+    def get_taste_signals(
+        cls, collection_name: str, *, session_id: str | None = None,
+        limit: int = 5000,
+    ) -> list[Tuple[str, str, str]]:
+        """Fire/water signals as ``(track_id, kind, created_at_iso)``, newest first.
+
+        ``session_id`` restricts to one session (the ephemeral wave); omit it for
+        the full history (island deposit + «favorites» rank). Decay is
+        order-independent, so newest-first ordering is just for the cap.
+        """
+        conn = cls._connect()
+        if session_id is None:
+            rows = conn.execute(
+                "SELECT track_id, kind, created_at FROM taste_signals "
+                "WHERE collection_name = ? ORDER BY id DESC LIMIT ?",
+                (collection_name, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT track_id, kind, created_at FROM taste_signals "
+                "WHERE collection_name = ? AND session_id = ? ORDER BY id DESC LIMIT ?",
+                (collection_name, session_id, limit),
+            ).fetchall()
         return [
             (r[0], r[1],
              r[2].isoformat() if hasattr(r[2], "isoformat") else str(r[2]))

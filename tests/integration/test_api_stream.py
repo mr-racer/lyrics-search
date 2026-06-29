@@ -436,7 +436,10 @@ class TestProfileAndAxisPlaylist:
         })
         for i in range(3):
             _post_event(client, f"a{i}")
-        _like(client, coll, "a0")
+        # Islands feed on fires + ≥85% completions (hearts gone): 3 completions
+        # + 1 fire = 4 signals.
+        MetadataDB.record_taste_signal(
+            session_id="s1", collection_name=coll, track_id="a0", kind="fire")
 
         resp = client.get("/api/v1/recommend/profile")
         assert resp.status_code == 200
@@ -612,3 +615,39 @@ class TestSimilar:
                           params={"track_id": "ghost", "limit": 5})
         assert resp.status_code == 200
         assert resp.json()["tracks"] == []
+
+
+class TestTasteSignalRoute:
+    """POST /recommend/taste-signal — огонёк/вода journal write + wave steer."""
+
+    def test_fire_recorded_and_surfaces_in_diagnostics(self, client):
+        coll = _owner_collection(client)
+        for i in range(3):
+            _post_event(client, f"a{i}", session="s1")
+        r = client.post("/api/v1/recommend/taste-signal",
+                        json={"session_id": "s1", "track_id": "a0", "kind": "fire"})
+        assert r.status_code == 200
+        assert isinstance(r.json()["id"], int)
+        # persisted in the per-account journal
+        sigs = {(t, k) for t, k, _ in MetadataDB.get_taste_signals(coll, session_id="s1")}
+        assert ("a0", "fire") in sigs
+        # and steers the wave: the fresh fire shows up as an active anchor
+        body = client.get("/api/v1/recommend/stream/next",
+                          params={"session_id": "s1", "n": 3}).json()
+        assert any(f["track_id"] == "a0" for f in body["diagnostics"]["fires"])
+
+    def test_water_recorded(self, client):
+        r = client.post("/api/v1/recommend/taste-signal",
+                        json={"session_id": "s1", "track_id": "a0", "kind": "water"})
+        assert r.status_code == 200
+
+    def test_invalid_kind_rejected(self, client):
+        r = client.post("/api/v1/recommend/taste-signal",
+                        json={"session_id": "s1", "track_id": "a0", "kind": "love"})
+        assert r.status_code == 422
+
+    def test_requires_auth(self, client):
+        r = client.post("/api/v1/recommend/taste-signal",
+                        headers={"Authorization": "Bearer not-a-real-token"},
+                        json={"session_id": "s1", "track_id": "a0", "kind": "fire"})
+        assert r.status_code == 401

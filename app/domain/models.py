@@ -300,6 +300,22 @@ class PlaybackEventOut(BaseModel):
     id: int
 
 
+class TasteSignalIn(BaseModel):
+    """Request body for POST /recommend/taste-signal (огонёк/вода).
+
+    fire = «больше такого» (strong ephemeral wave anchor); water = «остудить»
+    (soft ephemeral demotion). Both fade on time × session-track-count.
+    """
+    session_id: str
+    track_id: str
+    kind: Literal["fire", "water"]
+
+
+class TasteSignalOut(BaseModel):
+    """Successful POST response."""
+    id: int
+
+
 class AutoplayQueueDiagnostics(BaseModel):
     """Counters from the autoplay filter pipeline — for telemetry / debug."""
     candidates_fetched: int

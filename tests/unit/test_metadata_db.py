@@ -691,3 +691,46 @@ class TestUserSettings:
         """Re-init must not raise on the ALTER TABLE column adds."""
         MetadataDB.init()
         MetadataDB.init()  # second call: _ensure_columns silently skips existing cols
+
+
+class TestTasteSignals(_IsolatedDB):
+    """Append-only огонёк/вода journal (taste_signals)."""
+
+    def test_record_and_read_session_scoped(self):
+        MetadataDB.record_taste_signal(
+            session_id="s1", collection_name="colA", track_id="t1", kind="fire")
+        MetadataDB.record_taste_signal(
+            session_id="s1", collection_name="colA", track_id="t2", kind="water")
+        MetadataDB.record_taste_signal(
+            session_id="s2", collection_name="colA", track_id="t3", kind="fire")
+        sess = MetadataDB.get_taste_signals("colA", session_id="s1")
+        assert {(t, k) for t, k, _ in sess} == {("t1", "fire"), ("t2", "water")}
+
+    def test_all_signals_across_sessions(self):
+        MetadataDB.record_taste_signal(
+            session_id="s1", collection_name="colA", track_id="t1", kind="fire")
+        MetadataDB.record_taste_signal(
+            session_id="s2", collection_name="colA", track_id="t2", kind="fire")
+        allsig = MetadataDB.get_taste_signals("colA")
+        assert {(t, k) for t, k, _ in allsig} == {("t1", "fire"), ("t2", "fire")}
+
+    def test_scoped_by_collection(self):
+        MetadataDB.record_taste_signal(
+            session_id="s1", collection_name="colA", track_id="t1", kind="fire")
+        MetadataDB.record_taste_signal(
+            session_id="s1", collection_name="colB", track_id="t2", kind="fire")
+        assert {t for t, _, _ in MetadataDB.get_taste_signals("colA")} == {"t1"}
+
+    def test_append_only_keeps_repeat_fires(self):
+        MetadataDB.record_taste_signal(
+            session_id="s1", collection_name="colA", track_id="t1", kind="fire")
+        MetadataDB.record_taste_signal(
+            session_id="s1", collection_name="colA", track_id="t1", kind="fire")
+        rows = MetadataDB.get_taste_signals("colA")
+        assert [t for t, _, _ in rows] == ["t1", "t1"]
+
+    def test_created_at_is_parseable_iso(self):
+        MetadataDB.record_taste_signal(
+            session_id="s1", collection_name="colA", track_id="t1", kind="fire")
+        _, _, created = MetadataDB.get_taste_signals("colA")[0]
+        datetime.fromisoformat(created)  # must not raise

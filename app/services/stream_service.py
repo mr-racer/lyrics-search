@@ -56,6 +56,39 @@ IDLE_STREAK = 5
 # Minimum track duration for recommendation surfaces (intros/interludes filter).
 MIN_TRACK_DURATION_SEC = 60.0  # drop intros/interludes from recs & similar rails
 
+# ── Огонёк / Вода / Волна (fire/water ephemeral steer + low-LR islands) ──────
+# Design: docs/superpowers/specs/2026-06-29-fire-wave-recsys-design.md
+# A fire is a strong-ish session anchor on the fired track's CLAP vector; water
+# is the symmetric ephemeral «cool this». Both fade on TWO clocks at once —
+# wall-time (raised cosine over FIRE_TIME_MAX_H) AND session track-count
+# (full until FIRE_COUNT_FULL, linear to zero by FIRE_COUNT_ZERO) — whichever
+# kills the weight first.
+FIRE_BASE = 1.0            # peak weight of a fresh fire anchor
+WATER_BASE = 1.0           # peak weight of a fresh water (cool) signal
+FIRE_TIME_MAX_H = 4.0      # fire/water fade to 0 over this many hours
+FIRE_COUNT_FULL = 30       # full weight until this many session tracks since the fire
+FIRE_COUNT_ZERO = 50       # zero weight at/after this many session tracks
+WATER_W = 0.3              # score penalty per unit watered-proximity
+
+# Islands = long-term taste, LOW learning rate: fed ONLY by fires (fat) + ≥85%
+# completions (weak). Partial (65–85%) listens and skips never shape islands.
+FIRE_ISLAND_DEPOSIT = 1.0  # a fire's permanent contribution to taste islands
+COMPLETION_DEPOSIT = 0.2   # a ≥85% listen's (weak) contribution to taste islands
+H_ISLAND_DAYS = 180.0      # half-life of the long-term island deposit (learn slowly)
+
+# «Favorites» — the slider's liked pool, now COMPUTED (hearts removed): most
+# fired (dominant) + most listened-through.
+FAV_FIRE_W = 1.0           # favorites rank: decayed fire-count weight
+FAV_LISTEN_W = 0.3         # favorites rank: decayed ≥85%-listen weight
+FAV_POOL_SIZE = 60         # top-N favorites eligible for the liked slot quota
+
+# Fresh-session explore warmup («от островов, широко»): a session reset by >30h
+# idle (or a first run) starts with high exploration that tapers to baseline as
+# the user's signals accumulate. Long-term anchors stay in play throughout.
+WARMUP_SIGNALS = 8         # session signals over which explore tapers to baseline
+WARMUP_EXPLORE_SHARE = 0.5 # explore share for a brand-fresh session
+IDLE_RESET_H = 30.0        # frontend mints a fresh session_id after this idle gap
+
 
 def _duration_ok(payload) -> bool:
     """True unless the track's duration is KNOWN and shorter than 60s.
@@ -186,6 +219,14 @@ class ReactionSignal:
     track_id: str
     reaction: str           # 'like' | 'dislike'
     updated_at: datetime
+
+
+@dataclass(frozen=True)
+class FireSignal:
+    """One огонёк/вода gesture from the append-only ``taste_signals`` journal."""
+    track_id: str
+    kind: str               # 'fire' | 'water'
+    created_at: datetime
 
 
 @dataclass
@@ -701,9 +742,17 @@ def score_candidates(
     recency_hours: dict[str, float],
     axis_stats: dict | None,
     axis_names: tuple[str, ...],
+    water_proximity: dict[str, float] | None = None,
+    water_w: float = WATER_W,
 ) -> None:
     """Fill ``score`` + ``axis_match`` in place (design §6 formula, minus the
-    artist-repeat term — that one is positional and applied during assembly)."""
+    artist-repeat term — that one is positional and applied during assembly).
+
+    ``water_proximity`` maps track_id → decay-scaled closeness (∈[0,1]) to the
+    nearest watered («остужённый») anchor; it applies a soft, ephemeral demotion
+    so a cooled track and its neighbors recede from the current wave without any
+    permanent taste penalty.
+    """
     for c in candidates:
         z = z_scores_for_axes(c.payload.get("sonic_axes"), axis_stats, axis_names)
         c.axis_match = axis_match_score(z, p_final, confidence, axis_names)
@@ -711,12 +760,14 @@ def score_candidates(
         novelty = 1.0 / (1.0 + play_counts.get(c.track_id, 0))
         h = recency_hours.get(c.track_id)
         recent_pen = math.exp(-h / RECENT_PENALTY_HALFLIFE_H) if h is not None else 0.0
+        water_pen = water_w * (water_proximity or {}).get(c.track_id, 0.0)
 
         c.score = (
             SCORE_W_ANCHOR * c.max_anchor_cos
             + SCORE_W_AXIS * c.axis_match
             + SCORE_W_NOVELTY * novelty
             - SCORE_W_RECENT * recent_pen
+            - water_pen
         )
 
 
@@ -807,6 +858,140 @@ def assemble_chunk(
     return out
 
 
+# ── Огонёк / Вода: ephemeral session steer (dual decay) ─────────────────────
+
+def fire_time_factor(delta_hours: float) -> float:
+    """Wall-clock decay of a fire/water signal: raised cosine 1→0 over
+    FIRE_TIME_MAX_H, smoothly (no cliff), exactly 0 at and beyond the horizon."""
+    if delta_hours <= 0.0:
+        return 1.0
+    if delta_hours >= FIRE_TIME_MAX_H:
+        return 0.0
+    return 0.5 * (1.0 + math.cos(math.pi * delta_hours / FIRE_TIME_MAX_H))
+
+
+def fire_count_factor(n_tracks: int) -> float:
+    """Track-count decay: full until FIRE_COUNT_FULL session tracks since the
+    fire, linear down to 0 by FIRE_COUNT_ZERO."""
+    if n_tracks <= FIRE_COUNT_FULL:
+        return 1.0
+    if n_tracks >= FIRE_COUNT_ZERO:
+        return 0.0
+    return (FIRE_COUNT_ZERO - n_tracks) / (FIRE_COUNT_ZERO - FIRE_COUNT_FULL)
+
+
+def aggregate_taste_anchors(
+    signals: list[FireSignal],
+    *,
+    kind: str,
+    session_play_times: list[datetime],
+    now: datetime,
+    base: float = FIRE_BASE,
+) -> dict[str, float]:
+    """Effective ephemeral weight per track for one signal kind ('fire'|'water').
+
+    eff = base · time_factor(Δt) · count_factor(n), where n is the number of
+    session plays after the signal. Multiple signals on the same track sum;
+    fully-decayed (eff ≤ 0) signals drop out.
+    """
+    out: dict[str, float] = {}
+    for s in signals:
+        if s.kind != kind:
+            continue
+        dt_h = (now - s.created_at).total_seconds() / 3600.0
+        n = sum(1 for t in session_play_times if t > s.created_at)
+        eff = base * fire_time_factor(dt_h) * fire_count_factor(n)
+        if eff > 0.0:
+            out[s.track_id] = out.get(s.track_id, 0.0) + eff
+    return out
+
+
+# ── Острова: low-learning-rate long-term taste feed ─────────────────────────
+
+def decayed_fire_counts(
+    signals: list[FireSignal], now: datetime, *, half_life: float,
+) -> dict[str, float]:
+    """Decayed count of fires per track (water ignored). Powers the long-term
+    island deposit and the «favorites» rank — the clearest explicit signal."""
+    out: dict[str, float] = {}
+    for s in signals:
+        if s.kind != "fire":
+            continue
+        out[s.track_id] = out.get(s.track_id, 0.0) + decayed(
+            1.0, _age_days(s.created_at, now), half_life,
+        )
+    return out
+
+
+def completion_counts(
+    signals: list[PlaybackSignal], now: datetime, *, half_life: float,
+) -> dict[str, float]:
+    """Decayed count of deep (≥85%) listens per track. Partial listens and skips
+    are excluded — only a finished song is a clean long-term signal."""
+    out: dict[str, float] = {}
+    for ev in signals:
+        if not ev.total_dur or ev.total_dur <= 0.0:
+            continue
+        if ev.played_sec / ev.total_dur < FULL_RATIO:
+            continue
+        out[ev.track_id] = out.get(ev.track_id, 0.0) + decayed(
+            1.0, _age_days(ev.played_at, now), half_life,
+        )
+    return out
+
+
+def island_taste_weights(
+    fire_signals: list[FireSignal],
+    playback_signals: list[PlaybackSignal],
+    now: datetime,
+) -> dict[str, float]:
+    """Long-term taste weights for island building: fat fire deposit + weak ≥85%
+    completion deposit, both on the slow island half-life. This is the whole
+    «низкий learning rate» — noisy mid-listens never enter."""
+    fires = {tid: FIRE_ISLAND_DEPOSIT * c
+             for tid, c in decayed_fire_counts(
+                 fire_signals, now, half_life=H_ISLAND_DAYS).items()}
+    comps = {tid: COMPLETION_DEPOSIT * c
+             for tid, c in completion_counts(
+                 playback_signals, now, half_life=H_ISLAND_DAYS).items()}
+    return combine_weights(fires, comps)
+
+
+# ── «Favorites»: computed liked pool for the слайдер (hearts removed) ───────
+
+def favorite_weights(
+    fire_counts: dict[str, float],
+    listen_counts: dict[str, float],
+    *,
+    fire_w: float = FAV_FIRE_W,
+    listen_w: float = FAV_LISTEN_W,
+) -> dict[str, float]:
+    """«Любимые» = most fired (dominant) + most listened-through. Replaces the
+    heart-like pool that used to feed the liked/new slider."""
+    out: dict[str, float] = {}
+    for tid, c in fire_counts.items():
+        out[tid] = out.get(tid, 0.0) + fire_w * c
+    for tid, c in listen_counts.items():
+        out[tid] = out.get(tid, 0.0) + listen_w * c
+    return {tid: w for tid, w in out.items() if w > 0.0}
+
+
+# ── Fresh-session explore warmup («от островов, широко») ────────────────────
+
+def explore_share_for_warmth(
+    warmth: float,
+    *,
+    base: float = EXPLORE_SHARE,
+    warmup: float = WARMUP_EXPLORE_SHARE,
+    saturation: int = WARMUP_SIGNALS,
+) -> float:
+    """Explore share as a function of session «warmth» (signal count): high for a
+    fresh session, lerping down to the steady-state baseline by ``saturation``
+    signals. Long-term anchors stay in play — this only widens the spread."""
+    ramp = max(0.0, min(1.0, warmth / saturation)) if saturation > 0 else 1.0
+    return warmup + (base - warmup) * ramp
+
+
 # ── Orchestration: GET /stream/next entry point ─────────────────────────────
 
 def _parse_iso(ts: str) -> datetime | None:
@@ -814,6 +999,17 @@ def _parse_iso(ts: str) -> datetime | None:
         return datetime.fromisoformat(ts)
     except (TypeError, ValueError):
         return None
+
+
+def _fire_signals(rows: list) -> list[FireSignal]:
+    """Parse ``(track_id, kind, created_at_iso)`` journal rows into FireSignals,
+    dropping any with an unparseable timestamp."""
+    out: list[FireSignal] = []
+    for tid, kind, ts in rows:
+        dt = _parse_iso(ts)
+        if dt is not None:
+            out.append(FireSignal(track_id=tid, kind=kind, created_at=dt))
+    return out
 
 
 def _retrieve_track_data(
@@ -897,30 +1093,35 @@ def next_chunk(
         dt = _parse_iso(ts)
         if dt is not None:
             reactions.append(ReactionSignal(track_id=tid, reaction=reaction, updated_at=dt))
+    session_taste = _fire_signals(
+        MetadataDB.get_taste_signals(collection_name, session_id=session_id))
+    all_taste = _fire_signals(MetadataDB.get_taste_signals(collection_name))
 
-    # 2. Session split. In-session reactions = updated after the session began.
+    # 2. Session split (events only — reactions are dislikes/«hide» now).
     session_events = [s for s in signals if s.session_id == session_id]
-    if session_events:
-        session_start = session_events[0].played_at
-        session_reactions = [r for r in reactions if r.updated_at >= session_start]
-    else:
-        session_reactions = []
 
     # 3. Profiles + blend.
-    # Filter to influencing events for taste-profile only; keep full lists for
-    # anti-repeat (session_played, negative_track_ids, n_session_signals).
+    # Long-term backbone = ISLANDS (low LR): fires (fat) + ≥85% completions
+    # (weak) only — noisy mid-listens never shape long-term taste. The session
+    # wave stays responsive: all session listening + ephemeral fire anchors.
     influencing = [s for s in signals if getattr(s, "influence", True)]
     influencing_session = [s for s in session_events if getattr(s, "influence", True)]
+    session_play_times = sorted(s.played_at for s in session_events)
 
-    long_weights = combine_weights(
-        aggregate_event_weights(influencing, now),
-        aggregate_reaction_weights(reactions, now),
-    )
+    fire_anchor_weights = aggregate_taste_anchors(
+        session_taste, kind="fire",
+        session_play_times=session_play_times, now=now)
+    water_anchor_weights = aggregate_taste_anchors(
+        session_taste, kind="water", base=WATER_BASE,
+        session_play_times=session_play_times, now=now)
+
+    long_weights = island_taste_weights(all_taste, influencing, now)
     session_weights = combine_weights(
         aggregate_event_weights(influencing_session, now),
-        aggregate_reaction_weights(session_reactions, now),
+        fire_anchor_weights,
     )
-    n_session_signals = count_session_signals(session_events, session_reactions)
+    # A fire is a strong session signal — it counts toward the blend ramp.
+    n_session_signals = count_session_signals(session_events, []) + len(fire_anchor_weights)
     w_s = session_blend_weight(n_session_signals)
     anchor_weights = union_anchor_weights(long_weights, session_weights, w_s)
     negatives = negative_track_ids(signals, reactions, now)
@@ -929,12 +1130,31 @@ def next_chunk(
     anchor_cands = select_positive_anchors(anchor_weights)
     positive_ids = [a.track_id for a in anchor_cands]
     session_positive = [tid for tid, w in session_weights.items() if w > 0.0]
-    fetch_ids = list(dict.fromkeys(positive_ids + session_positive + sorted(negatives)))
+    fetch_ids = list(dict.fromkeys(
+        positive_ids + session_positive + list(water_anchor_weights) + sorted(negatives)))
     vectors, payloads = _retrieve_track_data(qdrant_client, collection_name, fetch_ids)
 
     merged = merge_anchors(anchor_cands, vectors)
     merged.sort(key=lambda a: a.weight, reverse=True)
     top_anchors = merged[:TOP_EFFECTIVE_ANCHORS]
+
+    # Вода («остудить») → soft ephemeral demotion: query the watered tracks'
+    # CLAP neighborhoods and penalise candidates by decay-scaled closeness. Pure
+    # session effect — never touches islands, favorites, or the hard-negative set.
+    water_proximity: dict[str, float] = {}
+    if water_anchor_weights:
+        water_anchors = [
+            Anchor(track_id=t, weight=w, vector=vectors[t])
+            for t, w in water_anchor_weights.items() if t in vectors
+        ]
+        if water_anchors:
+            wpool = pool_anchor_candidates(
+                qdrant_client, collection_name, water_anchors, excluded=set())
+            for tid, cand in wpool.items():
+                decay = min(1.0, water_anchor_weights.get(
+                    cand.anchor_track_id, 0.0) / WATER_BASE)
+                water_proximity[tid] = max(
+                    water_proximity.get(tid, 0.0), cand.max_anchor_cos * decay)
 
     # 5. Axis preferences in z-space (shrinkage-blended collection stats).
     axis_stats = blend_axis_stats(
@@ -952,7 +1172,15 @@ def next_chunk(
 
     # 6. Shared filter set + per-track stats.
     session_played = {s.track_id for s in session_events}
-    liked_ids = {r.track_id for r in reactions if r.reaction == "like"}
+    # «Favorites» replace heart-likes: most fired (dominant) + most listened-through.
+    # Capped to a pool so the slider quota draws from it AND it can be hard-excluded
+    # from the main pool (no double-serving) without gutting it on active libraries.
+    fav_weights = favorite_weights(
+        decayed_fire_counts(all_taste, now, half_life=H_LIKE_DAYS),
+        completion_counts(influencing, now, half_life=H_IMPLICIT_DAYS),
+    )
+    fav_top = dict(sorted(fav_weights.items(), key=lambda kv: kv[1],
+                          reverse=True)[:FAV_POOL_SIZE])
 
     play_counts = MetadataDB.get_play_counts_by_track(collection_name)
     recency_hours: dict[str, float] = {}
@@ -968,7 +1196,12 @@ def next_chunk(
     # hard across the round boundary — «жёсткий пол + мягкий хвост».
     floor_ids = _anti_repeat_floor(recency_hours)
     base_exclude = set(exclude_ids or [])
-    hard_excluded = negatives | base_exclude | liked_ids | floor_ids
+    # Favorites are NOT hard-excluded wholesale (unlike the old heart-likes):
+    # «favorite» is now a broad gradient (any fired / deeply-heard track), so
+    # excluding all of them would gut the main pool — and on a fully-heard
+    # library it would exclude EVERYTHING. Only the few favorites actually
+    # sampled into the liked quota are kept out of main (see sampled_liked below).
+    hard_excluded = negatives | base_exclude | floor_ids
     fresh_excluded = hard_excluded | session_played   # Pass 1 strictness
 
     # 7. Explore + liked pools — immune to round exhaustion (explore is low-play
@@ -976,9 +1209,12 @@ def next_chunk(
     liked_quota = max(0, min(n, round(n * (liked_share if liked_share is not None
                                            else DEFAULT_LIKED_SHARE))))
     non_liked_slots = n - liked_quota
-    frac = EXPLORE_SHARE * non_liked_slots
+    # Fresh-session warmup («от островов, широко»): a reset/cold session starts
+    # with high explore that tapers to the steady-state baseline as signals land.
+    explore_share_eff = explore_share_for_warmth(n_session_signals)
+    frac = explore_share_eff * non_liked_slots
     explore_slots = int(frac) + (1 if rng.random() < (frac - int(frac)) else 0)
-    # Cold start: no anchors at all → the whole non-liked budget is exploration.
+    # True cold start: no long-term anchors at all → whole non-liked budget explores.
     if not top_anchors:
         explore_slots = non_liked_slots
     explore_cands: list[StreamCandidate] = []
@@ -993,27 +1229,26 @@ def next_chunk(
         explore_cands = [c for c in explore_cands if _duration_ok(c.payload)]
 
     liked_cands: list[StreamCandidate] = []
-    if liked_quota > 0 and liked_ids:
-        liked_weights = {
-            tid: w for tid, w in aggregate_reaction_weights(
-                [r for r in reactions if r.reaction == "like"], now,
-            ).items() if w > 0.0
-        }
+    if liked_quota > 0 and fav_top:
         sampled = sample_liked_tracks(
-            liked_weights, recency_hours, liked_quota, rng,
+            fav_top, recency_hours, liked_quota, rng,
             excluded=base_exclude | session_played,
         )
         _, liked_payloads = _retrieve_track_data(qdrant_client, collection_name, sampled)
-        # Drop liked ids that no longer resolve in Qdrant. Likes live in SQLite
-        # but re-indexing mints fresh point ids, orphaning old reactions; an
-        # unresolved id would otherwise ship as an empty-payload «—» track that
-        # 404s on /stream and /lyrics. Pools A/B are immune (built from Qdrant).
+        # Drop favorites that no longer resolve in Qdrant. Signals live in SQLite
+        # but re-indexing mints fresh point ids, orphaning old ones; an unresolved
+        # id would otherwise ship as an empty-payload «—» track that 404s on
+        # /stream and /lyrics. Pools A/B are immune (built from Qdrant).
         liked_cands = [
             StreamCandidate(track_id=t, payload=liked_payloads[t], pool="liked")
             for t in sampled
             if t in liked_payloads
         ]
         liked_cands = [c for c in liked_cands if _duration_ok(c.payload)]
+
+    # Keep the few sampled favorites out of the main pool so a liked pick never
+    # also shows up as an anchor neighbor in the same chunk (no double-serving).
+    sampled_liked = {c.track_id for c in liked_cands}
 
     recent_artists = [
         (payloads.get(s.track_id) or {}).get("artist", "").strip().lower()
@@ -1028,14 +1263,20 @@ def next_chunk(
             cands, p_final=p_final, confidence=confidence,
             play_counts=play_counts, recency_hours=recency_hours,
             axis_stats=axis_stats, axis_names=AXIS_NAMES,
+            water_proximity=water_proximity,
         )
         cands = [c for c in cands if _duration_ok(c.payload)]
         return cands
 
     # 8. Pass 1 — fresh only: today's behaviour (anchor + explore + liked).
-    main = _anchor_main(fresh_excluded)
+    main = _anchor_main(fresh_excluded | sampled_liked)
     pool_a_size = len(main)
-    explore_picks = explore_cands[:explore_slots]
+    # Explore must be DISJOINT from the main/liked pools: a track that is already
+    # a strong anchor neighbor isn't «exploration», and serving it from two pools
+    # would double it in the same chunk (the warmup ramp makes explore fire often
+    # enough early that this overlap is real, not theoretical).
+    chunk_pool_ids = {c.track_id for c in main} | {c.track_id for c in liked_cands}
+    explore_picks = [c for c in explore_cands if c.track_id not in chunk_pool_ids][:explore_slots]
     chunk = assemble_chunk(
         main, liked_cands,
         n=n - len(explore_picks), liked_share=(liked_quota / n if n else 0.0),
@@ -1053,7 +1294,7 @@ def next_chunk(
     relaxed_used = False
     if len(chunk) < n:
         chosen = {c.track_id for c in chunk}
-        relaxed_main = sorted(_anchor_main(hard_excluded | chosen),
+        relaxed_main = sorted(_anchor_main(hard_excluded | sampled_liked | chosen),
                               key=lambda c: c.score, reverse=True)
         if relaxed_main:
             relaxed_used = True
@@ -1105,6 +1346,12 @@ def next_chunk(
                        "liked": len(liked_cands)},
         "liked_quota": liked_quota,
         "explore_slots": len(explore_picks),
+        "explore_share_eff": round(explore_share_eff, 3),
+        "fires": [{"track_id": t, "eff": round(w, 3)}
+                  for t, w in sorted(fire_anchor_weights.items(),
+                                     key=lambda kv: kv[1], reverse=True)],
+        "n_water": len(water_anchor_weights),
+        "fav_pool": len(fav_top),
         "round": round_no,
         "n_floor": len(floor_ids),
         "relaxed": relaxed_used,
@@ -1227,19 +1474,19 @@ def long_term_profile(*, qdrant_client, collection_name: str, now: datetime | No
 
     raw_signals = MetadataDB.get_playback_signals(collection_name, LONG_TERM_EVENT_CAP)
     signals = [PlaybackSignal(**r) for r in raw_signals]
-    reactions = []
-    for tid, reaction, ts in MetadataDB.get_reactions_with_updated_at(collection_name):
-        dt = _parse_iso(ts)
-        if dt is not None:
-            reactions.append(ReactionSignal(track_id=tid, reaction=reaction, updated_at=dt))
+    all_taste = _fire_signals(MetadataDB.get_taste_signals(collection_name))
 
+    # Low learning rate: islands are fed ONLY by the clearest explicit signals —
+    # fires (fat) + ≥85% completions (weak). Partial listens and skips never enter,
+    # so the long-term profile drifts slowly and stays trustworthy.
     influencing = [s for s in signals if getattr(s, "influence", True)]
-
-    long_weights = combine_weights(
-        aggregate_event_weights(influencing, now),
-        aggregate_reaction_weights(reactions, now),
+    long_weights = island_taste_weights(all_taste, influencing, now)
+    n_fires = sum(1 for s in all_taste if s.kind == "fire")
+    n_completions = sum(
+        1 for s in influencing
+        if s.total_dur and s.total_dur > 0.0 and s.played_sec / s.total_dur >= FULL_RATIO
     )
-    n_signals = len(signals) + len(reactions)
+    n_signals = n_fires + n_completions
 
     # Anchors → islands (merge groups carry their member track ids).
     anchor_cands = select_positive_anchors(long_weights)

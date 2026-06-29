@@ -585,8 +585,11 @@ class TestMergeAnchorsMembers:
 class TestLongTermProfile:
     def _seed_history(self, coll="acct_u"):
         MetadataDB.set_axis_norm_stats(coll, _stats())
-        MetadataDB.set_reaction("t1", coll, "like")
-        MetadataDB.set_reaction("t2", coll, "like")
+        # Islands are now fed by fires (fat) + ≥85% completions (weak); hearts gone.
+        MetadataDB.record_taste_signal(
+            session_id="s", collection_name=coll, track_id="t1", kind="fire")
+        MetadataDB.record_taste_signal(
+            session_id="s", collection_name=coll, track_id="t2", kind="fire")
         for tid in ("t1", "t2", "t3"):
             MetadataDB.record_playback_event(
                 session_id="s", collection_name=coll, track_id=tid,
