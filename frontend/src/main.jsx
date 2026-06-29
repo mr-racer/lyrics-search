@@ -288,6 +288,27 @@ async function postPlaybackEvent({ trackId, playedSec, totalDur, interacted, inf
   }
 }
 
+// Огонёк/Вода: record an ephemeral taste gesture (fire = «больше такого»,
+// water = «остудить»). Fire-and-forget; the wave rebuild is triggered separately
+// via onStreamSignal so the UI feels instant.
+async function postTasteSignal(trackId, kind) {
+  const token = getStoredToken();
+  if (!token || !trackId) return;
+  try {
+    await fetch(`${API}/recommend/taste-signal`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+      },
+      body: JSON.stringify({ session_id: getSessionId(), track_id: trackId, kind }),
+      keepalive: true,
+    });
+  } catch (e) {
+    console.warn('[taste] failed to post signal', e);
+  }
+}
+
 // ─── Listening-time accumulator ──────────────────────────────────────────────
 // A single continuous listen of a track must produce exactly ONE playback event
 // whose played_sec is the real number of seconds the user actually heard — NOT
@@ -4448,18 +4469,6 @@ function LibraryGlassyRow({ track, when, playCount, isDark, lang, onClick, navig
       <div className="mono" style={{ color:c.textMuted, fontSize:'13px', textAlign:'right' }}>{fmtDur(track.duration)}</div>
       <div style={{ display:'flex', gap:'5px' }}>
         <button
-          onClick={(e) => { e.stopPropagation(); onToggleLike && onToggleLike(track.track_id); }}
-          title={isLiked ? (lang==='ru'?'Убрать лайк':'Unlike') : (lang==='ru'?'Лайкнуть':'Like')}
-          style={{
-            width:'36px', height:'36px', borderRadius:'50%',
-            display:'grid', placeItems:'center',
-            background: isLiked ? 'rgba(255,122,168,.12)' : 'rgba(255,255,255,.03)',
-            color: isLiked ? '#ff7aa8' : c.textMuted,
-            border:'none', cursor:'pointer', fontSize:'17px',
-            transition:'all .18s',
-          }}
-        >{isLiked ? '♥' : '♡'}</button>
-        <button
           className="player-icon-btn"
           title={lang === 'ru' ? 'Добавить в плейлист' : 'Add to playlist'}
           onClick={(e) => { e.stopPropagation(); onAddToPlaylist && onAddToPlaylist(track.track_id, e.currentTarget); }}
@@ -4796,7 +4805,7 @@ function PlaylistTrackRow({ track, isDragging, onDragStart, onDragOver, onDragLe
       <div />
       <div className="mono" style={{ fontSize: 12, color: 'rgba(238,238,243,.5)', textAlign: 'right' }}>{fmtDur(track.duration)}</div>
       <div style={{ display: 'flex', gap: 8 }}>
-        <button className="player-icon-btn" style={{ width: 40, height: 40, fontSize: 20 }} data-active={liked ? 'like' : undefined} onClick={(e) => { e.stopPropagation(); handleLike(e); }} title={lang === 'ru' ? (liked ? 'Убрать лайк' : 'Лайкнуть') : (liked ? 'Unlike' : 'Like')}>{liked ? '♥' : '♡'}</button>
+        <button className="player-icon-btn" style={{ width: 40, height: 40, fontSize: 22 }} onClick={(e) => { e.stopPropagation(); onAddToPlaylist && onAddToPlaylist(track.track_id, e.currentTarget); }} title={lang === 'ru' ? 'Добавить в плейлист' : 'Add to playlist'}>＋</button>
         <button className="player-icon-btn" style={{ width: 40, height: 40, fontSize: 22 }} onClick={(e) => { e.stopPropagation(); handleRemove(e); }} title={lang === 'ru' ? 'Убрать из плейлиста' : 'Remove from playlist'}>⨯</button>
       </div>
     </div>
@@ -5394,7 +5403,7 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
           navigateToArtist={navigateToArtist}
           isDark={isDark}
           lang={lang}
-
+          onAddToPlaylist={onAddToPlaylist}
         />
       )}
       {showNewPlaylistModal && (
@@ -6541,7 +6550,7 @@ function NewPlaylistModal({ onCancel, onSubmit, lang }) {
   );
 }
 
-function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist, isDark, lang }) {
+function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist, isDark, lang, onAddToPlaylist }) {
   const c = useColors(isDark);
   const [hoverRow, setHoverRow] = useState(-1);
   const [likedMap, setLikedMap] = useState({});
@@ -6792,11 +6801,13 @@ function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist,
                       <span className="mono" style={{ color: hoverRow === i ? '#cdbcff' : 'rgba(238,235,248,.4)', fontSize:'11px', textAlign:'center' }}>{hoverRow === i ? '▶' : i+1}</span>
                       <span style={{ color:'#ece9f4', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t.title}</span>
                       <span className="mono" style={{ color:'rgba(238,235,248,.4)', fontSize:'11px', textAlign:'right' }}>{fmtDur(t.duration)}</span>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); toggleLike(t.track_id); }}
-                        style={{ background:'transparent', border:'none', cursor:'pointer', fontSize:'13px', color: liked ? '#ff7aa8' : 'rgba(238,235,248,.4)', padding:0 }}
-                        title={liked ? (lang==='ru'?'Убрать лайк':'Unlike') : (lang==='ru'?'Лайкнуть':'Like')}
-                      >{liked ? '♥' : '♡'}</button>
+                      {onAddToPlaylist ? (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onAddToPlaylist(t.track_id, e.currentTarget); }}
+                          style={{ background:'transparent', border:'none', cursor:'pointer', fontSize:'17px', lineHeight:1, color:'rgba(238,235,248,.45)', padding:0 }}
+                          title={lang==='ru'?'Добавить в плейлист':'Add to playlist'}
+                        >＋</button>
+                      ) : <span />}
                     </div>
                   );
                 })}
@@ -11202,6 +11213,67 @@ function useQueueReorder({ lockedBefore, count, onCommit, scrollRef }) {
   return { getRowProps, consumeClick, dragging: !!drag };
 }
 
+// ─── Огонёк/Вода: cover combustion effect ────────────────────────────────────
+// A one-shot burst that wraps the album cover in 3D — flame tongues lick up from
+// its edges (a BACK layer behind the art + a FRONT layer over its rim) plus a
+// warm aura, peaking ~1/2 the cover height and clearing the center so the art
+// reads through. Pure CSS transforms/opacity (GPU); the JS only seeds randomized
+// per-tongue geometry so no two bursts look alike. `playKey` remounts it per press.
+function CoverCombustion({ kind = 'fire', playKey = 0 }) {
+  const cfg = React.useMemo(() => {
+    const rnd = (a, b) => a + Math.random() * (b - a);
+    // Back layer: spread across the bottom, taller & fuller — it rises behind the
+    // art and halos around the top edge.
+    const back = Array.from({ length: 7 }, (_, i) => ({
+      x: ((i + 0.5) / 7) * 100 + rnd(-5, 5),
+      w: rnd(17, 27), h: rnd(40, 56), b: rnd(0, 9),
+      flick: rnd(150, 290), delay: rnd(0, 240), sway: rnd(1.5, 4),
+    }));
+    // Front layer: hug the LEFT/RIGHT edges (tall) with only short accents at the
+    // center-bottom, so the front flames frame the art instead of covering it.
+    const front = [
+      { x: rnd(2, 9), edge: true }, { x: rnd(9, 17), edge: true },
+      { x: rnd(83, 91), edge: true }, { x: rnd(91, 98), edge: true },
+      { x: rnd(34, 46), edge: false }, { x: rnd(54, 66), edge: false },
+    ].map(({ x, edge }) => ({
+      x, w: rnd(12, 20), h: edge ? rnd(34, 48) : rnd(14, 24), b: rnd(0, 7),
+      flick: rnd(140, 260), delay: rnd(30, 280), sway: rnd(1.5, 3.5),
+    }));
+    const embers = kind === 'fire'
+      ? Array.from({ length: 10 }, () => ({
+          x: rnd(8, 92), ex: rnd(-22, 22), ey: rnd(80, 180),
+          edur: rnd(1100, 1900), delay: rnd(60, 800),
+        }))
+      : [];
+    return { back, front, embers };
+  }, [playKey, kind]);
+
+  const flameStyle = (f) => ({
+    '--x': `${f.x}%`, '--w': `${f.w}%`, '--h': `${f.h}%`, '--b': `${f.b}%`,
+    '--flick': `${f.flick}ms`, '--delay': `${f.delay}ms`, '--sway': `${f.sway}%`,
+  });
+  const Flame = (f, i) => (
+    <span key={i} className="cover-fx__flame" style={flameStyle(f)}><i /></span>
+  );
+  return (
+    <>
+      <div className={`cover-fx cover-fx--back cover-fx--${kind}`} aria-hidden="true">
+        <span className="cover-fx__aura" />
+        {cfg.back.map(Flame)}
+      </div>
+      <div className={`cover-fx cover-fx--front cover-fx--${kind}`} aria-hidden="true">
+        {cfg.front.map(Flame)}
+        {cfg.embers.map((e, i) => (
+          <span key={`e${i}`} className="cover-fx__ember" style={{
+            '--x': `${e.x}%`, '--ex': `${e.ex}px`, '--ey': `${e.ey}px`,
+            '--edur': `${e.edur}ms`, '--delay': `${e.delay}ms`,
+          }} />
+        ))}
+      </div>
+    </>
+  );
+}
+
 function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, onStreamSignal, audio, visible, lyricsMode, onToggleLyrics, onCloseLyrics, showToast, navigateToArtist, aiStatus, onAddToPlaylist, onQueueNext, onReorderQueue }) {
   const [playlist, setPlaylist] = useState(initialPlaylist || []);
   const [currentIndex, setCurrentIndex] = useState(-1);
@@ -11454,9 +11526,16 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
     }
   }, [currentTrack, fetchedLyrics, expandedLines, explainStates]);
 
-  // Burst feedback for like/dislike icon clicks (single active burst at a time)
+  // Burst feedback for fire/water icon clicks (single active burst at a time)
   const [burstFor, setBurstFor] = useState(null);
   const burstTimerRef = useRef(null);
+
+  // Огонёк/Вода cover combustion: kind drives fire vs water; the nonce remounts
+  // <CoverCombustion> so each press replays cleanly even mid-burn.
+  const [fxKind, setFxKind] = useState(null);
+  const [fxKey, setFxKey] = useState(0);
+  const fxTimerRef = useRef(null);
+  const FX_MS = 2800;
 
   // Play/pause glassy indicator: 'play' | 'pause' | null. Keyed nonce
   // re-mounts the element so the CSS animation replays on every toggle.
@@ -11482,6 +11561,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
   useEffect(() => () => {
     if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current);
     if (burstTimerRef.current) clearTimeout(burstTimerRef.current);
+    if (fxTimerRef.current) clearTimeout(fxTimerRef.current);
     if (playFeedbackTimerRef.current) clearTimeout(playFeedbackTimerRef.current);
     if (hintHideTimerRef.current) clearTimeout(hintHideTimerRef.current);
   }, []);
@@ -11662,6 +11742,24 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
     setBurstFor(kind);
     if (burstTimerRef.current) clearTimeout(burstTimerRef.current);
     burstTimerRef.current = setTimeout(() => setBurstFor(null), 640);
+  };
+
+  const triggerCoverFx = (kind) => {
+    setFxKind(kind);
+    setFxKey(k => k + 1);
+    if (fxTimerRef.current) clearTimeout(fxTimerRef.current);
+    fxTimerRef.current = setTimeout(() => setFxKind(null), FX_MS);
+  };
+
+  // Огонёк/Вода gesture: light the cover effect, flash the icon, record the
+  // ephemeral signal, and ask App to rebuild the wave (it's a strong signal).
+  const sendTaste = (kind) => {
+    if (!currentTrack?.track_id) return;
+    markPlaybackInteracted(audio?.audioRef?.current);
+    triggerCoverFx(kind);
+    triggerBurst(kind);
+    postTasteSignal(currentTrack.track_id, kind);
+    if (onStreamSignal) onStreamSignal('reaction', currentTrack);
   };
 
   useEffect(() => {
@@ -11888,6 +11986,11 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                 ...(coverPx ? { width: `${coverPx}px`, maxWidth: `${coverPx}px` } : null),
               }}
             >
+              {/* Огонёк/Вода combustion — a back layer (behind the art) + a
+                  front layer (over its rim) wrap the cover in 3D. Mounted only
+                  while burning; keyed on fxKey so each press replays. */}
+              {fxKind && <CoverCombustion key={fxKey} kind={fxKind} playKey={fxKey} />}
+
               {/* Outgoing cover snapshot — animates "into the stack". Keyed on
                   entryNonce so rapid next-spam restarts the exit cleanly. */}
               {outgoingTrack && (
@@ -12102,45 +12205,34 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
             {/* Action icons — like / dislike / lyrics / ask AI */}
             <div className="player-actions-row" style={{ display:'flex', justifyContent:'center', gap:4 }}>
               <button
-                type="button" className="player-icon-btn"
-                data-active={liked === 'like' ? 'like' : ''}
-                aria-pressed={liked === 'like'}
-                onClick={() => setReaction('like')}
-                title={lang === 'ru' ? 'Нравится' : 'Like'}
+                type="button" className="player-icon-btn player-icon-btn--fire"
+                onClick={() => sendTaste('fire')}
+                disabled={!currentTrack?.track_id}
+                title={lang === 'ru' ? 'Огонёк — больше такого в волне' : 'Fire — more like this in the wave'}
+                aria-label={lang === 'ru' ? 'Огонёк' : 'Fire'}
               >
-                <svg width="18" height="18" viewBox="0 0 24 24"
-                  fill={liked === 'like' ? 'currentColor' : 'none'}
-                  stroke="currentColor" strokeWidth="2"
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" strokeWidth="1.9"
                   strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+                  <path d="M12 3c.5 2.7-.6 4.2-1.9 5.6C8.7 10 7.7 11.4 7.7 13.2a4.3 4.3 0 0 0 8.6.2c0-2-.9-3.2-1.8-4.4-.3.9-.9 1.4-1.7 1.6.8-2.3-.1-5.6-.9-7.6z"/>
+                  <path d="M12 13c1 .2 1.7 1 1.7 2a1.8 1.8 0 0 1-3.5.1c0-.7.4-1.4 1-1.8"/>
                 </svg>
-                {burstFor === 'like' && <span className="player-icon-burst player-icon-burst--like" />}
+                {burstFor === 'fire' && <span className="player-icon-burst player-icon-burst--fire" />}
               </button>
               <button
-                type="button" className="player-icon-btn"
-                data-active={liked === 'dislike' ? 'dislike' : ''}
-                aria-pressed={liked === 'dislike'}
-                onClick={() => setReaction('dislike')}
-                title={lang === 'ru' ? 'Не нравится' : 'Dislike'}
+                type="button" className="player-icon-btn player-icon-btn--water"
+                onClick={() => sendTaste('water')}
+                disabled={!currentTrack?.track_id}
+                title={lang === 'ru' ? 'Вода — остудить волну' : 'Water — cool the wave'}
+                aria-label={lang === 'ru' ? 'Вода' : 'Water'}
               >
-                {/* Broken heart — same silhouette as Like for kinship, but a
-                    zigzag crack splits it so dislike never reads as like. The
-                    crack is drawn twice: a wide panel-colored backing carves a
-                    real gap through the filled heart (active state), and a thin
-                    currentColor line keeps the crack visible while unfilled. */}
-                <svg width="18" height="18" viewBox="0 0 24 24"
-                  fill={liked === 'dislike' ? 'currentColor' : 'none'}
-                  stroke="currentColor" strokeWidth="2"
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
+                  stroke="currentColor" strokeWidth="1.9"
                   strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
-                  {liked === 'dislike' && (
-                    <polyline points="12 5.4 9.9 9.2 13.6 12.2 10.4 15.6 12 20.4"
-                      fill="none" stroke={isDark ? '#0B0E14' : '#f4f5fa'} strokeWidth="2.8"/>
-                  )}
-                  <polyline points="12 5.4 9.9 9.2 13.6 12.2 10.4 15.6 12 20.4"
-                    fill="none" stroke="currentColor" strokeWidth="1.5"/>
+                  <path d="M12 3.2c3.1 3.9 5.4 6.8 5.4 9.7a5.4 5.4 0 0 1-10.8 0c0-2.9 2.3-5.8 5.4-9.7z"/>
+                  <path d="M9.5 13.2a2.6 2.6 0 0 0 2.2 2.9"/>
                 </svg>
-                {burstFor === 'dislike' && <span className="player-icon-burst player-icon-burst--dislike" />}
+                {burstFor === 'water' && <span className="player-icon-burst player-icon-burst--water" />}
               </button>
               <button
                 type="button" className="player-icon-btn"

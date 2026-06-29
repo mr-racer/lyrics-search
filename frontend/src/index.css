@@ -1628,6 +1628,120 @@
       18%  { opacity: 0.9; }
       100% { transform: scale(4.5); opacity: 0; }
     }
+
+    /* ─── Огонёк/Вода: icon tints + bursts ───────────────────────────────── */
+    .player-icon-btn--fire  { color: rgba(255,150,80,0.62); }
+    .player-icon-btn--fire:hover  { color: #ff9a3c; background: rgba(255,120,30,0.14); }
+    .player-icon-btn--water { color: rgba(86,176,255,0.60); }
+    .player-icon-btn--water:hover { color: #4fb0ff; background: rgba(40,140,255,0.14); }
+    body[data-theme="light"] .player-icon-btn--fire  { color: rgba(214,98,20,0.66); }
+    body[data-theme="light"] .player-icon-btn--fire:hover  { color: #d4620f; }
+    body[data-theme="light"] .player-icon-btn--water { color: rgba(28,120,210,0.62); }
+    body[data-theme="light"] .player-icon-btn--water:hover { color: #1c78d2; }
+    .player-icon-burst--fire  { background: radial-gradient(circle, rgba(255,150,40,0.78) 0%, rgba(255,90,0,0) 70%); }
+    .player-icon-burst--water { background: radial-gradient(circle, rgba(80,176,255,0.74) 0%, rgba(40,120,255,0) 70%); }
+
+    /* ─── Огонёк/Вода: cover combustion ──────────────────────────────────────
+       Two absolutely-positioned layers overflow the cover; flame tongues rise
+       from the bottom/side edges (center left clear so the art reads). The BACK
+       layer (z:-1) sits behind the art for a 3D halo; the FRONT layer (z:3) licks
+       over its rim. `screen` blend makes overlapping tongues glow additively. */
+    .cover-fx {
+      position: absolute;
+      inset: -20% -16% -12% -16%;
+      pointer-events: none;
+      border-radius: 28px;
+    }
+    .cover-fx--back  { z-index: -1; }
+    .cover-fx--front { z-index: 3; }
+
+    .cover-fx__aura {
+      position: absolute; inset: 0;
+      border-radius: 30px;
+      filter: blur(28px);
+      opacity: 0;
+      will-change: opacity, transform;
+      animation: coverAura 2200ms ease-out forwards;
+    }
+    .cover-fx--fire .cover-fx__aura {
+      background: radial-gradient(58% 56% at 50% 80%, rgba(255,146,32,0.55), rgba(255,72,0,0.20) 56%, transparent 72%);
+    }
+    .cover-fx--water .cover-fx__aura {
+      background: radial-gradient(58% 56% at 50% 72%, rgba(60,168,255,0.42), rgba(40,116,255,0.16) 56%, transparent 72%);
+    }
+
+    /* outer tongue: position + one-shot rise (transform). */
+    .cover-fx__flame {
+      position: absolute;
+      bottom: var(--b, 6%);
+      left: var(--x, 50%);
+      width: var(--w, 18%);
+      height: var(--h, 44%);
+      transform: translateX(-50%) scaleY(0);
+      transform-origin: 50% 100%;
+      opacity: 0;
+      will-change: transform, opacity;
+      animation: coverFlameRise 2200ms cubic-bezier(0.3,0.7,0.3,1) var(--delay, 0ms) forwards;
+    }
+    /* inner tongue: the flame body + perpetual flicker (its own transform). */
+    .cover-fx__flame > i {
+      display: block; width: 100%; height: 100%;
+      transform-origin: 50% 100%;
+      filter: blur(6px);
+      mix-blend-mode: screen;
+      animation: coverFlameFlicker var(--flick, 220ms) ease-in-out var(--delay, 0ms) infinite alternate;
+    }
+    .cover-fx--fire .cover-fx__flame > i {
+      border-radius: 50% 50% 46% 46% / 66% 66% 34% 34%;
+      background: linear-gradient(to top, #ff2d00 0%, #ff6a00 30%, #ffb22e 60%, rgba(255,236,150,0.92) 84%, transparent 100%);
+    }
+    .cover-fx--water .cover-fx__flame > i {
+      border-radius: 46% 46% 50% 50% / 40% 40% 60% 60%;
+      background: linear-gradient(to top, #1f6dff 0%, #2f9bff 36%, #7fd0ff 68%, rgba(206,242,255,0.88) 90%, transparent 100%);
+    }
+
+    .cover-fx__ember {
+      position: absolute;
+      bottom: 16%;
+      left: var(--x, 50%);
+      width: 4px; height: 4px;
+      border-radius: 50%;
+      background: radial-gradient(circle, #ffd587 0%, rgba(255,120,0,0) 70%);
+      opacity: 0;
+      will-change: transform, opacity;
+      animation: coverEmber var(--edur, 1500ms) ease-out var(--delay, 0ms) forwards;
+    }
+
+    @keyframes coverAura {
+      0%   { opacity: 0; transform: scale(0.9); }
+      16%  { opacity: 1; transform: scale(1.02); }
+      58%  { opacity: 0.78; transform: scale(1); }
+      100% { opacity: 0; transform: scale(1.05); }
+    }
+    @keyframes coverFlameRise {
+      0%   { transform: translateX(-50%) scaleY(0);    opacity: 0; }
+      12%  { opacity: 1; }
+      20%  { transform: translateX(-50%) scaleY(1.05); }
+      40%  { transform: translateX(-50%) scaleY(0.95); }
+      74%  { opacity: 1; }
+      100% { transform: translateX(-50%) scaleY(0.5);  opacity: 0; }
+    }
+    @keyframes coverFlameFlicker {
+      0%   { transform: scaleX(1) scaleY(1) translateX(0); }
+      50%  { transform: scaleX(0.9) scaleY(1.12) translateX(var(--sway, 2%)); }
+      100% { transform: scaleX(1.08) scaleY(0.92) translateX(calc(-1 * var(--sway, 2%))); }
+    }
+    @keyframes coverEmber {
+      0%   { opacity: 0; transform: translate(0, 0) scale(1); }
+      18%  { opacity: 1; }
+      100% { opacity: 0; transform: translate(var(--ex, 0), calc(-1 * var(--ey, 120px))) scale(0.35); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .cover-fx__flame, .cover-fx__flame > i, .cover-fx__ember { animation: none; opacity: 0; }
+      /* keep only a gentle aura pulse so the gesture still acknowledges itself */
+      .cover-fx__aura { animation-duration: 1400ms; }
+    }
+
     .player-art-front,
     .player-art-back {
       position: absolute;
