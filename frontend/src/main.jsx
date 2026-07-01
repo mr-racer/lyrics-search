@@ -88,6 +88,9 @@ function clearStoredAuth() {
   // the next account's session (module state, declared below).
   _streamToken = '';
   _streamTokenExpMs = 0;
+  // And the prefetched media blobs — another account's audio must not sit in
+  // memory (or get promoted to the player) after the account switch.
+  dropMediaPrefetch();
 }
 
 // ─── Stream token — auth for <audio> URLs ───────────────────────────────────
@@ -109,7 +112,75 @@ async function refreshStreamToken() {
   }
 }
 
-function buildStreamUrl(trackId) {
+// ─── Next-track media prefetch ───────────────────────────────────────────────
+// On a slow connection every track change used to start from byte 0: token
+// check, Qdrant lookup, (ffprobe), then the whole download while the user
+// hears silence. Instead, once the CURRENT track is buffered to the end
+// (canplaythrough — so prefetch never competes with a still-starving stream),
+// App downloads the NEXT queue track into a Blob; buildStreamUrl then hands
+// the blob: URL to <audio> and the switch is instant and offline-proof.
+// At most two blobs are alive: the one playing and the one prefetched.
+let _playingBlob = { trackId: null, url: null };
+let _nextPrefetch = { trackId: null, blobUrl: null, ctrl: null };
+
+function prefetchNextTrack(trackId) {
+  if (!trackId) return;
+  if (_nextPrefetch.trackId === trackId || _playingBlob.trackId === trackId) return;
+  if (_nextPrefetch.ctrl) _nextPrefetch.ctrl.abort();
+  if (_nextPrefetch.blobUrl && _nextPrefetch.blobUrl !== _playingBlob.url) {
+    URL.revokeObjectURL(_nextPrefetch.blobUrl);
+  }
+  const ctrl = new AbortController();
+  const entry = { trackId, blobUrl: null, ctrl };
+  _nextPrefetch = entry;
+  // forPrefetch: the network-URL branch below must not treat this fetch as
+  // "now playing something else" and revoke the blob the <audio> is using.
+  fetch(buildStreamUrl(trackId, { forPrefetch: true }), { signal: ctrl.signal })
+    .then(r => (r.ok ? r.blob() : null))
+    .then(blob => {
+      // A newer prefetch may have replaced this entry while we downloaded.
+      if (!blob || _nextPrefetch !== entry) return;
+      entry.blobUrl = URL.createObjectURL(blob);
+    })
+    .catch(() => {});   // aborted / offline — playback falls back to the network URL
+}
+
+function dropMediaPrefetch() {
+  if (_nextPrefetch.ctrl) _nextPrefetch.ctrl.abort();
+  if (_nextPrefetch.blobUrl && _nextPrefetch.blobUrl !== _playingBlob.url) {
+    URL.revokeObjectURL(_nextPrefetch.blobUrl);
+  }
+  _nextPrefetch = { trackId: null, blobUrl: null, ctrl: null };
+  if (_playingBlob.url) URL.revokeObjectURL(_playingBlob.url);
+  _playingBlob = { trackId: null, url: null };
+}
+
+function buildStreamUrl(trackId, { forPrefetch = false } = {}) {
+  // Completed prefetch for this track — promote it to "playing" and serve the
+  // blob. The previous playing blob (if different) is no longer the element's
+  // src after this switch, so it's safe to revoke.
+  if (!forPrefetch && _nextPrefetch.trackId === trackId && _nextPrefetch.blobUrl) {
+    if (_playingBlob.url && _playingBlob.url !== _nextPrefetch.blobUrl) {
+      URL.revokeObjectURL(_playingBlob.url);
+    }
+    _playingBlob = { trackId, url: _nextPrefetch.blobUrl };
+    // Ownership moves to _playingBlob. Leaving the entry here would hand out
+    // this URL again AFTER the network path revoked it (play unprefetched →
+    // prev back to this track) — a dead blob: src the element can't load.
+    _nextPrefetch = { trackId: null, blobUrl: null, ctrl: null };
+    return _playingBlob.url;
+  }
+  // Re-pointing the already-playing blob track (section remount, queue
+  // re-sync) must return the SAME url so setSrc's same-src guard holds.
+  if (!forPrefetch && _playingBlob.trackId === trackId && _playingBlob.url) {
+    return _playingBlob.url;
+  }
+  // Network path. A real track switch away from the blob (manual pick of an
+  // unprefetched track) frees the stale blob so at most one lingers.
+  if (!forPrefetch && _playingBlob.url && _playingBlob.trackId !== trackId) {
+    URL.revokeObjectURL(_playingBlob.url);
+    _playingBlob = { trackId: null, url: null };
+  }
   // Self-heal: if the cached token is missing or in its last 5 minutes,
   // kick off a background refresh. The CURRENT url may still 401 in the
   // missing-token edge (first play racing the boot refresh) — the next
@@ -1365,6 +1436,26 @@ function AlbumCover({ title='', artist='', size=44, isDark, coverPath, radius, f
   );
 }
 
+// ─── LAZY COVER ───────────────────────────────────────────────────────────────
+// CSS background-image covers download EAGERLY the moment the element renders
+// (even in a hidden section) — loading="lazy" only exists on a real <img>.
+// List artwork goes through this so off-screen covers never compete with the
+// audio stream for the 6-per-origin connection pool (same reasoning as the
+// loading="lazy" in AlbumCover above). No artwork → a plain gradient div.
+function LazyCover({ url, className, style, fallback = 'linear-gradient(135deg, rgba(124,91,255,.35) 0%, rgba(255,120,200,.25) 100%)' }) {
+  // Key order matters in the fallback: `background` (shorthand) spread AFTER
+  // style wins over any backgroundColor placeholder carried in `style`.
+  if (!url) return <div className={className} style={{ ...style, background: fallback }} />;
+  return (
+    <img src={url} alt="" loading="lazy" decoding="async" className={className}
+         // The gradient doubles as a loading placeholder behind the not-yet-
+         // decoded image; a 404 swaps in a transparent pixel (data: can't
+         // re-error) so the gradient shows instead of a broken-image glyph.
+         style={{ objectFit: 'cover', background: fallback, ...style }}
+         onError={e => { e.currentTarget.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'; }} />
+  );
+}
+
 // ─── MOSAIC COVER ─────────────────────────────────────────────────────────────
 function MosaicCover({ trackIds = [], coverPaths = [], size = 220, radius = 12 }) {
   const n = Math.min(trackIds.length, 4);
@@ -1375,13 +1466,6 @@ function MosaicCover({ trackIds = [], coverPaths = [], size = 220, radius = 12 }
   const dim = typeof size === 'number'
     ? { width: size, height: size }
     : { width: size, aspectRatio: '1 / 1' };
-  const tileStyle = (path) => ({
-    backgroundImage: path ? `url(${API}${path})` : 'linear-gradient(135deg, rgba(124,91,255,.35) 0%, rgba(255,120,200,.25) 100%)',
-    backgroundSize: 'cover',
-    backgroundPosition: 'center',
-    backgroundColor: 'rgba(255,255,255,.04)',
-  });
-
   if (n === 0) {
     return (
       <div style={{
@@ -1405,10 +1489,14 @@ function MosaicCover({ trackIds = [], coverPaths = [], size = 220, radius = 12 }
   return (
     <div style={grid}>
       {Array.from({ length: n }).map((_, i) => (
-        <div key={i} style={{
-          ...tileStyle(coverPaths[i]),
-          ...(n === 3 && i === 0 ? { gridColumn: '1 / -1' } : {}),
-        }} />
+        <LazyCover key={i}
+          url={coverPaths[i] ? `${API}${coverPaths[i]}` : null}
+          style={{
+            width: '100%', height: '100%', minWidth: 0, minHeight: 0, display: 'block',
+            backgroundColor: 'rgba(255,255,255,.04)',
+            ...(n === 3 && i === 0 ? { gridColumn: '1 / -1' } : {}),
+          }}
+        />
       ))}
     </div>
   );
@@ -3996,11 +4084,6 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream, 
   const heroHeadline = (profile && profile.headline) ||
     (lang === 'ru' ? 'Твой музыкальный портрет' : 'Your music portrait');
 
-  const coverBg = (p) => {
-    const u = homeCoverUrl(p);
-    return u ? `url(${u})` : 'linear-gradient(135deg,#7c5cff,#b06bff)';
-  };
-
   const recDivider = (variant, label) => (
     <div className={`rec-div rec-div--${variant}`}>
       <div className="rec-div__ln" />
@@ -4028,7 +4111,8 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream, 
         <div key={(h.track && h.track.track_id) || i} className="rec-trk"
              onClick={() => onPlayTrack && onPlayTrack(h, hits)}>
           <div className="rec-trk__ix" style={{ color:c.textSubtle }}>{i + 1}</div>
-          <div className="rec-trk__cov" style={{ backgroundImage: coverBg(h.track && h.track.cover_art_path) }} />
+          <LazyCover className="rec-trk__cov" url={homeCoverUrl(h.track && h.track.cover_art_path)}
+                     fallback="linear-gradient(135deg,#7c5cff,#b06bff)" />
           <div style={{ flex:1, minWidth:0 }}>
             <div style={{ fontSize:'15px', fontWeight:700, color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{h.track && h.track.title}</div>
             <div style={{ fontSize:'12.5px', color:c.textSubtle }}>{h.track && h.track.artist}</div>
@@ -4120,7 +4204,8 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream, 
                   <div key={isl.track_id} className="rec-island" style={{ color:c.text }} onClick={() => islandRadio(isl)}>
                     <div className="rec-covers">
                       {(isl.tracks || []).slice(0,3).map((t,j) => (
-                        <div key={t.track_id || j} className="rec-cov" style={{ backgroundImage: coverBg(t.cover_art_path) }} />
+                        <LazyCover key={t.track_id || j} className="rec-cov" url={homeCoverUrl(t.cover_art_path)}
+                                   fallback="linear-gradient(135deg,#7c5cff,#b06bff)" />
                       ))}
                     </div>
                     <div style={{ fontSize:'15px', fontWeight:700, lineHeight:1.2 }}>
@@ -10037,6 +10122,18 @@ const _spectrumState = {
   setupAttempted: false,
 };
 
+// Mobile browsers (Android Chrome in particular) suspend a background page's
+// AudioContext when the screen locks or the tab is hidden. Once the <audio>
+// element is routed through createMediaElementSource its output goes ONLY
+// through that context — a suspended context means the element keeps
+// "playing" (currentTime advances, the buffer downloads) while producing
+// pure silence, and Chrome then drops the media notification because the tab
+// stopped being audible. There is no way to un-route a MediaElementSource,
+// so on mobile we never create it: no spectrum wave, but screen-off playback
+// survives track changes. (iPadOS masquerades as Mac — detect via touch.)
+const _IS_MOBILE = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) ||
+  (navigator.maxTouchPoints > 1 && /Mac/.test(navigator.platform));
+
 // Idempotent: wire <audio> into AnalyserNode. MUST be invoked **synchronously
 // inside a user gesture** (click/touch handler) so the AudioContext is born
 // in 'running' state. If we defer this to a useEffect, the ctx ends up
@@ -10045,6 +10142,7 @@ const _spectrumState = {
 function _setupSpectrumAnalyser(el) {
   if (_spectrumState.setupAttempted || !el) return;
   _spectrumState.setupAttempted = true;
+  if (_IS_MOBILE) return; // audio stays wired directly to the output
   let ctx = null;
   try {
     const Ctx = window.AudioContext || window.webkitAudioContext;
@@ -10059,6 +10157,20 @@ function _setupSpectrumAnalyser(el) {
     _spectrumState.ctx = ctx;
     _spectrumState.analyser = analyser;
     _spectrumState.dataArray = new Uint8Array(analyser.frequencyBinCount);
+    // Safety net: the browser may suspend the context while the page is
+    // hidden (sound dies but the element keeps advancing — see _IS_MOBILE
+    // note above). Resume whenever media actually starts flowing or the page
+    // becomes visible again; a prior user gesture makes resume() legal here.
+    // Attached once — setup is guarded by setupAttempted, so no leak.
+    const resume = () => {
+      if (_spectrumState.ctx && _spectrumState.ctx.state === 'suspended') {
+        _spectrumState.ctx.resume().catch(() => {});
+      }
+    };
+    el.addEventListener('playing', resume);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) resume();
+    });
   } catch (e) {
     if (ctx && typeof ctx.close === 'function') ctx.close().catch(() => {});
   }
@@ -14361,6 +14473,26 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     return () => el.removeEventListener('ended', onEnded);
   }, [section, audio?.audioRef, playerTrack?.track_id, playerPlaylist]);
 
+  // Prefetch the NEXT queue track once the CURRENT one is fully buffered.
+  // Gating on canplaythrough/HAVE_ENOUGH_DATA means a starving stream on a
+  // slow connection keeps the whole pipe — prefetch only spends the idle
+  // bandwidth after the current track is safe. Runs at App level so it works
+  // on every screen (PlayerSection may be unmounted on Home).
+  useEffect(() => {
+    const el = audio?.audioRef?.current;
+    if (!el || !playerTrack?.track_id) return;
+    const list = playerPlaylist || [];
+    const idx = list.findIndex(h => ((h && h.track) ? h.track : h).track_id === playerTrack.track_id);
+    const nextHit = idx >= 0 ? list[idx + 1] : null;
+    const nextId = nextHit ? ((nextHit.track) ? nextHit.track : nextHit).track_id : null;
+    if (!nextId) return;
+    let fired = false;
+    const kick = () => { if (!fired) { fired = true; prefetchNextTrack(nextId); } };
+    if (el.readyState >= 4) { kick(); return; }   // HAVE_ENOUGH_DATA already
+    el.addEventListener('canplaythrough', kick);
+    return () => el.removeEventListener('canplaythrough', kick);
+  }, [playerTrack?.track_id, playerPlaylist, audio?.audioRef]);
+
   // Stats for landing
   useEffect(() => {
     if (appState !== 'ready') return;
@@ -14556,7 +14688,11 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
       <audio
         ref={audio.initAudio}
         src={audio.currentSrc}
-        preload="metadata"
+        // "auto" (was "metadata"): on a slow connection "metadata" delayed the
+        // real download until play() — the user stared at the buffering veil.
+        // Let the browser buffer ahead; the next-track blob prefetch above is
+        // gated on canplaythrough so the two never compete.
+        preload="auto"
         crossOrigin="anonymous"
         style={{ position:'absolute', width:0, height:0, pointerEvents:'none' }}
       />
