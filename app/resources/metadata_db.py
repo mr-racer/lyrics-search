@@ -209,9 +209,13 @@ _SCHEMA_SQL: Tuple[str, ...] = (
         role          TEXT NOT NULL DEFAULT 'member'
                         CHECK (role IN ('owner', 'member')),
         created_at    REAL NOT NULL,
-        last_login_at REAL
+        last_login_at REAL,
+        premium       INTEGER NOT NULL DEFAULT 0
     )""",
     "CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)",
+    # Premium tier flag (display-only; no server-side gating). Idempotent —
+    # the duplicate-column catch in init() skips it on already-migrated DBs.
+    "ALTER TABLE users ADD COLUMN premium INTEGER NOT NULL DEFAULT 0",
     """CREATE TABLE IF NOT EXISTS invites (
         code         TEXT PRIMARY KEY,
         created_by   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -2341,7 +2345,7 @@ class MetadataDB:
         stored rows are already canonical)."""
         conn = cls._connect()
         row = conn.execute(
-            "SELECT id, email, password_hash, role, created_at, last_login_at "
+            "SELECT id, email, password_hash, role, created_at, last_login_at, premium "
             "FROM users WHERE email = ?",
             (email,),
         ).fetchone()
@@ -2350,6 +2354,7 @@ class MetadataDB:
         return {
             "id": row[0], "email": row[1], "password_hash": row[2],
             "role": row[3], "created_at": row[4], "last_login_at": row[5],
+            "premium": row[6],
         }
 
     @classmethod
@@ -2357,7 +2362,7 @@ class MetadataDB:
         """Return user row dict or None."""
         conn = cls._connect()
         row = conn.execute(
-            "SELECT id, email, password_hash, role, created_at, last_login_at "
+            "SELECT id, email, password_hash, role, created_at, last_login_at, premium "
             "FROM users WHERE id = ?",
             (user_id,),
         ).fetchone()
@@ -2366,6 +2371,7 @@ class MetadataDB:
         return {
             "id": row[0], "email": row[1], "password_hash": row[2],
             "role": row[3], "created_at": row[4], "last_login_at": row[5],
+            "premium": row[6],
         }
 
     @classmethod

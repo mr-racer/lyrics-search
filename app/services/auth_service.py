@@ -103,6 +103,7 @@ def _row_to_user(row: dict) -> User:
     return User(
         id=row["id"], email=row["email"], role=row["role"],
         created_at=row["created_at"], last_login_at=row["last_login_at"],
+        premium=bool(row.get("premium", 0)),
     )
 
 

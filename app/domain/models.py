@@ -824,6 +824,10 @@ class User(BaseModel):
     role: Literal["owner", "member"]
     created_at: float
     last_login_at: Optional[float] = None
+    # MusiX Premium tier — display-only flag (Yandex Music transfer, premium
+    # metadata/cover sources). Set directly in SQLite by the operator; no
+    # endpoint mutates it and nothing is gated server-side.
+    premium: bool = False
 
 
 class Invite(BaseModel):

@@ -70,6 +70,7 @@ function setStoredAuth({ token, user }) {
     localStorage.setItem('musix_user_id',    user.id || '');
     localStorage.setItem('musix_user_email', user.email || '');
     localStorage.setItem('musix_user_role',  user.role || '');
+    localStorage.setItem('musix_user_premium', user.premium ? '1' : '0');
   }
   // A successful auth ends any 401-kick state: reset the reload-loop guard
   // and drop the legacy '#login' hash older builds left in the URL.
@@ -84,6 +85,7 @@ function clearStoredAuth() {
   localStorage.removeItem('musix_user_id');
   localStorage.removeItem('musix_user_email');
   localStorage.removeItem('musix_user_role');
+  localStorage.removeItem('musix_user_premium');
   // Drop the cached stream token too — it must not survive a logout into
   // the next account's session (module state, declared below).
   _streamToken = '';
@@ -2418,8 +2420,11 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLi
       }}>
         <div style={{ display:'flex', alignItems:'center', gap:'14px', flex:'1 1 0', minWidth:0 }}>
           <BrandMark size={42} isDark={isDark} />
-          <div className="serif" style={{ fontSize:'clamp(26px,2.6vw,34px)', lineHeight:'0.95', letterSpacing:'-0.02em' }}>
-            Musi<i style={{ color: 'oklch(62% 0.2 275)' }}>X</i>
+          <div style={{ minWidth:0 }}>
+            <div className="serif" style={{ fontSize:'clamp(26px,2.6vw,34px)', lineHeight:'0.95', letterSpacing:'-0.02em' }}>
+              Musi<i style={{ color: 'oklch(62% 0.2 275)' }}>X</i>
+            </div>
+            <PremiumMark />
           </div>
         </div>
         {/* Centered mini-player — its own header zone (flanked by two equal
@@ -6908,8 +6913,161 @@ function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist,
 }
 
 
+// ─── Processing-mode badge + Premium enrichment note ─────────────────────────
+// Module-cached /instance/config fetch: the mode badge sits on several indexing
+// surfaces at once (onboarding, modal, member wizard) — one request serves all.
+let _instanceCfgPromise = null;
+function fetchInstanceConfigCached() {
+  if (!_instanceCfgPromise) {
+    _instanceCfgPromise = apiFetch('/instance/config')
+      .catch(err => { _instanceCfgPromise = null; throw err; });
+  }
+  return _instanceCfgPromise;
+}
+
+// Persistent "where does the processing run" indicator for every indexing
+// surface. sharing == the whole stack lives on the user's machine → local
+// processing (green); server == a hosted instance the member uploads to →
+// processing on the operator's server (violet). Renders nothing until the
+// config arrives so the wrong mode is never flashed.
+function ProcessingModeBadge({ isDark, lang, style }) {
+  const c = useColors(isDark);
+  const ru = lang === 'ru';
+  const [cfg, setCfg] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    fetchInstanceConfigCached().then(r => { if (alive) setCfg(r); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  if (!cfg) return null;
+
+  const server = cfg.mode === 'server';
+  const accent   = server ? 'oklch(62% 0.2 275)' : 'oklch(63% 0.17 142)';
+  const accentBg = server
+    ? `oklch(62% 0.2 275 / ${isDark ? 0.12 : 0.08})`
+    : `oklch(63% 0.17 142 / ${isDark ? 0.12 : 0.08})`;
+  const accentEdge = server ? 'oklch(62% 0.2 275 / 0.35)' : 'oklch(63% 0.17 142 / 0.35)';
+  const label = server
+    ? (ru ? 'ОБРАБОТКА НА СЕРВЕРЕ' : 'PROCESSING ON SERVER')
+    : (ru ? 'ЛОКАЛЬНАЯ ОБРАБОТКА' : 'PROCESSING ON THIS DEVICE');
+  let line = server
+    ? (ru ? 'Треки обрабатываются на сервере MusiX — скорость зависит от его загрузки, возможна очередь.'
+          : 'Your tracks are processed on the MusiX server — speed depends on server load; a queue is possible.')
+    : (ru ? 'Всё происходит на этом компьютере — файлы никуда не отправляются.'
+          : 'Everything runs on this computer — your files never leave it.');
+  if (!server && cfg.ai_available === false) {
+    line += ru
+      ? ' ИИ-дополнения выключены — локальная модель не настроена.'
+      : ' AI extras are off — no local model is configured.';
+  }
+
+  return (
+    <div style={{
+      display:'flex', alignItems:'flex-start', gap:'11px',
+      padding:'11px 14px', borderRadius:'12px',
+      background: accentBg,
+      border: `1px solid ${accentEdge}`,
+      ...style,
+    }}>
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke={accent}
+        strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+        style={{ flexShrink:0, marginTop:'1px' }}>
+        {server
+          ? <path d="M17.5 19a4.5 4.5 0 1 0-.9-8.9A6 6 0 1 0 6 15.7 3.5 3.5 0 0 0 7.5 19Z" />
+          : <>
+              <rect x="3" y="4" width="18" height="12" rx="2" />
+              <path d="M8 20h8M12 16v4" />
+            </>}
+      </svg>
+      <div style={{ minWidth:0 }}>
+        <div className="mono" style={{
+          fontSize:'11px', fontWeight:'600', letterSpacing:'0.2em',
+          color: accent, marginBottom:'3px',
+        }}>
+          {label}
+        </div>
+        <div style={{ fontSize:'12.5px', color:c.textMuted, lineHeight:1.5 }}>{line}</div>
+      </div>
+    </div>
+  );
+}
+
+// Tiny premium chip under the MusiX wordmark in the main app header. Renders
+// only for accounts with the premium flag — free accounts see nothing here
+// (the soft upsell lives in the first-run indexing flow instead).
+function PremiumMark({ style }) {
+  const premium = (typeof localStorage !== 'undefined'
+    && localStorage.getItem('musix_user_premium')) === '1';
+  if (!premium) return null;
+  return (
+    <div className="mono" style={{
+      display:'inline-flex', alignItems:'center', gap:'4px',
+      marginTop:'4px', padding:'2px 8px', borderRadius:'999px',
+      fontSize:'9px', fontWeight:'700', letterSpacing:'0.22em',
+      color:'oklch(76% 0.13 85)',
+      border:'1px solid oklch(76% 0.13 85 / 0.4)',
+      background:'oklch(76% 0.13 85 / 0.08)',
+      ...style,
+    }}>
+      ★ PREMIUM
+    </div>
+  );
+}
+
+// Contextual Premium note, anchored to the Facts stage of indexing — the point
+// where song/artist metadata and covers are being enriched. Premium accounts
+// see which extra sources they're getting plus the Yandex Music transfer;
+// free accounts get a soft one-liner about what Premium adds. Informational
+// only — nothing here is a popup or a gate.
+function PremiumEnrichNote({ isDark, lang, c, style }) {
+  const ru = lang === 'ru';
+  const premium = (typeof localStorage !== 'undefined'
+    && localStorage.getItem('musix_user_premium')) === '1';
+  const gold = 'oklch(76% 0.13 85)';
+
+  if (premium) {
+    return (
+      <div style={{
+        padding:'9px 13px', borderRadius:'10px',
+        background: isDark ? 'oklch(76% 0.13 85 / 0.09)' : 'oklch(76% 0.13 85 / 0.10)',
+        borderLeft: `2px solid ${gold}`,
+        ...style,
+      }}>
+        <div className="mono" style={{ fontSize:'10.5px', fontWeight:'600', letterSpacing:'0.2em', color: gold, marginBottom:'3px' }}>
+          ★ MUSIX PREMIUM
+        </div>
+        <div style={{ fontSize:'12.5px', color:c.textMuted, lineHeight:1.55 }}>
+          {ru
+            ? <>Обложки и метаданные — из премиум-источников повышенного качества. Плейлисты и «Моё избранное» можно импортировать из Яндекс Музыки.</>
+            : <>Covers and metadata come from higher-quality premium sources. You can also import playlists and “My Favorites” from Yandex Music.</>}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div style={{
+      padding:'9px 13px', borderRadius:'10px',
+      background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)',
+      borderLeft: `2px solid ${isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.12)'}`,
+      ...style,
+    }}>
+      <div style={{ fontSize:'12.5px', color:c.textMuted, lineHeight:1.55 }}>
+        {ru ? 'Обложки и метаданные — из базовых источников.' : 'Covers and metadata come from standard sources.'}
+      </div>
+      <div style={{ fontSize:'12px', color:c.textSubtle, lineHeight:1.55, marginTop:'3px' }}>
+        <span style={{ color: gold }}>★</span>{' '}
+        {ru
+          ? <>С MusiX Premium: источники выше качеством для загруженных файлов и импорт плейлистов и «Моего избранного» из Яндекс Музыки.</>
+          : <>With MusiX Premium: higher-quality sources for your uploads, plus importing playlists and “My Favorites” from Yandex Music.</>}
+      </div>
+    </div>
+  );
+}
+
 // ─── Indexing progress (compact, flat chronological list) ────────────────────
-function IndexingProgress({ stepStatus, stageProgress, lang, c, isDark }) {
+// `premiumNote` — show the Premium enrichment note under the Facts stage. Only
+// first-run (onboarding) indexing sets it; repeat indexing stays clean.
+function IndexingProgress({ stepStatus, stageProgress, lang, c, isDark, premiumNote = false }) {
   // Flat, chronological order matching the real pipeline: lyrics fetch + CLAP
   // (Звучание) start together at t=0, dense (Текстовый поиск) runs after lyrics,
   // facts overlap, analysis last. `metadata` (MusicBrainz) is skipped server-side
@@ -6974,7 +7132,8 @@ function IndexingProgress({ stepStatus, stageProgress, lang, c, isDark }) {
         else iconBg = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)';
 
         return (
-          <div key={s.key} style={{ display:'flex', alignItems:'flex-start', gap:'12px' }}>
+          <Fragment key={s.key}>
+          <div style={{ display:'flex', alignItems:'flex-start', gap:'12px' }}>
             <div style={{
               width:'35px', height:'35px', borderRadius:'10px', flexShrink:0, marginTop:'2px',
               display:'flex', alignItems:'center', justifyContent:'center',
@@ -7060,6 +7219,12 @@ function IndexingProgress({ stepStatus, stageProgress, lang, c, isDark }) {
               )}
             </div>
           </div>
+          {/* Facts is where metadata/covers get enriched — anchor the premium
+              source note right under it, indented to the row's text column. */}
+          {premiumNote && s.key === 'facts' && (
+            <PremiumEnrichNote isDark={isDark} lang={lang} c={c} style={{ marginLeft:'47px' }} />
+          )}
+          </Fragment>
         );
       })}
     </div>
@@ -7076,6 +7241,7 @@ function IndexingProgress({ stepStatus, stageProgress, lang, c, isDark }) {
 function IndexingModal({
   isDark, lang, collectionName, stepStatus, trackCount, errorMessage, onClose, stageProgress,
   phase, onAiConfirm, onAiSkip, onAiBootstrapRun, onAiBootstrapLater, aiStatus,
+  premiumNote = false,
 }) {
   const c = useColors(isDark);
   const allDone = Object.values(stepStatus).length > 0 && Object.values(stepStatus).every(s => s === 'done');
@@ -7226,13 +7392,14 @@ function IndexingModal({
               ? <>{lang==='ru'?'Готово':'Done'} <i style={{ color: c.green }}>✓</i></>
               : <>{lang==='ru'?'Идёт':'Working'} <i style={{ color: c.amber }}>…</i></>}
         </div>
+        <ProcessingModeBadge isDark={isDark} lang={lang} style={{ marginBottom:'22px' }} />
         {errorMessage ? (
           <div style={{ padding:'15px 18px', borderRadius:'12px',
             background: c.redBg, color: c.red, fontSize:'17px', marginBottom:'22px' }}>
             {errorMessage}
           </div>
         ) : (
-          <IndexingProgress stepStatus={stepStatus} stageProgress={stageProgress} lang={lang} c={c} isDark={isDark} />
+          <IndexingProgress stepStatus={stepStatus} stageProgress={stageProgress} lang={lang} c={c} isDark={isDark} premiumNote={premiumNote} />
         )}
         {trackCount != null && (
           <div className="mono" style={{ marginTop:'22px', fontSize:'18px', color: c.textMuted, letterSpacing:'0.1em' }}>
@@ -8813,9 +8980,10 @@ function MemberIndexing({ ru, c, isDark, jobId, onDone }) {
 
   return (
     <div className="ob-glass" style={{ padding:'26px 28px' }}>
-      <h2 className="serif" style={{ fontSize:'26px', letterSpacing:'-0.02em', marginBottom:'18px' }}>
+      <h2 className="serif" style={{ fontSize:'26px', letterSpacing:'-0.02em', marginBottom:'14px' }}>
         {error ? (ru ? 'Что-то пошло не так' : 'Something went wrong') : (ru ? 'Собираем вашу библиотеку…' : 'Building your library…')}
       </h2>
+      <ProcessingModeBadge isDark={isDark} lang={ru ? 'ru' : 'en'} style={{ marginBottom:'18px' }} />
       {error ? (
         <div style={{ padding:'10px 14px', borderRadius:'10px', background:c.redBg, color:c.red, fontSize:'13px' }}>{error}</div>
       ) : (
@@ -8825,7 +8993,16 @@ function MemberIndexing({ ru, c, isDark, jobId, onDone }) {
             const pr = stageProgress[k] || { current:0, total:0 };
             const pct = st === 'done' ? 100 : pr.total > 0 ? Math.round(100 * pr.current / pr.total) : 0;
             const count = (st === 'running' && pr.total > 1) ? `${pr.current || 0}/${pr.total}` : null;
-            return <OBStageBar key={k} c={c} label={ru ? WIZ_STAGE_LABELS[k].ru : WIZ_STAGE_LABELS[k].en} state={st} pct={pct} count={count} eta={etas[k]} />;
+            return (
+              <Fragment key={k}>
+                <OBStageBar c={c} label={ru ? WIZ_STAGE_LABELS[k].ru : WIZ_STAGE_LABELS[k].en} state={st} pct={pct} count={count} eta={etas[k]} />
+                {/* Facts is where metadata/covers get enriched — the premium
+                    source note lives right under that bar. */}
+                {k === 'facts' && (
+                  <PremiumEnrichNote isDark={isDark} lang={ru ? 'ru' : 'en'} c={c} style={{ margin:'2px 0 12px' }} />
+                )}
+              </Fragment>
+            );
           })}
           {aiWaiting && (
             <>
@@ -9364,6 +9541,10 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
             : 'A music folder or individual files — uploaded and stored under your account. FLAC, MP3, M4A.'}
         </p>
 
+        {/* Trust moment: before the user hands over files, say plainly where
+            they will be processed. The same badge follows into indexing. */}
+        <ProcessingModeBadge isDark={isDark} lang={lang} style={{ marginBottom:'16px' }} />
+
         <div className="ob-glass"
           onDragOver={(e) => e.preventDefault()}
           onDrop={onDrop}
@@ -9744,6 +9925,8 @@ function OnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
             : 'MusiX adds your music locally so you can search tracks by meaning — lyrics and audio. Nothing leaves your machine.'}
         </p>
 
+        <ProcessingModeBadge isDark={isDark} lang={lang} style={{ marginBottom:'16px' }} />
+
         <div className={ske('panel', isDark)} style={{ padding:'26px 28px', borderRadius:'18px' }}>
           <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'8px' }}>
             {lang==='ru'?'ИМЯ БИБЛИОТЕКИ':'LIBRARY NAME'}
@@ -9799,7 +9982,7 @@ function OnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
         <IndexingModal isDark={isDark} lang={lang} collectionName={collName}
           stepStatus={stepStatus} trackCount={modalTrackCount} errorMessage={modalError}
           onClose={() => { setShowModal(false); setStepStatus({}); setModalError(null); }}
-          stageProgress={stageProgress} />
+          stageProgress={stageProgress} premiumNote />
       )}
     </div>
   );
@@ -15554,17 +15737,27 @@ function SetupWizard({ onComplete }) {
       : { padding:'26px 28px' }}>
 
       {!finished && (
-        <h2 className="serif" style={{ fontSize:'26px', letterSpacing:'-0.02em', marginBottom:'18px' }}>
+        <h2 className="serif" style={{ fontSize:'26px', letterSpacing:'-0.02em', marginBottom:'14px' }}>
           {indexError ? (ru ? 'Что-то пошло не так' : 'Something went wrong')
                       : (ru ? 'Собираем вашу библиотеку…' : 'Building your library…')}
         </h2>
       )}
 
+      {!finished && <ProcessingModeBadge isDark={isDark} lang={lang} style={{ marginBottom:'18px' }} />}
+
       {!finished && !indexError && Object.keys(WIZ_STAGE_LABELS).map(k => {
         const st = stepStatus[k] || (indexDone ? 'done' : 'pending');
         const pr = stageProgress[k] || { current: 0, total: 0 };
         const pct = st === 'done' ? 100 : pr.total > 0 ? Math.round(100 * pr.current / pr.total) : 0;
-        return renderStageBar(ru ? WIZ_STAGE_LABELS[k].ru : WIZ_STAGE_LABELS[k].en, st, pct, k === 'dense', etas[k]);
+        return (
+          <Fragment key={k}>
+            {renderStageBar(ru ? WIZ_STAGE_LABELS[k].ru : WIZ_STAGE_LABELS[k].en, st, pct, k === 'dense', etas[k])}
+            {/* First-run indexing: premium sourcing note under the Facts bar. */}
+            {k === 'facts' && (
+              <PremiumEnrichNote isDark={isDark} lang={lang} c={c} style={{ margin:'2px 0 12px' }} />
+            )}
+          </Fragment>
+        );
       })}
 
       {!finished && !indexError && shouldEnrich && (indexDone || aiRunning) && (
