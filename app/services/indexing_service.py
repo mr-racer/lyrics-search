@@ -380,7 +380,10 @@ class IndexingService:
             # uploads skipped that step, so every server-mode track rendered the
             # no-cover equalizer fallback.
             try:
-                info["cover_art_path"] = save_cover_art(str(file_path), row["sha256"][:16])
+                info["cover_art_path"] = save_cover_art(
+                    str(file_path), row["sha256"][:16],
+                    meta=info, yandex_client=enrich_client,
+                )
             except Exception as e:
                 logger.warning(
                     "[index_uploads] cover extraction failed for %s: %s", file_path, e,

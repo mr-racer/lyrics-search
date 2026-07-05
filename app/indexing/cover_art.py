@@ -82,13 +82,35 @@ def extract_cover_art(filepath: str) -> tuple[bytes, str] | None:
     return None
 
 
-def save_cover_art(filepath: str, track_id: str) -> str | None:
+def save_cover_art(
+    filepath: str,
+    track_id: str,
+    *,
+    meta: dict | None = None,
+    yandex_client=None,
+) -> str | None:
     """Extract cover art and save to disk (content-addressed, deduplicated by SHA256).
 
     Returns relative URL path like '/covers/a3f2c1...jpg' or None.
     If an identical cover already exists on disk, returns the existing path — no duplicate write.
+
+    Premium enhancement: when the file carries NO embedded picture and a Yandex
+    enrichment ``meta`` (with artist/title) + ``yandex_client`` are supplied, fall
+    back to the Yandex catalog cover so manually-uploaded files without art still
+    get a real album image. Best-effort — any failure just yields no cover.
     """
     result = extract_cover_art(filepath)
+    if result is None and meta is not None and yandex_client is not None:
+        try:
+            from app.services.yandex.enrichment import fetch_cover_bytes
+            raw = fetch_cover_bytes(meta, yandex_client)
+            if raw:
+                try:
+                    result = (normalize_image(raw), "jpg")
+                except Exception:
+                    result = (raw, "jpg")
+        except Exception:
+            logger.debug("[cover_art] Yandex cover fallback failed", exc_info=True)
     if result is None:
         return None
 

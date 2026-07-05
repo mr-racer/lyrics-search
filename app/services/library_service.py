@@ -526,7 +526,10 @@ class LibraryService:
             if not info or not info.get("title") or not info.get("artist"):
                 return row, None, "missing title/artist in metadata tags"
             try:
-                info["cover_art_path"] = save_cover_art(str(file_path), row["sha256"][:16])
+                info["cover_art_path"] = save_cover_art(
+                    str(file_path), row["sha256"][:16],
+                    meta=info, yandex_client=enrich_client,
+                )
             except Exception as e:
                 logger.warning("[upload] cover extraction failed for %s: %s", file_path, e)
                 info["cover_art_path"] = None
@@ -1927,7 +1930,10 @@ class LibraryService:
             track_id = self._compute_track_id(info.get("file_path") or "")
             if info.get("file_path") and track_id:
                 try:
-                    info["cover_art_path"] = save_cover_art(info["file_path"], track_id)
+                    info["cover_art_path"] = save_cover_art(
+                        info["file_path"], track_id,
+                        meta=info, yandex_client=enrich_client,
+                    )
                 except Exception as e:
                     logger.warning("[LibraryService] cover extraction failed for %s: %s",
                                    info["file_path"], e)

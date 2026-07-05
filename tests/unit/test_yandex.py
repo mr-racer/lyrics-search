@@ -111,6 +111,44 @@ class TestEnrichMetadata(_EnrichmentTest):
         out = enrichment.enrich_metadata(meta, client=Boom())
         assert out is meta
 
+    def test_year_out_of_range_rejected(self):
+        # A garbage catalog year must not land in meta (validated like tag reads).
+        meta = {"artist": "A", "title": "T", "album": "", "year": None, "genre": ""}
+        enrichment.apply_yandex_track(meta, _ytrack(year=3999))
+        assert meta.get("year") in (None, "") or not meta.get("year")
+        assert meta["album"] == "Alb"  # other fields still fill
+
+
+class TestFetchCoverBytes(_EnrichmentTest):
+    def _cover_track(self, cover_uri="ya/%%", raw=b"\xff\xd8jpeg"):
+        t = _ytrack()
+        t.cover_uri = cover_uri
+        t.download_cover_bytes = lambda size=None: raw
+        return t
+
+    def test_returns_cover_bytes_on_match(self):
+        client = _FakeClient(self._cover_track(raw=b"IMG"))
+        out = enrichment.fetch_cover_bytes({"artist": "A", "title": "T"}, client=client)
+        assert out == b"IMG"
+
+    def test_none_when_no_cover_uri(self):
+        t = self._cover_track()
+        t.cover_uri = None
+        client = _FakeClient(t)
+        assert enrichment.fetch_cover_bytes({"artist": "A", "title": "T"}, client=client) is None
+
+    def test_none_without_artist_or_title(self):
+        client = _FakeClient(self._cover_track())
+        assert enrichment.fetch_cover_bytes({"artist": "", "title": "T"}, client=client) is None
+
+    def test_download_error_swallowed(self):
+        t = self._cover_track()
+        def boom(size=None):
+            raise RuntimeError("cdn down")
+        t.download_cover_bytes = boom
+        client = _FakeClient(t)
+        assert enrichment.fetch_cover_bytes({"artist": "A", "title": "T"}, client=client) is None
+
 
 # --------------------------------------------------------------------------- #
 # Token store + yandex_* MetadataDB CRUD                                       #

@@ -97,13 +97,35 @@ def _duration_matches(meta: dict, ytrack) -> bool:
     return abs(want - got_ms / 1000.0) <= _DURATION_TOLERANCE_S
 
 
+def _clean_str(v) -> str | None:
+    """Normalise a Yandex catalog string (title/genre) to a non-empty stripped
+    value, or None. Guards against stray whitespace and None/empty."""
+    if v is None:
+        return None
+    s = str(v).strip()
+    return s or None
+
+
 def apply_yandex_track(meta: dict, ytrack) -> dict:
-    """Backfill empty fields of ``meta`` from a Yandex ``Track`` (pure)."""
+    """Backfill empty ``album``/``year``/``genre`` of ``meta`` from a Yandex
+    ``Track`` (pure). Never overwrites a value the file's tags already carry.
+
+    Types are kept consistent with the tag-read pipeline: ``album``/``genre`` are
+    clean strings, and ``year`` is validated through the SAME ``validate_year``
+    the readers use — so an out-of-range catalog year is rejected and a good one
+    lands as an ``int`` (not the raw catalog value), matching tag-read metadata.
+    """
     album = ytrack.albums[0] if getattr(ytrack, "albums", None) else None
+    year_val = None
+    if album is not None:
+        raw_year = getattr(album, "year", None)
+        if raw_year is not None:
+            from app.indexing.metadata_readers import validate_year
+            year_val = validate_year(str(raw_year))
     values = {
-        "album": getattr(album, "title", None) if album else None,
-        "year": getattr(album, "year", None) if album else None,
-        "genre": getattr(album, "genre", None) if album else None,
+        "album": _clean_str(getattr(album, "title", None)) if album else None,
+        "year": year_val,
+        "genre": _clean_str(getattr(album, "genre", None)) if album else None,
     }
     for field in _ENRICHABLE:
         if not meta.get(field) and values.get(field):
@@ -142,3 +164,39 @@ def enrich_metadata(meta: dict, client=None) -> dict:
         logger.debug("[yandex/enrichment] enrichment failed for %s — %s",
                      meta.get("artist"), meta.get("title"), exc_info=True)
         return meta
+
+
+def fetch_cover_bytes(meta: dict, client=None) -> bytes | None:
+    """Best-effort album cover for a manual upload with NO embedded art.
+
+    Searches the Yandex catalog for ``meta['artist'] + meta['title']`` and, on a
+    duration-sane match, downloads the album cover (600×600 JPEG bytes). Returns
+    the raw bytes or None. Only called by the cover-save pass when the file itself
+    carries no embedded picture, so the common (tagged) case never hits the
+    network. Never raises — cover art must never break indexing.
+
+    Credentials mirror :func:`enrich_metadata`: the account token when linked
+    (higher-quality catalog access), otherwise an anonymous client.
+    """
+    if not _enabled():
+        return None
+    if not meta.get("artist") or not meta.get("title"):
+        return None
+
+    client = client or get_anonymous_client()
+    if client is None:
+        return None
+
+    try:
+        _throttle.wait()
+        ytrack = _search_track(client, meta["artist"], meta["title"])
+        if ytrack is None or not _duration_matches(meta, ytrack):
+            return None
+        if not getattr(ytrack, "cover_uri", None):
+            return None
+        raw = ytrack.download_cover_bytes(size="600x600")
+        return raw or None
+    except Exception:
+        logger.debug("[yandex/enrichment] cover fetch failed for %s — %s",
+                     meta.get("artist"), meta.get("title"), exc_info=True)
+        return None

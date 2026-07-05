@@ -6992,81 +6992,107 @@ function ProcessingModeBadge({ isDark, lang, style }) {
   );
 }
 
-// Tiny premium chip under the MusiX wordmark in the main app header. Renders
-// only for accounts with the premium flag — free accounts see nothing here
-// (the soft upsell lives in the first-run indexing flow instead).
-function PremiumMark({ style }) {
-  const premium = (typeof localStorage !== 'undefined'
-    && localStorage.getItem('musix_user_premium')) === '1';
-  if (!premium) return null;
+// ─── Premium edition gating ──────────────────────────────────────────────────
+// MusiX ships in two editions. This single build-level flag is the ONLY switch:
+// the "regular" edition sets it to false and every premium block below (Yandex
+// import, metadata/cover enhancement, the header chip) disappears cleanly —
+// each is wrapped in <PremiumGate>, so removing them never leaves a hole in the
+// layout. Flip to false (or wire to an env/config at build) for the plain build.
+const MUSIX_PREMIUM = true;
+
+// Renders children only in the premium edition. Wrap every premium-only block in
+// this so the regular edition is one flag-flip away, with no dangling markup.
+function PremiumGate({ children }) {
+  return MUSIX_PREMIUM ? <>{children}</> : null;
+}
+
+const PREMIUM_GOLD = 'oklch(76% 0.13 85)';
+
+// Small gold "★ PREMIUM" pill — the shared premium marker (header chip, upload
+// block, indexing stage). Pure/presentational; gate it with <PremiumGate> at the
+// call site when it should vanish in the regular edition.
+function PremiumBadge({ label = 'PREMIUM', style }) {
   return (
-    <div className="mono" style={{
+    <span className="mono" style={{
       display:'inline-flex', alignItems:'center', gap:'4px',
-      marginTop:'4px', padding:'2px 8px', borderRadius:'999px',
+      padding:'2px 8px', borderRadius:'999px',
       fontSize:'9px', fontWeight:'700', letterSpacing:'0.22em',
-      color:'oklch(76% 0.13 85)',
-      border:'1px solid oklch(76% 0.13 85 / 0.4)',
-      background:'oklch(76% 0.13 85 / 0.08)',
+      color: PREMIUM_GOLD,
+      border:`1px solid ${PREMIUM_GOLD.replace(')', ' / 0.4)')}`,
+      background: PREMIUM_GOLD.replace(')', ' / 0.08)'),
+      whiteSpace:'nowrap',
       ...style,
     }}>
-      ★ PREMIUM
-    </div>
+      ★ {label}
+    </span>
   );
 }
 
-// Contextual Premium note, anchored to the Facts stage of indexing — the point
-// where song/artist metadata and covers are being enriched. Premium accounts
-// see which extra sources they're getting plus the Yandex Music transfer;
-// free accounts get a soft one-liner about what Premium adds. Informational
-// only — nothing here is a popup or a gate.
-function PremiumEnrichNote({ isDark, lang, c, style }) {
-  const ru = lang === 'ru';
-  const premium = (typeof localStorage !== 'undefined'
-    && localStorage.getItem('musix_user_premium')) === '1';
-  const gold = 'oklch(76% 0.13 85)';
-
-  if (premium) {
-    return (
-      <div style={{
-        padding:'9px 13px', borderRadius:'10px',
-        background: isDark ? 'oklch(76% 0.13 85 / 0.09)' : 'oklch(76% 0.13 85 / 0.10)',
-        borderLeft: `2px solid ${gold}`,
-        ...style,
-      }}>
-        <div className="mono" style={{ fontSize:'10.5px', fontWeight:'600', letterSpacing:'0.2em', color: gold, marginBottom:'3px' }}>
-          ★ MUSIX PREMIUM
-        </div>
-        <div style={{ fontSize:'12.5px', color:c.textMuted, lineHeight:1.55 }}>
-          {ru
-            ? <>Обложки и метаданные — из премиум-источников повышенного качества. Плейлисты и «Моё избранное» можно импортировать из Яндекс Музыки.</>
-            : <>Covers and metadata come from higher-quality premium sources. You can also import playlists and “My Favorites” from Yandex Music.</>}
-        </div>
-      </div>
-    );
-  }
+// Lightweight hover hint: a small circled "i" that reveals a positioned bubble
+// on hover/focus. Matches the frontend's existing quiet-hint idiom without a
+// heavyweight tooltip lib.
+function InfoTip({ isDark, text, size = 15, style }) {
+  const [open, setOpen] = useState(false);
   return (
-    <div style={{
-      padding:'9px 13px', borderRadius:'10px',
-      background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)',
-      borderLeft: `2px solid ${isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.12)'}`,
-      ...style,
-    }}>
-      <div style={{ fontSize:'12.5px', color:c.textMuted, lineHeight:1.55 }}>
-        {ru ? 'Обложки и метаданные — из базовых источников.' : 'Covers and metadata come from standard sources.'}
-      </div>
-      <div style={{ fontSize:'12px', color:c.textSubtle, lineHeight:1.55, marginTop:'3px' }}>
-        <span style={{ color: gold }}>★</span>{' '}
-        {ru
-          ? <>С MusiX Premium: источники выше качеством для загруженных файлов и импорт плейлистов и «Моего избранного» из Яндекс Музыки.</>
-          : <>With MusiX Premium: higher-quality sources for your uploads, plus importing playlists and “My Favorites” from Yandex Music.</>}
-      </div>
-    </div>
+    <span style={{ position:'relative', display:'inline-flex', ...style }}
+      onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)} onBlur={() => setOpen(false)} tabIndex={0}>
+      <span aria-hidden style={{
+        width:size, height:size, borderRadius:'50%', flexShrink:0, cursor:'help',
+        display:'inline-flex', alignItems:'center', justifyContent:'center',
+        fontSize: size*0.62, fontStyle:'italic', fontWeight:700, lineHeight:1,
+        color: isDark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.6)',
+        background: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.07)',
+      }}>i</span>
+      {open && (
+        <span style={{
+          position:'absolute', bottom:'calc(100% + 8px)', left:'50%', transform:'translateX(-50%)',
+          width:'250px', maxWidth:'70vw', padding:'10px 12px', borderRadius:'10px', zIndex:60,
+          background: isDark ? '#23232b' : '#ffffff',
+          color: isDark ? '#d8dbe3' : '#333',
+          border:`1px solid ${isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}`,
+          boxShadow:'0 10px 34px rgba(0,0,0,0.28)',
+          fontSize:'12px', lineHeight:1.5, fontWeight:400, letterSpacing:'normal',
+          textTransform:'none', textAlign:'left', pointerEvents:'none',
+        }}>
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
+
+// Header chip under the MusiX wordmark — the persistent edition marker. Present
+// throughout the premium build; gone in the regular one.
+function PremiumMark({ style }) {
+  return (
+    <PremiumGate>
+      <PremiumBadge style={{ marginTop:'4px', ...style }} />
+    </PremiumGate>
+  );
+}
+
+// Compact premium marker next to the Facts indexing stage: a PREMIUM badge plus
+// an info hint explaining that, thanks to the premium edition, album art and
+// song info are sourced at higher quality. Vanishes in the regular edition.
+function PremiumMetaHint({ isDark, lang, style }) {
+  const ru = lang === 'ru';
+  return (
+    <PremiumGate>
+      <span style={{ display:'inline-flex', alignItems:'center', gap:'7px', ...style }}>
+        <PremiumBadge />
+        <InfoTip isDark={isDark} text={ru
+          ? 'У вас премиум-версия MusiX: обложки альбомов и информация о песнях подбираются из источников повышенного качества.'
+          : 'You have the premium MusiX edition: album art and song info are sourced at higher quality.'} />
+      </span>
+    </PremiumGate>
   );
 }
 
 // ─── Indexing progress (compact, flat chronological list) ────────────────────
-// `premiumNote` — show the Premium enrichment note under the Facts stage. Only
-// first-run (onboarding) indexing sets it; repeat indexing stays clean.
+// `premiumNote` — show the compact PremiumMetaHint (badge + hover tip) beside the
+// Facts stage. Only first-run (onboarding) indexing sets it; repeat indexing
+// stays clean. Also gated by MUSIX_PREMIUM via PremiumGate inside the hint.
 function IndexingProgress({ stepStatus, stageProgress, lang, c, isDark, premiumNote = false }) {
   // Flat, chronological order matching the real pipeline: lyrics fetch + CLAP
   // (Звучание) start together at t=0, dense (Текстовый поиск) runs after lyrics,
@@ -7153,8 +7179,15 @@ function IndexingProgress({ stepStatus, stageProgress, lang, c, isDark, premiumN
                 : s.icon}
             </div>
             <div style={{ flex:1, minWidth:0 }}>
-              <div style={{ fontSize:'17px', color: c.text, fontWeight: active?'600':'500' }}>
-                {lang==='ru' ? s.labelRu : s.labelEn}
+              <div style={{ display:'flex', alignItems:'center', gap:'10px', flexWrap:'wrap' }}>
+                <span style={{ fontSize:'17px', color: c.text, fontWeight: active?'600':'500' }}>
+                  {lang==='ru' ? s.labelRu : s.labelEn}
+                </span>
+                {/* Facts is the metadata-enrichment stage — mark the premium
+                    quality boost right beside its label. */}
+                {premiumNote && s.key === 'facts' && (
+                  <PremiumMetaHint isDark={isDark} lang={lang} />
+                )}
               </div>
               {(active || done || partial || fail) && (
                 <div style={{ display:'flex', flexDirection:'column', gap:'5px', marginTop:'6px' }}>
@@ -7219,11 +7252,6 @@ function IndexingProgress({ stepStatus, stageProgress, lang, c, isDark, premiumN
               )}
             </div>
           </div>
-          {/* Facts is where metadata/covers get enriched — anchor the premium
-              source note right under it, indented to the row's text column. */}
-          {premiumNote && s.key === 'facts' && (
-            <PremiumEnrichNote isDark={isDark} lang={lang} c={c} style={{ marginLeft:'47px' }} />
-          )}
           </Fragment>
         );
       })}
@@ -8866,11 +8894,14 @@ function computeStageEtas(stages, store, statusMap, ru, now) {
 // Reusable stage bar (member onboarding). `indeterminate` shows a moving shimmer
 // for stages with no granular progress (text search + the awaited AI phase);
 // `eta` is a short remaining-time string shown next to the … while running.
-function OBStageBar({ c, label, state, pct, indeterminate, eta, count }) {
+function OBStageBar({ c, label, state, pct, indeterminate, eta, count, trailing }) {
   return (
     <div style={{ marginBottom:12 }}>
       <div style={{ display:'flex', justifyContent:'space-between', marginBottom:4 }}>
-        <span className="mono" style={{ fontSize:12, letterSpacing:'0.12em', color: state==='running' ? c.text : c.textSubtle }}>{label}</span>
+        <span style={{ display:'flex', alignItems:'center', gap:8, minWidth:0 }}>
+          <span className="mono" style={{ fontSize:12, letterSpacing:'0.12em', color: state==='running' ? c.text : c.textSubtle }}>{label}</span>
+          {trailing}
+        </span>
         <span style={{ display:'flex', alignItems:'center', gap:8, fontSize:11, color: state==='failed' ? c.red : c.textSubtle }}>
           {count && state==='running' && <span className="mono" style={{ fontVariantNumeric:'tabular-nums', opacity:.95 }}>{count}</span>}
           {eta && state==='running' && <span style={{ fontVariantNumeric:'tabular-nums', opacity:.85 }}>{eta}</span>}
@@ -8995,12 +9026,8 @@ function MemberIndexing({ ru, c, isDark, jobId, onDone }) {
             const count = (st === 'running' && pr.total > 1) ? `${pr.current || 0}/${pr.total}` : null;
             return (
               <Fragment key={k}>
-                <OBStageBar c={c} label={ru ? WIZ_STAGE_LABELS[k].ru : WIZ_STAGE_LABELS[k].en} state={st} pct={pct} count={count} eta={etas[k]} />
-                {/* Facts is where metadata/covers get enriched — the premium
-                    source note lives right under that bar. */}
-                {k === 'facts' && (
-                  <PremiumEnrichNote isDark={isDark} lang={ru ? 'ru' : 'en'} c={c} style={{ margin:'2px 0 12px' }} />
-                )}
+                <OBStageBar c={c} label={ru ? WIZ_STAGE_LABELS[k].ru : WIZ_STAGE_LABELS[k].en} state={st} pct={pct} count={count} eta={etas[k]}
+                  trailing={k === 'facts' ? <PremiumMetaHint isDark={isDark} lang={ru ? 'ru' : 'en'} /> : null} />
               </Fragment>
             );
           })}
@@ -9015,6 +9042,131 @@ function MemberIndexing({ ru, c, isDark, jobId, onDone }) {
           )}
         </>
       )}
+    </div>
+  );
+}
+
+// Compact Yandex account link used INSIDE the "Your files" upload block: linking
+// the account lets indexing enrich manual uploads with higher-quality album art
+// and metadata from the Yandex catalog (the backend enrichment uses the account
+// token once linked). Premium-only — the caller wraps it in <PremiumGate>. This
+// only links the account; it does NOT import anything (that's YandexImportFlow).
+function YandexEnhanceLink({ isDark, lang }) {
+  const c = useColors(isDark);
+  const ru = lang === 'ru';
+  const [linked, setLinked] = useState(null);     // null = loading, else bool
+  const [session, setSession] = useState(null);   // {session_id, user_code, verification_url}
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    apiFetch('/import/yandex')
+      .then(r => { if (alive) setLinked(!!(r && r.linked)); })
+      .catch(() => { if (alive) setLinked(false); });
+    return () => { alive = false; };
+  }, []);
+
+  const startAuth = async () => {
+    setErr(null); setBusy(true);
+    try {
+      const res = await apiFetch('/import/yandex/auth/start', { method: 'POST' });
+      if (res.status === 'authorized') { setLinked(true); setBusy(false); return; }
+      setSession(res);
+    } catch (e) { setErr(e.message); setBusy(false); }
+  };
+
+  // Poll the device session until authorized / expired / error.
+  useEffect(() => {
+    if (!session?.session_id) return;
+    let stop = false;
+    const tick = async () => {
+      try {
+        const s = await apiFetch(`/import/yandex/auth/status?session_id=${encodeURIComponent(session.session_id)}`);
+        if (stop) return;
+        if (s.status === 'authorized') { setLinked(true); setSession(null); setBusy(false); return; }
+        if (s.status === 'expired' || s.status === 'error') {
+          setErr(s.error || (s.status === 'expired' ? (ru ? 'Код истёк' : 'Code expired') : (ru ? 'Ошибка входа' : 'Login error')));
+          setSession(null); setBusy(false); return;
+        }
+        if (s.user_code && !session.user_code) setSession(prev => ({ ...prev, ...s }));
+      } catch (e) { /* transient — keep polling */ }
+    };
+    const id = setInterval(tick, 2000);
+    return () => { stop = true; clearInterval(id); };
+  }, [session?.session_id, session?.user_code, ru]);
+
+  const gold = PREMIUM_GOLD;
+  const wrap = { marginTop:'14px', padding:'14px 18px', borderRadius:'14px' };
+
+  if (linked === null) return null;  // avoid flashing the CTA before status loads
+
+  if (linked) {
+    return (
+      <div className="ob-glass" style={wrap}>
+        <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
+          <span style={{ color:'oklch(70% 0.18 145)', fontSize:'16px' }}>✓</span>
+          <div style={{ fontSize:'13px', color:c.textMuted, lineHeight:1.5 }}>
+            {ru
+              ? 'Яндекс подключён — обложки и метаданные загруженных файлов будут качественнее.'
+              : 'Yandex connected — album art and metadata for your uploads will be higher quality.'}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Device-flow in progress: show the code + verification link.
+  if (session) {
+    return (
+      <div className="ob-glass" style={wrap}>
+        <div style={{ fontSize:'13px', color:c.textMuted, lineHeight:1.55, marginBottom:'10px' }}>
+          {ru ? 'Откройте страницу Яндекса и введите код:' : 'Open the Yandex page and enter the code:'}
+        </div>
+        <div style={{ display:'flex', alignItems:'center', gap:'12px', flexWrap:'wrap' }}>
+          <div className="mono" style={{ fontSize:'22px', fontWeight:'700', letterSpacing:'0.18em', color:c.text }}>
+            {session.user_code || '····'}
+          </div>
+          {session.verification_url && (
+            <a href={session.verification_url} target="_blank" rel="noreferrer"
+              className={ske('btn', isDark)}
+              style={{ padding:'8px 14px', borderRadius:'9px', fontSize:'13px', color:c.text, textDecoration:'none' }}>
+              {ru ? 'Открыть Яндекс ↗' : 'Open Yandex ↗'}
+            </a>
+          )}
+          <span style={{ fontSize:'12px', color:c.textSubtle, display:'inline-flex', alignItems:'center', gap:'6px' }}>
+            <Spinner size={12} /> {ru ? 'Ожидание входа…' : 'Waiting for sign-in…'}
+          </span>
+        </div>
+        {err && <div style={{ marginTop:'10px', fontSize:'12px', color:c.red }}>{err}</div>}
+      </div>
+    );
+  }
+
+  // Not linked: the CTA row.
+  return (
+    <div className="ob-glass" style={{ ...wrap, borderLeft:`2px solid ${gold}` }}>
+      <div style={{ display:'flex', alignItems:'center', gap:'8px', marginBottom:'6px' }}>
+        <PremiumBadge />
+        <span className="mono" style={{ fontSize:'11px', letterSpacing:'0.16em', color:gold }}>
+          {ru ? 'КАЧЕСТВЕННЕЕ ОБЛОЖКИ И МЕТАДАННЫЕ' : 'BETTER COVERS & METADATA'}
+        </span>
+      </div>
+      <div style={{ fontSize:'13px', color:c.textMuted, lineHeight:1.55, marginBottom:'12px' }}>
+        {ru
+          ? 'Войдите в Яндекс Музыку — MusiX подтянет обложки альбомов и точные метаданные для ваших файлов из каталога Яндекса.'
+          : 'Sign in to Yandex Music — MusiX will pull album art and accurate metadata for your files from the Yandex catalog.'}
+      </div>
+      <button onClick={startAuth} disabled={busy} className={ske('btn', isDark)}
+        style={{ padding:'10px 18px', borderRadius:'10px', fontSize:'13px', fontWeight:'600',
+          cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1,
+          display:'inline-flex', alignItems:'center', gap:'8px' }}>
+        <span style={{ width:'20px', height:'20px', borderRadius:'6px', flexShrink:0,
+          background:'linear-gradient(135deg, #ffcc00, #ff5c5c)', color:'#1a1a1a',
+          display:'inline-flex', alignItems:'center', justifyContent:'center', fontSize:'13px', fontWeight:'800' }}>Я</span>
+        {busy ? (ru ? 'Подключение…' : 'Connecting…') : (ru ? 'Войти в Яндекс' : 'Sign in to Yandex')}
+      </button>
+      {err && <div style={{ marginTop:'10px', fontSize:'12px', color:c.red }}>{err}</div>}
     </div>
   );
 }
@@ -9530,15 +9682,20 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
         ) : (
         <div>
         <div className="mono" style={{ fontSize:'11px', color:c.textSubtle, letterSpacing:'0.24em', textTransform:'uppercase', marginBottom:'8px' }}>
-          {lang==='ru'?'Шаг 1 · Загрузка':'Step 1 · Upload'}
+          {ru?'Шаг 1 · Источник музыки':'Step 1 · Music source'}
         </div>
-        <h2 className="serif" style={{ fontSize:'30px', lineHeight:'1.04', letterSpacing:'-0.02em', marginBottom:'10px' }}>
-          {lang==='ru' ? <>Загрузите <i style={{ color:'oklch(62% 0.2 275)' }}>музыку</i></> : <>Upload your <i style={{ color:'oklch(62% 0.2 275)' }}>music</i></>}
+        <h2 className="serif" style={{ fontSize:'30px', lineHeight:'1.04', letterSpacing:'-0.02em', marginBottom:'22px' }}>
+          {ru ? <>Добавьте <i style={{ color:'oklch(62% 0.2 275)' }}>музыку</i></> : <>Add your <i style={{ color:'oklch(62% 0.2 275)' }}>music</i></>}
         </h2>
-        <p style={{ fontSize:'14px', color:c.textMuted, lineHeight:'1.6', marginBottom:'20px' }}>
-          {lang==='ru'
-            ? 'Папка с музыкой или отдельные файлы — загрузятся и сохранятся под вашим аккаунтом. FLAC, MP3, M4A.'
-            : 'A music folder or individual files — uploaded and stored under your account. FLAC, MP3, M4A.'}
+
+        {/* ── Block: your own files ───────────────────────────────────────── */}
+        <h3 className="serif" style={{ fontSize:'20px', letterSpacing:'-0.01em', margin:'0 0 6px' }}>
+          {ru?'Свои файлы':'Your files'}
+        </h3>
+        <p style={{ fontSize:'13.5px', color:c.textMuted, lineHeight:'1.55', marginBottom:'14px' }}>
+          {ru
+            ? 'Папка с музыкой или отдельные файлы — загрузятся под вашим аккаунтом. FLAC, MP3, M4A.'
+            : 'A music folder or individual files — uploaded under your account. FLAC, MP3, M4A.'}
         </p>
 
         {/* Trust moment: before the user hands over files, say plainly where
@@ -9584,43 +9741,11 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
           </div>
         </div>
 
-        <button onClick={() => setMode('yandex')} disabled={anyUploading||committing}
-          className="ob-glass"
-          style={{ width:'100%', marginTop:'14px', padding:'16px 20px', borderRadius:'14px',
-            display:'flex', alignItems:'center', gap:'14px', cursor: anyUploading||committing ? 'not-allowed' : 'pointer',
-            opacity: anyUploading||committing ? 0.5 : 1, textAlign:'left' }}>
-          <div style={{ width:'44px', height:'44px', borderRadius:'11px', flexShrink:0,
-            background:'linear-gradient(135deg, #ffcc00, #ff5c5c)', color:'#1a1a1a',
-            display:'flex', alignItems:'center', justifyContent:'center', fontSize:'24px', fontWeight:'800' }}>Я</div>
-          <div style={{ flex:1, minWidth:0 }}>
-            <div style={{ fontSize:'14px', fontWeight:'600', color:c.text }}>
-              {ru ? 'Импорт из Яндекс.Музыки' : 'Import from Yandex Music'}
-            </div>
-            <div style={{ fontSize:'12.5px', color:c.textMuted, marginTop:'2px' }}>
-              {ru ? '«Мне нравится» и плейлисты — со всеми тегами и обложками' : 'Liked tracks & playlists — with tags and covers'}
-            </div>
-          </div>
-          <div style={{ fontSize:'18px', color:c.textSubtle, flexShrink:0 }}>→</div>
-        </button>
-
-        {memberIndexRoot && (
-          <div className="ob-glass" style={{ marginTop:'14px', padding:'16px 20px', borderRadius:'14px' }}>
-            <div style={{ fontSize:'13.5px', color:c.textMuted, lineHeight:1.55, marginBottom:'12px' }}>
-              {ru
-                ? <>Музыка уже примонтирована на сервере по пути <code style={{ color:c.text }}>{memberIndexRoot}</code>? Добавь её в библиотеку на месте — без повторной загрузки. <b>Заменит текущую библиотеку.</b></>
-                : <>Music already mounted on the server at <code style={{ color:c.text }}>{memberIndexRoot}</code>? Add it to your library in place — no re-upload. <b>Replaces your current library.</b></>}
-            </div>
-            <button onClick={startFolderIndex} disabled={indexingFolder||anyUploading||committing}
-              className={ske('btn', isDark)}
-              style={{ padding:'11px 22px', borderRadius:'10px', fontSize:'14px', fontWeight:'600',
-                cursor: indexingFolder||anyUploading||committing ? 'not-allowed' : 'pointer',
-                opacity: indexingFolder||anyUploading||committing ? 0.5 : 1 }}>
-              {indexingFolder
-                ? (ru?'Запуск…':'Starting…')
-                : (ru?`Заменить музыку: ${memberIndexRoot}`:`Replace music: ${memberIndexRoot}`)}
-            </button>
-          </div>
-        )}
+        {/* Premium: link the Yandex account to raise metadata/cover quality for
+            these manual uploads. Whole block disappears in the regular edition. */}
+        <PremiumGate>
+          <YandexEnhanceLink isDark={isDark} lang={lang} />
+        </PremiumGate>
 
         {progress.length > 0 && (
           <div className="ob-glass ob-listin" style={{ marginTop:'14px', padding:'16px 20px', borderRadius:'14px' }}>
@@ -9658,6 +9783,60 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
                 <Spinner size={14} /> {lang==='ru'?'Загрузка…':'Uploading…'}
               </div>
             )}
+          </div>
+        )}
+
+        {/* ── Block: import from Yandex Music (premium edition only) ───────── */}
+        <PremiumGate>
+          <div style={{ marginTop:'28px' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'6px' }}>
+              <h3 className="serif" style={{ fontSize:'20px', letterSpacing:'-0.01em', margin:0 }}>
+                {ru?'Импорт из Яндекс Музыки':'Import from Yandex Music'}
+              </h3>
+              <PremiumBadge />
+            </div>
+            <p style={{ fontSize:'13.5px', color:c.textMuted, lineHeight:'1.55', marginBottom:'12px' }}>
+              {ru
+                ? '«Мне нравится» и плейлисты — со всеми тегами и обложками, прямо в вашу библиотеку.'
+                : 'Liked tracks and playlists — with all tags and covers, straight into your library.'}
+            </p>
+            <button onClick={() => setMode('yandex')} disabled={anyUploading||committing}
+              className="ob-glass"
+              style={{ width:'100%', padding:'16px 20px', borderRadius:'14px',
+                display:'flex', alignItems:'center', gap:'14px', cursor: anyUploading||committing ? 'not-allowed' : 'pointer',
+                opacity: anyUploading||committing ? 0.5 : 1, textAlign:'left' }}>
+              <div style={{ width:'44px', height:'44px', borderRadius:'11px', flexShrink:0,
+                background:'linear-gradient(135deg, #ffcc00, #ff5c5c)', color:'#1a1a1a',
+                display:'flex', alignItems:'center', justifyContent:'center', fontSize:'24px', fontWeight:'800' }}>Я</div>
+              <div style={{ flex:1, minWidth:0 }}>
+                <div style={{ fontSize:'14px', fontWeight:'600', color:c.text }}>
+                  {ru ? 'Войти в Яндекс и выбрать' : 'Sign in to Yandex & choose'}
+                </div>
+                <div style={{ fontSize:'12.5px', color:c.textMuted, marginTop:'2px' }}>
+                  {ru ? 'Плейлисты и «Мне нравится» — на следующем шаге' : 'Pick playlists and Liked tracks on the next step'}
+                </div>
+              </div>
+              <div style={{ fontSize:'18px', color:c.textSubtle, flexShrink:0 }}>→</div>
+            </button>
+          </div>
+        </PremiumGate>
+
+        {memberIndexRoot && (
+          <div className="ob-glass" style={{ marginTop:'14px', padding:'16px 20px', borderRadius:'14px' }}>
+            <div style={{ fontSize:'13.5px', color:c.textMuted, lineHeight:1.55, marginBottom:'12px' }}>
+              {ru
+                ? <>Музыка уже примонтирована на сервере по пути <code style={{ color:c.text }}>{memberIndexRoot}</code>? Добавь её в библиотеку на месте — без повторной загрузки. <b>Заменит текущую библиотеку.</b></>
+                : <>Music already mounted on the server at <code style={{ color:c.text }}>{memberIndexRoot}</code>? Add it to your library in place — no re-upload. <b>Replaces your current library.</b></>}
+            </div>
+            <button onClick={startFolderIndex} disabled={indexingFolder||anyUploading||committing}
+              className={ske('btn', isDark)}
+              style={{ padding:'11px 22px', borderRadius:'10px', fontSize:'14px', fontWeight:'600',
+                cursor: indexingFolder||anyUploading||committing ? 'not-allowed' : 'pointer',
+                opacity: indexingFolder||anyUploading||committing ? 0.5 : 1 }}>
+              {indexingFolder
+                ? (ru?'Запуск…':'Starting…')
+                : (ru?`Заменить музыку: ${memberIndexRoot}`:`Replace music: ${memberIndexRoot}`)}
+            </button>
           </div>
         )}
         </div>
@@ -15711,10 +15890,13 @@ function SetupWizard({ onComplete }) {
     { key:'refined_facts', label: ru ? 'Углубление фактов' : 'Deeper facts' },
     { key:'sonic_vibe',    label: ru ? 'Звучание песен' : 'Song vibes' },
   ];
-  const renderStageBar = (label, st, pct, indeterminate, eta) => (
+  const renderStageBar = (label, st, pct, indeterminate, eta, trailing) => (
     <div key={label} style={{ marginBottom:'12px' }}>
       <div style={{ display:'flex', justifyContent:'space-between', marginBottom:'4px' }}>
-        <span className="mono" style={{ fontSize:'12px', letterSpacing:'0.12em', color: st === 'running' ? c.text : c.textSubtle }}>{label}</span>
+        <span style={{ display:'flex', alignItems:'center', gap:'8px', minWidth:0 }}>
+          <span className="mono" style={{ fontSize:'12px', letterSpacing:'0.12em', color: st === 'running' ? c.text : c.textSubtle }}>{label}</span>
+          {trailing}
+        </span>
         <span style={{ display:'flex', alignItems:'center', gap:'8px', fontSize:'11px', color: st === 'failed' ? c.red : c.textSubtle }}>
           {eta && st === 'running' && <span style={{ fontVariantNumeric:'tabular-nums', opacity:.85 }}>{eta}</span>}
           <span>{st === 'done' ? '✓' : st === 'failed' ? '✗' : st === 'running' ? '…' : '·'}</span>
@@ -15751,11 +15933,8 @@ function SetupWizard({ onComplete }) {
         const pct = st === 'done' ? 100 : pr.total > 0 ? Math.round(100 * pr.current / pr.total) : 0;
         return (
           <Fragment key={k}>
-            {renderStageBar(ru ? WIZ_STAGE_LABELS[k].ru : WIZ_STAGE_LABELS[k].en, st, pct, k === 'dense', etas[k])}
-            {/* First-run indexing: premium sourcing note under the Facts bar. */}
-            {k === 'facts' && (
-              <PremiumEnrichNote isDark={isDark} lang={lang} c={c} style={{ margin:'2px 0 12px' }} />
-            )}
+            {renderStageBar(ru ? WIZ_STAGE_LABELS[k].ru : WIZ_STAGE_LABELS[k].en, st, pct, k === 'dense', etas[k],
+              k === 'facts' ? <PremiumMetaHint isDark={isDark} lang={lang} /> : null)}
           </Fragment>
         );
       })}
