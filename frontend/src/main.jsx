@@ -9972,8 +9972,9 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
   const [showWizard, setShowWizard] = useState(false);
   const [memberIndexRoot, setMemberIndexRoot] = useState(null);
   const [indexingFolder, setIndexingFolder] = useState(false);
-  const [mode, setMode] = useState('pick');   // 'pick' (upload) | 'yandex' (import)
+  const [mode, setMode] = useState('pick');   // kept for compat — now only used internally
   const [uploadExpanded, setUploadExpanded] = useState(false);  // expand upload section
+  const [yandexExpanded, setYandexExpanded] = useState(false);  // expand Yandex inline section
   const [premiumHint, setPremiumHint] = useState(false);  // inline hint for non-premium Yandex click
   const premiumHintDismissed = (() => {
     try { return localStorage.getItem('musix_premium_hint_dismissed') === '1'; } catch { return false; }
@@ -10160,11 +10161,6 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
             ]}
             currentKey={showWizard ? 'indexing' : 'source'} />
           <div style={{ flex:1, position:'relative', zIndex:1, minWidth:0 }}>
-        {showWizard && jobId ? (
-          <MemberIndexing ru={ru} c={c} isDark={isDark} jobId={jobId} onDone={onDone} />
-        ) : mode === 'yandex' ? (
-          <YandexImportFlow isDark={isDark} lang={lang} onDone={onDone} onBack={() => setMode('pick')} />
-        ) : (
         <div>
         <div className="mono" style={{ fontSize:'11px', color:c.textSubtle, letterSpacing:'0.24em', textTransform:'uppercase', marginBottom:'8px' }}>
           {ru?'Шаг 1 · Откуда музыка?':'Step 1 · Music source'}
@@ -10189,11 +10185,11 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
         )}
 
         {/* ═══ Два кликабельных блока «или-или» ════════════════════════════ */}
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(260px, 1fr))', gap:'16px', marginBottom: uploadExpanded ? '0' : '16px', marginTop: (premiumHint && !premiumHintDismissed) ? '16px' : 0 }}>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(260px, 1fr))', gap:'16px', marginBottom: (uploadExpanded || yandexExpanded) ? '0' : '16px', marginTop: (premiumHint && !premiumHintDismissed) ? '16px' : 0 }}>
           {/* ── Card 1: Yandex Music ── */}
           <button onClick={() => {
             if (anyUploading || committing) return;
-            if (MUSIX_PREMIUM) setMode('yandex');
+            if (MUSIX_PREMIUM) setYandexExpanded(!yandexExpanded);
             else if (!premiumHintDismissed) setPremiumHint(true);
           }}
             disabled={anyUploading || committing}
@@ -10203,7 +10199,8 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
               padding:'32px 24px', borderRadius:'18px', cursor: MUSIX_PREMIUM && !anyUploading && !committing ? 'pointer' : 'default',
               opacity: MUSIX_PREMIUM && !anyUploading && !committing ? 1 : (MUSIX_PREMIUM ? 0.5 : 0.65),
               textAlign:'center', transition: 'transform 0.2s, box-shadow 0.2s',
-              border: `1px solid ${MUSIX_PREMIUM && !anyUploading && !committing ? 'rgba(255,255,255,0.12)' : c.border}`,
+              border: `1px solid ${yandexExpanded && MUSIX_PREMIUM ? 'oklch(62% 0.2 275)' : (MUSIX_PREMIUM && !anyUploading && !committing ? 'rgba(255,255,255,0.12)' : c.border)}`,
+              boxShadow: yandexExpanded && MUSIX_PREMIUM ? '0 0 0 3px oklch(62% 0.2 275 / 0.18)' : 'none',
             }}
             onMouseEnter={MUSIX_PREMIUM && !anyUploading && !committing ? (e) => { e.currentTarget.style.transform = 'translateY(-2px)'; } : undefined}
             onMouseLeave={MUSIX_PREMIUM && !anyUploading && !committing ? (e) => { e.currentTarget.style.transform = ''; } : undefined}>
@@ -10242,7 +10239,8 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
               display:'flex', flexDirection:'column', alignItems:'center', gap:'14px',
               padding:'32px 24px', borderRadius:'18px', cursor:'pointer',
               textAlign:'center', transition: 'transform 0.2s, box-shadow 0.2s',
-              border: `1px solid rgba(255,255,255,0.12)`,
+              border: `1px solid ${uploadExpanded ? 'oklch(62% 0.2 275)' : 'rgba(255,255,255,0.12)'}`,
+              boxShadow: uploadExpanded ? '0 0 0 3px oklch(62% 0.2 275 / 0.18)' : 'none',
             }}
             onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; }}
             onMouseLeave={(e) => { e.currentTarget.style.transform = ''; }}>
@@ -10307,6 +10305,15 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
               {MUSIX_PREMIUM && (
                 <YandexEnhanceLink isDark={isDark} lang={lang} />
               )}
+            </div>
+          </div>
+        )}
+
+        {/* ═══ Развёрнутый контент: Яндекс Музыка (inline, as-is from YandexImportFlow) ═══════════════ */}
+        {yandexExpanded && (
+          <div className="ob-listin">
+            <div style={{ marginTop:'14px' }}>
+              <YandexImportFlow isDark={isDark} lang={lang} onDone={onDone} onBack={() => setYandexExpanded(false)} />
             </div>
           </div>
         )}
@@ -10376,6 +10383,8 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
           </details>
         )}
         </div>
+        {showWizard && jobId && (
+          <MemberIndexing ru={ru} c={c} isDark={isDark} jobId={jobId} onDone={onDone} />
         )}
           </div>
         </div>
