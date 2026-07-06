@@ -3307,21 +3307,32 @@ function AgentSteps({ steps, streaming, lang }) {
 // ─── LyricSnippet — matched lyric line + context, inline expand ───────────────
 // Highlights the matched line (from hit.matched_line, else a word-overlap
 // heuristic) with one neighbour above/below; "show more" fades to full lyrics.
+// Excerpts sometimes arrive with mangled/absent line breaks — matching is
+// whitespace-normalized, and when the "line" is a wall of text the highlight
+// falls back to slicing context around the matched phrase (never the whole
+// block).
+const GIANT_LINE = 160;  // beyond this a "line" is a blob, not a lyric line
 function LyricSnippet({ lyrics, query, matchedLine, lang, c }) {
   const reduced = usePrefersReducedMotion();
   const [open, setOpen] = useState(false);
-  const lines = useMemo(
-    () => String(lyrics || '').split('\n').map(l => l.trim()).filter(Boolean),
-    [lyrics]);
+  const text = String(lyrics || '').trim();
+  const lines = useMemo(() => text.split('\n').map(l => l.trim()).filter(Boolean), [text]);
+
+  // Locate the matched line: exact → normalized equality → normalized contains
+  // → query-word-overlap heuristic. -1 = nothing matched (no highlight).
   const idx = useMemo(() => {
-    if (!lines.length) return 0;
+    if (!lines.length) return -1;
+    const norm = s => s.toLowerCase().replace(/\s+/g, ' ').trim();
     if (matchedLine) {
-      const mi = lines.findIndex(l => l === String(matchedLine).trim());
-      if (mi >= 0) return mi;
+      const m = String(matchedLine).trim();
+      let i = lines.findIndex(l => l === m);
+      if (i < 0) { const nm = norm(m); i = lines.findIndex(l => norm(l) === nm); }
+      if (i < 0) { const nm = norm(m); i = lines.findIndex(l => norm(l).includes(nm)); }
+      if (i >= 0) return i;
     }
     const terms = String(query || '').toLowerCase().split(/\s+/).filter(t => t.length > 2);
-    if (!terms.length) return 0;
-    let best = 0, bestScore = -1;
+    if (!terms.length) return -1;
+    let best = -1, bestScore = 0;
     lines.forEach((l, i) => {
       const low = l.toLowerCase();
       const score = terms.reduce((a, t) => a + (low.includes(t) ? 1 : 0), 0);
@@ -3330,18 +3341,65 @@ function LyricSnippet({ lyrics, query, matchedLine, lang, c }) {
     return best;
   }, [lines, query, matchedLine]);
 
+  // Blob mode: the highlight target is a giant block — find the matched
+  // phrase inside the raw text (whitespace-tolerant regex) and cut context
+  // around it instead of highlighting the whole block.
+  const blob = useMemo(() => {
+    const giant = idx >= 0
+      ? lines[idx].length > GIANT_LINE
+      : (lines.length > 0 && lines.length <= 2 && lines[0].length > GIANT_LINE);
+    if (!giant) return null;
+    if (!matchedLine) return { plain: true };
+    const words = String(matchedLine).trim().split(/\s+/)
+      .map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    if (!words.length) return { plain: true };
+    let m = null;
+    try { m = new RegExp(words.join('\\s+'), 'i').exec(text); } catch { /* noop */ }
+    if (!m) return { plain: true };
+    const beforeFull = text.slice(0, m.index).replace(/\s+/g, ' ').trim();
+    const afterFull  = text.slice(m.index + m[0].length).replace(/\s+/g, ' ').trim();
+    const match = m[0].replace(/\s+/g, ' ');
+    const beforeCtx = beforeFull.length > 110
+      ? '…' + beforeFull.slice(-110).replace(/^\S*\s/, '') : beforeFull;
+    const afterCtx = afterFull.length > 110
+      ? afterFull.slice(0, 110).replace(/\s\S*$/, '') + '…' : afterFull;
+    return { match, beforeFull, afterFull, beforeCtx, afterCtx };
+  }, [lines, idx, text, matchedLine]);
+
   if (!lines.length) return null;
-  const from = Math.max(0, idx - 1);
-  const preview = lines.slice(from, Math.min(lines.length, idx + 2));
-  const previewMatch = idx - from;
   const vars = {
     '--lyric-muted': c.textMuted,
     '--lyric-strong': c.text,
     '--lyric-hl': c.accentBg,
     '--lyric-accent': c.accent,
   };
-  const rows = open ? lines : preview;
-  const matchAt = open ? idx : previewMatch;
+
+  let rows, matchAt, expandable;
+  if (blob && !blob.plain) {
+    rows = (open
+      ? [blob.beforeFull, blob.match, blob.afterFull]
+      : [blob.beforeCtx, blob.match, blob.afterCtx]);
+    matchAt = 1;
+    // drop empty context rows, keeping the highlight on the match
+    const keep = rows.map((r, i) => ({ r, hl: i === 1 })).filter(x => x.r);
+    rows = keep.map(x => x.r);
+    matchAt = keep.findIndex(x => x.hl);
+    expandable = blob.beforeFull.length > blob.beforeCtx.length || blob.afterFull.length > blob.afterCtx.length;
+  } else if (blob) {
+    // wall of text, nothing to highlight — clipped plain preview
+    const flat = text.replace(/\s+/g, ' ').trim();
+    rows = [open ? flat : (flat.length > 220 ? flat.slice(0, 220).replace(/\s\S*$/, '') + '…' : flat)];
+    matchAt = -1;
+    expandable = flat.length > 220;
+  } else {
+    const anchor = idx >= 0 ? idx : 0;
+    const from = Math.max(0, anchor - 1);
+    const preview = lines.slice(from, Math.min(lines.length, anchor + 2));
+    rows = open ? lines : preview;
+    matchAt = idx < 0 ? -1 : (open ? idx : idx - from);
+    expandable = lines.length > preview.length;
+  }
+
   return (
     <div className="lyric-snippet" style={vars} onClick={e => e.stopPropagation()}>
       <div key={open ? 'full' : 'prev'} style={{ animation: reduced ? undefined : 'fadeIn .25s ease' }}>
@@ -3349,7 +3407,7 @@ function LyricSnippet({ lyrics, query, matchedLine, lang, c }) {
           <div key={i} className={`lyric-line ${i === matchAt ? 'lyric-line-match' : ''}`}>{l}</div>
         ))}
       </div>
-      {lines.length > preview.length && (
+      {expandable && (
         <button className="lyric-more" onClick={() => setOpen(o => !o)}>
           {open ? (lang === 'ru' ? 'свернуть' : 'show less') : (lang === 'ru' ? 'показать больше' : 'show more')}
         </button>
@@ -3481,8 +3539,33 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
     });
 
     let answered = false;
+
+    // Step events arrive in bursts (the backend emits classify+plan back to
+    // back once the planner finishes), which made stages flash by unseen.
+    // Pace the reveal: each queued step shows for ≥REVEAL_MS before the next;
+    // whatever is still queued when the answer lands is folded into the
+    // final message (it collapses into the summary row anyway).
+    const REVEAL_MS = 750;
+    const stepQueue = [];
+    let queueTimer = null, lastReveal = 0;
+    const pumpSteps = () => {
+      if (queueTimer || !stepQueue.length || answered) return;
+      const wait = Math.max(0, lastReveal + REVEAL_MS - Date.now());
+      queueTimer = setTimeout(() => {
+        queueTimer = null;
+        if (answered) return;
+        const ev = stepQueue.shift();
+        if (ev) {
+          lastReveal = Date.now();
+          patchLast(m => ({ ...m, steps: [...(m.steps||[]), ev] }));
+        }
+        pumpSteps();
+      }, wait);
+    };
+
     const finalizeAnswer = (ev) => {
       answered = true;
+      if (queueTimer) { clearTimeout(queueTimer); queueTimer = null; }
       const hits = ev.hits || [];
       setResults(hits);
       setMessages(prev => {
@@ -3491,7 +3574,8 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
         copy[li] = {
           role:'assistant', text:ev.message||'…', hits, best_hit:ev.best_hit,
           confidence:ev.confidence, song:ev.song, artist:ev.artist,
-          attempts:ev.attempts, steps: copy[li].steps || [], streaming:false,
+          attempts:ev.attempts, streaming:false,
+          steps: [...(copy[li].steps || []), ...stepQueue.splice(0)],
           time:new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'})
         };
         sessionIdRef.current = saveSession(copy, sessionIdRef.current);
@@ -3501,8 +3585,13 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
 
     const onEvent = (ev) => {
       if (ev.type === 'answer') { finalizeAnswer(ev); return; }
-      if (ev.type === 'error') { patchLast({ streaming:false, text:`${lang==='ru'?'Ошибка':'Error'}: ${ev.message||''}` }); return; }
-      patchLast(m => ({ ...m, steps: [...(m.steps||[]), ev] }));  // classify/plan/search/validate/retry
+      if (ev.type === 'error') {
+        if (queueTimer) { clearTimeout(queueTimer); queueTimer = null; }
+        patchLast({ streaming:false, text:`${lang==='ru'?'Ошибка':'Error'}: ${ev.message||''}` });
+        return;
+      }
+      stepQueue.push(ev);  // classify/plan/search/validate/retry
+      pumpSteps();
     };
 
     try {
@@ -3696,8 +3785,13 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
         {(showBubble || (msg.hits && msg.hits.length > 0)) && (
           <div className="mono" style={{ display:'flex', gap:'10px', alignItems:'center', fontSize:'12px', letterSpacing:'0.12em' }}>
             <span style={{ color:c.textSubtle }}>{msg.time}</span>
-            {conf && <span style={{ color: confColor }}>● {conf.toUpperCase()}</span>}
-            {msg.attempts!=null && <span style={{ color:c.textSubtle }}>{msg.attempts}/4</span>}
+            {conf && (
+              <span style={{ color: confColor }}>
+                ● {lang==='ru'
+                  ? `Уверенность: ${conf==='high'?'Высокая':conf==='medium'?'Средняя':'Низкая'}`
+                  : `Confidence: ${conf==='high'?'High':conf==='medium'?'Medium':'Low'}`}
+              </span>
+            )}
           </div>
         )}
       </div>
@@ -3970,8 +4064,8 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
             const suggestions = lang === 'ru'
               ? ['грустный синти-поп под ночь', 'песня про дорогу домой', 'энергичный рок для тренировки', 'как дождь за окном']
               : ['melancholic synth-pop for late nights', 'a song about the road home', 'high-energy rock for a workout', 'like rain on the window'];
-            const composer = (
-              <div className="liquid-glass chat-composer" style={{ padding:'8px', borderRadius:'22px' }}>
+            const renderComposer = (docked) => (
+              <div className={`liquid-glass chat-composer${docked ? ' chat-composer-docked' : ''}`} style={{ padding:'8px', borderRadius:'22px' }}>
                 <div style={{ display:'flex', gap:'8px', alignItems:'flex-end' }}>
                   <textarea
                     value={input} onChange={e=>setInput(e.target.value)}
@@ -4051,7 +4145,7 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
                         </div>
                       </div>
                       <div style={{ padding:'10px clamp(16px,3vw,32px) 20px' }}>
-                        <div className="chat-col">{composer}</div>
+                        <div className="chat-col">{renderComposer(true)}</div>
                       </div>
                     </Fragment>
                   ) : (
@@ -4065,7 +4159,7 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
                           ? 'Опиши настроение, текст, звук или жанр — я найду это в твоей библиотеке.'
                           : "Describe a mood, a lyric, a sound, or a genre — I'll find it in your library."}
                       </div>
-                      {composer}
+                      {renderComposer(false)}
                       <div className="chat-suggestions">
                         {suggestions.map((s, i) => (
                           <button key={i} className="chat-suggestion" onClick={() => handleChat(s)}>{s}</button>
@@ -4111,14 +4205,9 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
                     ) : sessions.map(s => (
                       <div key={s.id} className="chat-history-item" onClick={() => openSession(s)}
                         style={s.id === sessionIdRef.current ? { background: isDark?'rgba(255,255,255,0.07)':'rgba(0,0,0,0.05)' } : undefined}>
-                        <div style={{ flex:1, minWidth:0 }}>
-                          <div style={{ fontSize:'13.5px', fontWeight:'500', color:c.text,
-                            whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-                            {s.title}
-                          </div>
-                          <div className="mono" style={{ fontSize:'10.5px', color:c.textSubtle, marginTop:'2px', letterSpacing:'0.08em' }}>
-                            {new Date(s.time).toLocaleDateString(lang==='ru'?'ru':'en', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' })}
-                          </div>
+                        <div style={{ flex:1, minWidth:0, fontSize:'14px', fontWeight:'500', color:c.text,
+                          whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', alignSelf:'center' }}>
+                          {s.title}
                         </div>
                         <button className="history-delete-btn"
                           onClick={e => { e.stopPropagation(); deleteSession(s.id); }}

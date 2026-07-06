@@ -186,16 +186,31 @@ def _pick_matched_line(lyrics: str, query: str) -> str | None:
     terms = {t for t in re.findall(r"\w+", query.lower()) if len(t) > 2}
     if not terms or not lyrics:
         return None
+
+    def candidates():
+        for line in lyrics.split("\n"):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if len(stripped) <= 160:
+                yield stripped
+            else:
+                # Excerpt with mangled/absent line breaks — a whole-blob
+                # "line" would be useless for highlighting; score sliding
+                # ~12-word windows instead.
+                words = stripped.split()
+                for i in range(0, len(words), 6):
+                    chunk = " ".join(words[i:i + 12])
+                    if chunk:
+                        yield chunk
+
     best: str | None = None
     best_score = 0
-    for line in lyrics.split("\n"):
-        stripped = line.strip()
-        if not stripped:
-            continue
-        words = set(re.findall(r"\w+", stripped.lower()))
+    for cand in candidates():
+        words = set(re.findall(r"\w+", cand.lower()))
         score = len(terms & words)
         if score > best_score:
-            best, best_score = stripped, score
+            best, best_score = cand, score
     return best
 
 

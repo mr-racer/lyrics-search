@@ -2152,6 +2152,29 @@
       display: flex; align-items: center; gap: 8px;
       padding: 2px 6px 4px;
     }
+    /* Docked composer (conversation view): quieter glass than the hero — the
+       full lg-island brightness reads too light sitting over the messages. */
+    .liquid-glass.chat-composer-docked {
+      background:
+        linear-gradient(165deg, rgba(255,255,255,0.08) 0%, rgba(255,255,255,0.025) 36%, rgba(255,255,255,0.012) 68%, rgba(255,255,255,0.05) 100%),
+        rgba(20,20,28,0.30);
+      border: 1px solid rgba(255,255,255,0.09);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.14),
+        inset 0 -1px 0 rgba(255,255,255,0.04),
+        0 12px 32px rgba(0,0,0,0.32),
+        0 2px 8px rgba(0,0,0,0.2);
+    }
+    body[data-theme="light"] .liquid-glass.chat-composer-docked {
+      background:
+        linear-gradient(165deg, rgba(255,255,255,0.72) 0%, rgba(255,255,255,0.46) 40%, rgba(255,255,255,0.36) 70%, rgba(255,255,255,0.58) 100%),
+        rgba(244,243,250,0.3);
+      border: 1px solid rgba(255,255,255,0.6);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.8),
+        0 12px 32px rgba(46,36,86,0.11),
+        0 2px 8px rgba(46,36,86,0.06);
+    }
 
     /* ── GPT-style chat layout ── */
     /* Centered conversation column — fixes edge-to-edge sprawl on wide screens. */
@@ -2193,7 +2216,7 @@
 
     /* ── History rail: persistent right column with visible chat titles. ── */
     .chat-history-rail {
-      width: 256px; flex-shrink: 0;
+      width: 316px; flex-shrink: 0;
       display: flex; flex-direction: column;
       margin: 4px 14px 14px 6px;
       border-radius: 18px;
@@ -2262,13 +2285,14 @@
     @keyframes xfadeOut { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-9px); } }
     /* Completed steps stack above the active line, small and muted. */
     .agent-card-done { display: flex; flex-direction: column; margin-bottom: 4px; }
-    /* Shimmer strip along the card's bottom edge while active. */
+    /* Shimmer strip along the card's bottom edge while active — ping-pongs
+       left↔right (alternate) so the sweep never snaps back to the start. */
     .agent-card-shimmer {
       position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
       background: linear-gradient(90deg, transparent, oklch(68% 0.18 275 / 0.75), transparent);
       background-size: 40% 100%;
       background-repeat: no-repeat;
-      animation: shimmerSlide 1.6s ease-in-out infinite;
+      animation: shimmerSlide 1.4s ease-in-out infinite alternate;
     }
     @keyframes shimmerSlide {
       0% { background-position: -40% 0; }
