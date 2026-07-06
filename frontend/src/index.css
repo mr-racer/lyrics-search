@@ -2080,6 +2080,183 @@
       border: 1px solid rgba(0,0,0,0.08);
     }
 
+    /* ═══════════════════════════════════════════════════════════════
+       Chat redesign — liquid glass, agent-step timeline, lyric snippet
+       (paired with the AgentSteps / LyricSnippet components in main.jsx)
+       ═══════════════════════════════════════════════════════════════ */
+
+    /* ── Liquid glass: a stronger, more specular sibling of .panel-v3.
+       Reserved for the two chat accents: the composer + the best-hit card. */
+    .liquid-glass {
+      position: relative;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0.03) 55%, rgba(255,255,255,0.012) 100%),
+        radial-gradient(130% 90% at 12% -10%, oklch(72% 0.16 275 / 0.12) 0%, transparent 62%);
+      backdrop-filter: blur(28px) saturate(1.8);
+      -webkit-backdrop-filter: blur(28px) saturate(1.8);
+      border: 1px solid rgba(255,255,255,0.10);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.26),
+        inset 0 -1px 0 rgba(0,0,0,0.30),
+        0 8px 30px rgba(0,0,0,0.34);
+      overflow: hidden;
+    }
+    /* Specular top sheen — the light-catching edge that reads as "liquid". */
+    .liquid-glass::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      background: linear-gradient(180deg, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0) 24%);
+      pointer-events: none;
+    }
+    body[data-theme="light"] .liquid-glass {
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.74) 0%, rgba(255,255,255,0.44) 100%),
+        radial-gradient(130% 90% at 12% -10%, oklch(72% 0.16 275 / 0.12) 0%, transparent 62%);
+      border: 1px solid rgba(255,255,255,0.9);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.96),
+        inset 0 -1px 0 rgba(40,30,60,0.06),
+        0 10px 32px rgba(40,30,60,0.13);
+    }
+    body[data-theme="light"] .liquid-glass::before {
+      background: linear-gradient(180deg, rgba(255,255,255,0.62) 0%, rgba(255,255,255,0) 26%);
+    }
+
+    /* ── Chat composer: floating glass capsule that lifts + glows on focus. */
+    .chat-composer { transition: box-shadow .28s ease, transform .28s ease; }
+    .chat-composer:focus-within {
+      transform: translateY(-1px);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.30),
+        0 0 0 3px oklch(60% 0.18 270 / 0.22),
+        0 16px 42px rgba(0,0,0,0.42);
+    }
+    body[data-theme="light"] .chat-composer:focus-within {
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.96),
+        0 0 0 3px oklch(60% 0.18 270 / 0.20),
+        0 16px 42px rgba(40,30,60,0.16);
+    }
+
+    /* ── Best-hit card: the accentuated primary result inside a chat answer. */
+    .best-hit-card {
+      display: flex;
+      align-items: center;
+      gap: 13px;
+      padding: 12px 14px;
+      border-radius: 16px;
+      cursor: pointer;
+      transition: transform .2s cubic-bezier(.22,.9,.3,1), box-shadow .2s ease;
+      animation: fadeIn .34s ease both;
+    }
+    .best-hit-card:hover { transform: translateY(-2px); }
+
+    /* ── Agent-step timeline (skeuomorphic, NOT glass). ── */
+    .agent-steps { display: flex; flex-direction: column; }
+    .agent-step {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      animation: stepIn .34s cubic-bezier(.22,.9,.3,1) both;
+    }
+    @keyframes stepIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+    .agent-step-rail { display: flex; flex-direction: column; align-items: center; align-self: stretch; }
+    .agent-step-dot {
+      width: 17px; height: 17px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      background: rgba(255,255,255,0.05);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.12);
+      transition: background .3s ease, box-shadow .3s ease;
+    }
+    body[data-theme="light"] .agent-step-dot { background: rgba(0,0,0,0.04); box-shadow: inset 0 0 0 1px rgba(0,0,0,0.10); }
+    .agent-step-dot.is-active {
+      background: oklch(60% 0.18 270 / 0.16);
+      box-shadow: 0 0 0 1px oklch(60% 0.18 270 / 0.45), 0 0 11px oklch(60% 0.18 270 / 0.4);
+    }
+    .agent-step-dot.is-done {
+      background: oklch(63% 0.17 142 / 0.18);
+      box-shadow: inset 0 0 0 1px oklch(63% 0.17 142 / 0.4);
+    }
+    .agent-step-spin {
+      width: 11px; height: 11px; border-radius: 50%;
+      border: 2px solid oklch(70% 0.16 275 / 0.30);
+      border-top-color: oklch(72% 0.18 275);
+      animation: spin .7s linear infinite;
+    }
+    .agent-step-check { color: oklch(63% 0.17 142); animation: checkPop .32s cubic-bezier(.22,1.4,.4,1) both; }
+    @keyframes checkPop { from { opacity: 0; transform: scale(.4); } to { opacity: 1; transform: scale(1); } }
+    .agent-step-connector {
+      width: 2px; flex: 1; min-height: 9px; margin: 1px 0;
+      border-radius: 1px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.16), rgba(255,255,255,0));
+      transform-origin: top;
+      animation: connectorGrow .34s ease both;
+    }
+    body[data-theme="light"] .agent-step-connector { background: linear-gradient(180deg, rgba(0,0,0,0.14), rgba(0,0,0,0)); }
+    @keyframes connectorGrow { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+    .agent-step-label {
+      font-size: 13px; line-height: 17px;
+      padding-bottom: 9px;
+      color: rgba(255,255,255,0.5);
+      transition: color .3s ease;
+    }
+    body[data-theme="light"] .agent-step-label { color: rgba(0,0,0,0.5); }
+    .agent-step-label.is-active { color: #eeeef3; font-weight: 500; }
+    body[data-theme="light"] .agent-step-label.is-active { color: #161620; }
+    .agent-step:last-child .agent-step-label { padding-bottom: 0; }
+
+    /* Collapse wrapper: animates height via grid-rows (no JS measuring). */
+    .collapse-rows { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .3s cubic-bezier(.22,.9,.3,1); }
+    .collapse-rows.open { grid-template-rows: 1fr; }
+    .collapse-rows > .collapse-inner { overflow: hidden; min-height: 0; }
+
+    .agent-steps-summary {
+      display: inline-flex; align-items: center; gap: 7px;
+      font-size: 12.5px; cursor: pointer;
+      padding: 5px 11px; border-radius: 9px;
+      color: rgba(255,255,255,0.55);
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.06);
+      transition: background .18s ease, color .18s ease;
+    }
+    .agent-steps-summary:hover { background: rgba(255,255,255,0.07); color: #eeeef3; }
+    body[data-theme="light"] .agent-steps-summary { color: rgba(0,0,0,0.55); background: rgba(0,0,0,0.04); border-color: rgba(0,0,0,0.08); }
+    body[data-theme="light"] .agent-steps-summary:hover { background: rgba(0,0,0,0.06); color: #161620; }
+    .agent-steps-summary .chev { transition: transform .25s ease; }
+    .agent-steps-summary.open .chev { transform: rotate(180deg); }
+
+    /* ── Lyric snippet: highlighted matched line + context, inline expand. ── */
+    .lyric-snippet { display: flex; flex-direction: column; gap: 1px; }
+    .lyric-line {
+      font-size: 13.5px; line-height: 1.5;
+      padding: 2px 9px; border-radius: 6px;
+      color: var(--lyric-muted);
+      white-space: pre-wrap; word-break: break-word;
+    }
+    .lyric-line-match {
+      color: var(--lyric-strong);
+      background: var(--lyric-hl);
+      font-weight: 600;
+      box-shadow: inset 2px 0 0 var(--lyric-accent);
+    }
+    .lyric-more {
+      align-self: flex-start;
+      margin-top: 4px; font-size: 12px;
+      color: var(--lyric-accent);
+      background: none; border: none; cursor: pointer; padding: 2px 0;
+      letter-spacing: 0.01em;
+    }
+    .lyric-more:hover { text-decoration: underline; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .agent-step, .agent-step-connector, .agent-step-check, .best-hit-card { animation: none !important; }
+      .collapse-rows, .chat-composer, .agent-steps-summary .chev { transition: none !important; }
+      .agent-step-spin { animation-duration: 1.4s; }
+    }
+
     /* ── Markdown rendering for LLM outputs ─────────────────────
        Applied to artist bios, refined facts, chat answers, lyric
        explanations. Tight margins keep the typography appropriate

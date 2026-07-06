@@ -293,6 +293,41 @@ async function apiFetch(path, opts = {}) {
   return res.json();
 }
 
+// ─── apiStream — POST a JSON body, consume a text/event-stream response ───────
+// Reads SSE `data:` frames off the fetch body reader and hands each parsed event
+// to onEvent(). Used by the chat streaming endpoint (/chat/stream). Callers wrap
+// this in try/catch and fall back to the non-streaming endpoint on any failure.
+async function apiStream(path, body, onEvent, signal) {
+  const token = getStoredToken();
+  const headers = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(API + path, { method: "POST", headers, body: JSON.stringify(body), signal });
+  if (res.status === 401) { _onAuthFailure(); throw new Error("HTTP 401: not authenticated"); }
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`HTTP ${res.status}: ${t.slice(0, 200)}`);
+  }
+  if (!res.body || !res.body.getReader) throw new Error("stream unsupported");
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx;
+    // Frames are separated by a blank line; a frame may hold multiple data: lines.
+    while ((idx = buf.indexOf("\n\n")) !== -1) {
+      const frame = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      const dataLines = frame.split("\n").filter(l => l.startsWith("data:"));
+      if (!dataLines.length) continue;  // heartbeat / comment frame
+      const payload = dataLines.map(l => l.slice(5).replace(/^ /, "")).join("\n");
+      try { onEvent(JSON.parse(payload)); } catch { /* skip malformed frame */ }
+    }
+  }
+}
+
 // ─── MarkdownText — safe renderer for LLM outputs ────────────────────────────
 // Used by chat answers (search + drawer), lyric explanations, refined facts,
 // artist bios — any place where the backend returns LLM-generated text that
@@ -3162,6 +3197,135 @@ function DecadeFiltersChips({ selectedRanges, onToggleRange, isDark }) {
   );
 }
 
+// ─── Chat: small inline icons ────────────────────────────────────────────────
+const StepCheck = ({ size = 10 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+);
+
+// Russian plural: (1 шаг, 2 шага, 5 шагов)
+const pluralRu = (n, one, few, many) => {
+  const m = Math.abs(n) % 100, d = m % 10;
+  if (m >= 11 && m <= 14) return many;
+  if (d === 1) return one;
+  if (d >= 2 && d <= 4) return few;
+  return many;
+};
+
+// ─── AgentSteps — live agent-work timeline, collapses after the answer ────────
+// While streaming: vertical timeline, last step active (spinner), rest done
+// (check). After the answer arrives: one summary row that expands on click.
+function AgentSteps({ steps, streaming, lang }) {
+  const [open, setOpen] = useState(false);
+  const list = steps || [];
+
+  if (streaming) {
+    const shown = list.length ? list : [{ human: lang === 'ru' ? 'Думаю…' : 'Thinking…' }];
+    return (
+      <div className="agent-steps" style={{ marginBottom: 6 }}>
+        {shown.map((s, i) => {
+          const isLast = i === shown.length - 1;
+          return (
+            <div key={i} className="agent-step">
+              <div className="agent-step-rail">
+                <div className={`agent-step-dot ${isLast ? 'is-active' : 'is-done'}`}>
+                  {isLast ? <div className="agent-step-spin" /> : <span className="agent-step-check"><StepCheck /></span>}
+                </div>
+                {!isLast && <div className="agent-step-connector" />}
+              </div>
+              <div className={`agent-step-label ${isLast ? 'is-active' : ''}`}>{s.human}</div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  if (!list.length) return null;
+  const summary = lang === 'ru'
+    ? `Нашёл за ${list.length} ${pluralRu(list.length, 'шаг', 'шага', 'шагов')}`
+    : `Found in ${list.length} step${list.length === 1 ? '' : 's'}`;
+  return (
+    <div style={{ marginBottom: 6 }}>
+      <div className={`agent-steps-summary ${open ? 'open' : ''}`} onClick={() => setOpen(o => !o)}>
+        <span className="agent-step-check" style={{ display: 'inline-flex' }}><StepCheck /></span>
+        <span>{summary}</span>
+        <svg className="chev" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          strokeWidth="2.5" strokeLinecap="round"><path d="m6 9 6 6 6-6"/></svg>
+      </div>
+      <div className={`collapse-rows ${open ? 'open' : ''}`}>
+        <div className="collapse-inner">
+          <div className="agent-steps" style={{ paddingTop: 8 }}>
+            {list.map((s, i) => (
+              <div key={i} className="agent-step">
+                <div className="agent-step-rail">
+                  <div className="agent-step-dot is-done"><span className="agent-step-check"><StepCheck /></span></div>
+                  {i < list.length - 1 && <div className="agent-step-connector" />}
+                </div>
+                <div className="agent-step-label">{s.human}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── LyricSnippet — matched lyric line + context, inline expand ───────────────
+// Highlights the matched line (from hit.matched_line, else a word-overlap
+// heuristic) with one neighbour above/below; "show more" fades to full lyrics.
+function LyricSnippet({ lyrics, query, matchedLine, lang, c }) {
+  const reduced = usePrefersReducedMotion();
+  const [open, setOpen] = useState(false);
+  const lines = useMemo(
+    () => String(lyrics || '').split('\n').map(l => l.trim()).filter(Boolean),
+    [lyrics]);
+  const idx = useMemo(() => {
+    if (!lines.length) return 0;
+    if (matchedLine) {
+      const mi = lines.findIndex(l => l === String(matchedLine).trim());
+      if (mi >= 0) return mi;
+    }
+    const terms = String(query || '').toLowerCase().split(/\s+/).filter(t => t.length > 2);
+    if (!terms.length) return 0;
+    let best = 0, bestScore = -1;
+    lines.forEach((l, i) => {
+      const low = l.toLowerCase();
+      const score = terms.reduce((a, t) => a + (low.includes(t) ? 1 : 0), 0);
+      if (score > bestScore) { bestScore = score; best = i; }
+    });
+    return best;
+  }, [lines, query, matchedLine]);
+
+  if (!lines.length) return null;
+  const from = Math.max(0, idx - 1);
+  const preview = lines.slice(from, Math.min(lines.length, idx + 2));
+  const previewMatch = idx - from;
+  const vars = {
+    '--lyric-muted': c.textMuted,
+    '--lyric-strong': c.text,
+    '--lyric-hl': c.accentBg,
+    '--lyric-accent': c.accent,
+  };
+  const rows = open ? lines : preview;
+  const matchAt = open ? idx : previewMatch;
+  return (
+    <div className="lyric-snippet" style={vars} onClick={e => e.stopPropagation()}>
+      <div key={open ? 'full' : 'prev'} style={{ animation: reduced ? undefined : 'fadeIn .25s ease' }}>
+        {rows.map((l, i) => (
+          <div key={i} className={`lyric-line ${i === matchAt ? 'lyric-line-match' : ''}`}>{l}</div>
+        ))}
+      </div>
+      {lines.length > preview.length && (
+        <button className="lyric-more" onClick={() => setOpen(o => !o)}>
+          {open ? (lang === 'ru' ? 'свернуть' : 'show less') : (lang === 'ru' ? 'показать больше' : 'show more')}
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ─── SEARCH SECTION (redesigned) ──────────────────────────────────────────────
 function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, onAddToPlaylist }) {
   const c = useColors(isDark);
@@ -3257,34 +3421,68 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
     if (!aiActive && tab === 'chat') setTab('search');
   }, [aiActive, tab]);
 
-  // ── Chat handler ──
+  // ── Chat handler (streaming) ──
+  // POSTs /chat/stream and animates the agent's step events live; the trailing
+  // assistant message accumulates steps, then the `answer` event fills its body.
+  // Falls back to the non-streaming /chat/ endpoint if the stream can't open.
   const handleChat = async () => {
     if (!input.trim() || loading) return;
     const userText = input.trim();
     const now = new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'});
     const effectiveMode = autoMode ? 'hybrid' : chatMode;
-    const newMsgs = [...messages, { role:'user', text:userText, time:now }];
-    setMessages([...newMsgs, { role:'assistant', loading:true, time:now }]);
+    const history = messages.filter(m=>!m.loading && !m.streaming)
+      .map(m=>({ role:m.role==='assistant'?'assistant':'user', content:m.text||'' }));
+    const body = { message:userText, history, mode: effectiveMode, auto_mode: autoMode, lang, ...getLLMSettings() };
+
+    setMessages([...messages, { role:'user', text:userText, time:now },
+                              { role:'assistant', streaming:true, steps:[], time:now }]);
     setInput(''); setLoading(true);
-    try {
-      const history = messages.filter(m=>!m.loading).map(m=>({ role:m.role==='assistant'?'assistant':'user', content:m.text||'' }));
-      const res = await apiFetch('/chat/', { method:'POST', body: JSON.stringify({
-        message:userText, history, mode: effectiveMode, auto_mode: autoMode, lang, ...getLLMSettings()
-      }) });
-      const hits = res.hits || [];
+
+    // Patch the trailing assistant placeholder in place.
+    const patchLast = (patch) => setMessages(prev => {
+      const copy = prev.slice();
+      const li = copy.length - 1;
+      copy[li] = typeof patch === 'function' ? patch(copy[li]) : { ...copy[li], ...patch };
+      return copy;
+    });
+
+    let answered = false;
+    const finalizeAnswer = (ev) => {
+      answered = true;
+      const hits = ev.hits || [];
       setResults(hits);
-      const finalMsgs = [...newMsgs, {
-        role:'assistant', text:res.message||'…', hits, best_hit:res.best_hit,
-        confidence:res.confidence, song:res.song, artist:res.artist,
-        attempts:res.attempts, time:new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'})
-      }];
-      setMessages(finalMsgs);
-      saveSession(finalMsgs);
+      setMessages(prev => {
+        const copy = prev.slice();
+        const li = copy.length - 1;
+        copy[li] = {
+          role:'assistant', text:ev.message||'…', hits, best_hit:ev.best_hit,
+          confidence:ev.confidence, song:ev.song, artist:ev.artist,
+          attempts:ev.attempts, steps: copy[li].steps || [], streaming:false,
+          time:new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'})
+        };
+        saveSession(copy);
+        return copy;
+      });
+    };
+
+    const onEvent = (ev) => {
+      if (ev.type === 'answer') { finalizeAnswer(ev); return; }
+      if (ev.type === 'error') { patchLast({ streaming:false, text:`${lang==='ru'?'Ошибка':'Error'}: ${ev.message||''}` }); return; }
+      patchLast(m => ({ ...m, steps: [...(m.steps||[]), ev] }));  // classify/plan/search/validate/retry
+    };
+
+    try {
+      await apiStream('/chat/stream', body, onEvent);
+      if (!answered) throw new Error('stream ended without answer');
     } catch(e) {
-      setMessages(prev => [...prev.filter(m=>!m.loading), {
-        role:'assistant', text:`${lang==='ru'?'Ошибка':'Error'}: ${e.message}`,
-        time:new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'})
-      }]);
+      if (answered) { setLoading(false); return; }
+      // Fallback: non-streaming endpoint — no live steps, but a real answer.
+      try {
+        const res = await apiFetch('/chat/', { method:'POST', body: JSON.stringify(body) });
+        finalizeAnswer({ ...res });
+      } catch(e2) {
+        patchLast({ streaming:false, text:`${lang==='ru'?'Ошибка':'Error'}: ${e2.message}` });
+      }
     } finally { setLoading(false); }
   };
 
@@ -3364,66 +3562,109 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
     }));
   };
 
+  // ── Render a secondary (non-best) result card ──
+  const renderHitCard = (hit, hi, hits) => (
+    <div key={hi} className="chat-result-card"
+      style={{ background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)' }}
+      onClick={() => { setResults(hits); onPlayTrack && onPlayTrack(hit, hits); }}
+      onMouseEnter={e => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)'; }}
+      onMouseLeave={e => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)'; }}>
+      <AlbumCover title={hit.track?.title||''} artist={hit.track?.artist||''} size={42} isDark={isDark} coverPath={hit.track?.cover_art_path} />
+      <div style={{ flex:1, minWidth:0 }}>
+        <div style={{ fontSize:'14px', fontWeight:'600', color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{hit.track?.title||'—'}</div>
+        <div style={{ fontSize:'13px', color:c.textMuted, display: 'inline-block' }}>
+          <ArtistCredit track={hit.track} navigateToArtist={navigateToArtist} lang={lang} color={c.textMuted} />
+        </div>
+      </div>
+      <div className="mono" style={{ padding:'3px 8px', borderRadius:'16px', fontSize:'12px',
+        background: c.accentBg, color: c.accent, flexShrink:0 }}>
+        {Math.round((hit.score||0)*100)}%
+      </div>
+      <button onClick={e => { e.stopPropagation(); onPlayTrack && onPlayTrack(hit, hits); }}
+        style={{ width:'28px', height:'28px', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center',
+          flexShrink:0, background:'linear-gradient(180deg, oklch(60% 0.21 270), oklch(48% 0.22 285))',
+          boxShadow:'0 2px 6px oklch(58% 0.21 270 / 0.3)', fontSize:'10px', color:'white' }}>
+        ▶
+      </button>
+    </div>
+  );
+
+  // ── Render the accentuated best-hit card (liquid glass + lyric snippet) ──
+  const renderBestHit = (hit, hits, conf, confColor, userQuery) => {
+    const snippet = hit.lyrics && hit.matched_on !== 'audio';
+    return (
+      <div className="liquid-glass best-hit-card"
+        style={{ flexDirection:'column', alignItems:'stretch', gap:'11px' }}
+        onClick={() => { setResults(hits); onPlayTrack && onPlayTrack(hit, hits); }}>
+        {/* confidence accent bar (glass clips it) */}
+        <div style={{ position:'absolute', left:0, top:0, bottom:0, width:'3px', background:confColor, opacity:0.9 }} />
+        <div style={{ display:'flex', alignItems:'center', gap:'13px' }}>
+          <AlbumCover title={hit.track?.title||''} artist={hit.track?.artist||''} size={54} isDark={isDark} coverPath={hit.track?.cover_art_path} />
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ fontSize:'16px', fontWeight:'700', color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{hit.track?.title||'—'}</div>
+            <div style={{ fontSize:'13.5px', color:c.textMuted, display:'inline-block' }}>
+              <ArtistCredit track={hit.track} navigateToArtist={navigateToArtist} lang={lang} color={c.textMuted} />
+            </div>
+          </div>
+          <div className="mono" style={{ padding:'4px 9px', borderRadius:'16px', fontSize:'12px', fontWeight:'600',
+            background:c.accentBg, color:c.accent, flexShrink:0 }}>
+            {Math.round((hit.score||0)*100)}%
+          </div>
+          <button onClick={e => { e.stopPropagation(); onPlayTrack && onPlayTrack(hit, hits); }}
+            style={{ width:'34px', height:'34px', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center',
+              flexShrink:0, background:'linear-gradient(180deg, oklch(60% 0.21 270), oklch(48% 0.22 285))',
+              boxShadow:'0 3px 9px oklch(58% 0.21 270 / 0.4)', fontSize:'12px', color:'white' }}>
+            ▶
+          </button>
+        </div>
+        {snippet && <LyricSnippet lyrics={hit.lyrics} query={userQuery} matchedLine={hit.matched_line} lang={lang} c={c} />}
+      </div>
+    );
+  };
+
   // ── Render chat message ──
   const renderMessage = (msg, i) => {
     const isUser = msg.role==='user';
     const conf = msg.confidence;
     const confColor = conf==='high' ? c.green : conf==='medium' ? c.amber : c.textSubtle;
+    const isAssistant = !isUser;
+    const showBubble = isUser || !!msg.text;
+    const showSteps = isAssistant && (msg.streaming || (msg.steps && msg.steps.length > 0));
+    const userQuery = (i > 0 && messages[i-1]?.role === 'user') ? messages[i-1].text : '';
     return (
-      <div key={i} style={{ display:'flex', flexDirection:'column', alignItems:isUser?'flex-end':'flex-start', gap:'5px', animation:'fadeIn 0.3s ease' }}>
-        <div style={{
-          maxWidth:'92%', padding:'11px 15px',
-          borderRadius: isUser?'16px 16px 5px 16px':'16px 16px 16px 5px',
-          background: isUser ? c.userBubble : c.aiBubble,
-          color: isUser?'white':c.text, fontSize:'15px', lineHeight:'1.6',
-          boxShadow: isDark
-            ? (isUser ? 'inset 0 1px 0 rgba(255,255,255,0.18), 0 3px 10px rgba(0,0,0,0.45)' : 'inset 0 1px 0 rgba(255,255,255,0.05), 0 1px 4px rgba(0,0,0,0.3)')
-            : (isUser ? 'inset 0 1px 0 rgba(255,255,255,0.22), 0 3px 10px oklch(60% 0.18 270 / 0.25)' : 'inset 0 1px 0 rgba(255,255,255,0.95), 0 1px 4px rgba(40,30,60,0.08)'),
-        }}>
-          {msg.loading
-            ? <div style={{ display:'flex', gap:'5px', padding:'2px 0' }}>
-                {[0,1,2].map(j => <div key={j} style={{ width:'6px', height:'6px', borderRadius:'50%', background:c.textMuted, animation:`pulse 1.2s ease-in-out ${j*0.2}s infinite` }} />)}
-              </div>
-            : (isUser ? msg.text : <MarkdownText text={msg.text} />)}
-        </div>
-        {msg.hits && msg.hits.length > 0 && (
-          <div style={{
-            display:'flex', flexDirection:'column', gap:'4px',
-            maxWidth:'96%', animation:'fadeIn 0.3s ease',
-          }}>
-            {(msg.best_hit ? [msg.best_hit] : msg.hits.slice(0,5))
-              .map((hit, hi) => (
-                <div key={hi} className="chat-result-card"
-                  style={{ background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)' }}
-                  onClick={() => { setResults(msg.hits); onPlayTrack && onPlayTrack(hit, msg.hits); }}
-                  onMouseEnter={e => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)'; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)'; }}>
-                  <AlbumCover title={hit.track?.title||''} artist={hit.track?.artist||''} size={42} isDark={isDark} coverPath={hit.track?.cover_art_path} />
-                  <div style={{ flex:1, minWidth:0 }}>
-                    <div style={{ fontSize:'14px', fontWeight:'600', color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{hit.track?.title||'—'}</div>
-                    <div style={{ fontSize:'13px', color:c.textMuted, display: 'inline-block' }}>
-                      <ArtistCredit track={hit.track} navigateToArtist={navigateToArtist} lang={lang} color={c.textMuted} />
-                    </div>
-                  </div>
-                  <div className="mono" style={{ padding:'3px 8px', borderRadius:'16px', fontSize:'12px',
-                    background: c.accentBg, color: c.accent, flexShrink:0 }}>
-                    {Math.round((hit.score||0)*100)}%
-                  </div>
-                  <button onClick={e => { e.stopPropagation(); onPlayTrack && onPlayTrack(hit, msg.hits); }}
-                    style={{ width:'28px', height:'28px', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center',
-                      flexShrink:0, background:'linear-gradient(180deg, oklch(60% 0.21 270), oklch(48% 0.22 285))',
-                      boxShadow:'0 2px 6px oklch(58% 0.21 270 / 0.3)', fontSize:'10px', color:'white' }}>
-                    ▶
-                  </button>
-                </div>
-              ))}
+      <div key={i} style={{ display:'flex', flexDirection:'column', alignItems:isUser?'flex-end':'flex-start', gap:'6px', animation:'fadeIn 0.3s ease', width:'100%' }}>
+        {showSteps && (
+          <div style={{ maxWidth:'92%' }}>
+            <AgentSteps steps={msg.steps} streaming={!!msg.streaming} lang={lang} />
           </div>
         )}
-        <div className="mono" style={{ display:'flex', gap:'10px', alignItems:'center', fontSize:'12px', letterSpacing:'0.12em' }}>
-          <span style={{ color:c.textSubtle }}>{msg.time}</span>
-          {conf && <span style={{ color: confColor }}>● {conf.toUpperCase()}</span>}
-          {msg.attempts!=null && <span style={{ color:c.textSubtle }}>{msg.attempts}/4</span>}
-        </div>
+        {showBubble && (
+          <div style={{
+            maxWidth:'92%', padding:'11px 15px',
+            borderRadius: isUser?'16px 16px 5px 16px':'16px 16px 16px 5px',
+            background: isUser ? c.userBubble : c.aiBubble,
+            color: isUser?'white':c.text, fontSize:'15px', lineHeight:'1.6',
+            boxShadow: isDark
+              ? (isUser ? 'inset 0 1px 0 rgba(255,255,255,0.18), 0 3px 10px rgba(0,0,0,0.45)' : 'inset 0 1px 0 rgba(255,255,255,0.05), 0 1px 4px rgba(0,0,0,0.3)')
+              : (isUser ? 'inset 0 1px 0 rgba(255,255,255,0.22), 0 3px 10px oklch(60% 0.18 270 / 0.25)' : 'inset 0 1px 0 rgba(255,255,255,0.95), 0 1px 4px rgba(40,30,60,0.08)'),
+          }}>
+            {isUser ? msg.text : <MarkdownText text={msg.text} />}
+          </div>
+        )}
+        {msg.hits && msg.hits.length > 0 && (
+          <div style={{ display:'flex', flexDirection:'column', gap:'6px', maxWidth:'96%', width:'100%', animation:'fadeIn 0.3s ease' }}>
+            {msg.best_hit
+              ? renderBestHit(msg.best_hit, msg.hits, conf, confColor, userQuery)
+              : msg.hits.slice(0,5).map((hit, hi) => renderHitCard(hit, hi, msg.hits))}
+          </div>
+        )}
+        {(showBubble || (msg.hits && msg.hits.length > 0)) && (
+          <div className="mono" style={{ display:'flex', gap:'10px', alignItems:'center', fontSize:'12px', letterSpacing:'0.12em' }}>
+            <span style={{ color:c.textSubtle }}>{msg.time}</span>
+            {conf && <span style={{ color: confColor }}>● {conf.toUpperCase()}</span>}
+            {msg.attempts!=null && <span style={{ color:c.textSubtle }}>{msg.attempts}/4</span>}
+          </div>
+        )}
       </div>
     );
   };
@@ -3730,7 +3971,7 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
             {/* Input bar */}
             <div style={{ padding:'12px 24px 20px',
               background: isDark?'rgba(0,0,0,0.3)':'rgba(255,255,255,0.55)', backdropFilter:'blur(10px)' }}>
-              <div className="hero-bar panel-v3" style={{ display:'flex', gap:'8px', alignItems:'flex-end', padding:'8px', borderRadius:'16px' }}>
+              <div className="liquid-glass chat-composer" style={{ display:'flex', gap:'8px', alignItems:'flex-end', padding:'8px', borderRadius:'20px' }}>
                 <textarea
                   value={input} onChange={e=>setInput(e.target.value)}
                   onKeyDown={e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();handleChat();} }}

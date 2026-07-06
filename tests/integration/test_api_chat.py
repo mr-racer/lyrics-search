@@ -129,6 +129,76 @@ class TestChatAPI:
             )
             assert resp.status_code == 422
 
+
+def _parse_sse(text: str) -> list[dict]:
+    """Extract JSON payloads from SSE `data:` frames (skips heartbeat comments)."""
+    import json as _json
+    events = []
+    for frame in text.split("\n\n"):
+        data = "\n".join(
+            line[5:].lstrip(" ")
+            for line in frame.splitlines()
+            if line.startswith("data:")
+        )
+        if data:
+            events.append(_json.loads(data))
+    return events
+
+
+def test_chat_stream_emits_steps_and_matches_nonstream():
+    """POST /chat/stream streams step events then a final `answer` whose payload
+    equals what the non-streaming POST /chat/ returns for the same request."""
+    from app.api.routes import chat as chat_route
+
+    fixed = SimpleNamespace(id="user-A", email="a@x")
+
+    async def fake_search(**kwargs):
+        return []
+
+    svc = MagicMock(spec=SearchService)
+    svc.search = fake_search
+
+    import app.api.routes.chat as chat_module
+
+    orig_ask_llm = chat_module.ask_llm
+
+    async def fake_ask_llm(message, *, system_prompt=None, parse_json=False, **kwargs):
+        if parse_json and system_prompt and "CLAP" in (system_prompt or ""):
+            return ["mellow instrumental"]
+        if parse_json and system_prompt and "user_query" in (system_prompt or ""):
+            return {"message": "Found it!"}
+        if parse_json:
+            return {"action": "answer", "confidence": "low", "song": None,
+                    "artist": None, "message": "no result", "queries": None}
+        return {}
+
+    chat_module.ask_llm = fake_ask_llm
+    body = {"message": "hi", "auto_mode": False, "mode": "audio", "lang": "ru"}
+    try:
+        app = create_app()
+        app.dependency_overrides[chat_route.get_current_user] = lambda: fixed
+        with TestClient(app) as c:
+            c.app.state.search_service = svc
+            stream_resp = c.post("/api/v1/chat/stream", json=body)
+            plain_resp = c.post("/api/v1/chat/", json=body)
+
+        assert stream_resp.status_code == 200
+        assert stream_resp.headers["content-type"].startswith("text/event-stream")
+
+        events = _parse_sse(stream_resp.text)
+        types = [e["type"] for e in events]
+        # A classify step is emitted, and the stream terminates with `answer`.
+        assert "classify" in types
+        assert types[-1] == "answer"
+        # Every non-answer step carries a non-empty human label.
+        assert all(e.get("human") for e in events if e["type"] != "answer")
+
+        # Parity: the final answer payload matches the non-streaming endpoint.
+        answer = {k: v for k, v in events[-1].items() if k not in ("type", "human")}
+        assert answer == plain_resp.json()
+    finally:
+        chat_module.ask_llm = orig_ask_llm
+
     def test_chat_with_llm_settings(self):
         app = create_app()
         with TestClient(app) as c:

@@ -21,14 +21,17 @@ Call 2…N  (agentic search loop, up to NUM_ATTEMPTS)
 
 from __future__ import annotations
 
+import asyncio
 import json
-from typing import Any
+from typing import Any, AsyncGenerator, Awaitable, Callable, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import StreamingResponse
 
 from app.domain.models import ChatRequest, SearchFilters, TrackChatRequest, TrackChatResponse, TrackHit, User
 from app.api.dependencies import get_current_user
 from app.api.helpers import derive_collection_for_user
+from app.api.sse_utils import sse_data
 from app.services.agents import (
     PLANNER_PROMPT,
     SCORER_PROMPT,
@@ -346,11 +349,67 @@ def _history_preamble(history) -> str:
     )
 
 
-@router.post("/")
-async def chat(
+# ─── Agent step events (SSE) ──────────────────────────────────────────────────
+# The streaming endpoint drains these as the agentic loop progresses. Each event
+# carries a ready-to-render `human` string in the request language, so the UI does
+# no phrasing of its own — it just animates the label. `emit` is None for the
+# non-streaming endpoint, which makes every _emit() call a cheap no-op.
+
+EmitFn = Callable[[dict], Awaitable[None]]
+
+_MODE_LABEL_RU = {"text": "по тексту", "audio": "по звучанию", "hybrid": "по тексту и звуку"}
+_MODE_LABEL_EN = {"text": "by lyrics", "audio": "by sound", "hybrid": "by lyrics and sound"}
+
+
+def _plural_ru(n: int) -> str:
+    """Russian plural suffix for «совпадени·е/·я/·й»."""
+    r = abs(n) % 100
+    if 11 <= r <= 14:
+        return "й"
+    d = r % 10
+    if d == 1:
+        return "е"
+    if 2 <= d <= 4:
+        return "я"
+    return "й"
+
+
+def _human(event_type: str, lang: str | None, **kw) -> str:
+    """Plain-language, per-language label for a step event."""
+    ru = (lang or "en").startswith("ru")
+    if event_type == "classify":
+        mode = kw.get("mode", "hybrid")
+        return (f"Понял запрос — ищу {_MODE_LABEL_RU.get(mode, 'по тексту и звуку')}"
+                if ru else f"Got it — searching {_MODE_LABEL_EN.get(mode, 'by lyrics and sound')}")
+    if event_type == "plan":
+        return "Составил план поиска" if ru else "Planned the search"
+    if event_type == "search":
+        found = kw.get("found", 0)
+        if ru:
+            return f"Ищу в библиотеке… нашёл {found} совпадени{_plural_ru(found)}"
+        return f"Searching the library… found {found} match{'' if found == 1 else 'es'}"
+    if event_type == "validate":
+        if kw.get("valid", True):
+            return "Проверил — трек подходит" if ru else "Checked — the track fits"
+        return "Проверяю точность совпадения" if ru else "Double-checking the match"
+    if event_type == "retry":
+        return "Уточняю запрос и пробую снова" if ru else "Refining the query and retrying"
+    if event_type == "answer":
+        return "Готовлю ответ" if ru else "Preparing the answer"
+    return ""
+
+
+async def _emit(emit: EmitFn | None, event_type: str, lang: str | None, **fields) -> None:
+    if emit is None:
+        return
+    await emit({"type": event_type, "human": _human(event_type, lang, **fields), **fields})
+
+
+async def _run_chat_core(
     req: ChatRequest,
     request: Request,
-    current_user: User = Depends(get_current_user),
+    current_user: User,
+    emit: EmitFn | None = None,
 ) -> dict:
     """Agentic LLM-driven music search.
 
@@ -552,6 +611,10 @@ async def chat(
         active_filters or "(none)",
     )
 
+    await _emit(emit, "classify", req.lang, mode=effective_mode)
+    if planner_queries:
+        await _emit(emit, "plan", req.lang, queries=[q["query"] for q in planner_queries])
+
     # ── Audio fast path: rephrase → 3× CLAP search → RRF → answer ──────────
     # 1. LLM rephrases user's mood/vibe into 3 CLAP-optimised English prompts
     # 2. Each prompt runs through CLAP audio search (10 results each)
@@ -604,6 +667,8 @@ async def chat(
             len(merged),
             [(h.track.artist, h.track.title) for h in top5],
         )
+
+        await _emit(emit, "search", req.lang, attempt=1, queries=[], found=len(merged))
 
         if top5:
             best = top5[0]
@@ -798,6 +863,13 @@ async def chat(
             if new_hits:
                 all_hits = _merge_hits(all_hits, new_hits)
 
+            await _emit(
+                emit, "search", req.lang,
+                attempt=attempt,
+                queries=[q["query"] for q in queries],
+                found=len(new_hits),
+            )
+
             # Last attempt and still "search" — force exit with fallback message
             if attempt == NUM_ATTEMPTS:
                 final_result = {
@@ -842,11 +914,14 @@ async def chat(
                         [q.query for q in (val.queries or [])],
                     )
 
+                    await _emit(emit, "validate", req.lang, valid=val.valid)
+
                     if not val.valid and val.queries and attempt < NUM_ATTEMPTS:
                         # Rejected — inject new queries and continue the loop
                         queries = [{"query": q.query} for q in val.queries]
                         action = "search"
                         final_result = {}
+                        await _emit(emit, "retry", req.lang, attempt=attempt + 1)
                         continue
 
                     if not val.valid and attempt >= NUM_ATTEMPTS:
@@ -878,6 +953,79 @@ async def chat(
         "attempts":       attempts_done,
         "classification": classification,
     }
+
+
+@router.post("/")
+async def chat(
+    req: ChatRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Non-streaming agentic search — runs the loop to completion and returns
+    the final payload. Kept for backward compatibility and as the client's
+    fallback when the SSE stream is unavailable. Contract unchanged."""
+    return await _run_chat_core(req, request, current_user, emit=None)
+
+
+@router.post("/stream")
+async def chat_stream(
+    req: ChatRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> StreamingResponse:
+    """Streaming variant of ``POST /chat/``.
+
+    Runs the same agentic loop, emitting typed step events (classify → plan →
+    search → validate → retry) over SSE as the agent works, then a final
+    ``answer`` event carrying the exact payload the non-streaming endpoint
+    returns. The frontend animates each step's ``human`` label in real time.
+    """
+
+    async def event_source() -> AsyncGenerator[str, None]:
+        queue: asyncio.Queue[dict] = asyncio.Queue()
+        DONE = {"__done__": True}
+
+        async def emit(event: dict) -> None:
+            queue.put_nowait(event)
+
+        async def run() -> None:
+            try:
+                result = await _run_chat_core(req, request, current_user, emit=emit)
+                queue.put_nowait({"type": "answer", "human": _human("answer", req.lang), **result})
+            except Exception as exc:  # surface a terminal error frame, never hang
+                logger.error("[chat/stream] core error: %s", exc, exc_info=True)
+                queue.put_nowait({
+                    "type": "error",
+                    "human": ("Ошибка" if (req.lang or "en").startswith("ru") else "Error"),
+                    "message": str(exc),
+                })
+            finally:
+                queue.put_nowait(DONE)
+
+        task = asyncio.create_task(run())
+        try:
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield ": heartbeat\n\n"  # keep the connection warm during long LLM waits
+                    continue
+                if item is DONE:
+                    break
+                yield sse_data(item)
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ─── Track Chat ───────────────────────────────────────────────────────────────
