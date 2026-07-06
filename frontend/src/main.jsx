@@ -9973,6 +9973,15 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
   const [memberIndexRoot, setMemberIndexRoot] = useState(null);
   const [indexingFolder, setIndexingFolder] = useState(false);
   const [mode, setMode] = useState('pick');   // 'pick' (upload) | 'yandex' (import)
+  const [uploadExpanded, setUploadExpanded] = useState(false);  // expand upload section
+  const [premiumHint, setPremiumHint] = useState(false);  // inline hint for non-premium Yandex click
+  const premiumHintDismissed = (() => {
+    try { return localStorage.getItem('musix_premium_hint_dismissed') === '1'; } catch { return false; }
+  })();
+  const dismissPremiumHint = () => {
+    try { localStorage.setItem('musix_premium_hint_dismissed', '1'); } catch {}
+    setPremiumHint(false);
+  };
   const ru = lang === 'ru';
   const uid = (typeof localStorage !== 'undefined' && localStorage.getItem('musix_user_id')) || '';
   // Marketing welcome shows once per account on first onboarding, then never.
@@ -10164,129 +10173,145 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
           {ru ? <>Откуда <i style={{ color:'oklch(62% 0.2 275)' }}>музыка</i>?</> : <>Where is your <i style={{ color:'oklch(62% 0.2 275)' }}>music</i> from?</>}
         </h2>
 
-        {/* ── Block: Yandex Music (первый — основной путь для большинства) ──── */}
-        {MUSIX_PREMIUM ? (
-          <div>
-            <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'6px' }}>
-              <h3 className="serif" style={{ fontSize:'20px', letterSpacing:'-0.01em', margin:0 }}>
-                {ru?'Моя Яндекс Музыка':'My Yandex Music'}
-              </h3>
-              <PremiumBadge />
+        {/* ═══ Premium hint (inline, one-time) ═══════════════════════════════ */}
+        {premiumHint && !premiumHintDismissed && (
+          <div className="ob-glass ob-listin" style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:'12px', padding:'14px 20px', borderRadius:'14px' }}>
+            <div style={{ display:'flex', alignItems:'center', gap:'10px', flex:1, minWidth:0 }}>
+              <span style={{ width:'32px', height:'32px', borderRadius:'8px', background:'linear-gradient(135deg, #ffcc00, #ff5c5c)', color:'#1a1a1a', display:'flex', alignItems:'center', justifyContent:'center', fontSize:'15px', fontWeight:'800', flexShrink:0 }}>?</span>
+              <span style={{ fontSize:'13px', color:c.textMuted, lineHeight:1.5 }}>
+                {ru
+                  ? 'Импорт из Яндекс Музыки доступен в PRO-версии MusiX — подписка открывает доступ к плейлистам и «Мне нравится».'
+                  : 'Yandex Music import is available in MusiX PRO — a subscription unlocks playlists and liked tracks.'}
+              </span>
             </div>
-            <p style={{ fontSize:'13.5px', color:c.textMuted, lineHeight:'1.55', marginBottom:'12px' }}>
-              {ru
-                ? '«Мне нравится» и плейлисты — со всеми тегами и обложками, прямо в вашу библиотеку.'
-                : 'Liked tracks and playlists — with all tags and covers, straight into your library.'}
-            </p>
-            <button onClick={() => setMode('yandex')} disabled={anyUploading||committing}
-              className="ob-glass"
-              style={{ width:'100%', padding:'16px 20px', borderRadius:'14px',
-                display:'flex', alignItems:'center', gap:'14px', cursor: anyUploading||committing ? 'not-allowed' : 'pointer',
-                opacity: anyUploading||committing ? 0.5 : 1, textAlign:'left' }}>
-              <div style={{ width:'44px', height:'44px', borderRadius:'11px', flexShrink:0,
-                background:'linear-gradient(135deg, #ffcc00, #ff5c5c)', color:'#1a1a1a',
-                display:'flex', alignItems:'center', justifyContent:'center', fontSize:'24px', fontWeight:'800' }}>Я</div>
-              <div style={{ flex:1, minWidth:0 }}>
-                <div style={{ fontSize:'14px', fontWeight:'600', color:c.text }}>
-                  {ru ? 'Подключить Яндекс Музыку' : 'Connect Yandex Music'}
-                </div>
-                <div style={{ fontSize:'12.5px', color:c.textMuted, marginTop:'2px' }}>
-                  {ru ? 'Плейлисты и «Мне нравится» — на следующем шаге' : 'Pick playlists and Liked tracks on the next step'}
-                </div>
-              </div>
-              <div style={{ fontSize:'18px', color:c.textSubtle, flexShrink:0 }}>→</div>
-            </button>
-          </div>
-        ) : (
-          <div className="ob-glass" style={{
-            padding:'16px 20px', borderRadius:'14px', opacity:0.6,
-            border:`1px solid ${c.border}`,
-          }}>
-            <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'6px' }}>
-              <h3 className="serif" style={{ fontSize:'20px', letterSpacing:'-0.01em', margin:0, opacity:0.7 }}>
-                {ru?'Моя Яндекс Музыка':'My Yandex Music'}
-              </h3>
-              <span style={{
-                display:'inline-flex', alignItems:'center', gap:'4px',
-                padding:'2px 8px', borderRadius:'999px',
-                fontSize:'9px', fontWeight:'700', letterSpacing:'0.22em',
-                color: isDark ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.25)',
-                border:`1px solid ${isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}`,
-                background: 'transparent',
-              }}>🔒 {ru?'ПРО':'PRO'}</span>
-            </div>
-            <p style={{ fontSize:'13.5px', color:c.textMuted, lineHeight:'1.55', marginBottom:'10px' }}>
-              {ru
-                ? 'Импорт «Мне нравится» и плейлистов из Яндекс Музыки в вашу библиотеку.'
-                : 'Import Liked tracks and playlists from Yandex Music into your library.'}
-            </p>
-            <button disabled className={ske('btn', isDark)}
-              style={{ width:'100%', padding:'11px 18px', borderRadius:'10px', fontSize:'13.5px',
-                fontWeight:'500', cursor:'not-allowed', opacity:0.5,
-                display:'flex', alignItems:'center', justifyContent:'center', gap:'8px' }}>
-              🔒 {ru ? 'Доступно в PRO-версии MusiX' : 'Available in MusiX PRO'}
-            </button>
+            <button onClick={dismissPremiumHint} style={{ fontSize:'18px', color:c.textSubtle, cursor:'pointer', background:'none', border:'none', padding:'4px', lineHeight:1, flexShrink:0 }}>✕</button>
           </div>
         )}
 
-        {/* ── Block: локальные файлы (второй — для тех, у кого есть коллекция) */}
-        <div style={{ marginTop:'24px' }}>
-          <h3 className="serif" style={{ fontSize:'20px', letterSpacing:'-0.01em', margin:'0 0 6px' }}>
-            {ru?'Локальные файлы':'Local files'}
-          </h3>
-          <p style={{ fontSize:'13.5px', color:c.textMuted, lineHeight:'1.55', marginBottom:'14px' }}>
-            {ru
-              ? 'Ваши аудиофайлы — загрузятся под вашим аккаунтом. FLAC, MP3, M4A.'
-              : 'Your audio files — uploaded under your account. FLAC, MP3, M4A.'}
-          </p>
-
-          {/* Trust moment: before the user hands over files, say plainly where
-              they will be processed. The same badge follows into indexing. */}
-          <ProcessingModeBadge isDark={isDark} lang={lang} style={{ marginBottom:'16px' }} />
-
-          <div className="ob-glass"
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={onDrop}
-            style={{ padding:'44px 28px', borderRadius:'18px', border:`2px dashed ${c.border}`, textAlign:'center' }}>
-            <div style={{ fontSize:'48px', marginBottom:'12px' }}>📁</div>
-            <p style={{ fontSize:'14px', color:c.textMuted, marginBottom:'16px' }}>
-              {lang==='ru'?'Перетащи аудиофайлы сюда, или':'Drag audio files here, or'}
-            </p>
-            <input ref={attachFolderInput} type="file" multiple
-              onChange={onPickFolder}
-              disabled={anyUploading||committing}
-              style={{ display:'none' }}
-              id="onboard-folder-picker" />
-            <input type="file" multiple
-              accept=".flac,.mp3,.m4a,.aac,.ogg,.wav,.opus"
-              onChange={onPick}
-              disabled={anyUploading||committing}
-              style={{ display:'none' }}
-              id="onboard-picker" />
-            <div style={{ display:'flex', gap:'10px', justifyContent:'center', flexWrap:'wrap' }}>
-              <label htmlFor="onboard-folder-picker" className="ske-accent"
-                style={{ display:'inline-block', padding:'11px 22px', borderRadius:'10px', fontSize:'14px',
-                  cursor:'pointer', opacity: anyUploading||committing ? 0.5 : 1,
-                  pointerEvents: anyUploading||committing ? 'none' : 'auto' }}>
-                {lang==='ru'?'ВЫБРАТЬ ПАПКУ':'PICK FOLDER'}
-              </label>
-              <label htmlFor="onboard-picker" className={ske('btn', isDark)}
-                style={{ display:'inline-block', padding:'11px 22px', borderRadius:'10px', fontSize:'14px',
-                  color:c.textMuted,
-                  cursor:'pointer', opacity: anyUploading||committing ? 0.5 : 1,
-                  pointerEvents: anyUploading||committing ? 'none' : 'auto' }}>
-                {lang==='ru'?'ИЛИ ФАЙЛЫ':'OR FILES'}
-              </label>
+        {/* ═══ Два кликабельных блока «или-или» ════════════════════════════ */}
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(260px, 1fr))', gap:'16px', marginBottom: uploadExpanded ? '0' : '16px', marginTop: (premiumHint && !premiumHintDismissed) ? '16px' : 0 }}>
+          {/* ── Card 1: Yandex Music ── */}
+          <button onClick={() => {
+            if (anyUploading || committing) return;
+            if (MUSIX_PREMIUM) setMode('yandex');
+            else if (!premiumHintDismissed) setPremiumHint(true);
+          }}
+            disabled={anyUploading || committing}
+            className="ob-glass"
+            style={{
+              display:'flex', flexDirection:'column', alignItems:'center', gap:'14px',
+              padding:'32px 24px', borderRadius:'18px', cursor: MUSIX_PREMIUM && !anyUploading && !committing ? 'pointer' : 'default',
+              opacity: MUSIX_PREMIUM && !anyUploading && !committing ? 1 : (MUSIX_PREMIUM ? 0.5 : 0.65),
+              textAlign:'center', transition: 'transform 0.2s, box-shadow 0.2s',
+              border: `1px solid ${MUSIX_PREMIUM && !anyUploading && !committing ? 'rgba(255,255,255,0.12)' : c.border}`,
+            }}
+            onMouseEnter={MUSIX_PREMIUM && !anyUploading && !committing ? (e) => { e.currentTarget.style.transform = 'translateY(-2px)'; } : undefined}
+            onMouseLeave={MUSIX_PREMIUM && !anyUploading && !committing ? (e) => { e.currentTarget.style.transform = ''; } : undefined}>
+            <div style={{
+              width:'56px', height:'56px', borderRadius:'16px',
+              background:'linear-gradient(135deg, #ffcc00, #ff5c5c)',
+              color:'#1a1a1a', display:'flex', alignItems:'center', justifyContent:'center',
+              fontSize:'28px', fontWeight:'800', flexShrink:0,
+            }}>Я</div>
+            <div style={{ display:'flex', alignItems:'center', gap:'8px' }}>
+              <span className="serif" style={{ fontSize:'17px', fontWeight:'600', color:c.text }}>
+                {ru ? 'Яндекс Музыка' : 'Yandex Music'}
+              </span>
+              {MUSIX_PREMIUM ? <PremiumBadge /> : (
+                <span style={{
+                  display:'inline-flex', alignItems:'center', gap:'3px',
+                  padding:'2px 7px', borderRadius:'999px',
+                  fontSize:'9px', fontWeight:'700', letterSpacing:'0.22em',
+                  color: isDark ? 'rgba(255,255,255,0.35)' : 'rgba(0,0,0,0.25)',
+                  border:`1px solid ${isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}`,
+                  background:'transparent',
+                }}>🔒 {ru?'ПРО':'PRO'}</span>
+              )}
             </div>
-          </div>
+            <span style={{ fontSize:'13px', color:c.textMuted, lineHeight:1.5 }}>
+              {MUSIX_PREMIUM
+                ? (ru ? 'Импортировать плейлисты и «Мне нравится»' : 'Import playlists and liked tracks')
+                : (ru ? 'Доступно в PRO-версии' : 'Available in PRO')}
+            </span>
+          </button>
+
+          {/* ── Card 2: Local Files ── */}
+          <button onClick={() => setUploadExpanded(!uploadExpanded)}
+            className="ob-glass"
+            style={{
+              display:'flex', flexDirection:'column', alignItems:'center', gap:'14px',
+              padding:'32px 24px', borderRadius:'18px', cursor:'pointer',
+              textAlign:'center', transition: 'transform 0.2s, box-shadow 0.2s',
+              border: `1px solid rgba(255,255,255,0.12)`,
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.transform = ''; }}>
+            <div style={{
+              width:'56px', height:'56px', borderRadius:'16px',
+              background: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
+              display:'flex', alignItems:'center', justifyContent:'center',
+              fontSize:'28px', flexShrink:0,
+            }}>📁</div>
+            <span className="serif" style={{ fontSize:'17px', fontWeight:'600', color:c.text }}>
+              {ru ? 'Свои файлы' : 'My files'}
+            </span>
+            <span style={{ fontSize:'13px', color:c.textMuted, lineHeight:1.5 }}>
+              {ru ? 'Загрузить FLAC, MP3, M4A с компьютера' : 'Upload FLAC, MP3, M4A from your computer'}
+            </span>
+          </button>
         </div>
 
-        {/* Premium: link the Yandex account to raise metadata/cover quality for
-            these manual uploads. Only shown in premium edition. */}
-        {MUSIX_PREMIUM && (
-          <YandexEnhanceLink isDark={isDark} lang={lang} />
+        {/* ═══ Развёрнутый контент: локальные файлы ═══════════════════════════ */}
+        {uploadExpanded && (
+          <div className="ob-listin">
+            <div style={{ marginTop:'14px' }}>
+              <ProcessingModeBadge isDark={isDark} lang={lang} style={{ marginBottom:'16px' }} />
+
+              <div className="ob-glass"
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={onDrop}
+                style={{ padding:'44px 28px', borderRadius:'18px', border:`2px dashed ${c.border}`, textAlign:'center' }}>
+                <div style={{ fontSize:'40px', marginBottom:'10px' }}>🎵</div>
+                <p style={{ fontSize:'14px', color:c.textMuted, marginBottom:'16px' }}>
+                  {lang==='ru'?'Перетащи аудиофайлы сюда, или':'Drag audio files here, or'}
+                </p>
+                <input ref={attachFolderInput} type="file" multiple
+                  onChange={onPickFolder}
+                  disabled={anyUploading||committing}
+                  style={{ display:'none' }}
+                  id="onboard-folder-picker" />
+                <input type="file" multiple
+                  accept=".flac,.mp3,.m4a,.aac,.ogg,.wav,.opus"
+                  onChange={onPick}
+                  disabled={anyUploading||committing}
+                  style={{ display:'none' }}
+                  id="onboard-picker" />
+                <div style={{ display:'flex', gap:'10px', justifyContent:'center', flexWrap:'wrap' }}>
+                  <label htmlFor="onboard-folder-picker" className="ske-accent"
+                    style={{ display:'inline-block', padding:'11px 22px', borderRadius:'10px', fontSize:'14px',
+                      cursor:'pointer', opacity: anyUploading||committing ? 0.5 : 1,
+                      pointerEvents: anyUploading||committing ? 'none' : 'auto' }}>
+                    {lang==='ru'?'ВЫБРАТЬ ПАПКУ':'PICK FOLDER'}
+                  </label>
+                  <label htmlFor="onboard-picker" className={ske('btn', isDark)}
+                    style={{ display:'inline-block', padding:'11px 22px', borderRadius:'10px', fontSize:'14px',
+                      color:c.textMuted,
+                      cursor:'pointer', opacity: anyUploading||committing ? 0.5 : 1,
+                      pointerEvents: anyUploading||committing ? 'none' : 'auto' }}>
+                    {lang==='ru'?'ИЛИ ФАЙЛЫ':'OR FILES'}
+                  </label>
+                </div>
+              </div>
+
+              {/* Premium: link Yandex account for better metadata on uploads */}
+              {MUSIX_PREMIUM && (
+                <YandexEnhanceLink isDark={isDark} lang={lang} />
+              )}
+            </div>
+          </div>
         )}
 
+        {/* ═══ Прогресс загрузки файлов ═══════════════════════════════════════ */}
         {progress.length > 0 && (
           <div className="ob-glass ob-listin" style={{ marginTop:'14px', padding:'16px 20px', borderRadius:'14px' }}>
             <div className="mono" style={{ fontSize:'13px', color:c.textSubtle, marginBottom:'10px' }}>
@@ -10326,23 +10351,29 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
           </div>
         )}
 
+        {/* ═══ Dev section: mounted folder (hidden under spoiler) ════════════ */}
         {memberIndexRoot && (
-          <div className="ob-glass" style={{ marginTop:'14px', padding:'16px 20px', borderRadius:'14px' }}>
-            <div style={{ fontSize:'13.5px', color:c.textMuted, lineHeight:1.55, marginBottom:'12px' }}>
-              {ru
-                ? <>Музыка уже примонтирована на сервере по пути <code style={{ color:c.text }}>{memberIndexRoot}</code>? Добавь её в библиотеку на месте — без повторной загрузки. <b>Заменит текущую библиотеку.</b></>
-                : <>Music already mounted on the server at <code style={{ color:c.text }}>{memberIndexRoot}</code>? Add it to your library in place — no re-upload. <b>Replaces your current library.</b></>}
+          <details style={{ marginTop:'18px', opacity:0.6 }}>
+            <summary style={{ cursor:'pointer', fontSize:'12px', color:c.textSubtle, letterSpacing:'0.12em', textTransform:'uppercase', userSelect:'none' }}>
+              {ru ? '🛠 Для разработчиков — примонтированная папка' : '🛠 Developer — mounted folder'}
+            </summary>
+            <div className="ob-glass" style={{ marginTop:'10px', padding:'16px 20px', borderRadius:'14px' }}>
+              <div style={{ fontSize:'13px', color:c.textMuted, lineHeight:1.55, marginBottom:'12px' }}>
+                {ru
+                  ? <>Музыка примонтирована на сервере: <code style={{ color:c.text }}>{memberIndexRoot}</code>. Заменит текущую библиотеку.</>
+                  : <>Music mounted on server: <code style={{ color:c.text }}>{memberIndexRoot}</code>. Replaces your current library.</>}
+              </div>
+              <button onClick={startFolderIndex} disabled={indexingFolder||anyUploading||committing}
+                className={ske('btn', isDark)}
+                style={{ padding:'10px 18px', borderRadius:'10px', fontSize:'13px', fontWeight:'600',
+                  cursor: indexingFolder||anyUploading||committing ? 'not-allowed' : 'pointer',
+                  opacity: indexingFolder||anyUploading||committing ? 0.5 : 1 }}>
+                {indexingFolder
+                  ? (ru?'Запуск…':'Starting…')
+                  : (ru?`Индексировать: ${memberIndexRoot}`:`Index: ${memberIndexRoot}`)}
+              </button>
             </div>
-            <button onClick={startFolderIndex} disabled={indexingFolder||anyUploading||committing}
-              className={ske('btn', isDark)}
-              style={{ padding:'11px 22px', borderRadius:'10px', fontSize:'14px', fontWeight:'600',
-                cursor: indexingFolder||anyUploading||committing ? 'not-allowed' : 'pointer',
-                opacity: indexingFolder||anyUploading||committing ? 0.5 : 1 }}>
-              {indexingFolder
-                ? (ru?'Запуск…':'Starting…')
-                : (ru?`Заменить музыку: ${memberIndexRoot}`:`Replace music: ${memberIndexRoot}`)}
-            </button>
-          </div>
+          </details>
         )}
         </div>
         )}
