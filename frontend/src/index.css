@@ -822,27 +822,39 @@
        Premium Player — deep-space dashboard aesthetic
        ═══════════════════════════════════════════════════════════════════════════ */
 
+    /* Dynamic player accent — PlayerSection samples the cover's dominant color
+       and sets --player-accent inline on .player-accent-scope. Registering the
+       property makes the COLOR itself interpolable, so a track change glides
+       every consumer (progress gradient, queue tint, lyric-face glow, thumbs)
+       to the new hue in one motion. Unregistered browsers snap — acceptable. */
+    @property --player-accent {
+      syntax: '<color>';
+      inherits: true;
+      initial-value: #7C5BFF;
+    }
+    .player-accent-scope { transition: --player-accent 900ms ease; }
+
     /* Custom range inputs */
     .player-progress, .player-volume {
       -webkit-appearance: none; appearance: none; outline: none; cursor: pointer;
     }
     .player-progress::-webkit-slider-thumb {
       -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%;
-      background: #fff; box-shadow: 0 0 6px rgba(124,91,255,0.5), 0 1px 3px rgba(0,0,0,0.4);
+      background: #fff; box-shadow: 0 0 6px color-mix(in srgb, var(--player-accent, #7C5BFF) 50%, transparent), 0 1px 3px rgba(0,0,0,0.4);
       cursor: grab; transition: transform 0.15s ease;
     }
     .player-progress::-webkit-slider-thumb:hover { transform: scale(1.25); }
     .player-progress::-moz-range-thumb {
       width: 14px; height: 14px; border-radius: 50%; background: #fff; border: none;
-      box-shadow: 0 0 6px rgba(124,91,255,0.5), 0 1px 3px rgba(0,0,0,0.4); cursor: grab;
+      box-shadow: 0 0 6px color-mix(in srgb, var(--player-accent, #7C5BFF) 50%, transparent), 0 1px 3px rgba(0,0,0,0.4); cursor: grab;
     }
     .player-volume::-webkit-slider-thumb {
       -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%;
-      background: #fff; box-shadow: 0 0 4px rgba(124,91,255,0.4); cursor: grab;
+      background: #fff; box-shadow: 0 0 4px color-mix(in srgb, var(--player-accent, #7C5BFF) 40%, transparent); cursor: grab;
     }
     .player-volume::-moz-range-thumb {
       width: 12px; height: 12px; border-radius: 50%; background: #fff; border: none;
-      box-shadow: 0 0 4px rgba(124,91,255,0.4); cursor: grab;
+      box-shadow: 0 0 4px color-mix(in srgb, var(--player-accent, #7C5BFF) 40%, transparent); cursor: grab;
     }
 
     /* ─── MiniPlaybackPopout: glass materializing in/out ───
@@ -1605,12 +1617,12 @@
     .player-icon-btn:active { transform: scale(0.94); }
     .player-icon-btn[data-active="like"] { color: #cdb8ff; background: rgba(124,91,255,0.14); }
     .player-icon-btn[data-active="dislike"] { color: #fb6f6f; background: rgba(239,68,68,0.14); }
-    .player-icon-btn[data-active="lyrics"] { color: #cdb8ff; background: rgba(124,91,255,0.14); }
+    .player-icon-btn[data-active="lyrics"] { color: color-mix(in srgb, var(--player-accent, #7C5BFF) 55%, #fff); background: color-mix(in srgb, var(--player-accent, #7C5BFF) 14%, transparent); }
     body[data-theme="light"] .player-icon-btn { color: rgba(22,22,32,0.50); }
     body[data-theme="light"] .player-icon-btn:hover { color: #161620; }
     body[data-theme="light"] .player-icon-btn[data-active="like"]    { color: #5b3fd6; background: rgba(124,91,255,0.10); }
     body[data-theme="light"] .player-icon-btn[data-active="dislike"] { color: #c0392b; background: rgba(239,68,68,0.10); }
-    body[data-theme="light"] .player-icon-btn[data-active="lyrics"]  { color: #5b3fd6; background: rgba(124,91,255,0.10); }
+    body[data-theme="light"] .player-icon-btn[data-active="lyrics"]  { color: color-mix(in srgb, var(--player-accent, #7C5BFF) 78%, #000); background: color-mix(in srgb, var(--player-accent, #7C5BFF) 10%, transparent); }
 
     .player-icon-burst {
       position: absolute;
@@ -1702,13 +1714,13 @@
     .player-art-back {
       transform: rotateY(180deg);
       background: linear-gradient(135deg, #15151b, #1f1f29);
-      box-shadow: 0 16px 40px rgba(124,91,255,0.22),
+      box-shadow: 0 16px 40px color-mix(in srgb, var(--player-accent, #7C5BFF) 22%, transparent),
                   0 0 0 1px rgba(255,255,255,0.06) inset;
     }
     /* Light theme: cream/parchment palette for the reading face. */
     body[data-theme="light"] .player-art-back {
       background: linear-gradient(135deg, #f6f5ed, #ede9d8);
-      box-shadow: 0 16px 40px rgba(40,30,60,0.10),
+      box-shadow: 0 16px 40px color-mix(in srgb, var(--player-accent, #7C5BFF) 14%, transparent),
                   0 0 0 1px rgba(22,22,32,0.08) inset;
     }
     /* Respect motion-reduction preference: instant swap, no flip. */
@@ -1722,6 +1734,7 @@
       .player-art-entry--prev,
       .player-art-feedback,
       .player-art-blur-overlay,
+      .player-bg-cover--fade,
       .player-icon-burst { animation: none; }
     }
 
@@ -1772,7 +1785,7 @@
       border-radius: 12px;
     }
     .player-playlist-item:hover { background: rgba(255,255,255,0.05); }
-    .player-playlist-item.player-active { background: rgba(124,91,255,0.1); }
+    .player-playlist-item.player-active { background: color-mix(in srgb, var(--player-accent, #7C5BFF) 10%, transparent); }
 
     /* ── Queue drag-to-reorder ─────────────────────────────────────────
        Signature motion: the grabbed row lifts off the surface (depth +
@@ -1793,16 +1806,16 @@
       position: relative;
       z-index: 30;
       cursor: grabbing;
-      background: rgba(124,91,255,0.14);
-      box-shadow: 0 14px 30px rgba(0,0,0,0.34), 0 0 0 1.5px rgba(124,91,255,0.55);
+      background: color-mix(in srgb, var(--player-accent, #7C5BFF) 14%, transparent);
+      box-shadow: 0 14px 30px rgba(0,0,0,0.34), 0 0 0 1.5px color-mix(in srgb, var(--player-accent, #7C5BFF) 55%, transparent);
     }
     /* Fixed zone (already-played + now-playing) recedes during a drag. */
     .player-playlist-item.q-locked { opacity: 0.4; }
     /* Drop confirmation — one accent pulse, then gone. */
     @keyframes qDropGlow {
-      0%   { box-shadow: 0 0 0 0 rgba(124,91,255,0); }
-      28%  { box-shadow: 0 0 0 2px rgba(124,91,255,0.55), 0 0 18px rgba(124,91,255,0.42); }
-      100% { box-shadow: 0 0 0 0 rgba(124,91,255,0); }
+      0%   { box-shadow: 0 0 0 0 transparent; }
+      28%  { box-shadow: 0 0 0 2px color-mix(in srgb, var(--player-accent, #7C5BFF) 55%, transparent), 0 0 18px color-mix(in srgb, var(--player-accent, #7C5BFF) 42%, transparent); }
+      100% { box-shadow: 0 0 0 0 transparent; }
     }
     .player-playlist-item.q-dropped { animation: qDropGlow 0.52s ease; }
     /* Grip affordance — fades in on row hover, only for draggable rows. */
@@ -1860,9 +1873,9 @@
     .player-eq-bar {
       display: inline-block; width: 3px; border-radius: 2px; margin-right: 1px;
       background: linear-gradient(to bottom,
-        rgba(124, 91, 255, 1)    0%,    /* верхний край — сплошной */
-        rgba(124, 91, 255, 0.25) 50%,   /* центр — мягкий */
-        rgba(124, 91, 255, 1)    100%); /* нижний край — сплошной */
+        var(--player-accent, #7C5BFF) 0%,    /* верхний край — сплошной */
+        color-mix(in srgb, var(--player-accent, #7C5BFF) 25%, transparent) 50%, /* центр — мягкий */
+        var(--player-accent, #7C5BFF) 100%); /* нижний край — сплошной */
     }
     .player-eq-bar:nth-child(1) { animation: eqBar1 0.8s ease-in-out infinite; }
     .player-eq-bar:nth-child(2) { animation: eqBar2 0.6s ease-in-out infinite; }
@@ -1914,6 +1927,15 @@
       pointer-events: none;
       transition: opacity 0.8s ease;
     }
+    /* Cross-fade layer (PlayerAmbient): the incoming cover mounts on top of
+       the previous one already at its target opacity (--bg-cover-op, theme-
+       aware) and the animation carries it up from 0; the old layer beneath is
+       pruned on animationend. */
+    .player-bg-cover--fade {
+      opacity: var(--bg-cover-op, 0.4);
+      animation: playerBgCoverIn 900ms ease;
+    }
+    @keyframes playerBgCoverIn { from { opacity: 0; } }
     .player-bg-shade { position: absolute; inset: 0; pointer-events: none; }
     .player-bg-grain {
       position: absolute; inset: 0; pointer-events: none;

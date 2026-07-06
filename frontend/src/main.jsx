@@ -1411,7 +1411,7 @@ function SkeRange({ value, min = 0, max = 100, step = 1, onChange,
 }
 
 // ─── AlbumCover ───────────────────────────────────────────────────────────────
-function AlbumCover({ title='', artist='', size=44, isDark, coverPath, radius, fluid }) {
+function AlbumCover({ title='', artist='', size=44, isDark, coverPath, radius, fluid, eager }) {
   const hue = ((title.charCodeAt(0)||65)*37 + (artist.charCodeAt(0)||65)*17) % 360;
   const br = radius ?? (typeof size === 'number' ? (size > 100 ? 14 : size > 60 ? 10 : 8) : 0);
   const boxStyle = fluid
@@ -1441,8 +1441,12 @@ function AlbumCover({ title='', artist='', size=44, isDark, coverPath, radius, f
           // origin. loading="lazy" defers every off-screen/hidden cover so
           // playback wins the connection pool. decoding="async" keeps decode
           // off the main thread.
-          loading="lazy"
-          decoding="async"
+          // `eager` opts back into sync paint for the player's hero cover and
+          // its outgoing transition snapshot: both remount mid-animation with
+          // an already-cached URL, and lazy+async there costs a blank frame
+          // (the cover "blinks" before flying out on track change).
+          loading={eager ? 'eager' : 'lazy'}
+          decoding={eager ? 'sync' : 'async'}
           style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
           onError={e => {
             e.currentTarget.style.display = 'none';
@@ -11815,15 +11819,39 @@ function PlayerAmbient({ track, isDark }) {
     : null;
   const pBg    = isDark ? '#0B0E14' : '#f4f5fa';
   const pBgEnd = isDark ? '#0F111A' : '#eaeaf0';
+  // Two-layer cross-fade on track change. Swapping backgroundImage in place
+  // drops the wash to the bare gradient while the next cover decodes; instead
+  // the incoming cover is preloaded off-screen, mounted ON TOP at opacity 0,
+  // faded in (playerBgCoverIn), and the old layer is pruned once the fade
+  // lands. Max two layers — rapid skips replace the incoming one.
+  const [bgStack, setBgStack] = useState(() => (coverUrl ? [{ url: coverUrl, key: 0 }] : []));
+  useEffect(() => {
+    const top = bgStack[bgStack.length - 1];
+    if ((top?.url || null) === (coverUrl || null)) return;
+    if (!coverUrl) { setBgStack([]); return; }
+    let dead = false;
+    const img = new Image();
+    const push = () => {
+      if (dead) return;
+      setBgStack(s => [...s.slice(-1), { url: coverUrl, key: (s[s.length - 1]?.key ?? -1) + 1 }]);
+    };
+    img.onload = push;
+    img.onerror = push; // a failed cover paints nothing; the base gradient shows
+    img.src = coverUrl;
+    return () => { dead = true; };
+  }, [coverUrl, bgStack]);
   return (
     <div style={{
       position:'absolute', inset:0, zIndex:0, overflow:'hidden', pointerEvents:'none',
       background:`linear-gradient(180deg, ${pBg} 0%, ${pBgEnd} 100%)`,
     }}>
-      {coverUrl && (
-        <div className="player-bg-cover"
-          style={{ backgroundImage:`url(${coverUrl})`, opacity: isDark ? 0.48 : 0.26 }} />
-      )}
+      {bgStack.map((layer, i) => (
+        <div key={layer.key} className="player-bg-cover player-bg-cover--fade"
+          style={{ backgroundImage:`url(${layer.url})`, '--bg-cover-op': isDark ? 0.48 : 0.26 }}
+          onAnimationEnd={i === bgStack.length - 1 && bgStack.length > 1
+            ? () => setBgStack(s => s.slice(-1))
+            : undefined} />
+      ))}
       <div className="player-bg-shade" style={{
         background: isDark
           ? `linear-gradient(180deg, ${pBg}66 0%, ${pBg}b3 70%, ${pBg}e6 100%)`
@@ -12800,8 +12828,18 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
   const pBg          = isDark ? '#0B0E14' : '#f4f5fa';
   const pBgEnd       = isDark ? '#0F111A' : '#eaeaf0';
   const pSurface     = isDark ? '#1A1D27' : '#ebeaf2';
-  const pAccent      = '#7C5BFF';
-  const pAccentEnd   = '#6544E0';
+  // Dynamic accent — the cover's dominant HSL, clamped exactly like the
+  // spectrum wave so the progress bar / queue / lyric glow speak the same hue
+  // as the wave. Light theme sits darker so the tint holds contrast on pale
+  // surfaces. Consumers reference var(--player-accent): it's a REGISTERED
+  // custom property (see @property in index.css), so track changes glide to
+  // the new hue instead of snapping.
+  const accentColor = coverColor
+    ? `hsl(${coverColor.h.toFixed(0)}, ${Math.min(85, Math.max(45, coverColor.s)).toFixed(0)}%, ${(isDark
+        ? Math.min(72, Math.max(52, coverColor.l))
+        : Math.min(52, Math.max(38, coverColor.l))).toFixed(0)}%)`
+    : '#7C5BFF';
+  const pAccent      = 'var(--player-accent, #7C5BFF)';
   const pText        = isDark ? '#FFFFFF' : '#161620';
   const pTextMuted   = isDark ? '#9BA1B0' : 'rgba(22,22,32,0.62)';
   const pTextSubtle  = isDark ? 'rgba(255,255,255,0.30)' : 'rgba(22,22,32,0.42)';
@@ -13068,7 +13106,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
   const progressPct = duration ? (currentTime / duration * 100) : 0;
 
   return (
-    <div style={{
+    <div className="player-accent-scope" style={{
       flex:1, display:'flex', flexDirection:'column', overflow:'hidden',
       // The ambient wash (blurred cover + shade + grain + vignette) now lives
       // at the App shell level (PlayerAmbient) as a full-bleed layer so it
@@ -13076,6 +13114,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
       // on top of it — no more hard black strip under the rail.
       background: 'transparent',
       position: 'relative',
+      '--player-accent': accentColor,
     }}>
 
       {/* Main content area — top padding gives the cover breathing room from
@@ -13179,6 +13218,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                       title={outgoingTrack.title || ''}
                       artist={outgoingTrack.artist || ''}
                       fluid
+                      eager
                       isDark={isDark}
                       coverPath={outgoingTrack.cover_art_path}
                       radius={20}
@@ -13217,6 +13257,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                           title={currentTrack?.title || ''}
                           artist={currentTrack?.artist || ''}
                           fluid
+                          eager
                           isDark={isDark}
                           coverPath={currentTrack?.cover_art_path}
                           radius={20}
