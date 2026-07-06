@@ -2085,44 +2085,51 @@
        (paired with the AgentSteps / LyricSnippet components in main.jsx)
        ═══════════════════════════════════════════════════════════════ */
 
-    /* ── Liquid glass: a stronger, more specular sibling of .panel-v3.
-       Reserved for the two chat accents: the composer + the best-hit card. */
+    /* ── Liquid glass v2 — same layered recipe as the nav islands (.lg-island):
+       base tint under a 165° white gradient, heavy blur + saturation, bright
+       top/left "lens edge" strokes, double drop shadow, sweeping specular
+       glint. Reserved for the chat accents: composer, best-hit, agent card. */
     .liquid-glass {
       position: relative;
+      backdrop-filter: blur(28px) saturate(1.7);
+      -webkit-backdrop-filter: blur(28px) saturate(1.7);
+      border: 1px solid rgba(255,255,255,0.13);
       background:
-        linear-gradient(180deg, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0.03) 55%, rgba(255,255,255,0.012) 100%),
-        radial-gradient(130% 90% at 12% -10%, oklch(72% 0.16 275 / 0.12) 0%, transparent 62%);
-      backdrop-filter: blur(28px) saturate(1.8);
-      -webkit-backdrop-filter: blur(28px) saturate(1.8);
-      border: 1px solid rgba(255,255,255,0.10);
+        linear-gradient(165deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.05) 32%, rgba(255,255,255,0.02) 64%, rgba(255,255,255,0.10) 100%),
+        rgba(24,24,32,0.36);
       box-shadow:
-        inset 0 1px 0 rgba(255,255,255,0.26),
-        inset 0 -1px 0 rgba(0,0,0,0.30),
-        0 8px 30px rgba(0,0,0,0.34);
+        inset 0 1px 0 rgba(255,255,255,0.25),
+        inset 0 -1px 0 rgba(255,255,255,0.07),
+        inset 1px 0 0 rgba(255,255,255,0.06),
+        0 18px 42px rgba(0,0,0,0.45),
+        0 2px 10px rgba(0,0,0,0.28);
       overflow: hidden;
     }
-    /* Specular top sheen — the light-catching edge that reads as "liquid". */
-    .liquid-glass::before {
-      content: '';
-      position: absolute;
-      inset: 0;
-      border-radius: inherit;
-      background: linear-gradient(180deg, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0) 24%);
-      pointer-events: none;
-    }
     body[data-theme="light"] .liquid-glass {
+      border: 1px solid rgba(255,255,255,0.75);
       background:
-        linear-gradient(180deg, rgba(255,255,255,0.74) 0%, rgba(255,255,255,0.44) 100%),
-        radial-gradient(130% 90% at 12% -10%, oklch(72% 0.16 275 / 0.12) 0%, transparent 62%);
-      border: 1px solid rgba(255,255,255,0.9);
+        linear-gradient(165deg, rgba(255,255,255,0.92) 0%, rgba(255,255,255,0.58) 36%, rgba(255,255,255,0.42) 66%, rgba(255,255,255,0.80) 100%),
+        rgba(244,243,250,0.35);
       box-shadow:
-        inset 0 1px 0 rgba(255,255,255,0.96),
-        inset 0 -1px 0 rgba(40,30,60,0.06),
-        0 10px 32px rgba(40,30,60,0.13);
+        inset 0 1px 0 rgba(255,255,255,0.95),
+        inset 0 -1px 0 rgba(255,255,255,0.40),
+        0 18px 42px rgba(46,36,86,0.16),
+        0 2px 10px rgba(46,36,86,0.08);
     }
-    body[data-theme="light"] .liquid-glass::before {
-      background: linear-gradient(180deg, rgba(255,255,255,0.62) 0%, rgba(255,255,255,0) 26%);
+    /* Specular glint that sweeps across the surface on hover/focus. */
+    .liquid-glass::after {
+      content: '';
+      position: absolute; inset: 0;
+      border-radius: inherit;
+      pointer-events: none;
+      background: linear-gradient(115deg, transparent 30%, rgba(255,255,255,0.15) 46%, rgba(255,255,255,0.03) 54%, transparent 70%);
+      background-size: 220% 220%;
+      background-position: 120% 120%;
+      opacity: 0;
+      transition: opacity 0.5s ease, background-position 1.1s cubic-bezier(0.22, 1, 0.36, 1);
     }
+    .liquid-glass:hover::after,
+    .liquid-glass:focus-within::after { opacity: 1; background-position: 0% 0%; }
 
     /* ── Chat composer: floating glass capsule that lifts + glows on focus. */
     .chat-composer { transition: box-shadow .28s ease, transform .28s ease; }
@@ -2130,14 +2137,142 @@
       transform: translateY(-1px);
       box-shadow:
         inset 0 1px 0 rgba(255,255,255,0.30),
+        inset 1px 0 0 rgba(255,255,255,0.08),
         0 0 0 3px oklch(60% 0.18 270 / 0.22),
-        0 16px 42px rgba(0,0,0,0.42);
+        0 20px 48px rgba(0,0,0,0.5);
     }
     body[data-theme="light"] .chat-composer:focus-within {
       box-shadow:
         inset 0 1px 0 rgba(255,255,255,0.96),
         0 0 0 3px oklch(60% 0.18 270 / 0.20),
-        0 16px 42px rgba(40,30,60,0.16);
+        0 20px 48px rgba(46,36,86,0.18);
+    }
+    /* Tools row inside the capsule (AUTO + mode segmented + history on narrow). */
+    .composer-tools {
+      display: flex; align-items: center; gap: 8px;
+      padding: 2px 6px 4px;
+    }
+
+    /* ── GPT-style chat layout ── */
+    /* Centered conversation column — fixes edge-to-edge sprawl on wide screens. */
+    .chat-col { width: 100%; max-width: 760px; margin: 0 auto; }
+    /* Hero (empty chat): slogan + composer vertically centered. */
+    .chat-hero {
+      flex: 1; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 22px; padding: 24px;
+      animation: fadeIn .4s ease;
+    }
+    .chat-hero-slogan {
+      font-size: clamp(28px, 4vw, 40px);
+      letter-spacing: -0.02em;
+      text-align: center;
+      line-height: 1.15;
+    }
+    .chat-hero-sub {
+      font-size: 15px; text-align: center; max-width: 440px; line-height: 1.55;
+      margin-top: -8px;
+    }
+    .chat-hero .chat-composer { width: 100%; max-width: 640px; }
+    .chat-suggestions {
+      display: flex; flex-wrap: wrap; justify-content: center;
+      gap: 8px; max-width: 640px;
+    }
+    .chat-suggestion {
+      font-size: 13px; padding: 8px 14px; border-radius: 999px;
+      cursor: pointer; border: 1px solid rgba(255,255,255,0.09);
+      background: rgba(255,255,255,0.04);
+      color: rgba(238,238,243,0.65);
+      transition: background .18s ease, color .18s ease, transform .18s ease;
+    }
+    .chat-suggestion:hover { background: rgba(255,255,255,0.08); color: #eeeef3; transform: translateY(-1px); }
+    body[data-theme="light"] .chat-suggestion {
+      border-color: rgba(0,0,0,0.09); background: rgba(255,255,255,0.55); color: rgba(22,22,32,0.7);
+    }
+    body[data-theme="light"] .chat-suggestion:hover { background: rgba(255,255,255,0.85); color: #161620; }
+
+    /* ── History rail: persistent right column with visible chat titles. ── */
+    .chat-history-rail {
+      width: 256px; flex-shrink: 0;
+      display: flex; flex-direction: column;
+      margin: 4px 14px 14px 6px;
+      border-radius: 18px;
+      background: linear-gradient(180deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.015) 60%);
+      backdrop-filter: blur(22px) saturate(1.15);
+      -webkit-backdrop-filter: blur(22px) saturate(1.15);
+      border: 1px solid rgba(255,255,255,0.07);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.11), 0 5px 20px rgba(0,0,0,0.22);
+      overflow: hidden;
+      transition: width .32s cubic-bezier(.22,.9,.3,1), margin .32s ease, opacity .25s ease;
+    }
+    body[data-theme="light"] .chat-history-rail {
+      background: linear-gradient(180deg, rgba(255,255,255,0.66) 0%, rgba(255,255,255,0.4) 100%);
+      border: 1px solid rgba(255,255,255,0.8);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.9), 0 5px 20px rgba(46,36,86,0.08);
+    }
+    .chat-history-rail[data-collapsed="true"] { width: 0; margin-left: 0; margin-right: 0; opacity: 0; pointer-events: none; }
+    .chat-history-list { flex: 1; overflow-y: auto; min-height: 0; padding: 4px 8px 10px; }
+    .chat-history-item {
+      display: flex; align-items: flex-start; gap: 9px;
+      padding: 9px 10px; border-radius: 11px; cursor: pointer;
+      transition: background .16s ease;
+    }
+    .chat-history-item:hover { background: rgba(255,255,255,0.06); }
+    body[data-theme="light"] .chat-history-item:hover { background: rgba(0,0,0,0.045); }
+    .chat-history-item .history-delete-btn { opacity: 0; transition: opacity .15s ease; }
+    .chat-history-item:hover .history-delete-btn { opacity: 1; }
+    /* Rail lives on ≥1100px only; below that the slide-over takes over. */
+    .chat-rail-toggle { display: inline-flex; }
+    @media (max-width: 1099px) {
+      .chat-history-rail, .chat-rail-toggle { display: none; }
+    }
+    /* The labeled history button is the narrow-screen entry to the slide-over.
+       !important — the buttons carry inline display for their flex layout. */
+    @media (min-width: 1100px) {
+      .chat-history-btn { display: none !important; }
+    }
+
+    /* ── Agent activity card: large glass card while the agent works. ── */
+    .agent-card {
+      border-radius: 18px;
+      padding: 16px 18px 15px;
+      width: 100%;
+      animation: fadeIn .35s ease;
+    }
+    .agent-card-active {
+      display: flex; align-items: center; gap: 12px;
+      min-height: 30px;
+    }
+    .agent-card-active .agent-step-spin { width: 15px; height: 15px; border-width: 2px; flex-shrink: 0; }
+    /* Crossfade slot: outgoing label floats up+out, incoming rises in. */
+    .xfade-wrap { position: relative; flex: 1; min-width: 0; min-height: 24px; }
+    .xfade {
+      display: block;
+      font-size: 17px; line-height: 1.4; font-weight: 500;
+      color: #eeeef3;
+    }
+    body[data-theme="light"] .xfade { color: #161620; }
+    .xfade.in  { animation: xfadeIn .38s cubic-bezier(.22,.9,.3,1) both; }
+    .xfade.out {
+      position: absolute; inset: 0;
+      animation: xfadeOut .34s ease both;
+      pointer-events: none;
+    }
+    @keyframes xfadeIn  { from { opacity: 0; transform: translateY(9px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes xfadeOut { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-9px); } }
+    /* Completed steps stack above the active line, small and muted. */
+    .agent-card-done { display: flex; flex-direction: column; margin-bottom: 4px; }
+    /* Shimmer strip along the card's bottom edge while active. */
+    .agent-card-shimmer {
+      position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
+      background: linear-gradient(90deg, transparent, oklch(68% 0.18 275 / 0.75), transparent);
+      background-size: 40% 100%;
+      background-repeat: no-repeat;
+      animation: shimmerSlide 1.6s ease-in-out infinite;
+    }
+    @keyframes shimmerSlide {
+      0% { background-position: -40% 0; }
+      100% { background-position: 140% 0; }
     }
 
     /* ── Best-hit card: the accentuated primary result inside a chat answer. */
@@ -2252,8 +2387,11 @@
     .lyric-more:hover { text-decoration: underline; }
 
     @media (prefers-reduced-motion: reduce) {
-      .agent-step, .agent-step-connector, .agent-step-check, .best-hit-card { animation: none !important; }
-      .collapse-rows, .chat-composer, .agent-steps-summary .chev { transition: none !important; }
+      .agent-step, .agent-step-connector, .agent-step-check, .best-hit-card,
+      .agent-card, .xfade.in, .chat-hero { animation: none !important; }
+      .xfade.out, .agent-card-shimmer { animation: none !important; display: none; }
+      .collapse-rows, .chat-composer, .agent-steps-summary .chev,
+      .chat-history-rail, .liquid-glass::after { transition: none !important; }
       .agent-step-spin { animation-duration: 1.4s; }
     }
 

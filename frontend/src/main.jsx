@@ -1666,16 +1666,23 @@ function useChatHistory(userId) {
   }, [storageKey]);
   const [sessions, setSessions] = useState(load);
   useEffect(() => { setSessions(load()); }, [storageKey, load]);
-  const saveSession = useCallback((msgs) => {
-    if (!msgs || msgs.length === 0) return;
+  // Upserts: pass the session id to update an ongoing conversation in place
+  // (and bump it to the top) instead of minting a duplicate per answer.
+  // Returns the session id so the caller can keep threading saves into it.
+  const saveSession = useCallback((msgs, id = null) => {
+    const first = (msgs || []).find(m => m.role === 'user');
+    if (!first) return null;  // nothing worth keeping without a user message
+    const ts = Date.now();
+    const sid = id || ts;
+    const title = first.text?.slice(0, 48) || 'Чат';
     setSessions(prev => {
-      const ts = Date.now();
-      const first = msgs.find(m => m.role === 'user');
-      const title = first?.text?.slice(0, 48) || 'Чат';
-      const updated = [{ id: ts, title, time: ts, messages: msgs }, ...prev.slice(0, 19)];
+      const entry = { id: sid, title, time: ts, messages: msgs };
+      const rest = prev.filter(s => s.id !== sid);
+      const updated = [entry, ...rest.slice(0, 19)];
       try { localStorage.setItem(storageKey, JSON.stringify(updated)); } catch {}
       return updated;
     });
+    return sid;
   }, [storageKey]);
   const deleteSession = useCallback((id) => {
     setSessions(prev => {
@@ -3212,31 +3219,56 @@ const pluralRu = (n, one, few, many) => {
   return many;
 };
 
-// ─── AgentSteps — live agent-work timeline, collapses after the answer ────────
-// While streaming: vertical timeline, last step active (spinner), rest done
-// (check). After the answer arrives: one summary row that expands on click.
+// Crossfades its text on change: the outgoing label floats up and out while
+// the incoming one rises in (absolute overlap — never a hard swap).
+function CrossfadeText({ text }) {
+  const [pair, setPair] = useState({ curr: text, prev: null, k: 0 });
+  useEffect(() => {
+    setPair(p => (text === p.curr ? p : { curr: text, prev: p.curr, k: p.k + 1 }));
+  }, [text]);
+  return (
+    <span className="xfade-wrap">
+      {pair.prev != null && (
+        <span key={`p${pair.k}`} className="xfade out"
+          onAnimationEnd={() => setPair(p => ({ ...p, prev: null }))}>{pair.prev}</span>
+      )}
+      <span key={`c${pair.k}`} className="xfade in">{pair.curr}</span>
+    </span>
+  );
+}
+
+// ─── AgentSteps — live agent-work card, collapses after the answer ───────────
+// While streaming: a large liquid-glass card sitting where the answer will
+// appear — active step in big crossfading type, completed steps stacked small
+// above, shimmer strip along the bottom. After the answer: one summary row
+// that expands on click.
 function AgentSteps({ steps, streaming, lang }) {
   const [open, setOpen] = useState(false);
   const list = steps || [];
 
   if (streaming) {
-    const shown = list.length ? list : [{ human: lang === 'ru' ? 'Думаю…' : 'Thinking…' }];
+    const active = list.length ? list[list.length - 1] : { human: lang === 'ru' ? 'Думаю…' : 'Thinking…' };
+    const done = list.slice(0, -1);
     return (
-      <div className="agent-steps" style={{ marginBottom: 6 }}>
-        {shown.map((s, i) => {
-          const isLast = i === shown.length - 1;
-          return (
-            <div key={i} className="agent-step">
-              <div className="agent-step-rail">
-                <div className={`agent-step-dot ${isLast ? 'is-active' : 'is-done'}`}>
-                  {isLast ? <div className="agent-step-spin" /> : <span className="agent-step-check"><StepCheck /></span>}
+      <div className="liquid-glass agent-card" style={{ marginBottom: 6 }}>
+        {done.length > 0 && (
+          <div className="agent-card-done agent-steps">
+            {done.map((s, i) => (
+              <div key={i} className="agent-step">
+                <div className="agent-step-rail">
+                  <div className="agent-step-dot is-done"><span className="agent-step-check"><StepCheck /></span></div>
+                  <div className="agent-step-connector" />
                 </div>
-                {!isLast && <div className="agent-step-connector" />}
+                <div className="agent-step-label">{s.human}</div>
               </div>
-              <div className={`agent-step-label ${isLast ? 'is-active' : ''}`}>{s.human}</div>
-            </div>
-          );
-        })}
+            ))}
+          </div>
+        )}
+        <div className="agent-card-active">
+          <div className="agent-step-spin" />
+          <CrossfadeText text={active.human} />
+        </div>
+        <div className="agent-card-shimmer" />
       </div>
     );
   }
@@ -3330,20 +3362,16 @@ function LyricSnippet({ lyrics, query, matchedLine, lang, c }) {
 function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, onAddToPlaylist }) {
   const c = useColors(isDark);
   const aiActive = !!(aiStatus && aiStatus.aiActive);
+  const isMobileChat = useIsMobile();  // compact best-hit cover on phones
   const recent = useRecentSearches(localStorage.getItem('musix_user_id'));
   const { sessions, saveSession, deleteSession } = useChatHistory(localStorage.getItem('musix_user_id'));
 
   // Mode: 'search' (grid) or 'chat' (dialog)
   const [tab, setTab] = useState('search');
 
-  // Chat state
-  const initMsg = () => [{
-    role:'assistant',
-    text: lang==='ru'
-      ? 'Опиши музыку, которую ищешь — настроение, текст, звук или жанр. Попробуй: «грустный синти-поп под ночь».'
-      : "Describe the music — mood, lyrics, audio, or genre. Try: \"melancholic synth-pop for late nights\".",
-    time: new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'}),
-  }];
+  // Chat state — an empty conversation renders the hero (slogan + centered
+  // composer) instead of a greeting bubble, GPT-style.
+  const initMsg = () => [];
   const [messages, setMessages] = useState(initMsg);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -3351,7 +3379,13 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
   const [autoMode, setAutoMode] = useState(true);
   const [showHistory, setShowHistory] = useState(false);
   const [historyClosing, setHistoryClosing] = useState(false);
+  const [railOpen, setRailOpen] = useState(() => localStorage.getItem('musix_chat_rail') !== '0');
+  const sessionIdRef = useRef(null);  // current conversation's history-session id (upsert target)
   const chatEndRef = useRef(null);
+  const toggleRail = () => setRailOpen(v => {
+    try { localStorage.setItem('musix_chat_rail', v ? '0' : '1'); } catch {}
+    return !v;
+  });
 
   // Search state
   const [searchQuery, setSearchQuery] = useState('');
@@ -3425,9 +3459,9 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
   // POSTs /chat/stream and animates the agent's step events live; the trailing
   // assistant message accumulates steps, then the `answer` event fills its body.
   // Falls back to the non-streaming /chat/ endpoint if the stream can't open.
-  const handleChat = async () => {
-    if (!input.trim() || loading) return;
-    const userText = input.trim();
+  const handleChat = async (textArg) => {
+    const userText = (typeof textArg === 'string' ? textArg : input).trim();
+    if (!userText || loading) return;
     const now = new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'});
     const effectiveMode = autoMode ? 'hybrid' : chatMode;
     const history = messages.filter(m=>!m.loading && !m.streaming)
@@ -3460,7 +3494,7 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
           attempts:ev.attempts, steps: copy[li].steps || [], streaming:false,
           time:new Date().toLocaleTimeString('ru',{hour:'2-digit',minute:'2-digit'})
         };
-        saveSession(copy);
+        sessionIdRef.current = saveSession(copy, sessionIdRef.current);
         return copy;
       });
     };
@@ -3569,7 +3603,7 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
       onClick={() => { setResults(hits); onPlayTrack && onPlayTrack(hit, hits); }}
       onMouseEnter={e => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)'; }}
       onMouseLeave={e => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)'; }}>
-      <AlbumCover title={hit.track?.title||''} artist={hit.track?.artist||''} size={42} isDark={isDark} coverPath={hit.track?.cover_art_path} />
+      <AlbumCover title={hit.track?.title||''} artist={hit.track?.artist||''} size={56} isDark={isDark} coverPath={hit.track?.cover_art_path} />
       <div style={{ flex:1, minWidth:0 }}>
         <div style={{ fontSize:'14px', fontWeight:'600', color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{hit.track?.title||'—'}</div>
         <div style={{ fontSize:'13px', color:c.textMuted, display: 'inline-block' }}>
@@ -3592,17 +3626,18 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
   // ── Render the accentuated best-hit card (liquid glass + lyric snippet) ──
   const renderBestHit = (hit, hits, conf, confColor, userQuery) => {
     const snippet = hit.lyrics && hit.matched_on !== 'audio';
+    const coverSize = isMobileChat ? 72 : 96;
     return (
       <div className="liquid-glass best-hit-card"
         style={{ flexDirection:'column', alignItems:'stretch', gap:'11px' }}
         onClick={() => { setResults(hits); onPlayTrack && onPlayTrack(hit, hits); }}>
         {/* confidence accent bar (glass clips it) */}
         <div style={{ position:'absolute', left:0, top:0, bottom:0, width:'3px', background:confColor, opacity:0.9 }} />
-        <div style={{ display:'flex', alignItems:'center', gap:'13px' }}>
-          <AlbumCover title={hit.track?.title||''} artist={hit.track?.artist||''} size={54} isDark={isDark} coverPath={hit.track?.cover_art_path} />
+        <div style={{ display:'flex', alignItems:'center', gap:'15px' }}>
+          <AlbumCover title={hit.track?.title||''} artist={hit.track?.artist||''} size={coverSize} isDark={isDark} coverPath={hit.track?.cover_art_path} />
           <div style={{ flex:1, minWidth:0 }}>
-            <div style={{ fontSize:'16px', fontWeight:'700', color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{hit.track?.title||'—'}</div>
-            <div style={{ fontSize:'13.5px', color:c.textMuted, display:'inline-block' }}>
+            <div style={{ fontSize:'18px', fontWeight:'700', color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', letterSpacing:'-0.01em' }}>{hit.track?.title||'—'}</div>
+            <div style={{ fontSize:'14px', color:c.textMuted, display:'inline-block', marginTop:'2px' }}>
               <ArtistCredit track={hit.track} navigateToArtist={navigateToArtist} lang={lang} color={c.textMuted} />
             </div>
           </div>
@@ -3634,13 +3669,13 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
     return (
       <div key={i} style={{ display:'flex', flexDirection:'column', alignItems:isUser?'flex-end':'flex-start', gap:'6px', animation:'fadeIn 0.3s ease', width:'100%' }}>
         {showSteps && (
-          <div style={{ maxWidth:'92%' }}>
+          <div style={{ width:'100%' }}>
             <AgentSteps steps={msg.steps} streaming={!!msg.streaming} lang={lang} />
           </div>
         )}
         {showBubble && (
           <div style={{
-            maxWidth:'92%', padding:'11px 15px',
+            maxWidth: isUser ? '78%' : '100%', padding:'11px 15px',
             borderRadius: isUser?'16px 16px 5px 16px':'16px 16px 16px 5px',
             background: isUser ? c.userBubble : c.aiBubble,
             color: isUser?'white':c.text, fontSize:'15px', lineHeight:'1.6',
@@ -3672,11 +3707,10 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
   const isEmpty = results.length === 0;
 
   return (
-    /* Section root stays flat c.bg (matching Library/Recommend) so it lines up
-       with the background behind the transparent floating nav. Using .panel-v3
-       here tinted the whole section with translucent glass, leaving a gray/black
-       tone seam at the rail's edge. Glass lives on the inner cards, not the shell. */
-    <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:c.bg }}>
+    /* Section root is transparent: the colour field lives in SearchAmbient at
+       app-shell level (full-bleed, behind the transparent floating nav), so the
+       background flows continuously under the rail — no tone seam at its edge. */
+    <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:'transparent' }}>
       {/* ── Section Header with mode toggle ── */}
       <SectionHeader
         isDark={isDark} lang={lang}
@@ -3918,85 +3952,189 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
           </div>
         ) : (
           /* ═══════════════════════════════════════════════════════
-             CHAT MODE — Full-width chat with results in dialog
+             CHAT MODE — GPT-style: hero (empty) / centered column +
+             docked composer, persistent history rail on the right
              ═══════════════════════════════════════════════════════ */
-          <div className="tab-enter" style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden' }}>
-
-            {/* Messages */}
-            <div ref={chatEndRef} style={{ flex:1, overflowY:'auto', padding:'20px 24px', display:'flex', flexDirection:'column', gap:'16px' }}>
-              {messages.map(renderMessage)}
-            </div>
-
-            {/* Mode bar: AUTO/TEXT/AUDIO/HYB + HISTORY + NEW CHAT */}
-            <div style={{ padding:'8px 24px', borderTop:`1px solid ${c.border}`, display:'flex', gap:'10px', alignItems:'center',
-              background: isDark?'rgba(0,0,0,0.2)':'rgba(255,255,255,0.4)', backdropFilter:'blur(6px)' }}>
-              <div style={{ display:'flex', gap:'2px', alignItems:'center' }}>
-                <button
-                  onClick={() => { if (autoMode) { setAutoMode(false); setChatMode('hybrid'); } else { setAutoMode(true); } }}
-                  className={autoMode ? 'ske-accent' : ske('btn', isDark)}
-                  style={{
-                    padding:'6px 14px', borderRadius:'8px',
-                    fontSize:'11px', fontWeight:'600', fontFamily:"'JetBrains Mono', monospace",
-                    letterSpacing:'0.06em', color: autoMode ? 'white' : c.textSubtle,
-                    transition:'all 0.18s',
-                  }}>
-                  ✦ AUTO
-                </button>
-                <div style={{ width:'4px' }} />
-                <Segmented isDark={isDark} value={!autoMode ? chatMode : 'hybrid'}
-                  onChange={v => { setAutoMode(false); setChatMode(v); }}
-                  size="sm"
-                  style={autoMode ? { opacity: 0.35, pointerEvents: 'none' } : {}}
-                  options={[
-                    { value:'text',   label:lang==='ru'?'ТЕКСТ':'TEXT' },
-                    { value:'audio',  label:lang==='ru'?'ЗВУК':'AUDIO' },
-                    { value:'hybrid', label:'HYB' },
-                  ]} />
+          (() => {
+            const hasConversation = messages.some(m => m.role === 'user');
+            const startNewChat = () => {
+              saveSession(messages, sessionIdRef.current);
+              sessionIdRef.current = null;
+              setMessages(initMsg()); setResults([]);
+            };
+            const openSession = (s) => {
+              sessionIdRef.current = s.id;
+              setMessages(s.messages);
+              setShowHistory(false);
+            };
+            const suggestions = lang === 'ru'
+              ? ['грустный синти-поп под ночь', 'песня про дорогу домой', 'энергичный рок для тренировки', 'как дождь за окном']
+              : ['melancholic synth-pop for late nights', 'a song about the road home', 'high-energy rock for a workout', 'like rain on the window'];
+            const composer = (
+              <div className="liquid-glass chat-composer" style={{ padding:'8px', borderRadius:'22px' }}>
+                <div style={{ display:'flex', gap:'8px', alignItems:'flex-end' }}>
+                  <textarea
+                    value={input} onChange={e=>setInput(e.target.value)}
+                    onKeyDown={e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();handleChat();} }}
+                    placeholder={lang==='ru'?'Опиши музыку…':'Describe the music…'}
+                    rows={1} disabled={loading}
+                    style={{
+                      flex:1, padding:'10px 12px', borderRadius:'10px', border:'none',
+                      background:'transparent', color:c.text, resize:'none', fontSize:'16px',
+                      lineHeight:'1.5', outline:'none', minHeight:'42px', maxHeight:'120px',
+                      fontFamily:"'Geist', sans-serif",
+                    }} />
+                  <button onClick={handleChat} disabled={loading||!input.trim()}
+                    className={loading||!input.trim() ? '' : 'cta-v3'}
+                    style={{
+                      width:'44px', height:'44px', borderRadius:'13px', flexShrink:0, padding:0,
+                      background: loading||!input.trim() ? (isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.05)') : undefined,
+                      color: loading||!input.trim() ? c.textSubtle : 'white',
+                      cursor: loading||!input.trim()?'not-allowed':'pointer',
+                      display:'flex', alignItems:'center', justifyContent:'center',
+                    }}>
+                    {loading ? <Spinner size={15} color="white" /> : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4z"/></svg>}
+                  </button>
+                </div>
+                {/* Tools row — mode controls live inside the capsule, GPT-style. */}
+                <div className="composer-tools">
+                  <button
+                    onClick={() => { if (autoMode) { setAutoMode(false); setChatMode('hybrid'); } else { setAutoMode(true); } }}
+                    className={autoMode ? 'ske-accent' : ske('btn', isDark)}
+                    style={{
+                      padding:'5px 12px', borderRadius:'8px',
+                      fontSize:'11px', fontWeight:'600', fontFamily:"'JetBrains Mono', monospace",
+                      letterSpacing:'0.06em', color: autoMode ? 'white' : c.textSubtle,
+                      transition:'all 0.18s',
+                    }}>
+                    ✦ AUTO
+                  </button>
+                  <Segmented isDark={isDark} value={!autoMode ? chatMode : 'hybrid'}
+                    onChange={v => { setAutoMode(false); setChatMode(v); }}
+                    size="sm"
+                    style={autoMode ? { opacity: 0.35, pointerEvents: 'none' } : {}}
+                    options={[
+                      { value:'text',   label:lang==='ru'?'ТЕКСТ':'TEXT' },
+                      { value:'audio',  label:lang==='ru'?'ЗВУК':'AUDIO' },
+                      { value:'hybrid', label:'HYB' },
+                    ]} />
+                  <div style={{ flex:1 }} />
+                  {/* Narrow screens: history slide-over + new chat live here. */}
+                  <button onClick={() => { setHistoryClosing(false); setShowHistory(true); }}
+                    className={`chat-history-btn ${ske('btn', isDark)}`}
+                    style={{ padding:'5px 10px', borderRadius:'8px', fontSize:'11px', fontWeight:'600',
+                      fontFamily:"'JetBrains Mono', monospace", letterSpacing:'0.08em', color:c.textMuted,
+                      display:'inline-flex', alignItems:'center', gap:'5px' }}>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+                    {lang==='ru'?'ЧАТЫ':'CHATS'}
+                  </button>
+                  {hasConversation && (
+                    <button onClick={startNewChat}
+                      className={`chat-history-btn ${ske('btn', isDark)}`}
+                      style={{ padding:'5px 10px', borderRadius:'8px', fontSize:'11px', fontWeight:'600',
+                        fontFamily:"'JetBrains Mono', monospace", letterSpacing:'0.08em', color:c.textMuted }}>
+                      + {lang==='ru'?'НОВЫЙ':'NEW'}
+                    </button>
+                  )}
+                </div>
               </div>
-              <div style={{ flex:1 }} />
-              <button onClick={() => { setHistoryClosing(false); setShowHistory(true); }}
-                className={ske('btn', isDark)}
-                style={{ width:'30px', height:'30px', borderRadius:'8px', display:'flex', alignItems:'center', justifyContent:'center',
-                  color: c.textMuted, }}
-                title={lang==='ru'?'История':'History'}>
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
-              </button>
-              <button onClick={() => { saveSession(messages); setMessages(initMsg()); setResults([]); }}
-                className="mono"
-                style={{ fontSize:'12px', color:c.textSubtle, padding:'4px 10px', borderRadius:'6px', letterSpacing:'0.12em' }}>
-                + {lang==='ru'?'НОВЫЙ ЧАТ':'NEW CHAT'}
-              </button>
-            </div>
+            );
+            return (
+              <div className="tab-enter" style={{ flex:1, display:'flex', overflow:'hidden', position:'relative' }}>
+                {/* ── Main column ── */}
+                <div style={{ flex:1, minWidth:0, display:'flex', flexDirection:'column', overflow:'hidden' }}>
+                  {hasConversation ? (
+                    <Fragment>
+                      <div ref={chatEndRef} style={{ flex:1, overflowY:'auto', padding:'20px clamp(16px,3vw,32px)' }}>
+                        <div className="chat-col" style={{ display:'flex', flexDirection:'column', gap:'16px' }}>
+                          {messages.map(renderMessage)}
+                        </div>
+                      </div>
+                      <div style={{ padding:'10px clamp(16px,3vw,32px) 20px' }}>
+                        <div className="chat-col">{composer}</div>
+                      </div>
+                    </Fragment>
+                  ) : (
+                    /* Hero — slogan + centered composer + suggestion chips. */
+                    <div className="chat-hero">
+                      <div className="serif chat-hero-slogan" style={{ color:c.text }}>
+                        {lang==='ru' ? 'Что послушаем?' : 'What shall we listen to?'}
+                      </div>
+                      <div className="chat-hero-sub" style={{ color:c.textMuted }}>
+                        {lang==='ru'
+                          ? 'Опиши настроение, текст, звук или жанр — я найду это в твоей библиотеке.'
+                          : "Describe a mood, a lyric, a sound, or a genre — I'll find it in your library."}
+                      </div>
+                      {composer}
+                      <div className="chat-suggestions">
+                        {suggestions.map((s, i) => (
+                          <button key={i} className="chat-suggestion" onClick={() => handleChat(s)}>{s}</button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
 
-            {/* Input bar */}
-            <div style={{ padding:'12px 24px 20px',
-              background: isDark?'rgba(0,0,0,0.3)':'rgba(255,255,255,0.55)', backdropFilter:'blur(10px)' }}>
-              <div className="liquid-glass chat-composer" style={{ display:'flex', gap:'8px', alignItems:'flex-end', padding:'8px', borderRadius:'20px' }}>
-                <textarea
-                  value={input} onChange={e=>setInput(e.target.value)}
-                  onKeyDown={e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();handleChat();} }}
-                  placeholder={lang==='ru'?'Опиши музыку…':'Describe the music…'}
-                  rows={1} disabled={loading}
-                  style={{
-                    flex:1, padding:'10px 12px', borderRadius:'10px', border:'none',
-                    background:'transparent', color:c.text, resize:'none', fontSize:'16px',
-                    lineHeight:'1.5', outline:'none', minHeight:'42px', maxHeight:'120px',
-                    fontFamily:"'Geist', sans-serif",
-                  }} />
-                <button onClick={handleChat} disabled={loading||!input.trim()}
-                  className={loading||!input.trim() ? '' : 'cta-v3'}
-                  style={{
-                    width:'44px', height:'44px', borderRadius:'12px', flexShrink:0, padding:0,
-                    background: loading||!input.trim() ? (isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.05)') : undefined,
-                    color: loading||!input.trim() ? c.textSubtle : 'white',
-                    cursor: loading||!input.trim()?'not-allowed':'pointer',
-                    display:'flex', alignItems:'center', justifyContent:'center',
-                  }}>
-                  {loading ? <Spinner size={15} color="white" /> : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4z"/></svg>}
-                </button>
+                {/* ── History rail (≥1100px): chat titles always in view ── */}
+                {!railOpen && (
+                  <button className={`chat-rail-toggle ${ske('btn', isDark)}`} onClick={toggleRail}
+                    title={lang==='ru'?'История чатов':'Chat history'}
+                    style={{ position:'absolute', top:'12px', right:'12px', zIndex:5,
+                      width:'32px', height:'32px', borderRadius:'9px',
+                      alignItems:'center', justifyContent:'center', color:c.textMuted }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+                  </button>
+                )}
+                <div className="chat-history-rail" data-collapsed={!railOpen}>
+                  <div style={{ display:'flex', alignItems:'center', gap:'8px', padding:'13px 14px 9px' }}>
+                    <span className="mono" style={{ fontSize:'11px', color:c.textMuted, letterSpacing:'0.18em', fontWeight:'600', flex:1 }}>
+                      {lang==='ru'?'ЧАТЫ':'CHATS'}
+                    </span>
+                    <button onClick={startNewChat} title={lang==='ru'?'Новый чат':'New chat'}
+                      className={ske('btn', isDark)}
+                      style={{ width:'24px', height:'24px', borderRadius:'7px', display:'flex', alignItems:'center',
+                        justifyContent:'center', color:c.textMuted, fontSize:'15px', lineHeight:1 }}>
+                      +
+                    </button>
+                    <button onClick={toggleRail} title={lang==='ru'?'Свернуть':'Collapse'}
+                      className={ske('btn', isDark)}
+                      style={{ width:'24px', height:'24px', borderRadius:'7px', display:'flex', alignItems:'center',
+                        justifyContent:'center', color:c.textMuted }}>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="m9 6 6 6-6 6"/></svg>
+                    </button>
+                  </div>
+                  <div className="chat-history-list">
+                    {sessions.length === 0 ? (
+                      <div style={{ padding:'26px 12px', textAlign:'center', fontSize:'13px', color:c.textSubtle, fontStyle:'italic' }}>
+                        {lang==='ru'?'История пуста':'No chats yet'}
+                      </div>
+                    ) : sessions.map(s => (
+                      <div key={s.id} className="chat-history-item" onClick={() => openSession(s)}
+                        style={s.id === sessionIdRef.current ? { background: isDark?'rgba(255,255,255,0.07)':'rgba(0,0,0,0.05)' } : undefined}>
+                        <div style={{ flex:1, minWidth:0 }}>
+                          <div style={{ fontSize:'13.5px', fontWeight:'500', color:c.text,
+                            whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                            {s.title}
+                          </div>
+                          <div className="mono" style={{ fontSize:'10.5px', color:c.textSubtle, marginTop:'2px', letterSpacing:'0.08em' }}>
+                            {new Date(s.time).toLocaleDateString(lang==='ru'?'ru':'en', { day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit' })}
+                          </div>
+                        </div>
+                        <button className="history-delete-btn"
+                          onClick={e => { e.stopPropagation(); deleteSession(s.id); }}
+                          style={{ width:'22px', height:'22px', borderRadius:'6px', flexShrink:0,
+                            display:'flex', alignItems:'center', justifyContent:'center',
+                            color:c.textSubtle, background: isDark?'rgba(255,255,255,0.06)':'rgba(0,0,0,0.05)',
+                            fontSize:'13px', border:'none', cursor:'pointer' }}>
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
+            );
+          })()
         )}
       </div>
 
@@ -4049,7 +4187,7 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
                   style={{ borderBottom:`1px solid ${c.border}` }}
                   onMouseEnter={e=>e.currentTarget.style.background=isDark?'rgba(255,255,255,0.04)':'rgba(0,0,0,0.02)'}
                   onMouseLeave={e=>e.currentTarget.style.background='transparent'}
-                  onClick={() => { setMessages(s.messages); setShowHistory(false); }}>
+                  onClick={() => { sessionIdRef.current = s.id; setMessages(s.messages); setShowHistory(false); }}>
                   <span style={{ width:'8px', height:'8px', borderRadius:'50%', background:c.accent, flexShrink:0, marginTop:'4px' }} />
                   <div style={{ flex:1, minWidth:0 }}>
                     <div style={{ fontSize:'14px', fontWeight:'600', color:c.text,
@@ -11608,6 +11746,23 @@ function PlayerAmbient({ track, isDark }) {
   );
 }
 
+// ── Search/chat ambient — full-bleed colour field behind BOTH the transparent
+// nav rail and the section content, so the background is continuous and the
+// rail floats above it (no vertical seam at the rail's edge). Subtle enough
+// not to fight the results grid of the regular search tab.
+function SearchAmbient({ isDark }) {
+  return (
+    <div aria-hidden="true" style={{
+      position:'absolute', inset:0, zIndex:0, overflow:'hidden', pointerEvents:'none',
+      background: isDark
+        ? `radial-gradient(ellipse 75% 90% at 22% -8%, oklch(60% 0.18 275 / 0.13), transparent 58%),
+           radial-gradient(ellipse 60% 70% at 92% 108%, oklch(70% 0.13 60 / 0.06), transparent 55%)`
+        : `radial-gradient(ellipse 75% 90% at 22% -8%, oklch(60% 0.18 275 / 0.09), transparent 58%),
+           radial-gradient(ellipse 60% 70% at 92% 108%, oklch(70% 0.13 60 / 0.07), transparent 55%)`,
+    }} />
+  );
+}
+
 // ── Player Similarity Rail (CLAP «похожие / контраст» under the queue) ───────
 // Fetches the current track's top-3 similar + top-3 contrasting neighbours from
 // the memoized top-pairs cache. Renders nothing when there is no data (the
@@ -15143,6 +15298,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
           transparent floating nav AND the section content so the blurred-cover
           glow no longer cuts off at the rail's edge. */}
       {section === 'player' && <PlayerAmbient track={playerTrack} isDark={isDark} />}
+      {section === 'search' && <SearchAmbient isDark={isDark} />}
       <div className="app-main-area" style={{
         flex:1, minWidth:0, minHeight:0, display:'flex', position:'relative',
       }}>

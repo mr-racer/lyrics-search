@@ -65,6 +65,7 @@ class TrackHit(BaseModel):
     score: float
     matched_on: Literal["lyrics", "audio", "hybrid"] = "lyrics"
     lyrics: str | None = None  # выдержка из лирики для lyrics-поиска
+    matched_line: str | None = None  # строка лирики с максимальным перекрытием с запросом (подсветка в UI)
     artist_facts: str | None = None  # interesting facts about the artist
     song_facts: str | None = None  # interesting facts about the song
     score_breakdown: Optional[ScoreBreakdown] = None

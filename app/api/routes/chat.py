@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import Any, AsyncGenerator, Awaitable, Callable, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -175,6 +176,29 @@ def _match_best_hit(
     return None
 
 
+def _pick_matched_line(lyrics: str, query: str) -> str | None:
+    """Pick the lyric line with the most word overlap with the executed query.
+
+    The server knows the *executed* queries (planner-generated), which the
+    client never sees — so this beats the frontend's user-message heuristic.
+    Pure python, no LLM/embedding calls. Returns None when nothing overlaps.
+    """
+    terms = {t for t in re.findall(r"\w+", query.lower()) if len(t) > 2}
+    if not terms or not lyrics:
+        return None
+    best: str | None = None
+    best_score = 0
+    for line in lyrics.split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        words = set(re.findall(r"\w+", stripped.lower()))
+        score = len(terms & words)
+        if score > best_score:
+            best, best_score = stripped, score
+    return best
+
+
 async def _run_searches(
     llm_queries: list[dict],
     service,
@@ -247,6 +271,8 @@ async def _run_searches(
                 key = (hit.track.title.lower(), hit.track.artist.lower())
                 if key not in seen:
                     seen.add(key)
+                    if mode in ("text", "hybrid") and hit.lyrics and hit.matched_line is None:
+                        hit.matched_line = _pick_matched_line(hit.lyrics, query_text)
                     hits.append(hit)
         except Exception as exc:
             print(f"[chat] search error for '{query_text}': {exc}")
