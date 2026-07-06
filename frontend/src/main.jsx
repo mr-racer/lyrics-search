@@ -3718,7 +3718,11 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
 
   // ── Render the accentuated best-hit card (liquid glass + lyric snippet) ──
   const renderBestHit = (hit, hits, conf, confColor, userQuery) => {
-    const snippet = hit.lyrics && hit.matched_on !== 'audio';
+    // hit.lyrics is newline-flattened by the backend (LLM context form);
+    // track.lyrics keeps the raw line breaks — prefer it so the snippet
+    // renders as verse lines, not one run-together paragraph.
+    const snippetLyrics = hit.track?.lyrics || hit.lyrics;
+    const snippet = snippetLyrics && hit.matched_on !== 'audio';
     const coverSize = isMobileChat ? 72 : 96;
     return (
       <div className="liquid-glass best-hit-card"
@@ -3745,7 +3749,7 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
             ▶
           </button>
         </div>
-        {snippet && <LyricSnippet lyrics={hit.lyrics} query={userQuery} matchedLine={hit.matched_line} lang={lang} c={c} />}
+        {snippet && <LyricSnippet lyrics={snippetLyrics} query={userQuery} matchedLine={hit.matched_line} lang={lang} c={c} />}
       </div>
     );
   };
