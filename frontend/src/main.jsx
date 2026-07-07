@@ -1942,16 +1942,36 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
     }}>
       {/* brushed top hairline — a small skeuomorphic nod under the glass */}
       <div className={brushed(isDark)} style={{ position:'absolute', top:0, left:0, right:0, height:7, opacity:.7 }} />
-      {/* aurora "wave" band — soft-masked so it melts into the glass below */}
+      {/* aurora "wave" band — soft-masked so it melts into the glass below.
+          Blobs + caustics sit under ONE static SVG displacement "lens"
+          (.efir-liquid): the moving blobs get refracted as they drift, and the
+          light streaks bend with the liquid instead of lying flat on top.
+          Static noise = near-zero extra GPU cost; the motion is the blobs'. */}
       <div className="efir-wave" style={{ position:'absolute', top:0, left:0, right:0, height:'58%', opacity:isDark?0.55:0.45, pointerEvents:'none',
         WebkitMaskImage:waveFade, maskImage:waveFade }}>
-        <span className="fy-blob fy-bg1" /><span className="fy-blob fy-bg2" /><span className="fy-blob fy-bg3" /><span className="fy-blob fy-bg4" />
+        <div className="efir-liquid">
+          <span className="fy-blob fy-bg1" /><span className="fy-blob fy-bg2" /><span className="fy-blob fy-bg3" /><span className="fy-blob fy-bg4" />
+          <span className="efir-caustics" />
+        </div>
       </div>
       {/* dominant-hue tint + frost so the headline stays readable over the wave */}
       <div style={{ position:'absolute', inset:0, background:tint, pointerEvents:'none' }} />
       <div style={{ position:'absolute', inset:0, pointerEvents:'none', background: isDark
         ? 'linear-gradient(180deg, rgba(16,16,22,.10) 0%, rgba(16,16,22,.55) 60%)'
         : 'linear-gradient(180deg, rgba(255,255,255,.06) 0%, rgba(255,255,255,.6) 60%)' }} />
+      {/* meniscus — the drifting "surface line" where the liquid ends. Sits
+          above the frost so it reads as the wave's physical edge; the wavy
+          shape is an SVG mask, so the color stays a theme-aware gradient. */}
+      <div className="efir-meniscus" aria-hidden="true" style={{ background: isDark
+        ? 'linear-gradient(90deg, transparent 2%, rgba(255,255,255,.55) 22%, rgba(201,184,255,.62) 50%, rgba(255,255,255,.55) 78%, transparent 98%)'
+        : 'linear-gradient(90deg, transparent 2%, rgba(96,74,150,.38) 22%, rgba(124,91,255,.45) 50%, rgba(96,74,150,.38) 78%, transparent 98%)' }} />
+      {/* displacement source for the liquid-glass refraction (defs only, 0×0) */}
+      <svg width="0" height="0" style={{ position:'absolute' }} aria-hidden="true" focusable="false">
+        <filter id="efir-liquid-lens" x="-20%" y="-20%" width="140%" height="140%">
+          <feTurbulence type="fractalNoise" baseFrequency="0.007 0.013" numOctaves="2" seed="7" result="noise" />
+          <feDisplacementMap in="SourceGraphic" in2="noise" scale="90" xChannelSelector="R" yChannelSelector="G" />
+        </filter>
+      </svg>
 
       <div style={{ position:'relative', zIndex:2, display:'flex', flexDirection:'column', flex:1, minHeight:0 }}>
         {/* Top: kicker + the wave/vibe phrase headline (no concrete song) */}
@@ -1990,7 +2010,8 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
             <div style={{ width:98, height:98, flex:'none', display:'grid', placeItems:'center' }}>
               <div style={{ transform:'scale(1.5)' }}>
                 <div className={`fy-hybrid tint-irid${wavePlaying ? ' fy-playing' : ''}`} onMouseEnter={() => setHoverCtl(true)} onMouseLeave={() => setHoverCtl(false)}
-                     onClick={handleOrb} role="button"
+                     onClick={handleOrb} role="button" tabIndex={0}
+                     onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleOrb(); } }}
                      aria-label={wavePlaying ? (lang==='ru'?'Поставить волну на паузу':'Pause your stream')
                                  : waveLive ? (lang==='ru'?'Продолжить волну':'Resume your stream')
                                  : (lang==='ru'?'Включить ваш поток':'Start your stream')}>
@@ -2116,9 +2137,10 @@ function homeDeriveDifferent(resp) {
 // the layout/hover that doesn't depend on the theme.
 function railCardStyle(isDark, c) {
   return {
-    // flex column + grow-not-shrink so the two rail cards stretch to fill the
-    // column and their bottoms line up with the For-You hero (no dangling).
-    position:'relative', display:'flex', flexDirection:'column', flex:'1 0 auto',
+    // flex column, equal shares: the rail column is height-capped to the
+    // viewport (.efir-main), so both cards split it 50/50 and may shrink —
+    // their bottoms line up with the For-You hero without pushing past the fold.
+    position:'relative', display:'flex', flexDirection:'column', flex:'1 1 0', minHeight:0,
     borderRadius:20, overflow:'hidden', padding:'clamp(18px,1.5vw,24px)',
     border:`1px solid ${c.border}`,
     background: isDark
@@ -2178,10 +2200,13 @@ function FeaturedArtistCard({ isDark, lang, navigateToArtist }) {
          onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} onClick={open}>
       <div className="mono" style={{ fontSize:11, letterSpacing:'.26em', color:c.textSubtle }}>{lang==='ru'?'★ АРТИСТ ДНЯ':'★ FEATURED ARTIST'}</div>
       {img && (
-        <div style={{ width:'66%', margin:'16px auto 2px', borderRadius:14, overflow:'hidden',
+        /* height is viewport-driven (not width-driven): the photo crops via
+           object-fit instead of dictating the rail column height — this is
+           what used to push «Что-то новое» below the fold on 16" screens */
+        <div style={{ width:'66%', height:'clamp(140px, 24vh, 300px)', margin:'16px auto 2px', borderRadius:14, overflow:'hidden',
           boxShadow:'0 16px 34px rgba(0,0,0,.45)', transition:'transform .42s cubic-bezier(.22,.9,.3,1)',
           transform: hover ? 'translateY(-4px) scale(1.02)' : 'none' }}>
-          <img src={img} alt={a.name} style={{ width:'100%', height:'auto', display:'block', objectFit:'cover' }} />
+          <img src={img} alt={a.name} style={{ width:'100%', height:'100%', display:'block', objectFit:'cover', objectPosition:'50% 18%' }} />
         </div>
       )}
       <div className="serif" style={{ fontSize:'clamp(18px,1.5vw,22px)', fontWeight:300, color:c.text, marginTop:14, textAlign:'center' }}>{a.name}</div>
@@ -2492,8 +2517,10 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLi
         </div>
       </div>
 
-      {/* «Эфир» split — vertically centered in the viewport below the header */}
-      <div style={{ position:'relative', flex:'1 0 auto', display:'flex', flexDirection:'column', justifyContent:'center' }}>
+      {/* «Эфир» split — takes exactly the space left under the header (no page
+          scroll on desktop; .efir-main's min-height + the root's auto overflow
+          remain the fallback for very short windows) */}
+      <div style={{ position:'relative', flex:'1 1 auto', minHeight:0, display:'flex', flexDirection:'column', justifyContent:'center' }}>
         <div className="efir-main" style={{ position:'relative' }}>
           <ForYouHero isDark={isDark} lang={lang}
                       onStartStream={onStartStream} streamActive={streamActive} audio={audio}

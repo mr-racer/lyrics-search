@@ -2667,11 +2667,51 @@
       .efir-rail{display:grid;grid-template-columns:1fr 1fr}
     }
     @media (max-width:720px){ .efir-rail{grid-template-columns:1fr} }
+    /* «Всё в один экран» (desktop split only): the grid takes exactly the
+       height left under the header, cards share it — no page scroll. The
+       min-height guard + the root's auto overflow cover very short windows.
+       Below 1180px the rail reflows under the hero, so scroll returns there. */
+    @media (min-width:1181px){
+      .efir-main{height:100%;min-height:620px}
+    }
     /* Wide aurora "wave" — reuses the fy-blob keyframes at a larger scale */
     .efir-wave{position:relative;overflow:hidden;isolation:isolate}
     .efir-wave .fy-blob{width:58%;height:200%;filter:blur(40px)}
     .efir-wave .fy-bg1{top:-34%;left:-10%}.efir-wave .fy-bg2{top:-14%;left:22%}
     .efir-wave .fy-bg3{top:-46%;left:50%}.efir-wave .fy-bg4{top:-18%;left:74%}
+    /* ── Liquid-glass wave ──────────────────────────────────────────────────
+       .efir-liquid — one STATIC displacement "lens" (SVG feTurbulence, defined
+       inline in the hero) over the moving blobs + caustics: the picture under
+       the glass warps as it drifts, without re-computing noise per frame.
+       Browsers without SVG filter refs simply skip it (blobs stay as before). */
+    .efir-liquid{position:absolute;inset:0;filter:url(#efir-liquid-lens)}
+    /* Caustics — two skewed light streaks collected by the "liquid"; they live
+       UNDER the lens, so the displacement bends them with the wave. */
+    .efir-caustics{position:absolute;inset:0;mix-blend-mode:overlay;opacity:.55;
+      background:
+        linear-gradient(112deg,transparent 40%,rgba(255,255,255,.16) 46%,transparent 54%),
+        linear-gradient(98deg,transparent 58%,rgba(255,255,255,.10) 65%,transparent 73%);
+      background-size:230% 100%,280% 100%;
+      animation:causticsDrift 22s ease-in-out infinite alternate}
+    @keyframes causticsDrift{
+      0%{background-position:0% 0,120% 0}
+      100%{background-position:130% 0,-40% 0}}
+    /* Meniscus — the wavy surface line where the liquid ends. The wave shape
+       is a repeat-x SVG mask (color comes from the element's own theme-aware
+       gradient background, set inline); mask-position drifts on a seamless
+       240px loop. Sits in the hero at the aurora's dissolve zone. */
+    .efir-meniscus{position:absolute;left:0;right:0;top:calc(41% - 12px);height:24px;
+      pointer-events:none;opacity:.5;
+      -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='24' viewBox='0 0 240 24'%3E%3Cpath d='M0 12 Q30 5 60 12 T120 12 T180 12 T240 12' fill='none' stroke='%23000' stroke-width='1.6'/%3E%3C/svg%3E") repeat-x;
+      -webkit-mask-size:240px 24px;
+      mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='24' viewBox='0 0 240 24'%3E%3Cpath d='M0 12 Q30 5 60 12 T120 12 T180 12 T240 12' fill='none' stroke='%23000' stroke-width='1.6'/%3E%3C/svg%3E") repeat-x;
+      mask-size:240px 24px;
+      animation:meniscusDrift 16s linear infinite}
+    @keyframes meniscusDrift{
+      from{-webkit-mask-position:0 0;mask-position:0 0}
+      to{-webkit-mask-position:240px 0;mask-position:240px 0}}
+    @media (prefers-reduced-motion:reduce){
+      .efir-caustics,.efir-meniscus{animation:none}}
     /* === onboarding redesign === (.ob-root sets the --ob-* vars per theme) */
     .ob-glass{position:relative;z-index:1;background:var(--ob-glass-bg);border-radius:22px;backdrop-filter:blur(20px) saturate(135%);-webkit-backdrop-filter:blur(20px) saturate(135%);box-shadow:inset 0 1px 0 var(--ob-glass-sheen),0 12px 50px rgba(0,0,0,.28);}
     .ob-glass::before{content:"";position:absolute;inset:-1px;border-radius:23px;box-shadow:inset 0 0 0 1.5px var(--ob-glass-edge);filter:blur(3px);pointer-events:none;}
