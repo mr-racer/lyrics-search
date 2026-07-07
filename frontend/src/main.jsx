@@ -1940,8 +1940,6 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
       boxShadow:heroShadow, animation:'fadeInUp .55s cubic-bezier(.22,.9,.3,1)',
       display:'flex', flexDirection:'column',
     }}>
-      {/* brushed top hairline — a small skeuomorphic nod under the glass */}
-      <div className={brushed(isDark)} style={{ position:'absolute', top:0, left:0, right:0, height:7, opacity:.7 }} />
       {/* aurora "wave" band — soft-masked so it melts into the glass below.
           Blobs + caustics sit under ONE static SVG displacement "lens"
           (.efir-liquid): the moving blobs get refracted as they drift, and the
@@ -1959,12 +1957,6 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
       <div style={{ position:'absolute', inset:0, pointerEvents:'none', background: isDark
         ? 'linear-gradient(180deg, rgba(16,16,22,.10) 0%, rgba(16,16,22,.55) 60%)'
         : 'linear-gradient(180deg, rgba(255,255,255,.06) 0%, rgba(255,255,255,.6) 60%)' }} />
-      {/* meniscus — the drifting "surface line" where the liquid ends. Sits
-          above the frost so it reads as the wave's physical edge; the wavy
-          shape is an SVG mask, so the color stays a theme-aware gradient. */}
-      <div className="efir-meniscus" aria-hidden="true" style={{ background: isDark
-        ? 'linear-gradient(90deg, transparent 2%, rgba(255,255,255,.55) 22%, rgba(201,184,255,.62) 50%, rgba(255,255,255,.55) 78%, transparent 98%)'
-        : 'linear-gradient(90deg, transparent 2%, rgba(96,74,150,.38) 22%, rgba(124,91,255,.45) 50%, rgba(96,74,150,.38) 78%, transparent 98%)' }} />
       {/* displacement source for the liquid-glass refraction (defs only, 0×0) */}
       <svg width="0" height="0" style={{ position:'absolute' }} aria-hidden="true" focusable="false">
         <filter id="efir-liquid-lens" x="-20%" y="-20%" width="140%" height="140%">
@@ -2076,8 +2068,14 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
                    style={{ transform: settingsOpen ? 'rotate(180deg)' : 'none', transition:'transform .3s ease' }}><path d="m6 9 6 6 6-6"/></svg>
             </button>
-            <div style={{ width:'100%', overflow:'hidden', maxHeight: settingsOpen ? 100 : 0, opacity: settingsOpen ? 1 : 0,
-              transition:'max-height .4s cubic-bezier(.22,.9,.3,1), opacity .35s ease' }}>
+            {/* Fixed-height slot, ALWAYS in layout: the panel fades in place
+                instead of growing — growth would re-center the flex column and
+                drag the play orb above. visibility (not display) keeps the
+                slider out of tab order while hidden. */}
+            <div aria-hidden={!settingsOpen} style={{ width:'100%', height:92, overflow:'hidden',
+              opacity: settingsOpen ? 1 : 0, visibility: settingsOpen ? 'visible' : 'hidden',
+              pointerEvents: settingsOpen ? 'auto' : 'none',
+              transition:'opacity .35s ease, visibility .35s' }}>
               <div style={{ display:'flex', alignItems:'center', gap:12, marginTop:14 }}>
                 <span className="mono" style={{ fontSize:10, letterSpacing:'.18em', color:c.textSubtle, flex:'none' }}>
                   {lang==='ru'?'НОВОЕ':'NEW'}
