@@ -2703,11 +2703,14 @@
        early without the glow over-travelling. */
     .ob-listin{animation:obListIn .55s cubic-bezier(.22,.61,.36,1) both;overflow:hidden;}
     @keyframes obListIn{from{opacity:0;max-height:0;margin-top:0;transform:translateY(-6px)}to{opacity:1;max-height:420px;margin-top:14px;transform:translateY(0)}}
-    /* Smooth expand/collapse for inline sections (upload, yandex) — transition-based
-       so re-toggling replays the animation. max-height 0↔1200 handles any content. */
-    .ob-expand{overflow:hidden;transition:max-height .45s cubic-bezier(.22,.61,.36,1),opacity .35s ease,margin .45s cubic-bezier(.22,.61,.36,1);max-height:0;opacity:0;margin-top:0;margin-bottom:0;transform:translateY(-6px);transition-property:max-height,opacity,margin,transform;transition-duration:.45s,.35s,.45s,.45s;transition-timing-function:cubic-bezier(.22,.61,.36,1),ease,cubic-bezier(.22,.61,.36,1),cubic-bezier(.22,.61,.36,1);}
-    .ob-expand.ob-expand-open{max-height:1200px;opacity:1;margin-top:14px;margin-bottom:0;transform:translateY(0);}
-    @media (prefers-reduced-motion:reduce){.ob-listin{animation:none}}
+    /* Smooth expand/collapse for inline sections (upload, yandex) — grid-rows
+       0fr↔1fr tracks the content's REAL height: nothing is ever clipped (no
+       max-height ceiling) and open/close both animate at the same speed. The
+       inner wrapper needs min-height:0 so the 0fr track can actually collapse. */
+    .ob-expand{display:grid;grid-template-rows:0fr;opacity:0;margin-top:0;transform:translateY(-6px);transition:grid-template-rows .45s cubic-bezier(.22,.61,.36,1),opacity .35s ease,margin-top .45s cubic-bezier(.22,.61,.36,1),transform .45s cubic-bezier(.22,.61,.36,1);}
+    .ob-expand.ob-expand-open{grid-template-rows:1fr;opacity:1;margin-top:14px;transform:translateY(0);}
+    .ob-expand>.ob-expand-inner{min-height:0;overflow:hidden;}
+    @media (prefers-reduced-motion:reduce){.ob-listin{animation:none}.ob-expand{transition:none}}
     .ob-feat{position:relative;z-index:1;background:var(--ob-card-bg);border-radius:14px;padding:15px 16px;box-shadow:inset 0 1px 0 var(--ob-glass-sheen),inset 0 0 0 1px var(--ob-card-edge),0 4px 14px rgba(0,0,0,.16);transition:transform .25s cubic-bezier(.2,.7,.2,1),box-shadow .25s;}
     .ob-feat-hover:hover{transform:translateY(-6px);box-shadow:inset 0 1px 0 var(--ob-glass-sheen),inset 0 0 0 1px rgba(154,133,255,.35),0 16px 34px rgba(124,92,255,.28);}
     .ob-indet{position:absolute;top:0;bottom:0;width:38%;border-radius:3px;background:linear-gradient(90deg,transparent,oklch(68% .17 272),transparent);animation:obIndet 1.3s ease-in-out infinite;}

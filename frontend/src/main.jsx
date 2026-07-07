@@ -9962,6 +9962,36 @@ function YandexImportFlow({ isDark, lang, onDone, onBack }) {
   );
 }
 
+// Grid-rows expand/collapse wrapper (paired with .ob-expand in index.css).
+// Content mounts lazily on open and unmounts ~0.5s after close (once the 0fr
+// collapse settles) — YandexImportFlow must not stay mounted while hidden:
+// its mount effect starts a device-flow auth session and polling.
+function ObExpand({ open, children }) {
+  const [mounted, setMounted] = useState(open);
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    if (open) {
+      setMounted(true);
+      // Double-rAF: let the 0fr initial state paint before flipping to 1fr,
+      // otherwise the browser coalesces both states and skips the transition.
+      let cancelled = false;
+      const raf = requestAnimationFrame(() => requestAnimationFrame(() => { if (!cancelled) setShown(true); }));
+      return () => { cancelled = true; cancelAnimationFrame(raf); };
+    }
+    setShown(false);
+    // Unmount on a timer (not transitionend) so it also fires under
+    // prefers-reduced-motion, where no transition event ever comes.
+    const t = setTimeout(() => setMounted(false), 500);
+    return () => clearTimeout(t);
+  }, [open]);
+  if (!mounted) return null;
+  return (
+    <div className={`ob-expand${shown ? ' ob-expand-open' : ''}`}>
+      <div className="ob-expand-inner">{children}</div>
+    </div>
+  );
+}
+
 function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
   const c = useColors(isDark);
   const [files, setFiles] = useState([]);
@@ -10189,7 +10219,10 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
           {/* ── Card 1: Yandex Music ── */}
           <button onClick={() => {
             if (anyUploading || committing) return;
-            if (MUSIX_PREMIUM) setYandexExpanded(!yandexExpanded);
+            if (MUSIX_PREMIUM) {
+              setYandexExpanded(!yandexExpanded);
+              if (!yandexExpanded) setUploadExpanded(false);  // аккордеон: открыли Яндекс → файлы закрылись
+            }
             else if (!premiumHintDismissed) setPremiumHint(true);
           }}
             disabled={anyUploading || committing}
@@ -10233,7 +10266,10 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
           </button>
 
           {/* ── Card 2: Local Files ── */}
-          <button onClick={() => setUploadExpanded(!uploadExpanded)}
+          <button onClick={() => {
+            setUploadExpanded(!uploadExpanded);
+            if (!uploadExpanded) setYandexExpanded(false);  // аккордеон: открыли файлы → Яндекс закрылся
+          }}
             className="ob-glass"
             style={{
               display:'flex', flexDirection:'column', alignItems:'center', gap:'14px',
@@ -10260,9 +10296,8 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
         </div>
 
         {/* ═══ Развёрнутый контент: локальные файлы ═══════════════════════════ */}
-        {uploadExpanded && (
-          <div className="ob-listin">
-            <div style={{ marginTop:'14px' }}>
+        <ObExpand open={uploadExpanded}>
+            <div>
               <ProcessingModeBadge isDark={isDark} lang={lang} style={{ marginBottom:'16px' }} />
 
               <div className="ob-glass"
@@ -10306,17 +10341,12 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
                 <YandexEnhanceLink isDark={isDark} lang={lang} />
               )}
             </div>
-          </div>
-        )}
+        </ObExpand>
 
         {/* ═══ Развёрнутый контент: Яндекс Музыка (inline, as-is from YandexImportFlow) ═══════════════ */}
-        {yandexExpanded && (
-          <div className="ob-listin">
-            <div style={{ marginTop:'14px' }}>
-              <YandexImportFlow isDark={isDark} lang={lang} onDone={onDone} onBack={() => setYandexExpanded(false)} />
-            </div>
-          </div>
-        )}
+        <ObExpand open={yandexExpanded}>
+          <YandexImportFlow isDark={isDark} lang={lang} onDone={onDone} onBack={() => setYandexExpanded(false)} />
+        </ObExpand>
 
         {/* ═══ Прогресс загрузки файлов ═══════════════════════════════════════ */}
         {progress.length > 0 && (
