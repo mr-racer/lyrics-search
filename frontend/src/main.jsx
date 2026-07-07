@@ -11815,9 +11815,10 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, showToast }) {
       >
         {/* Slim header — 32px row with title label + close. Cover/title/
             artist/year intentionally dropped — visible in the left column. */}
-        <div className="tc-hairline" style={{
+        <div style={{
           display: 'flex', alignItems: 'center', gap: '8px',
           padding: '8px 14px', flexShrink: 0,
+          borderBottom: `1px solid ${isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'}`,
         }}>
           <span style={{ fontSize: '14px' }} aria-hidden>✨</span>
           <span style={{ flex: 1, fontSize: '13px', fontWeight: 600, color: c.text, letterSpacing: '-0.01em' }}>
@@ -11885,13 +11886,13 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, showToast }) {
         {/* Suggested prompts — single scrollable rail of icon chips just
             above the input (Perplexity / ChatGPT quick-actions pattern).
             Staggered entrance only while the chat is still empty. */}
-        <div className="tc-chip-rail tc-hairline" style={{
+        <div className="tc-chip-rail" style={{
           display: 'flex', gap: '6px',
           padding: '8px 18px',
           overflowX: 'auto',
-          borderTop: '1px solid transparent',
-          borderBottom: 'none',
+          borderTop: `1px solid ${isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'}`,
           flexShrink: 0,
+          minHeight: '38px',
         }}>
           {TRACK_CHAT_SUGGESTED_PROMPTS.map((p, i) => (
             <button key={i} onClick={() => handlePromptClick(p)}
