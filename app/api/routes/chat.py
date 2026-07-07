@@ -1098,3 +1098,75 @@ async def track_chat(
     except Exception as exc:
         logger.error("[track_chat] error: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"AI error: {str(exc)[:200]}")
+
+
+@router.post("/track-chat/stream")
+async def track_chat_stream(
+    req: TrackChatRequest,
+    current_user: User = Depends(get_current_user),
+) -> StreamingResponse:
+    """Streaming variant of ``POST /chat/track-chat``.
+
+    Same orchestration, but emits humanized status frames over SSE while the
+    agent works — ``{"type":"status","stage":"thinking"|"web_search"|"reading"}``
+    (web_search frames carry the ``query``) — then a terminal ``answer`` frame
+    with the exact TrackChatResponse payload. The drawer's activity ticker
+    animates these in real time; the client falls back to the non-streaming
+    endpoint if the stream can't open.
+    """
+    derived = derive_collection_for_user(current_user)
+    req = req.model_copy(update={"collection_name": derived})
+
+    if req.mode == "lyric_explain" and not req.selected_line:
+        raise HTTPException(
+            status_code=400,
+            detail="selected_line is required for mode='lyric_explain'",
+        )
+
+    async def event_source() -> AsyncGenerator[str, None]:
+        queue: asyncio.Queue[dict] = asyncio.Queue()
+        DONE = {"__done__": True}
+
+        def emit(event: dict) -> None:
+            queue.put_nowait(event)
+
+        async def run() -> None:
+            try:
+                from app.services.track_chat_service import answer_track_chat
+                emit({"type": "status", "stage": "thinking"})
+                res = await answer_track_chat(req, on_event=emit)
+                queue.put_nowait({
+                    "type": "answer",
+                    "message": res.message,
+                    "web_search_used": res.web_search_used,
+                })
+            except Exception as exc:  # surface a terminal error frame, never hang
+                logger.error("[track_chat/stream] error: %s", exc, exc_info=True)
+                queue.put_nowait({"type": "error", "message": str(exc)[:200]})
+            finally:
+                queue.put_nowait(DONE)
+
+        task = asyncio.create_task(run())
+        try:
+            while True:
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield ": heartbeat\n\n"  # keep the connection warm during long LLM waits
+                    continue
+                if item is DONE:
+                    break
+                yield sse_data(item)
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

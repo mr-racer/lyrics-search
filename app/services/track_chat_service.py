@@ -265,6 +265,7 @@ def create_track_chat_agent(
     llm_base_url: Optional[str],
     llm_model: Optional[str],
     system_prompt: str,
+    on_event=None,
 ):
     """Build a pydantic-ai Agent with the web_search tool registered.
 
@@ -279,6 +280,11 @@ def create_track_chat_agent(
     would lose the track context, lyrics, facts, and search rules and start making
     things up. ``instructions`` are re-sent on every run regardless of history.
 
+    Args (extra):
+        on_event: optional sync callback ``fn(dict)`` fired on tool activity so
+            a streaming route can surface humanized progress ("searching the
+            web…"). Must never raise into the agent loop — calls are guarded.
+
     Returns:
         (agent, state) — state dict contains 'web_search_calls' counter.
     """
@@ -291,6 +297,15 @@ def create_track_chat_agent(
     # Track tool invocations so we can report web_search_used
     state: dict = {"web_search_calls": 0}
     agent._test_state = state  # exposed for tests; safe — pydantic-ai ignores unknown attrs
+
+    def _emit(event: dict) -> None:
+        """Guarded status emit — a broken callback must never break the agent."""
+        if on_event is None:
+            return
+        try:
+            on_event(event)
+        except Exception:  # pragma: no cover — defensive
+            logger.debug("[track_chat] on_event callback failed", exc_info=True)
 
     @agent.tool_plain
     async def web_search(query: str) -> str:
@@ -315,14 +330,17 @@ def create_track_chat_agent(
             Formatted search results (titles, snippets, URLs), or a 'no results' marker.
         """
         state["web_search_calls"] += 1
+        _emit({"type": "status", "stage": "web_search", "query": query})
         try:
             from anyio import to_thread
 
             # smart_web_search is sync; run in a worker thread so we don't block the loop
             result = await to_thread.run_sync(smart_web_search, query, True, 3)
+            _emit({"type": "status", "stage": "reading"})
             return result or "(no web results)"
         except Exception as exc:
             logger.warning("[track_chat] web_search failed: %s", exc)
+            _emit({"type": "status", "stage": "thinking"})
             return "(web search unavailable)"
 
     return agent, state
@@ -344,8 +362,12 @@ def _identity_note(ctx) -> str:
     return "Track we're discussing: " + " ".join(parts)
 
 
-async def answer_track_chat(req):
-    """Orchestrate: validate, build context block, run agent, return response."""
+async def answer_track_chat(req, on_event=None):
+    """Orchestrate: validate, build context block, run agent, return response.
+
+    ``on_event`` (optional sync callback) receives humanized progress events —
+    see create_track_chat_agent. The non-streaming route passes nothing.
+    """
     from app.domain.models import TrackChatResponse
 
     if req.mode == "lyric_explain" and not req.selected_line:
@@ -388,7 +410,9 @@ async def answer_track_chat(req):
     system_prompt = _compose(packed_facts)
 
     # Build agent (per-request — simpler than thread-safety analysis)
-    agent, state = create_track_chat_agent(req.llm_base_url, req.llm_model, system_prompt)
+    agent, state = create_track_chat_agent(
+        req.llm_base_url, req.llm_model, system_prompt, on_event=on_event,
+    )
 
     # Restate the track identity inside the outgoing message so multi-turn
     # follow-ups stay pinned to THIS song (lyric_explain is single-shot and

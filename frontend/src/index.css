@@ -2894,3 +2894,127 @@
       .player-art-outgoing--next, .player-art-outgoing--prev,
       .player-art-entry--next, .player-art-entry--prev { animation: none !important; }
     }
+
+    /* ─── Track chat drawer (AIChatDrawer) — liquid-glass panel + activity ── */
+    /* Panel: layered translucency — a faint accent bloom in the top-right
+       corner, a vertical light gradient, and a low-alpha base tint. The
+       queue/lyrics behind it stay readable through blur(28px). */
+    .track-chat-glass {
+      border-radius: 16px;
+      background:
+        radial-gradient(120% 90% at 85% -10%, oklch(60% 0.18 270 / 0.10) 0%, transparent 55%),
+        linear-gradient(180deg, rgba(255,255,255,0.055) 0%, rgba(255,255,255,0.015) 40%),
+        rgba(16,16,22,0.58);
+      backdrop-filter: blur(28px) saturate(1.5);
+      -webkit-backdrop-filter: blur(28px) saturate(1.5);
+      border: 1px solid rgba(255,255,255,0.09);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.10),
+        inset 0 -1px 0 rgba(0,0,0,0.25),
+        0 12px 40px rgba(0,0,0,0.45);
+    }
+    body[data-theme="light"] .track-chat-glass {
+      background:
+        radial-gradient(120% 90% at 85% -10%, oklch(60% 0.18 270 / 0.07) 0%, transparent 55%),
+        linear-gradient(180deg, rgba(255,255,255,0.72) 0%, rgba(255,255,255,0.45) 100%),
+        rgba(244,243,248,0.5);
+      border: 1px solid rgba(255,255,255,0.65);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.9),
+        0 12px 40px rgba(40,30,60,0.16);
+    }
+    /* Hairline divider — fades at both ends instead of a hard border line */
+    .tc-hairline {
+      height: 1px; flex-shrink: 0;
+      background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.10) 18%, rgba(255,255,255,0.10) 82%, transparent 100%);
+    }
+    body[data-theme="light"] .tc-hairline {
+      background: linear-gradient(90deg, transparent 0%, rgba(0,0,0,0.08) 18%, rgba(0,0,0,0.08) 82%, transparent 100%);
+    }
+
+    /* Activity ticker — humanized "what the AI is doing" log. Current step
+       gets shimmering text (gradient sweep clipped to glyphs) + a live icon;
+       completed steps collapse into muted ✓ rows. */
+    .ai-activity { display: flex; flex-direction: column; gap: 7px; padding: 2px 0; }
+    .ai-activity-row { display: flex; align-items: baseline; gap: 8px; animation: aiStepIn 0.35s cubic-bezier(.22,.9,.3,1) both; }
+    .ai-activity-current {
+      font-size: 13px; font-weight: 500; letter-spacing: 0.01em;
+      background: linear-gradient(90deg, rgba(238,238,243,0.40) 0%, #ffffff 45%, oklch(78% 0.12 275) 55%, rgba(238,238,243,0.40) 100%);
+      background-size: 200% 100%;
+      -webkit-background-clip: text; background-clip: text; color: transparent;
+      animation: aiShimmer 2.1s linear infinite;
+    }
+    body[data-theme="light"] .ai-activity-current {
+      background-image: linear-gradient(90deg, rgba(22,22,32,0.35) 0%, #161620 45%, oklch(50% 0.18 275) 55%, rgba(22,22,32,0.35) 100%);
+    }
+    .ai-activity-done { font-size: 12px; color: rgba(238,238,243,0.38); }
+    body[data-theme="light"] .ai-activity-done { color: rgba(22,22,32,0.42); }
+    .ai-activity-q {
+      font-size: 11.5px; opacity: 0.55; font-style: italic;
+      max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .ai-orb {
+      width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; align-self: center;
+      background: linear-gradient(145deg, oklch(72% 0.16 265), oklch(55% 0.22 290));
+      box-shadow: 0 0 8px oklch(65% 0.18 275 / 0.8);
+      animation: aiBreath 1.6s ease-in-out infinite;
+    }
+    .ai-glyph { font-size: 13px; line-height: 1; flex-shrink: 0; align-self: center; animation: aiBob 1.8s ease-in-out infinite; }
+    .ai-tick { color: oklch(63% 0.17 142); font-size: 11px; }
+    @keyframes aiShimmer { 0% { background-position: 200% center; } 100% { background-position: -200% center; } }
+    @keyframes aiBreath { 0%, 100% { transform: scale(0.8); opacity: 0.7; } 50% { transform: scale(1.15); opacity: 1; } }
+    @keyframes aiBob { 0%, 100% { transform: translateY(0) rotate(-4deg); } 50% { transform: translateY(-2px) rotate(6deg); } }
+    @keyframes aiStepIn { from { opacity: 0; transform: translateY(5px); filter: blur(2px); } to { opacity: 1; transform: translateY(0); filter: blur(0); } }
+
+    /* Suggested-question chips — glassy pills with icon, hover lift + accent
+       ring; staggered entrance in the empty-state hero. */
+    .tc-chip {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 7px 13px; border-radius: 999px;
+      background: rgba(255,255,255,0.045);
+      border: 1px solid rgba(255,255,255,0.08);
+      color: rgba(238,238,243,0.72);
+      font-size: 12px; font-weight: 500; letter-spacing: 0.01em;
+      cursor: pointer; white-space: nowrap; flex-shrink: 0;
+      transition: transform 0.16s cubic-bezier(.22,.9,.3,1), border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease, color 0.16s ease;
+    }
+    .tc-chip:hover {
+      transform: translateY(-1px);
+      background: rgba(255,255,255,0.08);
+      border-color: rgba(124,91,255,0.45);
+      color: #fff;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.25), 0 0 10px oklch(60% 0.18 270 / 0.18);
+    }
+    .tc-chip:active { transform: translateY(0) scale(0.97); }
+    .tc-chip-icon { font-size: 13px; line-height: 1; }
+    body[data-theme="light"] .tc-chip { background: rgba(255,255,255,0.6); border-color: rgba(0,0,0,0.08); color: rgba(22,22,32,0.75); }
+    body[data-theme="light"] .tc-chip:hover {
+      background: #fff; border-color: rgba(124,91,255,0.5); color: #161620;
+      box-shadow: 0 4px 14px rgba(40,30,60,0.12), 0 0 10px oklch(60% 0.18 270 / 0.14);
+    }
+    .tc-chip-in { animation: tcChipIn 0.4s cubic-bezier(.22,.9,.3,1) both; }
+    @keyframes tcChipIn { from { opacity: 0; transform: translateY(8px) scale(0.96); } to { opacity: 1; transform: translateY(0) scale(1); } }
+
+    /* Empty-state hero — floating accent orb + invitation copy */
+    .tc-hero { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; padding: 12px 24px; }
+    .tc-hero-orb {
+      width: 34px; height: 34px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center; font-size: 15px; margin-bottom: 6px;
+      background: radial-gradient(circle at 30% 25%, oklch(70% 0.16 265 / 0.5), oklch(55% 0.22 290 / 0.25) 70%);
+      border: 1px solid rgba(124,91,255,0.35);
+      box-shadow: 0 0 22px oklch(60% 0.18 270 / 0.35), inset 0 1px 0 rgba(255,255,255,0.25);
+      animation: tcFloat 4.5s ease-in-out infinite;
+    }
+    @keyframes tcFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+
+    /* Composer input — soft focus ring instead of the default outline */
+    .tc-input { transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease; }
+    .tc-input:focus { border-color: rgba(124,91,255,0.55) !important; box-shadow: 0 0 0 3px oklch(60% 0.18 270 / 0.15); }
+
+    /* Chip rail above the composer scrolls horizontally without a scrollbar */
+    .tc-chip-rail { scrollbar-width: none; }
+    .tc-chip-rail::-webkit-scrollbar { display: none; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .ai-orb, .ai-glyph, .tc-hero-orb, .tc-chip-in, .ai-activity-row, .ai-activity-current { animation: none !important; }
+    }

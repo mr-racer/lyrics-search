@@ -1718,44 +1718,70 @@ function useTrackChat(trackId, userId, lang) {
     try { localStorage.setItem(storageKey, JSON.stringify(msgs)); } catch {}
   }, [storageKey]);
 
+  // Streams /chat/track-chat/stream: `status` frames update the trailing
+  // loading message's `activity` timeline (thinking → web_search → reading…)
+  // so the drawer can narrate what's happening; the terminal `answer` frame
+  // replaces it. Falls back to the non-streaming endpoint on any failure.
   const sendMessage = useCallback(async (text, trackContext, llmKw) => {
-    const userMsg = { role: 'user', text, time: new Date().toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' }) };
-    const loadingMsg = { role: 'assistant', loading: true, time: userMsg.time };
-    const after = [...messages, userMsg, loadingMsg];
-    setMessages(after);
-    persist(after);
-    try {
-      const res = await apiFetch('/chat/track-chat', {
-        method: 'POST',
-        body: JSON.stringify({
-          track_context: trackContext,
-          mode: 'song',
-          message: text,
-          lang,
-          history: messages.filter(m => !m.loading).map(m => ({
-            role: m.role, content: m.text || '',
-          })),
-          ...(llmKw || {}),
-        }),
-      });
-      const aiMsg = {
-        role: 'assistant',
-        text: res.message || '…',
-        web_search_used: res.web_search_used,
-        time: new Date().toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' }),
-      };
+    const stamp = () => new Date().toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' });
+    const userMsg = { role: 'user', text, time: stamp() };
+    const loadingMsg = { role: 'assistant', loading: true, activity: [{ stage: 'thinking' }], time: userMsg.time };
+    setMessages([...messages, userMsg, loadingMsg]);
+    persist([...messages, userMsg]);  // never persist the transient loading row
+
+    const body = {
+      track_context: trackContext,
+      mode: 'song',
+      message: text,
+      lang,
+      history: messages.filter(m => !m.loading).map(m => ({
+        role: m.role, content: m.text || '',
+      })),
+      ...(llmKw || {}),
+    };
+
+    const finalize = (aiMsg) => {
       const finalMsgs = [...messages, userMsg, aiMsg];
       setMessages(finalMsgs);
       persist(finalMsgs);
+    };
+    const patchLoading = (fn) => setMessages(prev => {
+      const copy = prev.slice();
+      const li = copy.length - 1;
+      if (!copy[li] || !copy[li].loading) return prev;
+      copy[li] = fn(copy[li]);
+      return copy;
+    });
+
+    let answered = false;
+    const onEvent = (ev) => {
+      if (ev.type === 'answer') {
+        answered = true;
+        finalize({ role: 'assistant', text: ev.message || '…', web_search_used: ev.web_search_used, time: stamp() });
+      } else if (ev.type === 'error') {
+        answered = true;
+        finalize({ role: 'assistant', text: `Ошибка: ${ev.message || ''}`, time: stamp() });
+      } else if (ev.type === 'status' && ev.stage) {
+        patchLoading(m => {
+          const acts = m.activity || [];
+          const last = acts[acts.length - 1];
+          if (last && last.stage === ev.stage && last.query === ev.query) return m;
+          return { ...m, activity: [...acts, { stage: ev.stage, query: ev.query }] };
+        });
+      }
+    };
+
+    try {
+      await apiStream('/chat/track-chat/stream', body, onEvent);
+      if (!answered) throw new Error('stream ended without answer');
     } catch (e) {
-      const errMsg = {
-        role: 'assistant',
-        text: `Ошибка: ${e.message}`,
-        time: new Date().toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' }),
-      };
-      const finalMsgs = [...messages, userMsg, errMsg];
-      setMessages(finalMsgs);
-      persist(finalMsgs);
+      if (answered) return;
+      try {
+        const res = await apiFetch('/chat/track-chat', { method: 'POST', body: JSON.stringify(body) });
+        finalize({ role: 'assistant', text: res.message || '…', web_search_used: res.web_search_used, time: stamp() });
+      } catch (e2) {
+        finalize({ role: 'assistant', text: `Ошибка: ${e2.message}`, time: stamp() });
+      }
     }
   }, [messages, persist, lang]);
 
@@ -11620,6 +11646,7 @@ function SpectrumBars({ side, analyserRef, dataArrayRef, color, isPlaying, barCo
 // full 1-2 sentence `prompt` into the input, where the user can read/edit before sending.
 const TRACK_CHAT_SUGGESTED_PROMPTS = [
   {
+    icon: '💭',
     label: { ru: 'О чём песня?', en: "What's it about?" },
     prompt: {
       ru: 'О чём эта песня на самом деле? Расскажи простыми словами, как будто объясняешь другу.',
@@ -11627,6 +11654,7 @@ const TRACK_CHAT_SUGGESTED_PROMPTS = [
     },
   },
   {
+    icon: '📖',
     label: { ru: 'История', en: 'Backstory' },
     prompt: {
       ru: 'Расскажи историю создания этой песни и насколько популярной она была, когда вышла.',
@@ -11634,6 +11662,7 @@ const TRACK_CHAT_SUGGESTED_PROMPTS = [
     },
   },
   {
+    icon: '✍️',
     label: { ru: 'Сильные строчки', en: 'Key lines' },
     prompt: {
       ru: 'Разбери пару самых сильных строчек: есть ли в них отсылки или скрытый смысл?',
@@ -11641,6 +11670,7 @@ const TRACK_CHAT_SUGGESTED_PROMPTS = [
     },
   },
   {
+    icon: '💿',
     label: { ru: 'Семплы', en: 'Samples' },
     prompt: {
       ru: 'Какие песни семплировались в этом треке? Расскажи, откуда взяты семплы.',
@@ -11649,6 +11679,60 @@ const TRACK_CHAT_SUGGESTED_PROMPTS = [
   },
 ];
 
+// Humanized labels for the streaming status stages. `label` = present tense
+// (current step, shimmering); `done` = past tense (collapsed ✓ row).
+const TRACK_CHAT_STAGES = {
+  thinking: {
+    icon: 'orb',
+    label: { ru: 'Думаю', en: 'Thinking' },
+    done:  { ru: 'Подумал', en: 'Thought it through' },
+  },
+  web_search: {
+    icon: '🌐',
+    label: { ru: 'Ищу в интернете', en: 'Searching the web' },
+    done:  { ru: 'Поискал в интернете', en: 'Searched the web' },
+  },
+  reading: {
+    icon: '📖',
+    label: { ru: 'Читаю найденное', en: 'Reading what I found' },
+    done:  { ru: 'Прочитал найденное', en: 'Read the results' },
+  },
+};
+
+// ─── TrackChatActivity — live "what am I doing" ticker inside the loading
+// message. The last stage is current (animated icon + shimmer text); earlier
+// stages collapse into muted ✓ rows. Web-search rows show the query.
+function TrackChatActivity({ activity, lang }) {
+  const items = (activity && activity.length) ? activity : [{ stage: 'thinking' }];
+  const L = (o) => (lang === 'ru' ? o.ru : o.en);
+  return (
+    <div className="ai-activity">
+      {items.map((a, i) => {
+        const meta = TRACK_CHAT_STAGES[a.stage] || TRACK_CHAT_STAGES.thinking;
+        const isCurrent = i === items.length - 1;
+        if (!isCurrent) {
+          return (
+            <div key={i} className="ai-activity-row ai-activity-done">
+              <span className="ai-tick" aria-hidden>✓</span>
+              <span>{L(meta.done)}</span>
+              {a.query && <span className="ai-activity-q">«{a.query}»</span>}
+            </div>
+          );
+        }
+        return (
+          <div key={i} className="ai-activity-row">
+            {meta.icon === 'orb'
+              ? <span className="ai-orb" aria-hidden />
+              : <span className="ai-glyph" aria-hidden>{meta.icon}</span>}
+            <span className="ai-activity-current">{L(meta.label)}…</span>
+            {a.query && <span className="ai-activity-q">«{a.query}»</span>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function AIChatDrawer({ isOpen, onClose, track, lang, isDark, showToast }) {
   const c = useColors(isDark);
   const trackId = track?.track_id || null;
@@ -11656,6 +11740,7 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, showToast }) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const endRef = useRef(null);
+  const inputRef = useRef(null);
 
   useEffect(() => {
     if (endRef.current) endRef.current.scrollTop = endRef.current.scrollHeight;
@@ -11698,6 +11783,7 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, showToast }) {
 
   const handlePromptClick = (p) => {
     setInput(lang === 'ru' ? p.prompt.ru : p.prompt.en);
+    if (inputRef.current) inputRef.current.focus();
   };
 
   const handleClearChat = () => {
@@ -11711,9 +11797,11 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, showToast }) {
     <>
       {/* Drawer panel — anchored absolute inside .queue-chat-area.
           Slides UP from beneath the queue (translateY 100%↔0), so FactsRail
-          stays visible above. Backdrop-filter blur gives the glassy feel
-          during the ~280ms transition. */}
+          stays visible above. Glass surface (blur/saturate/tint + top
+          hairline highlight) now lives in .track-chat-glass so the theme
+          override is a plain CSS swap instead of inline JS branching. */}
       <div
+        className="track-chat-glass"
         style={{
           position: 'absolute', inset: 0,
           display: 'flex', flexDirection: 'column',
@@ -11723,22 +11811,13 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, showToast }) {
           zIndex: 50,
           borderRadius: 14,
           pointerEvents: isOpen ? 'auto' : 'none',
-          background: isDark ? 'rgba(20, 20, 26, 0.85)' : 'rgba(248, 248, 250, 0.85)',
-          backdropFilter: 'blur(14px) saturate(140%)',
-          WebkitBackdropFilter: 'blur(14px) saturate(140%)',
-          border: `1px solid ${c.border}`,
-          boxShadow: isDark
-            ? '0 8px 32px rgba(0,0,0,0.35)'
-            : '0 8px 32px rgba(20,20,32,0.10)',
         }}
       >
-        {/* Slim header — 32px row with title label + close. ↺ clear-chat
-            added in Task 4. Cover/title/artist/year intentionally dropped —
-            they're visible in the left column already. */}
-        <div style={{
+        {/* Slim header — 32px row with title label + close. Cover/title/
+            artist/year intentionally dropped — visible in the left column. */}
+        <div className="tc-hairline" style={{
           display: 'flex', alignItems: 'center', gap: '8px',
-          padding: '8px 14px', borderBottom: `1px solid ${c.border}`,
-          flexShrink: 0,
+          padding: '8px 14px', flexShrink: 0,
         }}>
           <span style={{ fontSize: '14px' }} aria-hidden>✨</span>
           <span style={{ flex: 1, fontSize: '13px', fontWeight: 600, color: c.text, letterSpacing: '-0.01em' }}>
@@ -11758,56 +11837,68 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, showToast }) {
             style={{ padding: '3px 9px', fontSize: '13px', cursor: 'pointer' }}>✕</button>
         </div>
 
-        {/* Messages */}
-        <div ref={endRef} style={{
-          flex: 1, overflowY: 'auto', padding: '10px 18px',
-          display: 'flex', flexDirection: 'column', gap: '10px',
-        }}>
-          {messages.map((m, i) => (
-            <div key={i} style={{
-              alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
-              maxWidth: '88%',
-              padding: '9px 13px',
-              borderRadius: m.role === 'user' ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
-              background: m.role === 'user' ? c.userBubble : c.aiBubble,
-              color: m.role === 'user' ? 'white' : c.text,
-              fontSize: '14px', lineHeight: '1.5',
-            }}>
-              {m.loading
-                ? <div style={{ display: 'flex', gap: '4px', padding: '2px 0' }}>
-                    {[0, 1, 2].map(j => (
-                      <div key={j} style={{
-                        width: '5px', height: '5px', borderRadius: '50%',
-                        background: c.textMuted,
-                        animation: `pulse 1.2s ease-in-out ${j * 0.2}s infinite`,
-                      }} />
-                    ))}
-                  </div>
-                : m.role === 'assistant'
-                  ? <MarkdownText text={m.text} />
-                  : m.text}
-              {m.web_search_used && (
-                <div style={{ marginTop: '4px', fontSize: '10px', color: c.textSubtle, fontStyle: 'italic' }}>
-                  🌐 web search
-                </div>
-              )}
+        {/* Messages — or, when the chat is empty, a hero state with a
+            breathing orb + invitation, so the first open doesn't greet the
+            user with a blank void. */}
+        {messages.length === 0 ? (
+          <div className="tc-hero">
+            <span className="tc-hero-orb" aria-hidden />
+            <div style={{ fontSize: '14px', fontWeight: 600, color: c.text, letterSpacing: '-0.01em' }}>
+              {lang === 'ru' ? 'Спросите про этот трек' : 'Ask about this track'}
             </div>
-          ))}
-        </div>
+            <div style={{ fontSize: '12px', color: c.textMuted, maxWidth: '260px', lineHeight: 1.45 }}>
+              {lang === 'ru'
+                ? 'Смысл, история, семплы, отсылки — или выберите подсказку ниже.'
+                : 'Meaning, backstory, samples, references — or pick a chip below.'}
+            </div>
+          </div>
+        ) : (
+          <div ref={endRef} style={{
+            flex: 1, overflowY: 'auto', padding: '12px 18px',
+            display: 'flex', flexDirection: 'column', gap: '10px',
+          }}>
+            {messages.map((m, i) => (
+              <div key={i} style={{
+                alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
+                maxWidth: '88%',
+                padding: m.loading ? '10px 14px' : '9px 13px',
+                borderRadius: m.role === 'user' ? '14px 14px 4px 14px' : '14px 14px 14px 4px',
+                background: m.role === 'user' ? c.userBubble : c.aiBubble,
+                color: m.role === 'user' ? 'white' : c.text,
+                fontSize: '14px', lineHeight: '1.5',
+              }}>
+                {m.loading
+                  ? <TrackChatActivity activity={m.activity} lang={lang} />
+                  : m.role === 'assistant'
+                    ? <MarkdownText text={m.text} />
+                    : m.text}
+                {m.web_search_used && (
+                  <div style={{ marginTop: '4px', fontSize: '10px', color: c.textSubtle, fontStyle: 'italic' }}>
+                    🌐 {lang === 'ru' ? 'по данным из интернета' : 'web search'}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
 
-        {/* Suggested prompts — always visible, just above input. Persistent
-            "quick actions" pattern (Perplexity / ChatGPT quick-actions). */}
-        <div style={{
-          display: 'flex', gap: '6px', flexWrap: 'wrap',
+        {/* Suggested prompts — single scrollable rail of icon chips just
+            above the input (Perplexity / ChatGPT quick-actions pattern).
+            Staggered entrance only while the chat is still empty. */}
+        <div className="tc-chip-rail tc-hairline" style={{
+          display: 'flex', gap: '6px',
           padding: '8px 18px',
-          borderTop: `1px solid ${c.border}`,
+          overflowX: 'auto',
+          borderTop: '1px solid transparent',
+          borderBottom: 'none',
           flexShrink: 0,
         }}>
           {TRACK_CHAT_SUGGESTED_PROMPTS.map((p, i) => (
             <button key={i} onClick={() => handlePromptClick(p)}
-              className="pill-v3"
+              className={messages.length === 0 ? 'tc-chip tc-chip-in' : 'tc-chip'}
               title={lang === 'ru' ? p.prompt.ru : p.prompt.en}
-              style={{ padding: '4px 10px', fontSize: '12px', cursor: 'pointer' }}>
+              style={messages.length === 0 ? { animationDelay: `${i * 60}ms` } : undefined}>
+              <span className="tc-chip-icon" aria-hidden>{p.icon}</span>
               {lang === 'ru' ? p.label.ru : p.label.en}
             </button>
           ))}
@@ -11816,10 +11907,11 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, showToast }) {
         {/* Input */}
         <div style={{
           display: 'flex', gap: '8px', alignItems: 'center',
-          padding: '12px 18px', borderTop: `1px solid ${c.border}`,
-          flexShrink: 0,
+          padding: '10px 18px 12px', flexShrink: 0,
         }}>
           <input
+            ref={inputRef}
+            className="tc-input"
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
@@ -11835,8 +11927,9 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, showToast }) {
           />
           <button onClick={handleSend} disabled={sending || !input.trim()}
             className={sending || !input.trim() ? '' : 'cta-v3'}
+            aria-label={lang === 'ru' ? 'Отправить' : 'Send'}
             style={{
-              width: '36px', height: '36px', borderRadius: '10px', padding: 0,
+              width: '36px', height: '36px', borderRadius: '10px', padding: 0, flexShrink: 0,
               background: (sending || !input.trim()) ? (isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)') : undefined,
               color: (sending || !input.trim()) ? c.textSubtle : 'white',
               cursor: (sending || !input.trim()) ? 'not-allowed' : 'pointer',
