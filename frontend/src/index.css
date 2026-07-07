@@ -834,19 +834,82 @@
     }
     .player-accent-scope { transition: --player-accent 900ms ease; }
 
-    /* Custom range inputs */
-    .player-progress, .player-volume {
+    /* ═══ Custom range inputs ════════════════════════════════════ */
+
+    /* ── Liquid-glass groove progress bar ────────────────────────
+       Carved-in track (inset shadows) + a translucent glass knob
+       that refracts the accent hue. The native <input> sits at full
+       width; its inline background gradient is the fill layer visible
+       through the transparent track. */
+    .player-progress {
       -webkit-appearance: none; appearance: none; outline: none; cursor: pointer;
     }
+
+    /* WebKit — groove carved into the track surface */
+    .player-progress::-webkit-slider-runnable-track {
+      height: 6px; border-radius: 3px; background: transparent;
+      box-shadow:
+        inset 0 2px 3px rgba(0,0,0,0.45),
+        inset 0 -1px 1px rgba(255,255,255,0.06),
+        0 1px 0 rgba(255,255,255,0.04);
+    }
+
+    /* Glass knob — translucent sphere with accent-glow halo */
     .player-progress::-webkit-slider-thumb {
       -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%;
-      background: #fff; box-shadow: 0 0 6px color-mix(in srgb, var(--player-accent, #7C5BFF) 50%, transparent), 0 1px 3px rgba(0,0,0,0.4);
-      cursor: grab; transition: transform 0.15s ease;
+      background: radial-gradient(circle at 40% 30%,
+        rgba(255,255,255,0.92) 0%,
+        rgba(255,255,255,0.28) 40%,
+        rgba(255,255,255,0.08) 100%);
+      box-shadow:
+        0 0 0 1px rgba(255,255,255,0.20),
+        0 0 10px -2px var(--player-accent, #7C5BFF),
+        0 1px 3px rgba(0,0,0,0.35),
+        inset 0 1px 2px rgba(255,255,255,0.55);
+      cursor: grab;
+      transition: transform 0.15s ease, box-shadow 0.18s ease;
     }
-    .player-progress::-webkit-slider-thumb:hover { transform: scale(1.25); }
+    .player-progress::-webkit-slider-thumb:hover {
+      transform: scale(1.25);
+      box-shadow:
+        0 0 0 1.5px rgba(255,255,255,0.25),
+        0 0 14px -1px var(--player-accent, #7C5BFF),
+        0 2px 6px rgba(0,0,0,0.40),
+        inset 0 1px 2px rgba(255,255,255,0.60);
+    }
+
+    /* Firefox — same liquid-glass look via moz pseudo-elements */
+    .player-progress::-moz-range-track {
+      height: 6px; border-radius: 3px; background: transparent;
+      box-shadow:
+        inset 0 2px 3px rgba(0,0,0,0.45),
+        inset 0 -1px 1px rgba(255,255,255,0.06),
+        0 1px 0 rgba(255,255,255,0.04);
+    }
+    .player-progress::-moz-range-progress {
+      border-radius: 3px;
+      background: var(--player-accent, #7C5BFF);
+      box-shadow:
+        inset 0 1px 1px rgba(255,255,255,0.40),
+        0 0 7px -2px var(--player-accent, #7C5BFF);
+    }
     .player-progress::-moz-range-thumb {
-      width: 14px; height: 14px; border-radius: 50%; background: #fff; border: none;
-      box-shadow: 0 0 6px color-mix(in srgb, var(--player-accent, #7C5BFF) 50%, transparent), 0 1px 3px rgba(0,0,0,0.4); cursor: grab;
+      width: 14px; height: 14px; border-radius: 50%; border: none;
+      background: radial-gradient(circle at 40% 30%,
+        rgba(255,255,255,0.92) 0%,
+        rgba(255,255,255,0.28) 40%,
+        rgba(255,255,255,0.08) 100%);
+      box-shadow:
+        0 0 0 1px rgba(255,255,255,0.20),
+        0 0 10px -2px var(--player-accent, #7C5BFF),
+        0 1px 3px rgba(0,0,0,0.35),
+        inset 0 1px 2px rgba(255,255,255,0.55);
+      cursor: grab;
+    }
+
+    /* ── Volume slider (unchanged) ─────────────────────────────── */
+    .player-volume {
+      -webkit-appearance: none; appearance: none; outline: none; cursor: pointer;
     }
     .player-volume::-webkit-slider-thumb {
       -webkit-appearance: none; width: 12px; height: 12px; border-radius: 50%;
@@ -2571,17 +2634,77 @@
         0 30px 80px rgba(40,30,60,0.22),
         0 0 0 1px rgba(22,22,32,0.08) inset;
     }
-    /* Slider thumbs: keep white center but add a subtle border + softer shadow
-       so they remain visible on a light track. */
-    body[data-theme="light"] .player-progress::-webkit-slider-thumb,
-    body[data-theme="light"] .player-volume::-webkit-slider-thumb {
-      border: 1px solid rgba(22,22,32,0.10);
-      box-shadow: 0 0 6px rgba(124,91,255,0.55), 0 1px 4px rgba(40,30,60,0.22);
+    /* Slider thumbs: glass knob adapts to light — softer groove, frosted border,
+       and a tinted accent glow that stays visible on pale surfaces. */
+    body[data-theme="light"] .player-progress::-webkit-slider-thumb {
+      background: radial-gradient(circle at 40% 30%,
+        rgba(255,255,255,1) 0%,
+        rgba(255,255,255,0.45) 40%,
+        rgba(255,255,255,0.18) 100%);
+      box-shadow:
+        0 0 0 1px rgba(40,30,60,0.10),
+        0 0 10px -2px color-mix(in srgb, var(--player-accent, #7C5BFF) 60%, transparent),
+        0 1px 4px rgba(40,30,60,0.18),
+        inset 0 1px 2px rgba(255,255,255,0.70);
     }
-    body[data-theme="light"] .player-progress::-moz-range-thumb,
+    body[data-theme="light"] .player-progress::-webkit-slider-thumb:hover {
+      box-shadow:
+        0 0 0 1.5px rgba(40,30,60,0.12),
+        0 0 14px -1px color-mix(in srgb, var(--player-accent, #7C5BFF) 70%, transparent),
+        0 2px 6px rgba(40,30,60,0.22),
+        inset 0 1px 2px rgba(255,255,255,0.80);
+    }
+    body[data-theme="light"] .player-progress::-moz-range-thumb {
+      background: radial-gradient(circle at 40% 30%,
+        rgba(255,255,255,1) 0%,
+        rgba(255,255,255,0.45) 40%,
+        rgba(255,255,255,0.18) 100%);
+      box-shadow:
+        0 0 0 1px rgba(40,30,60,0.10),
+        0 0 10px -2px color-mix(in srgb, var(--player-accent, #7C5BFF) 60%, transparent),
+        0 1px 4px rgba(40,30,60,0.18),
+        inset 0 1px 2px rgba(255,255,255,0.70);
+    }
+
+    /* Light theme groove — shallower inset, frosted highlights */
+    body[data-theme="light"] .player-progress::-webkit-slider-runnable-track {
+      box-shadow:
+        inset 0 2px 3px rgba(40,30,60,0.18),
+        inset 0 -1px 1px rgba(255,255,255,0.70),
+        0 1px 0 rgba(255,255,255,0.60);
+    }
+    body[data-theme="light"] .player-progress::-moz-range-track {
+      box-shadow:
+        inset 0 2px 3px rgba(40,30,60,0.18),
+        inset 0 -1px 1px rgba(255,255,255,0.70),
+        0 1px 0 rgba(255,255,255,0.60);
+    }
+    body[data-theme="light"] .player-progress::-moz-range-progress {
+      box-shadow:
+        inset 0 1px 1px rgba(255,255,255,0.50),
+        0 0 7px -2px color-mix(in srgb, var(--player-accent, #7C5BFF) 60%, transparent);
+    }
+
+    /* Volume thumb: frosted glass for light */
+    body[data-theme="light"] .player-volume::-webkit-slider-thumb {
+      background: radial-gradient(circle at 40% 30%,
+        rgba(255,255,255,1) 0%,
+        rgba(255,255,255,0.40) 50%,
+        rgba(255,255,255,0.15) 100%);
+      box-shadow:
+        0 0 0 1px rgba(40,30,60,0.10),
+        0 0 4px color-mix(in srgb, var(--player-accent, #7C5BFF) 40%, transparent),
+        0 1px 2px rgba(40,30,60,0.15);
+    }
     body[data-theme="light"] .player-volume::-moz-range-thumb {
-      border: 1px solid rgba(22,22,32,0.10);
-      box-shadow: 0 0 6px rgba(124,91,255,0.55), 0 1px 4px rgba(40,30,60,0.22);
+      background: radial-gradient(circle at 40% 30%,
+        rgba(255,255,255,1) 0%,
+        rgba(255,255,255,0.40) 50%,
+        rgba(255,255,255,0.15) 100%);
+      box-shadow:
+        0 0 0 1px rgba(40,30,60,0.10),
+        0 0 4px color-mix(in srgb, var(--player-accent, #7C5BFF) 40%, transparent),
+        0 1px 2px rgba(40,30,60,0.15);
     }
 
     /* ─── Hybrid v3 keyframes ─── */
