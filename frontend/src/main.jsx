@@ -2391,13 +2391,23 @@ function HeaderNowPlaying({ track, audio, isDark, lang, onOpenPlayer, playlist, 
     opacity: enabled ? 1 : 0.32, cursor: enabled ? 'pointer' : 'not-allowed',
   });
 
+  // Liquid glass only while sound is actually on; paused keeps the quiet pill
+  // so the header doesn't shout when nothing plays. The glass variant has NO
+  // sweeping hover glint (user pref — see .hnp-glass in index.css): hover is
+  // the same shadow "lift" as the plain pill. When glass is active the inline
+  // border/background/shadow are dropped so the CSS class owns the surface.
+  const glassOn = isPlaying;
+
   return (
     <div onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+      className={glassOn ? 'liquid-glass hnp-glass' : undefined}
       style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 8px 6px 6px', borderRadius:14, maxWidth:390,
-        border:`1px solid ${hover ? c.borderStrong : c.border}`,
-        background: isDark ? (hover?'rgba(255,255,255,.07)':'rgba(255,255,255,.04)') : (hover?'rgba(255,255,255,.92)':'rgba(255,255,255,.6)'),
-        backdropFilter:'blur(16px)', WebkitBackdropFilter:'blur(16px)',
-        boxShadow: hover ? '0 8px 22px rgba(60,45,100,.16)' : '0 4px 12px rgba(60,45,100,.08)',
+        ...(glassOn ? {} : {
+          border:`1px solid ${hover ? c.borderStrong : c.border}`,
+          background: isDark ? (hover?'rgba(255,255,255,.07)':'rgba(255,255,255,.04)') : (hover?'rgba(255,255,255,.92)':'rgba(255,255,255,.6)'),
+          backdropFilter:'blur(16px)', WebkitBackdropFilter:'blur(16px)',
+          boxShadow: hover ? '0 8px 22px rgba(60,45,100,.16)' : '0 4px 12px rgba(60,45,100,.08)',
+        }),
         transition:'all .35s cubic-bezier(.22,.9,.3,1)' }}>
       <div onClick={onOpenPlayer} title={lang==='ru'?'Открыть плеер':'Open player'}
         style={{ width:34, height:34, borderRadius:9, overflow:'hidden', flex:'none', cursor:'pointer', background:'#241d38' }}>
