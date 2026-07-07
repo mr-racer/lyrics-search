@@ -2650,7 +2650,29 @@
     .fy-hybrid.fy-playing .fy-bg1{animation-duration:3.2s}.fy-hybrid.fy-playing .fy-bg2{animation-duration:3.8s}.fy-hybrid.fy-playing .fy-bg3{animation-duration:4.2s}.fy-hybrid.fy-playing .fy-bg4{animation-duration:3.5s}
     @media (prefers-reduced-motion: reduce){
       .fy-hybrid.fy-playing .fy-halo{animation:none}
+      .fy-breathe{animation:none!important}
     }
+    /* Idle "breathing" — while the wave is NOT playing the liquid swells on a
+       slow 7s cycle: alive and inviting instead of dead glass. The playing
+       state drops it (blobs already speed up there); reduced-motion kills it
+       in the media block above. */
+    .fy-breathe{position:absolute;inset:0;transition:transform .8s ease}
+    .fy-hybrid:not(.fy-playing) .fy-breathe{animation:fyBreath 7s ease-in-out infinite}
+    @keyframes fyBreath{0%,100%{transform:scale(1)}50%{transform:scale(1.07)}}
+    /* Cursor parallax — JS writes --px/--py (-.5…+.5) onto .fy-hybrid; each
+       blob sits at its own depth, so the liquid "refracts" toward the pointer.
+       The independent `translate` property composes with the keyframe
+       `transform`, so the drift animation keeps running underneath. */
+    .fy-hybrid .fy-blob{transition:translate .3s ease-out}
+    .fy-hybrid .fy-bg1{translate:calc(var(--px,0)*8px) calc(var(--py,0)*8px)}
+    .fy-hybrid .fy-bg2{translate:calc(var(--px,0)*12px) calc(var(--py,0)*12px)}
+    .fy-hybrid .fy-bg3{translate:calc(var(--px,0)*10px) calc(var(--py,0)*10px)}
+    .fy-hybrid .fy-bg4{translate:calc(var(--px,0)*15px) calc(var(--py,0)*15px)}
+    /* Watch-bezel progress dial (rendered only while the wave plays) */
+    .fy-dial{position:absolute;inset:-7px;z-index:5;pointer-events:none;
+      filter:drop-shadow(0 0 4px rgba(255,255,255,.3))}
+    /* Keyboard affordance for the orb's role="button" */
+    .fy-hybrid:focus-visible{outline:2px solid rgba(255,255,255,.65);outline-offset:8px}
     /* ── Artist-hero aurora: drifting album-colour blobs for the no-photo state.
        Reuses the For-You fyBlobA-D keyframes (their translate %s are relative to
        each blob's own box, so they scale up to hero size). The container masks the
@@ -2733,6 +2755,16 @@
       100%{background-position:130% 0,-40% 0}}
     @media (prefers-reduced-motion:reduce){
       .efir-caustics{animation:none}}
+    /* «Dust» on a rediscover pick's cover (Something-new card): muted sepia
+       under a beige noise film; hovering the cover cluster blows the dust off
+       (~.4s) and the colour comes back. Skeuomorphic on-message: this record
+       has been sitting on the shelf — pull it out and blow on it. */
+    .dust-cover img{filter:saturate(.5) sepia(.32) contrast(.96) brightness(.88);transition:filter .45s ease}
+    .dust-cover::after{content:'';position:absolute;inset:0;pointer-events:none;
+      background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='d'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' seed='3'/%3E%3CfeColorMatrix values='0 0 0 0 0.86 0 0 0 0 0.80 0 0 0 0 0.66 0 0 0 0.5 0'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23d)'/%3E%3C/svg%3E");
+      opacity:.55;transition:opacity .4s ease}
+    .dust-wrap:hover .dust-cover img{filter:none}
+    .dust-wrap:hover .dust-cover::after{opacity:0}
     /* === onboarding redesign === (.ob-root sets the --ob-* vars per theme) */
     .ob-glass{position:relative;z-index:1;background:var(--ob-glass-bg);border-radius:22px;backdrop-filter:blur(20px) saturate(135%);-webkit-backdrop-filter:blur(20px) saturate(135%);box-shadow:inset 0 1px 0 var(--ob-glass-sheen),0 12px 50px rgba(0,0,0,.28);}
     .ob-glass::before{content:"";position:absolute;inset:-1px;border-radius:23px;box-shadow:inset 0 0 0 1.5px var(--ob-glass-edge);filter:blur(3px);pointer-events:none;}

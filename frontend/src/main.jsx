@@ -1844,6 +1844,26 @@ function Skel({ w, h, r, isDark, style }) {
   );
 }
 
+// Thin progress arc around the orb — a watch-bezel "dial" for the current
+// track: status is visible with zero text. Isolated component on purpose:
+// useCurrentTime ticks every frame, and this way only the SVG re-renders,
+// not the whole hero.
+function OrbProgressArc({ audio }) {
+  const currentTime = useCurrentTime();
+  const duration = (audio && audio.duration) || 0;
+  const p = duration > 0 ? Math.min(1, currentTime / duration) : 0;
+  const R = 35;
+  const C = 2 * Math.PI * R;
+  return (
+    <svg className="fy-dial" viewBox="0 0 76 76" aria-hidden="true">
+      <circle cx="38" cy="38" r={R} fill="none" stroke="rgba(255,255,255,.16)" strokeWidth="1.3" />
+      <circle cx="38" cy="38" r={R} fill="none" stroke="rgba(255,255,255,.92)" strokeWidth="1.6"
+        strokeLinecap="round" strokeDasharray={C} strokeDashoffset={C * (1 - p)}
+        transform="rotate(-90 38 38)" style={{ transition: 'stroke-dashoffset .35s linear' }} />
+    </svg>
+  );
+}
+
 function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigateToArtist }) {
   const c = useColors(isDark);
   const [profile, setProfile] = useState(null);
@@ -1864,6 +1884,11 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
     .filter(Boolean);
   const topCoverUrl = homeCoverUrl(anchors[0] && anchors[0].cover_art_path);
   const color = useCoverColor(topCoverUrl);
+  // 2–3 dominant hues from the taste anchors paint the hero aurora below —
+  // the wave reads as "made of your music" (ТВОЙ ВАЙБ ← your actual covers),
+  // not a stock gradient. Hook count is fixed: missing anchors → null URL.
+  const color2 = useCoverColor(homeCoverUrl(anchors[1] && anchors[1].cover_art_path));
+  const color3 = useCoverColor(homeCoverUrl(anchors[2] && anchors[2].cover_art_path));
 
   useEffect(() => {
     let alive = true;
@@ -1915,6 +1940,22 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
     if (waveLive) { if (audio && audio.togglePlay) audio.togglePlay(); }
     else { startStream(); }
   };
+  // Cursor parallax for the orb blobs — the refraction move: liquid pulls
+  // toward the pointer. CSS vars are written straight on the node (no state →
+  // no re-renders at mousemove rate); per-blob depth lives in index.css.
+  const orbRef = useRef(null);
+  const orbMove = (e) => {
+    const el = orbRef.current;
+    if (!el || (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)) return;
+    const r = el.getBoundingClientRect();
+    el.style.setProperty('--px', (((e.clientX - r.left) / r.width) - 0.5).toFixed(3));
+    el.style.setProperty('--py', (((e.clientY - r.top) / r.height) - 0.5).toFixed(3));
+  };
+  const orbLeave = () => {
+    setHoverCtl(false);
+    const el = orbRef.current;
+    if (el) { el.style.setProperty('--px', '0'); el.style.setProperty('--py', '0'); }
+  };
   const phrase = vibe && vibe.phrase;
 
   const heroGlass = isDark
@@ -1928,6 +1969,18 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
     : `radial-gradient(ellipse 60% 90% at 22% 0%, rgba(124,91,255,.26), transparent 62%)`;
   // Soft fade so the aurora dissolves into the glass instead of cutting off.
   const waveFade = 'linear-gradient(180deg, #000 0%, #000 46%, transparent 100%)';
+  // Aurora blob palette from the anchors: saturation boosted a touch, lightness
+  // eased into the 46–66% band so the hue reads on both themes. 4th blob is the
+  // top anchor's hue rotated for depth. Brand palette until covers are sampled.
+  const blobHue = (hsl, fb) => hsl
+    ? `hsl(${Math.round(hsl.h)} ${Math.round(Math.min(88, hsl.s + 14))}% ${Math.round(Math.max(46, Math.min(66, hsl.l)))}%)`
+    : fb;
+  const waveBlobs = [
+    blobHue(color, '#7c5bff'),
+    blobHue(color2, '#ff78c8'),
+    blobHue(color3, '#e0b341'),
+    color ? `hsl(${Math.round((color.h + 40) % 360)} 72% 58%)` : '#b06bff',
+  ];
 
   return (
     // The lead element — liquid glass over the page, with the aurora "wave" as
@@ -1948,7 +2001,10 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
       <div className="efir-wave" style={{ position:'absolute', top:0, left:0, right:0, height:'58%', opacity:isDark?0.55:0.45, pointerEvents:'none',
         WebkitMaskImage:waveFade, maskImage:waveFade }}>
         <div className="efir-liquid">
-          <span className="fy-blob fy-bg1" /><span className="fy-blob fy-bg2" /><span className="fy-blob fy-bg3" /><span className="fy-blob fy-bg4" />
+          <span className="fy-blob fy-bg1" style={{ background:waveBlobs[0], transition:'background 1.6s ease' }} />
+          <span className="fy-blob fy-bg2" style={{ background:waveBlobs[1], transition:'background 1.6s ease' }} />
+          <span className="fy-blob fy-bg3" style={{ background:waveBlobs[2], transition:'background 1.6s ease' }} />
+          <span className="fy-blob fy-bg4" style={{ background:waveBlobs[3], transition:'background 1.6s ease' }} />
           <span className="efir-caustics" />
         </div>
       </div>
@@ -2001,14 +2057,17 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
           <div style={{ display:'flex', alignItems:'center', gap:'clamp(16px,1.6vw,26px)' }}>
             <div style={{ width:98, height:98, flex:'none', display:'grid', placeItems:'center' }}>
               <div style={{ transform:'scale(1.5)' }}>
-                <div className={`fy-hybrid tint-irid${wavePlaying ? ' fy-playing' : ''}`} onMouseEnter={() => setHoverCtl(true)} onMouseLeave={() => setHoverCtl(false)}
+                <div ref={orbRef} className={`fy-hybrid tint-irid${wavePlaying ? ' fy-playing' : ''}`}
+                     onMouseEnter={() => setHoverCtl(true)} onMouseLeave={orbLeave} onMouseMove={orbMove}
                      onClick={handleOrb} role="button" tabIndex={0}
                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleOrb(); } }}
                      aria-label={wavePlaying ? (lang==='ru'?'Поставить волну на паузу':'Pause your stream')
                                  : waveLive ? (lang==='ru'?'Продолжить волну':'Resume your stream')
                                  : (lang==='ru'?'Включить ваш поток':'Start your stream')}>
                   <span className="fy-ring" />
-                  <span className="fy-clip"><span className="fy-blob fy-bg1" /><span className="fy-blob fy-bg2" /><span className="fy-blob fy-bg3" /><span className="fy-blob fy-bg4" /></span>
+                  {wavePlaying && <OrbProgressArc audio={audio} />}
+                  {/* .fy-breathe — idle-only slow swell (CSS drops it while playing) */}
+                  <span className="fy-clip"><span className="fy-breathe"><span className="fy-blob fy-bg1" /><span className="fy-blob fy-bg2" /><span className="fy-blob fy-bg3" /><span className="fy-blob fy-bg4" /></span></span>
                   <span className="fy-glasscap" />
                   {wavePlaying
                     ? <span className="fy-glyph" style={{ marginLeft: 0 }}><svg width="15" height="15" viewBox="0 0 24 24" fill="#fff"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg></span>
@@ -2255,7 +2314,14 @@ function DiscoverNewCard({ isDark, lang, onPick, navigateToArtist }) {
     let alive = true;
     apiFetch(`/metadata/tracks/${encodeURIComponent(cur.track_id)}/facts?lang=${encodeURIComponent(lang)}`)
       .then(f => {
-        const fact = (f && ((f.song_facts && f.song_facts[0]) || (f.artist_facts && f.artist_facts[0]))) || null;
+        // Shortest fact that fits the reserved ~3-line slot wins — better a
+        // complete short fact than a long one clipped mid-sentence. If only
+        // long ones exist, take the shortest of them (slot grows, no clip).
+        const all = [ ...((f && f.song_facts) || []), ...((f && f.artist_facts) || []) ]
+          .filter(x => typeof x === 'string' && x.trim());
+        const short = all.filter(x => x.length <= 160);
+        const fact = (short.length ? short : all)
+          .reduce((a, b) => (a == null || b.length < a.length ? b : a), null);
         if (alive) setFactMap(prev => ({ ...prev, [cur.track_id]: fact }));
       })
       .catch(() => { if (alive) setFactMap(prev => ({ ...prev, [cur.track_id]: null })); });
@@ -2294,16 +2360,24 @@ function DiscoverNewCard({ isDark, lang, onPick, navigateToArtist }) {
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
           <div className="mono" style={{ fontSize:11, letterSpacing:'.24em', color:c.textSubtle }}>{lang==='ru'?'✦ ЧТО-ТО НОВОЕ':'✦ SOMETHING NEW'}</div>
           {pool.length > 1 && (
-            <button onClick={next} title={lang==='ru'?'Ещё вариант':'Another one'} className={ske('btn', isDark)}
-              style={{ width:30, height:30, borderRadius:'50%', display:'grid', placeItems:'center', color:c.textMuted, flex:'none' }}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 2v6h6"/><path d="M21 12A9 9 0 0 0 6 5.3L3 8"/><path d="M21 22v-6h-6"/><path d="M3 12a9 9 0 0 0 15 6.7l3-2.7"/></svg>
-            </button>
+            <div style={{ display:'flex', alignItems:'center', gap:8, flex:'none' }}>
+              {/* pool position — makes ↻ legible as "cycling a finite deck" */}
+              <span className="mono" style={{ fontSize:10, letterSpacing:'.08em', color:c.textSubtle }}>{idx + 1} / {pool.length}</span>
+              <button onClick={next} title={lang==='ru'?'Ещё вариант':'Another one'} className={ske('btn', isDark)}
+                style={{ width:30, height:30, borderRadius:'50%', display:'grid', placeItems:'center', color:c.textMuted, flex:'none' }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 2v6h6"/><path d="M21 12A9 9 0 0 0 6 5.3L3 8"/><path d="M21 22v-6h-6"/><path d="M3 12a9 9 0 0 0 15 6.7l3-2.7"/></svg>
+              </button>
+            </div>
           )}
         </div>
         {/* album + text centered, filling the remaining card height */}
         <div style={{ flex:1, display:'flex', flexDirection:'column', justifyContent:'center', alignItems:'center', textAlign:'center', marginTop:14 }}>
-          <div style={{ position:'relative', cursor:'pointer' }} onClick={() => onPick && onPick(cur)}>
-            <div style={{ width:104, height:104, borderRadius:12, overflow:'hidden', background:'#241d38', boxShadow:'0 14px 30px rgba(0,0,0,.45)' }}>
+          <div className="dust-wrap" style={{ position:'relative', cursor:'pointer' }} onClick={() => onPick && onPick(cur)}>
+            {/* A rediscover pick wears "dust": muted sepia under a noise film,
+                hover blows it off (~.4s) — you pulled a record off the shelf.
+                The unlike-your-usual kind stays clean (it isn't old, just odd). */}
+            <div className={cur.kind === 'rediscover' ? 'dust-cover' : undefined}
+              style={{ position:'relative', width:104, height:104, borderRadius:12, overflow:'hidden', background:'#241d38', boxShadow:'0 14px 30px rgba(0,0,0,.45)' }}>
               {coverUrl && <img src={coverUrl} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />}
             </div>
             <span style={{ position:'absolute', right:-8, bottom:-8, width:34, height:34, borderRadius:'50%',
@@ -2318,8 +2392,12 @@ function DiscoverNewCard({ isDark, lang, onPick, navigateToArtist }) {
               <ArtistCredit track={cur} navigateToArtist={navigateToArtist} lang={lang} color={c.textMuted} />
             </div>
           ) : null}
-          {fact && <div className="serif" style={{ fontStyle:'italic', fontSize:14, color:c.text, opacity:.86, marginTop:14, lineHeight:1.5, maxWidth:340,
-            display:'-webkit-box', WebkitLineClamp:3, WebkitBoxOrient:'vertical', overflow:'hidden' }}>❝ {fact} ❞</div>}
+          {/* Fact slot — fixed 3-line reserve: facts load async on ↻ and the
+              card must not bounce in height. Facts are pre-picked short (see
+              the fetch above) and rendered whole — no line clamp, no clipping. */}
+          <div style={{ marginTop:14, minHeight:66, display:'flex', alignItems:'flex-start', justifyContent:'center' }}>
+            {fact && <div className="serif" style={{ fontStyle:'italic', fontSize:14, color:c.text, opacity:.86, lineHeight:1.5, maxWidth:340 }}>❝ {fact} ❞</div>}
+          </div>
         </div>
       </div>
     </div>
