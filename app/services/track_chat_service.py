@@ -29,6 +29,9 @@ logger = logging.getLogger(__name__)
 
 _LANG_NAMES = {"ru": "Russian", "en": "English"}
 
+# Максимум web_search вызовов за один ответ agent'а
+_MAX_WEB_SEARCH_CALLS = 3
+
 # ─── Context budget (song-facts trimming) ─────────────────────────────────────
 # The whole player-chat prompt is capped at ~_max_prompt_tokens(). Song facts are
 # the single elastic component: lyrics + chat history go in full, facts are packed
@@ -329,6 +332,12 @@ def create_track_chat_agent(
         Returns:
             Formatted search results (titles, snippets, URLs), or a 'no results' marker.
         """
+        if state["web_search_calls"] >= _MAX_WEB_SEARCH_CALLS:
+            return (
+                f"(web search limit reached — {_MAX_WEB_SEARCH_CALLS} searches already used. "
+                "Answer based on existing knowledge or the already-found results.)"
+            )
+
         state["web_search_calls"] += 1
         _emit({"type": "status", "stage": "web_search", "query": query})
         try:
