@@ -607,30 +607,60 @@ function useAudioPlayer() {
   const [currentSrc, setCurrentSrc] = useState(null);
   const [duration, setDuration] = useState(0);
 
+  // Last src string this hook assigned to the element — the same-src guard
+  // reads it instead of React state so setSrc can stay fully synchronous.
+  const lastSrcRef = useRef(null);
+
   // When src changes mid-playback, fire a playback event for the *previous*
   // track using audio.currentTime as played_sec, then attach the new track id
   // to the audio element via dataset for the next 'ended' to pick up.
-  const setSrc = useCallback((src, meta) => {
+  //
+  // setSrc drives the <audio> element DIRECTLY (el.src / el.play()) instead of
+  // round-tripping through React. The element used to be controlled
+  // (<audio src={currentSrc}>) and callers scheduled play() via
+  // setTimeout(..., 50) — an async gap right when the previous track ended.
+  // On a phone with the screen off that gap is fatal: the instant a track ends
+  // the page stops being audible, so mobile Chrome throttles its timers (up to
+  // 1/min after 5 min hidden) and may freeze the page outright. The deferred
+  // play() never ran, the media notification vanished, and playback only
+  // resumed when the user lit the screen (unfreezing the page flushed the
+  // queued timer). Switching src + play() synchronously INSIDE the 'ended'
+  // handler leaves no silent gap, so the OS keeps the media session alive.
+  // React state (currentSrc) stays as a passive mirror for the UI.
+  const setSrc = useCallback((src, meta, { autoplay = false } = {}) => {
     const el = audioRef.current;
+    const playNow = (target) =>
+      target.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false));
+    if (!el) {
+      // Element not mounted yet (boot paths) — stash for initAudio to apply.
+      lastSrcRef.current = src;
+      setCurrentSrc(src);
+      return;
+    }
     // Same track re-pointed (section remount, playlist re-sync after a stream
     // buffer trim): do NOT reset the in-flight listen accumulator — that would
     // silently drop the seconds heard (and the interacted mark) mid-listen.
-    if (el && meta && el.dataset.playbackTrackId === String(meta.trackId || '')) {
+    if (meta && el.dataset.playbackTrackId === String(meta.trackId || '')) {
       // Keep the existing src if only the rotating ?st= stream token changed.
       // buildStreamUrl bakes a refresh-able token into the URL, so re-pointing
       // the SAME track with a freshly-minted token would change the <audio>
       // src string and reload the media from 0 — that's the "pressing like
       // sometimes restarts the song" bug (a reaction rebuilds the playlist,
       // which re-runs this effect for the already-playing head track).
-      setCurrentSrc(prev =>
-        (prev && prev.split('?')[0] === src.split('?')[0]) ? prev : src);
+      const prev = lastSrcRef.current;
+      if (!(prev && prev.split('?')[0] === src.split('?')[0])) {
+        lastSrcRef.current = src;
+        el.src = src;
+        setCurrentSrc(src);
+      }
+      if (autoplay && el.paused) playNow(el);
       return;
     }
     // Switching to a different track ends the previous listen — flush it.
-    if (el && el.dataset.playbackTrackId && meta && el.dataset.playbackTrackId !== meta.trackId) {
+    if (el.dataset.playbackTrackId && meta && el.dataset.playbackTrackId !== meta.trackId) {
       flushAccumulatedListen(el);
     }
-    if (el && meta) {
+    if (meta) {
       el.dataset.playbackTrackId = meta.trackId || '';
       el.dataset.playbackCollection = meta.collectionName || '';
       el.dataset.playNoInfluence = meta.noInfluence ? '1' : '0';
@@ -639,15 +669,18 @@ function useAudioPlayer() {
     // New media: show the buffering veil until 'canplay'/'playing' clears it
     // (covers m4a transcode + stream warm-up where 'waiting' may not fire).
     setIsBuffering(true);
+    lastSrcRef.current = src;
+    el.src = src;                 // assigning src starts the load synchronously
     setCurrentSrc(src);
+    if (autoplay) playNow(el);
   }, []);
 
   // Read playback state from the live <audio> element rather than React state.
-  // The setSrc + setTimeout(play, 50) pattern used by callers schedules the
-  // play() *before* setCurrentSrc has committed, so a closure over `currentSrc`
-  // or `isPlaying` is stale on the first call. Reading audioRef.current.src /
-  // .paused at execution time avoids that race and lets the callback identities
-  // stay stable across renders.
+  // Closures over `currentSrc` / `isPlaying` are stale when callers invoke this
+  // right after setSrc (state hasn't committed yet). Reading audioRef.current
+  // at execution time avoids that race and lets the callback identities stay
+  // stable across renders. Track switches should pass { autoplay: true } to
+  // setSrc instead — that plays synchronously with the src assignment.
   const play = useCallback(() => {
     const el = audioRef.current;
     if (!el) return;
@@ -698,6 +731,9 @@ function useAudioPlayer() {
   const initAudio = useCallback((el) => {
     audioRef.current = el;
     if (!el) { listenersAttached.current = false; return; }
+    // The element is uncontrolled (setSrc writes el.src directly). If setSrc
+    // ran before the element mounted, apply the stashed src now.
+    if (lastSrcRef.current && !el.getAttribute('src')) el.src = lastSrcRef.current;
     if (listenersAttached.current) return;
     el.addEventListener('timeupdate', () => {
       timeStore.setTime(el.currentTime || 0);
@@ -13183,8 +13219,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
       // user pick always carries a different track id, so it still autoplays.
       const el = audio.audioRef?.current;
       const reloadingPausedTrack = !!(el && el.dataset.playbackTrackId === String(track.track_id) && el.paused);
-      audio.setSrc(url, { trackId: track.track_id });
-      if (visible && !reloadingPausedTrack) setTimeout(() => audio.play(), 50);
+      audio.setSrc(url, { trackId: track.track_id }, { autoplay: visible && !reloadingPausedTrack });
     }
     fetchReaction(initialTrack.track_id);
   }, [initialPlaylist, initialTrack]);
@@ -13193,9 +13228,8 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
   useEffect(() => {
     if (!currentTrack || !audio) return;
     const url = buildStreamUrl(currentTrack.track_id);
-    audio.setSrc(url, { trackId: currentTrack.track_id });
     // Only auto-play when section is visible
-    if (visible && isPlaying) setTimeout(() => audio.play(), 50);
+    audio.setSrc(url, { trackId: currentTrack.track_id }, { autoplay: visible && isPlaying });
   }, [currentTrack?.track_id]);
 
   // Audio continues in background across nav. On nav-back, resume ONLY if
@@ -13233,7 +13267,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
     setCurrentIndex(index);
     const track = playlist[index].track;
     const url = buildStreamUrl(track.track_id);
-    if (audio) { audio.setSrc(url, { trackId: track.track_id, noInfluence: !!playlist[index]._noInfluence }); setTimeout(() => audio.play(), 50); }
+    if (audio) audio.setSrc(url, { trackId: track.track_id, noInfluence: !!playlist[index]._noInfluence }, { autoplay: true });
     fetchReaction(track.track_id);
     // Propagate the new track up so App.playerTrack stays in sync. Without
     // this, LandingScreen / NowPlayingPebble / MiniPlaybackPopout (which all
@@ -13298,8 +13332,21 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
         triggerVinyl('next');
         playTrackAt(currentIndex + 1);
       } else if (onRequestAutoplay && currentTrack) {
-        // Exhausted current playlist — ask App to fetch more
-        onRequestAutoplay(currentTrack);
+        // Exhausted current playlist — ask App to fetch more, then START the
+        // first fresh track ourselves (same as the off-player advance path).
+        // The prop-sync effect deliberately never resurrects an already-loaded
+        // paused track, so without this the refill only landed in the queue
+        // while the audio stayed silent — with the screen off the media
+        // notification died with it and playback never came back.
+        Promise.resolve(onRequestAutoplay(currentTrack)).then(fresh => {
+          const first = Array.isArray(fresh) ? fresh[0] : null;
+          if (!first) return;
+          const t = first.track ? first.track : first;
+          audio.setSrc(buildStreamUrl(t.track_id),
+            { trackId: t.track_id, noInfluence: !!first._noInfluence },
+            { autoplay: true });
+          if (onTrackChange) onTrackChange(t);
+        }).catch(() => {});
       }
     };
     el.addEventListener('ended', onEnded);
@@ -15505,8 +15552,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     if (!track || !track.track_id) return;
     if (audio) {
       markPlaybackInteracted(audio.audioRef?.current);
-      audio.setSrc(buildStreamUrl(track.track_id), { trackId: track.track_id });
-      setTimeout(() => audio.play && audio.play(), 50);
+      audio.setSrc(buildStreamUrl(track.track_id), { trackId: track.track_id }, { autoplay: true });
     }
     handleTrackChange(track);
   };
@@ -15638,8 +15684,9 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     const nextHit = idx >= 0 ? list[idx + 1] : null;
     if (nextHit) {
       const t = (nextHit.track) ? nextHit.track : nextHit;
-      audio.setSrc(buildStreamUrl(t.track_id), { trackId: t.track_id, noInfluence: !!nextHit._noInfluence });
-      setTimeout(() => audio.play && audio.play(), 50);
+      // Synchronous src+play inside the 'ended' event — see setSrc for why
+      // (background-tab timers are throttled/frozen once audio stops).
+      audio.setSrc(buildStreamUrl(t.track_id), { trackId: t.track_id, noInfluence: !!nextHit._noInfluence }, { autoplay: true });
       handleTrackChange(t);
       return;
     }
@@ -15654,8 +15701,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     const firstFresh = fresh[0];
     if (firstFresh) {
       const t = firstFresh.track ? firstFresh.track : firstFresh;
-      audio.setSrc(buildStreamUrl(t.track_id), { trackId: t.track_id, noInfluence: !!firstFresh._noInfluence });
-      setTimeout(() => audio.play && audio.play(), 50);
+      audio.setSrc(buildStreamUrl(t.track_id), { trackId: t.track_id, noInfluence: !!firstFresh._noInfluence }, { autoplay: true });
       handleTrackChange(t);
     }
   };
@@ -15883,10 +15929,14 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
         </div>
       )}
 
-      {/* Root-level audio — survives navigation since it's never unmounted or hidden */}
+      {/* Root-level audio — survives navigation since it's never unmounted or
+          hidden. Deliberately UNCONTROLLED: useAudioPlayer.setSrc assigns
+          el.src directly so track switches happen synchronously inside the
+          'ended' handler (a controlled src waited for a React commit — with
+          the screen off mobile Chrome froze the page in that silent gap and
+          background playback died at every track change). */}
       <audio
         ref={audio.initAudio}
-        src={audio.currentSrc}
         // "auto" (was "metadata"): on a slow connection "metadata" delayed the
         // real download until play() — the user stared at the buffering veil.
         // Let the browser buffer ahead; the next-track blob prefetch above is
