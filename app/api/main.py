@@ -9,6 +9,7 @@ Main FastAPI application.
 
 import asyncio
 import logging
+import mimetypes
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -44,6 +45,10 @@ logger = logging.getLogger(__name__)
 # Tier 0: the frontend is now a Vite build. We serve the compiled assets from
 # frontend/dist/ (produced by `npm run build`), not the source tree. covers/
 # stays at frontend/covers (a runtime volume) and is served by its own routes.
+# PWA: Windows не знает .webmanifest — без этого FileResponse отдал бы манифест
+# как application/octet-stream и Chrome не предложил бы установку.
+mimetypes.add_type("application/manifest+json", ".webmanifest")
+
 FRONTEND_DIST = Path(__file__).parent.parent.parent / "frontend" / "dist"
 FRONTEND_INDEX = FRONTEND_DIST / "index.html"
 COVERS_DIR = Path(__file__).parent.parent.parent / "frontend" / "covers"

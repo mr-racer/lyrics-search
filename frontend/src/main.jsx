@@ -3,6 +3,11 @@ import * as ReactDOM from 'react-dom/client';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import './index.css';
+import { registerSW } from 'virtual:pwa-register';
+
+// PWA service worker: autoUpdate. Требует secure context (ts.net/localhost);
+// по plain-HTTP LAN registerSW тихо не сработает — приложение живёт как сайт.
+registerSW({ immediate: true });
 
 const { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, Fragment } = React;
 
