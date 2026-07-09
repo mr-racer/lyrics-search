@@ -12556,7 +12556,10 @@ function useQueueReorder({ lockedBefore, count, onCommit, scrollRef }) {
 
   // Begin a press session. Recreated each render so it snapshots the CURRENT
   // lockedBefore / onCommit into the session for the stable handlers to read.
-  const startSession = (index, e) => {
+  // `immediate` (grip handle) lifts the row right on pointerdown — no
+  // long-press wait and no scroll-vs-drag ambiguity (the grip carries
+  // touch-action:none, so the browser never contests the gesture).
+  const startSession = (index, e, immediate = false) => {
     if (index < lockedBefore) return;             // locked prefix — not draggable
     if (count - lockedBefore < 2) return;         // <2 future tracks — nothing to reorder
     if (e.pointerType === 'mouse' && e.button !== 0) return;
@@ -12571,7 +12574,9 @@ function useQueueReorder({ lockedBefore, count, onCommit, scrollRef }) {
     window.addEventListener('pointermove', winMove, { passive: false });
     window.addEventListener('pointerup', winUp);
     window.addEventListener('pointercancel', winCancel);
-    if (isTouch) {
+    if (immediate) {
+      begin(e.clientY);
+    } else if (isTouch) {
       S.current.longPress = setTimeout(() => {
         if (S.current && !S.current.active) begin(S.current.downY);
       }, 200);
@@ -12617,6 +12622,16 @@ function useQueueReorder({ lockedBefore, count, onCommit, scrollRef }) {
     };
   };
 
+  // Grip-handle props: pointerdown here grabs the row instantly (stops
+  // propagation so the row's own long-press session doesn't double-start).
+  const getHandleProps = (index) => {
+    const draggable = index >= lockedBefore && (count - lockedBefore) >= 2;
+    if (!draggable) return {};
+    return {
+      onPointerDown: (e) => { e.stopPropagation(); startSession(index, e, true); },
+    };
+  };
+
   // True (and self-resets) when the click event trailing a real drag should be
   // swallowed so the drop doesn't also fire the row's play-on-click.
   const consumeClick = useCallback(() => {
@@ -12624,7 +12639,7 @@ function useQueueReorder({ lockedBefore, count, onCommit, scrollRef }) {
     return false;
   }, []);
 
-  return { getRowProps, consumeClick, dragging: !!drag };
+  return { getRowProps, getHandleProps, consumeClick, dragging: !!drag };
 }
 
 // ─── Огонёк/Вода: cover combustion effect ────────────────────────────────────
@@ -13210,6 +13225,8 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
   // glassy indicator) and ticks the hint counter. Hint is cover-specific —
   // Space-bar users don't need to be reminded which surface they just used.
   const handleCoverClick = () => {
+    // A horizontal swipe just ended — the trailing click is not a tap.
+    if (swipeClickGuardRef.current) { swipeClickGuardRef.current = false; return; }
     if (!currentTrack) return;
     togglePlay();
     if (hintVisible) {
@@ -13240,6 +13257,67 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
   const handleArtMouseEnter = useCallback(() => {
     setIsHovering(true);
   }, []);
+
+  // ── Mobile swipe-to-skip on the cover ────────────────────────────────────
+  // The finger drags the cover horizontally (transform written imperatively —
+  // no per-move re-renders); releasing past the threshold commits next/prev.
+  // The dragged offset is handed to the mobile exit keyframes via --swipe-x
+  // so the fly-out continues from under the finger instead of snapping back.
+  const SWIPE_COMMIT_PX = 70;
+  const swipeRef = useRef(null);             // live gesture session
+  const swipeClickGuardRef = useRef(false);  // swallow the click trailing a swipe
+
+  const handleArtTouchStart = (e) => {
+    if (!currentTrack || lyricsMode || outgoingTrack) return;
+    const t = e.touches[0];
+    swipeRef.current = { x0: t.clientX, y0: t.clientY, dx: 0, horiz: null };
+  };
+  const handleArtTouchMove = (e) => {
+    const s = swipeRef.current;
+    if (!s) return;
+    const t = e.touches[0];
+    const dx = t.clientX - s.x0, dy = t.clientY - s.y0;
+    // Lock gesture axis on the first decisive move; vertical = native scroll.
+    if (s.horiz === null && (Math.abs(dx) > 8 || Math.abs(dy) > 8)) {
+      s.horiz = Math.abs(dx) > Math.abs(dy);
+    }
+    if (!s.horiz) return;
+    s.dx = dx;
+    const el = artWrapRef.current;
+    if (el) {
+      el.style.transition = 'none';
+      el.style.transform = `translateX(${(dx * 0.85).toFixed(1)}px) rotate(${(dx * 0.02).toFixed(2)}deg)`;
+    }
+  };
+  const handleArtTouchEnd = (e, cancelled = false) => {
+    const s = swipeRef.current;
+    swipeRef.current = null;
+    if (!s) return;
+    const el = artWrapRef.current;
+    const commitNext = !cancelled && s.horiz && s.dx <= -SWIPE_COMMIT_PX && currentIndex < playlist.length - 1;
+    const commitPrev = !cancelled && s.horiz && s.dx >= SWIPE_COMMIT_PX && currentIndex > 0;
+    if (s.horiz && Math.abs(s.dx) > 8) {
+      // The click trailing this touchend is swipe residue, not a tap. Some
+      // browsers skip that click entirely after a real drag — self-reset so
+      // the guard can't eat the user's NEXT legitimate tap.
+      swipeClickGuardRef.current = true;
+      setTimeout(() => { swipeClickGuardRef.current = false; }, 400);
+    }
+    if (el) {
+      if (commitNext || commitPrev) {
+        // Hand the offset to the exit keyframes, reset the wrap instantly —
+        // the outgoing snapshot picks the motion up from this exact position.
+        el.style.setProperty('--swipe-x', `${Math.round(s.dx * 0.85)}px`);
+        el.style.transition = 'none';
+        el.style.transform = '';
+      } else {
+        el.style.transition = 'transform 240ms cubic-bezier(0.22, 0.9, 0.3, 1)';
+        el.style.transform = '';
+      }
+    }
+    if (commitNext) nextTrack();
+    else if (commitPrev) prevTrack();
+  };
 
   // Cover URL for color sampling — matches what AlbumCover renders internally.
   // useCoverColor caches per URL so flipping back to a known track is free.
@@ -13376,7 +13454,12 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
     setEntryNonce(n => n + 1);
     if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current);
     // 320ms delay + 600ms bounce = 920ms total; small buffer for jitter.
-    transitionTimerRef.current = setTimeout(() => setOutgoingTrack(null), 960);
+    transitionTimerRef.current = setTimeout(() => {
+      setOutgoingTrack(null);
+      // Drop the swipe offset so a later non-swipe transition (auto-advance,
+      // arrow tap) doesn't start its exit from a stale dragged position.
+      if (artWrapRef.current) artWrapRef.current.style.removeProperty('--swipe-x');
+    }, 960);
   };
 
   const triggerBurst = (kind) => {
@@ -13593,27 +13676,34 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
               The cover (.player-art-wrap, z:1) and side buttons (z:1) sit
               on top of the strips (z:0); the strips' blur halo bleeds onto
               the cover's edges for the "wave entering the album" feel. */}
-          <div style={{
+          <div className="player-cover-row" style={{
             position:'relative',
             display:'flex', alignItems:'center', justifyContent:'center',
             gap:'clamp(12px, 2.5vw, 36px)', width:'100%', flexShrink:0,
           }}>
-            <SpectrumBars
-              side="left"
-              analyserRef={analyserRef}
-              dataArrayRef={dataArrayRef}
-              color={coverColor}
-              isPlaying={isPlaying}
-              barCount={spectrumBarCount}
-            />
-            <SpectrumBars
-              side="right"
-              analyserRef={analyserRef}
-              dataArrayRef={dataArrayRef}
-              color={coverColor}
-              isPlaying={isPlaying}
-              barCount={spectrumBarCount}
-            />
+            {/* No spectrum on phones: the analyser is never wired there
+                (_IS_MOBILE), but the mounted components still burned a rAF
+                loop each — pure battery drain with zero pixels moving. */}
+            {!isMobile && (
+              <SpectrumBars
+                side="left"
+                analyserRef={analyserRef}
+                dataArrayRef={dataArrayRef}
+                color={coverColor}
+                isPlaying={isPlaying}
+                barCount={spectrumBarCount}
+              />
+            )}
+            {!isMobile && (
+              <SpectrumBars
+                side="right"
+                analyserRef={analyserRef}
+                dataArrayRef={dataArrayRef}
+                color={coverColor}
+                isPlaying={isPlaying}
+                barCount={spectrumBarCount}
+              />
+            )}
             {!isMobile && (
             <button
               type="button" className="player-side-btn"
@@ -13636,6 +13726,10 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
               onMouseEnter={lyricsMode ? undefined : handleArtMouseEnter}
               onMouseLeave={handleArtMouseLeave}
               onClick={currentTrack ? handleCoverClick : undefined}
+              onTouchStart={isMobile ? handleArtTouchStart : undefined}
+              onTouchMove={isMobile ? handleArtTouchMove : undefined}
+              onTouchEnd={isMobile ? handleArtTouchEnd : undefined}
+              onTouchCancel={isMobile ? (e) => handleArtTouchEnd(e, true) : undefined}
               style={{
                 cursor: currentTrack ? 'pointer' : 'default',
                 ...(coverPx ? { width: `${coverPx}px`, maxWidth: `${coverPx}px` } : null),
@@ -13768,6 +13862,31 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
               </svg>
             </button>
             )}
+
+            {/* Mobile: compact prev/next arrows overlay the row's side gutters
+                (the near-full-width cover leaves no room for in-flow buttons). */}
+            {isMobile && currentTrack && (
+              <>
+                <button
+                  type="button" className="player-side-btn player-side-btn--flank player-side-btn--flank-left"
+                  onClick={prevTrack} disabled={currentIndex <= 0}
+                  aria-label={lang==='ru'?'Предыдущий':'Previous'}
+                >
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="15 18 9 12 15 6"/>
+                  </svg>
+                </button>
+                <button
+                  type="button" className="player-side-btn player-side-btn--flank player-side-btn--flank-right"
+                  onClick={nextTrack} disabled={currentIndex >= playlist.length - 1}
+                  aria-label={lang==='ru'?'Следующий':'Next'}
+                >
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="9 18 15 12 9 6"/>
+                  </svg>
+                </button>
+              </>
+            )}
           </div>
 
           {/* Controls + meta column, constrained to cover width. The cover-row
@@ -13839,27 +13958,9 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
               </div>
             </div>
 
-            {/* Mobile transport — the cover-flanking prev/next are hidden on phones
-                so the cover can go near-full-width; play = this row or cover tap. */}
-            {isMobile && currentTrack && (
-              <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:30, padding:'2px 0' }}>
-                <button type="button" className="player-side-btn" onClick={prevTrack} disabled={currentIndex <= 0} aria-label={lang==='ru'?'Предыдущий':'Previous'}>
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-                </button>
-                <button type="button" className="player-side-btn" style={{ width:66, height:66 }}
-                  onClick={() => { markPlaybackInteracted(audio?.audioRef?.current); audio?.togglePlay?.(); }}
-                  aria-label={isPlaying ? (lang==='ru'?'Пауза':'Pause') : (lang==='ru'?'Играть':'Play')}>
-                  {isPlaying
-                    ? <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
-                    : <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><polygon points="7 4 19 12 7 20 7 4"/></svg>}
-                </button>
-                <button type="button" className="player-side-btn" onClick={nextTrack} disabled={currentIndex >= playlist.length - 1} aria-label={lang==='ru'?'Следующий':'Next'}>
-                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
-                </button>
-              </div>
-            )}
-
-            {/* Action icons — like / dislike / lyrics / ask AI */}
+            {/* Action icons — like / dislike / lyrics / ask AI.
+                (No transport row on phones: play/pause = cover tap, prev/next =
+                the flank arrows beside the cover + swipe.) */}
             <div className="player-actions-row" style={{ display:'flex', justifyContent:'center', gap:4 }}>
               <button
                 type="button" className="player-icon-btn"
@@ -13916,7 +14017,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
               {aiStatus?.aiActive && (
                 <button
                   type="button" className="player-icon-btn"
-                  onClick={() => { if (isMobile) setQueueOpen(true); setDrawerOpen(true); }}
+                  onClick={() => setDrawerOpen(true)}
                   title={lang === 'ru' ? 'Спросить AI' : 'Ask AI'}
                 >
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
@@ -13942,7 +14043,9 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
               const iconFilter = isDark
                 ? 'brightness(0) invert(1) opacity(0.65)'
                 : 'brightness(0) opacity(0.5)';
-              const losslessW = coverPx ? Math.max(80, Math.min(150, Math.round(coverPx * 0.26))) : 128;
+              const losslessBase = coverPx ? Math.max(80, Math.min(150, Math.round(coverPx * 0.26))) : 128;
+              // Phones: the badge read too small next to a near-full-width cover.
+              const losslessW = isMobile ? Math.round(losslessBase * 1.4) : losslessBase;
               // Badge rendered height ≈ width × 64/215. Size the hint dot to
               // ~64% of that so the "i" reads as a balanced companion to the mark.
               const hintSize = Math.max(16, Math.round(losslessW * 0.19));
@@ -14076,8 +14179,8 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
               <HintBadge
                 size={15}
                 label={lang === 'ru'
-                  ? <span>Треки в очереди можно двигать — <strong>зажмите и перетаскивайте</strong>. А ещё тут видно следующие треки в рекомендациях: смотрите, как они меняются от ваших действий.</span>
-                  : <span>Reorder the queue — <strong>press and drag</strong> any track. You can also see what's coming up in recommendations, and how it shifts as you listen.</span>}
+                  ? <span>Треки в очереди можно двигать — <strong>тяните за ⋮⋮ сбоку строки</strong> (или зажмите саму строку). А ещё тут видно следующие треки в рекомендациях: смотрите, как они меняются от ваших действий.</span>
+                  : <span>Reorder the queue — <strong>drag the ⋮⋮ handle</strong> at the side of a row (or press and hold the row). You can also see what's coming up in recommendations, and how it shifts as you listen.</span>}
                 placement="down"
                 ariaLabel={lang === 'ru' ? 'Как работает очередь' : 'How the queue works'}
               />
@@ -14191,6 +14294,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                             className="q-grip"
                             title={lang === 'ru' ? 'Перетащите, чтобы переставить' : 'Drag to reorder'}
                             onClick={(e) => e.stopPropagation()}
+                            {...queueReorder.getHandleProps(i)}
                           >⋮⋮</span>
                         )}
                       </div>
@@ -14201,22 +14305,27 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
             </div>
           </div>
 
-          {/* AI Chat drawer — overlays ONLY the queue-chat-area wrapper
-              above. Slides up from bottom; FactsRail stays visible.
+          {/* AI Chat drawer (desktop) — overlays ONLY the queue-chat-area
+              wrapper above. Slides up from bottom; FactsRail stays visible.
               Pass lyricsTrack (not raw currentTrack) so the chat's track
               context carries the on-demand fetched lyrics for non-search
               sources — stream/autoplay/home strip lyrics from the payload,
               so currentTrack.lyrics is empty there and the chat would
-              otherwise send no lyrics to the model. */}
-          <AIChatDrawer
-            isOpen={drawerOpen}
-            onClose={() => setDrawerOpen(false)}
-            track={lyricsTrack || currentTrack}
-            lang={lang}
-            isDark={isDark}
+              otherwise send no lyrics to the model.
+              On phones the drawer lives OUTSIDE this container (below) —
+              anchored in here it was trapped behind the queue's translateY,
+              so opening the chat forced the queue open with it. */}
+          {!isMobile && (
+            <AIChatDrawer
+              isOpen={drawerOpen}
+              onClose={() => setDrawerOpen(false)}
+              track={lyricsTrack || currentTrack}
+              lang={lang}
+              isDark={isDark}
 
-            showToast={showToast}
-          />
+              showToast={showToast}
+            />
+          )}
           </div>
 
           <SimilarityRail
@@ -14227,6 +14336,41 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
             onQueueNext={onQueueNext}
           />
           </div>
+
+          {/* AI Chat (mobile) — its own fixed overlay above the player, so the
+              chat opens WITHOUT dragging the queue drawer up behind it. The
+              scrim closes on tap; the glass card slides via the drawer's own
+              translateY. */}
+          {isMobile && (
+            <div
+              onClick={() => setDrawerOpen(false)}
+              style={{
+                position:'fixed', inset:0, zIndex:90,
+                background:'rgba(8,8,14,0.38)',
+                opacity: drawerOpen ? 1 : 0,
+                pointerEvents: drawerOpen ? 'auto' : 'none',
+                transition:'opacity 240ms ease',
+              }}
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  position:'absolute', left:8, right:8,
+                  top:'max(12px, env(safe-area-inset-top, 0px))',
+                  bottom:'calc(10px + env(safe-area-inset-bottom, 0px))',
+                }}
+              >
+                <AIChatDrawer
+                  isOpen={drawerOpen}
+                  onClose={() => setDrawerOpen(false)}
+                  track={lyricsTrack || currentTrack}
+                  lang={lang}
+                  isDark={isDark}
+                  showToast={showToast}
+                />
+              </div>
+            </div>
+          )}
         </div>
       </div>
 

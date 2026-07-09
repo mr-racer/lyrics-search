@@ -1897,6 +1897,33 @@
       border-color: rgba(22,22,32,0.28);
     }
 
+    /* Mobile flank arrows — small glass circles overlaying the cover row's
+       side gutters (the near-full-width cover leaves no in-flow room).
+       Every transform keeps the translateY(-50%) centering, otherwise the
+       base :hover/:active scale rules would yank the button off-axis. */
+    .player-side-btn--flank {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 38px; height: 38px;
+      z-index: 2;
+      opacity: 0.85;
+      background: rgba(18,18,26,0.32);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border-color: rgba(255,255,255,0.16);
+      color: rgba(255,255,255,0.88);
+    }
+    .player-side-btn--flank:hover:not(:disabled) { transform: translateY(-50%); }
+    .player-side-btn--flank:active:not(:disabled) { transform: translateY(-50%) scale(0.92); }
+    .player-side-btn--flank-left  { left: 2px; }
+    .player-side-btn--flank-right { right: 2px; }
+    body[data-theme="light"] .player-side-btn--flank {
+      background: rgba(255,255,255,0.55);
+      border-color: rgba(22,22,32,0.14);
+      color: rgba(22,22,32,0.78);
+    }
+
     /* Compact icon buttons in title row (like/dislike/lyrics/AI) + burst */
     .player-icon-btn {
       position: relative;
@@ -3186,7 +3213,14 @@
         width: min(92vw, 62vh) !important;
         max-width: min(92vw, 62vh) !important;
         perspective: 1000px;
+        /* Horizontal moves belong to the swipe-to-skip gesture; vertical
+           pans stay native page scroll. */
+        touch-action: pan-y;
       }
+      /* Clip the swipe fly-out at the row bounds so the exiting cover can't
+         stretch the page's horizontal scroll. overflow-y stays visible for
+         the flank arrows' glow / cover shadow. */
+      .player-cover-row { overflow-x: clip; overflow-y: visible; }
 
       /* ── Don't-break guard (heavy Phase-2 screens) ───────────────────────
          Recsys / atlas / efir are desktop-first and can push fixed-width
@@ -3224,8 +3258,13 @@
       /* ── Player: touch targets + comfier progress drag ──────────────── */
       .player-icon-btn { width: 44px; height: 44px; }
       .player-progress-row, .player-actions-row { padding: 0 14px; }
-      .player-progress::-webkit-slider-thumb { width: 18px; height: 18px; }
-      .player-progress::-moz-range-thumb { width: 18px; height: 18px; }
+      /* Fatter seek bar: the 6px desktop groove was too fine to scrub
+         precisely with a finger. !important beats the inline height/radius. */
+      .player-progress { height: 14px !important; border-radius: 7px !important; }
+      .player-progress::-webkit-slider-runnable-track { height: 14px; border-radius: 7px; }
+      .player-progress::-moz-range-track { height: 14px; border-radius: 7px; }
+      .player-progress::-webkit-slider-thumb { width: 22px; height: 22px; }
+      .player-progress::-moz-range-thumb { width: 22px; height: 22px; }
 
       /* ── Recommend / For You: tighter gutters + bigger tap targets ───── */
       .rec2-go { padding: 12px 16px; }
@@ -3240,12 +3279,49 @@
     }
 
     /* ── Touch devices: neutralise mouse-only / battery-heavy 3D ────────────
-       The mouse-tilt never fires without a pointer, and the vinyl entry/exit
-       on track change is the heavy preserve-3d that provoked the cover
-       clipping. Disable both; the cover↔lyrics flip is a separate one-shot
-       layer and is left intact. */
+       The mouse-tilt never fires without a pointer, and the desktop vinyl
+       entry/exit is the heavy preserve-3d that provoked the cover clipping.
+       Track changes get a light 2D swipe instead: the outgoing cover slides
+       off (continuing from the finger-dragged --swipe-x offset when the
+       change came from a swipe), the incoming one glides in from the
+       opposite side. Pure translate/rotate/opacity — composited, no 3D. */
+    @keyframes coverSwipeOutNext {
+      from { transform: translateX(var(--swipe-x, 0px)) rotate(0.001deg); opacity: 1; }
+      to   { transform: translateX(calc(var(--swipe-x, 0px) - 60%)) rotate(-7deg) scale(0.94); opacity: 0; }
+    }
+    @keyframes coverSwipeOutPrev {
+      from { transform: translateX(var(--swipe-x, 0px)) rotate(0.001deg); opacity: 1; }
+      to   { transform: translateX(calc(var(--swipe-x, 0px) + 60%)) rotate(7deg) scale(0.94); opacity: 0; }
+    }
+    @keyframes coverSwipeInNext {
+      from { transform: translateX(28%) scale(0.96); opacity: 0; }
+      to   { transform: none; opacity: 1; }
+    }
+    @keyframes coverSwipeInPrev {
+      from { transform: translateX(-28%) scale(0.96); opacity: 0; }
+      to   { transform: none; opacity: 1; }
+    }
     @media (hover: none), (pointer: coarse) {
       .player-art-tilt { transform: none !important; }
+      .player-art-outgoing--next { animation: coverSwipeOutNext 260ms cubic-bezier(0.3, 0, 0.8, 0.4) forwards; }
+      .player-art-outgoing--prev { animation: coverSwipeOutPrev 260ms cubic-bezier(0.3, 0, 0.8, 0.4) forwards; }
+      .player-art-entry--next { animation: coverSwipeInNext 320ms cubic-bezier(0.16, 1, 0.3, 1) 110ms both; }
+      .player-art-entry--prev { animation: coverSwipeInPrev 320ms cubic-bezier(0.16, 1, 0.3, 1) 110ms both; }
+
+      /* Queue grip: no hover on touch — keep the handle visible and give it
+         a real finger target. touch-action:none hands the gesture to the
+         reorder hook from the very first pointer event (instant grab). */
+      .q-grip {
+        opacity: 1;
+        touch-action: none;
+        font-size: 17px;
+        padding: 10px 6px;
+        margin: -10px -4px;
+      }
+    }
+    /* Reduced motion wins over the touch swipe animations above (this block
+       must stay AFTER them — same specificity, later position). */
+    @media (prefers-reduced-motion: reduce) {
       .player-art-outgoing--next, .player-art-outgoing--prev,
       .player-art-entry--next, .player-art-entry--prev { animation: none !important; }
     }
