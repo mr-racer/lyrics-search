@@ -14328,23 +14328,32 @@ function AtlasAnchorPills({ sections, activeId, onAnchor, isDark, compact }) {
   );
 }
 
+// Writes the cursor position (px) as CSS vars for the .atlas-glare highlight —
+// the liquid-glass glint that follows the pointer on the docks and play button.
+const atlasGlareMove = (e) => {
+  const el = e.currentTarget;
+  const r = el.getBoundingClientRect();
+  el.style.setProperty('--gx', `${e.clientX - r.left}px`);
+  el.style.setProperty('--gy', `${e.clientY - r.top}px`);
+};
+
 function AtlasSpinButton({ onSpin, lang, compact }) {
   return (
-    <button onClick={onSpin}
-      title={lang==='ru'?'Запустить отсюда':'Spin from here'}
+    <button onClick={onSpin} className="atlas-glare atlas-play-btn" onMouseMove={atlasGlareMove}
+      title={lang==='ru'?'Включить артиста':'Play artist'}
       style={{
         padding: compact ? '7px 13px' : '9px 18px', borderRadius:99, flexShrink:0,
         background:'linear-gradient(135deg, oklch(67% 0.18 270), oklch(52% 0.22 285))',
         color:'#fff', fontSize: compact ? 11 : 13, fontWeight:600, letterSpacing:'0.04em',
         border:'1px solid oklch(50% 0.2 275 / 0.4)', cursor:'pointer',
-        boxShadow:'inset 0 1px 0 rgba(255,255,255,0.32), 0 4px 16px rgba(124,91,255,0.35)',
+        // box-shadow lives in .atlas-play-btn (inline would beat the :hover lift)
       }}>
-      ▶{compact ? '' : ` ${lang==='ru'?'Запустить отсюда':'Spin from here'}`}
+      ▶{compact ? '' : ` ${lang==='ru'?'Включить артиста':'Play artist'}`}
     </button>
   );
 }
 
-function AtlasHero({ data, isDark, lang, onNav, heroRef }) {
+function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere }) {
   const c = useColors(isDark);
   const hue = atlasHue(data.name, data.name.slice(1));
   // Only a real artist photo counts as a backdrop. Album covers are NO LONGER
@@ -14386,26 +14395,100 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef }) {
   const auroraCss = auroraStops(padPalette(sampledColors, hue, 3), isDark);
   const isMobile = useIsMobile();
 
+  // Cursor parallax — same refraction move as the home orb: --hx/--hy ∈
+  // [-0.5, 0.5] are written straight on the hero node (no state → no
+  // re-renders at mousemove rate); .atlas-plx-* classes pick their depth.
+  const heroMove = (e) => {
+    const el = heroRef.current;
+    if (!el || (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)) return;
+    const r = el.getBoundingClientRect();
+    el.style.setProperty('--hx', (((e.clientX - r.left) / r.width) - 0.5).toFixed(3));
+    el.style.setProperty('--hy', (((e.clientY - r.top) / r.height) - 0.5).toFixed(3));
+  };
+  const heroLeave = () => {
+    const el = heroRef.current;
+    if (el) { el.style.setProperty('--hx', '0'); el.style.setProperty('--hy', '0'); }
+  };
+
   return (
-    <div ref={heroRef} style={{ position:'relative', height: mode==='aurora' ? (isMobile ? 'clamp(190px, 26vh, 240px)' : 'clamp(250px, 32vh, 320px)') : (isMobile ? 'clamp(280px, 42vh, 360px)' : 'clamp(420px, 56vh, 600px)'), overflow:'hidden' }}>
-      {mode === 'photo' ? (
-        // Crisp portrait scaled by HEIGHT (not stretched to full width, which on
-        // wide screens cropped it to a thin slice). The whole figure stays visible;
-        // the bottom ~20% softly blurs out behind the dock/facts header.
-        //
-        // Two-layer treatment (YouTube-style soft edges): a blurred, zoomed
-        // backdrop fills the hero, and the main photo sits on top with a
-        // combined mask that fades the top, bottom, AND side edges so nothing
-        // overlaps the breadcrumbs or hard-cuts at the viewport edge.
-        <Fragment>
-          {/* blurred backdrop — shows through the faded edges of the main photo */}
-          <img src={backdrop} alt="" aria-hidden="true" style={{
-            position:'absolute', top:'-10%', left:'-5%', width:'110%', height:'120%',
+    <div ref={heroRef} onMouseMove={heroMove} onMouseLeave={heroLeave}
+      style={{ position:'relative', height: mode==='aurora' ? (isMobile ? 'clamp(190px, 26vh, 240px)' : 'clamp(250px, 32vh, 320px)') : (isMobile ? 'clamp(280px, 42vh, 360px)' : 'clamp(420px, 56vh, 600px)'), overflow:'visible' }}>
+      {/* Light field: every colour layer lives here, not in the hero. The field
+          runs ~58% past the hero's bottom and dissolves with one long mask
+          (.atlas-field), so no mode has a horizontal colour cutoff — the dock
+          (z6) and the content column (z2) render over its fading tail. */}
+      <div className="atlas-field" aria-hidden="true">
+        {mode === 'photo' ? (
+          // blurred backdrop — fills the whole field so the photo's glow melts
+          // into the content instead of stopping at the hero's edge
+          <img src={backdrop} alt="" className="atlas-plx-far" style={{
+            position:'absolute', top:'-4%', left:'-5%', width:'110%', height:'108%',
             objectFit:'cover', objectPosition:'50% 40%',
             filter:`blur(28px) ${isDark ? 'brightness(0.7) saturate(1.1)' : 'brightness(0.85) saturate(1.05)'}`,
           }} />
-          {/* main photo — fades at top, bottom, and sides to reveal the backdrop */}
-          <img src={backdrop} alt="" aria-hidden="true" style={{
+        ) : mode === 'cutout' ? (
+          <div className="atlas-plx-far" style={{ position:'absolute', inset:0 }}>
+            {/* near-neutral deep base — spans the full field; the mask, not the
+                gradient, decides where the colour ends */}
+            <div style={{
+              position:'absolute', inset:0,
+              background: isDark
+                ? `radial-gradient(ellipse 92% 71% at 73% 32%, oklch(21% 0.015 ${hue}) 0%, oklch(13% 0.01 ${hue}) 55%, ${c.bg} 100%)`
+                : `radial-gradient(ellipse 92% 71% at 73% 32%, oklch(96% 0.012 ${hue}) 0%, oklch(92% 0.01 ${hue}) 55%, ${c.bg} 100%)`,
+            }} />
+            {/* Light-burst inside the centred box (63% ≈ the hero's share of the
+                field) so --burst-x keeps tracking the cutout; rays/flare spill
+                past the box and get clipped by the field, not the hero. */}
+            <div style={{ position:'relative', maxWidth:1120, margin:'0 auto', height:'63%', padding:'0 32px' }}>
+              <div className="atlas-burst" style={{
+                '--burst-x': '80%',
+                '--burst-hue': hue,
+                '--ray-color': isDark ? 'rgba(255,255,255,0.14)' : 'rgba(120,92,220,0.18)',
+                '--flare-inner': isDark ? 'rgba(255,250,240,0.68)' : 'rgba(255,255,255,0.85)',
+                '--flare-mid': isDark ? `oklch(68% 0.14 ${hue} / 0.42)` : `oklch(80% 0.12 ${hue} / 0.45)`,
+                '--spark': isDark ? 'rgba(255,238,205,0.95)' : `oklch(58% 0.16 ${hue} / 0.7)`,
+              }}>
+                <div className="atlas-particles atlas-plx-dust" />
+              </div>
+            </div>
+          </div>
+        ) : (
+          // aurora — base gradient + drifting album-colour blobs span the whole
+          // field, so the blobs sink below the dock before the mask melts them
+          <div className="atlas-plx-far" style={{ position:'absolute', inset:0 }}>
+            <div style={{
+              position:'absolute', inset:0,
+              background:`linear-gradient(150deg, ${auroraCss.join(', ')})`,
+              transition:'background 600ms ease',
+            }} />
+            <div className="atlas-aurora">
+              {[0,1,2,3].map(i => (
+                <div key={i} className={`aurora-blob aurora-blob-${i}`}
+                     style={{ background: auroraCss[i % auroraCss.length] }} />
+              ))}
+            </div>
+          </div>
+        )}
+        {/* depth accent */}
+        <div style={{
+          position:'absolute', inset:0,
+          background:`radial-gradient(ellipse 90% 130% at 18% 0%, ${isDark?'rgba(124,91,255,0.16)':'rgba(124,91,255,0.10)'}, transparent 55%)`,
+        }} />
+        <div className="atlas-grain" />
+        {/* Soft left fade toward the floating nav rail — spans the whole field
+            so the rail floats above the bleed, too */}
+        <div style={{
+          position:'absolute', inset:0,
+          background:`linear-gradient(90deg, ${c.bg} 0px, ${c.bg}00 120px)`,
+        }} />
+      </div>
+
+      {/* main photo (photo mode) — crisp, height-scaled, 4-edge mask. Clipped by
+          its own wrapper (the hero is overflow:visible now) so a wide portrait
+          can't leak outside; rides the mid parallax layer. */}
+      {mode === 'photo' && (
+        <div aria-hidden="true" style={{ position:'absolute', inset:0, overflow:'hidden', pointerEvents:'none' }}>
+          <img src={backdrop} alt="" className="atlas-plx-mid" style={{
             position:'absolute', top:0, left:'50%', transform:'translateX(-50%)',
             height:'100%', width:'auto', maxWidth:'none',
             filter: isDark ? 'brightness(0.92) saturate(1.04)' : 'saturate(1.02)',
@@ -14418,57 +14501,14 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef }) {
               'linear-gradient(90deg, transparent 0%, #000 12%, #000 88%, transparent 100%)',
             maskComposite: 'intersect',
           }} />
-          {/* frosted veil that blurs the lower edge as it slides under the header */}
-          <div aria-hidden="true" style={{
-            position:'absolute', left:0, right:0, bottom:0, height:'26%', pointerEvents:'none',
-            backdropFilter:'blur(13px)', WebkitBackdropFilter:'blur(13px)',
-            WebkitMaskImage:'linear-gradient(180deg, transparent 0%, #000 62%)',
-            maskImage:'linear-gradient(180deg, transparent 0%, #000 62%)',
-          }} />
-        </Fragment>
-      ) : mode === 'cutout' ? (
-        // Light-burst stage behind the figure: a near-neutral deep base here, with
-        // the rays/flare/particles rendered inside the centred container below so
-        // their origin tracks the cutout on wide screens.
-        <div aria-hidden="true" style={{
-          position:'absolute', inset:0,
-          background: isDark
-            ? `radial-gradient(ellipse 92% 112% at 73% 50%, oklch(21% 0.015 ${hue}) 0%, oklch(13% 0.01 ${hue}) 55%, ${c.bg} 100%)`
-            : `radial-gradient(ellipse 92% 112% at 73% 50%, oklch(96% 0.012 ${hue}) 0%, oklch(92% 0.01 ${hue}) 55%, ${c.bg} 100%)`,
-        }} />
-      ) : (
-        // aurora — full-bleed base gradient + drifting album-colour blobs, masked
-        // to fade out toward both horizontal edges (no hard cutoff on wide screens)
-        <Fragment>
-          <div aria-hidden="true" style={{
-            position:'absolute', inset:0,
-            background:`linear-gradient(150deg, ${auroraCss.join(', ')})`,
-            transition:'background 600ms ease',
-          }} />
-          <div className="atlas-aurora" aria-hidden="true">
-            {[0,1,2,3].map(i => (
-              <div key={i} className={`aurora-blob aurora-blob-${i}`}
-                   style={{ background: auroraCss[i % auroraCss.length] }} />
-            ))}
-          </div>
-        </Fragment>
+        </div>
       )}
-      {/* depth accent + readability wash toward the page bg */}
+
+      {/* top readability veil for the breadcrumb (the old bottom wash to c.bg is
+          gone — the field's mask owns the dissolve now) */}
       <div aria-hidden="true" style={{
-        position:'absolute', inset:0,
-        background:`radial-gradient(ellipse 90% 130% at 18% 0%, ${isDark?'rgba(124,91,255,0.16)':'rgba(124,91,255,0.10)'}, transparent 55%)`,
-      }} />
-      <div aria-hidden="true" style={{
-        position:'absolute', inset:0,
-        background:`linear-gradient(180deg, ${isDark?'rgba(13,13,16,0.2)':'rgba(242,241,246,0.14)'} 0%, transparent 38%, ${c.bg} 99%)`,
-      }} />
-      {/* Soft left fade: the hero colour dissolves into the page bg toward the
-          floating nav rail instead of hard-cutting at the content's left edge, so
-          the rail reads as floating ABOVE the colour field rather than replacing
-          it. Sits above the colour layers but below the name/breadcrumb content. */}
-      <div aria-hidden="true" style={{
-        position:'absolute', inset:0, pointerEvents:'none',
-        background:`linear-gradient(90deg, ${c.bg} 0px, ${c.bg}00 120px)`,
+        position:'absolute', left:0, right:0, top:0, height:'40%', pointerEvents:'none',
+        background:`linear-gradient(180deg, ${isDark?'rgba(13,13,16,0.2)':'rgba(242,241,246,0.14)'} 0%, transparent 100%)`,
       }} />
 
       <div style={{ position:'relative', maxWidth:1120, margin:'0 auto', height:'100%', padding:'0 32px' }}>
@@ -14499,24 +14539,48 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef }) {
           <span>{lang==='ru'?'АРТИСТЫ':'ARTISTS'}</span>
           {' / '}
           <span style={{ color: isDark ? '#fff' : '#161620' }}>{data.name.toUpperCase()}</span>
+          {/* mini-EQ: this artist is playing right now */}
+          {playingHere && (
+            <span className="hero-eq" aria-hidden="true" style={{ marginLeft:10, marginRight:0, height:10, verticalAlign:'middle' }}>
+              <span /><span /><span /><span /><span />
+            </span>
+          )}
         </div>
 
-        {/* Cutout photo (raised, capped) — cutout mode only; aurora has no focal art */}
+        {/* Cutout figure — cutout mode only. A blurred, brightened echo of the
+            same PNG glows behind the figure, and the main image gets a 4-edge
+            mask, so AudioDB's hard crop lines dissolve into light instead of
+            ending at a rectangle. Both ride the mid parallax layer. */}
         {mode === 'cutout' && (
-          <img src={cutout} alt="" className="atlas-cutout" style={{
+          <img src={cutout} alt="" aria-hidden="true" className="atlas-cutout-echo atlas-plx-mid" style={{
+            position:'absolute', right:36, top:44, bottom:34, maxWidth:'44%',
+            objectFit:'contain', objectPosition:'top right', zIndex:1,
+            filter:`blur(26px) saturate(1.35) ${isDark ? 'brightness(1.5)' : 'brightness(1.1)'}`,
+            opacity: isDark ? 0.5 : 0.42,
+            transform:'scale(1.07)',
+          }} />
+        )}
+        {mode === 'cutout' && (
+          <img src={cutout} alt="" className="atlas-cutout atlas-plx-mid" style={{
             position:'absolute', right:36, top:44, bottom:34, maxWidth:'44%',
             objectFit:'contain', objectPosition:'top right', zIndex:1,
             // No drop-shadow: it would paint a blurred black silhouette into the
             // cutout's transparent margins, graying the otherwise-clear backdrop.
-            // Depth comes from the light-burst/flare behind the figure instead.
-            WebkitMaskImage:'linear-gradient(180deg, #000 0%, #000 92%, transparent 100%)',
-            maskImage:'linear-gradient(180deg, #000 0%, #000 92%, transparent 100%)',
+            // Depth comes from the light-burst and the blurred echo instead.
+            WebkitMaskImage:
+              'linear-gradient(180deg, transparent 0%, #000 4%, #000 90%, transparent 100%), ' +
+              'linear-gradient(90deg, transparent 0%, #000 6%, #000 94%, transparent 100%)',
+            WebkitMaskComposite: 'source-in intersect',
+            maskImage:
+              'linear-gradient(180deg, transparent 0%, #000 4%, #000 90%, transparent 100%), ' +
+              'linear-gradient(90deg, transparent 0%, #000 6%, #000 94%, transparent 100%)',
+            maskComposite: 'intersect',
           }} />
         )}
 
         {/* Name + context lines. In cutout mode the name sits on the left,
             vertically centred against the figure; otherwise it anchors bottom-left. */}
-        <div style={{
+        <div className="atlas-plx-near" style={{
           position:'absolute', left:32, right: mode==='cutout' ? '46%' : (mode==='aurora' ? 32 : '44%'), zIndex:2, minWidth:0,
           ...(mode==='cutout' ? { top:'50%', transform:'translateY(-50%)' } : mode==='aurora' ? { top:52 } : { bottom:58 }),
         }}>
@@ -14612,6 +14676,10 @@ function AtlasBio({ bio, isDark, lang }) {
   );
 }
 
+// Stamp tilts cycle through both directions so neighbouring cards never match —
+// "hand-stamped" without true randomness (stable across re-renders).
+const ATLAS_STAMP_TILT = [-4, 3, -2, 5, -5, 2];
+
 function AtlasFactsShelf({ facts, isDark, lang }) {
   const c = useColors(isDark);
   const isMobile = useIsMobile();
@@ -14656,21 +14724,19 @@ function AtlasFactsShelf({ facts, isDark, lang }) {
           padding:'4px 2px 6px',
         }}>
           {facts.map((f, i) => (
-            <div key={i} style={{
+            // Archive index card: perforated spine + a hand-stamped number that
+            // lies at its own pseudo-random tilt and straightens on hover. The
+            // card itself never rotates (rotated text rasterizes blurry); the
+            // hover lift is a pure translate — see .atlas-fact-card.
+            <div key={i} className="atlas-fact-card" style={{
               flex:`0 0 ${CARD_W}px`, scrollSnapAlign:'start',
-              borderRadius:14, padding:'16px 18px',
-              background: isDark
-                ? 'linear-gradient(180deg, rgba(255,255,255,0.055) 0%, rgba(255,255,255,0.015) 100%)'
-                : 'linear-gradient(180deg, rgba(255,255,255,0.85) 0%, rgba(255,255,255,0.55) 100%)',
-              border:`1px solid ${c.border}`,
-              boxShadow: isDark
-                ? 'inset 0 1px 0 rgba(255,255,255,0.08), 0 4px 14px rgba(0,0,0,0.28)'
-                : 'inset 0 1px 0 rgba(255,255,255,0.9), 0 4px 12px rgba(40,30,70,0.08)',
+              '--stamp-tilt': `${ATLAS_STAMP_TILT[i % ATLAS_STAMP_TILT.length]}deg`,
             }}>
-              <div className="mono" style={{ fontSize:10, letterSpacing:'0.16em', color:c.accentLight }}>
-                {String(i+1).padStart(2,'0')} / {String(facts.length).padStart(2,'0')}
-              </div>
-              <div className="serif" style={{ marginTop:8, fontSize:14.5, lineHeight:1.65, color:c.text }}>{f}</div>
+              <span className="atlas-fact-grain" aria-hidden="true" />
+              <span className="atlas-fact-stamp mono">
+                {lang==='ru'?'ФАКТ':'FACT'} · {String(i+1).padStart(2,'0')}
+              </span>
+              <div className="serif" style={{ marginTop:13, fontSize:16, lineHeight:1.68, color:c.text }}>{f}</div>
             </div>
           ))}
         </div>
@@ -14902,7 +14968,7 @@ function AtlasAlbumStrip({ albums, artistName, isDark, lang, onOpen }) {
 
 function ArtistAtlasSection({
   isDark, lang, artistSlug, visible, onNav,
-  onPlayTrack, navigateToArtist,
+  onPlayTrack, navigateToArtist, playerTrack, audioPlaying,
 }) {
   const c = useColors(isDark);
   const [data, setData] = useState(null);
@@ -14970,7 +15036,11 @@ function ArtistAtlasSection({
   };
   const effectiveActive = activeId || (sectionsCfg[0] && sectionsCfg[0].id) || null;
 
-  // ▶ Spin from here — autoplay queue seeded by first track of first album
+  // Breadcrumb mini-EQ: is the track playing right now by THIS artist?
+  const playingHere = !!(audioPlaying && playerTrack && playerTrack.artist && data.name &&
+    playerTrack.artist.toLowerCase().includes(data.name.toLowerCase()));
+
+  // ▶ Play artist — autoplay queue seeded by first track of first album
   const onSpin = () => {
     const seed = data.albums[0] && data.albums[0].tracks[0];
     if (!seed || !onPlayTrack) return;
@@ -15001,7 +15071,7 @@ function ArtistAtlasSection({
   return (
     <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', position:'relative', background:c.bg }}>
       {/* Condensed glass dock — fades in once the hero scrolls away */}
-      <div style={{
+      <div className="atlas-glare" onMouseMove={atlasGlareMove} style={{
         position:'absolute', top:12, left:26, right:26, zIndex:40,
         display:'flex', alignItems:'center', gap:16, padding:'8px 12px 8px 18px', borderRadius:14,
         ...atlasGlass(isDark),
@@ -15021,11 +15091,11 @@ function ArtistAtlasSection({
 
       <div ref={scrollRef} onScroll={handleScroll} style={{ flex:1, overflowY:'auto', position:'relative' }}>
         <div key={`atlas-${enterEpoch}`}>
-          <AtlasHero data={data} isDark={isDark} lang={lang} onNav={onNav} heroRef={heroRef} />
+          <AtlasHero data={data} isDark={isDark} lang={lang} onNav={onNav} heroRef={heroRef} playingHere={playingHere} />
 
           {/* Floating glass dock overlapping the hero's bottom edge */}
           <div className="lib-rise" style={{ maxWidth:1120, margin:'0 auto', padding:'0 32px', position:'relative', zIndex:6 }}>
-            <div style={{
+            <div className="atlas-glare" onMouseMove={atlasGlareMove} style={{
               marginTop:-34, borderRadius:16, padding:'10px 14px',
               display:'flex', alignItems:'center', justifyContent:'space-between', gap:14,
               ...atlasGlass(isDark),
@@ -15035,7 +15105,9 @@ function ArtistAtlasSection({
             </div>
           </div>
 
-          <div style={{ maxWidth:1120, margin:'0 auto', padding:'34px 32px 110px', display:'flex', flexDirection:'column', gap:46 }}>
+          {/* position+z lift the column's text above the light field's tail
+              (a positioned z-auto hero paints over later static siblings) */}
+          <div style={{ maxWidth:1120, margin:'0 auto', padding:'34px 32px 110px', display:'flex', flexDirection:'column', gap:46, position:'relative', zIndex:2 }}>
             {data.bio && (
               <section ref={bioRef} className="lib-rise" style={{ '--lib-d':'0.08s', scrollMarginTop:84 }}>
                 <AtlasBio bio={data.bio} isDark={isDark} lang={lang} />
@@ -15931,6 +16003,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
                 onCloseLyrics={id === 'player' ? () => setLyricsMode(false) : undefined}
                 showToast={id === 'player' ? showToast : undefined}
                 artistSlug={id === 'artist' ? activeArtistSlug : undefined}
+                audioPlaying={id === 'artist' ? !!(audio && audio.isPlaying) : undefined}
                 navigateToArtist={navigateToArtist}
                 aiStatus={aiStatus}
                 onNav={setSection}

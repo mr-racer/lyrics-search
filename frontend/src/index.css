@@ -871,6 +871,109 @@
       .atlas-burst::before, .atlas-burst::after, .atlas-particles { animation: none !important; }
     }
 
+    /* ── Artist hero «light field» ────────────────────────────── */
+    /* All colour layers (burst / photo backdrop / aurora) live here instead of
+       the hero itself: the field runs ~58% PAST the hero's bottom and dissolves
+       with one long mask, so the hero has no bottom edge in any mode. The field
+       clips its own oversized children (rays are 150vmax); the hero stays
+       overflow:visible so the bleed can reach under the dock and the bio. */
+    .atlas-field {
+      position: absolute; top: 0; left: 0; right: 0; height: 158%;
+      overflow: hidden; pointer-events: none;
+      -webkit-mask-image: linear-gradient(180deg, #000 0%, #000 48%, transparent 100%);
+              mask-image: linear-gradient(180deg, #000 0%, #000 48%, transparent 100%);
+    }
+    /* Cursor parallax depths. --hx/--hy ∈ [-0.5, 0.5] are written straight on
+       the hero node by mousemove (no re-renders). The `translate` property is
+       used (not transform) so it composes with atlasCutoutIn's transform and
+       the name block's centering translateY. */
+    /* the echo hides with the figure on narrow viewports (it has no entry
+       animation — atlasCutoutIn's fill-mode would override its inline opacity) */
+    @media (max-width: 880px) { .atlas-cutout-echo { display: none; } }
+    .atlas-plx-far  { translate: calc(var(--hx, 0) * 6px)   calc(var(--hy, 0) * 4px);   transition: translate .7s  cubic-bezier(.22,.9,.3,1); }
+    .atlas-plx-dust { translate: calc(var(--hx, 0) * 8px)   calc(var(--hy, 0) * 6px);   transition: translate .55s cubic-bezier(.22,.9,.3,1); }
+    .atlas-plx-mid  { translate: calc(var(--hx, 0) * 3px)   calc(var(--hy, 0) * 2px);   transition: translate .7s  cubic-bezier(.22,.9,.3,1); }
+    .atlas-plx-near { translate: calc(var(--hx, 0) * 1.5px) calc(var(--hy, 0) * 1.5px); transition: translate .7s  cubic-bezier(.22,.9,.3,1); }
+    /* Film grain so the field's gradients don't read as plastic */
+    .atlas-grain {
+      position: absolute; inset: 0; pointer-events: none; opacity: .05; mix-blend-mode: overlay;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+    }
+    body[data-theme='light'] .atlas-grain { opacity: .035; }
+    /* Liquid-glass glare: a soft highlight that follows the cursor. --gx/--gy
+       are written in px by mousemove on the element itself. */
+    .atlas-glare { position: relative; }
+    .atlas-glare::after {
+      content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+      opacity: 0; transition: opacity .3s ease;
+      background: radial-gradient(140px circle at var(--gx, 50%) var(--gy, 50%), rgba(255,255,255,.14), transparent 65%);
+    }
+    .atlas-glare:hover::after { opacity: 1; }
+    body[data-theme='light'] .atlas-glare::after {
+      background: radial-gradient(140px circle at var(--gx, 50%) var(--gy, 50%), rgba(255,255,255,.5), transparent 65%);
+    }
+    .atlas-play-btn {
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.32), 0 4px 16px rgba(124,91,255,.35);
+      transition: transform .2s ease, box-shadow .2s ease;
+    }
+    .atlas-play-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.4), 0 8px 24px rgba(124,91,255,.5);
+    }
+
+    /* ── Atlas facts: archive index cards ─────────────────────── */
+    /* The card itself never rotates (rotated text rasterizes blurry, especially
+       on Windows) — the hover lift is a pure translate; only the small stamp
+       carries the hand-filed tilt and straightens out on hover. */
+    .atlas-fact-card {
+      position: relative; border-radius: 4px 14px 14px 4px; padding: 17px 19px 20px 30px;
+      background: linear-gradient(180deg, rgba(255,255,255,.065), rgba(255,255,255,.028));
+      border: 1px solid rgba(255,255,255,.1); border-left: 0;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.09), 0 6px 18px rgba(0,0,0,.3);
+      transition: translate .4s cubic-bezier(.22,.9,.3,1), box-shadow .4s ease;
+    }
+    .atlas-fact-card:hover {
+      translate: 0 -5px;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.13), 0 18px 36px rgba(0,0,0,.44), 0 0 0 1px rgba(151,120,255,.22);
+    }
+    body[data-theme='light'] .atlas-fact-card {
+      background: linear-gradient(180deg, rgba(255,255,255,.9), rgba(255,255,255,.6));
+      border-color: rgba(0,0,0,.09);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.95), 0 6px 16px rgba(40,30,70,.1);
+    }
+    body[data-theme='light'] .atlas-fact-card:hover {
+      box-shadow: inset 0 1px 0 #fff, 0 16px 30px rgba(40,30,70,.16), 0 0 0 1px rgba(124,91,255,.25);
+    }
+    /* Perforated spine: punched holes are painted in the page bg colour */
+    .atlas-fact-card::before {
+      content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 14px;
+      border-right: 1px dashed rgba(255,255,255,.16); border-radius: 4px 0 0 4px;
+      background-image: radial-gradient(circle at 7px 14px, #0d0d10 2.6px, transparent 3.4px);
+      background-size: 14px 26px; background-repeat: repeat-y;
+    }
+    body[data-theme='light'] .atlas-fact-card::before {
+      border-right-color: rgba(0,0,0,.14);
+      background-image: radial-gradient(circle at 7px 14px, #f2f1f6 2.6px, transparent 3.4px);
+    }
+    .atlas-fact-stamp {
+      display: inline-block; padding: 3px 9px; border-radius: 5px;
+      font-size: 9.5px; letter-spacing: .2em; text-transform: uppercase;
+      color: oklch(70% 0.16 270); border: 1px solid oklch(60% 0.18 270 / .45);
+      background: oklch(60% 0.18 270 / .08);
+      transform: rotate(var(--stamp-tilt, -4deg));
+      transition: transform .4s cubic-bezier(.22,.9,.3,1);
+    }
+    .atlas-fact-card:hover .atlas-fact-stamp { transform: rotate(0deg); }
+    body[data-theme='light'] .atlas-fact-stamp { color: oklch(48% 0.18 275); }
+    .atlas-fact-grain {
+      position: absolute; inset: 0; opacity: .05; pointer-events: none; border-radius: inherit; mix-blend-mode: overlay;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .atlas-plx-far, .atlas-plx-dust, .atlas-plx-mid, .atlas-plx-near,
+      .atlas-fact-card, .atlas-fact-stamp, .atlas-glare::after, .atlas-play-btn { transition: none !important; }
+    }
+
     /* ── Album gatefold modal (vinyl flip) ────────────────────── */
     @keyframes albumFlipIn  { from { transform: rotateY(0deg); }   to { transform: rotateY(180deg); } }
     @keyframes albumFlipOut { from { transform: rotateY(180deg); } to { transform: rotateY(360deg); } }
