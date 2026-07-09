@@ -4582,8 +4582,9 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream, 
   const aiHits = (aiResult && aiResult.tracks ? aiResult.tracks : [])
     .map(t => ({ track: t, score: t.score || 0, matched_on: 'ai' }));
 
-  const runAiPlaylist = async () => {
-    const prompt = aiPrompt.trim();
+  // promptOverride: demo chips run a canned wish without waiting for state.
+  const runAiPlaylist = async (promptOverride) => {
+    const prompt = (typeof promptOverride === 'string' ? promptOverride : aiPrompt).trim();
     if (!prompt || aiBusy) return;
     setAiBusy(true); setAiResult(null); setAiError(false); setAiStepsShown(0);
     try {
@@ -4740,15 +4741,60 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream, 
   const heroHeadline = (profile && profile.headline) ||
     (lang === 'ru' ? 'Твой музыкальный портрет' : 'Your music portrait');
 
-  const recDivider = (variant, label) => (
-    <div className={`rec-div rec-div--${variant}`}>
-      <div className="rec-div__ln" />
-      <div className="rec-div__lbl" style={{ color: c.textSubtle }}>
-        <span className="rec-div__nd" />{label}
-      </div>
-      <div className="rec-div__ln" />
-    </div>
-  );
+  // Demo wishes under the hero field (AI on): show off what the builder can
+  // parse — artist-flavoured and niche-genre asks, not generic moods.
+  const aiDemoChips = lang === 'ru' ? [
+    { icon:'🎸', text:'спокойная музыка как у Dire Straits' },
+    { icon:'🌍', text:'восточный хип-хоп' },
+    { icon:'🌙', text:'медленное и дымное под поздний вечер' },
+    { icon:'⚡', text:'энергичный рок в дорогу' },
+  ] : [
+    { icon:'🎸', text:'calm music like Dire Straits' },
+    { icon:'🌍', text:'oriental hip-hop' },
+    { icon:'🌙', text:'slow and smoky for late night' },
+    { icon:'⚡', text:'energetic rock for the road' },
+  ];
+
+  // Cursor spotlight (--mx/--my) + optional 3D tilt (--rx/--ry) — the hover
+  // grammar: clickable cards tilt, static panels only get the light spot.
+  const spotHandlers = (tilt) => ({
+    onPointerMove: (e) => {
+      const el = e.currentTarget, r = el.getBoundingClientRect();
+      const px = (e.clientX - r.left) / r.width, py = (e.clientY - r.top) / r.height;
+      el.style.setProperty('--mx', `${px * 100}%`);
+      el.style.setProperty('--my', `${py * 100}%`);
+      if (tilt) {
+        el.style.setProperty('--ry', `${((px - 0.5) * 6).toFixed(2)}deg`);
+        el.style.setProperty('--rx', `${((0.5 - py) * 6).toFixed(2)}deg`);
+      }
+    },
+    onPointerLeave: (e) => {
+      e.currentTarget.style.setProperty('--rx', '0deg');
+      e.currentTarget.style.setProperty('--ry', '0deg');
+    },
+  });
+  // Liquid refraction inside the stream button: blobs at different "depths"
+  // shift toward the cursor with different strengths (--lx/--ly ∈ -.5…+.5).
+  const lqHandlers = {
+    onPointerMove: (e) => {
+      const el = e.currentTarget, r = el.getBoundingClientRect();
+      el.style.setProperty('--lx', ((e.clientX - r.left) / r.width - 0.5).toFixed(3));
+      el.style.setProperty('--ly', ((e.clientY - r.top) / r.height - 0.5).toFixed(3));
+    },
+    onPointerLeave: (e) => {
+      e.currentTarget.style.setProperty('--lx', '0');
+      e.currentTarget.style.setProperty('--ly', '0');
+    },
+  };
+
+  // Mosaic order: most-populated island first — it renders as the big 2×2 tile.
+  const sortedIslands = [...islands].sort(
+    (a, b) => ((b.tracks || []).length) - ((a.tracks || []).length));
+  const islandArtists = (isl) => {
+    const seen = [];
+    (isl.tracks || []).forEach(t => { if (t.artist && !seen.includes(t.artist)) seen.push(t.artist); });
+    return seen.slice(0, 3).join(' · ');
+  };
 
   // A built sequence: one «Включить плейлист» on top, then a numbered queue
   // (no per-track play buttons — the whole list is the unit).
@@ -4801,143 +4847,178 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream, 
       />
 
       <div style={{ flex:1, overflowY:'auto', padding:'18px 28px 60px' }}>
-        <div className="rec-wrap">
+        <div className="rec2-wrap">
 
-          {/* ── 01 · ТВОЙ ЗВУК (hero) ── */}
-          {recDivider('taste', lang==='ru'?'твой звук':'your sound')}
-          <div className="rec-sec rec-bloom rec-bloom--taste" style={{ textAlign:'center' }}>
-            {profileLoading ? skeletonRows(2) : (
-              <>
-                {aiOn ? (
-                  <>
-                    <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:'10px', margin:'2px 0 10px' }}>
-                      <div className="serif" style={{ fontSize:'clamp(21px,5vw,30px)', fontWeight:600, color:c.text }}>{heroHeadline}</div>
-                      <button onClick={regenPortrait} disabled={portraitBusy} title={lang==='ru'?'Обновить':'Refresh'}
-                        style={{ border:'none', background:'transparent', cursor: portraitBusy?'wait':'pointer', color:c.textSubtle, fontSize:'15px', padding:'2px 6px' }}>
-                        {portraitBusy ? '…' : '↺'}
-                      </button>
-                    </div>
-                    {profile && profile.portrait
-                      ? <div className="serif" style={{ fontSize:'15.5px', lineHeight:1.55, color:c.textMuted, maxWidth:'500px', margin:'0 auto' }}>{profile.portrait}</div>
-                      : <div style={{ fontSize:'14px', color:c.textSubtle, fontStyle:'italic' }}>{(portraitBusy || autoEnriching) ? (lang==='ru'?'Собираю твой портрет…':'Writing your portrait…') : ''}</div>}
-                  </>
-                ) : (
-                  <div className="serif" style={{ fontSize:'clamp(20px,5vw,28px)', fontWeight:600, color:c.text, margin:'2px 0 14px' }}>{lang==='ru'?'Карта твоего звука':'Your sound map'}</div>
-                )}
-
-                <div style={{ display:'flex', justifyContent:'center', marginTop:'6px' }}>
-                  <AxisRadar values={profileAxisValues} isDark={isDark} lang={lang} size={256} />
-                </div>
-                {!profileAxisValues && (
-                  <div style={{ fontSize:'13.5px', color:c.textSubtle, marginTop:'8px' }}>
-                    {lang==='ru'?'Профиль появится после прослушивания':'Your profile appears as you listen'}
-                  </div>
-                )}
-
-                {onStartStream && (
-                  <div style={{ marginTop:'16px' }}>
-                    <button className="ske-accent" style={{ padding:'12px 24px', borderRadius:'999px', fontWeight:700, border:'none', cursor:'pointer' }}
-                            onClick={onStartStream}>▶ {lang==='ru'?'Запустить поток':'Start stream'}</button>
-                  </div>
-                )}
-                {!aiOn && (
-                  <div style={{ marginTop:'14px', display:'flex', justifyContent:'center' }}>
-                    <div className="rec-hint" style={{ color:c.textMuted }}>✨ {lang==='ru'?'Подключи ИИ, чтобы узнать свой музыкальный вкус словами':'Enable AI to learn your taste in words'}</div>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-
-          {/* ── 02 · ОСТРОВА ВКУСА ── */}
-          {recDivider('islands', lang==='ru'?'острова вкуса':'taste islands')}
-          <div className="rec-sec rec-bloom rec-bloom--islands">
-            <div className="serif" style={{ fontSize:'clamp(19px,4.5vw,24px)', fontWeight:600, color:c.text }}>{lang==='ru'?'Твои музыкальные острова':'Your taste islands'}</div>
-            <div style={{ fontSize:'13.5px', color:c.textSubtle, marginTop:'6px' }}>{lang==='ru'?'Сгустки твоего вкуса. Нажми — польётся радио на основе острова.':'Clusters of your taste. Tap for a radio seeded by the island.'}</div>
-            {islands.length ? (
-              <div style={{ display:'flex', gap:'14px', overflowX:'auto', padding:'14px 2px 6px' }}>
-                {islands.map(isl => (
-                  <div key={isl.track_id} className="rec-island" style={{ color:c.text }} onClick={() => islandRadio(isl)}>
-                    <div className="rec-covers">
-                      {(isl.tracks || []).slice(0,3).map((t,j) => (
-                        <LazyCover key={t.track_id || j} className="rec-cov" url={homeCoverUrl(t.cover_art_path)}
-                                   fallback="linear-gradient(135deg,#7c5cff,#b06bff)" />
-                      ))}
-                    </div>
-                    <div style={{ fontSize:'15px', fontWeight:700, lineHeight:1.2 }}>
-                      {isl.name ? isl.name
-                        : (autoEnriching && aiOn) ? <Skel w={'80%'} h={16} r={6} isDark={isDark} />
-                        : islandName(isl)}
-                    </div>
-                    <div style={{ fontSize:'11.5px', color:c.textSubtle, display:'flex', justifyContent:'space-between' }}>
-                      <span>{(isl.tracks||[]).length} {lang==='ru'?'треков':'tracks'}</span><span>▶</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div style={{ fontSize:'13.5px', color:c.textSubtle, marginTop:'12px' }}>{lang==='ru'?'Слушай и отмечай треки — со временем здесь проявятся твои музыкальные острова.':'Listen and react — your islands surface here over time.'}</div>
-            )}
-          </div>
-
-          {/* ── 03 · СОБРАТЬ ПО ЖЕЛАНИЮ (AI) | БЫСТРЫЕ МИКСЫ (no AI) ── */}
+          {/* ── HERO: одно желание → плейлист (AI) | быстрые миксы (no AI) ── */}
           {aiOn ? (
             <>
-              {recDivider('build', lang==='ru'?'собрать по желанию':'build by wish')}
-              <div className="rec-sec rec-bloom rec-bloom--build">
-                <div className="serif" style={{ fontSize:'clamp(19px,4.5vw,24px)', fontWeight:600, color:c.text, marginBottom:'12px' }}>{lang==='ru'?'Опиши, что хочешь — соберу':'Describe what you want — I build it'}</div>
-                <div className="rec-field" style={{ color:c.text }}>
-                  <span style={{ fontSize:'17px' }}>✨</span>
+              <div className="rec2-rim">
+                <div className="rec2-wish" style={{ color:c.text }}
+                     onClick={e => { const inp = e.currentTarget.querySelector('input'); if (inp) inp.focus(); }}>
+                  <span className="rec2-spark">✨</span>
                   <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)}
                          onKeyDown={e => { if (e.key === 'Enter') runAiPlaylist(); }}
-                         placeholder={lang==='ru'?'например, «энергичный рок для долгой дороги»…':'e.g. "energetic rock for a long drive"…'} />
-                  <button className="rec-go" onClick={runAiPlaylist} disabled={aiBusy || !aiPrompt.trim()}>{aiBusy ? (lang==='ru'?'СОБИРАЮ…':'BUILDING…') : (lang==='ru'?'СОБРАТЬ ▸':'BUILD ▸')}</button>
+                         placeholder={lang==='ru'?'опиши, что хочешь услышать…':'describe what you want to hear…'} />
+                  {!aiPrompt && <span className="rec2-caret" />}
+                  <button className="rec2-go" onClick={() => runAiPlaylist()} disabled={aiBusy || !aiPrompt.trim()}>
+                    {aiBusy ? (lang==='ru'?'СОБИРАЮ…':'BUILDING…') : (lang==='ru'?'СОБРАТЬ ▸':'BUILD ▸')}
+                  </button>
                 </div>
-                {aiBusy && !aiResult && <div style={{ fontStyle:'italic', color:c.textSubtle, margin:'14px 2px', animation:'pulse 1.4s ease-in-out infinite' }}>{lang==='ru'?'Подбираю под твоё желание…':'Tuning to your wish…'}</div>}
-                {aiError && !aiBusy && <div style={{ color:c.textSubtle, margin:'14px 2px' }}>{lang==='ru'?'Не получилось собрать — попробуй переформулировать желание.':'Could not build — try rephrasing your wish.'}</div>}
-                {aiResult && !aiBusy && (
-                  <>
-                    <div style={{ fontSize:'12.5px', fontStyle:'italic', color:'#caa14a', margin:'14px 2px 4px' }}>
-                      {friendlySteps(aiResult.steps).slice(0, aiStepsShown).map((s,i) => <span key={i}>✓ {s}{'   ·   '}</span>)}
-                      {aiStepsShown >= friendlySteps(aiResult.steps).length && <span>{lang==='ru'?`собрал ${aiHits.length} треков`:`built ${aiHits.length} tracks`}</span>}
-                    </div>
-                    {aiHits.length ? playlistResult(
-                      aiResult.title,
-                      `${aiHits.length} ${lang==='ru'?'треков · собрано по твоему запросу':'tracks · built from your wish'}`,
-                      aiHits, true) : (
-                      <div className="serif" style={{ fontSize:'14px', color:c.textSubtle, fontStyle:'italic', textAlign:'center', padding:'20px' }}>
-                        {lang==='ru'?'Ничего не нашлось — попробуй переформулировать':'Nothing found — try rephrasing'}
-                      </div>
-                    )}
-                  </>
-                )}
               </div>
+              <div className="rec2-chips">
+                {aiDemoChips.map(ch => (
+                  <span key={ch.text} className="rec2-chip" style={{ color:c.textMuted }}
+                        onClick={() => { setAiPrompt(ch.text); runAiPlaylist(ch.text); }}>
+                    <span style={{ fontSize:'14px' }}>{ch.icon}</span>{ch.text}
+                  </span>
+                ))}
+              </div>
+              {(aiBusy || aiError || aiResult) && (
+                <div className="rec2-results">
+                  {aiBusy && !aiResult && <div style={{ fontStyle:'italic', color:c.textSubtle, margin:'4px 2px', animation:'pulse 1.4s ease-in-out infinite' }}>{lang==='ru'?'Подбираю под твоё желание…':'Tuning to your wish…'}</div>}
+                  {aiError && !aiBusy && <div style={{ color:c.textSubtle, margin:'4px 2px' }}>{lang==='ru'?'Не получилось собрать — попробуй переформулировать желание.':'Could not build — try rephrasing your wish.'}</div>}
+                  {aiResult && !aiBusy && (
+                    <>
+                      <div style={{ fontSize:'12.5px', fontStyle:'italic', color:'#caa14a', margin:'4px 2px' }}>
+                        {friendlySteps(aiResult.steps).slice(0, aiStepsShown).map((s,i) => <span key={i}>✓ {s}{'   ·   '}</span>)}
+                        {aiStepsShown >= friendlySteps(aiResult.steps).length && <span>{lang==='ru'?`собрал ${aiHits.length} треков`:`built ${aiHits.length} tracks`}</span>}
+                      </div>
+                      {aiHits.length ? playlistResult(
+                        aiResult.title,
+                        `${aiHits.length} ${lang==='ru'?'треков · собрано по твоему запросу':'tracks · built from your wish'}`,
+                        aiHits, true) : (
+                        <div className="serif" style={{ fontSize:'14px', color:c.textSubtle, fontStyle:'italic', textAlign:'center', padding:'20px' }}>
+                          {lang==='ru'?'Ничего не нашлось — попробуй переформулировать':'Nothing found — try rephrasing'}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
             </>
           ) : (
             <>
-              {recDivider('build', lang==='ru'?'быстрые миксы':'quick mixes')}
-              <div className="rec-sec rec-bloom rec-bloom--build">
-                <div className="serif" style={{ fontSize:'clamp(19px,4.5vw,24px)', fontWeight:600, color:c.text }}>{lang==='ru'?'Быстрые миксы':'Quick mixes'}</div>
-                <div style={{ fontSize:'13.5px', color:c.textSubtle, margin:'6px 0 12px' }}>{lang==='ru'?'Шесть готовых миксов по настроению — подберут похожее по звучанию.':'Six ready mixes by mood — they pull what sounds alike.'}</div>
-                <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(clamp(140px,42vw,180px),1fr))', gap:'10px' }}>
-                  {moodPresets.map(p => (
-                    <div key={p.id} className={`rec-chip${activePreset===p.id?' rec-chip--on':''}`} style={{ color:c.text }} onClick={() => runPreset(p)}>
-                      <span style={{ fontSize:'18px' }}>{p.icon}</span>{p.label}
-                    </div>
-                  ))}
-                </div>
-                {presetLoading && <div style={{ marginTop:'14px' }}>{skeletonRows(3)}</div>}
-                {!presetLoading && presetResults.length > 0 && (
-                  <div style={{ marginTop:'16px' }}>
-                    {playlistResult(
-                      (moodPresets.find(p=>p.id===activePreset)||{}).label || (lang==='ru'?'Микс':'Mix'),
-                      `${presetResults.length} ${lang==='ru'?'треков':'tracks'}`,
-                      presetResults, false)}
-                  </div>
-                )}
+              <div style={{ textAlign:'center', marginTop:'14px' }}>
+                <div className="serif" style={{ fontSize:'clamp(20px,4.5vw,26px)', fontWeight:600, color:c.text }}>{lang==='ru'?'Быстрые миксы':'Quick mixes'}</div>
+                <div style={{ fontSize:'13.5px', color:c.textSubtle, marginTop:'6px' }}>{lang==='ru'?'Готовые подборки по настроению — подберут похожее по звучанию.':'Ready mixes by mood — they pull what sounds alike.'}</div>
               </div>
+              <div className="rec2-chips">
+                {moodPresets.map(p => (
+                  <span key={p.id} className={`rec2-chip${activePreset===p.id?' rec2-chip--on':''}`}
+                        style={{ color:c.textMuted }} onClick={() => runPreset(p)}>
+                    <span style={{ fontSize:'14px' }}>{p.icon}</span>{p.label}
+                  </span>
+                ))}
+              </div>
+              {(presetLoading || presetResults.length > 0) && (
+                <div className="rec2-results">
+                  {presetLoading ? skeletonRows(3) : playlistResult(
+                    (moodPresets.find(p=>p.id===activePreset)||{}).label || (lang==='ru'?'Микс':'Mix'),
+                    `${presetResults.length} ${lang==='ru'?'треков':'tracks'}`,
+                    presetResults, false)}
+                </div>
+              )}
             </>
           )}
+
+          {/* ── КОНСОЛЬ: панель профиля (слева) + мозаика островов (справа) ── */}
+          <div className="rec2-grid">
+            <div className="rec2-panel" {...spotHandlers(false)}>
+              <div className="rec2-screws"><span className="rec2-screw" /><span className="rec2-screw" /></div>
+              <div className="rec2-lbl" style={{ color:c.textSubtle }}>{lang==='ru'?'твой звук':'your sound'}</div>
+              {profileLoading ? skeletonRows(3) : (
+                <div className="rec2-panel-body">
+                  <div className="rec2-display">
+                    <AxisRadar values={profileAxisValues} isDark={isDark} lang={lang} size={244} />
+                  </div>
+                  <div className="rec2-panel-info">
+                    {aiOn ? (
+                      <>
+                        <div style={{ display:'flex', alignItems:'baseline', gap:'8px', marginTop:'12px' }}>
+                          <div className="serif" style={{ fontSize:'16.5px', fontWeight:700, color:c.text, flex:1, minWidth:0 }}>{heroHeadline}</div>
+                          <button onClick={regenPortrait} disabled={portraitBusy} title={lang==='ru'?'Обновить':'Refresh'}
+                            style={{ border:'none', background:'transparent', cursor: portraitBusy?'wait':'pointer', color:c.textSubtle, fontSize:'15px', padding:'0 2px', flex:'none' }}>
+                            {portraitBusy ? '…' : '↺'}
+                          </button>
+                        </div>
+                        {profile && profile.portrait
+                          ? <div className="serif rec2-portrait" style={{ color:c.textMuted, marginTop:'6px' }}>«{profile.portrait}»</div>
+                          : <div className="rec2-portrait" style={{ color:c.textSubtle }}>{(portraitBusy || autoEnriching) ? (lang==='ru'?'Собираю твой портрет…':'Writing your portrait…') : ''}</div>}
+                      </>
+                    ) : (
+                      <div className="rec-hint" style={{ color:c.textMuted, marginTop:'12px' }}>✨ {lang==='ru'?'Подключи ИИ, чтобы узнать свой музыкальный вкус словами':'Enable AI to learn your taste in words'}</div>
+                    )}
+                    {!profileAxisValues && (
+                      <div style={{ fontSize:'12.5px', color:c.textSubtle, marginTop:'8px' }}>
+                        {lang==='ru'?'Профиль появится после прослушивания':'Your profile appears as you listen'}
+                      </div>
+                    )}
+                    {onStartStream && (
+                      <button className="rec2-stream" onClick={onStartStream} {...lqHandlers}>
+                        <span className="rec2-lq-pool" aria-hidden="true">
+                          <span className="rec2-lq-hue">
+                            <span className="rec2-lq-blob rec2-lq-b1" /><span className="rec2-lq-blob rec2-lq-b2" />
+                            <span className="rec2-lq-blob rec2-lq-b3" /><span className="rec2-lq-blob rec2-lq-b4" />
+                            <span className="rec2-lq-blob rec2-lq-b5" />
+                          </span>
+                        </span>
+                        <span className="rec2-lq-cap" aria-hidden="true" />
+                        <span className="rec2-lq-sheen" aria-hidden="true" />
+                        <span className="rec2-lq-text">▶ {lang==='ru'?'Запустить поток':'Start stream'}</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div>
+              <div className="rec2-isl-head">
+                <span className="rec2-isl-title" style={{ color:c.text }}>{lang==='ru'?'Острова вкуса':'Taste islands'}</span>
+                {sortedIslands.length > 0 && <span className="rec2-isl-count">{sortedIslands.length}</span>}
+              </div>
+              <div className="rec2-isl-about" style={{ color:c.textSubtle }}>
+                {lang==='ru' ? (
+                  <>Выраженные области твоего музыкального вкуса. Они живут вместе с тобой: крепнут от <b style={{ color:c.textMuted }}>дослушанных до конца треков</b> и <b style={{ color:c.textMuted }}>огоньков</b>, слабеют от <b style={{ color:c.textMuted }}>скипов</b>. Нажми на остров — заиграет радио в его духе.</>
+                ) : (
+                  <>Distinct regions of your music taste. They live with you: they grow from <b style={{ color:c.textMuted }}>tracks played to the end</b> and <b style={{ color:c.textMuted }}>fires</b>, and fade from <b style={{ color:c.textMuted }}>skips</b>. Tap an island to start a radio in its spirit.</>
+                )}
+              </div>
+              {profileLoading ? skeletonRows(2) : sortedIslands.length ? (
+                <div className="rec2-mosaic">
+                  {sortedIslands.map((isl, ix) => {
+                    const big = ix === 0;
+                    const nameNode = isl.name ? isl.name
+                      : (autoEnriching && aiOn) ? <Skel w={'80%'} h={14} r={6} isDark={isDark} />
+                      : islandName(isl);
+                    return (
+                      <div key={isl.track_id} className={`rec2-isl${big?' rec2-isl--big':''}`}
+                           style={{ color:c.text }} onClick={() => islandRadio(isl)} {...spotHandlers(true)}>
+                        {big && <span className="rec2-badge">{lang==='ru'?'самый обитаемый':'most lived-in'}</span>}
+                        <div className="rec2-covs">
+                          {(isl.tracks || []).slice(0, big ? 4 : 2).map((t, j) => (
+                            <LazyCover key={t.track_id || j} className="rec2-cov" url={homeCoverUrl(t.cover_art_path)}
+                                       fallback="linear-gradient(135deg,#7c5cff,#b06bff)" />
+                          ))}
+                        </div>
+                        <div style={{ minWidth:0 }}>
+                          <div className="rec2-isl-name">{nameNode}</div>
+                          {big && <div className="serif rec2-isl-desc" style={{ color:c.textSubtle }}>{islandArtists(isl)}</div>}
+                          <div className="rec2-isl-sub" style={{ color:c.textSubtle }}>
+                            <span>{(isl.tracks||[]).length} {lang==='ru'?'треков':'tracks'}</span>
+                            {big && <span className="rec2-isl-play">▶ {lang==='ru'?'радио':'radio'}</span>}
+                          </div>
+                        </div>
+                        {!big && <span className="rec2-isl-play" style={{ position:'absolute', right:'12px', bottom:'12px' }}>▶</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div style={{ fontSize:'13.5px', color:c.textSubtle, marginTop:'4px' }}>{lang==='ru'?'Слушай и отмечай треки — со временем здесь проявятся твои музыкальные острова.':'Listen and react — your islands surface here over time.'}</div>
+              )}
+            </div>
+          </div>
 
         </div>
       </div>
