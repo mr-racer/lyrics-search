@@ -3472,3 +3472,39 @@
     @media (prefers-reduced-motion: reduce) {
       .ai-orb, .ai-glyph, .tc-hero-orb, .tc-chip-in, .ai-activity-row, .ai-activity-current { animation: none !important; }
     }
+
+    /* ═══ Mobile battery policy (пакет C) ═══════════════════════════════════
+       Continuous decorative animations are OFF on phones. Deliberately kept:
+       the home wave/orb (fy-*, efir-*), the playing-track EQ bars, marquee
+       for long titles, loading spinners/skeletons, the fire/water cover
+       effect, and every interaction-driven transition. */
+    @media (max-width: 768px), (hover: none) and (pointer: coarse) {
+      .rec2-rim,                       /* rec2Flow — animated background-position (repaints) */
+      .rec2-lq-hue,                    /* rec2Hue — 16s hue-rotate filter, the costliest */
+      .rec2-caret,                     /* fake caret blink */
+      .atlas-burst::before,            /* atlasRays — 150vmax rotating layer */
+      .atlas-burst::after,             /* atlasFlare pulse */
+      .atlas-particles,                /* atlasDrift */
+      .aurora-blob-0, .aurora-blob-1, .aurora-blob-2, .aurora-blob-3,
+      .album-vinyl,                    /* vinylSpin (album modal back) */
+      .vinyl-disc,                     /* vinylSpin (now-playing disc) */
+      .player-art-glow,                /* albumGlow — animated drop-shadow (paint) */
+      .player-play-btn,                /* playPulse — animated box-shadow */
+      .ask-ai-btn,                     /* askGlow */
+      .tc-hero-orb {                   /* tcFloat */
+        animation: none !important;
+      }
+      /* Fixed bars over scrolling content are the most expensive
+         backdrop-filters; their backgrounds are ~0.97 opaque anyway. */
+      .mobile-tabbar, .mobile-miniplayer {
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+      }
+    }
+
+    /* Hidden tab / screen off: pause every CSS animation (rAF loops the
+       browser freezes on its own). App toggles the class on <html> via
+       visibilitychange — GPU goes quiet while the music keeps playing. */
+    html.app-hidden *, html.app-hidden *::before, html.app-hidden *::after {
+      animation-play-state: paused !important;
+    }

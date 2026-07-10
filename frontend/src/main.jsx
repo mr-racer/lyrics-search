@@ -2154,7 +2154,10 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
       position:'relative', borderRadius: isMobile ? 18 : 24, overflow:'hidden',
       padding: isMobile ? '18px 16px 16px' : 'clamp(24px,2vw,38px)',
       border:`1px solid ${c.border}`, background:heroGlass,
-      backdropFilter:'blur(26px)', WebkitBackdropFilter:'blur(26px)',
+      // Mobile: what's behind the hero is a static page gradient — blurring it
+      // costs a large persistent GPU layer for no visible difference.
+      backdropFilter: isMobile ? 'none' : 'blur(26px)',
+      WebkitBackdropFilter: isMobile ? 'none' : 'blur(26px)',
       boxShadow:heroShadow, animation:'fadeInUp .55s cubic-bezier(.22,.9,.3,1)',
       display:'flex', flexDirection:'column',
     }}>
@@ -2590,7 +2593,8 @@ function LibraryPill({ stats, isDark, lang, onClick, fluid }) {
         borderRadius: fluid ? 18 : 14,
         border:`1px solid ${hover?c.borderStrong:c.border}`,
         background: isDark ? (hover?'rgba(255,255,255,.07)':'rgba(255,255,255,.04)') : (hover?'rgba(255,255,255,.92)':'rgba(255,255,255,.6)'),
-        backdropFilter:'blur(16px)', WebkitBackdropFilter:'blur(16px)',
+        backdropFilter: fluid ? 'none' : 'blur(16px)',
+        WebkitBackdropFilter: fluid ? 'none' : 'blur(16px)',
         boxShadow: hover ? '0 8px 22px rgba(60,45,100,.16)' : '0 4px 12px rgba(60,45,100,.08)',
         transition:'all .35s cubic-bezier(.22,.9,.3,1)', transform: hover ? 'translateY(-1px)' : 'none' }}>
       <span style={{ display:'grid', placeItems:'center', width:30, height:30, borderRadius:9, flex:'none',
@@ -5351,8 +5355,10 @@ function LibraryGlassyRow({ track, when, playCount, isDark, lang, onClick, navig
         padding: isMobile ? '8px 8px 8px 8px' : '11px 17px 11px 11px',
         borderRadius:'14px',
         background: isCurrent ? 'rgba(120,80,200,.13)' : 'rgba(255,255,255,.04)',
-        backdropFilter:'blur(22px) saturate(1.1)',
-        WebkitBackdropFilter:'blur(22px) saturate(1.1)',
+        // Mobile: a long list of blurred rows is pure GPU burn — the tint alone
+        // reads the same on the flat section background.
+        backdropFilter: isMobile ? 'none' : 'blur(22px) saturate(1.1)',
+        WebkitBackdropFilter: isMobile ? 'none' : 'blur(22px) saturate(1.1)',
         border:`1px solid ${isCurrent ? 'rgba(120,80,200,.32)' : c.border}`,
         boxShadow:'inset 0 1px 0 rgba(255,255,255,.04)',
         cursor:'pointer',
@@ -7491,7 +7497,11 @@ function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist,
       onClick={requestClose}
       style={{
         position:'fixed', inset:0, zIndex:100,
-        background:'rgba(0,0,0,.65)', backdropFilter:'blur(8px)', WebkitBackdropFilter:'blur(8px)',
+        background:'rgba(0,0,0,.65)',
+        // Mobile: the full-screen gatefold covers the overlay entirely — its
+        // blur would be invisible yet stay composited the whole time.
+        backdropFilter: isMobile ? 'none' : 'blur(8px)',
+        WebkitBackdropFilter: isMobile ? 'none' : 'blur(8px)',
         display:'grid', placeItems:'center', padding: isMobile ? 0 : '24px',
         animation: closing ? 'fadeOverlayOut 0.35s ease 0.15s forwards' : 'fadeIn 0.25s ease',
       }}
@@ -7633,10 +7643,13 @@ function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist,
                 }}>▶ {lang==='ru'?'Играть всё':'Play All'}</button>
               </div>
 
-              {/* Tracklist */}
+              {/* Tracklist. Mobile: what's behind is the already-64px-blurred
+                  cover image — a second live blur adds cost, not looks. */}
               <div style={{
-                background:'rgba(8,6,14,.45)', border:'1px solid rgba(255,255,255,.08)', borderRadius:'14px',
-                backdropFilter:'blur(14px)', WebkitBackdropFilter:'blur(14px)',
+                background: isMobile ? 'rgba(8,6,14,.72)' : 'rgba(8,6,14,.45)',
+                border:'1px solid rgba(255,255,255,.08)', borderRadius:'14px',
+                backdropFilter: isMobile ? 'none' : 'blur(14px)',
+                WebkitBackdropFilter: isMobile ? 'none' : 'blur(14px)',
                 overflow:'auto', flex:1, minHeight:0,
               }}>
                 {album.tracks.map((t, i) => {
@@ -16389,6 +16402,15 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
       handleTrackChange(t);
     }
   };
+
+  // Battery: pause every CSS animation while the tab is hidden / screen is
+  // off (audio keeps playing). The CSS rule lives on html.app-hidden.
+  useEffect(() => {
+    const onVis = () => document.documentElement.classList.toggle('app-hidden', document.hidden);
+    document.addEventListener('visibilitychange', onVis);
+    onVis();
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, []);
 
   // Off-player prev (mini-player button): a plain index step back — no queue
   // top-up semantics needed at the head of the list.
