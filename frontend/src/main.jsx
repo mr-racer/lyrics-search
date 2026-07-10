@@ -12417,9 +12417,13 @@ function SimilarityRail({ trackId, lang, isDark, drawerOpen, onQueueNext }) {
 }
 
 // ── Queue drag-to-reorder hook ──────────────────────────────────────────────
-// Pointer-events drag for the player QUEUE. Reorders ONLY the future slice
-// (indices >= lockedBefore); the already-played + now-playing prefix is locked
-// so the recommendation/stream engine never desyncs (design spec §5–§6).
+// Pointer-events drag for the player QUEUE. Every row is draggable EXCEPT the
+// now-playing one (lockedIndex) — entering an album mid-way leaves the earlier,
+// never-actually-played rows above the current track, and those must stay
+// movable (drag one below the current row to hear it). Rows above the current
+// track are the history zone: they won't auto-play. Stream dedup keys on
+// track_id, not position, so crossing the now-playing boundary is safe
+// (design: 2026-07-10-queue-reorder-unlock).
 //   • Mouse: 5px move threshold, so a plain click still plays the track.
 //   • Touch: ~200ms long-press, so a vertical scroll still works (scroll wins
 //     unless you hold still — a pointercancel from native scroll aborts it).
@@ -12427,9 +12431,9 @@ function SimilarityRail({ trackId, lang, isDark, drawerOpen, onQueueNext }) {
 // array coordinates; the caller splices the with-`from`-removed array at `over`.
 //
 // Stability: window listeners are memoized ([]) and read ALL mutable state from
-// the S.current session (incl. snapshots of lockedBefore/onCommit taken at drag
-// start), so a setDrag re-render can't strand a stale closure on window.
-function useQueueReorder({ lockedBefore, count, onCommit, scrollRef }) {
+// the S.current session (incl. a snapshot of onCommit taken at drag start), so
+// a setDrag re-render can't strand a stale closure on window.
+function useQueueReorder({ lockedIndex, count, onCommit, scrollRef }) {
   const reduced = useMemo(() => {
     try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; }
     catch (e) { return false; }
@@ -12455,7 +12459,7 @@ function useQueueReorder({ lockedBefore, count, onCommit, scrollRef }) {
     let over = s.from;
     for (let i = 0; i < s.rects.length; i++) {
       const rc = s.rects[i];
-      if (rc.index < s.lockedBefore || rc.index === s.from) continue;
+      if (rc.index === s.from) continue;
       if (rc.index < s.from && clientY < rc.mid) over = Math.min(over, rc.index);
       if (rc.index > s.from && clientY > rc.mid) over = Math.max(over, rc.index);
     }
@@ -12560,13 +12564,16 @@ function useQueueReorder({ lockedBefore, count, onCommit, scrollRef }) {
   cancelRef.current = () => finish(false);
 
   // Begin a press session. Recreated each render so it snapshots the CURRENT
-  // lockedBefore / onCommit into the session for the stable handlers to read.
+  // onCommit into the session for the stable handlers to read.
   // `immediate` (grip handle) lifts the row right on pointerdown — no
   // long-press wait and no scroll-vs-drag ambiguity (the grip carries
   // touch-action:none, so the browser never contests the gesture).
+  // Movable rows = everything except the pinned now-playing one.
+  const movable = count - (lockedIndex >= 0 && lockedIndex < count ? 1 : 0);
+
   const startSession = (index, e, immediate = false) => {
-    if (index < lockedBefore) return;             // locked prefix — not draggable
-    if (count - lockedBefore < 2) return;         // <2 future tracks — nothing to reorder
+    if (index === lockedIndex) return;            // now-playing row — pinned
+    if (movable < 2) return;                      // nothing to reorder
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     if (S.current) finish(false);                 // defensive: never run two sessions
     const isTouch = e.pointerType !== 'mouse';
@@ -12574,7 +12581,7 @@ function useQueueReorder({ lockedBefore, count, onCommit, scrollRef }) {
       from: index, active: false, isTouch,
       downX: e.clientX, downY: e.clientY, grabY: e.clientY,
       scroll0: 0, rects: [], height: 0, over: index, lastY: e.clientY, longPress: 0,
-      lockedBefore, onCommit,
+      onCommit,
     };
     window.addEventListener('pointermove', winMove, { passive: false });
     window.addEventListener('pointerup', winUp);
@@ -12594,25 +12601,28 @@ function useQueueReorder({ lockedBefore, count, onCommit, scrollRef }) {
   // Per-row props: data tag, drag/shift/locked classes, transform offset, and
   // (for draggable rows) the pointerdown that opens a session.
   const getRowProps = (index) => {
-    const draggable = index >= lockedBefore && (count - lockedBefore) >= 2;
+    const draggable = index !== lockedIndex && movable >= 2;
     const cls = [];
     const style = {};
     if (draggable) cls.push('q-draggable');
     if (drag) {
       // Row order in the DOM never changes mid-drag — only transforms move; the
       // array commit happens on drop. (The lifted row's opacity is forced full
-      // and the locked prefix dimmed inline, since the row carries an inline
-      // opacity that would otherwise outrank the q-* classes.)
+      // and the pinned now-playing row dimmed inline, since the row carries an
+      // inline opacity that would otherwise outrank the q-* classes.)
       if (index === drag.from) {
         cls.push('q-dragging');
         style.transform = `translateY(${drag.dy}px) scale(${reduced ? 1 : 1.025})`;
         style.opacity = 1;
         style.cursor = 'grabbing';
-      } else if (index < lockedBefore) {
-        cls.push('q-locked');
-        style.opacity = 0.4;
       } else {
+        // The pinned row still SHIFTS with the flow (a drag may cross the
+        // now-playing boundary) — it just can't be grabbed, and dims to say so.
         cls.push('q-shift');
+        if (index === lockedIndex) {
+          cls.push('q-locked');
+          style.opacity = 0.4;
+        }
         let ty = 0;
         if (drag.over > drag.from && index > drag.from && index <= drag.over) ty = -drag.height;
         else if (drag.over < drag.from && index >= drag.over && index < drag.from) ty = drag.height;
@@ -12630,7 +12640,7 @@ function useQueueReorder({ lockedBefore, count, onCommit, scrollRef }) {
   // Grip-handle props: pointerdown here grabs the row instantly (stops
   // propagation so the row's own long-press session doesn't double-start).
   const getHandleProps = (index) => {
-    const draggable = index >= lockedBefore && (count - lockedBefore) >= 2;
+    const draggable = index !== lockedIndex && movable >= 2;
     if (!draggable) return {};
     return {
       onPointerDown: (e) => { e.stopPropagation(); startSession(index, e, true); },
@@ -12949,14 +12959,20 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
   // mid-drag (always at the tail) won't get dropped.
   const playlistRef = useRef(playlist);
   playlistRef.current = playlist;
+  // Now-playing id mirrored the same way: the commit below recomputes
+  // currentIndex from it, and the track may advance mid-drag (song ended).
+  const currentTrackIdRef = useRef(null);
+  currentTrackIdRef.current = currentTrack ? currentTrack.track_id : null;
   const queueScrollRef = useRef(null);
   const [droppedId, setDroppedId] = useState(null);   // track id to flash after a drop
   const droppedTimerRef = useRef(null);
 
   // Commit a reorder: move item `from` → `over` (original coords), push the new
   // order UP to App.playerPlaylist (source of truth) so the next wave append
-  // can't clobber it, and briefly glow the moved row. Played + now-playing stay
-  // locked by the hook, so `currentIndex` and stream dedup are untouched.
+  // can't clobber it, and briefly glow the moved row. Only the now-playing row
+  // is pinned by the hook, so a drag may cross the now-playing boundary —
+  // recompute currentIndex from the track id (ref: fresh even if the track
+  // advanced mid-drag).
   const reorderQueue = (from, over) => {
     const cur = playlistRef.current || [];
     if (from < 0 || from >= cur.length) return;
@@ -12964,6 +12980,11 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
     const next = cur.slice();
     const moved = next.splice(from, 1)[0];
     next.splice(dest, 0, moved);
+    const curId = currentTrackIdRef.current;
+    if (curId != null) {
+      const ni = next.findIndex(h => ((h && h.track) ? h.track : h)?.track_id === curId);
+      if (ni >= 0) setCurrentIndex(ni);
+    }
     setPlaylist(next);
     if (onReorderQueue) onReorderQueue(next);
     const id = moved && moved.track && moved.track.track_id;
@@ -12975,7 +12996,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
   };
 
   const queueReorder = useQueueReorder({
-    lockedBefore: currentIndex + 1,   // lock already-played + the now-playing track
+    lockedIndex: currentIndex,   // pin ONLY the now-playing row; history stays movable
     count: playlist.length,
     onCommit: reorderQueue,
     scrollRef: queueScrollRef,
