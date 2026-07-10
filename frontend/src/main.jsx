@@ -1853,7 +1853,7 @@ function BrandMark({ size=34, isDark }) {
 }
 
 // ─── Top right corner: settings + theme + lang (used on landing) ──────────────
-function TopRightControls({ isDark, lang, onLang, onTheme, onSettings, floating=false }) {
+function TopRightControls({ isDark, lang, onLang, onTheme, onSettings, floating=false, showTheme=true, showSettings=true }) {
   const c = useColors(isDark);
   const wrap = floating ? {
     position:'absolute', top:'24px', right:'28px', zIndex:5,
@@ -1876,23 +1876,27 @@ function TopRightControls({ isDark, lang, onLang, onTheme, onSettings, floating=
         })}
       </div>
       {/* Theme knob */}
-      <Knob size={36} isDark={isDark} angle={isDark ? -55 : 55} glow={!isDark}
-        label={isDark ? 'Light theme' : 'Dark theme'} onClick={onTheme} />
+      {showTheme && (
+        <Knob size={36} isDark={isDark} angle={isDark ? -55 : 55} glow={!isDark}
+          label={isDark ? 'Light theme' : 'Dark theme'} onClick={onTheme} />
+      )}
       {/* Settings — round button */}
-      <button onClick={onSettings} className={ske('btn', isDark)} title={lang==='ru'?'Настройки':'Settings'}
-        style={{
-          width:'36px', height:'36px', borderRadius:'50%',
-          display:'flex', alignItems:'center', justifyContent:'center',
-          color: c.textMuted, transition:'transform 0.5s ease',
-        }}
-        onMouseEnter={e => { e.currentTarget.firstChild.style.transform = 'rotate(60deg)'; }}
-        onMouseLeave={e => { e.currentTarget.firstChild.style.transform = 'rotate(0)'; }}
-      >
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ transition:'transform 0.5s cubic-bezier(.22,.9,.3,1)' }}>
-          <circle cx="12" cy="12" r="3"/>
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-        </svg>
-      </button>
+      {showSettings && (
+        <button onClick={onSettings} className={ske('btn', isDark)} title={lang==='ru'?'Настройки':'Settings'}
+          style={{
+            width:'36px', height:'36px', borderRadius:'50%',
+            display:'flex', alignItems:'center', justifyContent:'center',
+            color: c.textMuted, transition:'transform 0.5s ease',
+          }}
+          onMouseEnter={e => { e.currentTarget.firstChild.style.transform = 'rotate(60deg)'; }}
+          onMouseLeave={e => { e.currentTarget.firstChild.style.transform = 'rotate(0)'; }}
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ transition:'transform 0.5s cubic-bezier(.22,.9,.3,1)' }}>
+            <circle cx="12" cy="12" r="3"/>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+          </svg>
+        </button>
+      )}
     </div>
   );
 }
@@ -10540,7 +10544,8 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
         <BrandMark size={36} isDark={isDark} />
         <span className="serif" style={{ fontSize:'28px', letterSpacing:'-0.02em' }}>Musi<i style={{ color:'oklch(62% 0.2 275)' }}>X</i></span>
       </div>
-      <TopRightControls isDark={isDark} lang={lang} onLang={onLang} onTheme={onTheme} onSettings={() => {}} />
+      <TopRightControls isDark={isDark} lang={lang} onLang={onLang} onTheme={onTheme}
+        showTheme={!showWizard} showSettings={false} />
     </div>
   );
 
@@ -11019,7 +11024,8 @@ function OnboardingScreen({ isDark, lang, onDone, onLang, onTheme, indexingJob }
           <BrandMark size={36} isDark={isDark} />
           <span className="serif" style={{ fontSize:'28px', letterSpacing:'-0.02em' }}>Musi<i style={{ color:'oklch(62% 0.2 275)' }}>X</i></span>
         </div>
-        <TopRightControls isDark={isDark} lang={lang} onLang={onLang} onTheme={onTheme} onSettings={() => {}} />
+        <TopRightControls isDark={isDark} lang={lang} onLang={onLang} onTheme={onTheme}
+          showTheme={!indexing} showSettings={false} />
       </div>
 
       <div style={{ maxWidth:'900px', margin:'28px auto 64px', padding:'0 32px', position:'relative' }}>
