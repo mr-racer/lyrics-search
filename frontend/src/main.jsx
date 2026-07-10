@@ -7536,7 +7536,10 @@ function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist,
           {/* ── BACK: blurred cover + tracklist ─────────────────── */}
           <div className="album-flip-face album-flip-back" style={{ background:'#0d0a12' }}>
             {coverUrl ? (
-              <img src={coverUrl} alt="" aria-hidden="true" style={{
+              // blur(64px) erases any detail beyond ~320px anyway — the thumb
+              // is usually already in cache from the grid, so the back face
+              // paints instantly instead of fetching the full-size art again.
+              <img src={thumbCoverUrl(coverUrl)} alt="" aria-hidden="true" style={{
                 position:'absolute', top:'-12%', left:'-12%', width:'124%', height:'124%',
                 objectFit:'cover', filter:'blur(64px) saturate(1.35) brightness(.45)',
               }} />
