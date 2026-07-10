@@ -1,19 +1,18 @@
 """Phase A pre-merge smoke check.
 
-1. Parse frontend/index.html scripts through @babel/standalone (Node) to catch JSX errors.
+1. Verify the Vite frontend build exists (frontend/dist/) — the syntax gate is
+   `npm run build` itself since the Vite migration (was: @babel/standalone parse
+   of the single-file index.html).
 2. Hit live GET  /api/v1/instance/config — returns 404 before init, 200 after.
 3. Hit live POST /api/v1/auth/login — round-trip succeeds with bootstrapped owner.
 4. Hit live GET  /api/v1/library/collections — 401 without token, 200 with token.
 
 Per project memory:
-  [[feedback_smoke_test_must_parse]] — grep alone misses syntax errors
   [[feedback_registry_pattern_needs_e2e]] — unit tests don't catch missing include_router
 """
 from __future__ import annotations
 
 import os
-import re
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -30,29 +29,14 @@ from app.resources.metadata_db import MetadataDB
 from app.services.auth_service import AuthService
 
 
-def smoke_babel_parse():
-    html = Path("frontend/index.html").read_text(encoding="utf-8")
-    blocks = re.findall(r'<script[^>]*type="text/babel"[^>]*>(.*?)</script>', html, flags=re.S)
-    if not blocks:
-        print("[FAIL] no text/babel script blocks found")
+def smoke_frontend_build():
+    """The real syntax gate is `npm run build` (Vite/esbuild). Here we only
+    verify the build artifact exists so the server has something to serve."""
+    dist_index = Path("frontend/dist/index.html")
+    if not dist_index.exists():
+        print("[FAIL] frontend/dist/index.html missing — run `npm run build` in frontend/")
         sys.exit(1)
-    combined = "\n".join(blocks)
-    with tempfile.NamedTemporaryFile(suffix=".jsx", mode="w", delete=False, encoding="utf-8") as f:
-        f.write(combined)
-        tmp_path = f.name
-    try:
-        result = subprocess.run(
-            ["node", "-e",
-             f"const b=require('@babel/standalone'); const s=require('fs').readFileSync({tmp_path!r},'utf8'); b.transform(s, {{presets:['react','env']}});"],
-            capture_output=True, text=True, timeout=60,
-        )
-        if result.returncode != 0:
-            print("[FAIL] Babel parse error:")
-            print(result.stderr[:4000])
-            sys.exit(1)
-        print(f"[OK] Babel parsed {len(combined)} chars of JSX without error")
-    except FileNotFoundError:
-        print("[WARN] node not on PATH — skipping Babel parse. Install Node 18+ and re-run before merging.")
+    print("[OK] frontend/dist build present")
 
 
 def smoke_live_endpoints():
@@ -76,8 +60,10 @@ def smoke_live_endpoints():
         auth.create_owner(email="smoke@example.com", password="smokepass12345")
 
         # ── instance/config returns mode after init ──
+        # Subset check, not equality — the payload has grown fields since
+        # Phase A (ai_available, member_index_root, ...) and will grow more.
         r = c.get("/api/v1/instance/config")
-        if r.status_code != 200 or r.json() != {"mode": "sharing"}:
+        if r.status_code != 200 or r.json().get("mode") != "sharing":
             print(f"[FAIL] /instance/config: {r.status_code} {r.text}")
             sys.exit(1)
         print("[OK] /api/v1/instance/config returns sharing mode")
@@ -121,6 +107,6 @@ def smoke_live_endpoints():
 
 
 if __name__ == "__main__":
-    smoke_babel_parse()
+    smoke_frontend_build()
     smoke_live_endpoints()
     print("\nAll Phase A smoke checks passed.")

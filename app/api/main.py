@@ -17,7 +17,7 @@ from typing import AsyncGenerator
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse, Response
+from fastapi.responses import FileResponse, StreamingResponse
 
 # Silence overly verbose third-party loggers
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -52,6 +52,47 @@ mimetypes.add_type("application/manifest+json", ".webmanifest")
 FRONTEND_DIST = Path(__file__).parent.parent.parent / "frontend" / "dist"
 FRONTEND_INDEX = FRONTEND_DIST / "index.html"
 COVERS_DIR = Path(__file__).parent.parent.parent / "frontend" / "covers"
+
+# Downscaled cover variants (?w=): mobile grids render covers at ~150px but
+# used to download the full embedded art (often 1000px+/400KB). Generated
+# lazily with Pillow, cached on disk next to the other runtime caches.
+COVER_THUMBS_DIR = Path(__file__).parent.parent.parent / "cache" / "cover_thumbs"
+COVER_THUMB_WIDTHS = {320}
+COVER_HEADERS = {
+    "Cache-Control": "public, max-age=31536000, immutable",  # 1 year
+    # Unconditional, NOT left to CORSMiddleware: the middleware skips requests
+    # without an Origin header (plain <img> / background-image), and that
+    # ACAO-less response gets cached immutable for a year under the same key a
+    # later crossOrigin='anonymous' canvas read will hit. The cached copy must
+    # already be CORS-readable or useCoverColor falls back to the purple default.
+    "Access-Control-Allow-Origin": "*",
+}
+
+
+def _make_cover_thumb(src: Path, dst: Path, width: int) -> bool:
+    """Downscale a cover to ``width`` px (blocking — run in an executor).
+
+    Keeps the source format: JPEG stays JPEG, PNG stays PNG so artist cutouts
+    keep their alpha channel (the Atlas hero canvas-probes transparency).
+    Writes tmp-then-rename so concurrent requests never see a partial file.
+    """
+    import uuid
+    tmp = dst.with_suffix(dst.suffix + f".{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        from PIL import Image
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        with Image.open(src) as im:
+            im.thumbnail((width, width))
+            if dst.suffix.lower() in (".jpg", ".jpeg"):
+                im.convert("RGB").save(tmp, "JPEG", quality=82, optimize=True)
+            else:
+                im.save(tmp, "PNG", optimize=True)
+        tmp.replace(dst)
+        return True
+    except Exception:
+        logger.warning("[covers] thumbnail generation failed for %s", src, exc_info=True)
+        tmp.unlink(missing_ok=True)
+        return False
 
 
 async def _preload_models_in_background(db_client: DbClient):
@@ -259,8 +300,14 @@ def create_app() -> FastAPI:
     # those requests fell through to the SPA catch-all, were served index.html
     # as text/html, and the browser blocked them (ERR_BLOCKED_BY_ORB).
     @app.get("/api/v1/covers/{cover_file:path}", tags=["Covers"])
-    async def serve_cover(cover_file: str):
-        """Serve an extracted album or artist cover image."""
+    async def serve_cover(cover_file: str, w: int | None = None):
+        """Serve an extracted album or artist cover image.
+
+        ``?w=320`` returns a lazily-generated downscaled variant (mobile grids).
+        FileResponse (not an in-memory read): covers used to be read whole into
+        RAM synchronously on the event loop, so a grid of covers loading during
+        playback contended with audio byte delivery.
+        """
         # :path matches slashes, so guard against escaping COVERS_DIR.
         covers_root = COVERS_DIR.resolve()
         cover_path = (covers_root / cover_file).resolve()
@@ -270,23 +317,21 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail="Cover not found")
 
         ext = cover_path.suffix.lower()
-        content_type = "image/jpeg" if ext == ".jpg" else "image/png"
+        content_type = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
 
-        return Response(
-            cover_path.read_bytes(),
-            media_type=content_type,
-            headers={
-                "Cache-Control": "public, max-age=31536000, immutable",  # 1 year
-                # Unconditional, NOT left to CORSMiddleware: the middleware
-                # skips requests without an Origin header (plain <img> /
-                # background-image), and that ACAO-less response gets cached
-                # immutable for a year under the same key a later
-                # crossOrigin='anonymous' canvas read will hit. The cached
-                # copy must already be CORS-readable or useCoverColor falls
-                # back to the purple default.
-                "Access-Control-Allow-Origin": "*",
-            },
-        )
+        if w in COVER_THUMB_WIDTHS:
+            thumbs_root = COVER_THUMBS_DIR.resolve()
+            thumb_path = (thumbs_root / str(w) / cover_file).resolve()
+            if thumb_path.is_relative_to(thumbs_root):
+                if not thumb_path.exists():
+                    await asyncio.get_running_loop().run_in_executor(
+                        None, _make_cover_thumb, cover_path, thumb_path, w,
+                    )
+                if thumb_path.exists():
+                    return FileResponse(thumb_path, media_type=content_type, headers=COVER_HEADERS)
+            # Thumbnail failed — fall through to the full-size original.
+
+        return FileResponse(cover_path, media_type=content_type, headers=COVER_HEADERS)
 
     # Artist images (AudioDB cutouts / Deezer thumbs) live one directory
     # deeper: /covers/artists/<hash>.<ext>. serve_cover's single-segment path
@@ -308,16 +353,7 @@ def create_app() -> FastAPI:
         ext = cover_path.suffix.lower()
         content_type = "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
 
-        return Response(
-            cover_path.read_bytes(),
-            media_type=content_type,
-            headers={
-                "Cache-Control": "public, max-age=31536000, immutable",
-                # Same unconditional ACAO as serve_cover — the Atlas hero
-                # canvas-probes this image for transparency.
-                "Access-Control-Allow-Origin": "*",
-            },
-        )
+        return FileResponse(cover_path, media_type=content_type, headers=COVER_HEADERS)
 
     # Routers — MUST be registered BEFORE the SPA catch-all so Starlette
     # matches /api/v1/... routes first (routes are evaluated in order).

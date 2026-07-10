@@ -43,8 +43,7 @@ def test_drop_transcoded_for_tracks_only_touches_caller_account(tmp_path, monkey
 @pytest.mark.asyncio
 async def test_get_streamable_path_uses_account_namespace(tmp_path, monkeypatch):
     monkeypatch.setattr(audio_streaming, "_CACHE_DIR", tmp_path / "tx")
-    # Force non-ALAC path so we don't need ffmpeg
-    monkeypatch.setattr(audio_streaming, "_is_alac_m4a", lambda *_: False)
+    # .flac short-circuits codec detection (suffix check) — no ffprobe/ffmpeg needed.
     src = tmp_path / "song.flac"
     src.write_bytes(b"flac-bytes")
 
@@ -54,3 +53,66 @@ async def test_get_streamable_path_uses_account_namespace(tmp_path, monkeypatch)
     # Non-ALAC short-circuits → returns source path unchanged
     assert path == src
     assert mime == "audio/flac"
+
+
+@pytest.mark.asyncio
+async def test_codec_hint_skips_ffprobe(tmp_path, monkeypatch):
+    """A payload codec hint must decide ALAC-ness without ever running ffprobe."""
+    def _boom(*_):
+        raise AssertionError("ffprobe must not run when a codec hint is present")
+    monkeypatch.setattr(audio_streaming, "_detect_codec_ffprobe", _boom)
+
+    src = tmp_path / "song.m4a"
+    src.write_bytes(b"m4a-bytes")
+
+    # AAC hint → served as-is, no ffprobe, no transcode.
+    path, mime = await audio_streaming.get_streamable_path(
+        account_id="acct-X", track_id="t1", file_path=src, codec="mp4a.40.2",
+    )
+    assert path == src
+    assert mime == "audio/mp4"
+
+    assert await audio_streaming._needs_alac_transcode(src, codec_hint="alac") is True
+
+
+@pytest.mark.asyncio
+async def test_codec_detection_cached_per_file_identity(tmp_path, monkeypatch):
+    """Without a hint, ffprobe runs once per (path, mtime, size), not per request."""
+    calls = []
+    monkeypatch.setattr(
+        audio_streaming, "_detect_codec_ffprobe",
+        lambda p: calls.append(p) or "aac",
+    )
+    src = tmp_path / "song.m4a"
+    src.write_bytes(b"m4a-bytes")
+
+    assert await audio_streaming._needs_alac_transcode(src) is False
+    assert await audio_streaming._needs_alac_transcode(src) is False
+    assert len(calls) == 1
+
+
+def test_source_cache_roundtrip_and_scoped_drop():
+    audio_streaming.put_cached_source("acct-A", "t1", "/x/a.flac", "alac")
+    audio_streaming.put_cached_source("acct-A", "t2", "/x/b.flac", None)
+    audio_streaming.put_cached_source("acct-B", "t1", "/y/a.flac", None)
+
+    assert audio_streaming.get_cached_source("acct-A", "t1") == ("/x/a.flac", "alac")
+
+    audio_streaming.drop_source_for_tracks("acct-A", ["t1"])
+    assert audio_streaming.get_cached_source("acct-A", "t1") is None
+    assert audio_streaming.get_cached_source("acct-A", "t2") is not None
+    assert audio_streaming.get_cached_source("acct-B", "t1") is not None
+
+    audio_streaming.drop_account_sources("acct-A")
+    assert audio_streaming.get_cached_source("acct-A", "t2") is None
+    assert audio_streaming.get_cached_source("acct-B", "t1") == ("/y/a.flac", None)
+
+
+def test_source_cache_ttl_expiry(monkeypatch):
+    audio_streaming.put_cached_source("acct-T", "t1", "/x/a.flac", None)
+    real_monotonic = audio_streaming.time.monotonic
+    monkeypatch.setattr(
+        audio_streaming.time, "monotonic",
+        lambda: real_monotonic() + audio_streaming._SOURCE_TTL_SECONDS + 1,
+    )
+    assert audio_streaming.get_cached_source("acct-T", "t1") is None

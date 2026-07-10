@@ -140,6 +140,11 @@ def get_alac_metadata(filepath: str) -> dict:
         val = audio.tags.get(key) or [""]
         return val[0].strip() if isinstance(val[0], str) else str(val[0]).strip()
 
+    # mutagen reports the sample-entry codec: "alac" or "mp4a.40.2" (AAC).
+    # Stored in the payload so the stream endpoint can decide ALAC→FLAC
+    # transcoding without an ffprobe on the request hot path.
+    codec = getattr(audio.info, "codec", None)
+
     raw_year = _tag("©day")
     return {
         "title":        _tag("©nam"),
@@ -149,6 +154,7 @@ def get_alac_metadata(filepath: str) -> dict:
         "genre":        _tag("©gen") or None,
         "duration":     round(duration),
         "bitrate_kbps": bitrate_kbps,
+        "audio_codec":  codec.lower() if isinstance(codec, str) else None,
         # MP4 stores track/disc as a list of (index, total) tuples.
         "track_number": parse_track_index((audio.tags.get("trkn") or [None])[0]),
         "disc_number":  parse_track_index((audio.tags.get("disk") or [None])[0]),

@@ -99,6 +99,7 @@ def _build_payload_for_upsert(song_info: dict, slug: str | None = None) -> dict:
         "samples":             song_info.get("samples"),
         "sampled_by":          song_info.get("sampled_by"),
         "bitrate_kbps":        song_info.get("bitrate_kbps"),
+        "audio_codec":         song_info.get("audio_codec"),
         "track_number":        song_info.get("track_number"),
         "disc_number":         song_info.get("disc_number"),
         "sonic_tags":          sonic_tags,

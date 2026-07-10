@@ -1218,7 +1218,7 @@ async def delete_track(
     track_id, and refuses pre-Phase-C folder-scan tracks).
     """
     import os as _os
-    from app.services.audio_streaming import drop_transcoded_for_tracks
+    from app.services.audio_streaming import drop_transcoded_for_tracks, drop_source_for_tracks
 
     collection_name = derive_collection_for_user(current_user)
     db_client = request.app.state.db_client
@@ -1264,9 +1264,11 @@ async def delete_track(
     except OSError as e:
         logger.warning("[delete_track] file unlink failed for %s: %s", file_path, e)
 
-    # Drop the per-account transcoded cache (Phase B §6.6 keyed by collection_name).
+    # Drop the per-account transcoded cache (Phase B §6.6 keyed by collection_name)
+    # + the in-memory track-source cache for the stream hot path.
     try:
         drop_transcoded_for_tracks(account_id=collection_name, track_ids=[track_id])
+        drop_source_for_tracks(collection_name, [track_id])
     except Exception:
         pass
 

@@ -1,5 +1,6 @@
 """Search endpoints."""
 
+import asyncio
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -12,7 +13,12 @@ from app.domain.models import (
 from app.api.dependencies import get_current_user, get_user_for_stream
 from app.api.helpers import derive_collection_for_user
 from app.resources.model_registry import ModelRegistry
-from app.services.audio_streaming import get_streamable_path
+from app.services.audio_streaming import (
+    get_streamable_path,
+    get_cached_source,
+    put_cached_source,
+    drop_source_for_tracks,
+)
 
 router = APIRouter(prefix="/search", tags=["Search"])
 
@@ -121,25 +127,44 @@ async def stream_track(
     if db is None:
         raise HTTPException(status_code=503, detail="Database unavailable")
 
-    # 1. Look up file_path from Qdrant payload
-    try:
-        result = db.qdrant.retrieve(
-            collection_name=derived,
-            ids=[track_id],
-            with_payload=True,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Track not found: {e}")
+    # 1. Resolve file_path (+codec hint). <audio> issues many Range requests per
+    # track, so the Qdrant lookup is memoized; the cold miss runs in a thread —
+    # the sync qdrant-client would otherwise block the event loop and stutter
+    # every concurrent stream.
+    async def _lookup_source() -> tuple[str, str | None]:
+        try:
+            result = await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: db.qdrant.retrieve(
+                    collection_name=derived,
+                    ids=[track_id],
+                    with_payload=True,
+                ),
+            )
+        except Exception as e:
+            raise HTTPException(status_code=404, detail=f"Track not found: {e}")
 
-    if not result:
-        raise HTTPException(status_code=404, detail=f"Track {track_id} not found in collection {derived}")
+        if not result:
+            raise HTTPException(status_code=404, detail=f"Track {track_id} not found in collection {derived}")
 
-    payload = result[0].payload or {}
-    file_path = payload.get("file_path")
-    if not file_path:
-        raise HTTPException(status_code=404, detail="Track has no file_path in database")
+        payload = result[0].payload or {}
+        fp = payload.get("file_path")
+        if not fp:
+            raise HTTPException(status_code=404, detail="Track has no file_path in database")
+
+        put_cached_source(derived, track_id, fp, payload.get("audio_codec"))
+        return fp, payload.get("audio_codec")
+
+    cached = get_cached_source(derived, track_id)
+    from_cache = cached is not None
+    file_path, codec = cached if cached else await _lookup_source()
 
     audio_path = Path(file_path)
+    if not audio_path.exists() and from_cache:
+        # Stale cache (file moved/re-indexed) — retry with a fresh lookup.
+        drop_source_for_tracks(derived, [track_id])
+        file_path, codec = await _lookup_source()
+        audio_path = Path(file_path)
     if not audio_path.exists():
         raise HTTPException(
             status_code=404,
@@ -152,13 +177,17 @@ async def stream_track(
     # two accounts sharing a track_id don't serve each other's cached blob.
     # Phase D: derived is acct_<id>; delete_collection purges under the same key.
     serve_path, content_type = await get_streamable_path(
-        account_id=derived, track_id=track_id, file_path=audio_path,
+        account_id=derived, track_id=track_id, file_path=audio_path, codec=codec,
     )
 
+    # private: the URL carries a per-user stream token; max-age matches the
+    # token TTL. Lets the browser serve repeat Range requests (and the client's
+    # full-file warmup fetch) from disk cache instead of revalidating.
     return FileResponse(
         serve_path,
         media_type=content_type,
         filename=serve_path.name,
+        headers={"Cache-Control": "private, max-age=3600"},
     )
 
 

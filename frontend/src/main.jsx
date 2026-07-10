@@ -152,12 +152,67 @@ function prefetchNextTrack(trackId) {
     .catch(() => {});   // aborted / offline — playback falls back to the network URL
 }
 
+// ── Current-track warmup ─────────────────────────────────────────────────────
+// The NEXT track is prefetched whole (above), but the CURRENT one — the first
+// track after a click, or any track whose prefetch didn't finish — streams
+// over the network with the browser's conservative buffer. Over the internet
+// a lossless FLAC rides close to the link bandwidth, so hiccups surface as
+// mid-track stutter. Once playback is safely started we download the file
+// fully on the side:
+//  * the response lands in the browser HTTP cache (the stream endpoint sends
+//    Cache-Control now), so the element's own later Range requests come from
+//    disk instead of the network;
+//  * if the element still starves ('waiting' mid-play) and the Blob is ready,
+//    App hot-swaps src to the Blob at the same position — one micro-pause
+//    instead of a stutter series.
+let _currentWarmup = { trackId: null, blobUrl: null, ctrl: null };
+
+function warmupCurrentTrack(trackId) {
+  if (!trackId) return;
+  if (_currentWarmup.trackId === trackId) return;            // already running/done
+  if (_playingBlob.trackId === trackId) return;              // already playing offline
+  if (_nextPrefetch.trackId === trackId && _nextPrefetch.blobUrl) return;
+  dropCurrentWarmup();
+  const ctrl = new AbortController();
+  const entry = { trackId, blobUrl: null, ctrl };
+  _currentWarmup = entry;
+  fetch(buildStreamUrl(trackId, { forPrefetch: true }), { signal: ctrl.signal })
+    .then(r => (r.ok ? r.blob() : null))
+    .then(blob => {
+      if (!blob || _currentWarmup !== entry) return;
+      entry.blobUrl = URL.createObjectURL(blob);
+    })
+    .catch(() => {});   // aborted / offline — the element keeps its network src
+}
+
+function dropCurrentWarmup() {
+  if (_currentWarmup.ctrl) _currentWarmup.ctrl.abort();
+  if (_currentWarmup.blobUrl && _currentWarmup.blobUrl !== _playingBlob.url) {
+    URL.revokeObjectURL(_currentWarmup.blobUrl);
+  }
+  _currentWarmup = { trackId: null, blobUrl: null, ctrl: null };
+}
+
+// Stall recovery: hand the completed warmup Blob over to _playingBlob (so
+// buildStreamUrl keeps returning it for this track) and return its URL, or
+// null when the download hasn't finished. Ownership moves — the caller swaps
+// the <audio> src, buildStreamUrl's same-track path then reuses the same URL.
+function takeWarmupBlob(trackId) {
+  if (_currentWarmup.trackId !== trackId || !_currentWarmup.blobUrl) return null;
+  const url = _currentWarmup.blobUrl;
+  _currentWarmup = { trackId: null, blobUrl: null, ctrl: null };
+  if (_playingBlob.url && _playingBlob.url !== url) URL.revokeObjectURL(_playingBlob.url);
+  _playingBlob = { trackId, url };
+  return url;
+}
+
 function dropMediaPrefetch() {
   if (_nextPrefetch.ctrl) _nextPrefetch.ctrl.abort();
   if (_nextPrefetch.blobUrl && _nextPrefetch.blobUrl !== _playingBlob.url) {
     URL.revokeObjectURL(_nextPrefetch.blobUrl);
   }
   _nextPrefetch = { trackId: null, blobUrl: null, ctrl: null };
+  dropCurrentWarmup();
   if (_playingBlob.url) URL.revokeObjectURL(_playingBlob.url);
   _playingBlob = { trackId: null, url: null };
 }
@@ -721,6 +776,25 @@ function useAudioPlayer() {
     timeStore.setTime(time);
   }, []);
 
+  // Same-track src replacement preserving position/play state (stall recovery:
+  // network src → completed warmup Blob). Goes through lastSrcRef so setSrc's
+  // same-track guard doesn't later see a "different" src and reload from 0.
+  // Does NOT touch playbackTrackId or the listen accumulator — same listen.
+  const hotSwapSrc = useCallback((url) => {
+    const el = audioRef.current;
+    if (!el || !url) return;
+    const pos = el.currentTime || 0;
+    const wasPlaying = !el.paused;
+    const restore = () => {
+      try { el.currentTime = pos; } catch { /* metadata race — keep 0 */ }
+      if (wasPlaying) el.play().catch(() => {});
+    };
+    el.addEventListener('loadedmetadata', restore, { once: true });
+    lastSrcRef.current = url;
+    el.src = url;
+    setCurrentSrc(url);
+  }, []);
+
   const setVolume = useCallback((vol) => {
     if (!audioRef.current) return;
     audioRef.current.volume = vol;
@@ -790,7 +864,7 @@ function useAudioPlayer() {
   return {
     audioRef, initAudio,
     isPlaying, isBuffering, currentSrc, duration,
-    play, pause, togglePlay, seek, setSrc, setVolume,
+    play, pause, togglePlay, seek, setSrc, setVolume, hotSwapSrc,
     // NOTE: currentTime is intentionally NOT here. Use useCurrentTime() for
     // display, or read audioRef.current?.currentTime in event handlers.
   };
@@ -1451,6 +1525,18 @@ function SkeRange({ value, min = 0, max = 100, step = 1, onChange,
   );
 }
 
+// ─── Cover thumbnails ─────────────────────────────────────────────────────────
+// The covers endpoint generates and caches downscaled variants on ?w=320.
+// Grids, rows and mosaics use them; the player (hero art, ambient wash, color
+// sampling) keeps the full-size original — those three must share one URL so
+// the browser cache is hit once and canvas sampling reuses the same entry.
+function thumbCoverUrl(url, w = 320) {
+  if (!url || typeof url !== 'string') return url;
+  if (url.startsWith('blob:') || url.startsWith('data:')) return url;
+  if (/[?&]w=\d/.test(url)) return url;              // already a thumbnail URL
+  return url.includes('?') ? `${url}&w=${w}` : `${url}?w=${w}`;
+}
+
 // ─── AlbumCover ───────────────────────────────────────────────────────────────
 function AlbumCover({ title='', artist='', size=44, isDark, coverPath, radius, fluid, eager }) {
   const hue = ((title.charCodeAt(0)||65)*37 + (artist.charCodeAt(0)||65)*17) % 360;
@@ -1468,7 +1554,11 @@ function AlbumCover({ title='', artist='', size=44, isDark, coverPath, radius, f
   const fs = (typeof size === 'number' ? size : 200) > 60 ? '22px' : '12px';
 
   if (coverPath) {
-    const imgSrc = coverPath.startsWith('http') ? coverPath : `${API}${coverPath}`;
+    // `eager` marks the player's hero cover (and its transition snapshot) —
+    // the one place that needs the full-resolution original. Everything else
+    // (list rows, grids, chips) renders small → server thumbnail.
+    const fullSrc = coverPath.startsWith('http') ? coverPath : `${API}${coverPath}`;
+    const imgSrc = eager ? fullSrc : thumbCoverUrl(fullSrc);
     return (
       <div style={boxStyle}>
         <img
@@ -1529,7 +1619,7 @@ function LazyCover({ url, className, style, fallback = 'linear-gradient(135deg, 
   // style wins over any backgroundColor placeholder carried in `style`.
   if (!url) return <div className={className} style={{ ...style, background: fallback }} />;
   return (
-    <img src={url} alt="" loading="lazy" decoding="async" className={className}
+    <img src={thumbCoverUrl(url)} alt="" loading="lazy" decoding="async" className={className}
          // The gradient doubles as a loading placeholder behind the not-yet-
          // decoded image; a 404 swaps in a transparent pixel (data: can't
          // re-error) so the gradient shows instead of a broken-image glyph.
@@ -1904,7 +1994,9 @@ function TopRightControls({ isDark, lang, onLang, onTheme, onSettings, floating=
 // ─── Home (Discovery Magazine) shared helpers + blocks ───────────────────────
 function homeCoverUrl(path) {
   if (!path) return null;
-  return path.startsWith('http') ? path : `${API}${path}`;
+  // Home cards / rec rows render covers small — the ?w=320 server thumbnail
+  // is ~25× lighter than the full embedded art (mobile data + battery).
+  return thumbCoverUrl(path.startsWith('http') ? path : `${API}${path}`);
 }
 
 // Shimmer skeleton block. Sizes accept px numbers or CSS strings (e.g. '80%').
@@ -2863,7 +2955,7 @@ function NowPlayingPebble({ track, isPlaying, isDark = true, onClick, onHoverCha
   // (e.g. "/api/v1") and we do the same here so the browser doesn't 404 against the
   // frontend origin. http(s) URLs pass through untouched.
   const rawCover = track && (track.cover_art_path || track.coverArt) || null;
-  const cover = rawCover ? (rawCover.startsWith('http') ? rawCover : `${API}${rawCover}`) : null;
+  const cover = rawCover ? thumbCoverUrl(rawCover.startsWith('http') ? rawCover : `${API}${rawCover}`) : null;
   const animation = (hasTrack && isPlaying) ? 'pebblePulse 2.4s ease-in-out infinite' : 'none';
 
   // Theme-aware tokens
@@ -2910,7 +3002,7 @@ function MiniPlaybackPopout({ track, audio, isDark = true, onOpenPlayer, onClose
   const artist = safe.artist || '';
   // Prefix relative cover paths with ${API} (matches AlbumCover behavior).
   const rawCover = safe.cover_art_path || safe.coverArt || null;
-  const cover = rawCover ? (rawCover.startsWith('http') ? rawCover : `${API}${rawCover}`) : null;
+  const cover = rawCover ? thumbCoverUrl(rawCover.startsWith('http') ? rawCover : `${API}${rawCover}`) : null;
   const duration = audio?.duration || 0;
   // Subscribe to time store so this popout updates smoothly without re-rendering
   // the rest of the app on every tick.
@@ -14737,7 +14829,7 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere }) {
   // One album yields 2-3 colours; several yield one dominant each (hue-deduped).
   const coverUrls = mode === 'aurora'
     ? Array.from(new Set((data.albums || [])
-        .map(a => atlasImgUrl(a.cover_art_path))
+        .map(a => thumbCoverUrl(atlasImgUrl(a.cover_art_path)))
         .filter(Boolean)))
     : [];
   const { colors: sampledColors } = useCoverPalette(coverUrls);
@@ -16428,6 +16520,35 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     el.addEventListener('canplaythrough', kick);
     return () => el.removeEventListener('canplaythrough', kick);
   }, [playerTrack?.track_id, playerPlaylist, audio?.audioRef]);
+
+  // Warm up the CURRENT track when it streams over the network (not from a
+  // prefetched blob:). Kick on canplaythrough (healthy stream, idle bandwidth)
+  // OR after 5s of wall time — a starving stream may never reach
+  // canplaythrough, and that's exactly the case that needs the full download.
+  // 'waiting' mid-play + completed warmup Blob → hot-swap src in place.
+  useEffect(() => {
+    const el = audio?.audioRef?.current;
+    const tid = playerTrack?.track_id;
+    if (!el || !tid) return;
+    if ((el.currentSrc || el.src || '').startsWith('blob:')) return;
+    let fired = false;
+    const kick = () => { if (!fired) { fired = true; warmupCurrentTrack(tid); } };
+    const timer = setTimeout(kick, 5000);
+    if (el.readyState >= 4) kick();
+    else el.addEventListener('canplaythrough', kick);
+    const onWaiting = () => {
+      // Ignore the initial load ('waiting' before playback ever started).
+      if (!el.currentTime) return;
+      const url = takeWarmupBlob(tid);
+      if (url) audio.hotSwapSrc(url);
+    };
+    el.addEventListener('waiting', onWaiting);
+    return () => {
+      clearTimeout(timer);
+      el.removeEventListener('canplaythrough', kick);
+      el.removeEventListener('waiting', onWaiting);
+    };
+  }, [playerTrack?.track_id, audio?.audioRef]);
 
   // Stats for landing
   useEffect(() => {

@@ -10,6 +10,7 @@ FLAC, MP3, AAC-in-m4a, OGG, WAV, OPUS are served as-is.
 Public API:
   get_streamable_path(account_id, track_id, file_path) -> (Path, mime_type)
   drop_transcoded_for_tracks(account_id, track_ids: Iterable[str]) -> int
+  get_cached_source / put_cached_source / drop_source_for_tracks / drop_account_sources
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import subprocess
+import time
 from collections import defaultdict
 from pathlib import Path
 from typing import Iterable
@@ -43,6 +45,50 @@ _FLAC_MIME = "audio/flac"
 # track don't spawn two ffmpeg processes writing the same output file.
 _locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
+# ── Hot-path caches ──────────────────────────────────────────────────────────
+# <audio> issues many Range requests per track; without these caches every one
+# of them re-did a synchronous Qdrant retrieve (and, for .m4a, a blocking
+# ffprobe) on the event loop — stalling byte delivery for ALL listeners.
+
+# (collection, track_id) -> (expires_at_monotonic, file_path, audio_codec|None)
+_SOURCE_TTL_SECONDS = 600.0
+_SOURCE_CACHE_MAX = 20_000
+_source_cache: dict[tuple[str, str], tuple[float, str, str | None]] = {}
+
+# str(path) -> ((mtime, size), codec|None) — ffprobe result, keyed by file identity
+_CODEC_CACHE_MAX = 8_192
+_codec_cache: dict[str, tuple[tuple[float, int], str | None]] = {}
+
+
+def get_cached_source(collection: str, track_id: str) -> tuple[str, str | None] | None:
+    """Return (file_path, audio_codec) for a track if cached and fresh, else None."""
+    entry = _source_cache.get((collection, track_id))
+    if entry is None:
+        return None
+    expires_at, file_path, codec = entry
+    if time.monotonic() >= expires_at:
+        _source_cache.pop((collection, track_id), None)
+        return None
+    return file_path, codec
+
+
+def put_cached_source(collection: str, track_id: str, file_path: str, codec: str | None) -> None:
+    if len(_source_cache) >= _SOURCE_CACHE_MAX:
+        _source_cache.clear()
+    _source_cache[(collection, track_id)] = (
+        time.monotonic() + _SOURCE_TTL_SECONDS, file_path, codec,
+    )
+
+
+def drop_source_for_tracks(collection: str, track_ids: Iterable[str]) -> None:
+    for tid in track_ids:
+        _source_cache.pop((collection, tid), None)
+
+
+def drop_account_sources(collection: str) -> None:
+    for key in [k for k in _source_cache if k[0] == collection]:
+        _source_cache.pop(key, None)
+
 
 def _content_type(file_path: Path) -> str:
     return AUDIO_CONTENT_TYPES.get(file_path.suffix.lower(), "application/octet-stream")
@@ -68,14 +114,39 @@ def _detect_codec_ffprobe(file_path: Path) -> str | None:
         return None
 
 
-def _is_alac_m4a(file_path: Path) -> bool:
-    """Cheap check: is this an .m4a file using the ALAC codec?
+async def _needs_alac_transcode(file_path: Path, codec_hint: str | None = None) -> bool:
+    """Is this an .m4a file using the ALAC codec? (AAC-in-m4a plays everywhere.)
 
-    AAC-in-m4a plays everywhere; only ALAC needs transcoding.
+    ``codec_hint`` comes from the Qdrant payload (written at index time by
+    mutagen: "alac" or "mp4a.40.2") — when present, no ffprobe runs at all.
+    Legacy libraries without the payload field fall back to ffprobe, executed
+    in a thread and cached per (mtime, size) so it runs once per file, not once
+    per Range request.
     """
     if file_path.suffix.lower() != ".m4a":
         return False
-    codec = _detect_codec_ffprobe(file_path)
+    if codec_hint:
+        return codec_hint.lower().startswith("alac")
+
+    try:
+        st = file_path.stat()
+        identity = (st.st_mtime, st.st_size)
+    except OSError:
+        identity = None
+
+    key = str(file_path)
+    if identity is not None:
+        cached = _codec_cache.get(key)
+        if cached is not None and cached[0] == identity:
+            return cached[1] == "alac"
+
+    codec = await asyncio.get_running_loop().run_in_executor(
+        None, _detect_codec_ffprobe, file_path,
+    )
+    if identity is not None:
+        if len(_codec_cache) >= _CODEC_CACHE_MAX:
+            _codec_cache.clear()
+        _codec_cache[key] = (identity, codec)
     return codec == "alac"
 
 
@@ -136,6 +207,7 @@ async def get_streamable_path(
     account_id: str,
     track_id: str,
     file_path: Path,
+    codec: str | None = None,
 ) -> tuple[Path, str]:
     """Resolve the path FastAPI should hand to FileResponse, plus its mime type.
 
@@ -145,8 +217,11 @@ async def get_streamable_path(
       returned with audio/flac. First call blocks ~1–2s; subsequent calls are
       instant. Concurrent first-calls are serialized per (account_id, track_id)
       so only one ffmpeg runs.
+
+    ``codec``: optional hint from the track's Qdrant payload (index-time
+    mutagen read) — skips codec detection entirely when present.
     """
-    if not _is_alac_m4a(file_path):
+    if not await _needs_alac_transcode(file_path, codec_hint=codec):
         return file_path, _content_type(file_path)
 
     cached = _cache_path(account_id, track_id)

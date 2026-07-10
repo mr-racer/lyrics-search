@@ -97,11 +97,13 @@ def wipe_account_library(
     except Exception:
         pass
 
-    # 2. transcoded audio cache (Phase B §6.6 — keyed by account/collection).
+    # 2. transcoded audio cache (Phase B §6.6 — keyed by account/collection)
+    # + in-memory track-source cache for the stream hot path.
     if track_ids:
         try:
-            from app.services.audio_streaming import drop_transcoded_for_tracks
+            from app.services.audio_streaming import drop_transcoded_for_tracks, drop_source_for_tracks
             drop_transcoded_for_tracks(account_id=target_collection, track_ids=track_ids)
+            drop_source_for_tracks(target_collection, track_ids)
         except Exception:
             pass
 
@@ -203,8 +205,9 @@ def delete_account(
 
     # 4c. transcoded cache (keyed by collection) + top-pairs cache.
     try:
-        from app.services.audio_streaming import drop_account_transcodes
+        from app.services.audio_streaming import drop_account_transcodes, drop_account_sources
         drop_account_transcodes(collection)
+        drop_account_sources(collection)
     except Exception:
         pass
     try:
