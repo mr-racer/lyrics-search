@@ -1943,11 +1943,13 @@
     .player-icon-btn[data-active="like"] { color: #cdb8ff; background: rgba(124,91,255,0.14); }
     .player-icon-btn[data-active="dislike"] { color: #fb6f6f; background: rgba(239,68,68,0.14); }
     .player-icon-btn[data-active="lyrics"] { color: color-mix(in srgb, var(--player-accent, #7C5BFF) 55%, #fff); background: color-mix(in srgb, var(--player-accent, #7C5BFF) 14%, transparent); }
+    .player-icon-btn[data-active="shuffle"] { color: color-mix(in srgb, var(--player-accent, #7C5BFF) 55%, #fff); background: color-mix(in srgb, var(--player-accent, #7C5BFF) 14%, transparent); }
     body[data-theme="light"] .player-icon-btn { color: rgba(22,22,32,0.50); }
     body[data-theme="light"] .player-icon-btn:hover { color: #161620; }
     body[data-theme="light"] .player-icon-btn[data-active="like"]    { color: #5b3fd6; background: rgba(124,91,255,0.10); }
     body[data-theme="light"] .player-icon-btn[data-active="dislike"] { color: #c0392b; background: rgba(239,68,68,0.10); }
     body[data-theme="light"] .player-icon-btn[data-active="lyrics"]  { color: color-mix(in srgb, var(--player-accent, #7C5BFF) 78%, #000); background: color-mix(in srgb, var(--player-accent, #7C5BFF) 10%, transparent); }
+    body[data-theme="light"] .player-icon-btn[data-active="shuffle"] { color: color-mix(in srgb, var(--player-accent, #7C5BFF) 78%, #000); background: color-mix(in srgb, var(--player-accent, #7C5BFF) 10%, transparent); }
 
     .player-icon-burst {
       position: absolute;

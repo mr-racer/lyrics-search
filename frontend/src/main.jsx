@@ -12927,7 +12927,7 @@ function CoverCombustion({ kind = 'fire', playKey = 0 }) {
   );
 }
 
-function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, onStreamSignal, audio, visible, lyricsMode, onToggleLyrics, onCloseLyrics, showToast, navigateToArtist, aiStatus, onAddToPlaylist, onQueueNext, onReorderQueue }) {
+function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, onStreamSignal, audio, visible, lyricsMode, onToggleLyrics, onCloseLyrics, showToast, navigateToArtist, aiStatus, onAddToPlaylist, onQueueNext, onReorderQueue, shuffleOn, onToggleShuffle, streamActive }) {
   const [playlist, setPlaylist] = useState(initialPlaylist || []);
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [liked, setLiked] = useState(null);
@@ -12980,6 +12980,48 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
     onCommit: reorderQueue,
     scrollRef: queueScrollRef,
   });
+
+  // ── Shuffle FLIP ────────────────────────────────────────────────────────
+  // The new order arrives asynchronously (click → App.toggleShuffle →
+  // initialPlaylist → setPlaylist), so the "first" rects must be captured at
+  // click time; the layout effect below plays first→last once the reordered
+  // rows are in the DOM. Skipped under prefers-reduced-motion (no capture →
+  // no animation, instant reorder).
+  const shuffleRectsRef = useRef(null);   // Map<track_id, DOMRect> | null
+  const handleShuffleClick = () => {
+    const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const root = queueScrollRef.current;
+    if (!reduced && root) {
+      const m = new Map();
+      root.querySelectorAll('[data-tid]').forEach(el => m.set(el.dataset.tid, el.getBoundingClientRect()));
+      shuffleRectsRef.current = m;
+    }
+    if (onToggleShuffle) onToggleShuffle();
+  };
+  useLayoutEffect(() => {
+    const prev = shuffleRectsRef.current;
+    if (!prev) return;
+    shuffleRectsRef.current = null;
+    const root = queueScrollRef.current;
+    if (!root || !root.querySelectorAll) return;
+    const view = root.getBoundingClientRect();
+    const inView = (r) => r.bottom > view.top && r.top < view.bottom;
+    let k = 0;   // stagger counter over rows that actually move
+    root.querySelectorAll('[data-tid]').forEach(el => {
+      const old = prev.get(el.dataset.tid);
+      if (!old || !el.animate) return;
+      const now = el.getBoundingClientRect();
+      const dy = old.top - now.top;
+      // Rows that never cross the visible scroll area just snap into place.
+      if (Math.abs(dy) < 2 || (!inView(old) && !inView(now))) return;
+      el.animate([
+        { transform: `translateY(${dy}px)` },
+        { transform: `translateY(${dy * 0.5}px) scale(0.97)`, offset: 0.55 },
+        { transform: 'translateY(0) scale(1)' },
+      ], { duration: 460, delay: Math.min(k * 16, 160), easing: 'cubic-bezier(0.22, 0.9, 0.24, 1)', fill: 'backwards' });
+      k++;
+    });
+  }, [playlist]);
 
   // Derive playback state from shared audio hook
   const isPlaying = audio?.isPlaying ?? false;
@@ -14031,6 +14073,29 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                 </button>
               )}
               <VolumeControl volume={volume} onChange={setVolume} isDark={isDark} lang={lang} />
+              {/* Shuffle — hidden in stream mode: the wave picks the next track
+                  itself, so a hand-shuffled order would be a lie there. */}
+              {!streamActive && (
+                <button
+                  type="button" className="player-icon-btn"
+                  data-active={shuffleOn ? 'shuffle' : ''}
+                  aria-pressed={!!shuffleOn}
+                  onClick={handleShuffleClick}
+                  disabled={playlist.length === 0}
+                  title={lang === 'ru'
+                    ? (shuffleOn ? 'Выключить перемешивание — вернуть порядок' : 'Перемешать очередь')
+                    : (shuffleOn ? 'Turn shuffle off — restore order' : 'Shuffle the queue')}
+                  aria-label={lang === 'ru' ? 'Перемешать очередь' : 'Shuffle the queue'}
+                >
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="16 3 21 3 21 8" />
+                    <line x1="4" y1="20" x2="21" y2="3" />
+                    <polyline points="21 16 21 21 16 21" />
+                    <line x1="15" y1="15" x2="21" y2="21" />
+                    <line x1="4" y1="4" x2="9" y2="9" />
+                  </svg>
+                </button>
+              )}
             </div>
 
             {/* Lossless badge — shown for FLAC always, M4A when bitrate > 600 kbps */}
@@ -14209,7 +14274,9 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                   const dropped = !!droppedId && t.track_id === droppedId;
                   return (
                     <Fragment key={t.track_id || i}>
-                      {i === firstAutoplayIdx && firstAutoplayIdx !== -1 && (
+                      {/* Shuffle intermixes hand-picked and autoplay tracks, so
+                          the divider would lie — hide it while shuffled. */}
+                      {i === firstAutoplayIdx && firstAutoplayIdx !== -1 && !shuffleOn && (
                         <div style={{
                           display: 'flex',
                           alignItems: 'center',
@@ -14227,6 +14294,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                       )}
                       <div
                         data-qrow={rp['data-qrow']}
+                        data-tid={t.track_id || ''}
                         className={`player-playlist-item${active ? ' player-active' : ''}${rp.className ? ' ' + rp.className : ''}${dropped ? ' q-dropped' : ''}`}
                         onPointerDown={rp.onPointerDown}
                         onClick={() => {
@@ -15723,6 +15791,8 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     // Any manual play exits stream mode — the user took the wheel.
     streamActiveRef.current = false;
     setStreamActive(false);
+    // Replacing the queue voids the shuffle: the fresh queue starts unshuffled.
+    resetShuffle();
     // Search/Recommend pass HIT shape ({ track:{track_id,title,...}, score, matched_on }).
     // playerTrack must be FLAT so LandingPlayer / NowPlayingPebble / MiniPlaybackPopout /
     // PlayerSection.findIndex (which compares h.track.track_id === initialTrack.track_id)
@@ -15859,6 +15929,48 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     handleTrackChange(track);
   };
 
+  // ── Queue shuffle ──────────────────────────────────────────────────────
+  // Toggle-with-restore over the SOURCE-OF-TRUTH queue (playerPlaylist), so
+  // the visible queue stays truthful: ON physically Fisher–Yates-shuffles the
+  // unplayed tail (played + now-playing stay put, same lock as drag-reorder);
+  // OFF restores the tail to the pre-shuffle snapshot. Tracks that appeared
+  // after ON (queue-next, autoplay top-ups) aren't in the snapshot — they sink
+  // to the end of the tail keeping their relative order. Hidden entirely in
+  // stream mode (the wave owns its order), and reset on every queue
+  // replacement (handlePlayTrack / startStream) — a new queue starts honest.
+  // Session-only: nothing persisted. Design: 2026-07-10-queue-shuffle-design.
+  const [shuffleOn, setShuffleOn] = useState(false);
+  const preShuffleOrderRef = useRef(null);   // track_id[] of the tail at ON time
+  const resetShuffle = () => { setShuffleOn(false); preShuffleOrderRef.current = null; };
+
+  const toggleShuffle = () => {
+    const list = playerPlaylist || [];
+    const idOf = (h) => ((h && h.track) ? h.track : h)?.track_id;
+    const curId = playerTrack?.track_id;
+    const idx = curId ? list.findIndex(h => idOf(h) === curId) : -1;
+    const splitAt = idx + 1;                 // idx === -1 → shuffle the whole list
+    const head = list.slice(0, splitAt);
+    const tail = list.slice(splitAt);
+    if (!shuffleOn) {
+      preShuffleOrderRef.current = tail.map(idOf);
+      const shuffled = tail.slice();
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      setPlayerPlaylist([...head, ...shuffled]);
+      setShuffleOn(true);
+    } else {
+      const order = preShuffleOrderRef.current || [];
+      const pos = new Map(order.map((id, i) => [id, i]));
+      const known = tail.filter(h => pos.has(idOf(h)));
+      const unknown = tail.filter(h => !pos.has(idOf(h)));
+      known.sort((a, b) => pos.get(idOf(a)) - pos.get(idOf(b)));
+      setPlayerPlaylist([...head, ...known, ...unknown]);
+      resetShuffle();
+    }
+  };
+
   // ── Stream mode («Поток») ──────────────────────────────────────────────
   // Stateless personalized radio: GET /recommend/stream/next rebuilds the
   // taste profile from playback_events + reactions on every call. The
@@ -15907,6 +16019,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
   const startStream = async () => {
     streamActiveRef.current = true;
     setStreamActive(true);
+    resetShuffle();   // the wave owns its order — shuffle can't apply to it
     const hits = await fetchStreamChunk({ excludeQueue: false });
     if (!hits.length) {
       streamActiveRef.current = false;
@@ -16160,6 +16273,9 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
                 playlistsListing={appPlaylists}
                 onQueueNext={id === 'player' ? handleQueueNext : undefined}
                 onReorderQueue={id === 'player' ? setPlayerPlaylist : undefined}
+                shuffleOn={id === 'player' ? shuffleOn : undefined}
+                onToggleShuffle={id === 'player' ? toggleShuffle : undefined}
+                streamActive={id === 'player' ? streamActive : undefined}
               />
             </div>
           ))}
