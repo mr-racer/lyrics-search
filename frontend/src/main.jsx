@@ -5981,7 +5981,13 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
   const [recentSort, setRecentSort] = useState('last_played');
 
   // ── UI state ──────────────────────────────────────────────────────────
-  const [activeTab, setActiveTab] = useState(() => localStorage.getItem('library_active_tab') || 'albums');
+  // Tab pick: a ?tab= deep link (spec 2026-07-10-spa-routing, phase 3) wins
+  // over the localStorage-persisted choice.
+  const [activeTab, setActiveTab] = useState(() => {
+    const urlTab = new URLSearchParams(window.location.search).get('tab');
+    if (urlTab && ['albums', 'liked', 'recent', 'playlists', 'stats'].includes(urlTab)) return urlTab;
+    return localStorage.getItem('library_active_tab') || 'albums';
+  });
   const [albumModal, setAlbumModal] = useState(null);  // { album: AlbumSummary, originRect: DOMRect|null }
   const [likedMap, setLikedMap] = useState({});
   // playlistsListing is now provided by App-level usePlaylists (lifted in Plan 19 follow-up)
@@ -6009,7 +6015,20 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
     }
   };
 
-  useEffect(() => { localStorage.setItem('library_active_tab', activeTab); }, [activeTab]);
+  useEffect(() => {
+    localStorage.setItem('library_active_tab', activeTab);
+    // Reflect the tab in the URL for shareable deep links. replaceState (not
+    // push) — tab switches must not become history entries; the pathname
+    // guard keeps a freshly-switched section's URL from being rewritten
+    // (child effects run before App's URL-sync effect).
+    if (window.location.pathname === '/library') {
+      const url = new URL(window.location.href);
+      if (url.searchParams.get('tab') !== activeTab) {
+        url.searchParams.set('tab', activeTab);
+        window.history.replaceState(window.history.state, '', url);
+      }
+    }
+  }, [activeTab]);
 
   // ── Entrance animation epoch ──────────────────────────────────────────
   // The section stays mounted (visibility-toggled at App level), so CSS
@@ -8002,6 +8021,157 @@ function IndexingProgress({ stepStatus, stageProgress, lang, c, isDark, premiumN
   );
 }
 
+// ─── Shared indexing-job tracking (spec 2026-07-10-spa-routing, phase 2) ─────
+// One SSE consumer for /index/progress/{job_id} with the stage-merge semantics
+// SettingsPanel and OnboardingScreen used to duplicate inline: event-specific
+// fields (current/total/eta/message) overlay the stage snapshot, and merged
+// values never regress to undefined. Returns a close function.
+function openIndexProgressStream(jobId, { onProgress, onComplete, onError }) {
+  const evt = new EventSource(`${API}/index/progress/${jobId}`);
+  const statusMap = { completed: 'done', failed: 'failed', running: 'running', pending: 'pending' };
+  let stepStatus = {};
+  let stageProgress = {};
+  let closed = false;
+  const close = () => { closed = true; evt.close(); };
+  evt.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      if (data.error && !data.stages) { close(); onError(String(data.error)); return; }  // e.g. 'Job not found'
+      if (data.stages) {
+        if (data.stage && data.stages[data.stage]) {
+          const ev = data.stages[data.stage];
+          if (data.current !== undefined) ev.current = data.current;
+          if (data.total !== undefined) ev.total = data.total;
+          if (data.eta_seconds !== undefined) ev.eta_seconds = data.eta_seconds;
+          if (data.message !== undefined) ev.message = data.message;
+        }
+        stepStatus = { ...stepStatus };
+        stageProgress = { ...stageProgress };
+        for (const [key, stage] of Object.entries(data.stages)) {
+          stepStatus[key] = (statusMap[stage.status] || stage.status) || 'pending';
+          const prev = stageProgress[key] || {};
+          stageProgress[key] = {
+            current: stage.current ?? prev.current ?? 0,
+            total: stage.total ?? prev.total ?? 0,
+            eta: stage.eta_seconds ?? prev.eta ?? null,
+            message: stage.message ?? prev.message ?? null,
+            found: stage.found ?? prev.found ?? null,
+            not_found: stage.not_found ?? prev.not_found ?? null,
+          };
+        }
+      }
+      if (data.overall_status === 'completed') {
+        close();
+        // Anything still pending when the job completes is implicitly done.
+        stepStatus = Object.fromEntries(Object.entries(stepStatus).map(([k, v]) => [k, v === 'pending' ? 'done' : v]));
+        onProgress({ stepStatus, stageProgress });
+        onComplete(data.stages?.lyrics?.current || data.stages?.metadata?.current || 0);
+      } else if (data.overall_status === 'failed') {
+        close();
+        onProgress({ stepStatus, stageProgress });
+        onError(data.error || data.message || 'failed');
+      } else if (data.stages) {
+        onProgress({ stepStatus, stageProgress });
+      }
+    } catch {}
+  };
+  evt.onerror = () => { if (!closed) { close(); onError('connection_lost'); } };
+  return close;
+}
+
+// App-level indexing job state. Owns the EventSource so tracking survives
+// closing the settings panel and section navigation; App re-attaches after a
+// full reload by asking GET /library/status (the server keeps per-account job
+// state, and the SSE stream replays a full snapshot to late subscribers).
+// `error` may hold the sentinel 'connection_lost' — consumers localize it.
+function useIndexingJob({ onCompleted } = {}) {
+  const [status, setStatus] = useState('idle');   // idle | running | completed | failed
+  const [jobInfo, setJobInfo] = useState(null);   // { jobId, resumed } | null
+  const [stepStatus, setStepStatus] = useState({});
+  const [stageProgress, setStageProgress] = useState({});
+  const [error, setError] = useState(null);
+  const [trackCount, setTrackCount] = useState(null);
+  const closeRef = useRef(null);
+  const onCompletedRef = useRef(onCompleted);
+  onCompletedRef.current = onCompleted;
+
+  // Seed the 'starting' UI before the POST /library/index round-trip returns.
+  const begin = useCallback(() => {
+    closeRef.current?.();
+    closeRef.current = null;
+    setJobInfo(null);
+    setStatus('running');
+    setError(null); setTrackCount(null);
+    setStepStatus({ lyrics:'idle', facts:'idle', metadata:'idle', dense:'idle', audio:'idle', analysis:'idle' });
+    setStageProgress({});
+  }, []);
+
+  const attach = useCallback((jobId, { resumed = false } = {}) => {
+    if (!jobId) return;
+    closeRef.current?.();
+    setJobInfo({ jobId, resumed });
+    setStatus('running');
+    if (resumed) { setError(null); setTrackCount(null); setStepStatus({}); setStageProgress({}); }
+    closeRef.current = openIndexProgressStream(jobId, {
+      onProgress: (p) => { setStepStatus(p.stepStatus); setStageProgress(p.stageProgress); },
+      onComplete: (count) => { setStatus('completed'); setTrackCount(count); onCompletedRef.current?.(count); },
+      onError: (msg) => { setStatus('failed'); setError(msg); },
+    });
+  }, []);
+
+  // Immediate-completion path: POST /library/index answered without a job_id.
+  const completeSync = useCallback((count) => {
+    setStepStatus({ lyrics:'done', facts:'done', metadata:'done', dense:'done', audio:'done', analysis:'done' });
+    setTrackCount(count); setStatus('completed');
+    onCompletedRef.current?.(count);
+  }, []);
+
+  const fail = useCallback((message) => { setStatus('failed'); setError(message); }, []);
+
+  const reset = useCallback(() => {
+    closeRef.current?.(); closeRef.current = null;
+    setJobInfo(null); setStatus('idle'); setError(null); setTrackCount(null);
+    setStepStatus({}); setStageProgress({});
+  }, []);
+
+  useEffect(() => () => { closeRef.current?.(); }, []);
+
+  return { status, jobInfo, stepStatus, stageProgress, error, trackCount, begin, attach, completeSync, fail, reset };
+}
+
+// Floating indicator for an indexing job running while its origin UI (settings
+// panel / onboarding modal) is closed. Click reopens Settings with the staged
+// modal. Percent mirrors JobTracker.get_progress_summary's stage weights.
+function IndexingStatusPill({ isDark, lang, stepStatus, stageProgress, onClick }) {
+  const c = useColors(isDark);
+  const isMobile = useIsMobile();
+  const weights = { lyrics: 0.25, facts: 0.10, metadata: 0.05, dense: 0.20, audio: 0.25, analysis: 0.15 };
+  let pct = 0;
+  for (const [key, w] of Object.entries(weights)) {
+    const sp = stageProgress[key];
+    if (stepStatus[key] === 'done') pct += w * 100;
+    else if (stepStatus[key] === 'running' && sp?.total) pct += w * (sp.current / sp.total) * 100;
+  }
+  pct = Math.min(100, Math.round(pct));
+  return (
+    <button onClick={onClick} className="mono" style={{
+      position: 'fixed', right: 18,
+      // Mobile: clear the bottom tab bar + mini player stack.
+      bottom: isMobile ? 'calc(env(safe-area-inset-bottom, 0px) + 132px)' : 18,
+      zIndex: 80,
+      display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', borderRadius: 999,
+      border: `1px solid ${isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.12)'}`,
+      background: isDark ? 'rgba(20,20,28,0.85)' : 'rgba(255,255,255,0.9)',
+      backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)',
+      color: c.text, fontSize: 12, letterSpacing: '0.08em', cursor: 'pointer',
+      boxShadow: '0 6px 24px rgba(0,0,0,0.25)', animation: 'fadeInUp 0.3s ease',
+    }}>
+      <Spinner size={13} />
+      {(lang === 'ru' ? 'ИНДЕКСАЦИЯ' : 'INDEXING')} · {pct}%
+    </button>
+  );
+}
+
 // ─── Indexing Modal ──────────────────────────────────────────────────────────
 function IndexingModal({
   isDark, lang, collectionName, stepStatus, trackCount, errorMessage, onClose, stageProgress,
@@ -9088,7 +9258,7 @@ function OwnerAdminDashboard({ onLogout }) {
   );
 }
 
-function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, onTheme, onLang, collections, userPoints, onLogout, instanceMode, showToast }) {
+function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, onTheme, onLang, collections, userPoints, onLogout, instanceMode, showToast, indexingJob }) {
   const c = useColors(isDark);
   const isMobile = useIsMobile();  // full-screen panel + tighter gutters on phones
   // 'light' | 'heavy' — derived from the legacy text_model localStorage key so
@@ -9100,14 +9270,40 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
   const [picking, setPicking] = useState(false);
   const [betterLyrics, setBetterLyrics] = useState(false);
   const [refineMetadata, setRefineMetadata] = useState(false);
-  const [indexing, setIndexing] = useState(false);
-  const [stepStatus, setStepStatus] = useState({});
-  const [showModal, setShowModal] = useState(false);
-  const [modalTrackCount, setModalTrackCount] = useState(null);
-  const [modalError, setModalError] = useState(null);
-  const [stageProgress, setStageProgress] = useState({});
-  const [indexPhase, setIndexPhase] = useState('ai-setup');  // 'ai-setup' | 'indexing' | 'ai-bootstrap' | 'ai-running'
+  // Progress state comes from the App-level indexingJob hook (spec phase 2):
+  // the SSE subscription lives above this panel, so closing it or navigating
+  // sections no longer loses the running job. Opening the panel while a job
+  // is already running (started earlier / resumed after F5) surfaces the
+  // staged modal immediately, past the AI-setup step.
+  const indexing = indexingJob.status === 'running';
+  const stepStatus = indexingJob.stepStatus;
+  const stageProgress = indexingJob.stageProgress;
+  const modalTrackCount = indexingJob.trackCount;
+  const modalError = indexingJob.error === 'connection_lost'
+    ? (lang === 'ru' ? 'Соединение потеряно' : 'Connection lost')
+    : indexingJob.error;
+  const [showModal, setShowModal] = useState(() => indexingJob.status === 'running');
+  const [indexPhase, setIndexPhase] = useState(() =>  // 'ai-setup' | 'indexing' | 'ai-bootstrap' | 'ai-running'
+    indexingJob.status === 'running' ? 'indexing' : 'ai-setup');
   const [enabledForNewCollection, setEnabledForNewCollection] = useState(true);
+  // Which AI choice the CURRENT run was started with — read on completion.
+  // A ref (not state): the completion effect below must see the value the run
+  // began with even if the component re-rendered in between.
+  const aiEnabledRef = useRef(true);
+
+  // Job completion → phase transition (mirrors the old inline SSE handler).
+  // Gated on showModal so a background job that finishes while this panel
+  // shows only the form doesn't flip phases behind the scenes.
+  const prevJobStatusRef = useRef(indexingJob.status);
+  useEffect(() => {
+    const prev = prevJobStatusRef.current;
+    prevJobStatusRef.current = indexingJob.status;
+    if (prev !== 'running' || indexingJob.status !== 'completed' || !showModal) return;
+    // (collections refresh happens in useIndexingJob's onCompleted at App level)
+    if (aiStatus?.aiAvailable && aiEnabledRef.current) setIndexPhase('ai-bootstrap');
+    else setIndexPhase('indexing');  // stay in 'indexing' phase showing Done UI
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [indexingJob.status, showModal]);
 
   const [llmBaseUrl, setLlmBaseUrl] = useState(() => localStorage.getItem('llm_base_url') || '');
   const [llmModel, setLlmModel] = useState(() => localStorage.getItem('llm_model') || '');
@@ -9151,87 +9347,23 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
   // render's value (stale), causing the post-indexing phase transition to
   // misroute (e.g. "Skip AI" would still land on ai-bootstrap).
   const startIndexing = async (aiEnabledArg = enabledForNewCollection) => {
-    const colName = collName.trim() || 'my_collection';
-    setIndexing(true); setModalError(null); setModalTrackCount(null); setStageProgress({});
-    setStepStatus({ lyrics:'idle', facts:'idle', metadata:'idle', dense:'idle', audio:'idle', analysis:'idle' });
+    aiEnabledRef.current = aiEnabledArg;
+    indexingJob.begin();
     try {
       // Only send text_model for the heavy tier — omit otherwise so backend
       // falls back to its default (the light model).
       const validModel = modelTier === 'heavy' ? HEAVY_TEXT_MODEL : undefined;
       const res = await apiFetch('/library/index', { method:'POST',
         body: JSON.stringify({ folder_path:folderPath, better_lyrics_quality:betterLyrics, text_model:validModel, enhance_by_musicbrainz:refineMetadata }) });
-      if (res.status === 'failed') { setModalError(res.message); setIndexing(false); return; }
+      if (res.status === 'failed') { indexingJob.fail(res.message); return; }
       if (!res.job_id) {
-        setStepStatus({ metadata:'done', lyrics:'done', audio:'done', analysis:'done' });
-        setModalTrackCount(res.count || 0);
-        onCollectionsUpdate && onCollectionsUpdate();
-        // Phase transition (Plan 6): if AI is on for this collection and LLM probes ok, advance to ai-bootstrap
-        if (aiStatus?.aiAvailable && aiEnabledArg) {
-          setIndexPhase('ai-bootstrap');
-        } else {
-          setIndexPhase('indexing');  // stay in 'indexing' phase showing Done UI
-        }
+        // Immediate completion — the completion effect above handles the
+        // phase transition and the collections refresh.
+        indexingJob.completeSync(res.count || 0);
         return;
       }
-      const evt = new EventSource(`${API}/index/progress/${res.job_id}`);
-      evt.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.stages) {
-            const statusMap = { completed: 'done', failed: 'failed', running: 'running', pending: 'pending' };
-            setStepStatus(prev => {
-              const newStatus = { ...prev };
-              for (const [key, stage] of Object.entries(data.stages)) {
-                newStatus[key] = (statusMap[stage.status] || stage.status) || 'pending';
-              }
-              return newStatus;
-            });
-            // Merge event-specific fields into the correct stage
-            if (data.stage && data.stages[data.stage]) {
-              const ev = data.stages[data.stage];
-              if (data.current !== undefined) ev.current = data.current;
-              if (data.total !== undefined) ev.total = data.total;
-              if (data.eta_seconds !== undefined) ev.eta_seconds = data.eta_seconds;
-              if (data.message !== undefined) ev.message = data.message;
-            }
-            setStageProgress(prev => {
-              const newProg = { ...prev };
-              for (const [key, stage] of Object.entries(data.stages)) {
-                newProg[key] = {
-                  current: stage.current ?? prev[key]?.current ?? 0,
-                  total: stage.total ?? prev[key]?.total ?? 0,
-                  eta: stage.eta_seconds ?? prev[key]?.eta ?? null,
-                  message: stage.message ?? prev[key]?.message ?? null,
-                  found: stage.found ?? prev[key]?.found ?? null,
-                  not_found: stage.not_found ?? prev[key]?.not_found ?? null,
-                };
-              }
-              return newProg;
-            });
-          }
-          if (data.overall_status === 'completed') {
-            evt.close();
-            setStepStatus(prev => ({ ...prev, ...Object.fromEntries(
-              Object.keys(prev).filter(k => prev[k] === 'pending').map(k => [k, 'done'])
-            )}));
-            setModalTrackCount(data.stages?.lyrics?.current || data.stages?.metadata?.current || 0);
-            setIndexing(false);
-            onCollectionsUpdate && onCollectionsUpdate();
-            // Phase transition (Plan 6): if AI is on for this collection and LLM probes ok, advance to ai-bootstrap
-            if (aiStatus?.aiAvailable && aiEnabledArg) {
-              setIndexPhase('ai-bootstrap');
-            } else {
-              setIndexPhase('indexing');  // stay in 'indexing' phase showing Done UI
-            }
-          } else if (data.overall_status === 'failed') {
-            evt.close();
-            setModalError(data.error || data.message);
-            setIndexing(false);
-          }
-        } catch {}
-      };
-      evt.onerror = () => { evt.close(); if (indexing) { setModalError(lang==='ru'?'Соединение потеряно':'Connection lost'); setIndexing(false); } };
-    } catch (e) { setModalError(e.message); setIndexing(false); }
+      indexingJob.attach(res.job_id);
+    } catch (e) { indexingJob.fail(e.message); }
   };
 
   // Save + probe in one step: trim, sync state with what we persist (so a
@@ -9546,7 +9678,7 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
         {showModal && (
           <IndexingModal isDark={isDark} lang={lang} collectionName={collName||'my_collection'}
             stepStatus={stepStatus} trackCount={modalTrackCount} errorMessage={modalError}
-            onClose={() => { setShowModal(false); setStepStatus({}); setModalError(null); setModalTrackCount(null); }}
+            onClose={() => { setShowModal(false); indexingJob.reset(); }}
             stageProgress={stageProgress}
             phase={indexPhase}
             aiStatus={aiStatus}
@@ -10781,7 +10913,7 @@ function UploadIndexingWizard({ isDark, lang, jobId, onDone }) {
   );
 }
 
-function OnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
+function OnboardingScreen({ isDark, lang, onDone, onLang, onTheme, indexingJob }) {
   const c = useColors(isDark);
   // Phase C: branch on instance mode. Sharing keeps the folder-input UI below;
   // server replaces it with a drag-drop uploader. Fetch /instance/config once on
@@ -10801,12 +10933,34 @@ function OnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
   const [refineMetadata, setRefineMetadata] = useState(false);
   const [picking, setPicking] = useState(false);
   const [error, setError] = useState('');
-  const [indexing, setIndexing] = useState(false);
-  const [stepStatus, setStepStatus] = useState({});
-  const [showModal, setShowModal] = useState(false);
-  const [modalTrackCount, setModalTrackCount] = useState(null);
-  const [modalError, setModalError] = useState(null);
-  const [stageProgress, setStageProgress] = useState({});
+  // Progress comes from the App-level indexingJob hook (spec phase 2) — a
+  // reload mid-indexing resumes tracking via GET /library/status in App, and
+  // the effects below re-open the modal and finish onboarding on completion.
+  const indexing = indexingJob.status === 'running';
+  const stepStatus = indexingJob.stepStatus;
+  const stageProgress = indexingJob.stageProgress;
+  const modalTrackCount = indexingJob.trackCount;
+  const modalError = indexingJob.error === 'connection_lost'
+    ? (lang === 'ru' ? 'Соединение потеряно' : 'Connection lost')
+    : indexingJob.error;
+  const [showModal, setShowModal] = useState(() => indexingJob.status === 'running');
+
+  // Resumed job attached after mount (App's /library/status answer races this
+  // screen's first render) — surface the modal as soon as it starts reporting.
+  useEffect(() => {
+    if (indexingJob.status === 'running') setShowModal(true);
+  }, [indexingJob.status]);
+
+  // Job ran to completion (fresh or resumed) → finish onboarding.
+  const prevJobStatusRef = useRef(indexingJob.status);
+  useEffect(() => {
+    const prev = prevJobStatusRef.current;
+    prevJobStatusRef.current = indexingJob.status;
+    if (prev !== 'running' || indexingJob.status !== 'completed') return;
+    const t = setTimeout(onDone, 800);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [indexingJob.status]);
 
   const handlePick = async () => {
     setPicking(true); setError('');
@@ -10816,68 +10970,19 @@ function OnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
 
   const handleIndex = async () => {
     if (!folderPath || indexing) return;
-    setIndexing(true); setShowModal(true); setModalError(null); setModalTrackCount(null); setStageProgress({});
-    setStepStatus({ lyrics:'idle', facts:'idle', metadata:'idle', dense:'idle', audio:'idle', analysis:'idle' });
-    const c = collName.trim() || 'my_collection';
+    setShowModal(true);
+    indexingJob.begin();
     try {
       const res = await apiFetch('/library/index', { method:'POST',
         body: JSON.stringify({ folder_path:folderPath, better_lyrics_quality:betterLyrics, enhance_by_musicbrainz:refineMetadata }) });
-      if (res.status === 'failed') { setModalError(res.message); setIndexing(false); return; }
+      if (res.status === 'failed') { indexingJob.fail(res.message); return; }
       if (!res.job_id) {
-        setStepStatus({ metadata:'done', lyrics:'done', audio:'done', analysis:'done' });
-        setModalTrackCount(res.count || 0);
-        setTimeout(onDone, 800); return;
+        // Immediate completion — the effect above fires onDone.
+        indexingJob.completeSync(res.count || 0);
+        return;
       }
-      const evt = new EventSource(`${API}/index/progress/${res.job_id}`);
-      evt.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.stages) {
-            const statusMap = { completed: 'done', failed: 'failed', running: 'running', pending: 'pending' };
-            setStepStatus(prev => {
-              const newStatus = { ...prev };
-              for (const [key, stage] of Object.entries(data.stages)) {
-                newStatus[key] = (statusMap[stage.status] || stage.status) || 'pending';
-              }
-              return newStatus;
-            });
-            // Merge event-specific fields into the correct stage
-            if (data.stage && data.stages[data.stage]) {
-              const ev = data.stages[data.stage];
-              if (data.current !== undefined) ev.current = data.current;
-              if (data.total !== undefined) ev.total = data.total;
-              if (data.eta_seconds !== undefined) ev.eta_seconds = data.eta_seconds;
-              if (data.message !== undefined) ev.message = data.message;
-            }
-            setStageProgress(prev => {
-              const newProg = { ...prev };
-              for (const [key, stage] of Object.entries(data.stages)) {
-                newProg[key] = {
-                  current: stage.current ?? prev[key]?.current ?? 0,
-                  total: stage.total ?? prev[key]?.total ?? 0,
-                  eta: stage.eta_seconds ?? prev[key]?.eta ?? null,
-                  message: stage.message ?? prev[key]?.message ?? null,
-                  found: stage.found ?? prev[key]?.found ?? null,
-                  not_found: stage.not_found ?? prev[key]?.not_found ?? null,
-                };
-              }
-              return newProg;
-            });
-          }
-          if (data.overall_status === 'completed') {
-            evt.close();
-            setStepStatus(prev => ({ ...prev, ...Object.fromEntries(
-              Object.keys(prev).filter(k => prev[k] === 'pending').map(k => [k, 'done'])
-            )}));
-            setModalTrackCount(data.stages?.lyrics?.current || data.stages?.metadata?.current || 0);
-            setTimeout(onDone, 800);
-          } else if (data.overall_status === 'failed') {
-            evt.close(); setModalError(data.error || data.message); setIndexing(false);
-          }
-        } catch {}
-      };
-      evt.onerror = () => { evt.close(); if (indexing) { setModalError(lang==='ru'?'Соединение потеряно':'Connection lost'); setIndexing(false); } };
-    } catch (e) { setModalError(e.message); setIndexing(false); }
+      indexingJob.attach(res.job_id);
+    } catch (e) { indexingJob.fail(e.message); }
   };
 
   // Phase C mode gate — runs before the sharing-mode UI below.
@@ -10996,7 +11101,7 @@ function OnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
       {showModal && (
         <IndexingModal isDark={isDark} lang={lang} collectionName={collName}
           stepStatus={stepStatus} trackCount={modalTrackCount} errorMessage={modalError}
-          onClose={() => { setShowModal(false); setStepStatus({}); setModalError(null); }}
+          onClose={() => { setShowModal(false); indexingJob.reset(); }}
           stageProgress={stageProgress} premiumNote />
       )}
     </div>
@@ -15665,6 +15770,67 @@ function MiniPlayerBar({ track, audio, isDark, lang, onOpen }) {
   );
 }
 
+// ─── SPA routing (spec 2026-07-10-spa-routing-design) ────────────────────────
+// The URL is a projection of App's `section` state (+ artist slug). No router
+// library on purpose: sections must stay mounted (visibility-toggled) so audio
+// and per-section state survive navigation; a route-per-element router would
+// unmount them. FastAPI's SPA catch-all and the PWA navigateFallback already
+// serve index.html for these paths, so F5 and deep links work.
+const SECTION_PATHS = {
+  home: '/', search: '/search', recommend: '/recommend',
+  library: '/library', player: '/player',
+};
+
+function pathForSection(section, artistSlug) {
+  if (section === 'artist' && artistSlug) return `/artist/${encodeURIComponent(artistSlug)}`;
+  return SECTION_PATHS[section] || '/';
+}
+
+function parseAppPath(pathname) {
+  const clean = (pathname || '/').replace(/\/+$/, '') || '/';
+  const artist = clean.match(/^\/artist\/([^/]+)$/);
+  if (artist) {
+    try { return { section: 'artist', slug: decodeURIComponent(artist[1]) }; }
+    catch { return null; }
+  }
+  for (const [section, path] of Object.entries(SECTION_PATHS)) {
+    if (clean === path) return { section };
+  }
+  return null;
+}
+
+// Push a history entry while an overlay is open so the browser/OS back
+// gesture closes the overlay instead of leaving the page (critical in the
+// installed PWA, where "back" otherwise exits the app). Closing through the
+// overlay's own UI pops the entry it pushed, keeping history clean. Only for
+// overlays whose close path can't race a section navigation in the same tick
+// (e.g. the settings panel); the library album modal closes INTO a play-track
+// navigation, so it must not use this.
+function useHistoryOverlay(isOpen, onClose, key) {
+  const openRef = useRef(false);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  useEffect(() => {
+    if (isOpen && !openRef.current) {
+      openRef.current = true;
+      window.history.pushState({ app: true, overlay: key }, '', window.location.href);
+    } else if (!isOpen && openRef.current) {
+      openRef.current = false;
+      if (window.history.state && window.history.state.overlay === key) window.history.back();
+    }
+  }, [isOpen, key]);
+  useEffect(() => {
+    const onPop = () => {
+      if (openRef.current && !(window.history.state && window.history.state.overlay === key)) {
+        openRef.current = false;
+        onCloseRef.current();
+      }
+    };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, [key]);
+}
+
 function App({ instanceMode = 'sharing', onLogout = () => {} }) {
   const [isDark, setDark] = useState(() => (localStorage.getItem('musix_theme') || 'dark') === 'dark');
   const [lang, setLang]   = useState(() => localStorage.getItem('musix_lang') || 'ru');
@@ -15675,12 +15841,20 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     document.body.setAttribute('data-theme', isDark ? 'dark' : 'light');
   }, [isDark]);
 
-  const [section, setSection] = useState('home'); // home | search | recommend | library | player
+  // SPA routing: the initial section comes from the URL (deep links / F5).
+  // '/player' can't be restored across a reload — the queue lives in memory —
+  // so it lands on home; the first URL-sync effect below replaceState()s the
+  // path back to '/' without creating a history entry (same for unknown paths).
+  const initialRouteRef = useRef(parseAppPath(window.location.pathname));
+  const [section, setSection] = useState(() => { // home | search | recommend | library | player | artist
+    const s = initialRouteRef.current?.section;
+    return (s && s !== 'player') ? s : 'home';
+  });
   // Artist Atlas: slug is stored alongside the section so the section type
   // 'artist' can render the ArtistAtlasSection with the right artist. Setting
   // a non-null slug + switching section in one call lets the section preserve
   // its own internal state (fetched aggregate, active tab) across navigation.
-  const [activeArtistSlug, setActiveArtistSlug] = useState(null);
+  const [activeArtistSlug, setActiveArtistSlug] = useState(initialRouteRef.current?.slug || null);
   const navigateToArtist = useCallback((slug) => {
     if (!slug) return;
     setActiveArtistSlug(slug);
@@ -15697,7 +15871,15 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     setSection(s => { if (s !== 'player') mobilePrevSectionRef.current = s; return 'player'; });
   }, []);
   const closeMobilePlayer = useCallback(() => {
-    setSection(mobilePrevSectionRef.current || 'library');
+    // The /player history entry was pushed by the URL-sync effect when the
+    // overlay opened — prefer history.back() so the ✕ button and the OS back
+    // gesture walk the same path and history doesn't accumulate a forward
+    // loop. The state marker is only absent when /player wasn't our push.
+    if (window.history.state && window.history.state.app) {
+      window.history.back();
+    } else {
+      setSection(mobilePrevSectionRef.current || 'library');
+    }
   }, []);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -15744,6 +15926,8 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
 
   // Reset cover face when the track changes — new song should start on cover.
   useEffect(() => { setLyricsMode(false); }, [playerTrack?.track_id]);
+  // Mirror for the popstate handler above (declared before playerTrack).
+  useEffect(() => { playerTrackRef2.current = playerTrack; }, [playerTrack]);
   // Played track ids live in a ref (not React state) because they only get
   // read from the autoplay-queue exclude_ids param — never rendered. A ref
   // sidesteps the stale-closure trap that would force every consumer to
@@ -15752,6 +15936,54 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
 
   // Shared audio controller — lives at App level so audio survives navigation
   const audio = useAudioPlayer();
+
+  // ── SPA routing effects ────────────────────────────────────────────────────
+  // playerTrack is declared further down (transpiled const→var, so reading it
+  // during render up here would see undefined) — the popstate handler reads it
+  // at event time through this ref instead.
+  const playerTrackRef2 = useRef(null);
+
+  // State → URL. After a popstate the URL already matches, so the pathname
+  // check breaks the loop and back/forward never double-push. The first sync
+  // uses replaceState: it only fires for deep links that need normalizing
+  // (unknown path, unrestorable /player) and must not mint a history entry.
+  const firstUrlSyncRef = useRef(true);
+  useEffect(() => {
+    if (appState !== 'ready') return; // boot/onboarding screens own the viewport
+    const path = pathForSection(section, activeArtistSlug);
+    if (window.location.pathname === path) { firstUrlSyncRef.current = false; return; }
+    const method = firstUrlSyncRef.current ? 'replaceState' : 'pushState';
+    window.history[method]({ app: true }, '', path);
+    firstUrlSyncRef.current = false;
+  }, [section, activeArtistSlug, appState]);
+
+  // URL → state (browser back/forward).
+  useEffect(() => {
+    // A leftover overlay entry can be current after a reload (history.state
+    // survives F5) — strip the marker so useHistoryOverlay can't misread it.
+    if (window.history.state && window.history.state.overlay) {
+      window.history.replaceState({ app: true }, '', window.location.href);
+    }
+    const onPopState = () => {
+      const route = parseAppPath(window.location.pathname) || { section: 'home' };
+      if (route.section === 'player' && !playerTrackRef2.current) {
+        // A /player entry from a previous page load can't be restored (the
+        // queue lives in memory) — land on home instead of an empty player.
+        window.history.replaceState({ app: true }, '', '/');
+        setSection('home');
+        return;
+      }
+      if (route.section === 'artist' && route.slug) setActiveArtistSlug(route.slug);
+      setSection(route.section);
+    };
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Back gesture closes the settings overlay instead of leaving the section
+  // (spec phase 3). SettingsPanel's own ✕ pops the entry it pushed.
+  useHistoryOverlay(settingsOpen, () => setSettingsOpen(false), 'settings');
 
   // Global keyboard shortcuts (Task 11 + Task 12)
   useGlobalKeyboardShortcuts({
@@ -15807,6 +16039,24 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
       setCollections(data.collections || []);
       setUserPoints(data.user_points || 0);
     }).catch(() => {}), []);
+
+  // Indexing job tracking lives at App level (spec phase 2): the SSE
+  // subscription survives closing the settings panel and section navigation.
+  const indexingJob = useIndexingJob({ onCompleted: loadCollections });
+
+  // Resume after a reload / navigation away: the server keeps the per-account
+  // job slot, and the SSE stream replays a full progress snapshot to late
+  // subscribers — so ask it instead of trusting any client-side memory.
+  useEffect(() => {
+    apiFetch('/library/status')
+      .then(st => {
+        if (st && st.job_id && (st.overall_status === 'running' || st.overall_status === 'pending')) {
+          indexingJob.attach(st.job_id, { resumed: true });
+        }
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handlePlayTrack = (track, results) => {
     // Any manual play exits stream mode — the user took the wheel.
@@ -16198,6 +16448,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
   if (appState === 'no-qdrant') return <NoQdrantScreen isDark={isDark} lang={lang} />;
   if (appState === 'onboarding') return (
     <OnboardingScreen isDark={isDark} lang={lang} onLang={handleLang} onTheme={handleTheme}
+      indexingJob={indexingJob}
       onDone={() => { loadCollections(); setAppState('ready'); }} />
   );
 
@@ -16328,6 +16579,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
         <SettingsPanel isDark={isDark} lang={lang}
           onClose={() => setSettingsOpen(false)}
           onCollectionsUpdate={loadCollections}
+          indexingJob={indexingJob}
 
           aiStatus={aiStatus}
           onTheme={handleTheme}
@@ -16337,6 +16589,14 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
           onLogout={onLogout}
           instanceMode={instanceMode}
           showToast={showToast} />
+      )}
+
+      {/* Background indexing indicator: the job started in Settings (or was
+          resumed after a reload) keeps reporting while the panel is closed. */}
+      {indexingJob.status === 'running' && !settingsOpen && (
+        <IndexingStatusPill isDark={isDark} lang={lang}
+          stepStatus={indexingJob.stepStatus} stageProgress={indexingJob.stageProgress}
+          onClick={() => setSettingsOpen(true)} />
       )}
 
       {toast && (
