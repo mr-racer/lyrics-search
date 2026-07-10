@@ -1,9 +1,15 @@
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     html, body, #root { height: 100%; width: 100%; overflow: hidden; }
+    /* Mobile: kill the translucent tap-flash rectangle on every tap target
+       (interactive feedback stays via each component's :active/transition
+       styles; keyboard :focus-visible outlines are untouched). */
+    html { -webkit-tap-highlight-color: transparent; }
     body {
       font-family: 'Geist', 'Inter', system-ui, sans-serif;
       -webkit-font-smoothing: antialiased;
       text-rendering: optimizeLegibility;
+      /* PWA: no pull-to-refresh / scroll-chaining over the player. */
+      overscroll-behavior-y: none;
     }
     .serif { font-family: 'Noto Sans', 'Times New Roman', serif; font-weight: 400; letter-spacing: -0.01em; }
     /* Expressive display serif for the "Твой Вайб" line — Playfair (Cyrillic OK). */
@@ -991,6 +997,10 @@
       backface-visibility: hidden; -webkit-backface-visibility: hidden;
       border-radius: 18px; overflow: hidden;
       box-shadow: 0 30px 80px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.07);
+    }
+    /* Mobile: the gatefold occupies the whole screen — square the corners. */
+    @media (max-width: 768px) {
+      .album-flip-face { border-radius: 0; }
     }
     .album-flip-back { transform: rotateY(180deg); }
     @keyframes albumBackRise {
@@ -1990,6 +2000,17 @@
       inset: 0;
       width: 100%;
       height: 100%;
+    }
+    /* Mobile: the flames used to hit the canvas's own -30%/-14% bounds well
+       before the screen edge — a hard horizontal cut mid-flame. Give the
+       canvas more vertical headroom and fade the last stretch with a mask so
+       whatever still reaches the edge dies out smoothly instead of clipping. */
+    @media (max-width: 768px) {
+      .cover-fx { inset: -58% -18% -32% -18%; }
+      .cover-fx__canvas {
+        -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 14%, #000 88%, transparent 100%);
+        mask-image: linear-gradient(180deg, transparent 0, #000 14%, #000 88%, transparent 100%);
+      }
     }
 
     .cover-fx__aura {

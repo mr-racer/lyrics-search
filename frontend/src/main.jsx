@@ -2029,6 +2029,7 @@ function OrbProgressArc({ audio }) {
 
 function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigateToArtist }) {
   const c = useColors(isDark);
+  const isMobile = useIsMobile();
   const [profile, setProfile] = useState(null);
   const [vibe, setVibe] = useState(null);          // { phrase, source } | null
   const [vibeLoading, setVibeLoading] = useState(true);
@@ -2150,7 +2151,8 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
     // its motif instead of a single album cover (we show the vibe, not a song).
     // Flex column so the play cluster centers in whatever height the row takes.
     <div className="efir-hero" style={{
-      position:'relative', borderRadius:24, overflow:'hidden', padding:'clamp(24px,2vw,38px)',
+      position:'relative', borderRadius: isMobile ? 18 : 24, overflow:'hidden',
+      padding: isMobile ? '18px 16px 16px' : 'clamp(24px,2vw,38px)',
       border:`1px solid ${c.border}`, background:heroGlass,
       backdropFilter:'blur(26px)', WebkitBackdropFilter:'blur(26px)',
       boxShadow:heroShadow, animation:'fadeInUp .55s cubic-bezier(.22,.9,.3,1)',
@@ -2258,8 +2260,9 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
             </div>
           </div>
 
-          {/* Taste anchors — under the play + title, above the wave settings */}
-          {hasProfile && anchors.length > 0 && (
+          {/* Taste anchors — under the play + title, above the wave settings.
+              Hidden on mobile: the compact home keeps launch + settings only. */}
+          {hasProfile && anchors.length > 0 && !isMobile && (
             <div style={{ display:'flex', alignItems:'center', gap:11 }}>
               <span className="mono" style={{ fontSize:10, letterSpacing:'.2em', color:c.textSubtle }}>{lang==='ru'?'ЯКОРЯ ВКУСА':'TASTE ANCHORS'}</span>
               <div style={{ display:'flex' }}>
@@ -2568,7 +2571,7 @@ function DiscoverNewCard({ isDark, lang, onPick, navigateToArtist }) {
 }
 
 // Header pill → Library, with a live "N albums · M tracks" summary from /library/stats.
-function LibraryPill({ stats, isDark, lang, onClick }) {
+function LibraryPill({ stats, isDark, lang, onClick, fluid }) {
   const c = useColors(isDark);
   const [hover, setHover] = useState(false);
   const albums = stats && typeof stats.unique_albums === 'number' ? stats.unique_albums : null;
@@ -2580,7 +2583,11 @@ function LibraryPill({ stats, isDark, lang, onClick }) {
   return (
     <button onClick={onClick} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
       title={lang==='ru'?'Перейти в библиотеку':'Go to library'}
-      style={{ display:'flex', alignItems:'center', gap:11, padding:'8px 14px 8px 11px', borderRadius:14, cursor:'pointer',
+      style={{ display:'flex', alignItems:'center', gap:11, cursor:'pointer',
+        // fluid: the mobile home renders this as a full-width stack card.
+        width: fluid ? '100%' : undefined,
+        padding: fluid ? '14px 16px' : '8px 14px 8px 11px',
+        borderRadius: fluid ? 18 : 14,
         border:`1px solid ${hover?c.borderStrong:c.border}`,
         background: isDark ? (hover?'rgba(255,255,255,.07)':'rgba(255,255,255,.04)') : (hover?'rgba(255,255,255,.92)':'rgba(255,255,255,.6)'),
         backdropFilter:'blur(16px)', WebkitBackdropFilter:'blur(16px)',
@@ -2591,8 +2598,8 @@ function LibraryPill({ stats, isDark, lang, onClick }) {
         boxShadow:'0 4px 12px rgba(124,91,255,.4)' }}>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></svg>
       </span>
-      <span style={{ textAlign:'left', lineHeight:1.15 }}>
-        <span style={{ display:'block', fontSize:13.5, fontWeight:600, color:c.text }}>{lang==='ru'?'Библиотека':'Library'}</span>
+      <span style={{ textAlign:'left', lineHeight:1.15, flex: fluid ? 1 : undefined, minWidth:0 }}>
+        <span style={{ display:'block', fontSize: fluid ? 15 : 13.5, fontWeight:600, color:c.text }}>{lang==='ru'?'Библиотека':'Library'}</span>
         <span className="mono" style={{ display:'block', fontSize:10, letterSpacing:'.04em', color:c.textMuted, marginTop:1 }}>{summary}</span>
       </span>
       <span style={{ color:c.textMuted, fontSize:16, marginLeft:2 }}>→</span>
@@ -2702,13 +2709,19 @@ function HintBadge({ size = 20, label, ariaLabel, placement = 'up' }) {
 
 function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLibrary, stats, playerTrack, playerPlaylist, onTrackChange, onPlayTrack, onStartStream, streamActive, audio, navigateToArtist }) {
   const c = useColors(isDark);
+  const isMobile = useIsMobile();
 
   // «Эфир»: one airy screen. The rail cards (artist of the day + something new)
   // fetch their own data, so the landing itself is just layout — no shelves,
   // no recently-played / liked rows, library reachable from the header.
+  //
+  // Sizing: 100% of the app shell, NOT 100vw/100vh — on mobile the shell
+  // stacks MiniPlayerBar + BottomTabBar below this screen, and a viewport-
+  // sized root overflowed under them (the wave block "danced" into the
+  // header because flex centering overflowed both directions).
   return (
     <div className="grain" style={{
-      width:'100vw', height:'100vh', overflow:'hidden auto', position:'relative',
+      flex:1, minWidth:0, minHeight:0, width:'100%', overflow:'hidden auto', position:'relative',
       display:'flex', flexDirection:'column',
       background: isDark
         ? 'radial-gradient(ellipse at top, #15151b 0%, #0a0a0e 60%, #07070a 100%)'
@@ -2751,13 +2764,15 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLi
             flex:1 0 zones) so it sits in the middle of the bar instead of
             crammed against the Library pill. Collapses to null when nothing
             is playing, leaving the brand/controls layout untouched. */}
+        {!isMobile && (
         <div style={{ display:'flex', justifyContent:'center', flex:'0 1 auto', minWidth:0 }}>
           <HeaderNowPlaying track={playerTrack} audio={audio} isDark={isDark} lang={lang}
             playlist={playerPlaylist} onTrackChange={onTrackChange}
             onOpenPlayer={() => onNav('player')} />
         </div>
+        )}
         <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap', flex:'1 1 0', minWidth:0, justifyContent:'flex-end' }}>
-          <LibraryPill stats={stats} isDark={isDark} lang={lang} onClick={() => onNav('library')} />
+          {!isMobile && <LibraryPill stats={stats} isDark={isDark} lang={lang} onClick={() => onNav('library')} />}
           <button onClick={() => onNav('search')} title={lang==='ru'?'Поиск':'Search'} className={ske('btn', isDark)}
             style={{ width:38, height:38, borderRadius:'50%', display:'grid', placeItems:'center', color:c.textMuted }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
@@ -2766,9 +2781,22 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLi
         </div>
       </div>
 
-      {/* «Эфир» split — takes exactly the space left under the header (no page
+      {isMobile ? (
+        /* Mobile «Эфир»: a plain top-aligned card stack — wave (launch +
+           settings, no taste anchors), library entry, artist of the day.
+           Normal document flow, so nothing can overlap the header. */
+        <div style={{ position:'relative', flex:'1 1 auto', minHeight:0, overflowY:'auto',
+          padding:'2px 14px 18px', display:'flex', flexDirection:'column', gap:14 }}>
+          <ForYouHero isDark={isDark} lang={lang}
+                      onStartStream={onStartStream} streamActive={streamActive} audio={audio}
+                      navigateToArtist={navigateToArtist} />
+          <LibraryPill stats={stats} isDark={isDark} lang={lang} fluid onClick={() => onNav('library')} />
+          <FeaturedArtistCard isDark={isDark} lang={lang} navigateToArtist={navigateToArtist} />
+        </div>
+      ) : (
+      /* «Эфир» split — takes exactly the space left under the header (no page
           scroll on desktop; .efir-main's min-height + the root's auto overflow
-          remain the fallback for very short windows) */}
+          remain the fallback for very short windows) */
       <div style={{ position:'relative', flex:'1 1 auto', minHeight:0, display:'flex', flexDirection:'column', justifyContent:'center' }}>
         <div className="efir-main" style={{ position:'relative' }}>
           <ForYouHero isDark={isDark} lang={lang}
@@ -2782,6 +2810,7 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLi
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -3180,7 +3209,7 @@ function Segmented({ value, onChange, options, isDark, size='md', style } = {}) 
 }
 
 // ─── SCORE BREAKDOWN TOOLTIP ──────────────────────────────────────────────────
-function ScoreBreakdownTooltip({ hit, breakdown, isDark, onPlay, onToggleLike, isLiked, likeLoading, onAddToPlaylist, lang }) {
+function ScoreBreakdownTooltip({ hit, breakdown, isDark, onPlay, onAddToPlaylist, lang }) {
   const c = useColors(isDark);
   if (!breakdown && !hit) return null;
   const rows = breakdown ? [
@@ -3214,12 +3243,6 @@ function ScoreBreakdownTooltip({ hit, breakdown, isDark, onPlay, onToggleLike, i
           onClick={e => { e.stopPropagation(); onPlay && onPlay(hit); }}
           style={{ padding:'4px 10px', fontSize:'11px', cursor:'pointer' }}
         >▶ Play</button>
-        <button
-          className={`pill-v3${isLiked ? ' pill-v3-active' : ''}`}
-          onClick={e => { e.stopPropagation(); onToggleLike && onToggleLike(hit); }}
-          disabled={likeLoading}
-          style={{ padding:'4px 10px', fontSize:'11px', cursor: likeLoading ? 'wait' : 'pointer' }}
-        >{isLiked ? '♥ Liked' : '♡ Like'}</button>
         <button
           className="pill-v3"
           onClick={e => { e.stopPropagation(); onAddToPlaylist && onAddToPlaylist(hit.track?.track_id || hit.track_id, e.currentTarget); }}
@@ -3311,7 +3334,10 @@ function usePlaylists() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, description: description || null }),
     });
-    await refetchAll();
+    // Background refresh: the create dialog closes on POST success; awaiting
+    // the list refetch here kept the "Create" button spinning for seconds on
+    // a busy connection (the modal waited on a request it didn't need).
+    refetchAll();
     return r;
   };
 
@@ -3336,7 +3362,7 @@ function usePlaylists() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ track_id: trackId }),
     });
-    await refetchAll();
+    refetchAll();   // background — same reasoning as createPlaylist
     return r;
   };
 
@@ -3740,49 +3766,12 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
   // Shared results
   const [results, setResults] = useState([]);
   const [hoveredHit, setHoveredHit] = useState(null);
-  const [likedMap, setLikedMap] = useState({});      // { [trackId]: true | false }
-  const [likeLoading, setLikeLoading] = useState({}); // { [trackId]: true } while in-flight
 
   const getLLMSettings = () => ({
     llm_base_url: localStorage.getItem('llm_base_url') || undefined,
     llm_model:    localStorage.getItem('llm_model')    || undefined,
     planner_enabled: true,
   });
-
-  // ── Reaction helpers ──
-  const ensureLikeStatus = async (trackId) => {
-    if (!trackId || trackId in likedMap) return;
-    try {
-      const r = await apiFetch(`/search/tracks/${encodeURIComponent(trackId)}/reaction`);
-      setLikedMap(prev => ({ ...prev, [trackId]: r?.reaction === 'like' }));
-    } catch {
-      setLikedMap(prev => ({ ...prev, [trackId]: false }));
-    }
-  };
-
-  const handleToggleLike = async (hit) => {
-    const trackId = hit?.track?.track_id;
-    if (!trackId) return;
-    const isLiked = !!likedMap[trackId];
-    setLikeLoading(prev => ({ ...prev, [trackId]: true }));
-    try {
-      await apiFetch(`/search/tracks/${encodeURIComponent(trackId)}/reaction`, {
-        method: 'POST',
-        body: JSON.stringify({
-          reaction: isLiked ? null : 'like',
-        }),
-      });
-      setLikedMap(prev => ({ ...prev, [trackId]: !isLiked }));
-    } catch (e) {
-      // ignore — keep UI tied to actual server state
-    } finally {
-      setLikeLoading(prev => {
-        const next = { ...prev };
-        delete next[trackId];
-        return next;
-      });
-    }
-  };
 
   useEffect(() => {
     if (chatEndRef.current) chatEndRef.current.scrollTop = chatEndRef.current.scrollHeight;
@@ -4267,7 +4256,7 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
                     {results.map((hit, i) => (
                       <div key={i} className="grid-card panel-v3"
                         onClick={() => onPlayTrack && onPlayTrack(hit, results)}
-                        onMouseEnter={() => { setHoveredHit(hit.track?.track_id); ensureLikeStatus(hit.track?.track_id); }}
+                        onMouseEnter={() => setHoveredHit(hit.track?.track_id)}
                         onMouseLeave={() => setHoveredHit(null)}
                         style={{
                           borderRadius:'16px', overflow:'hidden', position:'relative',
@@ -4314,9 +4303,6 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
                             breakdown={hit.score_breakdown}
                             isDark={isDark}
                             onPlay={(h) => onPlayTrack && onPlayTrack(h, results)}
-                            onToggleLike={handleToggleLike}
-                            isLiked={!!likedMap[hit.track?.track_id]}
-                            likeLoading={!!likeLoading[hit.track?.track_id]}
                             onAddToPlaylist={onAddToPlaylist}
                             lang={lang}
                           />
@@ -5182,36 +5168,34 @@ function AlbumCard({ album, isDark, onClick, navigateToArtist, lang, index = 0 }
 }
 
 // ─── PLAYLIST CARD ────────────────────────────────────────────────────────────
-function PlaylistCard({ playlist, onOpen, onPlayAll, lang }) {
+// Same card anatomy/classes as AlbumCard (.lib-album-card / .lib-album-cover /
+// .lib-album-body) so playlists inherit the album grid's sizing — including the
+// 150px/132px mobile columns — instead of the old oversized 218px tiles.
+function PlaylistCard({ playlist, onOpen, onPlayAll, lang, index = 0 }) {
   return (
     <div
       onClick={() => onOpen(playlist.id)}
+      className="lib-album-card"
       style={{
-        display: 'flex', flexDirection: 'column',
-        padding: 12, borderRadius: 14,
-        background: 'linear-gradient(180deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0.015) 60%)',
-        border: '1px solid rgba(255,255,255,.06)',
-        boxShadow: 'inset 0 1px 0 rgba(255,255,255,.08), inset 0 -1px 0 rgba(0,0,0,.22), 0 4px 14px rgba(0,0,0,.22)',
-        cursor: 'pointer',
-        transition: 'transform .22s cubic-bezier(.22,.9,.3,1), border-color .22s, box-shadow .22s',
+        '--lib-i': Math.min(index, 18),
+        borderRadius:'14px', overflow:'hidden',
+        background:'rgba(255,255,255,.04)',
+        border:'1px solid rgba(255,255,255,.06)',
+        cursor:'pointer',
       }}
       onMouseEnter={(e) => {
-        e.currentTarget.style.transform = 'translateY(-3px)';
-        e.currentTarget.style.borderColor = 'rgba(124,91,255,.35)';
-        e.currentTarget.style.boxShadow = 'inset 0 1px 0 rgba(255,255,255,.12), inset 0 -1px 0 rgba(0,0,0,.22), 0 8px 24px rgba(124,91,255,.18)';
         const playBtn = e.currentTarget.querySelector('[data-play]');
         if (playBtn) { playBtn.style.opacity = '1'; playBtn.style.transform = 'translateY(0)'; }
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.transform = '';
-        e.currentTarget.style.borderColor = 'rgba(255,255,255,.06)';
-        e.currentTarget.style.boxShadow = 'inset 0 1px 0 rgba(255,255,255,.08), inset 0 -1px 0 rgba(0,0,0,.22), 0 4px 14px rgba(0,0,0,.22)';
         const playBtn = e.currentTarget.querySelector('[data-play]');
         if (playBtn) { playBtn.style.opacity = '0'; playBtn.style.transform = 'translateY(6px)'; }
       }}
     >
-      <div style={{ position: 'relative' }}>
-        <MosaicCover trackIds={playlist.cover_track_ids || []} coverPaths={playlist.cover_art_paths || []} size={'100%'} />
+      <div style={{ position:'relative', aspectRatio:'1', overflow:'hidden' }}>
+        <div className="lib-album-cover">
+          <MosaicCover trackIds={playlist.cover_track_ids || []} coverPaths={playlist.cover_art_paths || []} size={'100%'} radius={0} />
+        </div>
         <button
           data-play
           onClick={(e) => { e.stopPropagation(); onPlayAll(playlist.id); }}
@@ -5229,11 +5213,13 @@ function PlaylistCard({ playlist, onOpen, onPlayAll, lang }) {
           }}
         >▶</button>
       </div>
-      <div style={{ fontSize: 15, fontWeight: 500, marginTop: 12, color: '#eeeef3', letterSpacing: '-0.005em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {playlist.name}
-      </div>
-      <div className="mono" style={{ fontSize: 10, letterSpacing: '0.15em', color: 'rgba(238,238,243,.45)', marginTop: 4, textTransform: 'uppercase' }}>
-        {playlist.track_count} {lang === 'ru' ? (playlist.track_count === 1 ? 'трек' : 'треков') : 'tracks'}
+      <div className="lib-album-body">
+        <div className="lib-album-title" style={{ fontWeight:600, color:'#eeeef3', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+          {playlist.name}
+        </div>
+        <div className="mono" style={{ fontSize: 10, letterSpacing: '0.15em', color: 'rgba(238,238,243,.45)', marginTop: 4, textTransform: 'uppercase' }}>
+          {playlist.track_count} {lang === 'ru' ? (playlist.track_count === 1 ? 'трек' : 'треков') : 'tracks'}
+        </div>
       </div>
     </div>
   );
@@ -5244,25 +5230,26 @@ function NewPlaylistTile({ onClick, lang }) {
   return (
     <div
       onClick={onClick}
+      className="lib-album-card"
       style={{
-        display: 'grid', placeItems: 'center',
-        padding: 12, borderRadius: 14,
+        borderRadius: 14, overflow: 'hidden',
         border: '1px dashed rgba(124,91,255,.35)',
         background: 'linear-gradient(180deg, rgba(124,91,255,.04) 0%, rgba(124,91,255,.01) 100%)',
         cursor: 'pointer',
-        transition: 'background .18s, border-color .18s',
       }}
       onMouseEnter={(e) => { e.currentTarget.style.background = 'linear-gradient(180deg, rgba(124,91,255,.10) 0%, rgba(124,91,255,.03) 100%)'; e.currentTarget.style.borderColor = 'rgba(124,91,255,.55)'; }}
       onMouseLeave={(e) => { e.currentTarget.style.background = 'linear-gradient(180deg, rgba(124,91,255,.04) 0%, rgba(124,91,255,.01) 100%)'; e.currentTarget.style.borderColor = 'rgba(124,91,255,.35)'; }}
     >
-      <div style={{ aspectRatio: '1/1', width: '100%', display: 'grid', placeItems: 'center', borderRadius: 10, background: 'rgba(124,91,255,.06)', border: '1px dashed rgba(124,91,255,.25)' }}>
+      <div style={{ aspectRatio: '1', display: 'grid', placeItems: 'center', background: 'rgba(124,91,255,.06)' }}>
         <span style={{ fontSize: 44, color: 'rgba(124,91,255,.5)', fontWeight: 200 }}>＋</span>
       </div>
-      <div style={{ fontSize: 15, fontWeight: 500, marginTop: 12, color: '#d8ccff', textAlign: 'center' }}>
-        {lang === 'ru' ? 'Новый плейлист' : 'New playlist'}
-      </div>
-      <div className="mono" style={{ fontSize: 10, letterSpacing: '0.15em', color: 'rgba(238,238,243,.4)', marginTop: 4, textTransform: 'uppercase', textAlign: 'center' }}>
-        {lang === 'ru' ? 'создать с нуля' : 'create from scratch'}
+      <div className="lib-album-body">
+        <div className="lib-album-title" style={{ fontWeight:500, color:'#d8ccff', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+          {lang === 'ru' ? 'Новый плейлист' : 'New playlist'}
+        </div>
+        <div className="mono" style={{ fontSize: 10, letterSpacing: '0.15em', color: 'rgba(238,238,243,.4)', marginTop: 4, textTransform: 'uppercase' }}>
+          {lang === 'ru' ? 'создать с нуля' : 'create from scratch'}
+        </div>
       </div>
     </div>
   );
@@ -5277,10 +5264,12 @@ function PlaylistsListView({ playlists, onOpen, onCreate, onPlayAll, lang }) {
           {playlists.length} {lang === 'ru' ? 'ПЛЕЙЛИСТОВ' : 'PLAYLISTS'}
         </span>
       </div>
-      <div className="lib-grid" style={{ '--lib-grid-min': '218px', '--lib-grid-gap': '16px' }}>
+      {/* No --lib-grid-min override: inherit the album grid's column sizing
+          (216px desktop, 150px/132px mobile via the shared media rules). */}
+      <div className="lib-grid">
         <NewPlaylistTile onClick={onCreate} lang={lang} />
-        {playlists.map(p => (
-          <PlaylistCard key={p.id} playlist={p} onOpen={onOpen} onPlayAll={onPlayAll} lang={lang} />
+        {playlists.map((p, i) => (
+          <PlaylistCard key={p.id} playlist={p} onOpen={onOpen} onPlayAll={onPlayAll} lang={lang} index={i + 1} />
         ))}
       </div>
     </>
@@ -5340,21 +5329,26 @@ function AlbumsGridTab({ albums, sort, onSortChange, onAlbumOpen, isDark, lang, 
 }
 
 // ─── LIBRARY GLASSY ROW (shared by Liked + Recently) ──────────────────────────
-function LibraryGlassyRow({ track, when, playCount, isDark, lang, onClick, navigateToArtist, onAlbumClick, onToggleLike, isLiked, isCurrent, onAddToPlaylist }) {
+function LibraryGlassyRow({ track, when, playCount, isDark, lang, onClick, navigateToArtist, onAlbumClick, isCurrent, onAddToPlaylist }) {
   const c = useColors(isDark);
   const fmtDur = (s) => {
     if (!s) return '—';
     const m = Math.floor(s / 60), r = Math.floor(s % 60);
     return `${m}:${String(r).padStart(2, '0')}`;
   };
+  // Mobile: the desktop 5-column grid (spacer + fixed 72px duration) wasted a
+  // third of a phone's width and squeezed title/album into ellipsis. Two full-
+  // width text lines instead; duration folds into the meta line.
+  const isMobile = useIsMobile();
+  const coverSize = isMobile ? 46 : 52;
   return (
     <div
       onClick={onClick}
       style={{
         display:'grid',
-        gridTemplateColumns:'52px 1fr auto 72px auto',
-        gap:'16px', alignItems:'center',
-        padding:'11px 17px 11px 11px',
+        gridTemplateColumns: isMobile ? `${coverSize}px minmax(0,1fr) auto` : '52px 1fr auto 72px auto',
+        gap: isMobile ? '10px' : '16px', alignItems:'center',
+        padding: isMobile ? '8px 8px 8px 8px' : '11px 17px 11px 11px',
         borderRadius:'14px',
         background: isCurrent ? 'rgba(120,80,200,.13)' : 'rgba(255,255,255,.04)',
         backdropFilter:'blur(22px) saturate(1.1)',
@@ -5367,12 +5361,12 @@ function LibraryGlassyRow({ track, when, playCount, isDark, lang, onClick, navig
       onMouseEnter={e => { e.currentTarget.style.background = isCurrent ? 'rgba(120,80,200,.18)' : 'rgba(255,255,255,.07)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
       onMouseLeave={e => { e.currentTarget.style.background = isCurrent ? 'rgba(120,80,200,.13)' : 'rgba(255,255,255,.04)'; e.currentTarget.style.transform = 'translateY(0)'; }}
     >
-      <div style={{ position:'relative', width:'52px', height:'52px', borderRadius:'10px', overflow:'hidden' }}>
-        <AlbumCover title={track.title} artist={track.artist} size={52} isDark={isDark} coverPath={track.cover_art_path} radius={10} fluid />
+      <div style={{ position:'relative', width:coverSize, height:coverSize, borderRadius:'10px', overflow:'hidden' }}>
+        <AlbumCover title={track.title} artist={track.artist} size={coverSize} isDark={isDark} coverPath={track.cover_art_path} radius={10} fluid />
       </div>
       <div style={{ minWidth:0 }}>
-        <div style={{ color:c.text, fontSize:'17px', fontWeight:500, letterSpacing:'-0.01em', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title}</div>
-        <div style={{ color:c.textMuted, fontSize:'14px', marginTop:'2px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+        <div style={{ color:c.text, fontSize: isMobile ? '15px' : '17px', fontWeight:500, letterSpacing:'-0.01em', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title}</div>
+        <div style={{ color:c.textMuted, fontSize: isMobile ? '12.5px' : '14px', marginTop:'2px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
           <ArtistCredit track={track} navigateToArtist={navigateToArtist} lang={lang} />
           {track.album && (<>
             <span style={{ color:c.textSubtle, margin:'0 7px' }}>·</span>
@@ -5380,16 +5374,20 @@ function LibraryGlassyRow({ track, when, playCount, isDark, lang, onClick, navig
           </>)}
           {when && (<>
             <span style={{ color:c.textSubtle, margin:'0 7px' }}>·</span>
-            <span className="mono" style={{ color:c.textSubtle, fontSize:'13px', letterSpacing:'0.06em' }}>{when}</span>
+            <span className="mono" style={{ color:c.textSubtle, fontSize: isMobile ? '11.5px' : '13px', letterSpacing:'0.06em' }}>{when}</span>
           </>)}
           {playCount != null && playCount > 0 && (<>
             <span style={{ color:c.textSubtle, margin:'0 7px' }}>·</span>
-            <span className="mono" style={{ color:c.textSubtle, fontSize:'13px' }}>{playCount}×</span>
+            <span className="mono" style={{ color:c.textSubtle, fontSize: isMobile ? '11.5px' : '13px' }}>{playCount}×</span>
           </>)}
+          {isMobile && track.duration ? (<>
+            <span style={{ color:c.textSubtle, margin:'0 7px' }}>·</span>
+            <span className="mono" style={{ color:c.textSubtle, fontSize:'11.5px' }}>{fmtDur(track.duration)}</span>
+          </>) : null}
         </div>
       </div>
-      <div />
-      <div className="mono" style={{ color:c.textMuted, fontSize:'13px', textAlign:'right' }}>{fmtDur(track.duration)}</div>
+      {!isMobile && <div />}
+      {!isMobile && <div className="mono" style={{ color:c.textMuted, fontSize:'13px', textAlign:'right' }}>{fmtDur(track.duration)}</div>}
       <div style={{ display:'flex', gap:'5px' }}>
         <button
           className="player-icon-btn"
@@ -5399,37 +5397,6 @@ function LibraryGlassyRow({ track, when, playCount, isDark, lang, onClick, navig
         >＋</button>
       </div>
     </div>
-  );
-}
-
-// ─── LIKED SONGS TAB ──────────────────────────────────────────────────────────
-function LikedSongsTab({ tracks, isDark, lang, onPlayTrack, navigateToArtist, onAlbumClick, onToggleLike, likedMap, currentTrackId, onAddToPlaylist }) {
-  const c = useColors(isDark);
-  if (!tracks || tracks.length === 0) {
-    return <div style={{ padding:'40px 20px', textAlign:'center', color:c.textSubtle, fontSize:'13px' }}>{lang==='ru' ? 'Нет лайкнутых треков — лайкни что-нибудь из Player или Search' : 'No liked songs yet — like a track from Player or Search'}</div>;
-  }
-  return (
-    <>
-      <div style={{ padding:'4px 0 10px', fontSize:'11px', color:c.textSubtle, fontFamily:"'JetBrains Mono', monospace", letterSpacing:'0.06em' }}>
-        {tracks.length} {lang==='ru'?'треков':'tracks'}
-      </div>
-      <div style={{ display:'flex', flexDirection:'column', gap:'6px' }}>
-        {tracks.map((t) => (
-          <LibraryGlassyRow
-            key={t.track_id}
-            track={t}
-            isDark={isDark} lang={lang}
-            isLiked={likedMap[t.track_id] !== false}
-            isCurrent={t.track_id === currentTrackId}
-            onClick={() => onPlayTrack && onPlayTrack({ track: t }, tracks.map(tt => ({ track: tt })))}
-            navigateToArtist={navigateToArtist}
-            onAlbumClick={(name) => onAlbumClick && onAlbumClick(name)}
-            onToggleLike={onToggleLike}
-            onAddToPlaylist={onAddToPlaylist}
-          />
-        ))}
-      </div>
-    </>
   );
 }
 
@@ -5453,7 +5420,7 @@ function formatRelativeTime(iso, lang) {
 }
 
 // ─── RECENTLY PLAYED TAB ──────────────────────────────────────────────────────
-function RecentlyPlayedTab({ tracks, sort, onSortChange, isDark, lang, onPlayTrack, navigateToArtist, onAlbumClick, onToggleLike, likedMap, currentTrackId, onAddToPlaylist }) {
+function RecentlyPlayedTab({ tracks, sort, onSortChange, isDark, lang, onPlayTrack, navigateToArtist, onAlbumClick, currentTrackId, onAddToPlaylist }) {
   const c = useColors(isDark);
   if (!tracks || tracks.length === 0) {
     return <div style={{ padding:'40px 20px', textAlign:'center', color:c.textSubtle, fontSize:'13px' }}>{lang==='ru' ? 'История пуста — выбери что-нибудь и сыграй' : 'No playback history yet — pick something and play'}</div>;
@@ -5491,12 +5458,10 @@ function RecentlyPlayedTab({ tracks, sort, onSortChange, isDark, lang, onPlayTra
             when={formatRelativeTime(t.last_played, lang)}
             playCount={t.play_count}
             isDark={isDark} lang={lang}
-            isLiked={!!likedMap[t.track_id]}
             isCurrent={t.track_id === currentTrackId}
             onClick={() => onPlayTrack && onPlayTrack({ track: t }, tracks.map(tt => ({ track: tt })))}
             navigateToArtist={navigateToArtist}
             onAlbumClick={(name) => onAlbumClick && onAlbumClick(name)}
-            onToggleLike={onToggleLike}
             onAddToPlaylist={onAddToPlaylist}
           />
         ))}
@@ -5653,13 +5618,7 @@ function AddToPlaylistPopover({ trackId, anchor, onClose, listing, lang }) {
 }
 
 // ─── PLAYLIST TRACK ROW (Task 18) ────────────────────────────────────────────
-function PlaylistTrackRow({ track, isDragging, onDragStart, onDragOver, onDragLeave, onDrop, onPlay, navigateToArtist, onRemove, playlistId, listing, lang }) {
-  const [liked, setLiked]       = React.useState(false);
-
-  React.useEffect(() => {
-    apiFetch(`/search/tracks/${track.track_id}/reaction`).then(r => setLiked(r?.reaction === 'like')).catch(() => {});
-  }, [track.track_id]);
-
+function PlaylistTrackRow({ track, isDragging, onDragStart, onDragOver, onDragLeave, onDrop, onPlay, navigateToArtist, onRemove, onAddToPlaylist, playlistId, listing, lang }) {
   const fmtDur = (s) => { if (!s) return '—'; const m = Math.floor(s/60), r = Math.floor(s%60); return `${m}:${String(r).padStart(2,'0')}`; };
 
   const burst = (btn, kind) => {
@@ -5671,19 +5630,6 @@ function PlaylistTrackRow({ track, isDragging, onDragStart, onDragOver, onDragLe
     }
     btn.appendChild(b);
     setTimeout(() => b.remove(), 640);
-  };
-
-  const handleLike = async (e) => {
-    burst(e.currentTarget, 'like');
-    const next = !liked;
-    setLiked(next);
-    try {
-      await apiFetch(`/search/tracks/${track.track_id}/reaction`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reaction: next ? 'like' : null }),
-      });
-    } catch { setLiked(!next); }
   };
 
   const handleRemove = (e) => {
@@ -5736,7 +5682,7 @@ function PlaylistTrackRow({ track, isDragging, onDragStart, onDragOver, onDragLe
 }
 
 // ─── PLAYLIST DETAIL VIEW (Task 17) ──────────────────────────────────────────
-function PlaylistDetailView({ playlistId, lang, isDark, onClose, onPlayTrack, navigateToArtist, listing }) {
+function PlaylistDetailView({ playlistId, lang, isDark, onClose, onPlayTrack, navigateToArtist, listing, onAddToPlaylist }) {
   const [detail, setDetail] = React.useState(null);
   const [error, setError] = React.useState(null);
   const [dragId, setDragId] = React.useState(null);
@@ -5911,10 +5857,10 @@ function PlaylistDetailView({ playlistId, lang, isDark, onClose, onPlayTrack, na
               onPlay={() => onPlayTrack({ track: t }, queue)}
               navigateToArtist={navigateToArtist}
               onRemove={() => onRemoveTrack(t.track_id)}
+              onAddToPlaylist={onAddToPlaylist}
               playlistId={playlistId}
               listing={listing}
               lang={lang}
-
             />
           ));
         })()}
@@ -5924,7 +5870,7 @@ function PlaylistDetailView({ playlistId, lang, isDark, onClose, onPlayTrack, na
 }
 
 // ─── PLAYLISTS TAB ────────────────────────────────────────────────────────────
-function PlaylistsTab({ listing, activePlaylistId, onOpenPlaylist, onCloseDetail, onRequestCreate, onPlayTrack, isDark, lang, navigateToArtist }) {
+function PlaylistsTab({ listing, activePlaylistId, onOpenPlaylist, onCloseDetail, onRequestCreate, onPlayTrack, isDark, lang, navigateToArtist, onAddToPlaylist }) {
   if (activePlaylistId == null) {
     return (
       <PlaylistsListView
@@ -5945,6 +5891,7 @@ function PlaylistsTab({ listing, activePlaylistId, onOpenPlaylist, onCloseDetail
       onPlayTrack={onPlayTrack}
       navigateToArtist={navigateToArtist}
       listing={listing}
+      onAddToPlaylist={onAddToPlaylist}
     />
   );
 }
@@ -6066,7 +6013,6 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
   // ── Data fetching ─────────────────────────────────────────────────────
   const [stats, setStats] = useState(null);                  // /library/stats
   const [albumsData, setAlbumsData] = useState(null);        // /library/albums
-  const [likedData, setLikedData] = useState(null);          // /library/liked-songs
   const [recentData, setRecentData] = useState(null);        // /playback/recent
   const [listenData, setListenData] = useState(null);        // /library/listening-stats
   const [rhythmData, setRhythmData] = useState(null);        // /library/rhythm
@@ -6081,11 +6027,13 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
   // over the localStorage-persisted choice.
   const [activeTab, setActiveTab] = useState(() => {
     const urlTab = new URLSearchParams(window.location.search).get('tab');
-    if (urlTab && ['albums', 'liked', 'recent', 'playlists', 'stats'].includes(urlTab)) return urlTab;
-    return localStorage.getItem('library_active_tab') || 'albums';
+    // 'liked' removed 2026-07 (likes replaced by огоньки + add-to-playlist);
+    // old deep links / persisted picks fall through to the albums default.
+    if (urlTab && ['albums', 'recent', 'playlists', 'stats'].includes(urlTab)) return urlTab;
+    const stored = localStorage.getItem('library_active_tab');
+    return (stored && stored !== 'liked') ? stored : 'albums';
   });
   const [albumModal, setAlbumModal] = useState(null);  // { album: AlbumSummary, originRect: DOMRect|null }
-  const [likedMap, setLikedMap] = useState({});
   // playlistsListing is now provided by App-level usePlaylists (lifted in Plan 19 follow-up)
   const [activePlaylistId, setActivePlaylistId] = React.useState(null);
   const [showNewPlaylistModal, setShowNewPlaylistModal] = React.useState(false);
@@ -6095,21 +6043,6 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
   const [catalogHits, setCatalogHits] = useState([]);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const catalogTimer = useRef(null);
-
-  const toggleLike = async (track_id) => {
-    const next = !(likedMap[track_id] !== false);   // default-true for items already in liked list
-    setLikedMap(p => ({ ...p, [track_id]: next }));
-    try {
-      await apiFetch(`/search/tracks/${track_id}/reaction`, {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ reaction: next ? 'like' : null }),
-      });
-      apiFetch(`/library/liked-songs`).then(setLikedData).catch(() => {});
-    } catch {
-      setLikedMap(p => ({ ...p, [track_id]: !next }));   // rollback
-    }
-  };
 
   useEffect(() => {
     localStorage.setItem('library_active_tab', activeTab);
@@ -6143,10 +6076,6 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
   useEffect(() => {
     if (visible === false) return;
     apiFetch(`/library/stats`).then(setStats).catch(() => setStats(null));
-    apiFetch(`/library/liked-songs`).then(d => {
-      setLikedData(d);
-      setLikedMap(p => { const next = {...p}; (d?.tracks || []).forEach(t => { next[t.track_id] = true; }); return next; });
-    }).catch(() => setLikedData({tracks:[]}));
     apiFetch(`/playback/recent?limit=50`).then(setRecentData).catch(() => setRecentData({tracks:[]}));
     // getTimezoneOffset() returns minutes where local = UTC - offset; negate it
     // so the backend gets the additive UTC→local shift (UTC+3 → +180) for
@@ -6208,7 +6137,6 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
   };
 
   const albumsCount = albumsData?.albums?.length ?? 0;
-  const likedCount  = likedData?.tracks?.length ?? 0;
   const recentCount = recentData?.tracks?.length ?? 0;
   const catalogActive = catalogQuery.trim().length >= 2;
 
@@ -6250,7 +6178,7 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
             <LibraryTabsStrip
               active={activeTab}
               onChange={setActiveTab}
-              counts={{ albums: albumsCount, liked: likedCount, recent: recentCount, playlists: playlistsListing.playlists.length }}
+              counts={{ albums: albumsCount, recent: recentCount, playlists: playlistsListing.playlists.length }}
               isDark={isDark}
               lang={lang}
             />
@@ -6268,22 +6196,6 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
               navigateToArtist={navigateToArtist}
             />
           )}
-          {activeTab === 'liked' && (
-            <LikedSongsTab
-              tracks={likedData?.tracks || []}
-              isDark={isDark} lang={lang}
-              onPlayTrack={onPlayTrack}
-              navigateToArtist={navigateToArtist}
-              onAlbumClick={(albumTitle) => {
-                const found = (albumsData?.albums || []).find(a => a.album_title === albumTitle);
-                if (found) setAlbumModal({ album: found, originRect: null });
-              }}
-              onToggleLike={toggleLike}
-              likedMap={likedMap}
-              currentTrackId={playerTrack?.track_id || null}
-              onAddToPlaylist={onAddToPlaylist}
-            />
-          )}
           {activeTab === 'recent' && (
             <RecentlyPlayedTab
               tracks={recentData?.tracks || []}
@@ -6296,8 +6208,6 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
                 const found = (albumsData?.albums || []).find(a => a.album_title === albumTitle);
                 if (found) setAlbumModal({ album: found, originRect: null });
               }}
-              onToggleLike={toggleLike}
-              likedMap={likedMap}
               currentTrackId={playerTrack?.track_id || null}
               onAddToPlaylist={onAddToPlaylist}
             />
@@ -6312,8 +6222,8 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
               onPlayTrack={onPlayTrack}
               isDark={isDark}
               lang={lang}
-
               navigateToArtist={navigateToArtist}
+              onAddToPlaylist={onAddToPlaylist}
             />
           )}
           {activeTab === 'stats' && (
@@ -7305,16 +7215,15 @@ function LibraryTabsStrip({ active, onChange, counts, lang, isDark }) {
   const isMobile = useIsMobile();
   if (isMobile) {
     const labelFor = (id) => ((lang === 'ru')
-      ? { albums:'Альбомы', liked:'Любимые', recent:'Недавние', playlists:'Плейлисты', stats:'Статистика' }
-      : { albums:'Albums', liked:'Liked', recent:'Recently', playlists:'Playlists', stats:'Statistics' })[id];
+      ? { albums:'Альбомы', recent:'Недавние', playlists:'Плейлисты', stats:'Статистика' }
+      : { albums:'Albums', recent:'Recently', playlists:'Playlists', stats:'Statistics' })[id];
     const ICONS = {
       albums: <><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></>,
-      liked: <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>,
       recent: <><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></>,
       playlists: <><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3.5" cy="6" r="1.3" fill="currentColor" stroke="none"/><circle cx="3.5" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="3.5" cy="18" r="1.3" fill="currentColor" stroke="none"/></>,
       stats: <><line x1="6" y1="21" x2="6" y2="12"/><line x1="12" y1="21" x2="12" y2="4"/><line x1="18" y1="21" x2="18" y2="15"/></>,
     };
-    const order = ['albums','liked','recent','playlists','stats'];
+    const order = ['albums','recent','playlists','stats'];
     return (
       <div style={{ display:'flex', gap:6, padding:'2px 0' }}>
         {order.map(id => {
@@ -7347,8 +7256,8 @@ function LibraryTabsStrip({ active, onChange, counts, lang, isDark }) {
     );
   }
   const tabs = lang === 'ru'
-    ? [['albums','▦ Альбомы', counts.albums], ['liked','♥ Любимые', counts.liked], ['recent','⟲ Недавние', counts.recent], ['playlists','♫ Плейлисты', counts.playlists], ['stats','◷ Статистика', null]]
-    : [['albums','▦ Albums', counts.albums], ['liked','♥ Liked', counts.liked], ['recent','⟲ Recently', counts.recent], ['playlists','♫ Playlists', counts.playlists], ['stats','◷ Statistics', null]];
+    ? [['albums','▦ Альбомы', counts.albums], ['recent','⟲ Недавние', counts.recent], ['playlists','♫ Плейлисты', counts.playlists], ['stats','◷ Статистика', null]]
+    : [['albums','▦ Albums', counts.albums], ['recent','⟲ Recently', counts.recent], ['playlists','♫ Playlists', counts.playlists], ['stats','◷ Statistics', null]];
   return (
     <div style={{ display:'flex', gap:10, flexWrap:'wrap' }}>
       {tabs.map(([id, label, n]) => {
@@ -7429,7 +7338,7 @@ function NewPlaylistModal({ onCancel, onSubmit, lang }) {
       }}
     >
       <div style={{
-        width: 440, padding: 28,
+        width: 'min(440px, 92vw)', padding: 28,
         background: 'linear-gradient(180deg, rgba(32,28,48,0.97) 0%, rgba(20,16,32,0.97) 60%)',
         border: '1px solid rgba(255,255,255,.08)',
         borderRadius: 18,
@@ -7495,8 +7404,9 @@ function NewPlaylistModal({ onCancel, onSubmit, lang }) {
 function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist, isDark, lang, onAddToPlaylist }) {
   const c = useColors(isDark);
   const [hoverRow, setHoverRow] = useState(-1);
-  const [likedMap, setLikedMap] = useState({});
-  const [likeLoading, setLikeLoading] = useState({});
+  // 10+ feat-артистов заполоняли всю страницу — прячем хвост под "+N".
+  const [showAllFeat, setShowAllFeat] = useState(false);
+  const isMobile = useIsMobile();
 
   // ── Shared-element fly-in (FLIP): start at the clicked grid cover ────
   // originRect is the viewport rect of the cover the user clicked; the
@@ -7555,32 +7465,6 @@ function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist,
     return () => document.removeEventListener('keydown', h);
   }, [requestClose]);
 
-  // Lazy-load per-track reactions on mount
-  useEffect(() => {
-    if (!album?.tracks?.length) return;
-    Promise.all(album.tracks.map(t =>
-      apiFetch(`/search/tracks/${t.track_id}/reaction`).then(r => [t.track_id, r?.reaction === 'like']).catch(() => [t.track_id, false])
-    )).then(pairs => setLikedMap(Object.fromEntries(pairs)));
-  }, [album?.album_title]);
-
-  const toggleLike = async (track_id) => {
-    if (likeLoading[track_id]) return;
-    const next = !likedMap[track_id];
-    setLikeLoading(p => ({ ...p, [track_id]: true }));
-    setLikedMap(p => ({ ...p, [track_id]: next }));   // optimistic
-    try {
-      await apiFetch(`/search/tracks/${track_id}/reaction`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reaction: next ? 'like' : null }),
-      });
-    } catch {
-      setLikedMap(p => ({ ...p, [track_id]: !next })); // rollback
-    } finally {
-      setLikeLoading(p => ({ ...p, [track_id]: false }));
-    }
-  };
-
   const playFromIdx = (idx) => {
     const t = album.tracks[idx];
     if (!t || !onPlayTrack) return;
@@ -7608,7 +7492,7 @@ function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist,
       style={{
         position:'fixed', inset:0, zIndex:100,
         background:'rgba(0,0,0,.65)', backdropFilter:'blur(8px)', WebkitBackdropFilter:'blur(8px)',
-        display:'grid', placeItems:'center', padding:'24px',
+        display:'grid', placeItems:'center', padding: isMobile ? 0 : '24px',
         animation: closing ? 'fadeOverlayOut 0.35s ease 0.15s forwards' : 'fadeIn 0.25s ease',
       }}
     >
@@ -7616,7 +7500,11 @@ function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist,
         ref={stageRef}
         className="album-flip-stage"
         onClick={e => e.stopPropagation()}
-        style={{ width:'min(700px, 94vw)', height:'min(84vh, 700px)', willChange:'transform' }}
+        // Mobile: the gatefold takes the whole screen (same flip mechanics);
+        // desktop keeps the centered 700px sleeve.
+        style={ isMobile
+          ? { width:'100dvw', height:'100dvh', willChange:'transform' }
+          : { width:'min(700px, 94vw)', height:'min(84vh, 700px)', willChange:'transform' } }
       >
         <div className={`album-flip${closing ? ' closing' : ''}`}>
 
@@ -7647,10 +7535,19 @@ function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist,
             )}
             <div aria-hidden="true" style={{ position:'absolute', inset:0, background:'linear-gradient(180deg, rgba(10,8,18,.32) 0%, rgba(10,8,18,.66) 100%)' }} />
 
-            <div style={{ position:'absolute', inset:0, display:'flex', flexDirection:'column', gap:'16px', padding:'26px 28px 24px' }}>
+            <div style={{
+              position:'absolute', inset:0, display:'flex', flexDirection:'column',
+              gap: isMobile ? '12px' : '16px',
+              padding: isMobile
+                ? 'calc(env(safe-area-inset-top, 0px) + 16px) 14px calc(env(safe-area-inset-bottom, 0px) + 14px)'
+                : '26px 28px 24px',
+            }}>
 
-              {/* Hero: small cover + vinyl peeking out */}
+              {/* Hero: small cover + vinyl peeking out. On phones the user just
+                  saw the full-screen front cover — skip the duplicate art and
+                  give the width to title/artists/tracklist. */}
               <div className="album-back-rise" style={{ '--ab-d':'0.45s', display:'flex', gap:'22px', alignItems:'center' }}>
+                {!isMobile && (
                 <div style={{ position:'relative', width:'196px', height:'132px', flexShrink:0 }}>
                   <div className="album-vinyl" style={{ position:'absolute', left:'64px', top:'4px', width:'124px', height:'124px' }}>
                     <div style={{ position:'absolute', inset:0, display:'grid', placeItems:'center' }}>
@@ -7667,6 +7564,7 @@ function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist,
                     <AlbumCover title={album.album_title} artist={album.primary_artist} size={132} isDark={true} coverPath={album.cover_art_path} radius={12} />
                   </div>
                 </div>
+                )}
                 <div style={{ flex:1, minWidth:0 }}>
                   <div className="mono" style={{ fontSize:'10px', color:'rgba(238,235,248,.5)', letterSpacing:'0.24em', textTransform:'uppercase' }}>{lang==='ru'?'АЛЬБОМ':'ALBUM'}</div>
                   <div style={{
@@ -7679,17 +7577,37 @@ function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist,
                     onClick={() => { if (album.primary_artist_slug && navigateToArtist) { navigateToArtist(album.primary_artist_slug); requestClose(); } }}
                     style={{ fontSize:'14px', color:'#cdbcff', cursor:'pointer', display:'inline-block' }}
                   >{album.primary_artist} →</div>
-                  {album.feat_artists?.length > 0 && (
+                  {album.feat_artists?.length > 0 && (() => {
+                    const FEAT_LIMIT = 6;
+                    const feats = album.feat_artists;
+                    const shown = showAllFeat ? feats : feats.slice(0, FEAT_LIMIT);
+                    const hidden = feats.length - shown.length;
+                    return (
                     <div style={{ marginTop:'7px', display:'flex', gap:'5px', flexWrap:'wrap' }}>
-                      {album.feat_artists.map(f => (
+                      {shown.map(f => (
                         <span key={f.slug}
                           onClick={() => { if (navigateToArtist) { navigateToArtist(f.slug); requestClose(); } }}
                           style={{ padding:'2px 9px', borderRadius:'10px', background:'rgba(120,80,200,.25)', border:'1px solid rgba(160,130,255,.35)', color:'#d4c8ff', fontSize:'10px', cursor:'pointer' }}>
                           {f.name}
                         </span>
                       ))}
+                      {hidden > 0 && (
+                        <span
+                          onClick={(e) => { e.stopPropagation(); setShowAllFeat(true); }}
+                          style={{ padding:'2px 9px', borderRadius:'10px', background:'rgba(255,255,255,.08)', border:'1px solid rgba(255,255,255,.18)', color:'rgba(238,235,248,.75)', fontSize:'10px', cursor:'pointer' }}>
+                          {lang==='ru' ? `+${hidden} ещё` : `+${hidden} more`}
+                        </span>
+                      )}
+                      {showAllFeat && feats.length > FEAT_LIMIT && (
+                        <span
+                          onClick={(e) => { e.stopPropagation(); setShowAllFeat(false); }}
+                          style={{ padding:'2px 9px', borderRadius:'10px', background:'rgba(255,255,255,.05)', border:'1px solid rgba(255,255,255,.12)', color:'rgba(238,235,248,.55)', fontSize:'10px', cursor:'pointer' }}>
+                          {lang==='ru' ? 'Свернуть' : 'Collapse'}
+                        </span>
+                      )}
                     </div>
-                  )}
+                    );
+                  })()}
                   <div className="mono" style={{ display:'flex', gap:'14px', fontSize:'11px', color:'rgba(238,235,248,.55)', marginTop:'10px', letterSpacing:'0.06em' }}>
                     <span>{album.year_range || album.year || '—'}</span>
                     <span>·</span>
@@ -7722,7 +7640,6 @@ function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist,
                 overflow:'auto', flex:1, minHeight:0,
               }}>
                 {album.tracks.map((t, i) => {
-                  const liked = !!likedMap[t.track_id];
                   return (
                     <div
                       key={t.track_id}
@@ -13143,7 +13060,6 @@ function CoverCombustion({ kind = 'fire', playKey = 0 }) {
 function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, onStreamSignal, audio, visible, lyricsMode, onToggleLyrics, onCloseLyrics, showToast, navigateToArtist, aiStatus, onAddToPlaylist, onQueueNext, onReorderQueue, shuffleOn, onToggleShuffle, streamActive }) {
   const [playlist, setPlaylist] = useState(initialPlaylist || []);
   const [currentIndex, setCurrentIndex] = useState(-1);
-  const [liked, setLiked] = useState(null);
   const [hoveredQueueIdx, setHoveredQueueIdx] = useState(-1);
   const isMobile = useIsMobile();             // mobile player: full-width cover, queue drawer
   const [queueOpen, setQueueOpen] = useState(false);  // mobile queue slide-up drawer
@@ -13651,7 +13567,6 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
       const reloadingPausedTrack = !!(el && el.dataset.playbackTrackId === String(track.track_id) && el.paused);
       audio.setSrc(url, { trackId: track.track_id }, { autoplay: visible && !reloadingPausedTrack });
     }
-    fetchReaction(initialTrack.track_id);
   }, [initialPlaylist, initialTrack]);
 
   // Sync audio source when current track changes
@@ -13675,14 +13590,6 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
     }
   }, [visible]);
 
-  const fetchReaction = async (trackId) => {
-    if (!trackId) return;
-    try {
-      const data = await apiFetch(`/search/tracks/${trackId}/reaction`, { headers: {} });
-      setLiked(data.reaction || null);
-    } catch { setLiked(null); }
-  };
-
   const playTrackAt = (index) => {
     if (index < 0 || index >= playlist.length) return;
     // Bootstrap spectrum analyser inside this (user-gesture) sync path so the
@@ -13698,7 +13605,6 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
     const track = playlist[index].track;
     const url = buildStreamUrl(track.track_id);
     if (audio) audio.setSrc(url, { trackId: track.track_id, noInfluence: !!playlist[index]._noInfluence }, { autoplay: true });
-    fetchReaction(track.track_id);
     // Propagate the new track up so App.playerTrack stays in sync. Without
     // this, LandingScreen / NowPlayingPebble / MiniPlaybackPopout (which all
     // read playerTrack at App level) would keep showing the *initial* track
@@ -13840,28 +13746,6 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
     onPrev: prevTrack,
     onSeek: seek,
   });
-
-  const setReaction = async (val) => {
-    if (!currentTrack) return;
-    markPlaybackInteracted(audio?.audioRef?.current);
-    // Toggle: clicking the already-active reaction CLEARS it. Compute the target
-    // ONCE and send exactly what the UI shows. The body used to always send `val`
-    // while local state toggled, so a second click re-upserted the same reaction
-    // server-side (the backend DELETEs only on reaction:null) — like/dislike could
-    // never be un-set from the player, and fetchReaction snapped the heart back.
-    const next = (val === liked) ? null : val;
-    triggerBurst(next);  // burst on set; next === null (clear) shows no burst
-    try {
-      await apiFetch(`/search/tracks/${currentTrack.track_id}/reaction`, {
-        method: 'POST',
-        body: JSON.stringify({ reaction: next }),
-      });
-      setLiked(next);
-      // Like/dislike = strong stream signal — the prefetched tail was picked
-      // by the pre-reaction profile, let App rebuild it.
-      if (onStreamSignal) onStreamSignal('reaction', currentTrack);
-    } catch (e) { console.error('Failed to set reaction:', e); }
-  };
 
   // Claim Space ownership while this section is mounted so the global shortcut
   // handler defers to the local handler below (which adds the cover flash).
@@ -15818,11 +15702,11 @@ function BottomTabBar({ section, onNav, isDark, lang }) {
 
 // ─── MiniPlayerBar — mobile persistent now-playing strip above the tab bar ────
 // Reuses the cover-URL convention from MiniPlaybackPopout. Tapping the strip opens
-// the full-screen player; the play/pause button toggles playback in place.
-function MiniPlayerBar({ track, audio, isDark, lang, onOpen }) {
+// the full-screen player; prev/play/next + add-to-playlist act in place.
+function MiniPlayerBar({ track, audio, isDark, lang, onOpen, onPrev, onNext, onAddToPlaylist }) {
   const c = useColors(isDark);
   const rawCover = (track && (track.cover_art_path || track.coverArt)) || null;
-  const cover = rawCover ? (rawCover.startsWith('http') ? rawCover : `${API}${rawCover}`) : null;
+  const cover = rawCover ? thumbCoverUrl(rawCover.startsWith('http') ? rawCover : `${API}${rawCover}`) : null;
   const title = track?.title || '—';
   const artist = track?.artist || '';
   const isPlaying = !!(audio && audio.isPlaying);
@@ -15856,6 +15740,16 @@ function MiniPlayerBar({ track, audio, isDark, lang, onOpen }) {
         <div style={{ fontSize:13, fontWeight:600, color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{title}</div>
         <div style={{ fontSize:11, color:c.textMuted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{artist}</div>
       </div>
+      <button title={lang==='ru'?'В плейлист':'Add to playlist'}
+        onClick={(e)=>{ e.stopPropagation(); onAddToPlaylist && onAddToPlaylist(track?.track_id, e.currentTarget); }}
+        style={{ flexShrink:0, width:34, height:40, display:'grid',
+          placeItems:'center', background:'transparent', border:0, color:c.textMuted, cursor:'pointer', fontSize:19, lineHeight:1 }}>＋</button>
+      <button title={lang==='ru'?'Предыдущий':'Previous'}
+        onClick={(e)=>{ e.stopPropagation(); onPrev && onPrev(); }}
+        style={{ flexShrink:0, width:34, height:40, display:'grid',
+          placeItems:'center', background:'transparent', border:0, color:c.text, cursor:'pointer' }}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="19 20 9 12 19 4"/><rect x="5" y="4" width="2" height="16"/></svg>
+      </button>
       <button title={isPlaying ? (lang==='ru'?'Пауза':'Pause') : (lang==='ru'?'Играть':'Play')}
         onClick={(e)=>{ e.stopPropagation(); audio?.togglePlay?.(); }}
         style={{ flexShrink:0, width:40, height:40, borderRadius:20, display:'grid',
@@ -15863,6 +15757,12 @@ function MiniPlayerBar({ track, audio, isDark, lang, onOpen }) {
         {isPlaying
           ? <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
           : <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><polygon points="7 4 19 12 7 20 7 4"/></svg>}
+      </button>
+      <button title={lang==='ru'?'Следующий':'Next'}
+        onClick={(e)=>{ e.stopPropagation(); onNext && onNext(); }}
+        style={{ flexShrink:0, width:34, height:40, display:'grid',
+          placeItems:'center', background:'transparent', border:0, color:c.text, cursor:'pointer' }}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 4 15 12 5 20"/><rect x="17" y="4" width="2" height="16"/></svg>
       </button>
     </div>
   );
@@ -16490,6 +16390,20 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     }
   };
 
+  // Off-player prev (mini-player button): a plain index step back — no queue
+  // top-up semantics needed at the head of the list.
+  const stepBackOffPlayer = () => {
+    const list = playerPlaylist;
+    const cur = playerTrack;
+    if (!cur) return;
+    const idx = list.findIndex(h => ((h && h.track) ? h.track : h).track_id === cur.track_id);
+    const prevHit = idx > 0 ? list[idx - 1] : null;
+    if (!prevHit) return;
+    const t = prevHit.track ? prevHit.track : prevHit;
+    audio.setSrc(buildStreamUrl(t.track_id), { trackId: t.track_id, noInfluence: !!prevHit._noInfluence }, { autoplay: true });
+    handleTrackChange(t);
+  };
+
   // Off-player auto-advance. On the player screen, PlayerSection owns the 'ended'
   // listener (it receives `audio`); everywhere else attach ours so a finished
   // track on Home / "For You" still rolls to the next one.
@@ -16696,7 +16610,8 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
         )}
       </div>
       {isMobile && section !== 'player' && playerTrack && (
-        <MiniPlayerBar track={playerTrack} audio={audio} isDark={isDark} lang={lang} onOpen={openMobilePlayer} />
+        <MiniPlayerBar track={playerTrack} audio={audio} isDark={isDark} lang={lang} onOpen={openMobilePlayer}
+          onPrev={stepBackOffPlayer} onNext={advancePlaybackOffPlayer} onAddToPlaylist={openAddToPlaylist} />
       )}
       {isMobile && section !== 'player' && (
         <BottomTabBar section={section} onNav={setSection} isDark={isDark} lang={lang} />
