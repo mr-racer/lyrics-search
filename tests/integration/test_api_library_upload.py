@@ -319,3 +319,48 @@ class TestBatchCommit:
                 )
                 assert resp.status_code == 200, resp.text
             assert enq.call_args.kwargs.get("text_model") is None
+
+
+class TestFolderIndexEmbedModel:
+    """POST /library/index (server-mode member, MEMBER_INDEX_ROOT opt-in).
+
+    Same policy as batch-commit: the embedding model is the admin's instance
+    setting; the request body cannot override it. Regression guard for the bug
+    where a member's mounted-folder index silently fell back to the jina default
+    because the route forwarded req.text_model (which the member UI never sends)
+    instead of the instance EMBED_MODEL setting.
+    """
+
+    def test_server_member_index_uses_instance_setting(self, _server_mode_batch, monkeypatch):
+        import time
+        from unittest.mock import AsyncMock
+        from app.resources.metadata_db import MetadataDB
+
+        root = _server_mode_batch  # tmp_path — a real dir, passes the is_dir() check
+        monkeypatch.setenv("MEMBER_INDEX_ROOT", str(root))
+        MetadataDB.set_instance_settings(
+            {"EMBED_MODEL": "intfloat/multilingual-e5-base"}, time.time(),
+        )
+        app = create_app()
+        _login_batch(app, "acct_alice")
+        with patch(
+            "app.services.library_service.LibraryService.index_folder",
+            new_callable=AsyncMock,
+        ) as idx:
+            idx.return_value = {"status": "completed", "count": 0, "message": "ok"}
+            with TestClient(app) as c:
+                # This test exercises route-level model resolution, not Qdrant.
+                # In limited mode (no live Qdrant) the lifespan leaves
+                # library_service=None; inject a bare instance so the request
+                # reaches index_folder (which is mocked above).
+                from app.services.library_service import LibraryService
+                if app.state.library_service is None:
+                    app.state.library_service = object.__new__(LibraryService)
+                resp = c.post(
+                    "/api/v1/library/index",
+                    # Body value must be IGNORED in favor of the instance model.
+                    json={"folder_path": str(root),
+                          "text_model": "Qwen/Qwen3-Embedding-0.6B"},
+                )
+                assert resp.status_code == 200, resp.text
+            assert idx.call_args.kwargs.get("text_model") == "intfloat/multilingual-e5-base"

@@ -1032,13 +1032,24 @@ async def index_folder(
             status_code=400,
             detail=f"folder does not exist on this host: {req.folder_path}",
         )
+    # In server mode the embedding model is an instance-wide admin decision
+    # (same policy as /library/upload/batch-commit): the request body cannot
+    # override it. Without this a member's mounted-folder index sent no
+    # text_model (the member UI omits it), so the pipeline silently fell back to
+    # the jina default instead of honoring the Settings-chosen model. In sharing
+    # mode the single owner picks the model per-index, so keep the body value.
+    text_model = req.text_model
+    if cfg is not None and cfg.get("mode") == "server":
+        from app.services.settings_service import settings_service
+        text_model = settings_service.embed_model()
+
     # Phase B: key the in-flight indexing slot by the authenticated account, so
     # two accounts can index concurrently while one account can't double-start.
     result = await service.index_folder(
         folder_path=req.folder_path,
         collection_name=derived,
         better_lyrics_quality=req.better_lyrics_quality,
-        text_model=req.text_model,
+        text_model=text_model,
         enhance_by_musicbrainz=req.enhance_by_musicbrainz,
         account_id=current_user.id,
     )
