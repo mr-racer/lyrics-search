@@ -4881,6 +4881,21 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream, 
   // Mosaic order: most-populated island first — it renders as the big 2×2 tile.
   const sortedIslands = [...islands].sort(
     (a, b) => ((b.tracks || []).length) - ((a.tracks || []).length));
+  // «Вайбики» — the fast mood layer; server sends them strongest-first.
+  const vibes = (profile && profile.vibes) || [];
+  // One cover per album on the island/vibe walls: several songs off the same
+  // album collapse into a single tile (tracks without an album stay separate).
+  const uniqueAlbumTracks = (tracks) => {
+    const seen = new Set();
+    const out = [];
+    (tracks || []).forEach(t => {
+      const key = t.album
+        ? `${(t.artist || '').toLowerCase()}||${t.album.toLowerCase()}`
+        : (t.cover_art_path || t.track_id);
+      if (!seen.has(key)) { seen.add(key); out.push(t); }
+    });
+    return out;
+  };
   const islandArtists = (isl) => {
     const seen = [];
     (isl.tracks || []).forEach(t => { if (t.artist && !seen.includes(t.artist)) seen.push(t.artist); });
@@ -5070,9 +5085,9 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream, 
               </div>
               <div className="rec2-isl-about" style={{ color:c.textSubtle }}>
                 {lang==='ru' ? (
-                  <>Выраженные области твоего музыкального вкуса. Они живут вместе с тобой: крепнут от <b style={{ color:c.textMuted }}>дослушанных до конца треков</b> и <b style={{ color:c.textMuted }}>огоньков</b>, слабеют от <b style={{ color:c.textMuted }}>скипов</b>. Нажми на остров — заиграет радио в его духе.</>
+                  <>Выраженные области твоего музыкального вкуса. Они живут вместе с тобой: крепнут от <b style={{ color:c.textMuted }}>дослушанных до конца треков</b> и <b style={{ color:c.textMuted }}>огоньков</b>, а без прослушиваний постепенно <b style={{ color:c.textMuted }}>тают</b>. Нажми на остров — заиграет радио в его духе.</>
                 ) : (
-                  <>Distinct regions of your music taste. They live with you: they grow from <b style={{ color:c.textMuted }}>tracks played to the end</b> and <b style={{ color:c.textMuted }}>fires</b>, and fade from <b style={{ color:c.textMuted }}>skips</b>. Tap an island to start a radio in its spirit.</>
+                  <>Distinct regions of your music taste. They live with you: they grow from <b style={{ color:c.textMuted }}>tracks played to the end</b> and <b style={{ color:c.textMuted }}>fires</b>, and slowly <b style={{ color:c.textMuted }}>melt away</b> when unplayed. Tap an island to start a radio in its spirit.</>
                 )}
               </div>
               {profileLoading ? skeletonRows(2) : sortedIslands.length ? (
@@ -5087,7 +5102,7 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream, 
                            style={{ color:c.text }} onClick={() => islandRadio(isl)} {...spotHandlers(true)}>
                         {big && <span className="rec2-badge">{lang==='ru'?'самый обитаемый':'most lived-in'}</span>}
                         <div className="rec2-covs">
-                          {(isl.tracks || []).slice(0, big ? 4 : 2).map((t, j) => (
+                          {uniqueAlbumTracks(isl.tracks).slice(0, big ? 4 : 2).map((t, j) => (
                             <LazyCover key={t.track_id || j} className="rec2-cov" url={homeCoverUrl(t.cover_art_path)}
                                        fallback="linear-gradient(135deg,#7c5cff,#b06bff)" />
                           ))}
@@ -5107,6 +5122,49 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream, 
                 </div>
               ) : (
                 <div style={{ fontSize:'13.5px', color:c.textSubtle, marginTop:'4px' }}>{lang==='ru'?'Слушай и отмечай треки — со временем здесь проявятся твои музыкальные острова.':'Listen and react — your islands surface here over time.'}</div>
+              )}
+
+              {/* «Вайбики» — fast mood layer under the islands: same visual
+                  language, but ephemeral (days, not months). Hidden entirely
+                  when none are alive — it's an optional layer, no empty state. */}
+              {vibes.length > 0 && (
+                <>
+                  <div className="rec-div rec-div--taste" style={{ margin:'20px 0 8px' }}>
+                    <div className="rec-div__ln" />
+                    <div className="rec-div__lbl" style={{ color:c.textSubtle }}>
+                      <span className="rec-div__nd" />
+                      {lang==='ru' ? 'Вайбики' : 'Vibes'}
+                    </div>
+                    <div className="rec-div__ln" />
+                  </div>
+                  <div className="rec2-isl-about" style={{ color:c.textSubtle }}>
+                    {lang==='ru' ? (
+                      <>То, что ты слушаешь <b style={{ color:c.textMuted }}>прямо сейчас</b>. Вайбики ловят твоё текущее настроение и, в отличие от островов, тают за пару дней. Скипы похожих песен и «остудить» ускоряют их уход.</>
+                    ) : (
+                      <>What you're listening to <b style={{ color:c.textMuted }}>right now</b>. Vibes catch your current mood and, unlike islands, melt away within days. Skipping similar songs or "cool it" speeds up their fade.</>
+                    )}
+                  </div>
+                  <div className="rec2-mosaic">
+                    {vibes.map(v => (
+                      <div key={v.track_id} className="rec2-isl" style={{ color:c.text }}
+                           onClick={() => islandRadio(v)} {...spotHandlers(true)}>
+                        <div className="rec2-covs">
+                          {uniqueAlbumTracks(v.tracks).slice(0, 2).map((t, j) => (
+                            <LazyCover key={t.track_id || j} className="rec2-cov" url={homeCoverUrl(t.cover_art_path)}
+                                       fallback="linear-gradient(135deg,#7c5cff,#b06bff)" />
+                          ))}
+                        </div>
+                        <div style={{ minWidth:0 }}>
+                          <div className="rec2-isl-name">{islandName(v)}</div>
+                          <div className="rec2-isl-sub" style={{ color:c.textSubtle }}>
+                            <span>{(v.tracks||[]).length} {lang==='ru'?'треков':'tracks'}</span>
+                          </div>
+                        </div>
+                        <span className="rec2-isl-play" style={{ position:'absolute', right:'12px', bottom:'12px' }}>▶</span>
+                      </div>
+                    ))}
+                  </div>
+                </>
               )}
             </div>
           </div>
@@ -13204,7 +13262,7 @@ function CoverCombustion({ kind = 'fire', playKey = 0 }) {
   );
 }
 
-function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, onStreamSignal, audio, visible, lyricsMode, onToggleLyrics, onCloseLyrics, showToast, navigateToArtist, aiStatus, onAddToPlaylist, onQueueNext, onReorderQueue, shuffleOn, onToggleShuffle, streamActive }) {
+function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, onStreamSignal, audio, visible, lyricsMode, onToggleLyrics, onCloseLyrics, showToast, navigateToArtist, aiStatus, onAddToPlaylist, onQueueNext, onReorderQueue, shuffleOn, onToggleShuffle, streamActive, streamAdapt }) {
   const [playlist, setPlaylist] = useState(initialPlaylist || []);
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [hoveredQueueIdx, setHoveredQueueIdx] = useState(-1);
@@ -14489,6 +14547,28 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
             overflow: 'hidden',
             minHeight: 0,
           }}>
+            {/* «Подстроились под твой вайб» — only in stream mode and only when
+                the server named distinguishable contributors (fire/replay). */}
+            {streamActive && streamAdapt && streamAdapt.active && (streamAdapt.tracks || []).length > 0 && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 9, flexShrink: 0,
+                marginBottom: 10, padding: '7px 12px', borderRadius: 12,
+                background: isDark ? 'rgba(124,92,255,.10)' : 'rgba(124,92,255,.07)',
+                border: `1px solid ${isDark ? 'rgba(124,92,255,.26)' : 'rgba(124,92,255,.20)'}`,
+              }}>
+                <span aria-hidden="true" style={{ fontSize: 13, lineHeight: 1 }}>✨</span>
+                <span style={{ fontSize: 12.5, fontWeight: 600, color: pText, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {lang === 'ru' ? 'Подстроились под твой вайб' : 'Tuned to your vibe'}
+                </span>
+                <span style={{ display: 'flex', gap: 5, marginLeft: 'auto', flexShrink: 0 }}>
+                  {(streamAdapt.tracks || []).slice(0, 2).map((t, j) => (
+                    <LazyCover key={t.track_id || j} url={homeCoverUrl(t.cover_art_path)}
+                               style={{ width: 24, height: 24, borderRadius: 6 }}
+                               fallback="linear-gradient(135deg,#7c5cff,#b06bff)" />
+                  ))}
+                </span>
+              </div>
+            )}
             <div style={{
               fontSize: 10,
               letterSpacing: '0.20em',
@@ -16207,6 +16287,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     // Any manual play exits stream mode — the user took the wheel.
     streamActiveRef.current = false;
     setStreamActive(false);
+    setStreamAdapt(null);
     // Replacing the queue voids the shuffle: the fresh queue starts unshuffled.
     resetShuffle();
     // Search/Recommend pass HIT shape ({ track:{track_id,title,...}, score, matched_on }).
@@ -16399,6 +16480,10 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
   // must know whether the live queue IS the wave. Kept in lockstep with the ref
   // at every write-site below.
   const [streamActive, setStreamActive] = useState(false);
+  // «Подстроились под твой вайб»: the latest chunk's session_adaptation
+  // payload (null when session contributions are indistinguishable — the
+  // server only sends it after a fire/replay, never for uniform listening).
+  const [streamAdapt, setStreamAdapt] = useState(null);
 
   const fetchStreamChunk = async ({ excludeQueue = true } = {}) => {
     if (streamFetchingRef.current) return [];
@@ -16421,6 +16506,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
         `/recommend/stream/next?session_id=${encodeURIComponent(getSessionId())}&n=3` +
         (ex ? `&exclude_ids=${encodeURIComponent(ex)}` : '')
       );
+      setStreamAdapt(data.session_adaptation || null);
       return (data.tracks || []).map(t => ({
         track: t, score: t.score || 0, matched_on: 'stream', _stream: true, _pool: t.pool,
       }));
@@ -16440,6 +16526,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     if (!hits.length) {
       streamActiveRef.current = false;
       setStreamActive(false);
+      setStreamAdapt(null);
       showToast(lang === 'ru' ? 'Библиотека пуста — добавьте музыку' : 'Library is empty — add your music');
       return;
     }
@@ -16745,6 +16832,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
                 shuffleOn={id === 'player' ? shuffleOn : undefined}
                 onToggleShuffle={id === 'player' ? toggleShuffle : undefined}
                 streamActive={id === 'player' ? streamActive : undefined}
+                streamAdapt={id === 'player' ? streamAdapt : undefined}
               />
             </div>
           ))}

@@ -235,6 +235,25 @@ class TestStreamNext:
         # every track carries full metadata for the player
         for t in body["tracks"]:
             assert t["title"] and t["artist"] and t["file_path"]
+        # uniform full listens only → contributions indistinguishable → no badge
+        assert body["session_adaptation"] is None
+
+    def test_fire_lights_the_session_adaptation_badge(self, client):
+        """A session fire makes contributions distinguishable: the chunk ships
+        «подстроились под твой вайб» with the fired track's metadata."""
+        for i in range(3):
+            _post_event(client, f"a{i}", session="s_fire")
+        r = client.post("/api/v1/recommend/taste-signal", json={
+            "session_id": "s_fire", "track_id": "a1", "kind": "fire"})
+        assert r.status_code == 200
+
+        resp = client.get("/api/v1/recommend/stream/next",
+                          params={"session_id": "s_fire", "n": 3})
+        body = resp.json()
+        adapt = body["session_adaptation"]
+        assert adapt["active"] is True
+        assert adapt["tracks"][0]["track_id"] == "a1"
+        assert adapt["tracks"][0]["title"]
 
     def test_session_signals_adapt_queue_toward_cluster(self, client):
         """«15 событий → очередь адаптировалась»: full listens of B-cluster in
@@ -447,6 +466,10 @@ class TestProfileAndAxisPlaylist:
         assert body["n_signals"] == 4
         assert body["islands"], "expected at least one island"
         assert body["islands"][0]["tracks"][0]["title"]
+        # Vibes (the fast mood layer) ship in the same response; the fresh
+        # a-cluster signals must also form at least one vibe.
+        assert body["vibes"], "expected at least one vibe"
+        assert body["vibes"][0]["tracks"][0]["title"]
         assert set(body["axes"]) == set(AXIS_NAMES)
         assert body["portrait"] is None  # LLM enrichment not generated yet
 

@@ -585,12 +585,12 @@ class TestMergeAnchorsMembers:
 class TestLongTermProfile:
     def _seed_history(self, coll="acct_u"):
         MetadataDB.set_axis_norm_stats(coll, _stats())
-        # Islands are now fed by fires (fat) + ≥85% completions (weak); hearts gone.
-        MetadataDB.record_taste_signal(
-            session_id="s", collection_name=coll, track_id="t1", kind="fire")
-        MetadataDB.record_taste_signal(
-            session_id="s", collection_name=coll, track_id="t2", kind="fire")
-        for tid in ("t1", "t2", "t3"):
+        # Islands are fed by fires (fat) + ≥85% completions (weak); hearts gone.
+        # t1 gets 2 fires → strongest, deterministic greedy-merge representative.
+        for tid in ("t1", "t1", "t2", "t3"):
+            MetadataDB.record_taste_signal(
+                session_id="s", collection_name=coll, track_id=tid, kind="fire")
+        for tid in ("t1", "t2", "t3", "t4", "t5"):
             MetadataDB.record_playback_event(
                 session_id="s", collection_name=coll, track_id=tid,
                 played_sec=190.0, total_dur=200.0,
@@ -598,26 +598,72 @@ class TestLongTermProfile:
 
     def test_profile_shape(self):
         self._seed_history()
+        # Angles: t1=0°, t2=16° (cos .96), t3=33° (cos .839 to t1 — merges at the
+        # 0.80 profile threshold but NOT at the stream's 0.85); t4/t5 form a far
+        # pair (120°/136°) — a 2-track cluster is below ISLAND_MIN_MEMBERS=3.
         fake = FakeQdrant([
             _Point("t1", vector=[1.0, 0.0],
-                   payload={"title": "T1", "artist": "A", "sonic_axes": _axes(1.0)}),
-            _Point("t2", vector=[0.999, 0.04],
-                   payload={"title": "T2", "artist": "A", "sonic_axes": _axes(1.0)}),
-            _Point("t3", vector=[0.0, 1.0],
-                   payload={"title": "T3", "artist": "B", "sonic_axes": _axes(-1.0)}),
+                   payload={"title": "T1", "artist": "A", "album": "Alb1",
+                            "sonic_axes": _axes(1.0)}),
+            _Point("t2", vector=[0.9613, 0.2756],
+                   payload={"title": "T2", "artist": "A", "album": "Alb1",
+                            "sonic_axes": _axes(1.0)}),
+            _Point("t3", vector=[0.8387, 0.5446],
+                   payload={"title": "T3", "artist": "A", "album": "Alb2",
+                            "sonic_axes": _axes(1.0)}),
+            _Point("t4", vector=[-0.5, 0.8660],
+                   payload={"title": "T4", "artist": "B", "sonic_axes": _axes(-1.0)}),
+            _Point("t5", vector=[-0.7193, 0.6947],
+                   payload={"title": "T5", "artist": "B", "sonic_axes": _axes(-1.0)}),
         ])
         out = long_term_profile(qdrant_client=fake, collection_name="acct_u", now=NOW)
 
-        assert out["n_signals"] == 5  # 3 events + 2 reactions
+        assert out["n_signals"] == 9  # 4 fires + 5 completions
         assert out["confidence"] > 0.0
-        # t1+t2 merge into one island (cos≈1); t3 is a lone track and a
-        # single-song «island» is dropped — only the real cluster survives.
+        # Only the 3-track cluster survives: the t4+t5 pair is dropped
+        # (islands start at 3 members).
         assert len(out["islands"]) == 1
         top = out["islands"][0]
-        assert {m["track_id"] for m in top["tracks"]} == {"t1", "t2"}
-        # axes: likes dominate at +1z → positive prefs with level labels
+        assert {m["track_id"] for m in top["tracks"]} == {"t1", "t2", "t3"}
+        # Album passthrough for the frontend's per-album cover dedup.
+        assert {m["album"] for m in top["tracks"]} == {"Alb1", "Alb2"}
+        # axes: the fired trio dominates at +1z → positive prefs with levels
         assert out["axes"]["energy"]["z"] > 0.3
         assert out["axes"]["energy"]["level"] in ("high", "very_high")
+        # Vibes ride the same response: the fired trio + the completions-only
+        # t4/t5 pair (vibes allow pairs, unlike islands), strongest first.
+        assert [{m["track_id"] for m in v["tracks"]} for v in out["vibes"]] \
+            == [{"t1", "t2", "t3"}, {"t4", "t5"}]
+
+    def test_island_pool_reaches_past_top_20(self):
+        """A weak 3-track cluster ranked 21–23 by weight must still become an
+        island — the profile pool is wider than the stream's top-20 anchors."""
+        coll = "acct_u"
+        MetadataDB.set_axis_norm_stats(coll, _stats())
+        # 20 strong solo tracks (1 fire each) fill the old top-20 window…
+        for i in range(20):
+            MetadataDB.record_taste_signal(
+                session_id="s", collection_name=coll, track_id=f"f{i}", kind="fire")
+        # …while the trio has completions only (0.2 each → ranks 21–23).
+        for tid in ("c1", "c2", "c3"):
+            MetadataDB.record_playback_event(
+                session_id="s", collection_name=coll, track_id=tid,
+                played_sec=190.0, total_dur=200.0,
+            )
+        dim = 24
+        pts = []
+        for i in range(20):
+            v = [0.0] * dim
+            v[i] = 1.0  # one-hot: solos are pairwise orthogonal, never merge
+            pts.append(_Point(f"f{i}", vector=v, payload={"title": f"F{i}", "artist": "solo"}))
+        shared = [0.0] * dim
+        shared[dim - 1] = 1.0
+        for tid in ("c1", "c2", "c3"):
+            pts.append(_Point(tid, vector=list(shared), payload={"title": tid, "artist": "trio"}))
+
+        out = long_term_profile(qdrant_client=FakeQdrant(pts), collection_name=coll, now=NOW)
+        assert [{m["track_id"] for m in isl["tracks"]} for isl in out["islands"]] \
+            == [{"c1", "c2", "c3"}]
 
     def test_empty_history_returns_blank_profile(self):
         fake = FakeQdrant([])
@@ -625,6 +671,231 @@ class TestLongTermProfile:
         assert out["islands"] == []
         assert out["axes"] is None
         assert out["n_signals"] == 0
+
+
+class TestIslandWeights:
+    def test_island_decay_time_constant_is_30_days(self):
+        """Islands breathe: a fire is worth 1/e after 30 days (was 180)."""
+        fire = ss.FireSignal(track_id="a", kind="fire",
+                             created_at=NOW - timedelta(days=30.0))
+        w = ss.island_taste_weights([fire], [], NOW)
+        assert w["a"] == pytest.approx(1.0 / 2.718281828, rel=1e-6)
+
+
+# ── «Вайбики»: ephemeral mood clusters (fast layer under the islands) ────────
+
+def _vev(track, played=190.0, dur=200.0, days_ago=0.0, session="s1"):
+    """Playback event on the vibe test clock (NOW)."""
+    return PlaybackSignal(
+        track_id=track, played_sec=played, total_dur=dur,
+        played_at=NOW - timedelta(days=days_ago), session_id=session,
+    )
+
+
+def _fire(track, kind="fire", days_ago=0.0):
+    return ss.FireSignal(track_id=track, kind=kind,
+                         created_at=NOW - timedelta(days=days_ago))
+
+
+class TestVibeWeights:
+    def test_fire_full_partial_deposits(self):
+        w = ss.vibe_taste_weights(
+            [_fire("f")],
+            [_vev("full"), _vev("part", played=140.0)],  # 95% and 70%
+            NOW,
+        )
+        assert w["f"] == pytest.approx(ss.VIBE_FIRE_DEPOSIT)
+        assert w["full"] == pytest.approx(ss.VIBE_FULL_DEPOSIT)
+        assert w["part"] == pytest.approx(ss.VIBE_MOST_DEPOSIT)
+
+    def test_water_and_skip_do_not_deposit(self):
+        w = ss.vibe_taste_weights(
+            [_fire("w", kind="water")], [_vev("sk", played=5.0)], NOW)
+        assert w == {}
+
+    def test_vibe_decay_is_days_not_months(self):
+        w = ss.vibe_taste_weights([_fire("f", days_ago=ss.H_VIBE_DAYS)], [], NOW)
+        assert w["f"] == pytest.approx(
+            ss.VIBE_FIRE_DEPOSIT / 2.718281828, rel=1e-6)
+
+
+class TestCurrentVibes:
+    # 2D directions: A-cluster around [1,0]; B far away at [0,1].
+    A1 = [1.0, 0.0]
+    A2 = [0.9613, 0.2756]   # cos .96 to A1 → merges at 0.80
+    B = [0.0, 1.0]
+
+    def _points(self, extra=()):
+        pts = [
+            _Point("a1", vector=self.A1, payload={"title": "A1", "artist": "A"}),
+            _Point("a2", vector=self.A2, payload={"title": "A2", "artist": "A"}),
+            _Point("b", vector=self.B, payload={"title": "B", "artist": "B"}),
+        ]
+        pts.extend(extra)
+        return pts
+
+    def _vibes(self, taste, events, points):
+        return ss.current_vibes(
+            qdrant_client=FakeQdrant(points), collection_name="c",
+            signals=events, taste_signals=taste, now=NOW,
+        )
+
+    def test_cluster_of_two_forms_a_vibe_solo_does_not(self):
+        taste = [_fire("a1"), _fire("a1"), _fire("a2"), _fire("b")]
+        out = self._vibes(taste, [], self._points())
+        assert len(out) == 1
+        assert {m["track_id"] for m in out[0]["tracks"]} == {"a1", "a2"}
+        assert out[0]["track_id"] == "a1"  # strongest member represents
+
+    def test_at_most_three_vibes_strongest_first(self):
+        dim = 8
+        taste, pts = [], []
+        # 4 pair-clusters with descending fire counts (3, 2, 1, 0 fires each
+        # member; the last pair lives on completions only).
+        events = []
+        for c in range(4):
+            v = [0.0] * dim
+            v[c] = 1.0
+            for m in range(2):
+                tid = f"c{c}m{m}"
+                pts.append(_Point(tid, vector=list(v),
+                                  payload={"title": tid, "artist": f"c{c}"}))
+                taste.extend(_fire(tid) for _ in range(3 - c))
+                events.append(_vev(tid))
+        out = self._vibes(taste, events, pts)
+        assert len(out) == 3
+        got = [{m["track_id"] for m in v["tracks"]} for v in out]
+        assert got == [{"c0m0", "c0m1"}, {"c1m0", "c1m1"}, {"c2m0", "c2m1"}]
+
+    def test_similar_skips_kill_a_vibe(self):
+        taste = [_fire("a1"), _fire("a2")]
+        sk = _Point("sk", vector=self.A1, payload={"title": "S", "artist": "A"})
+        skips = [_vev("sk", played=5.0) for _ in range(5)]  # 5 × 0.35 = 1.75
+        out = self._vibes(taste, skips, self._points(extra=[sk]))
+        assert out == []  # net 2.0 − 1.75 = 0.25 < VIBE_MIN_NET
+
+    def test_dissimilar_skips_do_not_touch_a_vibe(self):
+        taste = [_fire("a1"), _fire("a2")]
+        sk = _Point("sk", vector=self.B, payload={"title": "S", "artist": "B"})
+        skips = [_vev("sk", played=5.0) for _ in range(5)]
+        out = self._vibes(taste, skips, self._points(extra=[sk]))
+        assert len(out) == 1
+        assert out[0]["weight"] == pytest.approx(2.0)
+
+    def test_water_hits_harder_than_a_skip(self):
+        taste = [_fire("a1"), _fire("a2")]
+        sk = _Point("sk", vector=self.A1, payload={"title": "S", "artist": "A"})
+        skipped = self._vibes(
+            taste + [], [_vev("sk", played=5.0)], self._points(extra=[sk]))
+        watered = self._vibes(
+            taste + [_fire("sk", kind="water")], [], self._points(extra=[sk]))
+        assert skipped[0]["weight"] == pytest.approx(2.0 - ss.VIBE_SKIP_PENALTY)
+        assert watered[0]["weight"] == pytest.approx(2.0 - ss.VIBE_WATER_PENALTY)
+
+
+# ── Session wave: anchor rotation + pivot («резко сменить пластинку») ────────
+
+class TestSessionWave:
+    def test_wave_is_weighted_mean_of_positive_session_tracks(self):
+        vectors = {"a": np.array([1.0, 0.0]), "b": np.array([0.0, 1.0])}
+        wave = ss.session_wave_vector({"a": 1.0, "b": 3.0}, vectors)
+        # b dominates the mean → the wave leans toward b's direction
+        assert float(wave @ ss._unit(vectors["b"])) \
+            > float(wave @ ss._unit(vectors["a"]))
+        assert np.linalg.norm(wave) == pytest.approx(1.0)
+
+    def test_no_positive_tracks_means_no_wave(self):
+        vectors = {"a": np.array([1.0, 0.0])}
+        assert ss.session_wave_vector({"a": -0.6}, vectors) is None
+        assert ss.session_wave_vector({}, vectors) is None
+        assert ss.session_wave_vector({"missing": 1.0}, {}) is None
+
+
+class TestAnchorRotation:
+    def _anchors(self):
+        # heavy anchor orthogonal to the wave; light anchor aligned with it
+        heavy = Anchor("heavy", 10.0, vector=np.array([0.0, 1.0]))
+        light = Anchor("light", 1.0, vector=np.array([1.0, 0.0]))
+        return [heavy, light]
+
+    WAVE = np.array([1.0, 0.0])
+
+    def test_cold_session_keeps_pure_weight_order(self):
+        out = ss.rank_effective_anchors(self._anchors(), None, 0.5, top_k=2)
+        assert [a.track_id for a in out] == ["heavy", "light"]
+        out = ss.rank_effective_anchors(self._anchors(), self.WAVE, 0.0, top_k=2)
+        assert [a.track_id for a in out] == ["heavy", "light"]
+
+    def test_warm_session_pulls_wave_aligned_anchor_up(self):
+        # w_s=0.5: heavy = .5·1 + .5·0 = .50; light = .5·0.1 + .5·1 = .55
+        out = ss.rank_effective_anchors(self._anchors(), self.WAVE, 0.5, top_k=1)
+        assert [a.track_id for a in out] == ["light"]
+
+
+class TestPivot:
+    def _skip(self, minute):
+        return _vev("x", played=5.0, days_ago=-minute / (24 * 60.0))
+
+    def _full(self, minute):
+        return _vev("y", days_ago=-minute / (24 * 60.0))
+
+    def test_three_skips_in_last_five_events_trigger(self):
+        events = [self._full(m) for m in range(5)] \
+            + [self._skip(5), self._full(6), self._skip(7), self._skip(8)]
+        assert ss.detect_pivot(events, [], NOW) is True
+
+    def test_old_skips_buried_by_fresh_listens_do_not(self):
+        events = [self._skip(m) for m in range(3)] \
+            + [self._full(m) for m in range(3, 8)]
+        assert ss.detect_pivot(events, [], NOW) is False
+
+    def test_two_fresh_waters_trigger_one_does_not(self):
+        fresh = [_fire("w1", kind="water"), _fire("w2", kind="water")]
+        assert ss.detect_pivot([], fresh, NOW) is True
+        assert ss.detect_pivot([], fresh[:1], NOW) is False
+
+    def test_stale_waters_do_not_trigger(self):
+        stale = [_fire("w1", kind="water", days_ago=30 / (24 * 60.0)),
+                 _fire("w2", kind="water", days_ago=30 / (24 * 60.0))]
+        assert ss.detect_pivot([], stale, NOW) is False
+
+    def test_pivot_anchors_prefer_wave_dissimilar(self):
+        wave = np.array([1.0, 0.0])
+        a_hi = Anchor("hi", 10.0, vector=np.array([1.0, 0.0]))       # cos 1.0
+        a_mid = Anchor("mid", 9.0, vector=np.array([0.9, 0.4359]))  # cos 0.9
+        a_orth = Anchor("orth", 1.0, vector=np.array([0.0, 1.0]))   # cos 0.0
+        out = ss.pivot_anchors([a_hi, a_mid, a_orth], wave, top_k=2)
+        # only orth clears PIVOT_SIM_CEIL; the top-up takes the least similar rest
+        assert [a.track_id for a in out] == ["orth", "mid"]
+
+    def test_pivot_without_wave_falls_back_to_weight_order(self):
+        a1 = Anchor("a1", 2.0, vector=np.array([1.0, 0.0]))
+        a2 = Anchor("a2", 5.0, vector=np.array([0.0, 1.0]))
+        out = ss.pivot_anchors([a1, a2], None, top_k=2)
+        assert [a.track_id for a in out] == ["a2", "a1"]
+
+
+class TestSessionAdaptation:
+    def test_uniform_listening_gives_no_badge(self):
+        # Full listens only: every track contributes the same ~W_FULL — nothing
+        # to show off, no badge («это кринж» guard).
+        events = [_vev(f"t{i}", days_ago=-i * 0.001) for i in range(5)]
+        assert ss.session_adaptation(events, {}) is None
+
+    def test_fires_activate_strongest_first(self):
+        out = ss.session_adaptation([_vev("t1")], {"f1": 0.9, "f2": 1.0})
+        assert out["active"] is True
+        assert out["track_ids"] == ["f2", "f1"]
+
+    def test_replay_activates(self):
+        e1 = _vev("r1")
+        e2 = _vev("r1", days_ago=-0.001)  # right after a ≥85% listen, same session
+        out = ss.session_adaptation([e1, e2], {})
+        assert out["track_ids"] == ["r1"]
+
+    def test_caps_at_two_tracks(self):
+        out = ss.session_adaptation([], {"a": 3.0, "b": 2.0, "c": 1.0})
+        assert out["track_ids"] == ["a", "b"]
 
 
 @pytest.mark.usefixtures("_isolated_db")

@@ -503,11 +503,27 @@ class StreamTrack(TrackMetadata):
     score: Optional[float] = None
 
 
+class SessionAdaptationTrack(BaseModel):
+    """A track that visibly steered this session (fire/replay)."""
+    track_id: str
+    title: str
+    artist: str
+    cover_art_path: Optional[str] = None
+
+
+class SessionAdaptation(BaseModel):
+    """«Подстроились под твой вайб» badge payload — present only when session
+    contributions are distinguishable (a fire or a replay happened)."""
+    active: bool
+    tracks: List[SessionAdaptationTrack] = []
+
+
 class StreamNextResponse(BaseModel):
     """Result of GET /recommend/stream/next."""
     session_id: str
     tracks: List[StreamTrack]
     diagnostics: dict
+    session_adaptation: Optional[SessionAdaptation] = None
 
 
 class StreamSettingsIn(BaseModel):
@@ -536,6 +552,7 @@ class ProfileIslandTrack(BaseModel):
     track_id: str
     title: str
     artist: str
+    album: Optional[str] = None        # frontend dedupes covers per album
     cover_art_path: Optional[str] = None
 
 
@@ -553,6 +570,7 @@ class StreamProfileResponse(BaseModel):
     confidence: float
     n_signals: int
     islands: List[ProfileIsland]
+    vibes: List[ProfileIsland] = []    # «вайбики» — days-scale mood clusters
     portrait: Optional[str] = None     # cached LLM listener portrait (AI mode)
     headline: Optional[str] = None     # cached short hero title (AI mode)
     axis_stats_source: Optional[str] = None

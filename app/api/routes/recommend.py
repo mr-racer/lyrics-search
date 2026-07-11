@@ -133,6 +133,7 @@ def stream_next(
         session_id=session_id,
         tracks=[_candidate_to_stream_track(c) for c in result["tracks"]],
         diagnostics=result["diagnostics"],
+        session_adaptation=result.get("session_adaptation"),
     )
 
 
@@ -201,12 +202,22 @@ def stream_profile(
         )
         for i in result["islands"]
     ]
+    # «Вайбики» reuse the island shape; no LLM naming in v1 (frontend falls
+    # back to genre/artist naming, same as unnamed islands).
+    vibes = [
+        ProfileIsland(
+            track_id=v["track_id"], weight=v["weight"],
+            tracks=[ProfileIslandTrack(**t) for t in v["tracks"]],
+        )
+        for v in result.get("vibes", [])
+    ]
     stored_share = MetadataDB.get_stream_liked_share(derived)
     return StreamProfileResponse(
         axes=result["axes"],
         confidence=result["confidence"],
         n_signals=result["n_signals"],
         islands=islands,
+        vibes=vibes,
         portrait=enrich.get("portrait"),
         headline=enrich.get("headline"),
         axis_stats_source=result["axis_stats_source"],

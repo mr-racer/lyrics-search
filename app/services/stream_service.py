@@ -74,7 +74,26 @@ WATER_W = 0.3              # score penalty per unit watered-proximity
 # completions (weak). Partial (65–85%) listens and skips never shape islands.
 FIRE_ISLAND_DEPOSIT = 1.0  # a fire's permanent contribution to taste islands
 COMPLETION_DEPOSIT = 0.2   # a ≥85% listen's (weak) contribution to taste islands
-H_ISLAND_DAYS = 180.0      # half-life of the long-term island deposit (learn slowly)
+H_ISLAND_DAYS = 30.0       # decay of the long-term island deposit — a month of
+                           # silence halves-ish a track's claim, so islands
+                           # breathe with what the user actually plays now
+
+# «Вайбики» — ephemeral mood clusters: what the user plays RIGHT NOW. Same
+# anchor-merge machinery as islands, but on a days-scale clock, with pairs
+# allowed and an explicit negative loop: skips/water on tracks that sound like
+# a vibe (cos ≥ VIBE_NEG_SIM to its centroid) press its net weight back down.
+H_VIBE_DAYS = 2.5          # e-folding of vibe deposits — a mood, not a taste
+VIBE_FIRE_DEPOSIT = 1.0    # огонёк
+VIBE_FULL_DEPOSIT = 0.4    # ≥85% listen
+VIBE_MOST_DEPOSIT = 0.15   # partial 65–85% listen (fast clock → noise dies fast)
+VIBE_POOL_SIZE = 30        # top positive candidates clustered into vibes
+VIBE_MIN_MEMBERS = 2       # a vibe may be a pair — the window is only days wide
+VIBES_MAX = 3              # at most 3 vibes surface at once
+VIBE_NEG_SIM = 0.88        # a skip/water counts against a vibe only this close
+VIBE_SKIP_PENALTY = 0.35   # pressure per similar skip (decayed, H_VIBE_DAYS)
+VIBE_WATER_PENALTY = 0.6   # explicit «остудить» presses harder than a skip
+VIBE_MIN_NET = 0.3         # a vibe below this net weight dissolves
+VIBE_SIGNAL_MAX_AGE_DAYS = 10.0  # ≈4×H — older signals weigh nothing anyway
 
 # «Favorites» — the slider's liked pool, now COMPUTED (hearts removed): most
 # fired (dominant) + most listened-through.
@@ -441,6 +460,136 @@ def union_anchor_weights(
         if boosted > out.get(tid, float("-inf")):
             out[tid] = boosted
     return out
+
+
+# ── Session wave: anchor rotation + pivot ────────────────────────────────────
+# The wave is where THIS session's listening actually sits in CLAP space.
+# Effective anchors are re-ranked toward it as the session warms up; a burst
+# of skips/water flips the selection to wave-DISSIMILAR anchors instead
+# («резко сменить пластинку»).
+
+WAVE_MIN_SIGNALS = 3       # session signals before the wave is trusted at all
+PIVOT_WINDOW = 5           # look at the last N session events…
+PIVOT_SKIPS = 3            # …a pivot is ≥ this many skips among them…
+PIVOT_WATERS = 2           # …or ≥ this many waters within the minutes window
+PIVOT_WATER_WINDOW_MIN = 15.0
+PIVOT_SIM_CEIL = 0.6       # an anchor is «not the wave» below this cos
+PIVOT_EXPLORE_SHARE = 0.5  # pivot chunks also widen exploration
+
+
+def session_wave_vector(
+    session_weights: dict[str, float], vectors: dict,
+) -> np.ndarray | None:
+    """Unit centroid of the session's positive-weight tracks in CLAP space.
+    Skipped tracks carry negative weight and never enter — the wave is where
+    the session's *enjoyed* listening sits. ``None`` when nothing qualifies."""
+    acc = None
+    for tid, w in session_weights.items():
+        if w <= 0.0 or tid not in vectors:
+            continue
+        v = _unit(vectors[tid])
+        if v is None:
+            continue
+        acc = w * v if acc is None else acc + w * v
+    return _unit(acc) if acc is not None else None
+
+
+def _wave_alignment(anchor: Anchor, wave: np.ndarray) -> float:
+    v = _unit(anchor.vector) if anchor.vector is not None else None
+    return float(v @ wave) if v is not None else 0.0
+
+
+def rank_effective_anchors(
+    merged: list[Anchor],
+    wave: np.ndarray | None,
+    w_s: float,
+    top_k: int = TOP_EFFECTIVE_ANCHORS,
+) -> list[Anchor]:
+    """Deterministic anchor rotation: (1−w_s)·normalized-weight + w_s·alignment.
+
+    Reuses the session blend weight as trust in the wave: a cold session
+    (w_s≈0, or no wave yet) degenerates to the old pure-weight top-K, while a
+    warm session lets wave alignment matter up to parity — anchors that
+    «стыкуются с волной» rotate in, weight alone no longer monopolizes.
+    """
+    by_weight = sorted(merged, key=lambda a: a.weight, reverse=True)
+    if wave is None or w_s <= 0.0 or not by_weight:
+        return by_weight[:top_k]
+    w_max = by_weight[0].weight or 1.0
+    return sorted(
+        by_weight,
+        key=lambda a: ((1.0 - w_s) * (a.weight / w_max)
+                       + w_s * max(0.0, _wave_alignment(a, wave))),
+        reverse=True,
+    )[:top_k]
+
+
+def detect_pivot(
+    session_events: list[PlaybackSignal],
+    session_taste: list[FireSignal],
+    now: datetime,
+) -> bool:
+    """«Юзер начал резко скипать / лить водичку»: ≥PIVOT_SKIPS skips among the
+    last PIVOT_WINDOW session events, or ≥PIVOT_WATERS waters in the last
+    PIVOT_WATER_WINDOW_MIN minutes. Stateless — recomputed per request, so it
+    clears by itself once positive signals resume."""
+    recent = sorted(session_events, key=lambda s: s.played_at)[-PIVOT_WINDOW:]
+    if sum(1 for s in recent if is_skip(s.played_sec, s.total_dur)) >= PIVOT_SKIPS:
+        return True
+    n_waters = sum(
+        1 for t in session_taste
+        if t.kind == "water"
+        and (now - t.created_at).total_seconds() / 60.0 <= PIVOT_WATER_WINDOW_MIN
+    )
+    return n_waters >= PIVOT_WATERS
+
+
+SESSION_ADAPT_TRACKS = 2   # covers shown next to «подстроились под твой вайб»
+
+
+def session_adaptation(
+    session_events: list[PlaybackSignal],
+    fire_anchor_weights: dict[str, float],
+) -> dict | None:
+    """«Подстроились под твой вайб» — shown ONLY when session contributions are
+    distinguishable: an active fire or an instant replay. Uniform background
+    listening gives every track the same ~W_FULL claim, so naming «виновников»
+    would be arbitrary — return None and show no badge.
+
+    Returns ``{"active": True, "track_ids": [...]}`` (fires by effective
+    weight first, then most recent replays), capped at SESSION_ADAPT_TRACKS.
+    """
+    track_ids = [t for t, _ in sorted(fire_anchor_weights.items(),
+                                      key=lambda kv: kv[1], reverse=True)]
+    ordered = sorted(session_events, key=lambda s: s.played_at)
+    for prev, cur in reversed(list(zip(ordered, ordered[1:]))):
+        if _is_replay(prev, cur) and cur.track_id not in track_ids:
+            track_ids.append(cur.track_id)
+    if not track_ids:
+        return None
+    return {"active": True, "track_ids": track_ids[:SESSION_ADAPT_TRACKS]}
+
+
+def pivot_anchors(
+    merged: list[Anchor],
+    wave: np.ndarray | None,
+    top_k: int = TOP_EFFECTIVE_ANCHORS,
+) -> list[Anchor]:
+    """Pivot selection: anchors NOT sounding like the wave (cos <
+    PIVOT_SIM_CEIL), strongest first; topped up with the least wave-similar
+    rest when too few qualify. Without a wave (an all-skip session) there is
+    nothing to be dissimilar to — fall back to weight order and let the raised
+    explore share do the pivoting."""
+    if wave is None:
+        return sorted(merged, key=lambda a: a.weight, reverse=True)[:top_k]
+    dissimilar = [a for a in merged if _wave_alignment(a, wave) < PIVOT_SIM_CEIL]
+    dissimilar.sort(key=lambda a: a.weight, reverse=True)
+    if len(dissimilar) >= top_k:
+        return dissimilar[:top_k]
+    chosen = {a.track_id for a in dissimilar}
+    rest = sorted((a for a in merged if a.track_id not in chosen),
+                  key=lambda a: _wave_alignment(a, wave))
+    return dissimilar + rest[: top_k - len(dissimilar)]
 
 
 # ── Candidate pools + scoring + chunk assembly (design §5–6) ───────────────
@@ -957,6 +1106,155 @@ def island_taste_weights(
     return combine_weights(fires, comps)
 
 
+# ── «Вайбики»: fast-clock mood clusters with a negative feedback loop ───────
+
+def partial_counts(
+    signals: list[PlaybackSignal], now: datetime, *, half_life: float,
+) -> dict[str, float]:
+    """Decayed count of partial (65–85%) listens per track. Only the vibe layer
+    consumes these — its days-scale clock keeps the noise from accumulating."""
+    out: dict[str, float] = {}
+    for ev in signals:
+        if not ev.total_dur or ev.total_dur <= 0.0:
+            continue
+        ratio = ev.played_sec / ev.total_dur
+        if not (MOST_RATIO <= ratio < FULL_RATIO):
+            continue
+        out[ev.track_id] = out.get(ev.track_id, 0.0) + decayed(
+            1.0, _age_days(ev.played_at, now), half_life,
+        )
+    return out
+
+
+def vibe_taste_weights(
+    fire_signals: list[FireSignal],
+    playback_signals: list[PlaybackSignal],
+    now: datetime,
+) -> dict[str, float]:
+    """Positive vibe weights: fires (fat) + full listens + partial listens, all
+    on the fast H_VIBE_DAYS clock. Skips and water never deposit — they act as
+    pressure against already-formed vibes instead (see current_vibes)."""
+    fires = {tid: VIBE_FIRE_DEPOSIT * c
+             for tid, c in decayed_fire_counts(
+                 fire_signals, now, half_life=H_VIBE_DAYS).items()}
+    fulls = {tid: VIBE_FULL_DEPOSIT * c
+             for tid, c in completion_counts(
+                 playback_signals, now, half_life=H_VIBE_DAYS).items()}
+    mosts = {tid: VIBE_MOST_DEPOSIT * c
+             for tid, c in partial_counts(
+                 playback_signals, now, half_life=H_VIBE_DAYS).items()}
+    return combine_weights(fires, fulls, mosts)
+
+
+def _unit(vec) -> np.ndarray | None:
+    v = np.asarray(vec, dtype=np.float32)
+    n = np.linalg.norm(v)
+    return v / n if n > 0 else None
+
+
+def _vibe_centroid(member_ids: list[str], vectors: dict) -> np.ndarray | None:
+    """Normalized mean of the members' unit CLAP vectors (members already sit
+    within the merge threshold of each other, so unweighted is fine)."""
+    acc = None
+    for tid in member_ids:
+        if tid not in vectors:
+            continue
+        v = _unit(vectors[tid])
+        if v is None:
+            continue
+        acc = v if acc is None else acc + v
+    return _unit(acc) if acc is not None else None
+
+
+def current_vibes(
+    *,
+    qdrant_client,
+    collection_name: str,
+    signals: list[PlaybackSignal],
+    taste_signals: list[FireSignal],
+    now: datetime,
+) -> list[dict]:
+    """Up to VIBES_MAX ephemeral mood clusters («вайбики»).
+
+    Positive side: vibe_taste_weights → top-VIBE_POOL_SIZE anchors → greedy
+    merge (same soft threshold as the profile mosaic), pairs allowed. Negative
+    side: each recent skip/water whose track sounds like a vibe's centroid
+    (cos ≥ VIBE_NEG_SIM) presses that vibe down; a vibe whose net weight falls
+    below VIBE_MIN_NET dissolves — «юзер уже не хочет слушать такое».
+    """
+    influencing = [s for s in signals if getattr(s, "influence", True)]
+    weights = vibe_taste_weights(taste_signals, influencing, now)
+    cands = select_positive_anchors(weights, top_m=VIBE_POOL_SIZE)
+    if not cands:
+        return []
+
+    skip_events = [
+        s for s in influencing
+        if is_skip(s.played_sec, s.total_dur)
+        and _age_days(s.played_at, now) <= VIBE_SIGNAL_MAX_AGE_DAYS
+    ]
+    waters = [
+        t for t in taste_signals
+        if t.kind == "water"
+        and _age_days(t.created_at, now) <= VIBE_SIGNAL_MAX_AGE_DAYS
+    ]
+    fetch_ids = list(dict.fromkeys(
+        [a.track_id for a in cands]
+        + [s.track_id for s in skip_events]
+        + [w.track_id for w in waters]))
+    vectors, payloads = _retrieve_track_data(qdrant_client, collection_name, fetch_ids)
+
+    merged = merge_anchors(cands, vectors, threshold=ISLAND_MERGE_THRESHOLD)
+    merged = [a for a in merged if len(a.members) >= VIBE_MIN_MEMBERS]
+    if not merged:
+        return []
+
+    # (unit vector, decayed penalty) per recent negative event.
+    negatives: list[tuple[np.ndarray, float]] = []
+    for ev in skip_events:
+        v = _unit(vectors[ev.track_id]) if ev.track_id in vectors else None
+        if v is not None:
+            negatives.append((v, VIBE_SKIP_PENALTY * decayed(
+                1.0, _age_days(ev.played_at, now), H_VIBE_DAYS)))
+    for w in waters:
+        v = _unit(vectors[w.track_id]) if w.track_id in vectors else None
+        if v is not None:
+            negatives.append((v, VIBE_WATER_PENALTY * decayed(
+                1.0, _age_days(w.created_at, now), H_VIBE_DAYS)))
+
+    scored: list[tuple[float, Anchor]] = []
+    for a in merged:
+        centroid = _vibe_centroid(a.members, vectors)
+        if centroid is None:
+            continue
+        pressure = sum(pen for v, pen in negatives
+                       if float(v @ centroid) >= VIBE_NEG_SIM)
+        net = a.weight - pressure
+        if net >= VIBE_MIN_NET:
+            scored.append((net, a))
+    scored.sort(key=lambda p: p[0], reverse=True)
+
+    vibes = []
+    for net, a in scored[:VIBES_MAX]:
+        members = []
+        for tid in a.members[:ISLAND_MEMBERS_MAX]:
+            p = payloads.get(tid) or {}
+            members.append({
+                "track_id": tid,
+                "title": p.get("title") or "—",
+                "artist": p.get("artist") or "—",
+                "album": p.get("album"),
+                "genre": p.get("genre"),
+                "cover_art_path": p.get("cover_art_path"),
+            })
+        vibes.append({
+            "track_id": a.track_id,
+            "weight": round(net, 3),
+            "tracks": members,
+        })
+    return vibes
+
+
 # ── «Favorites»: computed liked pool for the слайдер (hearts removed) ───────
 
 def favorite_weights(
@@ -1135,8 +1433,17 @@ def next_chunk(
     vectors, payloads = _retrieve_track_data(qdrant_client, collection_name, fetch_ids)
 
     merged = merge_anchors(anchor_cands, vectors)
-    merged.sort(key=lambda a: a.weight, reverse=True)
-    top_anchors = merged[:TOP_EFFECTIVE_ANCHORS]
+    # Session wave → anchor rotation. Cold sessions (few signals / no wave)
+    # reproduce the old pure-weight top-K exactly; warm sessions rotate in the
+    # anchors that align with where the session actually went. A skip/water
+    # burst pivots to wave-DISSIMILAR anchors + a widened explore share.
+    wave = (session_wave_vector(session_weights, vectors)
+            if n_session_signals >= WAVE_MIN_SIGNALS else None)
+    pivot = detect_pivot(session_events, session_taste, now)
+    if pivot:
+        top_anchors = pivot_anchors(merged, wave)
+    else:
+        top_anchors = rank_effective_anchors(merged, wave, w_s)
 
     # Вода («остудить») → soft ephemeral demotion: query the watered tracks'
     # CLAP neighborhoods and penalise candidates by decay-scaled closeness. Pure
@@ -1212,6 +1519,9 @@ def next_chunk(
     # Fresh-session warmup («от островов, широко»): a reset/cold session starts
     # with high explore that tapers to the steady-state baseline as signals land.
     explore_share_eff = explore_share_for_warmth(n_session_signals)
+    if pivot:
+        # «Совсем новые песни»: a pivot chunk widens exploration too.
+        explore_share_eff = max(explore_share_eff, PIVOT_EXPLORE_SHARE)
     frac = explore_share_eff * non_liked_slots
     explore_slots = int(frac) + (1 if rng.random() < (frac - int(frac)) else 0)
     # True cold start: no long-term anchors at all → whole non-liked budget explores.
@@ -1352,12 +1662,33 @@ def next_chunk(
                                      key=lambda kv: kv[1], reverse=True)],
         "n_water": len(water_anchor_weights),
         "fav_pool": len(fav_top),
+        "wave": wave is not None,
+        "pivot": pivot,
         "round": round_no,
         "n_floor": len(floor_ids),
         "relaxed": relaxed_used,
         "fallback": fallback_used,
     }
-    return {"tracks": chunk, "diagnostics": diagnostics}
+
+    # «Подстроились под твой вайб»: fired/replayed session tracks are already
+    # in `payloads` (they carry positive session weight → fetched at step 4).
+    adaptation = session_adaptation(session_events, fire_anchor_weights)
+    if adaptation is not None:
+        adaptation = {
+            "active": True,
+            "tracks": [
+                {
+                    "track_id": tid,
+                    "title": (payloads.get(tid) or {}).get("title") or "—",
+                    "artist": (payloads.get(tid) or {}).get("artist") or "—",
+                    "cover_art_path": (payloads.get(tid) or {}).get("cover_art_path"),
+                }
+                for tid in adaptation["track_ids"]
+            ],
+        }
+
+    return {"tracks": chunk, "diagnostics": diagnostics,
+            "session_adaptation": adaptation}
 
 
 # ── Similar tracks: CLAP neighbors re-ranked by sonic axes ──────────────────
@@ -1457,6 +1788,12 @@ def similar_tracks(
 
 ISLANDS_MAX = 10          # taste islands shown in the profile
 ISLAND_MEMBERS_MAX = 8    # covers per island (representative first)
+# The profile mosaic needs a much wider candidate pool than the stream's
+# top-20 anchor window (which only ever feeds 5 Qdrant queries): with 20
+# candidates most clusters can't reach 3 members and the mosaic freezes.
+ISLAND_POOL_SIZE = 60         # anchor candidates clustered for the mosaic
+ISLAND_MERGE_THRESHOLD = 0.80  # display clustering is softer than the stream's 0.85
+ISLAND_MIN_MEMBERS = 3        # an island is a real cluster, not a pair
 
 
 def long_term_profile(*, qdrant_client, collection_name: str, now: datetime | None = None) -> dict:
@@ -1489,14 +1826,14 @@ def long_term_profile(*, qdrant_client, collection_name: str, now: datetime | No
     n_signals = n_fires + n_completions
 
     # Anchors → islands (merge groups carry their member track ids).
-    anchor_cands = select_positive_anchors(long_weights)
+    anchor_cands = select_positive_anchors(long_weights, top_m=ISLAND_POOL_SIZE)
     member_pool = [a.track_id for a in anchor_cands]
     vectors, payloads = _retrieve_track_data(qdrant_client, collection_name, member_pool)
-    merged = merge_anchors(anchor_cands, vectors)
-    # An island is a *cluster* of taste, not a lone track: keep only merge
-    # groups that absorbed at least one near-duplicate, so no «остров» is ever
+    merged = merge_anchors(anchor_cands, vectors, threshold=ISLAND_MERGE_THRESHOLD)
+    # An island is a *cluster* of taste, not a lone track or a chance pair:
+    # keep only merge groups of ISLAND_MIN_MEMBERS+, so no «остров» is ever
     # built from a single song.
-    merged = [a for a in merged if len(a.members) >= 2]
+    merged = [a for a in merged if len(a.members) >= ISLAND_MIN_MEMBERS]
     merged.sort(key=lambda a: a.weight, reverse=True)
     islands = []
     for a in merged[:ISLANDS_MAX]:
@@ -1507,6 +1844,7 @@ def long_term_profile(*, qdrant_client, collection_name: str, now: datetime | No
                 "track_id": tid,
                 "title": p.get("title") or "—",
                 "artist": p.get("artist") or "—",
+                "album": p.get("album"),
                 "genre": p.get("genre"),
                 "cover_art_path": p.get("cover_art_path"),
             })
@@ -1531,11 +1869,18 @@ def long_term_profile(*, qdrant_client, collection_name: str, now: datetime | No
         if p_long is not None else None
     )
 
+    # «Вайбики» ride the same response — the fast mood layer under the islands.
+    vibes = current_vibes(
+        qdrant_client=qdrant_client, collection_name=collection_name,
+        signals=signals, taste_signals=all_taste, now=now,
+    )
+
     return {
         "axes": axes,
         "confidence": round(confidence, 3),
         "n_signals": n_signals,
         "islands": islands,
+        "vibes": vibes,
         "axis_stats_source": (axis_stats or {}).get("source"),
     }
 
