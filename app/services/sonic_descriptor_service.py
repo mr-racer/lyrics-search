@@ -24,6 +24,26 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_VOCAB_PATH = ROOT / "cache" / "sonic_prompts.json"
 DEFAULT_EMBEDDINGS_PATH = ROOT / "cache" / "sonic_prompts_embeddings.npy"
 
+# Built-in vocabulary used when the JSON file is absent — cache/ is wipeable
+# (bind mount, factory reset), so the service must not depend on it existing.
+# PUT /library/sonic-prompts writes the file, which then overrides this default.
+DEFAULT_VOCAB: dict = {
+    "version": 1,
+    "description": (
+        "Starter adjective vocabulary for CLAP prompt-probing. Edit freely; "
+        "updating triggers re-tagging via PUT /library/sonic-prompts."
+    ),
+    "groups": {
+        "energy": ["explosive", "driving", "punchy", "mid-tempo", "languid", "ambient", "drone"],
+        "valence": ["euphoric", "joyful", "hopeful", "neutral mood", "melancholy", "anxious", "dark"],
+        "density": ["minimal arrangement", "sparse", "lush", "wall-of-sound"],
+        "texture": ["clean production", "warm", "raw", "lo-fi", "polished", "saturated", "crystalline"],
+        "instrumentation": ["acoustic guitar", "piano-led", "orchestral", "synth-heavy", "electronic", "guitar-driven"],
+        "vocal": ["instrumental", "sparse vocals", "lead vocals prominent", "harmony-rich"],
+        "rhythm": ["4/4 steady", "swung", "syncopated", "free-time", "motorik"],
+    },
+}
+
 
 class SonicDescriptorService:
     """Compute and persist interpretable descriptors for tracks.
@@ -50,11 +70,23 @@ class SonicDescriptorService:
         self._prompt_embeddings: Optional[np.ndarray] = None
 
     def load_prompt_vocab(self) -> list[str]:
-        """Return flat list of prompts from the vocab JSON, cached after first read."""
+        """Return flat list of prompts from the vocab JSON, cached after first read.
+
+        Falls back to the built-in ``DEFAULT_VOCAB`` when the file is missing;
+        a present-but-corrupt file still raises (an explicit edit gone wrong
+        should be loud, not silently masked by the default).
+        """
         if self._prompts is not None:
             return self._prompts
-        with self.prompt_vocab_path.open("r", encoding="utf-8") as fh:
-            doc = json.load(fh)
+        if self.prompt_vocab_path.exists():
+            with self.prompt_vocab_path.open("r", encoding="utf-8") as fh:
+                doc = json.load(fh)
+        else:
+            doc = DEFAULT_VOCAB
+            logger.info(
+                "[SonicDescriptor] vocab file %s missing — using built-in default vocabulary",
+                self.prompt_vocab_path,
+            )
         flat: list[str] = []
         for group_prompts in doc.get("groups", {}).values():
             flat.extend(group_prompts)

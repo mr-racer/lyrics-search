@@ -1412,7 +1412,8 @@ async def get_sonic_prompts(request: Request) -> dict:
         raise HTTPException(status_code=503, detail="Sonic Descriptor Service unavailable")
     import json as _json
     if not svc.prompt_vocab_path.exists():
-        return {"version": 0, "groups": {}}
+        from app.services.sonic_descriptor_service import DEFAULT_VOCAB
+        return DEFAULT_VOCAB
     return _json.loads(svc.prompt_vocab_path.read_text(encoding="utf-8"))
 
 

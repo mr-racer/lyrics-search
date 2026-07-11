@@ -170,6 +170,21 @@ class TestSonicDescriptorTags:
         prompts = svc.load_prompt_vocab()
         assert prompts == ["punchy", "ambient", "sad", "happy"]
 
+    def test_missing_vocab_file_falls_back_to_builtin_default(self, tmp_path):
+        """cache/ is wipeable — the service must work without the JSON file."""
+        from app.services.sonic_descriptor_service import DEFAULT_VOCAB
+
+        svc = SonicDescriptorService(prompt_vocab_path=tmp_path / "nope.json")
+        prompts = svc.load_prompt_vocab()
+
+        expected = [p for group in DEFAULT_VOCAB["groups"].values() for p in group]
+        assert prompts == expected
+        assert len(prompts) == 40  # 40 adjectives across 7 axes
+
+    def test_vocab_file_overrides_builtin_default(self, sample_vocab_file):
+        svc = SonicDescriptorService(prompt_vocab_path=sample_vocab_file)
+        assert svc.load_prompt_vocab() == ["punchy", "ambient", "sad", "happy"]
+
     def test_service_default_top_k_is_five(self):
         svc = SonicDescriptorService()
         assert svc.top_k_tags == 5
