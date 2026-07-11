@@ -176,6 +176,20 @@ def _match_best_hit(
     return None
 
 
+def _quoted_fragments(message: str) -> list[str]:
+    """Lyric quotes the LLM embedded in its answer, longest first.
+
+    The answer message usually cites the matched line in «…», “…” or "…" —
+    that citation is the ground truth for the highlight, unlike the executed
+    search query the initial matched_line heuristic used. Fragments shorter
+    than 3 words are dropped (song titles, single-word emphasis).
+    """
+    frags = re.findall(r"[«“\"]([^«»“”\"]{10,200})[»”\"]", message or "")
+    frags = [f.strip() for f in frags if len(f.split()) >= 3]
+    frags.sort(key=len, reverse=True)
+    return frags
+
+
 def _pick_matched_line(lyrics: str, query: str) -> str | None:
     """Pick the lyric line with the most word overlap with the executed query.
 
@@ -938,7 +952,16 @@ async def _run_chat_core(
             if validator_fn and final_result.get("song"):
                 proposed_song = final_result.get("song", "")
                 proposed_artist = final_result.get("artist", "")
-                lyrics_excerpt = _extract_lyrics_for_song(context, proposed_song, proposed_artist)
+                # Lyrics for the proposed song: resolve against the actual hits
+                # first (fuzzy title match — the LLM often reformats the title,
+                # so the strict header parse of the context string misses and
+                # the validator would wrongly see "(no lyrics available)").
+                lyrics_excerpt = ""
+                val_hit = _match_best_hit(all_hits, proposed_song, proposed_artist)
+                if val_hit is not None and val_hit.lyrics:
+                    lyrics_excerpt = val_hit.lyrics[:300]
+                if not lyrics_excerpt:
+                    lyrics_excerpt = _extract_lyrics_for_song(context, proposed_song, proposed_artist)
                 filled_val = VALIDATOR_PROMPT.format(
                     query=req.message,
                     song=proposed_song,
@@ -984,13 +1007,28 @@ async def _run_chat_core(
         all_hits, final_result.get("song"), final_result.get("artist"),
     )
 
+    # Re-anchor the highlight on the line the LLM actually cited in its answer.
+    # matched_line was picked at retrieval time from the *executed query*, which
+    # regularly disagrees with the line the answer quotes.
+    if best_hit is not None and best_hit.lyrics:
+        for frag in _quoted_fragments(final_result.get("message", "")):
+            line = _pick_matched_line(best_hit.lyrics, frag)
+            if line:
+                best_hit.matched_line = line
+                break
+
+    # No song named by the LLM = nothing found. Ship an empty hit list instead
+    # of the raw top-N retrieval tail, so the UI doesn't present near-misses as
+    # an answer.
+    found = bool(final_result.get("song"))
+
     return {
         "message":        final_result.get("message", ""),
         "song":           final_result.get("song"),
         "artist":         final_result.get("artist"),
         "confidence":     final_result.get("confidence", "low"),
         "best_hit":       best_hit.model_dump() if best_hit else None,
-        "hits":           [h.model_dump() for h in all_hits[:10]],
+        "hits":           [h.model_dump() for h in all_hits[:10]] if found else [],
         "attempts":       attempts_done,
         "classification": classification,
     }

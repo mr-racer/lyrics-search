@@ -22,7 +22,29 @@ from typing import Dict, List, Literal, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["MetadataDB"]
+__all__ = ["MetadataDB", "canonical_track_id"]
+
+_HEX32 = frozenset("0123456789abcdef")
+
+
+def canonical_track_id(track_id: str) -> str:
+    """Normalize a track id to the dashed-UUID form Qdrant emits.
+
+    Indexing used to mint point ids as ``uuid4().hex`` (32 hex chars, no
+    dashes) while Qdrant canonicalizes any UUID input to the dashed form in
+    every read — so the same track had two spellings depending on the data
+    source. Non-UUID ids pass through unchanged.
+    """
+    if (
+        isinstance(track_id, str)
+        and len(track_id) == 32
+        and all(c in _HEX32 for c in track_id.lower())
+    ):
+        return (
+            f"{track_id[0:8]}-{track_id[8:12]}-{track_id[12:16]}"
+            f"-{track_id[16:20]}-{track_id[20:32]}"
+        ).lower()
+    return track_id
 
 import os as _os
 DB_DIR = Path(__file__).resolve().parent.parent.parent / "cache"
@@ -503,8 +525,83 @@ class MetadataDB:
         if "refined_facts" in existing_tables:
             cls._migrate_refined_facts_key(conn)
 
+        cls._migrate_dashed_track_ids(conn, existing_tables)
+
         conn.commit()
         logger.info("[MetadataDB] Schema initialised")
+
+    # Tables whose track ids may still carry the legacy undashed uuid4().hex
+    # spelling (written by indexing / upload flows before point ids were minted
+    # in the dashed form Qdrant emits).
+    _TRACK_ID_TABLES: Tuple[Tuple[str, str], ...] = (
+        ("track_metadata", "track_id"),
+        ("track_artist_slugs", "track_id"),
+        ("playlist_tracks", "track_id"),
+        ("track_reactions", "track_id"),
+        ("playback_events", "track_id"),
+        ("taste_signals", "track_id"),
+        ("sonic_vibes", "track_id"),
+        ("pending_uploads", "track_id"),
+        ("yandex_imports", "track_id"),
+    )
+
+    @classmethod
+    def _migrate_dashed_track_ids(
+        cls, conn: sqlite3.Connection, existing_tables: set,
+    ) -> None:
+        """Rewrite legacy undashed uuid4().hex track ids to the dashed form.
+
+        Qdrant canonicalizes UUID point ids to the dashed spelling in every
+        read, so any SQLite row keyed by the undashed spelling never matches a
+        live Qdrant id (playlists resolved to "lost" tracks, the player's
+        metadata batch couldn't merge, top-pairs lookups missed). Idempotent:
+        the WHERE clause matches nothing once all ids are dashed. UPDATE OR
+        IGNORE skips rows whose dashed twin already exists; the follow-up
+        DELETE drops those now-redundant undashed duplicates.
+        """
+        dashed_expr = (
+            "lower(substr({c},1,8) || '-' || substr({c},9,4) || '-' || "
+            "substr({c},13,4) || '-' || substr({c},17,4) || '-' || substr({c},21))"
+        )
+        # 32 hex chars, no dashes. NB: SQLite GLOB negates classes with '^'
+        # (not the Unix-shell '!'), so a positive 32-class pattern is the
+        # least error-prone spelling.
+        hex32_glob = "[0-9a-f]" * 32
+        legacy_where = f"lower({{c}}) GLOB '{hex32_glob}'"
+        # track_artist_slugs references track_metadata(track_id) with no ON
+        # UPDATE action, so rewriting the parent key under foreign_keys=ON
+        # would raise. The pragma is a no-op inside a transaction — commit
+        # whatever init() has done so far, toggle, migrate, toggle back.
+        conn.commit()
+        conn.execute("PRAGMA foreign_keys=OFF")
+        try:
+            for table, col in cls._TRACK_ID_TABLES:
+                if table not in existing_tables:
+                    continue
+                where = legacy_where.format(c=col)
+                try:
+                    n_legacy = conn.execute(
+                        f"SELECT COUNT(*) FROM {table} WHERE {where}"
+                    ).fetchone()[0]
+                    if not n_legacy:
+                        continue
+                    conn.execute(
+                        f"UPDATE OR IGNORE {table} SET {col} = {dashed_expr.format(c=col)}"
+                        f" WHERE {where}"
+                    )
+                    conn.execute(f"DELETE FROM {table} WHERE {where}")
+                    logger.info(
+                        "[MetadataDB] migrated %d undashed track ids in %s",
+                        n_legacy, table,
+                    )
+                except sqlite3.OperationalError:
+                    logger.warning(
+                        "[MetadataDB] dashed-id migration failed for %s", table,
+                        exc_info=True,
+                    )
+            conn.commit()
+        finally:
+            conn.execute("PRAGMA foreign_keys=ON")
 
     @classmethod
     def _migrate_dedup_facts(cls, conn: sqlite3.Connection) -> None:
@@ -2219,6 +2316,7 @@ class MetadataDB:
     def add_track_to_playlist(cls, playlist_id: int, track_id: str) -> int:
         """Append track with position = max(position) + 1. Returns the new position.
         Raises sqlite3.IntegrityError if already present (UNIQUE)."""
+        track_id = canonical_track_id(track_id)
         conn = cls._connect()
         cur = conn.execute(
             "SELECT COALESCE(MAX(position), 0) FROM playlist_tracks WHERE playlist_id = ?",
@@ -3103,6 +3201,7 @@ class MetadataDB:
         Called during indexing / upload for every track so the artist-aggregate
         endpoint can read from SQLite instead of paginating Qdrant.
         """
+        track_id = canonical_track_id(track_id)
         conn = cls._connect()
         conn.execute(
             """INSERT INTO track_metadata
@@ -3165,6 +3264,7 @@ class MetadataDB:
         conn = cls._connect()
         try:
             for track_id, payload in rows:
+                track_id = canonical_track_id(track_id)
                 conn.execute(
                     """INSERT INTO track_metadata
                         (collection_name, track_id, title, artist, artists, artist_slugs,

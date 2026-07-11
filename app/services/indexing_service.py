@@ -247,7 +247,12 @@ class IndexingService:
                     if axes:
                         payload["sonic_axes"] = axes
 
-                point_id = uuid.uuid4().hex
+                # Canonical dashed UUID: Qdrant normalizes any UUID form to the
+                # dashed representation in every read (scroll/search/retrieve),
+                # so the SQLite mirror must store the same form — an undashed
+                # .hex here would give the two stores different keys for the
+                # same track.
+                point_id = str(uuid.uuid4())
                 points.append(models.PointStruct(
                     id=point_id,
                     vector=vector,
