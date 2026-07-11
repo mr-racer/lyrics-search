@@ -45,8 +45,13 @@ _LYRICS_WORKERS = 8
 class IndexPipeline:
     """Run CLAP/dense encoding concurrently with the online-lyrics fetch."""
 
-    def __init__(self, engine):
+    def __init__(self, engine, *, model_name: str | None = None):
+        """``model_name`` — text embedding model for THIS batch (None → the
+        engine's default). Passed through to a per-run IndexingService instead
+        of being written onto the shared engine (two concurrent jobs used to
+        race on ``engine.model_name`` / ``engine.collection_name``)."""
         self.engine = engine
+        self.model_name = model_name
 
     async def run(
         self,
@@ -73,7 +78,11 @@ class IndexPipeline:
         Returns ``(upserted_count, track_ids_by_key)``.
         """
         loop = asyncio.get_running_loop()
-        indexing = IndexingService(self.engine)
+        # Per-run service: collection + model are instance-local, so parallel
+        # jobs for different accounts can't cross-contaminate via the engine.
+        indexing = IndexingService(
+            self.engine, collection_name=collection_name, model_name=self.model_name,
+        )
 
         filtered, clap_paths = await loop.run_in_executor(None, indexing.prepare, tracks)
         if not filtered:
@@ -153,23 +162,18 @@ class IndexPipeline:
             gpu_pool.shutdown(wait=False)
 
         def _create_and_upsert():
-            # Mutating engine.collection_name is the existing fit_with_progress
-            # contract (set + restore around the upsert), kept narrow on purpose.
-            _saved = self.engine.collection_name
-            self.engine.collection_name = collection_name
+            # The IndexingService instance was constructed with this run's
+            # collection_name — no shared-engine mutation, safe under parallel jobs.
+            indexing.create_collection(clap_paths)
             try:
-                indexing.create_collection(clap_paths)
-                try:
-                    MetadataDB.clear_track_metadata(str(collection_name))
-                except Exception:
-                    logger.warning("[IndexPipeline] clear_track_metadata failed — non-fatal")
-                indexing.upsert(
-                    filtered, text_vecs, clap_map or None, chunks or None,
-                    sonic_axes_map=axes or None,
-                )
-                indexing.finalize_norms_and_prune(axes or None)
-            finally:
-                self.engine.collection_name = _saved
+                MetadataDB.clear_track_metadata(str(collection_name))
+            except Exception:
+                logger.warning("[IndexPipeline] clear_track_metadata failed — non-fatal")
+            indexing.upsert(
+                filtered, text_vecs, clap_map or None, chunks or None,
+                sonic_axes_map=axes or None,
+            )
+            indexing.finalize_norms_and_prune(axes or None)
 
         await loop.run_in_executor(None, _create_and_upsert)
         logger.info("[IndexPipeline] upserted %d tracks into %s", total, collection_name)

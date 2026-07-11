@@ -110,14 +110,23 @@ class SearchService:
             query, col, effective_model, active or "(none)",
         )
 
-        results = self.lyrics_db.search(
-            query=query,
-            limit=limit * 2,
-            min_dense_score=0.3,
-            include_clap=False,
-            collection_name_override=collection_name,
-            model_name=effective_model,
-            **filter_kwargs,
+        # lyrics_db.search is fully blocking (SentenceTransformer.encode — and,
+        # on the first call for a model, the model load itself — plus a sync
+        # Qdrant query). Run it in a worker thread so one search doesn't stall
+        # every open SSE/audio connection on the event loop. The engine's
+        # stateless dispatch + ModelRegistry's per-name lock make concurrent
+        # executor calls safe.
+        results = await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: self.lyrics_db.search(
+                query=query,
+                limit=limit * 2,
+                min_dense_score=0.3,
+                include_clap=False,
+                collection_name_override=collection_name,
+                model_name=effective_model,
+                **filter_kwargs,
+            ),
         )
 
         logger.info("[SearchService] _search_text: Qdrant returned %d points", len(results))
@@ -154,7 +163,12 @@ class SearchService:
                 raise RuntimeError(f"Audio search unavailable: CLAP model could not be loaded — {e}") from e
         
         try:
-            clap_vector = clap_model.get_text_embedding([query])[0].tolist()
+            # CLAP text-tower inference is blocking (torch forward pass) —
+            # keep it off the event loop like the Qdrant query below.
+            embeddings = await asyncio.get_running_loop().run_in_executor(
+                None, lambda: clap_model.get_text_embedding([query])
+            )
+            clap_vector = embeddings[0].tolist()
             logger.debug("[SearchService] CLAP text embedding generated, dim=%d", len(clap_vector))
         except Exception as e:
             logger.error("[SearchService] Failed to generate CLAP embedding: %s", e)

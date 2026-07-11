@@ -47,9 +47,13 @@ def test_partitions_lyrics_and_orders_clap_before_dense(monkeypatch):
 
     fake_indexing.encode_clap.side_effect = _clap
     fake_indexing.encode_dense.side_effect = _dense
-    monkeypatch.setattr(
-        "app.services.index_pipeline.IndexingService", lambda engine: fake_indexing,
-    )
+    ctor_kwargs = {}
+
+    def _fake_ctor(engine, **kw):
+        ctor_kwargs.update(kw)
+        return fake_indexing
+
+    monkeypatch.setattr("app.services.index_pipeline.IndexingService", _fake_ctor)
 
     fetched = []
 
@@ -75,7 +79,9 @@ def test_partitions_lyrics_and_orders_clap_before_dense(monkeypatch):
     assert order[2] == ("embedded", "ONLINE")
     fake_indexing.create_collection.assert_called_once()
     fake_indexing.upsert.assert_called_once()
-    # engine.collection_name restored after the upsert block.
+    # Collection/model are passed to the per-run IndexingService instance;
+    # the shared engine is never mutated (parallel-jobs isolation).
+    assert ctor_kwargs == {"collection_name": "acct_x", "model_name": None}
     assert engine.collection_name == "saved"
 
 
@@ -83,7 +89,7 @@ def test_empty_batch_short_circuits(monkeypatch):
     fake_indexing = MagicMock()
     fake_indexing.prepare.return_value = ([], [])
     monkeypatch.setattr(
-        "app.services.index_pipeline.IndexingService", lambda engine: fake_indexing,
+        "app.services.index_pipeline.IndexingService", lambda engine, **kw: fake_indexing,
     )
     engine = MagicMock()
     engine.collection_name = "saved"

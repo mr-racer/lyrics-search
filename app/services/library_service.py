@@ -252,19 +252,15 @@ class LibraryService:
             engine = self.db_client.search_engine
 
             # Same sanitize + batch-model selection as the folder flow
-            # (_run_indexing_job): treat stringified-null junk as None, point
-            # the shared engine at the requested model, invalidate its lazy
-            # caches, and warm the registry. Same residual concurrent-models
-            # limitation as the folder flow (acceptable per spec §6.2).
+            # (_run_indexing_job): treat stringified-null junk as None. The
+            # batch model is passed EXPLICITLY through the pipeline — the
+            # shared engine is never mutated, so two accounts indexing in
+            # parallel (semaphore=2) can't leak models/collections into each
+            # other's job. Warm the registry cache up front.
             if text_model in (None, "", "null", "undefined", "None"):
                 text_model = None
-            if text_model and text_model != engine.model_name:
-                logger.info("[LibraryService] upload batch text model: %s -> %s",
-                            engine.model_name, text_model)
-                engine.model_name = text_model
-                engine._model = None
-                engine._vector_name = None
-                engine._vector_dim = None
+            if text_model:
+                logger.info("[LibraryService] upload batch text model: %s", text_model)
                 ModelRegistry.get_text_model(text_model)  # warm cache
 
             collection_name = f"acct_{account_id}"
@@ -310,7 +306,7 @@ class LibraryService:
             )
 
             # Encode pipeline: lyrics fetch ‖ (CLAP → dense) → upsert.
-            pipeline = IndexPipeline(engine)
+            pipeline = IndexPipeline(engine, model_name=text_model)
             _, track_ids = await pipeline.run(
                 tracks, collection_name, better_lyrics_quality=False,
                 progress=_pipeline_progress, resolve_track_ids=True,
@@ -1054,17 +1050,12 @@ class LibraryService:
             })
 
             if self.db_client and processed_files:
-                # Select the text model for THIS batch (ModelRegistry is the cache;
-                # invalidate the engine's lazy hints so the next access reloads the
-                # right model). Same residual concurrent-models caveat as before.
+                # Text model for THIS batch goes into the pipeline explicitly
+                # (ModelRegistry is the cache) — the shared engine is never
+                # mutated, so parallel jobs can't cross-contaminate.
                 engine = self.db_client.search_engine
-                if text_model and text_model != engine.model_name:
-                    logger.info("[LibraryService] Setting batch text model: %s -> %s",
-                                engine.model_name, text_model)
-                    engine.model_name = text_model
-                    engine._model = None
-                    engine._vector_name = None
-                    engine._vector_dim = None
+                if text_model:
+                    logger.info("[LibraryService] batch text model: %s", text_model)
                     ModelRegistry.get_text_model(text_model)  # warm cache
 
                 loop = asyncio.get_event_loop()
@@ -1076,7 +1067,7 @@ class LibraryService:
                         self._on_index_progress(job, stage, current, total, message), loop,
                     )
 
-                pipeline = IndexPipeline(engine)
+                pipeline = IndexPipeline(engine, model_name=text_model)
                 await pipeline.run(
                     processed_files, collection_name,
                     better_lyrics_quality=better_lyrics_quality,

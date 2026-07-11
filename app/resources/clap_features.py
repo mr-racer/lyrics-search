@@ -25,12 +25,19 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 _FORCE_CPU = os.environ.get("FORCE_CPU", "").strip().lower() in ("1", "true", "yes", "on")
-_Device = "cpu" if _FORCE_CPU else ("cuda" if torch.cuda.is_available() else "cpu")
-DEVICE = torch.device(_Device)
-if _FORCE_CPU:
-    logger.info("[clap_features] FORCE_CPU set — using CPU for CLAP inference")
-else:
-    logger.info("[clap_features] using device: %s", DEVICE)
+# Device policy 2026-07: CLAP is pinned to the CPU by ModelRegistry. Inference
+# helpers derive the device from the model's own parameters (so input tensors
+# always land where the weights are); this constant is only the last-resort
+# fallback for exotic model objects without parameters().
+DEVICE = torch.device("cpu")
+
+
+def _model_device(model) -> "torch.device":
+    """Device the model's weights live on; falls back to CPU."""
+    try:
+        return next(model.parameters()).device
+    except Exception:
+        return DEVICE
 
 MAX_DURATION = 420  # seconds — kept here so clap_features is self-contained
 
@@ -235,14 +242,20 @@ def unit_norm(v):
 
 
 def get_clap_embedding_long(clap_model, y: np.ndarray, sr: int,
-                             chunk_sec: int = 10, device=DEVICE
+                             chunk_sec: int = 10, device=None
                              ) -> tuple[np.ndarray | None, list[np.ndarray] | None]:
     """Split long audio into chunks, embed each, return (mean, per-chunk list).
 
     Both outputs come from the same forward pass. The mean is NOT unit-norm yet
     (caller decides); per-chunk vectors are returned as-is from the model.
     Returns ``(None, None)`` when the audio is shorter than 5 seconds.
+
+    ``device=None`` (default) derives the device from the model's parameters —
+    with CLAP pinned to the CPU this keeps the input batch co-located with the
+    weights instead of assuming a global CUDA device.
     """
+    if device is None:
+        device = _model_device(clap_model)
     chunk_len = sr * chunk_sec
 
     chunks = []
@@ -268,7 +281,7 @@ def get_clap_embedding_long(clap_model, y: np.ndarray, sr: int,
     return mean_vec, chunk_list
 
 
-def extract_clap_features(path: str, model, duration: int = 300, device=DEVICE
+def extract_clap_features(path: str, model, duration: int = 300, device=None
                           ) -> tuple[np.ndarray | None, list[np.ndarray] | None]:
     """Load audio file via librosa and return (unit-norm mean vector, unit-norm per-chunk list).
 

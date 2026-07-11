@@ -105,21 +105,26 @@ async def _preload_models_in_background(db_client: DbClient):
         await asyncio.sleep(1)  # give the event loop a moment
 
         # ── Step 1: Find the largest collection ──
-        largest_col = None
-        largest_count = 0
-        try:
-            cols = db_client.qdrant.get_collections().collections
-            for col in cols:
-                try:
-                    info = db_client.qdrant.get_collection(col.name)
-                    count = info.points_count or 0
-                    if count > largest_count:
-                        largest_count = count
-                        largest_col = col.name
-                except Exception:
-                    pass
-        except Exception as e:
-            logger.warning("[preload] Could not query collections: %s", e)
+        # The sync qdrant-client blocks — run the whole sweep in a thread so
+        # early requests aren't stalled while we probe collections.
+        def _find_largest() -> tuple[str | None, int]:
+            largest_col, largest_count = None, 0
+            try:
+                cols = db_client.qdrant.get_collections().collections
+                for col in cols:
+                    try:
+                        info = db_client.qdrant.get_collection(col.name)
+                        count = info.points_count or 0
+                        if count > largest_count:
+                            largest_count = count
+                            largest_col = col.name
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.warning("[preload] Could not query collections: %s", e)
+            return largest_col, largest_count
+
+        largest_col, largest_count = await asyncio.to_thread(_find_largest)
 
         logger.info("[preload] Largest collection: %s (%d points)",
                     largest_col, largest_count)
@@ -128,8 +133,12 @@ async def _preload_models_in_background(db_client: DbClient):
         # can use different embedding models). No background preload needed here.
 
         # ── Step 2: Load CLAP ──
+        # load_clap() is heavily blocking (checkpoint load, possibly a ~2.3 GB
+        # download). Calling it inline would freeze the event loop — and this
+        # coroutine runs exactly when the user starts browsing — so it goes to
+        # a worker thread; ModelRegistry._clap_lock keeps the load single.
         try:
-            ModelRegistry.load_clap()
+            await asyncio.to_thread(ModelRegistry.load_clap)
             logger.info("[preload] CLAP model loaded")
         except Exception as e:
             logger.warning("[preload] CLAP load failed: %s", e)
@@ -196,8 +205,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as e:
             logger.warning("[WARN] Facts migration skipped: %s", e)
 
-        # Start background model preload (non-blocking)
-        asyncio.create_task(_preload_models_in_background(db))
+        # Start background model preload (non-blocking). Keep a reference on
+        # app.state — the event loop holds tasks only weakly, so an anonymous
+        # create_task() can be garbage-collected mid-preload.
+        app.state._preload_task = asyncio.create_task(_preload_models_in_background(db))
 
     except Exception as e:
         # Qdrant is down or model failed to load — start anyway with limited mode

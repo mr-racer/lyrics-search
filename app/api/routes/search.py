@@ -90,7 +90,10 @@ async def catalog_search(
     if db_client is None:
         return []
     collection = derive_collection_for_user(current_user)
-    hits = catalog_search_service.search_catalog(db_client.qdrant, collection, q, limit)
+    # search_catalog runs sync Qdrant queries — keep them off the event loop.
+    hits = await asyncio.get_running_loop().run_in_executor(
+        None, catalog_search_service.search_catalog, db_client.qdrant, collection, q, limit,
+    )
     return [CatalogHit(**h) for h in hits]
 
 
@@ -261,11 +264,16 @@ async def get_track_lyrics(
         raise HTTPException(status_code=503, detail="Database unavailable")
 
     try:
-        result = db.qdrant.retrieve(
-            collection_name=derived,
-            ids=[track_id],
-            with_payload=True,
-            with_vectors=False,
+        # Sync qdrant-client — threaded so a lyrics lookup (fired on every
+        # track change) never stalls concurrent audio byte delivery.
+        result = await asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: db.qdrant.retrieve(
+                collection_name=derived,
+                ids=[track_id],
+                with_payload=True,
+                with_vectors=False,
+            ),
         )
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Track not found: {e}")

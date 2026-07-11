@@ -21,7 +21,6 @@ remains as a synchronous batch-index entry point (used by maintenance scripts).
 
 from __future__ import annotations
 
-import gc
 import logging
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -29,7 +28,6 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import numpy as np
-import torch
 from qdrant_client import models
 from tqdm.auto import tqdm
 
@@ -124,28 +122,46 @@ class IndexingService:
     ``app.resources.qdrant_payload.prepare_metadata``.
     """
 
-    def __init__(self, engine: LyricsSearchEngine):
+    def __init__(
+        self,
+        engine: LyricsSearchEngine,
+        *,
+        collection_name: str | None = None,
+        model_name: str | None = None,
+    ):
+        """``collection_name`` / ``model_name`` are snapshotted PER INSTANCE.
+
+        The engine is shared across concurrent indexing jobs (semaphore allows
+        2), so job-specific state must never be written onto it — two accounts
+        indexing at once used to race on ``engine.collection_name`` /
+        ``engine.model_name`` and could upsert into each other's collection.
+        Instances are cheap; create one per run with explicit targets.
+        """
         self.engine = engine
+        self.collection_name = str(collection_name or engine.collection_name)
+        # None → engine default stays possible for test fakes without model_name.
+        self.model_name = model_name or getattr(engine, "model_name", None)
 
-    # Convenience pass-through so legacy call sites see a single object.
-    @property
-    def collection_name(self) -> str:
-        return self.engine.collection_name
-
-    @collection_name.setter
-    def collection_name(self, v: str) -> None:
-        self.engine.collection_name = v
+    def _vector_params(self) -> tuple[str, int]:
+        """Resolve ``(vector_name, vector_dim)`` for this run's text model."""
+        if self.model_name:
+            from app.resources.model_registry import ModelRegistry
+            _, vector_name, vector_dim = ModelRegistry.get_text_model(self.model_name)
+            return vector_name, vector_dim
+        # Test fakes provide vector_name/vector_dim directly on the engine.
+        return self.engine.vector_name, self.engine.vector_dim
 
     def _create_collection(self, clap_paths: list) -> None:
         client = self.engine.qdrant_client
-        coll = str(self.engine.collection_name)
+        coll = self.collection_name
         existing = client.get_collections().collections
         if any(c.name == coll for c in existing):
             client.delete_collection(coll)
 
+        vector_name, vector_dim = self._vector_params()
         vectors_config = {
-            self.engine.vector_name: models.VectorParams(
-                size=self.engine.vector_dim,
+            vector_name: models.VectorParams(
+                size=vector_dim,
                 distance=models.Distance.COSINE,
             ),
         }
@@ -184,7 +200,8 @@ class IndexingService:
         sonic_axes_map: Optional[dict] = None,
     ) -> None:
         client = self.engine.qdrant_client
-        coll = self.engine.collection_name
+        coll = self.collection_name
+        vector_name, _ = self._vector_params()
         matched = 0
         chunks_attached = 0
 
@@ -200,7 +217,7 @@ class IndexingService:
                         text=build_text_for_embedding(song_info),
                         model="Qdrant/bm25",
                     ),
-                    self.engine.vector_name: vec,
+                    vector_name: vec,
                 }
                 key = (
                     song_info.get("artist", "").strip().lower(),
@@ -267,14 +284,11 @@ class IndexingService:
             path: Optional explicit folder path used to locate CLAP audio files.
                   When ``None``, ``file_path`` values inside ``data`` are used.
             collection_name: Override target collection for this run only.
+                             Instance-local — the shared engine is not touched.
         """
-        _saved = self.engine.collection_name
         if collection_name:
-            self.engine.collection_name = collection_name
-        try:
-            self._fit_impl(data, path)
-        finally:
-            self.engine.collection_name = _saved
+            self.collection_name = str(collection_name)
+        self._fit_impl(data, path)
 
     def fit_with_progress(
         self,
@@ -289,16 +303,13 @@ class IndexingService:
             data: ``dict[str, dict]`` keyed by ``"Artist — Title"``.
             path: Optional explicit folder path for CLAP audio file discovery.
             collection_name: Override target collection for this run only.
+                             Instance-local — the shared engine is not touched.
             progress_callback: Sync callable ``(stage: str, current: int, total: int, message: str) → None``.
                                ``stage`` is ``"lyrics"`` (dense encoding) or ``"audio"`` (CLAP encoding).
         """
-        _saved = self.engine.collection_name
         if collection_name:
-            self.engine.collection_name = collection_name
-        try:
-            self._fit_impl(data, path, progress_callback=progress_callback)
-        finally:
-            self.engine.collection_name = _saved
+            self.collection_name = str(collection_name)
+        self._fit_impl(data, path, progress_callback=progress_callback)
 
     def index_uploads(
         self,
@@ -433,9 +444,9 @@ class IndexingService:
             logger.info("[index_uploads] nothing to index for account=%s", account_id)
             return {}
 
-        # Run the same pipeline as the folder-scan flow. fit_with_progress sets
-        # (and restores) engine.collection_name around _fit_impl, so the upsert
-        # lands in acct_<account_id> without mutating the shared engine's default.
+        # Run the same pipeline as the folder-scan flow. fit_with_progress
+        # retargets THIS instance at acct_<account_id>; the shared engine's
+        # default collection is never mutated.
         self.fit_with_progress(
             data, path=None, collection_name=collection_name,
             progress_callback=progress_callback,
@@ -515,19 +526,17 @@ class IndexingService:
         """CLAP audio pass → ``(clap_map, clap_chunks_map, sonic_axes_map)``.
 
         Needs only ``file_path``/``artist``/``title`` per track — NOT lyrics — so the
-        IndexPipeline runs this concurrently with the online-lyrics fetch. Vacates
-        the text model from the GPU first (text + CLAP can't share VRAM); the
-        original device is stashed on ``self._text_device`` and restored by
-        ``encode_dense``. On a CLAP error the text model is restored to the GPU
-        before re-raising, so a failed index never strands live search on the CPU.
+        IndexPipeline runs this concurrently with the online-lyrics fetch.
+
+        Device policy 2026-07: CLAP is pinned to the CPU by ModelRegistry, so
+        the old GPU juggling (vacate text model → CLAP → restore) is gone —
+        the text model can hold the GPU for the whole indexing run while CLAP
+        encodes audio on the CPU in parallel.
 
         Sonic axes (Stream RecSys) are projected from the pooled CLAP vectors while
         the CLAP model is still loaded; raw scores go to the payload, z-scoring is
         done at read time.
         """
-        text_device = next(self.engine.model.parameters()).device
-        self._text_device = text_device
-
         has_audio = any(
             t.get("file_path") and Path(t["file_path"]).suffix.lower() in (".flac", ".m4a", ".mp3")
             for t in clap_tracks
@@ -535,38 +544,23 @@ class IndexingService:
         if not has_audio:
             return {}, {}, {}
 
-        moved = False
-        if torch.cuda.is_available() and text_device.type == "cuda":
-            self.engine.model.to("cpu")
-            gc.collect()
-            torch.cuda.empty_cache()
-            moved = True
-
         total = len(clap_tracks)
 
         def _clap_cb(c, t):
             if progress_callback:
                 progress_callback("audio", c, t, "Encoding audio (CLAP)...")
 
-        try:
-            if progress_callback:
-                progress_callback("audio", 0, total, "Encoding audio (CLAP)...")
-            clap_map, clap_chunks_map = _encode_clap(
-                clap_tracks,
-                self.engine.model_clap if self.engine.model_clap else None,
-                progress_callback=_clap_cb,
-            )
-            if progress_callback:
-                progress_callback("audio", total, total, "CLAP encoding done")
-            sonic_axes_map = self._compute_sonic_axes(clap_map)
-            return clap_map, clap_chunks_map, sonic_axes_map
-        except Exception:
-            if moved and torch.cuda.is_available():
-                try:
-                    self.engine.model.to(text_device)
-                except Exception:
-                    logger.warning("[IndexingService] failed to restore text model to GPU after CLAP error")
-            raise
+        if progress_callback:
+            progress_callback("audio", 0, total, "Encoding audio (CLAP)...")
+        clap_map, clap_chunks_map = _encode_clap(
+            clap_tracks,
+            self.engine.model_clap if self.engine.model_clap else None,
+            progress_callback=_clap_cb,
+        )
+        if progress_callback:
+            progress_callback("audio", total, total, "CLAP encoding done")
+        sonic_axes_map = self._compute_sonic_axes(clap_map)
+        return clap_map, clap_chunks_map, sonic_axes_map
 
     def encode_dense(
         self,
@@ -574,24 +568,32 @@ class IndexingService:
         *,
         progress_callback: Optional[Callable] = None,
     ) -> np.ndarray:
-        """Dense lyrics pass → ``text_vecs``. Restores the text model to its GPU
-        device first (``encode_clap`` may have vacated it). Reads ``s["lyrics"]``,
-        so a caller that fetches lyrics after CLAP must have written them into the
-        same ``filtered`` dicts before calling this.
-        """
-        text_device = getattr(self, "_text_device", None)
-        if text_device is not None and text_device.type == "cuda" and torch.cuda.is_available():
-            self.engine.model.to(text_device)
+        """Dense lyrics pass → ``text_vecs``. Reads ``s["lyrics"]``, so a caller
+        that fetches lyrics after CLAP must have written them into the same
+        ``filtered`` dicts before calling this.
 
+        The text model is pinned to the GPU for the duration of the batch via
+        ``ModelRegistry.begin_indexing`` (waits out in-flight search encodes,
+        blocks the idle reaper) and released with ``end_indexing`` — the
+        registry then demotes it back to the CPU after ~60s of quiet.
+        """
         total = len(filtered)
         if progress_callback:
             progress_callback("lyrics", 0, total, "Encoding lyrics...")
-        text_vecs = self.engine.model.encode(
-            [s["lyrics"] for s in filtered],
-            batch_size=32,
-            show_progress_bar=True,
-            convert_to_numpy=True,
-        )
+
+        texts = [s["lyrics"] for s in filtered]
+        encode_kwargs = dict(batch_size=32, show_progress_bar=True, convert_to_numpy=True)
+        if self.model_name:
+            from app.resources.model_registry import ModelRegistry
+            model = ModelRegistry.begin_indexing(self.model_name)
+            try:
+                text_vecs = model.encode(texts, **encode_kwargs)
+            finally:
+                ModelRegistry.end_indexing(self.model_name)
+        else:
+            # Test fakes without a model_name supply .model directly.
+            text_vecs = self.engine.model.encode(texts, **encode_kwargs)
+
         if progress_callback:
             progress_callback("lyrics", total, total, "Lyrics encoding done")
         return text_vecs
@@ -629,14 +631,12 @@ class IndexingService:
 
         # Clear old SQLite track_metadata before upserting new data
         try:
-            MetadataDB.clear_track_metadata(str(self.engine.collection_name))
+            MetadataDB.clear_track_metadata(self.collection_name)
         except Exception:
             logger.warning("[IndexingService] failed to clear old track_metadata — non-fatal")
 
-        # CLAP first (audio-only), then dense — they can't share the GPU. The
-        # IndexPipeline overlaps these with the network; here (sequential) only the
-        # order matters: encode_clap vacates the text model, encode_dense restores
-        # it before encoding lyrics.
+        # CLAP (audio-only, CPU) first, then dense (GPU) — sequential here; the
+        # IndexPipeline variant overlaps them with the network lane.
         clap_map, clap_chunks_map, sonic_axes_map = self.encode_clap(
             filtered, progress_callback=progress_callback,
         )
@@ -664,7 +664,7 @@ class IndexingService:
         prune failure must never fail the index — it only leaves stale rows the
         stream's per-pool resolve guard still filters out.
         """
-        coll = str(self.engine.collection_name)
+        coll = self.collection_name
         client = self.engine.qdrant_client
         try:
             live_ids: set[str] = {
@@ -728,10 +728,10 @@ class IndexingService:
                 "mean": {a: float(v) for a, v in zip(AXIS_NAMES, mean)},
                 "std": {a: float(v) for a, v in zip(AXIS_NAMES, std)},
             }
-            MetadataDB.set_axis_norm_stats(str(self.engine.collection_name), stats)
+            MetadataDB.set_axis_norm_stats(self.collection_name, stats)
             logger.info(
                 "[IndexingService] axis_norm_stats persisted for '%s' (n=%d)",
-                self.engine.collection_name, stats["n"],
+                self.collection_name, stats["n"],
             )
         except Exception:
             logger.exception("[IndexingService] failed to persist axis_norm_stats")

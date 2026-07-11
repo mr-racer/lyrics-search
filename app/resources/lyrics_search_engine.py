@@ -71,8 +71,11 @@ class LyricsSearchEngine:
                 model_name, self._vector_dim,
             )
         elif not lazy:
+            # Eager = warm the registry cache now, but do NOT pin the model on
+            # self: the registry's idle reaper must stay able to unload it.
             from .model_registry import ModelRegistry
-            self._model, self._vector_name, self._vector_dim = ModelRegistry.load_text_model(self.model_name)
+            self._model = None
+            _, self._vector_name, self._vector_dim = ModelRegistry.load_text_model(self.model_name)
             logger.info(
                 "[LyricsSearchEngine] Text model '%s' loaded eagerly via ModelRegistry (dim=%d)",
                 model_name, self._vector_dim,
@@ -117,9 +120,18 @@ class LyricsSearchEngine:
 
     @property
     def model(self):
-        """Return the text model, loading lazily via ModelRegistry."""
-        self._ensure_model()
-        return self._model
+        """Return the text model for the engine's default ``model_name``.
+
+        Resolved through ModelRegistry on EVERY access (a dict hit once
+        loaded) instead of being cached on ``self`` — caching here would pin
+        the weights and defeat the registry's idle unload. A ctor-supplied
+        pre-loaded ``model`` (tests) is the only thing kept on the instance.
+        """
+        if self._model is not None:
+            return self._model
+        from .model_registry import ModelRegistry
+        m, self._vector_name, self._vector_dim = ModelRegistry.get_text_model(self.model_name)
+        return m
 
     @property
     def model_clap(self):
@@ -128,14 +140,15 @@ class LyricsSearchEngine:
         return self._model_clap
 
     def _ensure_model(self) -> None:
-        if self._model is not None:
+        """Resolve vector metadata for the default model (no pinning)."""
+        if self._vector_name is not None:
             return
         with self._model_lock:
-            if self._model is not None:
+            if self._vector_name is not None:
                 return
             from .model_registry import ModelRegistry
             logger.info("[LyricsSearchEngine] Loading text model '%s' via ModelRegistry...", self.model_name)
-            self._model, self._vector_name, self._vector_dim = ModelRegistry.load_text_model(self.model_name)
+            _, self._vector_name, self._vector_dim = ModelRegistry.load_text_model(self.model_name)
             logger.info("[LyricsSearchEngine] Text model loaded (dim=%d)", self._vector_dim)
 
     def _ensure_clap(self) -> None:
@@ -201,10 +214,12 @@ class LyricsSearchEngine:
 
         if not include_clap:
             # Resolve the text model per call — stateless dispatch, no self.* write.
+            # encode_text (not raw model.encode) so the registry's in-flight
+            # tracking keeps the idle reaper from moving/unloading mid-encode.
             from .model_registry import ModelRegistry
             effective_model_name = model_name or self.model_name
-            text_model, vector_name, _vector_dim = ModelRegistry.get_text_model(effective_model_name)
-            query_vector = text_model.encode(query).tolist()
+            _, vector_name, _vector_dim = ModelRegistry.get_text_model(effective_model_name)
+            query_vector = ModelRegistry.encode_text(effective_model_name, query).tolist()
             results = self.qdrant_client.query_points(
                 collection_name=col,
                 prefetch=[
