@@ -3217,6 +3217,14 @@
     .ob-indet{position:absolute;top:0;bottom:0;width:38%;border-radius:3px;background:linear-gradient(90deg,transparent,oklch(68% .17 272),transparent);animation:obIndet 1.3s ease-in-out infinite;}
     @keyframes obIndet{0%{left:-40%}100%{left:100%}}
     @media (prefers-reduced-motion:reduce){.ob-indet{animation:none;left:0;width:100%;opacity:.5}}
+    /* Premium feature cards on the welcome slide — same body as .ob-feat but a
+       quiet gold edge, and a gold (not violet) glow on hover. */
+    .ob-feat-premium{box-shadow:inset 0 1px 0 var(--ob-glass-sheen),inset 0 0 0 1px oklch(76% .13 85 / .32),0 4px 14px rgba(0,0,0,.16);}
+    .ob-feat-premium:hover{transform:translateY(-6px);box-shadow:inset 0 1px 0 var(--ob-glass-sheen),inset 0 0 0 1px oklch(76% .13 85 / .6),0 16px 34px oklch(76% .13 85 / .22);}
+    /* Gentle lift for clickable option cards (mode pick, source pick). */
+    .ob-hoverlift{transition:transform .22s cubic-bezier(.2,.7,.2,1),box-shadow .22s;}
+    .ob-hoverlift:hover{transform:translateY(-3px);}
+    @media (prefers-reduced-motion:reduce){.ob-feat-premium:hover,.ob-hoverlift:hover{transform:none}}
 
     /* ════════════════════════════════════════════════════════════════════════
        MOBILE — Phase 1 (≤768px). Spec: docs/superpowers/specs/2026-06-24-

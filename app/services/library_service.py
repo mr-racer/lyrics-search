@@ -336,7 +336,7 @@ class LibraryService:
 
             # AI tasks (after facts + upsert); awaited so COMPLETED gates player entry.
             try:
-                await self._run_ai_tasks(collection_name, len(tracks), lang)
+                await self._run_ai_tasks(collection_name, len(tracks), lang, job=job)
             except Exception:
                 logger.exception("[enrich] upload AI tasks failed (tracks already indexed)")
 
@@ -689,11 +689,19 @@ class LibraryService:
             stage_facts.found, facts_total, collection_name,
         )
 
-    async def _run_ai_tasks(self, collection_name: str, n_total: int, lang: str = "ru") -> None:
+    async def _run_ai_tasks(
+        self, collection_name: str, n_total: int, lang: str = "ru", job=None,
+    ) -> None:
         """Auto AI-indexing (sonic_vibe / refined_facts / artist_bio) for a
         just-indexed batch — only when the LLM is reachable. Awaited by the runner
         AFTER facts + upsert, so COMPLETED gates player entry (the frontend relies
         on it), and so the AI tasks see the facts/bio they consume.
+
+        ``job``: optional JobTracker job. When given, per-task guru progress is
+        published into the SAME SSE stream the core stages use (``ai_stages`` key
+        on each event + the late-subscriber snapshot via get_progress_summary),
+        so the frontend never has to poll /library/ai-index/status and can't
+        confuse this run with a previous one's rows.
         """
         from app.services import ai_indexing_service
         from app.services.llm_client import (
@@ -713,7 +721,37 @@ class LibraryService:
             "[enrich] LLM reachable (base_url=%s model=%s) — auto AI-indexing %s",
             base_url, model, collection_name,
         )
-        for task_type in ("sonic_vibe", "refined_facts", "artist_bio"):
+
+        task_types = ("sonic_vibe", "refined_facts", "artist_bio")
+        ai_stages: dict = {
+            tt: {"status": "pending", "n_done": 0, "n_total": 0} for tt in task_types
+        }
+
+        async def _publish() -> None:
+            if job is None:
+                return
+            job.ai_stages = ai_stages  # snapshot for late SSE subscribers
+            try:
+                await self._notify_progress(job, {"ai_stages": ai_stages})
+            except Exception:
+                logger.debug("[enrich] ai_stages notify failed", exc_info=True)
+
+        def _pull_row(task_type: str) -> None:
+            """Refresh one task's entry from its ai_indexing_jobs row."""
+            try:
+                row = MetadataDB.get_latest_ai_job(collection_name, task_type)
+            except Exception:
+                return
+            if not row:
+                return
+            ai_stages[task_type] = {
+                "status": row["status"],
+                "n_done": int(row["n_done"] or 0),
+                "n_total": int(row["n_total"] or 0),
+            }
+
+        await _publish()
+        for task_type in task_types:
             try:
                 job_id = ai_indexing_service.start_job(
                     task_type=task_type,
@@ -726,18 +764,28 @@ class LibraryService:
                     llm_model=model,
                     bio_source=("web" if task_type == "artist_bio" else "facts"),
                 )
-                await ai_indexing_service.wait_for_job(job_id)
+                waiter = asyncio.create_task(ai_indexing_service.wait_for_job(job_id))
+                while not waiter.done():
+                    await asyncio.wait({waiter}, timeout=2.0)
+                    _pull_row(task_type)
+                    await _publish()
+                _pull_row(task_type)
+                await _publish()
                 logger.info(
                     "[enrich] AI task '%s' finished (collection=%s)",
                     task_type, collection_name,
                 )
             except ValueError as e:
                 logger.warning("[enrich] AI task '%s' skipped: %s", task_type, e)
+                ai_stages[task_type]["status"] = "skipped"
+                await _publish()
             except Exception:
                 logger.exception(
                     "[enrich] AI task '%s' failed (collection=%s)",
                     task_type, collection_name,
                 )
+                ai_stages[task_type]["status"] = "failed"
+                await _publish()
 
     async def index_folder(
         self,

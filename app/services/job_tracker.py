@@ -206,4 +206,10 @@ class JobTracker:
         yandex_report = getattr(job, "yandex_report", None)
         if yandex_report is not None:
             summary["yandex_report"] = yandex_report
+        # Awaited AI-enrichment phase (set by _run_ai_tasks while the job is
+        # still RUNNING): late SSE subscribers must see the current guru
+        # progress in the initial snapshot, not wait for the next live event.
+        ai_stages = getattr(job, "ai_stages", None)
+        if ai_stages:
+            summary["ai_stages"] = ai_stages
         return summary

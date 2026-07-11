@@ -9828,6 +9828,32 @@ const AI_ENRICH_STAGES = [
   { key:'artist_bio',    ru:'Биографии артистов', en:'Artist bios' },
 ];
 
+// Live guru progress driven by the indexing SSE stream itself (`ai_stages` key,
+// published by the backend's awaited AI phase). Unlike AiEnrichProgress (below),
+// this can't confuse the current run with a previous run's rows and needs no
+// extra polling — preferred wherever the SSE stream carries ai_stages.
+function GuruStagesFromSse({ ru, c, aiStages }) {
+  return (
+    <>
+      {AI_ENRICH_STAGES.map(s => {
+        const st = (aiStages && aiStages[s.key]) || { status: 'pending', n_done: 0, n_total: 0 };
+        const raw = st.status;
+        const state = (raw === 'done' || raw === 'skipped') ? 'done'
+                    : (raw === 'failed' || raw === 'cancelled') ? 'failed'
+                    : (raw === 'running' || raw === 'queued') ? 'running' : 'pending';
+        const total = st.n_total || 0, done = st.n_done || 0;
+        const pct = state === 'done' ? 100 : total > 0 ? Math.min(100, Math.round(100 * done / total)) : 0;
+        const count = (state === 'running' && total > 0) ? `${done}/${total}` : null;
+        const indeterminate = state === 'running' && total <= 0;
+        return (
+          <OBStageBar key={s.key} c={c} label={ru ? s.ru : s.en}
+            state={state} pct={pct} count={count} indeterminate={indeterminate} />
+        );
+      })}
+    </>
+  );
+}
+
 function AiEnrichProgress({ ru, c }) {
   const [status, setStatus] = useState({});
   useEffect(() => {
@@ -9868,17 +9894,23 @@ function AiEnrichProgress({ ru, c }) {
 // and aiWaiting never trips). Replaces the modal UploadIndexingWizard in the
 // member onboarding so it sits inside the SetupRail layout.
 function MemberIndexing({ ru, c, isDark, jobId, onDone }) {
+  // The job we actually stream. A Yandex import starts as a DOWNLOAD job and
+  // hands off to the real indexing job on completion (indexing_job_id) — after
+  // a page reload we may attach to either, so the switch lives here.
+  const [activeJobId, setActiveJobId] = useState(jobId);
+  useEffect(() => { setActiveJobId(jobId); }, [jobId]);
   const [stepStatus, setStepStatus] = useState({});
   const [stageProgress, setStageProgress] = useState({});
   const [error, setError] = useState(null);
   const [done, setDone] = useState(false);
-  const [aiWaiting, setAiWaiting] = useState(false);
+  const [aiStages, setAiStages] = useState(null);   // live guru progress from SSE
+  const [dl, setDl] = useState(null);               // Yandex download phase {current,total,done}
   const [etas, setEtas] = useState({});
   const etaRef = useRef({});
 
   useEffect(() => {
-    if (!jobId) return;
-    const evt = new EventSource(`${API}/index/progress/${jobId}`);
+    if (!activeJobId) return;
+    const evt = new EventSource(`${API}/index/progress/${activeJobId}`);
     evt.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data);
@@ -9888,13 +9920,25 @@ function MemberIndexing({ ru, c, isDark, jobId, onDone }) {
           setStageProgress(prev => { const next = { ...prev }; for (const [k, v] of Object.entries(data.stages)) next[k] = { current: v.current ?? prev[k]?.current ?? 0, total: v.total ?? prev[k]?.total ?? 0 }; return next; });
           setEtas(prev => ({ ...prev, ...computeStageEtas(data.stages, etaRef.current, statusMap, ru, Date.now()) }));
         }
-        if (data.overall_status !== 'completed' && data.stages?.facts?.status === 'completed') setAiWaiting(true);
-        if (data.overall_status === 'completed') { evt.close(); setDone(true); setTimeout(onDone, 1400); }
+        if (data.stage === 'download') {
+          setDl({ current: data.current ?? 0, total: data.total ?? 0, done: false });
+        }
+        if (data.ai_stages) setAiStages(data.ai_stages);
+        if (data.overall_status === 'completed') {
+          evt.close();
+          if (data.indexing_job_id && data.indexing_job_id !== activeJobId) {
+            // Download finished → follow the indexing job it spawned.
+            setDl(d => d ? { ...d, done: true } : d);
+            setActiveJobId(data.indexing_job_id);
+          } else {
+            setDone(true); setTimeout(onDone, 1400);
+          }
+        }
         else if (data.overall_status === 'failed') { evt.close(); setError(data.error || data.message || 'failed'); }
       } catch (err) {}
     };
     return () => evt.close();
-  }, [jobId]);
+  }, [activeJobId]);
 
   if (done) {
     return (
@@ -9907,16 +9951,26 @@ function MemberIndexing({ ru, c, isDark, jobId, onDone }) {
     );
   }
 
+  // The awaited guru phase starts once every core stage is done but the job is
+  // still running; ai_stages from the SSE stream is the authoritative signal.
+  const coreDone = Object.keys(WIZ_STAGE_LABELS).every(k => stepStatus[k] === 'done');
   return (
     <div className="ob-glass" style={{ padding:'26px 28px' }}>
       <h2 className="serif" style={{ fontSize:'26px', letterSpacing:'-0.02em', marginBottom:'14px' }}>
-        {error ? (ru ? 'Что-то пошло не так' : 'Something went wrong') : (ru ? 'Собираем вашу библиотеку…' : 'Building your library…')}
+        {error ? (ru ? 'Что-то пошло не так' : 'Something went wrong') : (ru ? 'Готовим вашу музыку…' : 'Preparing your music…')}
       </h2>
       <ProcessingModeBadge isDark={isDark} lang={ru ? 'ru' : 'en'} style={{ marginBottom:'18px' }} />
       {error ? (
         <div style={{ padding:'10px 14px', borderRadius:'10px', background:c.redBg, color:c.red, fontSize:'13px' }}>{error}</div>
       ) : (
         <>
+          {dl && (
+            <OBStageBar c={c} label={ru ? 'Скачивание из Яндекса' : 'Downloading from Yandex'}
+              state={dl.done ? 'done' : 'running'}
+              pct={dl.done ? 100 : (dl.total > 0 ? Math.round(100 * dl.current / dl.total) : 0)}
+              count={!dl.done && dl.total > 0 ? `${dl.current}/${dl.total}` : null}
+              indeterminate={!dl.done && dl.total === 0} />
+          )}
           {Object.keys(WIZ_STAGE_LABELS).map(k => {
             const st = stepStatus[k] || 'pending';
             const pr = stageProgress[k] || { current:0, total:0 };
@@ -9929,15 +9983,20 @@ function MemberIndexing({ ru, c, isDark, jobId, onDone }) {
               </Fragment>
             );
           })}
-          {aiWaiting && (
+          {(aiStages || coreDone) && (
             <>
               <div className="mono" style={{ display:'flex', alignItems:'center', gap:'9px', margin:'16px 0 10px',
                 fontSize:'11px', letterSpacing:'0.2em', textTransform:'uppercase', color:'#c3b8ff' }}>
                 ✨ {ru ? 'С помощью гуру' : 'With the guru'}
               </div>
-              <AiEnrichProgress ru={ru} c={c} />
+              <GuruStagesFromSse ru={ru} c={c} aiStages={aiStages} />
             </>
           )}
+          <div style={{ display:'flex', alignItems:'center', gap:'8px', marginTop:'16px', fontSize:'12px', color:c.textSubtle, lineHeight:1.5 }}>
+            <span aria-hidden>🌙</span>
+            {ru ? 'Можно уйти со страницы или закрыть вкладку — подготовка продолжится, а прогресс будет здесь, когда вернётесь.'
+                : 'Feel free to leave this page or close the tab — preparation continues, and the progress will be here when you return.'}
+          </div>
         </>
       )}
     </div>
@@ -10074,7 +10133,7 @@ function YandexEnhanceLink({ isDark, lang }) {
 // then the normal indexing wizard). Talks to the /import/yandex/* endpoints and,
 // for the indexing phase, reuses MemberIndexing on the indexing_job_id the backend
 // hands back in the download job's completion event.
-function YandexImportFlow({ isDark, lang, onDone, onBack }) {
+function YandexImportFlow({ isDark, lang, onDone, onBack, onPhase }) {
   const c = useColors(isDark);
   const ru = lang === 'ru';
   const [step, setStep] = useState('auth');     // 'auth' | 'sources' | 'progress'
@@ -10164,6 +10223,7 @@ function YandexImportFlow({ isDark, lang, onDone, onBack }) {
     if (!body.length) return;
     setProgErr(null);
     setStep('progress');
+    if (onPhase) onPhase('progress');  // parent flips to the dedicated progress page
     try {
       const res = await apiFetch('/import/yandex/start', {
         method: 'POST',
@@ -10419,6 +10479,7 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
   const [files, setFiles] = useState([]);
   // Per-file: { name, size, status: 'queued'|'uploading'|'done'|'failed', upload_id?, error? }
   const [progress, setProgress] = useState([]);
+  const [uploadStarted, setUploadStarted] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [jobId, setJobId] = useState(null);
   const [showWizard, setShowWizard] = useState(false);
@@ -10427,6 +10488,7 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
   const [mode, setMode] = useState('pick');   // kept for compat — now only used internally
   const [uploadExpanded, setUploadExpanded] = useState(false);  // expand upload section
   const [yandexExpanded, setYandexExpanded] = useState(false);  // expand Yandex inline section
+  const [yandexImporting, setYandexImporting] = useState(false); // Yandex flow entered its progress phase
   const [premiumHint, setPremiumHint] = useState(false);  // inline hint for non-premium Yandex click
   const premiumHintDismissed = (() => {
     try { return localStorage.getItem('musix_premium_hint_dismissed') === '1'; } catch { return false; }
@@ -10502,13 +10564,16 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
 
   const startUpload = async () => {
     if (!files.length) return;
+    // Entering the upload phase flips the screen to the dedicated progress page
+    // (uploadStarted covers the brief gaps between sequential files).
+    setUploadStarted(true);
     // Sequential to keep server memory bounded — parallel would need a pool.
     const ids = [];
     for (let i = 0; i < files.length; i++) {
       const id = await uploadOne(files[i], i);
       if (id) ids.push(id);
     }
-    if (!ids.length) return;
+    if (!ids.length) { setUploadStarted(false); return; }
     setCommitting(true);
     try {
       const res = await apiFetch('/library/upload/batch-commit', {
@@ -10519,6 +10584,7 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
       setShowWizard(true);
     } catch (e) {
       setCommitting(false);
+      setUploadStarted(false);
       alert(`Batch commit failed: ${e.message}`);
     }
   };
@@ -10527,6 +10593,11 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
   const anyUploading = progress.some(p => p.status === 'uploading');
   const successCount = progress.filter(p => p.status === 'done').length;
 
+  // Page phase: the source picker gives way to a dedicated progress page the
+  // moment work starts — uploading files, importing from Yandex, or indexing.
+  const uploadBusy = uploadStarted || anyUploading || committing;
+  const busy = (showWizard && !!jobId) || uploadBusy || yandexImporting;
+
   // Server-mode opt-in (MEMBER_INDEX_ROOT): if the operator mounted a trusted
   // folder and exposed it via /instance/config, members may index it in place
   // instead of uploading. Fetch once; the button below renders only when set.
@@ -10534,6 +10605,24 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
     apiFetch('/instance/config')
       .then(cfg => { if (cfg && cfg.mode === 'server' && cfg.member_index_root) setMemberIndexRoot(cfg.member_index_root); })
       .catch(() => {});
+  }, []);
+
+  // Reload / navigation away mid-indexing: the server keeps the per-account job
+  // slot (same contract App uses at /library/status), so ask it on mount and
+  // jump straight back to the progress page instead of the source picker.
+  useEffect(() => {
+    let alive = true;
+    apiFetch('/library/status')
+      .then(st => {
+        if (!alive || !st || !st.job_id) return;
+        if (st.overall_status === 'running' || st.overall_status === 'pending') {
+          setWelcomed(true);   // they're mid-flow — the marketing slide is behind them
+          setJobId(st.job_id);
+          setShowWizard(true);
+        }
+      })
+      .catch(() => {});
+    return () => { alive = false; };
   }, []);
 
   // Index the mounted root in place, then hand the returned job to the same
@@ -10583,7 +10672,7 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
           : 'radial-gradient(ellipse at top, #fafaff 0%, #ececf3 60%, #e3e2e8 100%)',
         color: c.text }}>
         {header}
-        <div style={{ maxWidth:'min(1320px, 94vw)', margin:'24px auto 48px', padding:'0 32px', position:'relative' }}>
+        <div style={{ maxWidth:'min(1100px, 94vw)', margin:'24px auto 48px', padding:'0 32px', position:'relative' }}>
           <DriftBackdrop />
           <GlassCard style={{ padding:'clamp(30px, 3vw, 60px) clamp(28px, 3vw, 56px)' }}>
             <WelcomeSlide ru={ru} c={c} onStart={dismissWelcome} />
@@ -10609,12 +10698,14 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
           <SetupRail ru={ru}
             steps={[
               { key:'source',   label: ru?'Откуда музыка?':'Music source' },
-              { key:'indexing', label: ru?'Подготовка библиотеки':'Preparing library' },
+              { key:'indexing', label: ru?'Подготовка музыки':'Preparing music' },
               { key:'done',     label: ru?'Готово!':'Done!' },
             ]}
-            currentKey={showWizard ? 'indexing' : 'source'} />
+            currentKey={busy ? 'indexing' : 'source'} />
           <div style={{ flex:1, position:'relative', zIndex:1, minWidth:0 }}>
-        <div>
+        {/* ═══ Source picker — HIDDEN (not unmounted) once the flow is busy, so
+            uploads driven from this component's state keep running. ═══ */}
+        <div style={{ display: busy ? 'none' : undefined }}>
         <div className="mono" style={{ fontSize:'11px', color:c.textSubtle, letterSpacing:'0.24em', textTransform:'uppercase', marginBottom:'8px' }}>
           {ru?'Шаг 1 · Откуда музыка?':'Step 1 · Music source'}
         </div>
@@ -10765,13 +10856,47 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
               )}
             </div>
         </ObExpand>
+        </div>
 
-        {/* ═══ Развёрнутый контент: Яндекс Музыка (inline, as-is from YandexImportFlow) ═══════════════ */}
-        <ObExpand open={yandexExpanded}>
-          <YandexImportFlow isDark={isDark} lang={lang} onDone={onDone} onBack={() => setYandexExpanded(false)} />
-        </ObExpand>
+        {/* ═══ Яндекс Музыка — OUTSIDE the hidden source wrapper: the flow must
+            stay mounted (and visible) when its import turns the page into the
+            dedicated progress view. ═══ */}
+        <div style={{ display: (busy && !yandexImporting) ? 'none' : undefined }}>
+          <ObExpand open={yandexExpanded}>
+            <YandexImportFlow isDark={isDark} lang={lang} onDone={onDone}
+              onPhase={(p) => setYandexImporting(p === 'progress')}
+              onBack={() => { setYandexExpanded(false); setYandexImporting(false); }} />
+          </ObExpand>
+        </div>
 
-        {/* ═══ Прогресс загрузки файлов ═══════════════════════════════════════ */}
+        {/* ═══ Отдельная страница: загрузка файлов на сервер ═══════════════════ */}
+        {uploadBusy && !showWizard && (
+          <div className="ob-listin">
+            <div className="mono" style={{ fontSize:'11px', color:c.textSubtle, letterSpacing:'0.24em', textTransform:'uppercase', marginBottom:'8px' }}>
+              {ru?'Шаг 2 · Подготовка музыки':'Step 2 · Preparing music'}
+            </div>
+            <h2 className="serif" style={{ fontSize:'30px', lineHeight:'1.04', letterSpacing:'-0.02em', marginBottom:'18px' }}>
+              {committing
+                ? (ru ? <>Запускаем <i style={{ color:'oklch(62% 0.2 275)' }}>обработку</i>…</> : <>Starting <i style={{ color:'oklch(62% 0.2 275)' }}>processing</i>…</>)
+                : (ru ? <>Загружаем <i style={{ color:'oklch(62% 0.2 275)' }}>файлы</i>…</> : <>Uploading your <i style={{ color:'oklch(62% 0.2 275)' }}>files</i>…</>)}
+            </h2>
+            <div className="ob-glass" style={{ padding:'18px 20px', borderRadius:'14px', marginBottom:'14px' }}>
+              <OBStageBar c={c} label={ru ? 'Загрузка на сервер' : 'Upload to server'}
+                state={committing ? 'done' : 'running'}
+                pct={progress.length > 0 ? Math.round(100 * progress.filter(p => p.status === 'done' || p.status === 'failed').length / progress.length) : 0}
+                count={`${progress.filter(p => p.status === 'done').length}/${progress.length}`} />
+              <div style={{ display:'flex', alignItems:'center', gap:'8px', fontSize:'12px', color:'#d9a76a', lineHeight:1.5 }}>
+                <span aria-hidden>⚠</span>
+                {ru ? 'Пока файлы загружаются с этого устройства — не закрывайте страницу. Дальше всё сделает сервер, и страницу можно будет закрыть.'
+                    : 'While files are uploading from this device, keep the page open. After that the server takes over and you may leave.'}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ═══ Прогресс загрузки файлов (список) — виден при выборе и во время
+            загрузки; на странице индексации уже не нужен ═══ */}
+        <div style={{ display: showWizard || yandexImporting ? 'none' : undefined }}>
         {progress.length > 0 && (
           <div className="ob-glass ob-listin" style={{ marginTop:'14px', padding:'16px 20px', borderRadius:'14px' }}>
             <div className="mono" style={{ fontSize:'13px', color:c.textSubtle, marginBottom:'10px' }}>
@@ -10796,7 +10921,7 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
               ))}
             </div>
 
-            {!allDone && !anyUploading && (
+            {!allDone && !anyUploading && !uploadStarted && (
               <button onClick={startUpload} className="ske-accent"
                 style={{ width:'100%', marginTop:'14px', padding:'12px 20px', borderRadius:'12px',
                   fontSize:'14px', fontWeight:'600', letterSpacing:'0.08em', cursor:'pointer' }}>
@@ -10810,8 +10935,10 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
             )}
           </div>
         )}
+        </div>
 
         {/* ═══ Dev section: mounted folder (hidden under spoiler) ════════════ */}
+        <div style={{ display: busy ? 'none' : undefined }}>
         {memberIndexRoot && (
           <details style={{ marginTop:'18px', opacity:0.6 }}>
             <summary style={{ cursor:'pointer', fontSize:'12px', color:c.textSubtle, letterSpacing:'0.12em', textTransform:'uppercase', userSelect:'none' }}>
@@ -10861,6 +10988,7 @@ function UploadIndexingWizard({ isDark, lang, jobId, onDone }) {
   // before flipping overall_status to 'completed'. We stay on this screen until
   // then; aiWaiting drives a "finishing" note so the wait is explained.
   const [aiWaiting, setAiWaiting] = useState(false);
+  const [aiStages, setAiStages] = useState(null);  // live guru progress from SSE
 
   useEffect(() => {
     const evt = new EventSource(`${API}/index/progress/${jobId}`);
@@ -10891,11 +11019,12 @@ function UploadIndexingWizard({ isDark, lang, jobId, onDone }) {
             return next;
           });
         }
-        // Once FACTS is done but the job isn't 'completed', the backend is in the
-        // awaited AI phase (no further stage events, just SSE heartbeats) — show
-        // the finishing note instead of a frozen-looking screen.
-        if (data.overall_status !== 'completed'
-            && data.stages?.facts?.status === 'completed') {
+        if (data.ai_stages) { setAiStages(data.ai_stages); setAiWaiting(true); }
+        // Fallback for streams without ai_stages: once EVERY core stage is done
+        // but the job isn't 'completed', the backend is in the awaited AI phase
+        // (facts alone completes early — it runs in parallel with encoding).
+        if (data.overall_status !== 'completed' && data.stages
+            && Object.values(data.stages).every(s => s.status === 'completed')) {
           setAiWaiting(true);
         }
         if (data.overall_status === 'completed') {
@@ -10932,9 +11061,11 @@ function UploadIndexingWizard({ isDark, lang, jobId, onDone }) {
               letterSpacing:'0.2em', textTransform:'uppercase', color:'#c3b8ff', marginBottom:'10px' }}>
               <Spinner size={12} /> ✨ {lang==='ru' ? 'С помощью гуру' : 'With the guru'}
             </div>
-            <AiEnrichProgress ru={lang==='ru'} c={c} />
+            {aiStages
+              ? <GuruStagesFromSse ru={lang==='ru'} c={c} aiStages={aiStages} />
+              : <AiEnrichProgress ru={lang==='ru'} c={c} />}
             <div style={{ fontSize:'11px', color: isDark ? 'rgba(255,255,255,.45)' : 'rgba(0,0,0,.45)', marginTop:'4px' }}>
-              {lang==='ru' ? 'Не закрывайте страницу — плеер откроется автоматически.' : 'Keep this page open — the player opens automatically.'}
+              {lang==='ru' ? 'Плеер откроется автоматически, как только всё будет готово.' : 'The player opens automatically once everything is ready.'}
             </div>
           </div>
         </div>
@@ -16793,13 +16924,22 @@ function DriftBackdrop({ variant }) {
 function GlassCard({ children, style, className }) {
   return <div className={'ob-glass' + (className ? ' ' + className : '')} style={style}>{children}</div>;
 }
-function FeatureCard({ icon, title, body }) {
+function FeatureCard({ icon, title, body, premium }) {
   return (
-    <div className="ob-feat ob-feat-hover" style={{ padding:'clamp(15px, 1.3vw, 26px)' }}>
+    <div className={'ob-feat ' + (premium ? 'ob-feat-premium' : 'ob-feat-hover')} style={{ padding:'clamp(15px, 1.3vw, 26px)' }}>
       <div style={{ fontSize:'clamp(20px, 1.7vw, 32px)', lineHeight:1 }}>{icon}</div>
       <div style={{ fontWeight:600, fontSize:'clamp(14px, 1.05vw, 20px)', margin:'10px 0 5px' }}>{title}</div>
       <div style={{ fontSize:'clamp(12.5px, 0.92vw, 16px)', lineHeight:1.45, opacity:.72 }}>{body}</div>
     </div>
+  );
+}
+// The «Я» tile used everywhere Yandex Music appears — kept as an element so the
+// welcome premium card matches the source-pick card visually.
+function YandexTile({ size = '1.05em' }) {
+  return (
+    <span aria-hidden style={{ display:'inline-flex', width:size, height:size, borderRadius:'0.28em',
+      background:'linear-gradient(135deg, #ffcc00, #ff5c5c)', color:'#1a1a1a',
+      alignItems:'center', justifyContent:'center', fontWeight:800, fontSize:'0.72em', lineHeight:1 }}>Я</span>
   );
 }
 function WelcomeSlide({ ru, c, onStart }) {
@@ -16809,15 +16949,34 @@ function WelcomeSlide({ ru, c, onStart }) {
     { icon:'💡', title: ru?'Другая сторона артистов':'The other side of artists', body: ru?'Маколей Калкин — крёстный отец детей Майкла Джексона. И ещё сотни фактов.':"Macaulay Culkin is godfather to Michael Jackson's kids. And hundreds more facts." },
     { icon:'🌐', title: ru?'Свой сервер':'Your own server', body: ru?'Зови друзей. Библиотека без ИИ-музыки и ремиксов — песня всегда доступна.':'Invite friends. A library with no AI music or remixes — a song never disappears.' },
   ];
+  const premiumFeats = [
+    { icon:<YandexTile />, title: ru?'Импорт из Яндекс Музыки':'Import from Yandex Music',
+      body: ru?'Лайкнутые песни и плейлисты переезжают в один клик.':'Liked songs and playlists move over in one click.' },
+    { icon:'✨', title: ru?'Метаданные лучшего качества':'Better metadata quality',
+      body: ru?'Тексты, обложки и информация о песнях подтягиваются в улучшенном качестве — даже для ваших собственных файлов.':'Lyrics, covers and song info arrive in higher quality — even for your own files.' },
+  ];
+  const gold = PREMIUM_GOLD;
   return (
     <div style={{ display:'flex', gap:'clamp(28px, 3vw, 60px)', alignItems:'center', flexWrap:'wrap' }}>
-      <div style={{ flex:'1 1 360px', minWidth:300 }}>
+      <div style={{ flex:'1 1 340px', minWidth:290 }}>
         <div className="mono" style={{ fontSize:'clamp(11px, 0.85vw, 14px)', letterSpacing:'.26em', textTransform:'uppercase', opacity:.5 }}>{ru?'— Добро пожаловать':'— Welcome'}</div>
         <h1 className="serif" style={{ fontSize:'clamp(40px, 4vw, 78px)', lineHeight:1.04, letterSpacing:'-.02em', margin:'clamp(12px,1vw,22px) 0 clamp(10px,0.8vw,16px)' }}>{ru?'Добро пожаловать в ':'Welcome to '}<span style={{ color:'oklch(62% 0.2 275)' }}>MusiX</span>!</h1>
         <div style={{ fontSize:'clamp(17px, 1.5vw, 27px)', opacity:.65 }}>{ru?'Ваш личный музыкальный гуру':'Your personal music guru'}</div>
         <button className="ske-accent" style={{ marginTop:'clamp(22px, 1.9vw, 34px)', padding:'clamp(13px,1vw,18px) clamp(28px,2.4vw,46px)', borderRadius:12, fontSize:'clamp(14.5px, 1.1vw, 19px)', fontWeight:600, border:'none', cursor:'pointer' }} onClick={onStart}>{ru?'В мир музыки →':'Into the music →'}</button>
       </div>
-      <div style={{ flex:'1 1 380px', display:'grid', gridTemplateColumns:'1fr 1fr', gap:'clamp(12px, 1vw, 20px)' }}>{feats.map((f,i)=><FeatureCard key={i} icon={f.icon} title={f.title} body={f.body} />)}</div>
+      <div style={{ flex:'1 1 380px', minWidth:300 }}>
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'clamp(12px, 1vw, 20px)' }}>{feats.map((f,i)=><FeatureCard key={i} icon={f.icon} title={f.title} body={f.body} />)}</div>
+        <PremiumGate>
+          <div style={{ display:'flex', alignItems:'center', gap:'12px', margin:'clamp(16px, 1.4vw, 26px) 0 clamp(10px, 0.9vw, 16px)' }}>
+            <span style={{ flex:1, height:1, background:`linear-gradient(90deg, transparent, ${gold.replace(')', ' / 0.45)')})` }} />
+            <span className="mono" style={{ fontSize:'clamp(10px, 0.78vw, 12.5px)', letterSpacing:'.22em', color:gold, whiteSpace:'nowrap' }}>
+              ★ {ru?'С PREMIUM ВАМ ДОСТУПНО':'AVAILABLE WITH PREMIUM'}
+            </span>
+            <span style={{ flex:1, height:1, background:`linear-gradient(90deg, ${gold.replace(')', ' / 0.45)')}, transparent)` }} />
+          </div>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:'clamp(12px, 1vw, 20px)' }}>{premiumFeats.map((f,i)=><FeatureCard key={i} icon={f.icon} title={f.title} body={f.body} premium />)}</div>
+        </PremiumGate>
+      </div>
     </div>
   );
 }
@@ -16844,7 +17003,7 @@ function SetupRail({ ru, steps, currentKey }) {
 }
 function ModeCard({ sel, onClick, title, body, note }) {
   return (
-    <div onClick={onClick} style={{ cursor:'pointer', background:'var(--ob-card-bg)', borderRadius:12, padding:13,
+    <div onClick={onClick} className="ob-hoverlift" style={{ cursor:'pointer', background:'var(--ob-card-bg)', borderRadius:12, padding:13,
         boxShadow: sel?'inset 0 0 0 2px oklch(62% .2 275),0 6px 18px rgba(124,92,255,.3)':'inset 0 0 0 1px var(--ob-card-edge),0 3px 10px rgba(0,0,0,.18)' }}>
       <div style={{ fontWeight:600, fontSize:13 }}>{title}</div>
       <div style={{ fontSize:11.5, opacity:.7, lineHeight:1.4, marginTop:3 }}>{body}</div>
@@ -16911,6 +17070,10 @@ function SetupWizard({ onComplete }) {
   const [aiStatus, setAiStatus]           = useState(null);
   const [aiRunning, setAiRunning]         = useState(false);
   const [aiDone, setAiDone]               = useState(false);
+  // Server-mode upload jobs run the guru phase server-side and stream its
+  // progress over the same SSE (`ai_stages`). When present, it both renders
+  // live bars and tells the client NOT to re-run the tasks after completion.
+  const [sseAiStages, setSseAiStages]     = useState(null);
 
   const handleTheme = () => setDark(d => {
     const next = !d; localStorage.setItem('musix_theme', next ? 'dark' : 'light'); return next;
@@ -17034,6 +17197,7 @@ function SetupWizard({ onComplete }) {
           });
           setEtas(prev => ({ ...prev, ...computeStageEtas(data.stages, etaRef.current, statusMap, ru, Date.now()) }));
         }
+        if (data.ai_stages) setSseAiStages(data.ai_stages);
         if (data.overall_status === 'completed') { evt.close(); setIndexDone(true); }
         else if (data.overall_status === 'failed') { evt.close(); setIndexError(data.error || data.message || 'failed'); }
       } catch {}
@@ -17050,6 +17214,9 @@ function SetupWizard({ onComplete }) {
   useEffect(() => {
     if (!indexDone) return;
     if (!shouldEnrich) { setAiDone(true); return; }
+    // The backend already ran (and streamed) the guru phase inside the job —
+    // re-running the tasks client-side would just re-poll a finished state.
+    if (sseAiStages) { setAiDone(true); return; }
     if (aiRunning || aiDone) return;
     let cancelled = false;
     const tasks = ['artist_bio', 'refined_facts', 'sonic_vibe'];
@@ -17075,7 +17242,7 @@ function SetupWizard({ onComplete }) {
       if (!cancelled) { setAiRunning(false); setAiDone(true); }
     })();
     return () => { cancelled = true; };
-  }, [indexDone, shouldEnrich]);
+  }, [indexDone, shouldEnrich, sseAiStages]);
 
   const applyTierToLocalStorage = () => {
     // Mirror the Settings panel behavior: search must use the same model the
@@ -17593,7 +17760,22 @@ function SetupWizard({ onComplete }) {
         );
       })}
 
-      {!finished && !indexError && shouldEnrich && (indexDone || aiRunning) && (
+      {/* Server-side guru phase — live bars straight from the job's SSE stream. */}
+      {!finished && !indexError && sseAiStages && (
+        <>
+          <div className="mono" style={{ display:'flex', alignItems:'center', gap:'9px', margin:'16px 0 10px',
+            fontSize:'11px', letterSpacing:'0.2em', textTransform:'uppercase', color:'#c3b8ff' }}>
+            ✨ {ru ? 'С помощью гуру' : 'With the guru'}
+          </div>
+          <GuruStagesFromSse ru={ru} c={c} aiStages={sseAiStages} />
+          <button onClick={() => onComplete({ mode })}
+            style={{ marginTop:'6px', background:'transparent', border:'none', color:c.textSubtle, fontSize:'12px', textDecoration:'underline', cursor:'pointer' }}>
+            {ru ? 'Войти, не дожидаясь' : 'Enter without waiting'}
+          </button>
+        </>
+      )}
+
+      {!finished && !indexError && !sseAiStages && shouldEnrich && (indexDone || aiRunning) && (
         <>
           <div className="mono" style={{ display:'flex', alignItems:'center', gap:'9px', margin:'16px 0 10px',
             fontSize:'11px', letterSpacing:'0.2em', textTransform:'uppercase', color:'#c3b8ff' }}>
@@ -17700,7 +17882,7 @@ function SetupWizard({ onComplete }) {
         <TopRightControls isDark={isDark} lang={lang} onLang={handleLang} onTheme={handleTheme} onSettings={() => {}} />
       </div>
       <div style={{ flex:1, display:'flex', alignItems:'center', justifyContent:'center', padding:'24px 32px 48px' }}>
-        <div style={{ width:'100%', maxWidth: step === 'welcome' ? 'min(1320px, 94vw)' : '880px' }}>
+        <div style={{ width:'100%', maxWidth: step === 'welcome' ? 'min(1100px, 94vw)' : '880px' }}>
           {step === 'welcome' ? renderWelcome() : (
             <div style={{ position:'relative', display:'flex', gap:24 }}>
               <DriftBackdrop />
