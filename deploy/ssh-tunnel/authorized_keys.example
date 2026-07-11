@@ -1,0 +1,10 @@
+# Кладётся на VPS в /home/tunnel/.ssh/authorized_keys (одна строка, без переносов).
+#
+# Ключ ЖЁСТКО ограничен: только обратный проброс порта 127.0.0.1:8000, без shell,
+# без агента, без pty. Даже если ключ утечёт — им нельзя ни зайти в систему, ни
+# пробросить что-то кроме нужного порта.
+#
+# Подставь публичную часть ключа, сгенерированного на ДОМАШНЕМ сервере (Ubuntu)
+# (см. README, раздел «Обратный SSH-туннель»).
+
+restrict,port-forwarding,permitlisten="127.0.0.1:8000",command="/usr/sbin/nologin" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILDOqZ5485bxctnncryJ1H7673DhuYK3WV7qTHU/JJor musix-home-tunnel

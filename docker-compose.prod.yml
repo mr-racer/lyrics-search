@@ -1,0 +1,126 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ПРОД-конфиг для домашнего сервера (Ubuntu + Docker + NVIDIA GPU).
+# Отличия от базового docker-compose.yml:
+#   • Qdrant и SearXNG больше НЕ публикуют порты на хост — доступны только по
+#     внутренней сети Compose. Это закрывает главную дыру (Qdrant без пароля).
+#   • musix слушает ТОЛЬКО 127.0.0.1 — в локальной сети его не видно; наружу он
+#     попадает исключительно через обратный SSH-туннель на VPS.
+#   • no-new-privileges на всех сервисах.
+#   • Выброшены dev-бинды (tests/, pytest.ini) и Linux-путь /mnt/music.
+#
+# Требуется nvidia-container-toolkit на хосте (для проброса GPU).
+# Запуск (из корня репозитория):
+#   docker compose -f docker-compose.prod.yml up -d --build
+#   docker compose -f docker-compose.prod.yml logs -f musix
+# ─────────────────────────────────────────────────────────────────────────────
+services:
+  musix:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: musix
+    restart: unless-stopped
+    ports:
+      # ВАЖНО: слушаем только loopback. Обратный SSH-туннель (systemd-сервис на
+      # этом же хосте) коннектится к localhost:8000 — значит наружу/в LAN порт не
+      # торчит вообще. Отдельных правил файрвола для 8000 не требуется.
+      - "127.0.0.1:8000:8000"
+    env_file:
+      - path: .env
+        required: false
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - QDRANT_URL=http://qdrant:6333
+      - SEARXNG_URL=http://searxng:8080
+      # Не даём библиотекам утащить внутренний трафик в прокси (см. базовый compose).
+      - HTTP_PROXY=
+      - http_proxy=
+      - HTTPS_PROXY=
+      - https_proxy=
+      # - MEMBER_INDEX_ROOT=/music   # опционально: пустить участников индексировать /music
+    volumes:
+      - ./media:/app/media
+      - ./cache:/app/cache
+      - ./weights:/app/weights
+      - ./frontend/covers:/app/frontend/covers
+      - ./.env:/app/.env:ro
+      - hf-cache:/app/.hf-cache
+      # Опционально: индексировать внешнюю папку по ссылке, read-only:
+      # - "/mnt/music:/music:ro"
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      searxng:
+        condition: service_started
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    restart: unless-stopped
+    # Никакого `ports:` — только внутренняя сеть Compose. Приложение ходит сюда
+    # по имени сервиса (http://qdrant:6333). Наружу Qdrant не выставляется.
+    expose:
+      - "6333"
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - qdrant-storage:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/6333"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "1"
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    restart: unless-stopped
+    # Тоже без публикации порта — приложение ходит по searxng:8080 внутри сети.
+    expose:
+      - "8080"
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./searxng:/etc/searxng
+      - searxng-cache:/var/cache/searxng
+    environment:
+      - SEARXNG_BASE_URL=http://searxng:8080/
+      - UWSGI_WORKERS=4
+      - UWSGI_THREADS=4
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "1"
+
+volumes:
+  searxng-cache:
+  qdrant-storage:
+  hf-cache:

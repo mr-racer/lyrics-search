@@ -1,0 +1,41 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Обратный SSH-туннель: домашний Ubuntu-сервер -> VPS.
+# Пробрасывает локальный 127.0.0.1:8000 (контейнер musix) на 127.0.0.1:8000 VPS,
+# откуда его забирает nginx. systemd сам переподнимает соединение при обрыве —
+# autossh не нужен.
+#
+# Установка:
+#   sudo cp deploy/ssh-tunnel/musix-tunnel.service /etc/systemd/system/
+#   sudo nano /etc/systemd/system/musix-tunnel.service   # впиши User, ключ, VPS
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now musix-tunnel
+#   systemctl status musix-tunnel
+#   journalctl -u musix-tunnel -f
+# ─────────────────────────────────────────────────────────────────────────────
+[Unit]
+Description=MusiX reverse SSH tunnel to VPS
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+# Пользователь, которому принадлежит приватный ключ (НЕ root). Замени на свой.
+User=ИМЯ_ПОЛЬЗОВАТЕЛЯ
+# Замени VPS_IP, порт (-p 22) и путь к ключу под свои значения.
+#   -N -T          — без команды и без псевдотерминала, только форвардинг
+#   ExitOnForward  — сразу падать, если порт на VPS занят (не висеть молча)
+#   ServerAlive    — детект обрыва за ~90с и выход -> systemd переподнимет
+ExecStart=/usr/bin/ssh -N -T \
+  -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=3 \
+  -o ExitOnForwardFailure=yes \
+  -o StrictHostKeyChecking=accept-new \
+  -o IdentitiesOnly=yes \
+  -i /home/ИМЯ_ПОЛЬЗОВАТЕЛЯ/.ssh/musix_tunnel \
+  -R 127.0.0.1:8000:localhost:8000 \
+  -p 22 \
+  tunnel@VPS_IP
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
