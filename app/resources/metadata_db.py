@@ -2928,6 +2928,21 @@ class MetadataDB:
     # ── Library aggregation from SQLite ──
 
     @classmethod
+    def count_distinct_artist_slugs(cls, collection_name: str) -> int:
+        """Count distinct artists in a collection from track_artist_slugs.
+
+        Returns 0 if the mirror is empty (pre-backfill) — callers should treat
+        0 as "unknown" and fall back to a Qdrant scan.
+        """
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT COUNT(DISTINCT artist_slug) FROM track_artist_slugs"
+            " WHERE collection_name = ?",
+            (collection_name,),
+        ).fetchone()
+        return int(row[0] or 0)
+
+    @classmethod
     def get_distinct_artist_slugs_from_sqlite(cls, collection_name: str) -> list[dict]:
         """Return list of {slug, name, track_count, album_count} for all artists
         in a collection, read from track_artist_slugs + track_metadata.

@@ -7,6 +7,7 @@ DELETE /library/ai-index/{task_type}/cache  — wipe cache rows for the task
 
 from __future__ import annotations
 
+import asyncio
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -64,8 +65,15 @@ def _count_eligible(db_client, collection_name: str, task_type: str) -> int:
             return 0
 
     if task_type == "artist_bio":
-        # Count distinct artists by scanning Qdrant payloads — same logic as
-        # artist_bio.run uses to collect artist_slugs from each point.
+        # Distinct artists from the SQLite mirror (indexed query, instant).
+        # 0 means the mirror is empty (pre-backfill) — fall back to scanning
+        # Qdrant payloads with the same logic artist_bio.run uses.
+        try:
+            n = MetadataDB.count_distinct_artist_slugs(collection_name)
+            if n:
+                return n
+        except Exception:
+            pass
         try:
             from app.services.artist_split import artist_slugs
             seen: set[str] = set()
@@ -123,7 +131,9 @@ async def start_job(
 
     derived = derive_collection_for_user(current_user)
 
-    n_total = _count_eligible(db_client, derived, task_type)
+    # Off the event loop: the artist_bio fallback path scans the whole
+    # collection — run in a worker thread so a slow count can't freeze the app.
+    n_total = await asyncio.to_thread(_count_eligible, db_client, derived, task_type)
     try:
         job_id = ai_indexing_service.start_job(
             task_type=task_type,

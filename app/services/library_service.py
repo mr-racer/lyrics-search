@@ -636,10 +636,13 @@ class LibraryService:
                 }))
             return _cb
 
+        # No wall-clock timeout: both fetchers are idempotent (cached artists are
+        # skipped), so a large library enriches fully instead of being cut off
+        # mid-alphabet after N seconds and never backfilled on later runs.
         if facts_total:
             if unique_artists or unique_songs:
                 try:
-                    await asyncio.wait_for(asyncio.gather(
+                    await asyncio.gather(
                         fetch_facts_for_artists(
                             unique_artists, collection_name,
                             progress_callback=_make_cb("artists"),
@@ -649,20 +652,17 @@ class LibraryService:
                             progress_callback=_make_cb("songs"),
                         ),
                         return_exceptions=True,
-                    ), timeout=180)
-                except Exception as e:
-                    logger.warning("[enrich] facts fetch timed out/failed: %s", e)
-            if unique_artists:
-                try:
-                    await asyncio.wait_for(
-                        fetch_audiodb_for_artists(
-                            unique_artists, collection_name,
-                            progress_callback=_make_cb("audiodb"),
-                        ),
-                        timeout=300,
                     )
                 except Exception as e:
-                    logger.warning("[enrich] AudioDB enrichment timed out/failed: %s", e)
+                    logger.warning("[enrich] facts fetch failed: %s", e)
+            if unique_artists:
+                try:
+                    await fetch_audiodb_for_artists(
+                        unique_artists, collection_name,
+                        progress_callback=_make_cb("audiodb"),
+                    )
+                except Exception as e:
+                    logger.warning("[enrich] AudioDB enrichment failed: %s", e)
 
         stage_facts.status = IndexStatus.COMPLETED
         stage_facts.current = facts_total

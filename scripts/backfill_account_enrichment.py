@@ -43,6 +43,7 @@ from qdrant_client import QdrantClient
 
 from app.resources.metadata_db import MetadataDB
 from app.services.artist_facts_service import fetch_facts_for_artists
+from app.services.artist_split import normalize_artist_name, split_artists
 from app.services.audiodb_service import fetch_audiodb_for_artists
 from app.services.proxy_config import get_proxy_url
 from app.services.song_facts_service import fetch_facts_for_songs
@@ -122,8 +123,13 @@ def collect_artists_and_songs(
     qdrant: QdrantClient, collection: str
 ) -> Tuple[List[str], List[Tuple[str, str]], int]:
     """Scroll the whole collection, returning sorted unique artists, sorted
-    unique (artist, title) pairs, and the total track count."""
-    artists: set[str] = set()
+    unique (artist, title) pairs, and the total track count.
+
+    Raw artist tags are split into individual participants exactly like
+    ``LibraryService._fetch_facts_batch`` ('Kanye West & Ty Dolla $ign' → two
+    artists), so facts/AudioDB lookups hit the same slugs the indexing path
+    would. Song facts keep the raw (artist, title) pair, also mirroring it."""
+    raw_artists: set[str] = set()
     songs: set[Tuple[str, str]] = set()
     n_total = 0
     for batch in _iter_points(qdrant, collection):
@@ -133,9 +139,15 @@ def collect_artists_and_songs(
             artist = (payload.get("artist") or "").strip()
             title = (payload.get("title") or "").strip()
             if artist:
-                artists.add(artist)
+                raw_artists.add(artist)
             if artist and title:
                 songs.add((artist, title))
+    artists = {
+        norm_name
+        for raw in raw_artists
+        for name in split_artists(raw)
+        if (norm_name := normalize_artist_name(name))
+    }
     return sorted(artists), sorted(songs), n_total
 
 
