@@ -261,7 +261,11 @@ class LibraryService:
                 text_model = None
             if text_model:
                 logger.info("[LibraryService] upload batch text model: %s", text_model)
-                ModelRegistry.get_text_model(text_model)  # warm cache
+                # Warm cache OFF the event loop: a cold SentenceTransformer load
+                # is tens of seconds of blocking I/O + torch init, and this
+                # coroutine runs on the loop — inline it and every request
+                # (login included) freezes until the weights are in RAM.
+                await asyncio.to_thread(ModelRegistry.get_text_model, text_model)
 
             collection_name = f"acct_{account_id}"
             loop = asyncio.get_running_loop()
@@ -883,7 +887,9 @@ class LibraryService:
             # Use already-loaded text model (don't reload during indexing).
             if text_model:
                 logger.info("[LibraryService] Getting text model: %s (cached if already loaded)", text_model)
-                ModelRegistry.load_text_model(text_model)
+                # Cold load = tens of seconds of blocking work; keep it off the
+                # event loop or every request (login included) hangs meanwhile.
+                await asyncio.to_thread(ModelRegistry.load_text_model, text_model)
             else:
                 logger.info("[LibraryService] No text_model specified, using default")
 
@@ -1056,7 +1062,8 @@ class LibraryService:
                 engine = self.db_client.search_engine
                 if text_model:
                     logger.info("[LibraryService] batch text model: %s", text_model)
-                    ModelRegistry.get_text_model(text_model)  # warm cache
+                    # warm cache off-loop (см. комментарий у load_text_model выше)
+                    await asyncio.to_thread(ModelRegistry.get_text_model, text_model)
 
                 loop = asyncio.get_event_loop()
 
