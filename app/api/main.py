@@ -404,9 +404,20 @@ def create_app() -> FastAPI:
     # SPA catch-all — must be LAST so it doesn't shadow API routes
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
-        # Try exact static file first (hashed JS/CSS assets from the Vite build)
-        file_path = FRONTEND_DIST / full_path
-        if file_path.exists() and file_path.is_file():
+        # Try exact static file first (hashed JS/CSS assets from the Vite build).
+        # SECURITY: guard against path traversal (e.g. `/../../.env`, `/..%2f.env`)
+        # — resolve the candidate and only serve it if it stays inside the build
+        # dir. Without this, the catch-all is an arbitrary-file-read primitive.
+        dist_root = FRONTEND_DIST.resolve()
+        try:
+            file_path = (dist_root / full_path).resolve()
+        except (OSError, ValueError, RuntimeError):
+            file_path = None
+        if (
+            file_path is not None
+            and file_path.is_relative_to(dist_root)
+            and file_path.is_file()
+        ):
             return FileResponse(file_path)
         # SPA fallback → index.html
         if FRONTEND_INDEX.exists():
