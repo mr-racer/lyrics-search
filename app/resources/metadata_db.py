@@ -1056,44 +1056,126 @@ class MetadataDB:
         cls,
         collection_name: str,
         limit: int = 5,
+        lang: str = "en",
     ) -> List[dict]:
         """Return ``limit`` random facts from the collection's fact pool.
 
-        Pool includes both ``artist_facts`` (with artist name as context) and
-        ``song_facts`` (with ``"Artist — Song"`` as context).  Filtered by
-        collection and ``lang='en'``.
+        Prefers REFINED facts (``refined_facts`` — the AI-filtered short pools,
+        keyed per entity) in the requested language, then refined English, and
+        only then tops up from the raw ``artist_facts``/``song_facts`` pool
+        (which is English-only). One fact per entity, so the picks never all
+        come from the same artist/song. Scoped to the collection via the
+        ``artists``/``songs`` join — refined rows themselves are
+        collection-independent (see :meth:`get_refined_facts`).
 
         Returns list of dicts: ``{"fact": str, "context": str, "type": str}``.
         """
+        import json as _json
+        import random as _random
+
         conn = cls._connect()
-        rows = conn.execute(
-            """
-            SELECT fact, context, type FROM (
-                SELECT
-                    af.fact,
-                    a.name AS context,
-                    'artist' AS type
-                FROM artist_facts af
-                JOIN artists a ON a.slug = af.artist_slug
-                WHERE a.collection_name = ? AND af.lang = 'en'
+        out: List[dict] = []
+        seen: set = set()   # (type, context) — one fact per entity
 
-                UNION ALL
+        langs = [lang] + (["en"] if lang != "en" else [])
+        for lng in langs:
+            if len(out) >= limit:
+                break
+            rows = conn.execute(
+                """
+                SELECT refined_json, context, type FROM (
+                    SELECT
+                        rf.refined_json,
+                        a.name AS context,
+                        'artist' AS type
+                    FROM refined_facts rf
+                    JOIN artists a ON a.slug = rf.scope_key
+                    WHERE rf.scope = 'artist' AND rf.lang = ?
+                      AND a.collection_name = ?
 
-                SELECT
-                    sf.fact,
-                    a.name || ' — ' || s.title AS context,
-                    'song' AS type
-                FROM song_facts sf
-                JOIN songs s ON s.slug = sf.song_slug
-                JOIN artists a ON a.slug = s.artist_slug
-                WHERE s.collection_name = ? AND sf.lang = 'en'
-            )
-            ORDER BY RANDOM()
-            LIMIT ?
-            """,
-            (collection_name, collection_name, limit),
-        ).fetchall()
-        return [{"fact": r[0], "context": r[1], "type": r[2]} for r in rows]
+                    UNION ALL
+
+                    SELECT
+                        rf.refined_json,
+                        a.name || ' — ' || s.title AS context,
+                        'song' AS type
+                    FROM refined_facts rf
+                    JOIN songs s ON s.slug = rf.scope_key
+                    JOIN artists a ON a.slug = s.artist_slug
+                    WHERE rf.scope = 'song' AND rf.lang = ?
+                      AND s.collection_name = ?
+                )
+                ORDER BY RANDOM()
+                LIMIT ?
+                """,
+                (lng, collection_name, lng, collection_name, limit * 4),
+            ).fetchall()
+            for refined_json, context, ftype in rows:
+                if len(out) >= limit:
+                    break
+                key = (ftype, context)
+                if key in seen:
+                    continue
+                try:
+                    texts = [
+                        (item.get("text") or "").strip()
+                        for item in _json.loads(refined_json)
+                        if isinstance(item, dict)
+                    ]
+                except Exception:
+                    texts = []
+                texts = [t for t in texts if t]
+                if not texts:
+                    # Explicit [] — AI ran and kept nothing for this entity.
+                    # Mark it consumed so the raw top-up below can't resurface
+                    # the very facts the AI rejected (same semantics as
+                    # get_track_facts honouring an explicit empty refined list).
+                    seen.add(key)
+                    continue
+                out.append({
+                    "fact": _random.choice(texts),
+                    "context": context,
+                    "type": ftype,
+                })
+                seen.add(key)
+
+        if len(out) < limit:
+            rows = conn.execute(
+                """
+                SELECT fact, context, type FROM (
+                    SELECT
+                        af.fact,
+                        a.name AS context,
+                        'artist' AS type
+                    FROM artist_facts af
+                    JOIN artists a ON a.slug = af.artist_slug
+                    WHERE a.collection_name = ? AND af.lang = 'en'
+
+                    UNION ALL
+
+                    SELECT
+                        sf.fact,
+                        a.name || ' — ' || s.title AS context,
+                        'song' AS type
+                    FROM song_facts sf
+                    JOIN songs s ON s.slug = sf.song_slug
+                    JOIN artists a ON a.slug = s.artist_slug
+                    WHERE s.collection_name = ? AND sf.lang = 'en'
+                )
+                ORDER BY RANDOM()
+                LIMIT ?
+                """,
+                (collection_name, collection_name, limit * 4),
+            ).fetchall()
+            for fact, context, ftype in rows:
+                if len(out) >= limit:
+                    break
+                key = (ftype, context)
+                if key in seen:
+                    continue
+                out.append({"fact": fact, "context": context, "type": ftype})
+                seen.add(key)
+        return out
 
     # ── Convenience helpers ──
 
@@ -1728,34 +1810,59 @@ class MetadataDB:
     @classmethod
     def get_weekly_listening_summary(
         cls, collection_name: str, tz_offset_minutes: int = 0,
-    ) -> tuple[float, str | None]:
-        """Return (seconds_listened, top_genre) over the last 7 local days
-        (today plus the preceding 6), bucketed by the caller's UTC offset —
-        same modifier pattern as ``get_plays_by_local_day``."""
+    ) -> tuple[float, str | None, int]:
+        """Return (seconds_listened, top_genre, discoveries) for the CURRENT
+        calendar week — Monday through today, in the caller's local time
+        (same modifier pattern as ``get_plays_by_local_day``).
+
+        ``discoveries`` = tracks whose first-ever playback event falls inside
+        this week, i.e. music the user heard for the first time. The counter
+        grows through the week and resets every Monday.
+
+        SQLite Monday idiom: ``weekday 1`` moves FORWARD to Monday (or stays
+        if already Monday), so stepping back 6 days first always lands on the
+        Monday of the current local week."""
         modifier = f"{int(tz_offset_minutes):+d} minutes"
+        week_start = "date('now', ?, '-6 days', 'weekday 1')"
         conn = cls._connect()
         total_row = conn.execute(
-            """SELECT COALESCE(SUM(played_sec), 0)
+            f"""SELECT COALESCE(SUM(played_sec), 0)
                FROM playback_events
                WHERE collection_name = ?
-                 AND date(played_at, ?) >= date('now', ?, '-6 days')""",
+                 AND date(played_at, ?) >= {week_start}""",
             (collection_name, modifier, modifier),
         ).fetchone()
         genre_row = conn.execute(
-            """SELECT tm.genre, COUNT(*) AS plays
+            f"""SELECT tm.genre, COUNT(*) AS plays
                FROM playback_events pe
                JOIN track_metadata tm
                  ON tm.collection_name = pe.collection_name AND tm.track_id = pe.track_id
                WHERE pe.collection_name = ?
                  AND pe.skipped_early = 0
-                 AND date(pe.played_at, ?) >= date('now', ?, '-6 days')
+                 AND date(pe.played_at, ?) >= {week_start}
                  AND tm.genre IS NOT NULL AND tm.genre != ''
                GROUP BY tm.genre
                ORDER BY plays DESC
                LIMIT 1""",
             (collection_name, modifier, modifier),
         ).fetchone()
-        return float(total_row[0] or 0), (genre_row[0] if genre_row else None)
+        # MIN over the TEXT timestamps is safe: CURRENT_TIMESTAMP's
+        # "YYYY-MM-DD HH:MM:SS" sorts lexicographically = chronologically.
+        disc_row = conn.execute(
+            f"""SELECT COUNT(*) FROM (
+                   SELECT track_id, MIN(played_at) AS first_played
+                   FROM playback_events
+                   WHERE collection_name = ?
+                   GROUP BY track_id
+               )
+               WHERE date(first_played, ?) >= {week_start}""",
+            (collection_name, modifier, modifier),
+        ).fetchone()
+        return (
+            float(total_row[0] or 0),
+            (genre_row[0] if genre_row else None),
+            int(disc_row[0] or 0),
+        )
 
     @classmethod
     def get_plays_by_local_hour(

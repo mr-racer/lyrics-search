@@ -3058,20 +3058,22 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLi
             <LibraryPathCard isDark={isDark} lang={lang} stats={stats} onClick={() => onNav('library')} />
           </div>
         </div>
+        {/* Daily extras live INSIDE the one-screen split, absolutely anchored
+            to its free bottom air — zero added height, the trio never moves.
+            (Appending them after this block re-enabled page scroll and pushed
+            the whole screen up.) Visibility is gated in CSS (.home-extras):
+            desktop split widths + tall-enough windows only. */}
+        {hasLibrary && <HomeDailyExtras isDark={isDark} lang={lang} />}
       </div>
       )}
-
-      {/* Under-the-fold extras — desktop only, deliberately quiet so they never
-          compete with the wave/search/library trio above. Mobile has no room
-          and stays exactly as-is (per design: no scroll needed on the phone). */}
-      {!isMobile && hasLibrary && <HomeDailyExtras isDark={isDark} lang={lang} />}
     </div>
   );
 }
 
-// ─── Home daily extras (desktop only) — a couple of static facts + a quiet
-// weekly pulse, both fixed for the day (cached under a date key) so they
-// don't reshuffle every time the page is revisited.
+// ─── Home daily extras (desktop split only) — 2-3 quiet facts + the weekly
+// pulse, dissolved into the free bottom air of the one-screen «Эфир». Facts
+// are fixed for the day (cached under a date+lang key) so they don't
+// reshuffle on every visit; positioning/visibility live in CSS (.home-extras).
 function HomeDailyExtras({ isDark, lang }) {
   const c = useColors(isDark);
   const [facts, setFacts] = useState(null);
@@ -3083,14 +3085,14 @@ function HomeDailyExtras({ isDark, lang }) {
     const cacheKey = 'musix_daily_facts';
     let cached = null;
     try { cached = JSON.parse(localStorage.getItem(cacheKey) || 'null'); } catch {}
-    if (cached && cached.date === today && Array.isArray(cached.facts)) {
+    if (cached && cached.date === today && cached.lang === lang && Array.isArray(cached.facts)) {
       setFacts(cached.facts);
     } else {
-      apiFetch('/metadata/random-facts?limit=3').then(r => {
+      apiFetch(`/metadata/random-facts?limit=3&lang=${encodeURIComponent(lang)}`).then(r => {
         if (!alive) return;
         const list = Array.isArray(r) ? r : [];
         setFacts(list);
-        try { localStorage.setItem(cacheKey, JSON.stringify({ date: today, facts: list })); } catch {}
+        try { localStorage.setItem(cacheKey, JSON.stringify({ date: today, lang, facts: list })); } catch {}
       }).catch(() => { if (alive) setFacts([]); });
     }
     const tzOffset = -new Date().getTimezoneOffset();
@@ -3098,7 +3100,7 @@ function HomeDailyExtras({ isDark, lang }) {
       .then(r => { if (alive) setPulse(r || null); })
       .catch(() => { if (alive) setPulse(null); });
     return () => { alive = false; };
-  }, []);
+  }, [lang]);
 
   const fmtDur = (sec) => {
     if (!sec) return null;
@@ -3107,48 +3109,60 @@ function HomeDailyExtras({ isDark, lang }) {
     const hU = lang === 'ru' ? 'ч' : 'h', mU = lang === 'ru' ? 'м' : 'm';
     return h > 0 ? `${h}${hU} ${m}${mU}` : `${m}${mU}`;
   };
-
-  const hasFacts = !!(facts && facts.length > 0);
-  const hasPulse = !!(pulse && (pulse.seconds_listened > 0 || pulse.top_genre));
-  if (facts === null && pulse === null) return null;   // still loading — nothing to flash in
-  if (!hasFacts && !hasPulse) return null;
-
-  const cardStyle = {
-    borderRadius: 14, padding: '14px 16px', flex: '1 1 220px', minWidth: 200,
-    background: isDark ? 'rgba(255,255,255,.025)' : 'rgba(0,0,0,.02)',
-    border: `1px solid ${c.border}`,
+  // «14 открытий / 2 открытия / 1 открытие» — the week's first-time-heard tracks.
+  const fmtDiscoveries = (n) => {
+    if (!n) return null;
+    if (lang !== 'ru') return `${n} ${n === 1 ? 'discovery' : 'discoveries'}`;
+    const d10 = n % 10, d100 = n % 100;
+    const word = (d10 === 1 && d100 !== 11) ? 'открытие'
+      : (d10 >= 2 && d10 <= 4 && (d100 < 12 || d100 > 14)) ? 'открытия' : 'открытий';
+    return `${n} ${word}`;
   };
 
+  const hasFacts = !!(facts && facts.length > 0);
+  const hasPulse = !!(pulse && (pulse.seconds_listened > 0 || pulse.top_genre || pulse.discoveries > 0));
+  if (!hasFacts && !hasPulse) return null;
+
+  const pulseBits = hasPulse ? [
+    pulse.top_genre ? (lang==='ru' ? `любимый жанр — ${pulse.top_genre}` : `top genre — ${pulse.top_genre}`) : null,
+    fmtDiscoveries(pulse.discoveries),
+  ].filter(Boolean) : [];
+
   return (
-    <div style={{ padding: '10px clamp(20px,3vw,40px) 40px', marginTop: 18 }}>
-      <div style={{ display:'flex', flexWrap:'wrap', gap:14 }}>
+    <div className="home-extras">
+      {/* Left: the day's facts — bare lines separated by air, no card chrome */}
+      <div style={{ display:'flex', gap:'clamp(26px,3.4vw,48px)', flex:'1 1 auto', minWidth:0, alignItems:'flex-end' }}>
         {hasFacts && facts.slice(0, 3).map((f, i) => (
-          <div key={i} style={cardStyle}>
-            <div className="mono" style={{ fontSize:9.5, letterSpacing:'.16em', color:c.textSubtle, marginBottom:6 }}>
-              {f.type === 'artist'
-                ? (lang==='ru'?'ОБ АРТИСТЕ':'ABOUT THE ARTIST')
-                : (lang==='ru'?'О ПЕСНЕ':'ABOUT THE SONG')}
+          <div key={i} style={{ flex:'1 1 0', minWidth:0, maxWidth:340 }}>
+            <div className="mono" style={{ fontSize:9, letterSpacing:'.18em', color:c.textSubtle,
+              marginBottom:7, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', textTransform:'uppercase' }}>
+              {f.type === 'artist' ? (lang==='ru'?'ОБ АРТИСТЕ':'ARTIST') : (lang==='ru'?'О ПЕСНЕ':'SONG')}
+              {f.context ? ` · ${f.context}` : ''}
             </div>
-            <div style={{ fontSize:12.5, color:c.textMuted, lineHeight:1.5 }}>{f.fact}</div>
-            {f.context && (
-              <div style={{ fontSize:11, color:c.textSubtle, marginTop:6 }}>{f.context}</div>
-            )}
+            <div style={{ fontSize:12, color:c.textMuted, lineHeight:1.55, opacity:.85,
+              display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden' }}>
+              {f.fact}
+            </div>
           </div>
         ))}
-        {hasPulse && (
-          <div style={cardStyle}>
-            <div className="mono" style={{ fontSize:9.5, letterSpacing:'.16em', color:c.textSubtle, marginBottom:6 }}>
-              {lang==='ru'?'ЗА ЭТУ НЕДЕЛЮ':'THIS WEEK'}
-            </div>
-            <div style={{ fontSize:12.5, color:c.textMuted, lineHeight:1.5 }}>
-              {fmtDur(pulse.seconds_listened)
-                ? (lang==='ru' ? `Прослушано ${fmtDur(pulse.seconds_listened)}` : `${fmtDur(pulse.seconds_listened)} listened`)
-                : (lang==='ru' ? 'Пока тихо' : 'Quiet so far')}
-              {pulse.top_genre && (lang==='ru' ? ` · любимый жанр — ${pulse.top_genre}` : ` · favorite genre — ${pulse.top_genre}`)}
-            </div>
-          </div>
-        )}
       </div>
+      {/* Right: the weekly pulse — a single serif accent + one quiet line,
+          mirroring the hero's type scale instead of a widget box */}
+      {hasPulse && (
+        <div style={{ flexShrink:0, textAlign:'right' }}>
+          <div className="mono" style={{ fontSize:9, letterSpacing:'.18em', color:c.textSubtle, marginBottom:6 }}>
+            {lang==='ru'?'ЗА ЭТУ НЕДЕЛЮ':'THIS WEEK'}
+          </div>
+          <div className="serif" style={{ fontSize:21, lineHeight:1, color:c.text, opacity:.82, letterSpacing:'-0.01em' }}>
+            {fmtDur(pulse.seconds_listened) || (lang==='ru' ? 'пока тихо' : 'quiet so far')}
+          </div>
+          {pulseBits.length > 0 && (
+            <div style={{ fontSize:11, color:c.textSubtle, marginTop:6 }}>
+              {pulseBits.join(' · ')}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -1785,15 +1785,19 @@ class LibraryService:
     def get_weekly_pulse(
         cls, *, collection_name: str, tz_offset_minutes: int = 0,
     ):
-        """Light "this week" summary for the home page: seconds listened and
-        top genre over the last 7 local days. Accounts with little recent
-        activity simply get sparse/zero values."""
+        """Light "this week" summary for the home page: seconds listened, top
+        genre and discoveries (first-time-heard tracks) for the current
+        calendar week (Monday..now). Accounts with little recent activity
+        simply get sparse/zero values."""
         from app.domain.models import WeeklyPulseResponse
 
-        seconds, top_genre = MetadataDB.get_weekly_listening_summary(
+        seconds, top_genre, discoveries = MetadataDB.get_weekly_listening_summary(
             collection_name, tz_offset_minutes,
         )
-        return WeeklyPulseResponse(seconds_listened=int(seconds), top_genre=top_genre)
+        return WeeklyPulseResponse(
+            seconds_listened=int(seconds), top_genre=top_genre,
+            discoveries=discoveries,
+        )
 
     @classmethod
     def get_engagement(

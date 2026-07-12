@@ -545,12 +545,29 @@ class TestListeningStats:
 # --------------------------------------------------------------------------- #
 # LibraryService.get_weekly_pulse — home-page "this week" widget.
 # --------------------------------------------------------------------------- #
+def _event_before_monday(track_id, played_sec=100.0, collection="c"):
+    """Insert a playback event stamped on the Sunday of the PREVIOUS local
+    week (one day before this week's Monday). record_playback_event always
+    stamps CURRENT_TIMESTAMP, so past history is written directly — same
+    trick as the integration suite's _backdate_event."""
+    conn = MetadataDB._connect()
+    conn.execute(
+        "INSERT INTO playback_events "
+        "(session_id, collection_name, track_id, played_sec, total_dur, "
+        " skipped_early, played_at) "
+        "VALUES ('s', ?, ?, ?, 240, 0, datetime('now', '-6 days', 'weekday 1', '-1 day'))",
+        (collection, track_id, played_sec),
+    )
+    conn.commit()
+
+
 @pytest.mark.usefixtures("_isolated_db")
 class TestWeeklyPulse:
     def test_weekly_pulse_empty_when_no_events(self):
         res = LibraryService.get_weekly_pulse(collection_name="c", tz_offset_minutes=0)
         assert res.seconds_listened == 0
         assert res.top_genre is None
+        assert res.discoveries == 0
 
     def test_weekly_pulse_sums_seconds_and_picks_top_genre(self):
         _upsert("t1", genre="Rock")
@@ -564,6 +581,7 @@ class TestWeeklyPulse:
         res = LibraryService.get_weekly_pulse(collection_name="c", tz_offset_minutes=0)
         assert res.seconds_listened == 215
         assert res.top_genre == "Rock"
+        assert res.discoveries == 2   # both tracks first heard this week
 
     def test_weekly_pulse_scoped_to_collection(self):
         _upsert("t1", genre="Rock")
@@ -572,6 +590,26 @@ class TestWeeklyPulse:
         res = LibraryService.get_weekly_pulse(collection_name="other", tz_offset_minutes=0)
         assert res.seconds_listened == 0
         assert res.top_genre is None
+        assert res.discoveries == 0
+
+    def test_weekly_pulse_window_starts_monday_not_rolling_7_days(self):
+        # An event from last week's Sunday must not leak into this week's sum.
+        _event_before_monday("t_old", played_sec=500)
+        MetadataDB.record_playback_event(session_id="s", collection_name="c",
+                                         track_id="t_old", played_sec=80, total_dur=240)
+        res = LibraryService.get_weekly_pulse(collection_name="c", tz_offset_minutes=0)
+        assert res.seconds_listened == 80
+
+    def test_weekly_pulse_discoveries_count_first_time_heard_only(self):
+        # t_old was first heard LAST week — replaying it now is not a discovery.
+        _event_before_monday("t_old")
+        MetadataDB.record_playback_event(session_id="s", collection_name="c",
+                                         track_id="t_old", played_sec=100, total_dur=240)
+        # t_new's very first event falls inside the current week — a discovery.
+        MetadataDB.record_playback_event(session_id="s", collection_name="c",
+                                         track_id="t_new", played_sec=100, total_dur=240)
+        res = LibraryService.get_weekly_pulse(collection_name="c", tz_offset_minutes=0)
+        assert res.discoveries == 1
 
 
 # --------------------------------------------------------------------------- #

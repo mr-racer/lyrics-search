@@ -147,10 +147,15 @@ def add_song_fact(
 def get_random_facts(
     current_user: User = Depends(get_current_user),
     limit: int = Query(5, ge=1, le=20, description="Number of random facts"),
+    lang: str = Query("en", description="Preferred language for refined facts"),
 ) -> List[RandomFact]:
-    """Return random facts from the collection's fact pool."""
+    """Return random facts from the collection's fact pool.
+
+    Refined (AI-shortened) facts in the requested language are preferred;
+    raw English facts only top up the remainder.
+    """
     derived = derive_collection_for_user(current_user)
-    raw = MetadataDB.get_random_facts(collection_name=derived, limit=limit)
+    raw = MetadataDB.get_random_facts(collection_name=derived, limit=limit, lang=lang)
     return [RandomFact(**r) for r in raw]
 
 

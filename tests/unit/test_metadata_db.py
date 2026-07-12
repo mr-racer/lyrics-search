@@ -734,3 +734,74 @@ class TestTasteSignals(_IsolatedDB):
             session_id="s1", collection_name="colA", track_id="t1", kind="fire")
         _, _, created = MetadataDB.get_taste_signals("colA")[0]
         datetime.fromisoformat(created)  # must not raise
+
+
+class TestRandomFacts(_IsolatedDB):
+    """get_random_facts — the home page's daily pool. Refined (AI-shortened)
+    facts in the requested language win; refined English is the second
+    choice; the raw English pool only tops up what's left."""
+
+    def _seed_artist(self, slug="radiohead", name="Radiohead", coll="c"):
+        MetadataDB.upsert_artist(slug, name, coll)
+
+    def test_raw_pool_when_no_refined(self):
+        self._seed_artist()
+        MetadataDB.add_artist_fact("radiohead", "c", "Raw fact one")
+        out = MetadataDB.get_random_facts("c", limit=3, lang="ru")
+        assert [f["fact"] for f in out] == ["Raw fact one"]
+        assert out[0]["type"] == "artist"
+        assert out[0]["context"] == "Radiohead"
+
+    def test_prefers_refined_in_requested_lang(self):
+        self._seed_artist()
+        MetadataDB.add_artist_fact("radiohead", "c", "Raw fact")
+        MetadataDB.set_refined_facts(
+            scope="artist", scope_key="radiohead", collection_name="c",
+            lang="ru", refined=["Отшлифованный факт"])
+        out = MetadataDB.get_random_facts("c", limit=1, lang="ru")
+        assert out == [{"fact": "Отшлифованный факт",
+                        "context": "Radiohead", "type": "artist"}]
+
+    def test_falls_back_to_refined_en_before_raw(self):
+        self._seed_artist()
+        MetadataDB.add_artist_fact("radiohead", "c", "Raw fact")
+        MetadataDB.set_refined_facts(
+            scope="artist", scope_key="radiohead", collection_name="c",
+            lang="en", refined=["Refined EN"])
+        out = MetadataDB.get_random_facts("c", limit=1, lang="ru")
+        assert out[0]["fact"] == "Refined EN"
+
+    def test_explicit_empty_refined_blocks_raw_resurfacing(self):
+        # AI ran and kept nothing for this artist — its raw facts must not
+        # sneak back in through the raw top-up.
+        self._seed_artist()
+        MetadataDB.add_artist_fact("radiohead", "c", "Rejected raw fact")
+        MetadataDB.set_refined_facts(
+            scope="artist", scope_key="radiohead", collection_name="c",
+            lang="ru", refined=[])
+        assert MetadataDB.get_random_facts("c", limit=3, lang="ru") == []
+
+    def test_song_refined_context_joins_artist_and_title(self):
+        self._seed_artist()
+        MetadataDB.upsert_song("radiohead-creep", "Creep", "radiohead", "c")
+        MetadataDB.set_refined_facts(
+            scope="song", scope_key="radiohead-creep", collection_name="c",
+            lang="ru", refined=["Факт о песне"])
+        out = MetadataDB.get_random_facts("c", limit=1, lang="ru")
+        assert out == [{"fact": "Факт о песне",
+                        "context": "Radiohead — Creep", "type": "song"}]
+
+    def test_one_fact_per_entity(self):
+        self._seed_artist()
+        MetadataDB.set_refined_facts(
+            scope="artist", scope_key="radiohead", collection_name="c",
+            lang="ru", refined=["Факт 1", "Факт 2", "Факт 3"])
+        out = MetadataDB.get_random_facts("c", limit=3, lang="ru")
+        assert len(out) == 1   # one entity → at most one pick
+
+    def test_scoped_to_collection(self):
+        self._seed_artist(coll="other")
+        MetadataDB.set_refined_facts(
+            scope="artist", scope_key="radiohead", collection_name="other",
+            lang="ru", refined=["X"])
+        assert MetadataDB.get_random_facts("c", limit=3, lang="ru") == []

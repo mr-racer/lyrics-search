@@ -3200,6 +3200,22 @@
     @media (min-width:901px){
       .efir-main{height:100%;min-height:560px}
     }
+    /* Daily extras (facts + weekly pulse) — absolutely anchored into the free
+       bottom air of the one-screen split, so they add ZERO height (in-flow
+       they re-enabled page scroll and shoved the trio up). pointer-events:none
+       keeps the strip purely ambient — nothing under it loses clicks. Shown
+       only where the free air actually exists: the desktop split on windows
+       tall enough that the strip can't collide with the hero content. */
+    .home-extras{display:none}
+    @media (min-width:901px) and (min-height:760px){
+      .home-extras{display:flex;position:absolute;left:0;right:0;bottom:0;
+        max-width:1380px;margin:0 auto;width:100%;box-sizing:border-box;
+        padding:0 clamp(20px,3vw,48px) clamp(16px,2.4vh,28px);
+        align-items:flex-end;gap:clamp(32px,4vw,64px);
+        pointer-events:none;animation:homeExtrasIn .9s ease .2s both}
+    }
+    @keyframes homeExtrasIn{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+    @media (prefers-reduced-motion: reduce){.home-extras{animation:none}}
     /* Wide aurora "wave" — reuses the fy-blob keyframes at a larger scale */
     .efir-wave{position:relative;overflow:hidden;isolation:isolate}
     .efir-wave .fy-blob{width:58%;height:200%;filter:blur(40px)}
