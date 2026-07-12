@@ -14304,6 +14304,19 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
   // animation, bump entryNonce to remount the entry wrapper, and schedule
   // cleanup once the longest animation (720ms entry) finishes.
   const triggerVinyl = (dir) => {
+    // Hidden tab / locked phone: html.app-hidden holds every CSS animation
+    // paused, so a transition started now would freeze at its first keyframe
+    // (incoming cover invisible off-side — `both` fill; outgoing snapshot
+    // parked fully opaque on top) and replay only when the app is reopened —
+    // after a few background auto-advances the cover visibly "flew in" on
+    // unhide. Swap instantly instead: no snapshot, no entry remount — the
+    // mounted AlbumCover just re-renders with the next track's props.
+    if (document.hidden) {
+      if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current);
+      setOutgoingTrack(null);
+      if (artWrapRef.current) artWrapRef.current.style.removeProperty('--swipe-x');
+      return;
+    }
     if (currentTrack) {
       setOutgoingTrack(currentTrack);
       setTransitionDir(dir);
