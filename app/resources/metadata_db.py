@@ -3545,14 +3545,16 @@ class MetadataDB:
     @classmethod
     def get_browse_rows(cls, collection_name: str, limit: int | None = None) -> list[dict]:
         """Lightweight rows for the /library/browse search: track_id + title +
-        artist + album + cover_art_path, read from the mirror.
+        artist + album + cover_art_path (+ year/genre/duration for the
+        spotlight quick-search rows), read from the mirror.
 
         ``limit`` caps the no-query "first N" mode; omit it (None) for the
         scored-search mode that needs every row. Returns [] when the mirror is
         empty so the route can fall back to a Qdrant scroll.
         """
         conn = cls._connect()
-        sql = ("SELECT track_id, title, artist, album, cover_art_path "
+        sql = ("SELECT track_id, title, artist, album, cover_art_path, "
+               "year, genre, duration "
                "FROM track_metadata WHERE collection_name = ?")
         params: tuple = (collection_name,)
         if limit is not None:
@@ -3566,6 +3568,9 @@ class MetadataDB:
                 "artist": r[2] or "",
                 "album": r[3] or "",
                 "cover_art_path": r[4],
+                "year": r[5],
+                "genre": r[6],
+                "duration": r[7],
             }
             for r in rows
         ]

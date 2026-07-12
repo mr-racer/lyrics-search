@@ -2027,7 +2027,69 @@ function OrbProgressArc({ audio }) {
   );
 }
 
-function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigateToArtist }) {
+// ─── Cursor grammar (shared: landing + recommend) ───────────────────────────
+// Cursor spotlight (--mx/--my) + optional 3D tilt (--rx/--ry) — the hover
+// grammar: clickable cards tilt, static panels only get the light spot.
+// CSS vars are written straight on the node — no state, no re-renders.
+const spotHandlers = (tilt) => ({
+  onPointerMove: (e) => {
+    const el = e.currentTarget, r = el.getBoundingClientRect();
+    const px = (e.clientX - r.left) / r.width, py = (e.clientY - r.top) / r.height;
+    el.style.setProperty('--mx', `${px * 100}%`);
+    el.style.setProperty('--my', `${py * 100}%`);
+    if (tilt) {
+      el.style.setProperty('--ry', `${((px - 0.5) * 6).toFixed(2)}deg`);
+      el.style.setProperty('--rx', `${((0.5 - py) * 6).toFixed(2)}deg`);
+    }
+  },
+  onPointerLeave: (e) => {
+    e.currentTarget.style.setProperty('--rx', '0deg');
+    e.currentTarget.style.setProperty('--ry', '0deg');
+  },
+});
+// Liquid refraction inside the stream button: blobs at different "depths"
+// shift toward the cursor with different strengths (--lx/--ly ∈ -.5…+.5).
+const lqHandlers = {
+  onPointerMove: (e) => {
+    const el = e.currentTarget, r = el.getBoundingClientRect();
+    el.style.setProperty('--lx', ((e.clientX - r.left) / r.width - 0.5).toFixed(3));
+    el.style.setProperty('--ly', ((e.clientY - r.top) / r.height - 0.5).toFixed(3));
+  },
+  onPointerLeave: (e) => {
+    e.currentTarget.style.setProperty('--lx', '0');
+    e.currentTarget.style.setProperty('--ly', '0');
+  },
+};
+
+// ─── Orb palette from the 6 sonic axes ──────────────────────────────────────
+// Long-term taste → color: each axis has a fixed hue; the two axes with the
+// largest |z| paint the orb gradient (top-1 = base hue, top-2 = second stop)
+// and the page aurora. Saturation follows |z| clamped into a dusty band —
+// the orb "sounds like" the listener without going neon. No axes → null
+// (callers fall back to the brand violet).
+const AXIS_HUES = {
+  energy: 20, brightness: 48, acousticness: 145,
+  spacious: 200, experimental: 275, vocal_lead: 330,
+};
+function axisPalette(axes) {
+  const entries = Object.entries(AXIS_HUES)
+    .map(([name, hue]) => {
+      const a = axes && axes[name];
+      const z = a && typeof a.z === 'number' ? a.z : null;
+      return z == null ? null : { hue, az: Math.abs(z) };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.az - a.az);
+  if (!entries.length) return null;
+  const sat = (az) => Math.round(Math.max(38, Math.min(55, 38 + az * 12)));
+  const top = entries[0], second = entries[1] || entries[0];
+  return {
+    h1: top.hue, s1: sat(top.az),
+    h2: second.hue, s2: sat(second.az),
+  };
+}
+
+function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigateToArtist, onPlayTrack, onPalette }) {
   const c = useColors(isDark);
   const isMobile = useIsMobile();
   const [profile, setProfile] = useState(null);
@@ -2046,13 +2108,16 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
   const anchors = islands
     .map(isl => (isl.tracks && isl.tracks[0]) || null)
     .filter(Boolean);
+  // «Вайбики» — the days-scale mood layer; server sends them strongest-first
+  // (max 3). Empty → the row is simply absent, no empty state.
+  const vibes = (profile && profile.vibes) || [];
+  // Taste axes → dusty palette for the orb + page aurora (see axisPalette).
+  const pal = axisPalette(profile && profile.axes);
+  // The top anchor's cover hue stays as a third accent in the aurora, so the
+  // wave still carries a trace of the actual records. Hook count is fixed:
+  // a missing anchor yields a null URL.
   const topCoverUrl = homeCoverUrl(anchors[0] && anchors[0].cover_art_path);
   const color = useCoverColor(topCoverUrl);
-  // 2–3 dominant hues from the taste anchors paint the hero aurora below —
-  // the wave reads as "made of your music" (ТВОЙ ВАЙБ ← your actual covers),
-  // not a stock gradient. Hook count is fixed: missing anchors → null URL.
-  const color2 = useCoverColor(homeCoverUrl(anchors[1] && anchors[1].cover_art_path));
-  const color3 = useCoverColor(homeCoverUrl(anchors[2] && anchors[2].cover_art_path));
 
   useEffect(() => {
     let alive = true;
@@ -2122,95 +2187,100 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
   };
   const phrase = vibe && vibe.phrase;
 
-  const heroGlass = isDark
-    ? 'linear-gradient(150deg, rgba(30,28,42,.72), rgba(16,16,22,.66))'
-    : 'linear-gradient(150deg, rgba(255,255,255,.72), rgba(244,243,250,.62))';
-  const heroShadow = isDark
-    ? '0 30px 70px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.08)'
-    : '0 30px 60px rgba(60,45,100,.16), inset 0 1px 0 rgba(255,255,255,.9)';
-  const tint = color
-    ? `radial-gradient(ellipse 60% 90% at 22% 0%, hsla(${color.h},${color.s}%,${color.l}%,.30), transparent 62%)`
-    : `radial-gradient(ellipse 60% 90% at 22% 0%, rgba(124,91,255,.26), transparent 62%)`;
-  // Soft fade so the aurora dissolves into the glass instead of cutting off.
-  const waveFade = 'linear-gradient(180deg, #000 0%, #000 46%, transparent 100%)';
-  // Aurora blob palette from the anchors: saturation boosted a touch, lightness
-  // eased into the 46–66% band so the hue reads on both themes. 4th blob is the
-  // top anchor's hue rotated for depth. Brand palette until covers are sampled.
-  const blobHue = (hsl, fb) => hsl
-    ? `hsl(${Math.round(hsl.h)} ${Math.round(Math.min(88, hsl.s + 14))}% ${Math.round(Math.max(46, Math.min(66, hsl.l)))}%)`
-    : fb;
-  const waveBlobs = [
-    blobHue(color, '#7c5bff'),
-    blobHue(color2, '#ff78c8'),
-    blobHue(color3, '#e0b341'),
-    color ? `hsl(${Math.round((color.h + 40) % 360)} 72% 58%)` : '#b06bff',
-  ];
+  // Launch spring: a short press-in bounce on the orb when a fresh wave starts
+  // (the playing state then takes over). Class is applied off-state via the
+  // ref — no re-render for a 650ms cosmetic.
+  const launchSpring = () => {
+    const el = orbRef.current;
+    if (!el || (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)) return;
+    el.classList.add('fy-launching');
+    setTimeout(() => { el.classList.remove('fy-launching'); }, 650);
+  };
+  const handleOrbClick = () => {
+    if (!waveLive) launchSpring();
+    handleOrb();
+  };
+
+  // «Вайбик» → radio: CLAP-neighbour queue seeded by the vibe's anchor track,
+  // the anchor itself leads (same recipe as the recommend islands).
+  const vibeRadio = async (v) => {
+    try {
+      const data = await apiFetch(
+        `/recommend/autoplay-queue?seed_track_id=${encodeURIComponent(v.track_id)}&limit=20`);
+      const lead = v.tracks && v.tracks[0];
+      const hits = [
+        ...(lead ? [{ track: lead, score: 0, matched_on: 'audio' }] : []),
+        ...((data.tracks || []).map(t => ({ track: t, score: 0, matched_on: 'audio' }))),
+      ];
+      if (hits.length && onPlayTrack) onPlayTrack(hits[0], hits);
+    } catch (e) {}
+  };
+  const vibeName = (v) =>
+    v.name || (v.tracks && v.tracks[0] && v.tracks[0].artist) ||
+    (lang === 'ru' ? 'Вайбик' : 'Vibe');
+
+  // Dusty axis palette → 4 blob colors for the orb + the page aurora. The
+  // lightness bands keep the hue readable on both themes; blob 3 keeps the top
+  // anchor's cover hue as a trace of the actual records. No axes → brand set.
+  const dusty = (h, s, l) => `hsl(${h} ${s}% ${l}%)`;
+  const waveBlobs = pal ? [
+    dusty(pal.h1, pal.s1, 58),
+    dusty(pal.h2, pal.s2, 60),
+    color ? dusty(Math.round(color.h), Math.min(60, Math.round(color.s)), 56) : dusty((pal.h1 + 40) % 360, pal.s1, 56),
+    dusty((pal.h1 + 30) % 360, Math.max(36, pal.s1 - 6), 54),
+  ] : ['#7c5bff', '#ff78c8', '#e0b341', '#b06bff'];
+  // Kicker + halo tinted by the dominant axis so the whole hero "sounds" alike.
+  const kickerColor = pal
+    ? dusty(pal.h1, pal.s1, isDark ? 78 : 38)
+    : (isDark ? '#c9b8ff' : 'oklch(46% 0.19 280)');
+  const haloColor = pal
+    ? `hsla(${pal.h1}, ${pal.s1}%, 60%, .55)`
+    : 'rgba(255,150,210,.6)';
+  // Palette CSS vars for the orb blobs/ring (index.css reads --fy-c1..c4).
+  const orbVars = {
+    '--fy-c1': waveBlobs[0], '--fy-c2': waveBlobs[1],
+    '--fy-c3': waveBlobs[2], '--fy-c4': waveBlobs[3],
+    '--fy-halo': haloColor,
+  };
+
+  // Hand the palette up: the page aurora lives in LandingScreen (the hero is
+  // borderless now — its colors must bleed page-wide, not stop at a card edge).
+  const paletteKey = waveBlobs.join('|');
+  useEffect(() => {
+    if (onPalette) onPalette(waveBlobs);
+  }, [paletteKey]);
 
   return (
-    // The lead element — liquid glass over the page, with the aurora "wave" as
-    // its motif instead of a single album cover (we show the vibe, not a song).
-    // Flex column so the play cluster centers in whatever height the row takes.
+    // The lead element — borderless now: no glass card, no frame. The page
+    // aurora behind it lives in LandingScreen (fed via onPalette); the hero is
+    // pure content in the page's light. Flex column; the vibes row pins to the
+    // bottom and levels the hero with the right wing.
     <div className="efir-hero" style={{
-      position:'relative', borderRadius: isMobile ? 18 : 24, overflow:'hidden',
-      padding: isMobile ? '18px 16px 16px' : 'clamp(24px,2vw,38px)',
-      border:`1px solid ${c.border}`, background:heroGlass,
-      // Mobile: what's behind the hero is a static page gradient — blurring it
-      // costs a large persistent GPU layer for no visible difference.
-      backdropFilter: isMobile ? 'none' : 'blur(26px)',
-      WebkitBackdropFilter: isMobile ? 'none' : 'blur(26px)',
-      boxShadow:heroShadow, animation:'fadeInUp .55s cubic-bezier(.22,.9,.3,1)',
-      display:'flex', flexDirection:'column',
+      position:'relative', display:'flex', flexDirection:'column', flex:1, minHeight:0,
+      padding: isMobile ? '10px 2px 4px' : '4px 0 0',
+      animation:'fadeInUp .55s cubic-bezier(.22,.9,.3,1)',
     }}>
-      {/* aurora "wave" band — soft-masked so it melts into the glass below.
-          Blobs + caustics sit under ONE static SVG displacement "lens"
-          (.efir-liquid): the moving blobs get refracted as they drift, and the
-          light streaks bend with the liquid instead of lying flat on top.
-          Static noise = near-zero extra GPU cost; the motion is the blobs'. */}
-      <div className="efir-wave" style={{ position:'absolute', top:0, left:0, right:0, height:'58%', opacity:isDark?0.55:0.45, pointerEvents:'none',
-        WebkitMaskImage:waveFade, maskImage:waveFade }}>
-        <div className="efir-liquid">
-          <span className="fy-blob fy-bg1" style={{ background:waveBlobs[0], transition:'background 1.6s ease' }} />
-          <span className="fy-blob fy-bg2" style={{ background:waveBlobs[1], transition:'background 1.6s ease' }} />
-          <span className="fy-blob fy-bg3" style={{ background:waveBlobs[2], transition:'background 1.6s ease' }} />
-          <span className="fy-blob fy-bg4" style={{ background:waveBlobs[3], transition:'background 1.6s ease' }} />
-          <span className="efir-caustics" />
-        </div>
-      </div>
-      {/* dominant-hue tint + frost so the headline stays readable over the wave */}
-      <div style={{ position:'absolute', inset:0, background:tint, pointerEvents:'none' }} />
-      <div style={{ position:'absolute', inset:0, pointerEvents:'none', background: isDark
-        ? 'linear-gradient(180deg, rgba(16,16,22,.10) 0%, rgba(16,16,22,.55) 60%)'
-        : 'linear-gradient(180deg, rgba(255,255,255,.06) 0%, rgba(255,255,255,.6) 60%)' }} />
-      {/* displacement source for the liquid-glass refraction (defs only, 0×0) */}
-      <svg width="0" height="0" style={{ position:'absolute' }} aria-hidden="true" focusable="false">
-        <filter id="efir-liquid-lens" x="-20%" y="-20%" width="140%" height="140%">
-          <feTurbulence type="fractalNoise" baseFrequency="0.007 0.013" numOctaves="2" seed="7" result="noise" />
-          <feDisplacementMap in="SourceGraphic" in2="noise" scale="90" xChannelSelector="R" yChannelSelector="G" />
-        </filter>
-      </svg>
-
-      <div style={{ position:'relative', zIndex:2, display:'flex', flexDirection:'column', flex:1, minHeight:0 }}>
         {/* Top: kicker + the wave/vibe phrase headline (no concrete song) */}
         <div>
-          <div className="mono" style={{ display:'flex', alignItems:'center', fontSize:9.5, letterSpacing:'.28em', color: isDark ? '#c9b8ff' : 'oklch(46% 0.19 280)' }}>
+          <div className="mono" style={{ display:'flex', alignItems:'center', fontSize:11.5, letterSpacing:'.28em', color:kickerColor, transition:'color 1.6s ease' }}>
             <span className="hero-eq" aria-hidden="true"><span /><span /><span /><span /><span /></span>
             {lang==='ru'?'ТВОЙ ВАЙБ':'YOUR VIBE'}
           </div>
           {loading || vibeLoading ? (
             <div style={{ marginTop:16 }}>
-              <Skel w={'78%'} h={26} r={8} isDark={isDark} />
-              <Skel w={'52%'} h={26} r={8} isDark={isDark} style={{ marginTop:10 }} />
+              <Skel w={'78%'} h={28} r={8} isDark={isDark} />
+              <Skel w={'52%'} h={28} r={8} isDark={isDark} style={{ marginTop:10 }} />
             </div>
           ) : phrase ? (
-            <div className="vibe-serif" style={{ fontSize:'clamp(18px,2vw,26px)', fontWeight:400, lineHeight:1.22, letterSpacing:'0', marginTop:12, color:c.text, maxWidth:620 }}>
+            <div className="vibe-serif" style={{ fontSize:'clamp(20px,2.2vw,28px)', fontWeight:400, lineHeight:1.28, letterSpacing:'0', marginTop:12, color:c.text, maxWidth:620 }}>
               {phrase}
             </div>
           ) : (
             <Fragment>
-              <div className="vibe-serif" style={{ fontSize:'clamp(18px,2vw,26px)', fontWeight:400, marginTop:12, color:c.text }}>
+              <div className="vibe-serif" style={{ fontSize:'clamp(20px,2.2vw,28px)', fontWeight:400, marginTop:12, color:c.text }}>
                 {lang==='ru'?'Начнём с разведки':'Let’s start exploring'}
               </div>
-              <div style={{ fontSize:11, color:c.textMuted, marginTop:8, maxWidth:520, lineHeight:1.5 }}>
+              <div style={{ fontSize:13, color:c.textMuted, marginTop:8, maxWidth:520, lineHeight:1.5 }}>
                 {lang==='ru'
                   ? 'Истории пока мало — поток начнёт с неизученных уголков библиотеки и подстроится под ваши реакции.'
                   : 'Not much history yet — the stream starts from unexplored corners and adapts to your reactions.'}
@@ -2219,16 +2289,17 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
           )}
         </div>
 
-        {/* Centered control cluster — fills the remaining height of the block */}
-        <div style={{ flex:1, display:'flex', flexDirection:'column', justifyContent:'center', alignItems:'center', gap:'clamp(18px,2.6vh,30px)', marginTop:'clamp(12px,1.5vh,20px)' }}>
-          {/* Big play orb + copy to its right */}
-          <div style={{ display:'flex', alignItems:'center', gap:'clamp(16px,1.6vw,26px)' }}>
-            <div style={{ width:98, height:98, flex:'none', display:'grid', placeItems:'center' }}>
-              <div style={{ transform:'scale(1.5)' }}>
+        {/* Orb row — left-aligned: the orb + caption column with the wave
+            settings disclosure right under the caption (not at the hero
+            bottom — the bottom now belongs to the vibes). */}
+        <div style={{ display:'flex', alignItems:'flex-start', gap:'clamp(18px,1.8vw,28px)', marginTop:'clamp(22px,3.4vh,38px)' }}>
+            <div style={{ width: isMobile ? 84 : 112, height: isMobile ? 84 : 112, flex:'none', display:'grid', placeItems:'center' }}>
+              <div style={{ transform:`scale(${isMobile ? 1.25 : 1.7})` }}>
                 <div ref={orbRef} className={`fy-hybrid tint-irid${wavePlaying ? ' fy-playing' : ''}`}
+                     style={orbVars}
                      onMouseEnter={() => setHoverCtl(true)} onMouseLeave={orbLeave} onMouseMove={orbMove}
-                     onClick={handleOrb} role="button" tabIndex={0}
-                     onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleOrb(); } }}
+                     onClick={handleOrbClick} role="button" tabIndex={0}
+                     onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleOrbClick(); } }}
                      aria-label={wavePlaying ? (lang==='ru'?'Поставить волну на паузу':'Pause your stream')
                                  : waveLive ? (lang==='ru'?'Продолжить волну':'Resume your stream')
                                  : (lang==='ru'?'Включить ваш поток':'Start your stream')}>
@@ -2244,370 +2315,244 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
                 </div>
               </div>
             </div>
-            <div style={{ minWidth:0, maxWidth:300 }}>
-              <div className="mono" style={{ fontSize:'clamp(11px,0.9vw,13px)', letterSpacing:'.18em', color:hoverCtl?(isDark?'#f3ecff':'#2c2440'):c.text, transition:'color .3s', cursor:'pointer' }}
-                   onClick={handleOrb}>
+            <div style={{ minWidth:0, maxWidth:360 }}>
+              <div className="mono" style={{ fontSize:'clamp(12px,1vw,14px)', letterSpacing:'.2em', color:hoverCtl?(isDark?'#f3ecff':'#2c2440'):c.text, transition:'color .3s', cursor:'pointer' }}
+                   onClick={handleOrbClick}>
                 {wavePlaying ? (lang==='ru'?'ВОЛНА ИГРАЕТ':'YOUR STREAM IS LIVE')
                  : waveLive ? (lang==='ru'?'ВОЛНА НА ПАУЗЕ':'STREAM PAUSED')
-                 : (lang==='ru'?'ВКЛЮЧИТЬ ВАШ ПОТОК':'START YOUR STREAM')}
+                 : (lang==='ru'?'ВКЛЮЧИТЬ ПОТОК':'START YOUR STREAM')}
               </div>
-              <div style={{ fontSize:'clamp(11px,0.78vw,12px)', color:c.textMuted, marginTop:6, lineHeight:1.45 }}>
+              <div style={{ fontSize:'clamp(12px,0.9vw,13.5px)', color:c.textMuted, marginTop:7, lineHeight:1.45 }}>
                 {waveLive
                   ? (wavePlaying
                       ? (lang==='ru' ? 'Нажмите, чтобы поставить волну на паузу' : 'Tap to pause your stream')
                       : (lang==='ru' ? 'Нажмите, чтобы продолжить волну' : 'Tap to resume your stream'))
                   : hasProfile
-                    ? (lang==='ru' ? 'Включите волну, собранную под ваш вкус — она подстроится под реакции' : 'Start a wave tuned to your taste — it adapts to your reactions')
+                    ? (lang==='ru' ? 'Волна под ваш вкус — подстраивается под реакции' : 'A wave tuned to your taste — it adapts to your reactions')
                     : (lang==='ru' ? 'Режим разведки — начнём с неизученного и подстроимся' : 'Exploration mode — we start from the unknown and adapt')}
               </div>
-            </div>
-          </div>
-
-          {/* Taste anchors — under the play + title, above the wave settings.
-              Hidden on mobile: the compact home keeps launch + settings only. */}
-          {hasProfile && anchors.length > 0 && !isMobile && (
-            <div style={{ display:'flex', alignItems:'center', gap:11 }}>
-              <span className="mono" style={{ fontSize:10, letterSpacing:'.2em', color:c.textSubtle }}>{lang==='ru'?'ЯКОРЯ ВКУСА':'TASTE ANCHORS'}</span>
-              <div style={{ display:'flex' }}>
-                {anchors.slice(0, 5).map((t, i) => {
-                  const src = homeCoverUrl(t.cover_art_path);
-                  return (
-                    <div key={t.track_id || i} title={`${t.title || ''}${t.artist ? ' — ' + t.artist : ''}`}
-                         onClick={() => { const s = primaryArtistSlug(t); if (s && navigateToArtist) navigateToArtist(s); }}
-                         style={{ width:30, height:30, borderRadius:8, overflow:'hidden', marginLeft: i ? -9 : 0, cursor:'pointer',
-                                  position:'relative', zIndex: 10 - i, background:'#241d38',
-                                  border:`1.5px solid ${isDark ? '#26262d' : '#fff'}`, boxShadow:'0 4px 10px rgba(0,0,0,.35)' }}>
-                      {src && <img src={src} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />}
+              {/* Wave settings — disclosure pill; the panel unfolds in place
+                  below (0fr→1fr grid row, no fixed-height reserve needed since
+                  nothing is vertically centered anymore). */}
+              <button onClick={() => setSettingsOpen(o => !o)} title={lang==='ru'?'Настроить волну':'Tune your wave'}
+                aria-expanded={settingsOpen}
+                style={{ display:'inline-flex', alignItems:'center', gap:8, marginTop:14, padding:'8px 14px', borderRadius:999, cursor:'pointer',
+                  background: settingsOpen ? (isDark?'rgba(255,255,255,.07)':'rgba(0,0,0,.05)') : (isDark?'rgba(255,255,255,.04)':'rgba(0,0,0,.03)'),
+                  border:`1px solid ${settingsOpen ? c.border : 'transparent'}`, color:c.textMuted,
+                  boxShadow:'inset 0 1px 0 rgba(255,255,255,.08)', transition:'all .3s ease' }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                <span className="mono" style={{ fontSize:11.5, letterSpacing:'.16em' }}>{lang==='ru'?'НАСТРОИТЬ ВОЛНУ':'TUNE THE WAVE'}</span>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                     style={{ transform: settingsOpen ? 'rotate(180deg)' : 'none', transition:'transform .3s ease' }}><path d="m6 9 6 6 6-6"/></svg>
+              </button>
+              <div aria-hidden={!settingsOpen} style={{ display:'grid',
+                gridTemplateRows: settingsOpen ? '1fr' : '0fr',
+                opacity: settingsOpen ? 1 : 0,
+                transition:'grid-template-rows .35s cubic-bezier(.22,.9,.3,1), opacity .35s ease' }}>
+                <div style={{ overflow:'hidden', pointerEvents: settingsOpen ? 'auto' : 'none' }}>
+                  <div style={{ marginTop:12, padding:'16px 18px', borderRadius:14,
+                    background: isDark?'rgba(255,255,255,.04)':'rgba(0,0,0,.03)',
+                    boxShadow:'inset 0 1px 0 rgba(255,255,255,.07)' }}>
+                    <div style={{ display:'flex', alignItems:'center', gap:13 }}>
+                      <span className="mono" style={{ fontSize:11.5, letterSpacing:'.18em', color:c.textMuted, flex:'none' }}>
+                        {lang==='ru'?'НОВОЕ':'NEW'}
+                      </span>
+                      <SkeRange min={0} max={100} step={10} value={Math.round(likedShare*100)}
+                             onChange={v => setShare(v / 100)} accent="oklch(62% 0.2 275)" style={{ flex:1 }}
+                             ariaLabel={lang==='ru'?'Баланс нового и любимого в потоке':'Balance of new vs liked in the stream'} />
+                      <span className="mono" style={{ fontSize:11.5, letterSpacing:'.18em', color:c.textMuted, flex:'none' }}>
+                        {lang==='ru'?'ЛЮБИМОЕ':'LIKED'}
+                      </span>
                     </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Stream settings — collapsed; the gear reveals the liked/new dial */}
-          <div style={{ width:'100%', maxWidth:380, display:'flex', flexDirection:'column', alignItems:'center' }}>
-            <button onClick={() => setSettingsOpen(o => !o)} title={lang==='ru'?'Настройки потока':'Stream settings'}
-              style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 12px', borderRadius:10, cursor:'pointer',
-                background: settingsOpen ? (isDark?'rgba(255,255,255,.06)':'rgba(0,0,0,.04)') : 'transparent',
-                border:`1px solid ${settingsOpen ? c.border : 'transparent'}`, color:c.textMuted, transition:'all .3s ease' }}>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-              <span className="mono" style={{ fontSize:10, letterSpacing:'.16em' }}>{lang==='ru'?'НАСТРОЙКИ ПОТОКА':'STREAM SETTINGS'}</span>
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-                   style={{ transform: settingsOpen ? 'rotate(180deg)' : 'none', transition:'transform .3s ease' }}><path d="m6 9 6 6 6-6"/></svg>
-            </button>
-            {/* Fixed-height slot, ALWAYS in layout: the panel fades in place
-                instead of growing — growth would re-center the flex column and
-                drag the play orb above. visibility (not display) keeps the
-                slider out of tab order while hidden. */}
-            <div aria-hidden={!settingsOpen} style={{ width:'100%', height:92, overflow:'hidden',
-              opacity: settingsOpen ? 1 : 0, visibility: settingsOpen ? 'visible' : 'hidden',
-              pointerEvents: settingsOpen ? 'auto' : 'none',
-              transition:'opacity .35s ease, visibility .35s' }}>
-              <div style={{ display:'flex', alignItems:'center', gap:12, marginTop:14 }}>
-                <span className="mono" style={{ fontSize:10, letterSpacing:'.18em', color:c.textSubtle, flex:'none' }}>
-                  {lang==='ru'?'НОВОЕ':'NEW'}
-                </span>
-                <SkeRange min={0} max={100} step={10} value={Math.round(likedShare*100)}
-                       onChange={v => setShare(v / 100)} accent="oklch(62% 0.2 275)" style={{ flex:1 }}
-                       ariaLabel={lang==='ru'?'Баланс нового и любимого в потоке':'Balance of new vs liked in the stream'} />
-                <span className="mono" style={{ fontSize:10, letterSpacing:'.18em', color:c.textSubtle, flex:'none' }}>
-                  {lang==='ru'?'ЛЮБИМЫЕ':'LIKED'}
-                </span>
-              </div>
-              <div className="mono" style={{ fontSize:9, letterSpacing:'.12em', color:c.textSubtle, textAlign:'center', marginTop:8 }}>
-                {lang==='ru'?'ПО УМОЛЧАНИЮ — 70% НОВОГО · 30% ЛЮБИМОГО':'DEFAULT — 70% NEW · 30% LIKED'}
+                    <div className="mono" style={{ fontSize:10.5, letterSpacing:'.12em', color:c.textSubtle, textAlign:'center', marginTop:11 }}>
+                      {lang==='ru'?'ПО УМОЛЧАНИЮ — 70% НОВОГО · 30% ЛЮБИМОГО':'DEFAULT — 70% NEW · 30% LIKED'}
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
-        </div>
+
+        {/* Taste anchors — desktop only (the compact home keeps launch + search). */}
+        {hasProfile && anchors.length > 0 && !isMobile && (
+          <div style={{ display:'flex', alignItems:'center', gap:13, marginTop:'clamp(18px,2.6vh,30px)' }}>
+            <span className="mono" style={{ fontSize:10.5, letterSpacing:'.2em', color:c.textSubtle }}>{lang==='ru'?'ЯКОРЯ ВКУСА':'TASTE ANCHORS'}</span>
+            <div style={{ display:'flex' }}>
+              {anchors.slice(0, 5).map((t, i) => {
+                const src = homeCoverUrl(t.cover_art_path);
+                return (
+                  <div key={t.track_id || i} title={`${t.title || ''}${t.artist ? ' — ' + t.artist : ''}`}
+                       onClick={() => { const s = primaryArtistSlug(t); if (s && navigateToArtist) navigateToArtist(s); }}
+                       style={{ width:40, height:40, borderRadius:10, overflow:'hidden', marginLeft: i ? -11 : 0, cursor:'pointer',
+                                position:'relative', zIndex: 10 - i, background:'#241d38',
+                                border:`2px solid ${isDark ? '#26262d' : '#fff'}`, boxShadow:'0 6px 14px rgba(0,0,0,.35)' }}>
+                    {src && <img src={src} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* «Вайбики» — the days-scale mood chips pinned to the hero bottom;
+            they also level the hero with the right wing. Absent entirely when
+            the fast layer has nothing (optional layer, no empty state). */}
+        {vibes.length > 0 && (
+          <div style={{ marginTop:'auto', paddingTop:'clamp(20px,3vh,34px)' }}>
+            <div className="mono" style={{ fontSize:10.5, letterSpacing:'.2em', color:c.textSubtle, marginBottom:11 }}>
+              {lang==='ru' ? 'ВАЙБИКИ' : 'VIBES'} · <span style={{ color:c.textSubtle, opacity:.7, letterSpacing:'.08em' }}>
+                {lang==='ru' ? 'то, что держит тебя сейчас' : 'what holds you right now'}</span>
+            </div>
+            <div style={{ display:'flex', gap:11, flexWrap: isMobile ? 'nowrap' : 'wrap',
+              overflowX: isMobile ? 'auto' : 'visible', paddingBottom: isMobile ? 6 : 0 }}>
+              {vibes.slice(0, 3).map(v => {
+                const cov = homeCoverUrl(v.tracks && v.tracks[0] && v.tracks[0].cover_art_path);
+                return (
+                  <div key={v.track_id} className="efir-vibe-chip" {...spotHandlers(true)}
+                       onClick={() => vibeRadio(v)} role="button" tabIndex={0}
+                       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); vibeRadio(v); } }}
+                       title={lang==='ru' ? 'Включить радио этого вайба' : 'Play this vibe as a radio'}
+                       style={{ display:'flex', alignItems:'center', gap:9, padding:'9px 14px 9px 9px',
+                         borderRadius:999, cursor:'pointer', flex:'none',
+                         background: isDark
+                           ? 'linear-gradient(150deg, rgba(255,255,255,.09), rgba(255,255,255,.03))'
+                           : 'linear-gradient(150deg, rgba(255,255,255,.9), rgba(255,255,255,.55))',
+                         boxShadow: isDark
+                           ? '0 10px 24px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.12)'
+                           : '0 8px 20px rgba(60,45,100,.12), inset 0 1px 0 rgba(255,255,255,.9)',
+                         color:c.text, fontSize:12.5 }}>
+                    <span style={{ width:26, height:26, borderRadius:'50%', overflow:'hidden', flex:'none',
+                      background:'linear-gradient(135deg,#7c5cff,#b06bff)',
+                      boxShadow:'inset 0 0 0 2px rgba(0,0,0,.35), 0 4px 10px rgba(0,0,0,.3)' }}>
+                      {cov && <img src={cov} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />}
+                    </span>
+                    <span style={{ whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', maxWidth:170 }}>{vibeName(v)}</span>
+                    <span style={{ opacity:.55, fontSize:11 }}>▶</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+    </div>
+  );
+}
+
+// ─── Right wing of the landing: the two non-stream paths ────────────────────
+// Kickers + captions live straight on the page background (borderless zones);
+// glass is reserved for the interactive elements themselves.
+
+// ✦ Lyrics search — a live input that hands the query off to the search screen
+// (AI chat when the assistant is up, classic grid otherwise). No hover glow on
+// purpose (user pref): focus/hover is a soft border tint only.
+function LyricsSearchPath({ isDark, lang, aiActive, onSubmit }) {
+  const c = useColors(isDark);
+  const [q, setQ] = useState('');
+  const [focus, setFocus] = useState(false);
+  const inputRef = useRef(null);
+  const submit = () => { const t = q.trim(); if (t && onSubmit) onSubmit(t); };
+  const kicker = isDark ? '#c9b8ff' : 'oklch(46% 0.19 280)';
+  return (
+    <div style={{ width:'100%' }}>
+      <div className="mono" style={{ fontSize:11.5, letterSpacing:'.24em', color:kicker, marginBottom:6 }}>
+        ✦ {lang==='ru'?'ПОИСК ПО ТЕКСТУ':'LYRICS SEARCH'}
+      </div>
+      <div style={{ fontSize:13.5, color:c.textMuted, marginBottom:13, lineHeight:1.45 }}>
+        {lang==='ru'
+          ? (aiActive ? 'Помнишь строчку, а не название? ИИ найдёт песню по словам' : 'Помнишь строчку, а не название? Найдём песню по словам')
+          : (aiActive ? 'Remember a line, not the title? AI finds the song by its words' : 'Remember a line, not the title? Find the song by its words')}
+      </div>
+      <div onClick={() => inputRef.current && inputRef.current.focus()}
+        style={{ display:'flex', alignItems:'center', gap:12, padding:'16px 18px', borderRadius:18, cursor:'text',
+          border:`1px solid ${focus ? (isDark?'rgba(154,123,255,.45)':'rgba(124,91,255,.4)') : c.border}`,
+          background: isDark
+            ? 'linear-gradient(150deg, rgba(38,34,54,.55), rgba(18,17,26,.45))'
+            : 'linear-gradient(150deg, rgba(255,255,255,.85), rgba(245,244,250,.6))',
+          boxShadow: isDark
+            ? '0 18px 44px rgba(0,0,0,.42), inset 0 1px 0 rgba(255,255,255,.09)'
+            : '0 14px 34px rgba(60,45,100,.12), inset 0 1px 0 rgba(255,255,255,.9)',
+          backdropFilter:'blur(14px)', WebkitBackdropFilter:'blur(14px)',
+          transition:'border-color .3s ease' }}>
+        <span aria-hidden="true" style={{ color:kicker, fontSize:17, flex:'none' }}>✦</span>
+        <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)}
+          onFocus={() => setFocus(true)} onBlur={() => setFocus(false)}
+          onKeyDown={e => { if (e.key === 'Enter') submit(); }}
+          placeholder={lang==='ru'?'строчка из песни…':'a line from the lyrics…'}
+          aria-label={lang==='ru'?'Поиск песни по тексту':'Search a song by its lyrics'}
+          style={{ flex:1, minWidth:0, background:'transparent', border:0, outline:'none',
+            color:c.text, fontSize:14.5, fontFamily:'inherit' }} />
+        {aiActive ? (
+          <button onClick={(e) => { e.stopPropagation(); submit(); }} title={lang==='ru'?'Найти с ИИ':'Search with AI'}
+            className="mono" style={{ flex:'none', fontSize:9, letterSpacing:'.1em', color:'#9a7bff', cursor:'pointer',
+              border:'1px solid rgba(154,123,255,.4)', borderRadius:6, padding:'3px 7px', background:'transparent' }}>
+            {lang==='ru'?'ИИ':'AI'}
+          </button>
+        ) : (
+          <button onClick={(e) => { e.stopPropagation(); submit(); }} title={lang==='ru'?'Найти':'Search'}
+            style={{ flex:'none', color:c.textMuted, fontSize:16, cursor:'pointer', background:'transparent', border:0 }}>→</button>
+        )}
       </div>
     </div>
   );
 }
 
-function homeGapBadge(data, lang) {
-  if (!data || data.never_played || !data.last_played) return lang==='ru' ? 'ИЗ ГЛУБИН БИБЛИОТЕКИ' : 'FROM THE DEEP CUTS';
-  const days = Math.floor((Date.now() - new Date(data.last_played).getTime()) / 86400000);
-  const months = Math.floor(days / 30);
-  if (lang==='ru') return months >= 1 ? `НЕ СЛУШАЛИ ~${months} МЕС` : `НЕ СЛУШАЛИ ${days} ДН`;
-  return months >= 1 ? `NOT PLAYED IN ~${months}MO` : `NOT PLAYED IN ${days}D`;
-}
-
-// /library/top-pairs returns { similar:[{song, track_id, cover_art_path, top_similar:[...]},...],
-//                               dissimilar:[{song, track_id, cover_art_path, top_dissimilar:[...]},...] }
-// We flatten the dissimilar array: each entry is a "pivot" track that is most unlike its peers.
-// We use the pivot track itself (track_id, song name, cover_art_path) as the card item.
-function homeDeriveDifferent(resp) {
-  if (!resp || !Array.isArray(resp.dissimilar)) return [];
-  const seen = new Set();
-  const out = [];
-  for (const entry of resp.dissimilar) {
-    if (!entry || !entry.track_id) continue;
-    if (!seen.has(entry.track_id)) {
-      seen.add(entry.track_id);
-      out.push({
-        track_id: entry.track_id,
-        title: entry.song || '',
-        artist: '',
-        cover_art_path: entry.cover_art_path || null,
-      });
-    }
-    if (out.length >= 12) break;
-  }
-  return out;
-}
-
-// Shared glass surface for the discovery rail cards (Artist of the day +
-// Something new). Theme-aware inline (the file's idiom) — class only carries
-// the layout/hover that doesn't depend on the theme.
-function railCardStyle(isDark, c) {
-  return {
-    // flex column, equal shares: the rail column is height-capped to the
-    // viewport (.efir-main), so both cards split it 50/50 and may shrink —
-    // their bottoms line up with the For-You hero without pushing past the fold.
-    position:'relative', display:'flex', flexDirection:'column', flex:'1 1 0', minHeight:0,
-    borderRadius:20, overflow:'hidden', padding:'clamp(18px,1.5vw,24px)',
-    border:`1px solid ${c.border}`,
-    background: isDark
-      ? 'linear-gradient(160deg, rgba(28,26,38,.6), rgba(16,16,22,.5))'
-      : 'linear-gradient(160deg, rgba(255,255,255,.7), rgba(245,244,250,.55))',
-    backdropFilter:'blur(20px)', WebkitBackdropFilter:'blur(20px)',
-    boxShadow: isDark ? '0 16px 40px rgba(0,0,0,.35)' : '0 16px 36px rgba(60,45,100,.12)',
-    transition:'transform .5s cubic-bezier(.22,.9,.3,1), box-shadow .5s ease',
-  };
-}
-
-// ★ Artist of the day — vertical glass card. Shows the artist's own photo
-// (thumb/cutout) at ~2/3 width when present; if there's none, no image at all.
-function FeaturedArtistCard({ isDark, lang, navigateToArtist }) {
+// ◉ Library — the "fan of covers" portal card: the three freshest album covers
+// peek from the right edge and fan out on hover; stats ride /library/stats.
+function LibraryPathCard({ isDark, lang, stats, onClick }) {
   const c = useColors(isDark);
-  const [a, setA] = useState(null);
-  const [hover, setHover] = useState(false);
-  const [loading, setLoading] = useState(true);
-
+  const [covers, setCovers] = useState([]);
   useEffect(() => {
     let alive = true;
-    apiFetch(`/library/featured-artist?lang=${lang}`)
-      .then(r => { if (alive && r && r.slug) setA(r); })
-      .catch(() => { if (alive) setA(null); })
-      .finally(() => { if (alive) setLoading(false); });
-    return () => { alive = false; };
-  }, [lang]);
-
-  const base = railCardStyle(isDark, c);
-
-  // On lang change `a` is kept (not cleared), so the card swaps in place without
-  // a skeleton flash; the skeleton only shows on first mount while `a` is null.
-  if (!a) return (
-    <div style={base}>
-      <Skel w={130} h={11} r={4} isDark={isDark} />
-      {loading ? (
-        <Fragment>
-          <Skel w={'66%'} h={150} r={14} isDark={isDark} style={{ margin:'16px auto 0' }} />
-          <Skel w={'70%'} h={18} r={6} isDark={isDark} style={{ marginTop:16 }} />
-          <Skel w={'50%'} h={12} r={5} isDark={isDark} style={{ marginTop:9 }} />
-          <Skel w={'92%'} h={12} r={5} isDark={isDark} style={{ marginTop:12 }} />
-        </Fragment>
-      ) : (
-        <div style={{ fontSize:13, color:c.textSubtle, marginTop:14 }}>{lang==='ru'?'Пока нет артиста дня':'No featured artist yet'}</div>
-      )}
-    </div>
-  );
-
-  // Artist photo — prefer the rectangular thumb, fall back to the cutout. No
-  // image → render none (no album-cover fallback).
-  const img = homeCoverUrl(a.thumb_path || a.cutout_path);
-  const ctx = [a.genre, a.decade_range, a.album_count ? `${a.album_count} ${lang==='ru'?'альбомов':'albums'}` : null].filter(Boolean).join(' · ');
-  const open = () => navigateToArtist && navigateToArtist(a.slug);
-
-  return (
-    <div style={{ ...base, cursor:'pointer', transform: hover ? 'translateY(-3px)' : 'none' }}
-         onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)} onClick={open}>
-      <div className="mono" style={{ fontSize:11, letterSpacing:'.26em', color:c.textSubtle }}>{lang==='ru'?'★ АРТИСТ ДНЯ':'★ FEATURED ARTIST'}</div>
-      {img && (
-        /* height is viewport-driven (not width-driven): the photo crops via
-           object-fit instead of dictating the rail column height — this is
-           what used to push «Что-то новое» below the fold on 16" screens */
-        <div style={{ width:'66%', height:'clamp(140px, 24vh, 300px)', margin:'16px auto 2px', borderRadius:14, overflow:'hidden',
-          boxShadow:'0 16px 34px rgba(0,0,0,.45)', transition:'transform .42s cubic-bezier(.22,.9,.3,1)',
-          transform: hover ? 'translateY(-4px) scale(1.02)' : 'none' }}>
-          <img src={img} alt={a.name} style={{ width:'100%', height:'100%', display:'block', objectFit:'cover', objectPosition:'50% 18%' }} />
-        </div>
-      )}
-      <div className="serif" style={{ fontSize:'clamp(18px,1.5vw,22px)', fontWeight:300, color:c.text, marginTop:14, textAlign:'center' }}>{a.name}</div>
-      {ctx && <div style={{ fontSize:13, color:c.textMuted, marginTop:3, textAlign:'center' }}>{ctx}</div>}
-      {a.bio && <div style={{ fontSize:13, color:c.text, opacity:.72, marginTop:9, lineHeight:1.5, textAlign:'center', display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden' }}>{a.bio}</div>}
-      <div style={{ marginTop:'auto', paddingTop:14, fontSize:13, color:'#c9b8ff', textAlign:'center' }}>→ {lang==='ru'?'Открыть Атлас':'Open Atlas'}</div>
-    </div>
-  );
-}
-
-// ✦ Something new — one merged discovery block. Pool blends two notions of
-// "new": a forgotten/never-played track (/library/rediscover) and tracks unlike
-// the user's usual taste (/library/top-pairs → dissimilar). ↻ cycles the pool.
-function DiscoverNewCard({ isDark, lang, onPick, navigateToArtist }) {
-  const c = useColors(isDark);
-  const [pool, setPool] = useState([]);
-  const [idx, setIdx] = useState(0);
-  const [factMap, setFactMap] = useState({});   // track_id -> fact | null
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let alive = true;
-    Promise.allSettled([
-      apiFetch(`/library/rediscover`),
-      apiFetch(`/library/top-pairs?sample=24`),
-    ]).then(([rd, tp]) => {
-      if (!alive) return;
-      const out = [];
-      const r = rd.status === 'fulfilled' ? rd.value : null;
-      if (r && r.track) out.push({ ...r.track, kind:'rediscover', last_played:r.last_played, never_played:r.never_played });
-      const diff = tp.status === 'fulfilled' ? homeDeriveDifferent(tp.value) : [];
-      for (const d of diff.slice(0, 6)) {
-        if (!out.some(x => x.track_id === d.track_id)) out.push({ ...d, kind:'different' });
-      }
-      setPool(out);
-    }).finally(() => { if (alive) setLoading(false); });
+    apiFetch(`/library/albums?sort=year_desc`)
+      .then(d => {
+        if (!alive) return;
+        const cs = ((d && d.albums) || [])
+          .map(a => homeCoverUrl(a.cover_art_path)).filter(Boolean).slice(0, 3);
+        setCovers(cs);
+      })
+      .catch(() => {});
     return () => { alive = false; };
   }, []);
-
-  // Derived BEFORE the hooks below — @babel/standalone hoists const→var.
-  const cur = pool[idx] || null;
-  const coverUrl = homeCoverUrl(cur && cur.cover_art_path);
-  const color = useCoverColor(coverUrl);
-
-  // Lazy-fetch one fact per candidate (cached by track_id).
-  useEffect(() => {
-    if (!cur || !cur.track_id || cur.track_id in factMap) return;
-    let alive = true;
-    apiFetch(`/metadata/tracks/${encodeURIComponent(cur.track_id)}/facts?lang=${encodeURIComponent(lang)}`)
-      .then(f => {
-        // Shortest fact that fits the reserved ~3-line slot wins — better a
-        // complete short fact than a long one clipped mid-sentence. If only
-        // long ones exist, take the shortest of them (slot grows, no clip).
-        const all = [ ...((f && f.song_facts) || []), ...((f && f.artist_facts) || []) ]
-          .filter(x => typeof x === 'string' && x.trim());
-        const short = all.filter(x => x.length <= 160);
-        const fact = (short.length ? short : all)
-          .reduce((a, b) => (a == null || b.length < a.length ? b : a), null);
-        if (alive) setFactMap(prev => ({ ...prev, [cur.track_id]: fact }));
-      })
-      .catch(() => { if (alive) setFactMap(prev => ({ ...prev, [cur.track_id]: null })); });
-    return () => { alive = false; };
-  }, [cur && cur.track_id]);
-
-  const base = railCardStyle(isDark, c);
-  base.transition = undefined;  // no hover-lift on this card (it has internal controls)
-
-  if (loading) return (
-    <div style={base}>
-      <Skel w={130} h={11} r={4} isDark={isDark} />
-      <div style={{ flex:1, display:'flex', flexDirection:'column', justifyContent:'center', alignItems:'center', marginTop:14 }}>
-        <Skel w={104} h={104} r={12} isDark={isDark} />
-        <Skel w={'70%'} h={16} r={6} isDark={isDark} style={{ marginTop:14 }} />
-        <Skel w={'45%'} h={11} r={5} isDark={isDark} style={{ marginTop:9 }} />
-        <Skel w={'88%'} h={12} r={5} isDark={isDark} style={{ marginTop:14 }} />
-      </div>
-    </div>
-  );
-  if (!cur) return null;
-
-  const wash = color
-    ? `radial-gradient(ellipse 80% 100% at 50% 0%, hsla(${color.h},${color.s}%,${color.l}%,.16), transparent 72%)`
-    : `radial-gradient(ellipse 80% 100% at 50% 0%, rgba(124,91,255,.14), transparent 72%)`;
-  const badge = cur.kind === 'rediscover'
-    ? homeGapBadge({ never_played: cur.never_played, last_played: cur.last_played }, lang)
-    : (lang==='ru' ? 'НЕПОХОЖЕ НА ВАШ ВКУС' : 'UNLIKE YOUR USUAL');
-  const fact = factMap[cur.track_id];
-  const next = () => setIdx(i => (pool.length ? (i + 1) % pool.length : 0));
-
-  return (
-    <div style={base}>
-      <div style={{ position:'absolute', inset:0, background:wash, pointerEvents:'none' }} />
-      <div style={{ position:'relative', display:'flex', flexDirection:'column', flex:1, minHeight:0 }}>
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-          <div className="mono" style={{ fontSize:11, letterSpacing:'.24em', color:c.textSubtle }}>{lang==='ru'?'✦ ЧТО-ТО НОВОЕ':'✦ SOMETHING NEW'}</div>
-          {pool.length > 1 && (
-            <div style={{ display:'flex', alignItems:'center', gap:8, flex:'none' }}>
-              {/* pool position — makes ↻ legible as "cycling a finite deck" */}
-              <span className="mono" style={{ fontSize:10, letterSpacing:'.08em', color:c.textSubtle }}>{idx + 1} / {pool.length}</span>
-              <button onClick={next} title={lang==='ru'?'Ещё вариант':'Another one'} className={ske('btn', isDark)}
-                style={{ width:30, height:30, borderRadius:'50%', display:'grid', placeItems:'center', color:c.textMuted, flex:'none' }}>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 2v6h6"/><path d="M21 12A9 9 0 0 0 6 5.3L3 8"/><path d="M21 22v-6h-6"/><path d="M3 12a9 9 0 0 0 15 6.7l3-2.7"/></svg>
-              </button>
-            </div>
-          )}
-        </div>
-        {/* album + text centered, filling the remaining card height */}
-        <div style={{ flex:1, display:'flex', flexDirection:'column', justifyContent:'center', alignItems:'center', textAlign:'center', marginTop:14 }}>
-          <div className="dust-wrap" style={{ position:'relative', cursor:'pointer' }} onClick={() => onPick && onPick(cur)}>
-            {/* A rediscover pick wears "dust": muted sepia under a noise film,
-                hover blows it off (~.4s) — you pulled a record off the shelf.
-                The unlike-your-usual kind stays clean (it isn't old, just odd). */}
-            <div className={cur.kind === 'rediscover' ? 'dust-cover' : undefined}
-              style={{ position:'relative', width:104, height:104, borderRadius:12, overflow:'hidden', background:'#241d38', boxShadow:'0 14px 30px rgba(0,0,0,.45)' }}>
-              {coverUrl && <img src={coverUrl} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />}
-            </div>
-            <span style={{ position:'absolute', right:-8, bottom:-8, width:34, height:34, borderRadius:'50%',
-              background:'linear-gradient(180deg,#9a7bff,#6a44d6)', color:'#fff', display:'grid', placeItems:'center',
-              fontSize:13, boxShadow:'0 8px 18px rgba(124,91,255,.5)' }}>▶</span>
-          </div>
-          <div className="mono" style={{ fontSize:9.5, letterSpacing:'.14em', color:c.amber, marginTop:16 }}>{badge}</div>
-          <div className="serif" style={{ fontSize:18, fontWeight:300, color:c.text, marginTop:7, lineHeight:1.25, cursor:'pointer' }}
-               onClick={() => onPick && onPick(cur)}>{cur.title}</div>
-          {cur.artist ? (
-            <div style={{ fontSize:12.5, color:c.textMuted, marginTop:3 }}>
-              <ArtistCredit track={cur} navigateToArtist={navigateToArtist} lang={lang} color={c.textMuted} />
-            </div>
-          ) : null}
-          {/* Fact slot — fixed 3-line reserve: facts load async on ↻ and the
-              card must not bounce in height. Facts are pre-picked short (see
-              the fetch above) and rendered whole — no line clamp, no clipping. */}
-          <div style={{ marginTop:14, minHeight:66, display:'flex', alignItems:'flex-start', justifyContent:'center' }}>
-            {fact && <div className="serif" style={{ fontStyle:'italic', fontSize:14, color:c.text, opacity:.86, lineHeight:1.5, maxWidth:340 }}>❝ {fact} ❞</div>}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Header pill → Library, with a live "N albums · M tracks" summary from /library/stats.
-function LibraryPill({ stats, isDark, lang, onClick, fluid }) {
-  const c = useColors(isDark);
-  const [hover, setHover] = useState(false);
   const albums = stats && typeof stats.unique_albums === 'number' ? stats.unique_albums : null;
   const tracks = stats && typeof stats.total_tracks === 'number' ? stats.total_tracks : null;
   const fmt = (n) => (n == null ? '—' : (n.toLocaleString ? n.toLocaleString() : n));
   const summary = (albums != null || tracks != null)
-    ? `${fmt(albums)} ${lang==='ru'?'альб':'alb'} · ${fmt(tracks)} ${lang==='ru'?'трек':'tr'}`
-    : (lang==='ru'?'Открыть фонотеку':'Browse library');
+    ? `${fmt(albums)} ${lang==='ru'?'АЛЬБОМОВ':'ALBUMS'} · ${fmt(tracks)} ${lang==='ru'?'ТРЕКОВ':'TRACKS'}`
+    : (lang==='ru'?'ОТКРЫТЬ ФОНОТЕКУ':'BROWSE THE SHELVES');
+  const kicker = isDark ? '#c9b8ff' : 'oklch(46% 0.19 280)';
+  // Placeholder gradients keep the fan alive while covers load / are missing.
+  const fills = ['linear-gradient(135deg,#6e5a2e,#3a2f14)', 'linear-gradient(135deg,#3d6258,#1e332c)', 'linear-gradient(135deg,#7a4360,#3f2038)'];
   return (
-    <button onClick={onClick} onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
-      title={lang==='ru'?'Перейти в библиотеку':'Go to library'}
-      style={{ display:'flex', alignItems:'center', gap:11, cursor:'pointer',
-        // fluid: the mobile home renders this as a full-width stack card.
-        width: fluid ? '100%' : undefined,
-        padding: fluid ? '14px 16px' : '8px 14px 8px 11px',
-        borderRadius: fluid ? 18 : 14,
-        border:`1px solid ${hover?c.borderStrong:c.border}`,
-        background: isDark ? (hover?'rgba(255,255,255,.07)':'rgba(255,255,255,.04)') : (hover?'rgba(255,255,255,.92)':'rgba(255,255,255,.6)'),
-        backdropFilter: fluid ? 'none' : 'blur(16px)',
-        WebkitBackdropFilter: fluid ? 'none' : 'blur(16px)',
-        boxShadow: hover ? '0 8px 22px rgba(60,45,100,.16)' : '0 4px 12px rgba(60,45,100,.08)',
-        transition:'all .35s cubic-bezier(.22,.9,.3,1)', transform: hover ? 'translateY(-1px)' : 'none' }}>
-      <span style={{ display:'grid', placeItems:'center', width:30, height:30, borderRadius:9, flex:'none',
-        background:'linear-gradient(160deg, oklch(62% 0.18 275), oklch(58% 0.18 305))', color:'#fff',
-        boxShadow:'0 4px 12px rgba(124,91,255,.4)' }}>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></svg>
-      </span>
-      <span style={{ textAlign:'left', lineHeight:1.15, flex: fluid ? 1 : undefined, minWidth:0 }}>
-        <span style={{ display:'block', fontSize: fluid ? 15 : 13.5, fontWeight:600, color:c.text }}>{lang==='ru'?'Библиотека':'Library'}</span>
-        <span className="mono" style={{ display:'block', fontSize:10, letterSpacing:'.04em', color:c.textMuted, marginTop:1 }}>{summary}</span>
-      </span>
-      <span style={{ color:c.textMuted, fontSize:16, marginLeft:2 }}>→</span>
-    </button>
+    <div style={{ width:'100%' }}>
+      <div className="mono" style={{ fontSize:11.5, letterSpacing:'.24em', color:kicker, marginBottom:13 }}>
+        ◉ {lang==='ru'?'ФОНОТЕКА':'LIBRARY'}
+      </div>
+      <div className="efir-lib-card" {...spotHandlers(true)} onClick={onClick} role="button" tabIndex={0}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick && onClick(); } }}
+        title={lang==='ru'?'Перейти в библиотеку':'Go to library'}
+        style={{ position:'relative', borderRadius:18, padding:'20px', overflow:'hidden', cursor:'pointer',
+          border:`1px solid ${c.border}`,
+          background: isDark
+            ? 'linear-gradient(150deg, rgba(38,34,54,.55), rgba(18,17,26,.45))'
+            : 'linear-gradient(150deg, rgba(255,255,255,.85), rgba(245,244,250,.6))',
+          boxShadow: isDark
+            ? '0 18px 44px rgba(0,0,0,.42), inset 0 1px 0 rgba(255,255,255,.09)'
+            : '0 14px 34px rgba(60,45,100,.12), inset 0 1px 0 rgba(255,255,255,.9)',
+          backdropFilter:'blur(14px)', WebkitBackdropFilter:'blur(14px)' }}>
+        <div className="efir-lib-fan" aria-hidden="true">
+          {[0, 1, 2].map(i => (
+            <span key={i} className={`efir-lib-cov efir-lib-cov-${i}`}
+              style={{ background: covers[i] ? undefined : fills[i] }}>
+              {covers[i] && <img src={covers[i]} alt="" style={{ width:'100%', height:'100%', objectFit:'cover', display:'block' }} />}
+            </span>
+          ))}
+        </div>
+        <div style={{ position:'relative', maxWidth:'58%' }}>
+          <div style={{ fontSize:18, fontWeight:600, color:c.text }}>{lang==='ru'?'Библиотека':'Library'} <span style={{ color:c.textMuted }}>→</span></div>
+          <div className="mono" style={{ fontSize:10.5, letterSpacing:'.08em', color:c.textMuted, marginTop:7 }}>{summary}</div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -2711,14 +2656,209 @@ function HintBadge({ size = 20, label, ariaLabel, placement = 'up' }) {
   );
 }
 
-function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLibrary, stats, playerTrack, playerPlaylist, onTrackChange, onPlayTrack, onStartStream, streamActive, audio, navigateToArtist }) {
+// ─── SpotlightSearch — global find-and-play overlay (🔍 in the header, Ctrl/Cmd+K) ──
+// macOS-Spotlight-style: dim + blur under a centered glass bar; instant rows
+// from /library/browse. Click a row (or ↵) = play it with the other matches
+// queued behind; «+» = add to a playlist without playing; Tab / «ещё» hands
+// the query to the full search screen. One shared highlight pill slides
+// between rows (hover and ↑↓) with a light bounce — no per-row glow.
+function SpotlightSearch({ open, onClose, isDark, lang, onPlayTrack, onAddToPlaylist, onMore }) {
+  const c = useColors(isDark);
+  const [q, setQ] = useState('');
+  const [rows, setRows] = useState([]);
+  const [hasMore, setHasMore] = useState(false);
+  const [searched, setSearched] = useState(false);
+  const [active, setActive] = useState(0);
+  const [hl, setHl] = useState(null);          // { y, h } of the highlight pill
+  const inputRef = useRef(null);
+  const rowRefs = useRef([]);
+
+  // Fresh sheet on every open (Spotlight muscle memory: open → type).
+  useEffect(() => {
+    if (!open) return;
+    setQ(''); setRows([]); setSearched(false); setActive(0); setHl(null);
+    const t = setTimeout(() => { if (inputRef.current) inputRef.current.focus(); }, 30);
+    return () => clearTimeout(t);
+  }, [open]);
+
+  // Debounced instant search. limit=9, show 8 — the 9th only signals «ещё».
+  useEffect(() => {
+    if (!open) return;
+    const term = q.trim();
+    if (term.length < 2) { setRows([]); setSearched(false); setHasMore(false); return; }
+    let alive = true;
+    const timer = setTimeout(() => {
+      apiFetch(`/library/browse?q=${encodeURIComponent(term)}&limit=9`)
+        .then(d => {
+          if (!alive) return;
+          const list = Array.isArray(d) ? d : [];
+          setRows(list.slice(0, 8));
+          setHasMore(list.length > 8);
+          setSearched(true);
+          setActive(0);
+        })
+        .catch(() => { if (alive) { setRows([]); setHasMore(false); setSearched(true); } });
+    }, 150);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [q, open]);
+
+  // The sliding pill tracks the active row (hover writes active too).
+  useEffect(() => {
+    const el = rowRefs.current[active];
+    if (!el) { setHl(null); return; }
+    setHl({ y: el.offsetTop, h: el.offsetHeight });
+  }, [active, rows]);
+
+  // Escape closes even if focus wandered off the input.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); onClose && onClose(); } };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  const playRow = (i) => {
+    const r = rows[i];
+    if (!r) return;
+    const hits = rows.map(t => ({ track: t, score: t.score || 0, matched_on: 'browse' }));
+    if (onPlayTrack) onPlayTrack(hits[i], hits);
+    if (onClose) onClose();
+  };
+  const goMore = () => {
+    const term = q.trim();
+    if (term && onMore) { onMore(term); if (onClose) onClose(); }
+  };
+  const onInputKey = (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActive(i => Math.min(rows.length - 1, i + 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(i => Math.max(0, i - 1)); }
+    else if (e.key === 'Enter') { e.preventDefault(); playRow(active); }
+    else if (e.key === 'Tab') { e.preventDefault(); goMore(); }
+  };
+  const fmtDur = (s) => {
+    if (typeof s !== 'number' || !isFinite(s) || s <= 0) return null;
+    const m = Math.floor(s / 60), sec = Math.round(s % 60);
+    return `${m}:${String(sec).padStart(2, '0')}`;
+  };
+  const glass = {
+    background: isDark
+      ? 'linear-gradient(150deg, rgba(38,34,54,.72), rgba(18,17,26,.66))'
+      : 'linear-gradient(150deg, rgba(255,255,255,.92), rgba(245,244,250,.82))',
+    backdropFilter:'blur(18px)', WebkitBackdropFilter:'blur(18px)',
+    border:`1px solid ${isDark ? 'rgba(255,255,255,.09)' : 'rgba(0,0,0,.08)'}`,
+  };
+  const term = q.trim();
+
+  return (
+    <div onMouseDown={(e) => { if (e.target === e.currentTarget && onClose) onClose(); }}
+      role="dialog" aria-modal="true" aria-label={lang==='ru'?'Быстрый поиск по песням':'Quick song search'}
+      style={{ position:'fixed', inset:0, zIndex:1500,
+        background: isDark ? 'rgba(5,4,10,.55)' : 'rgba(30,25,50,.28)',
+        backdropFilter:'blur(3px)', WebkitBackdropFilter:'blur(3px)',
+        display:'flex', flexDirection:'column', alignItems:'center',
+        paddingTop:'min(14vh, 130px)', animation:'fadeIn .18s ease' }}>
+      <div style={{ width:'min(92vw, 680px)' }} onMouseDown={(e) => e.stopPropagation()}>
+        {/* Search bar */}
+        <div style={{ ...glass, display:'flex', alignItems:'center', gap:12, padding:'16px 20px', borderRadius:20,
+          boxShadow:'0 30px 80px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.14)' }}>
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke={c.textMuted} strokeWidth="2" strokeLinecap="round" style={{ flex:'none' }}><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)} onKeyDown={onInputKey}
+            placeholder={lang==='ru'?'название, артист или альбом…':'song, artist or album…'}
+            aria-label={lang==='ru'?'Найти песню':'Find a song'}
+            style={{ flex:1, minWidth:0, background:'transparent', border:0, outline:'none',
+              color:c.text, fontSize:15.5, fontFamily:'inherit' }} />
+          <span className="mono" style={{ flex:'none', fontSize:9, letterSpacing:'.1em', color:c.textSubtle }}>ESC</span>
+        </div>
+
+        {/* Results panel — only once there is a real query */}
+        {term.length >= 2 && (
+          <div style={{ ...glass, marginTop:12, borderRadius:16, padding:10,
+            boxShadow:'0 30px 80px rgba(0,0,0,.45)' }}>
+            {rows.length > 0 ? (
+              <Fragment>
+                <div style={{ position:'relative' }}>
+                  {hl && (
+                    <div className="spotlight-hl" aria-hidden="true" style={{
+                      transform:`translateY(${hl.y}px)`, height:hl.h,
+                      background: isDark ? 'rgba(154,123,255,.14)' : 'rgba(124,91,255,.12)',
+                    }} />
+                  )}
+                  {rows.map((r, i) => {
+                    const cover = homeCoverUrl(r.cover_art_path);
+                    const dur = fmtDur(r.duration);
+                    const sub = [r.artist, r.album ? `${lang==='ru'?'альбом ':''}${r.album}` : null, r.year || null]
+                      .filter(Boolean).join(' · ');
+                    return (
+                      <div key={r.track_id || i} ref={el => { rowRefs.current[i] = el; }}
+                        onMouseEnter={() => setActive(i)} onClick={() => playRow(i)}
+                        style={{ position:'relative', display:'flex', alignItems:'center', gap:12,
+                          padding:'11px 14px', borderRadius:12, cursor:'pointer' }}>
+                        <div style={{ width:44, height:44, borderRadius:8, overflow:'hidden', flex:'none',
+                          background:'linear-gradient(135deg,#4a3d78,#251d3f)',
+                          boxShadow:'0 6px 16px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.15)' }}>
+                          {cover && <img src={cover} alt="" loading="lazy" style={{ width:'100%', height:'100%', objectFit:'cover', display:'block' }} />}
+                        </div>
+                        <div style={{ minWidth:0, flex:1 }}>
+                          <div style={{ color:c.text, fontSize:14.5, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{r.title || '—'}</div>
+                          <div style={{ color:c.textMuted, fontSize:11.5, marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{sub}</div>
+                        </div>
+                        {r.genre && (
+                          <span className="mono" style={{ flex:'none', fontSize:9, letterSpacing:'.1em', color:isDark?'#a79cc9':'#6a5b96',
+                            border:`1px solid ${isDark?'rgba(167,156,201,.3)':'rgba(106,91,150,.3)'}`, borderRadius:6, padding:'3px 8px',
+                            maxWidth:130, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', textTransform:'uppercase' }}>{r.genre}</span>
+                        )}
+                        <span style={{ width:14, flex:'none' }} />
+                        {dur && <span className="mono" style={{ flex:'none', fontSize:10.5, letterSpacing:'.05em', color:isDark?'#a79cc9':'#6a5b96' }}>{dur}</span>}
+                        <button onClick={(e) => { e.stopPropagation(); onAddToPlaylist && onAddToPlaylist(r.track_id, e.currentTarget); }}
+                          title={lang==='ru'?'Добавить в плейлист':'Add to playlist'} className="spotlight-add"
+                          style={{ flex:'none', width:32, height:32, borderRadius:'50%', display:'grid', placeItems:'center',
+                            background:'linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.02))',
+                            boxShadow:'0 5px 12px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.16)',
+                            border:0, color:c.textMuted, fontSize:15, cursor:'pointer' }}>＋</button>
+                        <span className="mono" style={{ flex:'none', width:12, fontSize:9, color:'#9a7bff', opacity: i === active ? 1 : 0 }}>↵</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:10,
+                  padding:'9px 14px 4px', marginTop:6, borderTop:`1px solid ${isDark?'rgba(255,255,255,.05)':'rgba(0,0,0,.06)'}` }}>
+                  <span className="mono" style={{ fontSize:9, letterSpacing:'.08em', color:c.textSubtle }}>
+                    {lang==='ru'?'↑↓ ВЫБОР · ↵ ИГРАТЬ · TAB — ВЕСЬ ПОИСК':'↑↓ SELECT · ↵ PLAY · TAB — FULL SEARCH'}
+                  </span>
+                  {hasMore && (
+                    <button onClick={goMore} className="mono"
+                      style={{ fontSize:9, letterSpacing:'.08em', color:c.textMuted, background:'transparent', border:0, cursor:'pointer' }}>
+                      {lang==='ru'?'ЕЩЁ СОВПАДЕНИЯ →':'MORE MATCHES →'}
+                    </button>
+                  )}
+                </div>
+              </Fragment>
+            ) : searched ? (
+              <div style={{ padding:'18px 14px', fontSize:13.5, color:c.textMuted }}>
+                {lang==='ru'?'Ничего не нашлось в библиотеке':'Nothing found in your library'}
+              </div>
+            ) : (
+              <div style={{ padding:'18px 14px', fontSize:13.5, color:c.textSubtle }}>…</div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLibrary, stats, playerTrack, playerPlaylist, onTrackChange, onPlayTrack, onStartStream, streamActive, audio, navigateToArtist, onOpenSpotlight, onSearchLyrics, aiActive }) {
   const c = useColors(isDark);
   const isMobile = useIsMobile();
 
-  // «Эфир»: one airy screen. The rail cards (artist of the day + something new)
-  // fetch their own data, so the landing itself is just layout — no shelves,
-  // no recently-played / liked rows, library reachable from the header.
-  //
+  // «Эфир»: one airy screen, three paths — the wave (hero), lyrics search and
+  // the library. No glass zone frames: the zones share the page and are split
+  // by air; the aurora below bleeds page-wide in the hero's taste palette
+  // (fed back via onPalette). Brand set until the profile arrives.
+  const [auroraBlobs, setAuroraBlobs] = useState(null);
+  const blobs = auroraBlobs || ['#7c5bff', '#ff78c8', '#e0b341', '#b06bff'];
+
   // Sizing: 100% of the app shell, NOT 100vw/100vh — on mobile the shell
   // stacks MiniPlayerBar + BottomTabBar below this screen, and a viewport-
   // sized root overflowed under them (the wave block "danced" into the
@@ -2733,6 +2873,29 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLi
       color: c.text,
       animation: 'themeFade 0.45s ease',
     }}>
+      {/* Page aurora — the hero's liquid wave promoted to the page layer: it
+          starts behind the hero and dissolves toward the right wing, erasing
+          any sense of a card boundary. Blobs + caustics under one static SVG
+          displacement lens (near-zero extra GPU cost; the motion is the blobs'). */}
+      <div className="efir-wave" style={{ position:'absolute', top:0, left:0, right:0, height:'62%',
+        opacity: isDark ? 0.34 : 0.24, pointerEvents:'none',
+        WebkitMaskImage:'linear-gradient(180deg, #000 0%, #000 40%, transparent 100%)',
+        maskImage:'linear-gradient(180deg, #000 0%, #000 40%, transparent 100%)' }}>
+        <div className="efir-liquid">
+          <span className="fy-blob fy-bg1" style={{ background:blobs[0], transition:'background 1.6s ease' }} />
+          <span className="fy-blob fy-bg2" style={{ background:blobs[1], transition:'background 1.6s ease' }} />
+          <span className="fy-blob fy-bg3" style={{ background:blobs[2], transition:'background 1.6s ease' }} />
+          <span className="fy-blob fy-bg4" style={{ background:blobs[3], transition:'background 1.6s ease' }} />
+          <span className="efir-caustics" />
+        </div>
+      </div>
+      {/* displacement source for the liquid-glass refraction (defs only, 0×0) */}
+      <svg width="0" height="0" style={{ position:'absolute' }} aria-hidden="true" focusable="false">
+        <filter id="efir-liquid-lens" x="-20%" y="-20%" width="140%" height="140%">
+          <feTurbulence type="fractalNoise" baseFrequency="0.007 0.013" numOctaves="2" seed="7" result="noise" />
+          <feDisplacementMap in="SourceGraphic" in2="noise" scale="90" xChannelSelector="R" yChannelSelector="G" />
+        </filter>
+      </svg>
       {/* Subtle bg pattern: concentric vinyl-like rings */}
       <div style={{
         position:'absolute', top:'-25%', right:'-15%', width:'820px', height:'820px',
@@ -2750,7 +2913,8 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLi
           transparent 48.5%)`,
       }} />
 
-      {/* Header: brand + quick Library (with live summary) + Search + controls */}
+      {/* Header: brand + mini-player (center) + spotlight + controls. The
+          Library pill is gone — the library is a full path on the page now. */}
       <div style={{
         position:'relative', display:'flex', alignItems:'center', justifyContent:'space-between', gap:16,
         padding:'clamp(18px,2.4vh,26px) clamp(20px,3vw,40px)', flexWrap:'wrap',
@@ -2765,9 +2929,8 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLi
           </div>
         </div>
         {/* Centered mini-player — its own header zone (flanked by two equal
-            flex:1 0 zones) so it sits in the middle of the bar instead of
-            crammed against the Library pill. Collapses to null when nothing
-            is playing, leaving the brand/controls layout untouched. */}
+            flex:1 0 zones) so it sits in the middle of the bar. Collapses to
+            null when nothing is playing. */}
         {!isMobile && (
         <div style={{ display:'flex', justifyContent:'center', flex:'0 1 auto', minWidth:0 }}>
           <HeaderNowPlaying track={playerTrack} audio={audio} isDark={isDark} lang={lang}
@@ -2776,8 +2939,10 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLi
         </div>
         )}
         <div style={{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap', flex:'1 1 0', minWidth:0, justifyContent:'flex-end' }}>
-          {!isMobile && <LibraryPill stats={stats} isDark={isDark} lang={lang} onClick={() => onNav('library')} />}
-          <button onClick={() => onNav('search')} title={lang==='ru'?'Поиск':'Search'} className={ske('btn', isDark)}
+          {/* Song spotlight (⌘K) — quick find-and-play over the library;
+              lyrics search lives on the page as its own path. */}
+          <button onClick={onOpenSpotlight}
+            title={lang==='ru'?'Найти песню (Ctrl+K)':'Find a song (Ctrl+K)'} className={ske('btn', isDark)}
             style={{ width:38, height:38, borderRadius:'50%', display:'grid', placeItems:'center', color:c.textMuted }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
           </button>
@@ -2786,16 +2951,17 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLi
       </div>
 
       {isMobile ? (
-        /* Mobile «Эфир»: a plain top-aligned card stack — wave (launch +
-           settings, no taste anchors), library entry, artist of the day.
-           Normal document flow, so nothing can overlap the header. */
+        /* Mobile «Эфир»: one column, same three paths — hero (vibe + orb +
+           vibes strip inside), lyrics search, library. Normal document flow,
+           so nothing can overlap the header. */
         <div style={{ position:'relative', flex:'1 1 auto', minHeight:0, overflowY:'auto',
-          padding:'2px 14px 18px', display:'flex', flexDirection:'column', gap:14 }}>
+          padding:'2px 16px 18px', display:'flex', flexDirection:'column', gap:22 }}>
           <ForYouHero isDark={isDark} lang={lang}
                       onStartStream={onStartStream} streamActive={streamActive} audio={audio}
-                      navigateToArtist={navigateToArtist} />
-          <LibraryPill stats={stats} isDark={isDark} lang={lang} fluid onClick={() => onNav('library')} />
-          <FeaturedArtistCard isDark={isDark} lang={lang} navigateToArtist={navigateToArtist} />
+                      navigateToArtist={navigateToArtist} onPlayTrack={onPlayTrack}
+                      onPalette={setAuroraBlobs} />
+          <LyricsSearchPath isDark={isDark} lang={lang} aiActive={aiActive} onSubmit={onSearchLyrics} />
+          <LibraryPathCard isDark={isDark} lang={lang} stats={stats} onClick={() => onNav('library')} />
         </div>
       ) : (
       /* «Эфир» split — takes exactly the space left under the header (no page
@@ -2805,12 +2971,13 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLi
         <div className="efir-main" style={{ position:'relative' }}>
           <ForYouHero isDark={isDark} lang={lang}
                       onStartStream={onStartStream} streamActive={streamActive} audio={audio}
-                      navigateToArtist={navigateToArtist} />
-          <div className="efir-rail">
-            <FeaturedArtistCard isDark={isDark} lang={lang} navigateToArtist={navigateToArtist} />
-            <DiscoverNewCard isDark={isDark} lang={lang}
-                             onPick={(t) => onPlayTrack && onPlayTrack({ track: t }, [{ track: t }])}
-                             navigateToArtist={navigateToArtist} />
+                      navigateToArtist={navigateToArtist} onPlayTrack={onPlayTrack}
+                      onPalette={setAuroraBlobs} />
+          {/* Right wing — no cards, just the two paths separated by air. The
+              top padding drops the wing's optical start to the hero phrase. */}
+          <div className="efir-wing">
+            <LyricsSearchPath isDark={isDark} lang={lang} aiActive={aiActive} onSubmit={onSearchLyrics} />
+            <LibraryPathCard isDark={isDark} lang={lang} stats={stats} onClick={() => onNav('library')} />
           </div>
         </div>
       </div>
@@ -3727,15 +3894,20 @@ function LyricSnippet({ lyrics, query, matchedLine, lang, c }) {
 }
 
 // ─── SEARCH SECTION (redesigned) ──────────────────────────────────────────────
-function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, onAddToPlaylist }) {
+function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, onAddToPlaylist, searchHandoff }) {
   const c = useColors(isDark);
   const aiActive = !!(aiStatus && aiStatus.aiActive);
   const isMobileChat = useIsMobile();  // compact best-hit cover on phones
   const recent = useRecentSearches(localStorage.getItem('musix_user_id'));
   const { sessions, saveSession, deleteSession } = useChatHistory(localStorage.getItem('musix_user_id'));
 
-  // Mode: 'search' (grid) or 'chat' (dialog)
-  const [tab, setTab] = useState('search');
+  // Mode: 'chat' (AI dialog — the default whenever the assistant is up) or
+  // 'search' (classic grid). Sections mount before the AI probe resolves, so
+  // an effect below upgrades the default to 'chat' once aiActive lands —
+  // unless the user already picked a tab or started working.
+  const [tab, setTab] = useState(aiActive ? 'chat' : 'search');
+  const tabTouchedRef = useRef(false);
+  const pickTab = (id) => { tabTouchedRef.current = true; setTab(id); };
 
   // Chat state — an empty conversation renders the hero (slogan + centered
   // composer) instead of a greeting bubble, GPT-style.
@@ -3785,6 +3957,12 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
   useEffect(() => {
     if (!aiActive && tab === 'chat') setTab('search');
   }, [aiActive, tab]);
+
+  // ── AI probe landed → upgrade the default tab to the chat (unless the user
+  // already picked a tab or has work in progress on the grid) ──
+  useEffect(() => {
+    if (aiActive && !tabTouchedRef.current && messages.length === 0 && !searchExecuted) setTab('chat');
+  }, [aiActive]);
 
   // ── Chat handler (streaming) ──
   // POSTs /chat/stream and animates the agent's step events live; the trailing
@@ -3883,8 +4061,12 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
   };
 
   // ── Search handler ──
-  const handleSearch = async () => {
-    if (!searchQuery.trim() || searchLoading) return;
+  // queryArg: the landing/spotlight handoff runs a query straight away —
+  // state hasn't flushed yet at that point (same trick as handleChat's textArg;
+  // a click event object falls through to the state value).
+  const handleSearch = async (queryArg) => {
+    const query = (typeof queryArg === 'string' ? queryArg : searchQuery).trim();
+    if (!query || searchLoading) return;
     setSearchLoading(true); setSearchError('');
     try {
       const f = {};
@@ -3892,15 +4074,34 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
       if (filters.sonic_tags.length) f.sonic_tags = filters.sonic_tags;
       if (filters.year_ranges.length) f.year_ranges = filters.year_ranges;
       const res = await apiFetch('/search/', { method:'POST', body: JSON.stringify({
-        query:searchQuery, mode:searchMode, filters:Object.keys(f).length?f:null,
+        query, mode:searchMode, filters:Object.keys(f).length?f:null,
         limit:20
       }) });
       setResults(res.hits||[]);
       setSearchExecuted(true);
-      recent.push(searchQuery);
+      recent.push(query);
     } catch(e) { setSearchError(e.message); }
     finally { setSearchLoading(false); }
   };
+
+  // ── One-shot query handoff (landing lyrics field / spotlight «ещё») ──
+  // ts deduping lets the same query re-fire on a second submit. mode 'grid'
+  // forces the classic tab; 'auto' prefers the AI chat when it's up.
+  const handledHandoffRef = useRef(null);
+  useEffect(() => {
+    if (!searchHandoff || !searchHandoff.query) return;
+    if (handledHandoffRef.current === searchHandoff.ts) return;
+    handledHandoffRef.current = searchHandoff.ts;
+    tabTouchedRef.current = true;
+    if (searchHandoff.mode !== 'grid' && aiActive) {
+      setTab('chat');
+      handleChat(searchHandoff.query);
+    } else {
+      setTab('search');
+      setSearchQuery(searchHandoff.query);
+      handleSearch(searchHandoff.query);
+    }
+  }, [searchHandoff]);
 
   // ── Filter autocomplete: fetch suggestions from /browse ──
   const fetchFilterSuggestions = async (field, query) => {
@@ -4092,14 +4293,14 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
           <div className="pill-v3 pill-segmented">
             <button
               className={`pill-v3${tab==='search' ? ' pill-v3-active' : ''}`}
-              onClick={() => setTab('search')}
+              onClick={() => pickTab('search')}
               style={{ fontFamily:"'JetBrains Mono', monospace", fontSize:'11px', letterSpacing:'0.06em', fontWeight:'600' }}>
               {lang==='ru'?'🔍 Поиск':'🔍 Search'}
             </button>
             {aiActive && (
               <button
                 className={`pill-v3${tab==='chat' ? ' pill-v3-active' : ''}`}
-                onClick={() => setTab('chat')}
+                onClick={() => pickTab('chat')}
                 style={{ fontFamily:"'JetBrains Mono', monospace", fontSize:'11px', letterSpacing:'0.06em', fontWeight:'600' }}>
                 {lang==='ru'?'💬 Чат':'💬 Chat'}
               </button>
@@ -4845,38 +5046,6 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream, 
     { icon:'🌙', text:'slow and smoky for late night' },
     { icon:'⚡', text:'energetic rock for the road' },
   ];
-
-  // Cursor spotlight (--mx/--my) + optional 3D tilt (--rx/--ry) — the hover
-  // grammar: clickable cards tilt, static panels only get the light spot.
-  const spotHandlers = (tilt) => ({
-    onPointerMove: (e) => {
-      const el = e.currentTarget, r = el.getBoundingClientRect();
-      const px = (e.clientX - r.left) / r.width, py = (e.clientY - r.top) / r.height;
-      el.style.setProperty('--mx', `${px * 100}%`);
-      el.style.setProperty('--my', `${py * 100}%`);
-      if (tilt) {
-        el.style.setProperty('--ry', `${((px - 0.5) * 6).toFixed(2)}deg`);
-        el.style.setProperty('--rx', `${((0.5 - py) * 6).toFixed(2)}deg`);
-      }
-    },
-    onPointerLeave: (e) => {
-      e.currentTarget.style.setProperty('--rx', '0deg');
-      e.currentTarget.style.setProperty('--ry', '0deg');
-    },
-  });
-  // Liquid refraction inside the stream button: blobs at different "depths"
-  // shift toward the cursor with different strengths (--lx/--ly ∈ -.5…+.5).
-  const lqHandlers = {
-    onPointerMove: (e) => {
-      const el = e.currentTarget, r = el.getBoundingClientRect();
-      el.style.setProperty('--lx', ((e.clientX - r.left) / r.width - 0.5).toFixed(3));
-      el.style.setProperty('--ly', ((e.clientY - r.top) / r.height - 0.5).toFixed(3));
-    },
-    onPointerLeave: (e) => {
-      e.currentTarget.style.setProperty('--lx', '0');
-      e.currentTarget.style.setProperty('--ly', '0');
-    },
-  };
 
   // Mosaic order: most-populated island first — it renders as the big 2×2 tile.
   const sortedIslands = [...islands].sort(
@@ -16131,6 +16300,28 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
   }, []);
   const closeAddToPlaylist = useCallback(() => setAddToPopoverInfo(null), []);
 
+  // ── Spotlight (find-and-play) + search handoff from the landing ──────────
+  // spotlightOpen: the global ⌘K overlay. searchHandoff: a one-shot query the
+  // landing (lyrics field) or the spotlight («ещё») throws into SearchSection;
+  // ts makes repeated identical queries re-fire. mode 'auto' → AI chat when
+  // the assistant is up, classic grid otherwise; 'grid' forces the classic tab.
+  const [spotlightOpen, setSpotlightOpen] = useState(false);
+  const [searchHandoff, setSearchHandoff] = useState(null);  // { query, mode, ts } | null
+  const handoffToSearch = useCallback((query, mode = 'auto') => {
+    setSearchHandoff({ query, mode, ts: Date.now() });
+    setSection('search');
+  }, []);
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'k' || e.key === 'K' || e.key === 'л' || e.key === 'Л')) {
+        e.preventDefault();
+        setSpotlightOpen(o => !o);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   const [stats, setStats] = useState(null);
 
   // Player state
@@ -16775,6 +16966,9 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
           streamActive={streamActive}
           audio={audio}
           navigateToArtist={navigateToArtist}
+          onOpenSpotlight={() => setSpotlightOpen(true)}
+          onSearchLyrics={(q) => handoffToSearch(q, 'auto')}
+          aiActive={!!(aiStatus && aiStatus.aiActive)}
         />
       ) : (
         <Fragment>
@@ -16826,6 +17020,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
                 aiStatus={aiStatus}
                 onNav={setSection}
                 onAddToPlaylist={openAddToPlaylist}
+                searchHandoff={id === 'search' ? searchHandoff : undefined}
                 playlistsListing={appPlaylists}
                 onQueueNext={id === 'player' ? handleQueueNext : undefined}
                 onReorderQueue={id === 'player' ? setPlayerPlaylist : undefined}
@@ -16942,6 +17137,15 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
           lang={lang}
         />
       )}
+
+      {/* Spotlight find-and-play — global overlay (🔍 on the landing, ⌘K anywhere).
+          z 1500 keeps it under the AddToPlaylist popover (z 2000) so «+» works
+          without leaving the spotlight. */}
+      <SpotlightSearch open={spotlightOpen} onClose={() => setSpotlightOpen(false)}
+        isDark={isDark} lang={lang}
+        onPlayTrack={handlePlayTrack}
+        onAddToPlaylist={openAddToPlaylist}
+        onMore={(q) => handoffToSearch(q, 'grid')} />
     </div>
   );
 }

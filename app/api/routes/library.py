@@ -132,7 +132,8 @@ async def browse_tracks(
                     collection_name=target_col,
                     offset=offset,
                     limit=batch_size,
-                    with_payload=["title", "artist", "album", "cover_art_path"],
+                    with_payload=["title", "artist", "album", "cover_art_path",
+                                  "year", "genre", "duration"],
                     with_vectors=False,
                 )
                 for point in results:
@@ -143,6 +144,9 @@ async def browse_tracks(
                         "artist": pl.get("artist") or "",
                         "album": pl.get("album") or "",
                         "cover_art_path": pl.get("cover_art_path"),
+                        "year": pl.get("year"),
+                        "genre": pl.get("genre"),
+                        "duration": pl.get("duration"),
                     })
                 if next_offset is None or not results:
                     break
@@ -161,7 +165,8 @@ async def browse_tracks(
                 collection_name=target_col,
                 offset=offset,
                 limit=2500,
-                with_payload=["title", "artist", "album", "cover_art_path"],
+                with_payload=["title", "artist", "album", "cover_art_path",
+                              "year", "genre", "duration"],
                 with_vectors=False,
             )
             for point in results:
@@ -184,6 +189,9 @@ async def browse_tracks(
                         "artist": artist,
                         "album": album,
                         "cover_art_path": pl.get("cover_art_path"),
+                        "year": pl.get("year"),
+                        "genre": pl.get("genre"),
+                        "duration": pl.get("duration"),
                         "score": round(score, 2),
                     },
                 )

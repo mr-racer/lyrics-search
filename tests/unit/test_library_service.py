@@ -392,10 +392,16 @@ class TestAlbumsSqlite:
     def test_get_browse_rows_shape_and_limit(self, temp_db):
         for i in range(5):
             _upsert(f"t{i}", title=f"Song {i}", artist="X", artist_slugs=["x"],
-                    album="Al", duration=200, cover_art_path=f"/c{i}.jpg")
+                    album="Al", year=1985, genre="Rock", duration=200,
+                    cover_art_path=f"/c{i}.jpg")
         rows = MetadataDB.get_browse_rows("c")
         assert len(rows) == 5
-        assert set(rows[0].keys()) == {"track_id", "title", "artist", "album", "cover_art_path"}
+        # year/genre/duration ride along for the spotlight quick-search rows.
+        assert set(rows[0].keys()) == {"track_id", "title", "artist", "album",
+                                       "cover_art_path", "year", "genre", "duration"}
+        assert rows[0]["year"] == 1985
+        assert rows[0]["genre"] == "Rock"
+        assert rows[0]["duration"] == 200
         assert len(MetadataDB.get_browse_rows("c", limit=2)) == 2
         assert MetadataDB.get_browse_rows("missing") == []
 
