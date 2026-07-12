@@ -9869,6 +9869,7 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
   const isMobile = useIsMobile();  // full-screen panel + tighter gutters on phones
   const [closing, setClosing] = useState(false);
   const requestClose = () => { setClosing(true); setTimeout(onClose, 260); };
+  const [guideOpen, setGuideOpen] = useState(false);  // «Как пользоваться» re-open
   // 'light' | 'heavy' — derived from the legacy text_model localStorage key so
   // an earlier explicit heavy pick survives the UI change.
   const [modelTier, setModelTier] = useState(() =>
@@ -10151,6 +10152,11 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
               <button className="pill-v3" onClick={() => onLang && onLang(lang === 'ru' ? 'en' : 'ru')}>
                 {lang === 'ru' ? 'EN' : 'RU'}
               </button>
+              <button className="pill-v3" onClick={() => setGuideOpen(true)}
+                style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                <span>{lang === 'ru' ? 'Как пользоваться' : 'How it works'}</span>
+              </button>
             </div>
           </section>
 
@@ -10213,6 +10219,12 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
           />
         )}
       </div>
+
+      {/* z 1200 — above the settings sheet (z 91), so the guide reads as a
+          layer on top of it rather than replacing it. */}
+      {guideOpen && (
+        <GuideCarousel isDark={isDark} lang={lang} onClose={() => setGuideOpen(false)} />
+      )}
     </>
   );
 }
@@ -16194,6 +16206,7 @@ function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
   });
   const [error, setError]   = useState('');
   const [busy, setBusy]     = useState(false);
+  const [guideOpen, setGuideOpen] = useState(false);
 
   useEffect(() => {
     if (window.location.hash.startsWith('#/register') && instanceMode === 'server') {
@@ -16252,6 +16265,19 @@ function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
       <div className="login-aurora login-aurora--a" />
       <div className="login-aurora login-aurora--b" />
       <div className="login-glow" />
+
+      {/* «?» — opens the user guide pre-auth. Doesn't touch the seen-flag:
+          there's no user id yet, and the auto-show after first login is
+          keyed per account. */}
+      <button type="button" onClick={() => setGuideOpen(true)}
+        aria-label={ru ? 'Как пользоваться' : 'How it works'}
+        title={ru ? 'Как пользоваться' : 'How it works'}
+        className="liquid-glass"
+        style={{ position:'fixed', top:'calc(env(safe-area-inset-top, 0px) + 16px)', right:16, zIndex:20,
+          width:40, height:40, borderRadius:'50%', display:'grid', placeItems:'center',
+          cursor:'pointer', color:'rgba(238,238,243,.82)', fontSize:17, fontWeight:600 }}>
+        ?
+      </button>
 
       <div className="login-wrap">
         {/* ── Mini welcome page ── */}
@@ -16354,6 +16380,337 @@ function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
             </div>
           )}
         </form>
+      </div>
+
+      {guideOpen && (
+        <GuideCarousel isDark={true} lang={lang} onClose={() => setGuideOpen(false)} />
+      )}
+    </div>
+  );
+}
+
+// ─── User guide — «Как пользоваться» carousel ─────────────────────────────────
+// Static walkthrough of the player's core moves. Deliberately server-free: it
+// must also render on LoginScreen (pre-auth, no JWT), so every «screenshot» is
+// a hand-drawn JSX fragment that reads colors from useColors and copy from
+// `lang` — the mocks stay bilingual and theme-correct with zero binary assets,
+// and a palette tweak repaints them for free. Entry points: auto-once on the
+// first 'ready' boot (musix_guide_seen_{uid}), «?» on LoginScreen, and
+// Settings → Appearance.
+const GUIDE_MOCK_COVER = 'linear-gradient(135deg, oklch(66% 0.19 280) 0%, oklch(48% 0.20 250) 100%)';
+
+function GuideArtPlayer({ c, ru, isMobile }) {
+  const chevron = (flip) => (
+    <div style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:5, color:c.textSubtle }}>
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+        strokeLinecap="round" strokeLinejoin="round" style={{ transform: flip ? 'scaleX(-1)' : 'none' }}>
+        <path d="M9 18l6-6-6-6"/>
+      </svg>
+      <span className="mono" style={{ fontSize:9, letterSpacing:'0.14em' }}>{ru ? 'СВАЙП' : 'SWIPE'}</span>
+    </div>
+  );
+  return (
+    <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:22 }}>
+      {isMobile && chevron(true)}
+      <div style={{ textAlign:'center' }}>
+        <div style={{ position:'relative', width:116, height:116, margin:'0 auto', borderRadius:18,
+          background: GUIDE_MOCK_COVER,
+          boxShadow:'0 14px 32px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.3)' }}>
+          <div style={{ position:'absolute', inset:0, display:'grid', placeItems:'center' }}>
+            <div style={{ width:46, height:46, borderRadius:'50%', display:'grid', placeItems:'center',
+              background:'rgba(255,255,255,0.22)', border:'1px solid rgba(255,255,255,0.4)',
+              backdropFilter:'blur(6px)', WebkitBackdropFilter:'blur(6px)' }}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="#fff" style={{ marginLeft:2 }}><polygon points="8 5 19 12 8 19"/></svg>
+            </div>
+          </div>
+        </div>
+        <div style={{ fontSize:13, fontWeight:600, color:c.text, marginTop:10 }}>{ru ? 'Осенний блюз' : 'Autumn Blues'}</div>
+        <div style={{ fontSize:11, color:c.textMuted, marginTop:2 }}>{ru ? 'Тёплый ламповый бэнд' : 'The Warm Tube Band'}</div>
+      </div>
+      {isMobile && chevron(false)}
+    </div>
+  );
+}
+
+function GuideArtSearch({ c, ru }) {
+  return (
+    <div style={{ width:'min(360px, 100%)' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:10, padding:'12px 15px', borderRadius:14,
+        background:c.inputBg, border:`1px solid ${c.borderStrong}`,
+        boxShadow:'0 8px 22px rgba(0,0,0,0.12)' }}>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke={c.textMuted} strokeWidth="2" strokeLinecap="round" style={{ flexShrink:0 }}><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        <span style={{ fontSize:12.5, fontStyle:'italic', color:c.text, overflow:'hidden', whiteSpace:'nowrap', textOverflow:'ellipsis' }}>
+          {ru ? 'спокойная песня про осенний дождь…' : 'a calm song about autumn rain…'}
+        </span>
+        <span style={{ width:2, height:15, flexShrink:0, background:c.accent, animation:'pulse 1.2s infinite' }} />
+      </div>
+      <div style={{ display:'flex', gap:8, marginTop:11, justifyContent:'center', flexWrap:'wrap' }}>
+        <span style={{ padding:'5px 13px', borderRadius:999, fontSize:11.5, background:c.accentBg, color:c.accent,
+          border:'1px solid oklch(60% 0.18 270 / 0.45)' }}>
+          ¶ {ru ? 'по смыслу текста' : 'by lyric meaning'}
+        </span>
+        <span style={{ padding:'5px 13px', borderRadius:999, fontSize:11.5, color:c.textMuted,
+          border:`1px solid ${c.border}`, display:'inline-flex', alignItems:'center', gap:6 }}>
+          <span style={{ display:'inline-flex', alignItems:'flex-end', gap:1.5, height:10 }}>
+            {[4,8,10,6].map((h,i)=><span key={i} style={{ width:2, height:h, borderRadius:1, background:'currentColor' }}/>)}
+          </span>
+          {ru ? 'по звучанию' : 'by how it sounds'}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function GuideArtLyrics({ c, ru }) {
+  return (
+    <div style={{ width:'min(340px, 100%)', display:'flex', flexDirection:'column', gap:7 }}>
+      <div style={{ fontSize:13.5, color:c.textSubtle, lineHeight:1.5 }}>
+        {ru ? 'Ветер листья по дворам несёт,' : 'The wind is herding leaves astray,'}
+      </div>
+      <div style={{ display:'flex', alignItems:'center', gap:10, padding:'7px 11px', borderRadius:10,
+        background:c.accentBg, border:'1px solid oklch(60% 0.18 270 / 0.4)' }}>
+        <div style={{ flex:1, fontSize:13.5, color:c.text, lineHeight:1.5 }}>
+          {ru ? 'Мы с тобой молчим о разном…' : 'We sit in silence, worlds apart…'}
+        </div>
+        <span style={{ width:26, height:26, borderRadius:'50%', flexShrink:0, display:'grid', placeItems:'center',
+          background:c.accent, color:'#fff', fontSize:12,
+          boxShadow:'0 4px 12px oklch(60% 0.18 270 / 0.4)' }}>✨</span>
+      </div>
+      <div style={{ fontSize:13.5, color:c.textSubtle, lineHeight:1.5 }}>
+        {ru ? 'Осень нам прощает всё.' : 'And autumn pardons everything.'}
+      </div>
+      <div style={{ marginTop:6, padding:'9px 13px', borderRadius:12, background:c.aiBubble,
+        border:`1px solid ${c.border}`, fontSize:12, color:c.textMuted, lineHeight:1.55 }}>
+        {ru
+          ? '✨ Молчание здесь — не ссора: двое устали от слов и понимают друг друга без них…'
+          : "✨ The silence here isn't a fight: two people are past words and understand each other without them…"}
+      </div>
+    </div>
+  );
+}
+
+function GuideArtChat({ c, ru }) {
+  return (
+    <div style={{ width:'min(340px, 100%)', display:'flex', flexDirection:'column', gap:8 }}>
+      <div style={{ alignSelf:'flex-end', maxWidth:'85%', padding:'9px 14px', borderRadius:'16px 16px 4px 16px',
+        background:c.userBubble, color:'#fff', fontSize:12.5, lineHeight:1.5 }}>
+        {ru ? 'А о чём вообще эта песня? Есть тут двойное дно?' : 'So what is this song really about? Any hidden layer?'}
+      </div>
+      <div style={{ alignSelf:'flex-start', maxWidth:'88%', padding:'9px 14px', borderRadius:'16px 16px 16px 4px',
+        background:c.aiBubble, color:c.text, fontSize:12.5, lineHeight:1.55, border:`1px solid ${c.border}` }}>
+        {ru
+          ? 'Есть: на поверхности — расставание, а в припеве спрятана отсылка к первой песне альбома…'
+          : "There is: on the surface it's a breakup, but the chorus hides a nod to the album's opening track…"}
+      </div>
+    </div>
+  );
+}
+
+function GuideArtWave({ c, ru }) {
+  const bars = [10,18,30,44,54,46,34,24,34,48,54,40,26,16,10];
+  return (
+    <div style={{ width:'min(360px, 100%)', textAlign:'center' }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'center', gap:3, height:56 }}>
+        {bars.map((h, i) => (
+          <span key={i} style={{ width:4, height:h, borderRadius:2,
+            background:`oklch(${58 + Math.round((h/54)*14)}% 0.18 ${262 + i*2})`,
+            opacity:0.55 + (h/54)*0.45 }} />
+        ))}
+      </div>
+      <div className="mono-label" style={{ color:c.textSubtle, marginTop:8 }}>
+        {ru ? 'ВОЛНА · НА ГЛАВНОЙ' : 'THE WAVE · HOME PAGE'}
+      </div>
+      <div style={{ display:'flex', gap:8, marginTop:12, justifyContent:'center', flexWrap:'wrap' }}>
+        {[ru?'Ночной неон':'Night neon', ru?'Тихая осень':'Quiet autumn', ru?'Дорожный рок':'Road rock'].map((name, i) => (
+          <span key={name} style={{ display:'inline-flex', alignItems:'center', gap:7, padding:'6px 13px', borderRadius:999,
+            fontSize:11.5, color:c.text, border:`1px solid ${c.border}`, background:c.surface2 }}>
+            <span style={{ width:7, height:7, borderRadius:'50%', background:`oklch(64% 0.17 ${[275, 60, 150][i]})` }} />
+            {name} ▸
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function GuideArtFire({ c, ru }) {
+  const statBar = (name, w, hrs) => (
+    <div key={name} style={{ display:'flex', alignItems:'center', gap:10 }}>
+      <span style={{ width:110, flexShrink:0, fontSize:11, color:c.textMuted, textAlign:'right',
+        overflow:'hidden', whiteSpace:'nowrap', textOverflow:'ellipsis' }}>{name}</span>
+      <span style={{ flex:1, height:8, borderRadius:4, background:c.surface2, overflow:'hidden' }}>
+        <span style={{ display:'block', width:`${w}%`, height:'100%', borderRadius:4,
+          background:'linear-gradient(90deg, oklch(60% 0.18 270), oklch(66% 0.17 300))' }} />
+      </span>
+      <span className="mono" style={{ width:36, flexShrink:0, fontSize:10, color:c.textSubtle }}>{hrs}</span>
+    </div>
+  );
+  return (
+    <div style={{ width:'min(350px, 100%)' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:11, padding:'9px 12px', borderRadius:13,
+        background:c.surface, border:`1px solid ${c.border}` }}>
+        <div style={{ width:38, height:38, borderRadius:9, flexShrink:0, background:GUIDE_MOCK_COVER }} />
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ fontSize:12.5, fontWeight:600, color:c.text }}>{ru ? 'Осенний блюз' : 'Autumn Blues'}</div>
+          <div style={{ fontSize:10.5, color:c.textMuted }}>{ru ? 'Тёплый ламповый бэнд' : 'The Warm Tube Band'}</div>
+        </div>
+        <span style={{ width:32, height:32, borderRadius:'50%', display:'grid', placeItems:'center', fontSize:15,
+          background:'oklch(65% 0.19 45 / 0.18)', border:'1px solid oklch(65% 0.19 45 / 0.5)',
+          boxShadow:'0 0 14px oklch(68% 0.19 45 / 0.4)' }}>🔥</span>
+        <span style={{ width:32, height:32, borderRadius:'50%', display:'grid', placeItems:'center', fontSize:14,
+          border:`1px solid ${c.border}`, opacity:0.75 }}>💧</span>
+      </div>
+      <div style={{ display:'flex', flexDirection:'column', gap:7, marginTop:14 }}>
+        {statBar(ru ? 'Ламповый бэнд' : 'Tube Band', 88, ru ? '31 ч' : '31 h')}
+        {statBar(ru ? 'Осенние коты' : 'Autumn Cats', 57, ru ? '19 ч' : '19 h')}
+        {statBar(ru ? 'Тихий проспект' : 'Quiet Avenue', 32, ru ? '11 ч' : '11 h')}
+      </div>
+    </div>
+  );
+}
+
+function GuideCarousel({ isDark, lang, onClose }) {
+  const c = useColors(isDark);
+  const isMobile = useIsMobile();
+  const ru = lang === 'ru';
+  const [idx, setIdx] = useState(0);
+  const touchX = useRef(null);
+
+  const slides = [
+    { key:'player',
+      title: ru ? 'Плеер под пальцами' : 'The player at your fingertips',
+      body: (ru
+        ? 'Нажми на обложку — трек заиграет; нажми ещё раз — встанет на паузу.'
+        : 'Tap the cover to play; tap again to pause.')
+        + (isMobile
+          ? (ru ? ' Свайп по плееру влево или вправо переключает треки.' : ' Swipe the player left or right to switch tracks.')
+          : ''),
+      art: <GuideArtPlayer c={c} ru={ru} isMobile={isMobile} /> },
+    { key:'search',
+      title: ru ? 'Ищи словами, как думаешь' : 'Search the way you think',
+      body: ru
+        ? 'Поиск понимает и смысл текста, и само звучание. Попроси «спокойную песню под осенний вечер, где упоминается британская погода» — и он найдёт.'
+        : 'Search understands both lyric meaning and the sound itself. Ask for “a calm song for an autumn evening that mentions British weather” — and it will find one.',
+      art: <GuideArtSearch c={c} ru={ru} /> },
+    { key:'lyrics',
+      title: ru ? 'О чём эта строка?' : 'What does this line mean?',
+      body: ru
+        ? 'Открой текст песни и нажми значок у строки — ИИ объяснит, что за ней стоит.'
+        : 'Open the lyrics and tap the icon next to a line — the AI explains what stands behind it.',
+      art: <GuideArtLyrics c={c} ru={ru} /> },
+    { key:'chat',
+      title: ru ? 'Поговори с песней' : 'Talk to the song',
+      body: ru
+        ? 'В плеере есть чат по треку. История записи, скрытые смыслы, похожие песни — спрашивай что угодно.'
+        : 'The player has a per-song chat. Recording history, hidden meanings, similar songs — ask anything.',
+      art: <GuideArtChat c={c} ru={ru} /> },
+    { key:'wave',
+      title: ru ? 'Волна знает твой вкус' : 'The wave knows your taste',
+      body: ru
+        ? 'Звуковая волна на главной — вход в рекомендации: там твой музыкальный профиль, острова вкуса (любой можно запустить) и быстрый плейлист по одному запросу.'
+        : 'The sound wave on the home page opens recommendations: your taste profile, taste islands (play any of them) and a quick playlist from a single request.',
+      art: <GuideArtWave c={c} ru={ru} /> },
+    { key:'fire',
+      title: ru ? 'Подкинь огня — или воды' : 'Add fire — or water',
+      body: ru
+        ? 'Огонёк на треке — «такого побольше», капля — «поменьше». Рекомендации замечают и это, и то, слушаешь ли ты до конца или скипаешь. А в статистике библиотеки видно, сколько и кого ты слушал.'
+        : 'A flame on a track means “more like this”, a drop means “less”. Recommendations also notice whether you listen through or skip. And library statistics show how much you listened — and to whom.',
+      art: <GuideArtFire c={c} ru={ru} /> },
+  ];
+
+  const last = idx === slides.length - 1;
+  // slides.length is a constant 6, so the stale closure inside the key handler
+  // below is harmless — the clamp never changes.
+  const go = (d) => setIdx(x => Math.min(slides.length - 1, Math.max(0, x + d)));
+
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose();
+      else if (e.key === 'ArrowRight') go(1);
+      else if (e.key === 'ArrowLeft') go(-1);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onClose]);
+
+  const navBtn = (dir) => (
+    <button onClick={() => go(dir)} disabled={dir === -1 && idx === 0}
+      aria-label={dir === 1 ? (ru?'Дальше':'Next') : (ru?'Назад':'Back')}
+      className="pill-v3" style={{ width:36, height:36, padding:0, borderRadius:'50%',
+        display:'grid', placeItems:'center', flexShrink:0,
+        opacity: dir === -1 && idx === 0 ? 0.35 : 1,
+        cursor: dir === -1 && idx === 0 ? 'default' : 'pointer' }}>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+        strokeLinecap="round" strokeLinejoin="round" style={{ transform: dir === -1 ? 'scaleX(-1)' : 'none' }}>
+        <path d="M9 18l6-6-6-6"/>
+      </svg>
+    </button>
+  );
+
+  return (
+    <div onClick={onClose} style={{ position:'fixed', inset:0, zIndex:1200,
+      background: isDark ? 'rgba(0,0,0,0.62)' : 'rgba(40,30,60,0.32)',
+      backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)',
+      display:'grid', placeItems:'center', padding:14, animation:'fadeIn 0.22s ease' }}>
+      <div onClick={e => e.stopPropagation()}
+        onTouchStart={e => { touchX.current = e.touches[0].clientX; }}
+        onTouchEnd={e => {
+          if (touchX.current == null) return;
+          const dx = e.changedTouches[0].clientX - touchX.current;
+          touchX.current = null;
+          if (Math.abs(dx) > 42) go(dx < 0 ? 1 : -1);
+        }}
+        className="grain"
+        style={{ width:'min(560px, 96vw)', maxHeight:'88vh', overflowY:'auto',
+          display:'flex', flexDirection:'column', borderRadius:24, position:'relative',
+          background: isDark
+            ? 'linear-gradient(180deg, rgba(26,26,34,0.96) 0%, rgba(15,15,21,0.98) 100%)'
+            : 'linear-gradient(180deg, rgba(252,251,255,0.97) 0%, rgba(240,239,247,0.98) 100%)',
+          border:`1px solid ${isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.09)'}`,
+          boxShadow: isDark ? '0 30px 80px rgba(0,0,0,0.6)' : '0 30px 80px rgba(40,30,80,0.22)',
+          backdropFilter:'blur(24px) saturate(1.2)', WebkitBackdropFilter:'blur(24px) saturate(1.2)',
+          padding:'20px clamp(18px,5vw,30px) 18px',
+          animation:'scaleIn 0.28s cubic-bezier(.22,.9,.3,1)' }}>
+
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:14 }}>
+          <div className="mono-label" style={{ color:c.textSubtle }}>
+            {(ru ? 'КАК ПОЛЬЗОВАТЬСЯ' : 'HOW IT WORKS') + ` · ${idx + 1}/${slides.length}`}
+          </div>
+          <button onClick={onClose} aria-label={ru?'Закрыть':'Close'} className="pill-v3" style={{
+            width:30, height:30, padding:0, borderRadius:'50%', display:'grid', placeItems:'center' }}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+
+        <div key={slides[idx].key} style={{ animation:'fadeIn 0.28s ease' }}>
+          <div style={{ minHeight:196, display:'grid', placeItems:'center', padding:'10px 0 4px' }}>
+            {slides[idx].art}
+          </div>
+          <div className="serif" style={{ fontSize:'clamp(20px,5.4vw,25px)', marginTop:14, color:c.text, letterSpacing:'-0.01em' }}>
+            {slides[idx].title}
+          </div>
+          <div style={{ fontSize:13.5, lineHeight:1.62, color:c.textMuted, marginTop:8, minHeight:66 }}>
+            {slides[idx].body}
+          </div>
+        </div>
+
+        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginTop:16, gap:12 }}>
+          {navBtn(-1)}
+          <div style={{ display:'flex', gap:7 }}>
+            {slides.map((s, i2) => (
+              <button key={s.key} onClick={() => setIdx(i2)} aria-label={`${i2 + 1}`} style={{
+                width: i2 === idx ? 20 : 7, height:7, borderRadius:4, padding:0, border:'none', cursor:'pointer',
+                background: i2 === idx ? c.accent : (isDark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.16)'),
+                transition:'all .25s ease' }} />
+            ))}
+          </div>
+          {last
+            ? <button onClick={onClose} className="cta-v3" style={{ padding:'9px 20px', fontSize:13 }}>
+                {ru ? 'Понятно!' : 'Got it!'}
+              </button>
+            : navBtn(1)}
+        </div>
       </div>
     </div>
   );
@@ -16611,6 +16968,26 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [themeAnim, setThemeAnim] = useState(false);
   const [appState, setAppState] = useState('checking');
+
+  // First-run user guide: opens once per account the moment the app first
+  // lands on 'ready' (fresh boot or right after onboarding finishes). The
+  // seen-flag is only stamped on close, so an interrupted first visit shows
+  // the guide again next time.
+  const [guideOpen, setGuideOpen] = useState(false);
+  useEffect(() => {
+    if (appState !== 'ready') return;
+    try {
+      const uid = localStorage.getItem('musix_user_id') || '';
+      if (localStorage.getItem('musix_guide_seen_' + uid) !== '1') setGuideOpen(true);
+    } catch (e) {}
+  }, [appState]);
+  const closeGuide = useCallback(() => {
+    try {
+      const uid = localStorage.getItem('musix_user_id') || '';
+      localStorage.setItem('musix_guide_seen_' + uid, '1');
+    } catch (e) {}
+    setGuideOpen(false);
+  }, []);
 
   // Phase D: migrate collection-suffixed localStorage keys → user-id-scoped.
   // useMemo (not useEffect) so it runs DURING App's first render, before any
@@ -17428,6 +17805,10 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
           onLogout={onLogout}
           instanceMode={instanceMode}
           showToast={showToast} />
+      )}
+
+      {guideOpen && (
+        <GuideCarousel isDark={isDark} lang={lang} onClose={closeGuide} />
       )}
 
       {/* Background indexing indicator: the job started in Settings (or was
