@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import logging
 import os
+from urllib.parse import urlparse
 
 import httpx
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
+from pydantic_ai.usage import UsageLimits
 
 from app.services.llm_client import _get_client, resolve_model
 from app.services.proxy_config import get_proxy_url
@@ -51,6 +53,18 @@ except ImportError:
 # 1. ПОИСК
 # ─────────────────────────────────────────
 
+def _describe_results(results: list[dict]) -> str:
+    """Human-readable one-liner for logs: 'Title (host); Title (host); …'."""
+    if not results:
+        return "(none)"
+    parts = []
+    for r in results:
+        title = (r.get("title") or "?").strip()[:60]
+        host = urlparse(r.get("url") or "").netloc or "?"
+        parts.append(f"{title} ({host})")
+    return "; ".join(parts)
+
+
 def search_searxng(query: str, max_results: int = 5) -> list[dict]:
     """Поиск через локальный SearXNG."""
     if not _WEB_SEARCH_AVAILABLE:
@@ -82,7 +96,7 @@ def search_searxng(query: str, max_results: int = 5) -> list[dict]:
         resp.raise_for_status()
         data = resp.json()
         results = data.get("results", [])[:max_results]
-        logger.debug("[searxng] query=%r → %d results", query, len(results))
+        logger.info("[searxng] query=%r → %d results: %s", query, len(results), _describe_results(results))
         if not results:
             logger.warning("[searxng] 0 results for query=%r, falling back to DDG", query)
             return search_ddg(query, max_results)
@@ -114,13 +128,14 @@ def search_ddg(query: str, max_results: int = 5) -> list[dict]:
             ddgs_cm = DDGS()
         with ddgs_cm as ddgs:
             results = list(ddgs.text(query, max_results=max_results))
-        logger.debug("[ddg] query=%r → %d results", query, len(results))
         if not results:
             logger.warning("[ddg] 0 results for query=%r", query)
-        return [
+        mapped = [
             {"title": r["title"], "url": r["href"], "content": r["body"]}
             for r in results
         ]
+        logger.info("[ddg] query=%r → %d results: %s", query, len(mapped), _describe_results(mapped))
+        return mapped
     except Exception as e:
         logger.error("[ddg] failed for query=%r: %s", query, e)
         return []
@@ -199,6 +214,14 @@ def smart_web_search(
 # 4. АГЕНТ — ФАБРИКА
 # ─────────────────────────────────────────
 
+# Hard cap on web_search tool calls per agent run. After the cap the tool stops
+# hitting SearXNG and returns a "write your answer now" marker instead, so the
+# agent finishes with whatever it has rather than looping (or crashing).
+_MAX_WEB_SEARCHES = 3
+# Backstop for truly stuck models that keep calling the tool despite the marker:
+# hard ceiling on LLM round-trips per run (3 searches + a few retries + final).
+_MAX_LLM_REQUESTS = 12
+
 _AGENT_SYSTEM_PROMPT_TEMPLATE = """CRITICAL RULE: The artist name must appear in your response EXACTLY as given in the user message — character for character. Do not translate, transliterate, or alter it in any way.
 
 You are a music research assistant. Your task is to write a 2-3 sentence biographical paragraph about a given artist.
@@ -207,6 +230,7 @@ Strategy:
 - Search for the artist's biography, origin, and genre.
 - Use fetch_content=True only when snippets are not enough.
 - If the first search is insufficient, search again with a refined query.
+- HARD LIMIT: you may call web_search at most 3 times. After that, write the best biography you can from what you already have — even if information is incomplete.
 - Always cite the source URL in your final answer.
 - Lead with origin + genre. Keep it journalistic, no clichés.
 {artist_name_rule}"""
@@ -219,6 +243,7 @@ Strategy:
 - Prefer fidelity to the initial bio — preserve its facts.
 - Use web_search ONLY if you spot a factual gap or contradiction in the initial bio.
 - If you do search, use fetch_content=True only when snippets are not enough.
+- HARD LIMIT: you may call web_search at most 3 times. After that, write the final bio from what you already have.
 - Lead with origin + genre. Keep it journalistic, no clichés.
 - Output a single paragraph (3-5 sentences).
 {artist_name_rule}"""
@@ -248,15 +273,35 @@ def _create_agent(
 
     agent: Agent = Agent(pydantic_model, system_prompt=system_prompt)
 
+    # Per-run search budget: the agent is created fresh for every
+    # web_research_bio() call, so this closure counter is per-artist.
+    search_calls = 0
+
     @agent.tool_plain
     def web_search(query: str, fetch_content: bool = False) -> str:  # noqa: F841
-        """Search the web.
+        """Search the web. HARD LIMIT: at most 3 calls per task.
 
         Args:
             query: Search query in English.
             fetch_content: True = full page text, False = snippets only.
         """
-        logger.info("[agent→tool] web_search called: query=%r fetch_content=%s", query, fetch_content)
+        nonlocal search_calls
+        if search_calls >= _MAX_WEB_SEARCHES:
+            logger.info(
+                "[agent→tool] web_search limit (%d) exhausted, refusing query=%r",
+                _MAX_WEB_SEARCHES, query,
+            )
+            return (
+                f"SEARCH LIMIT REACHED: all {_MAX_WEB_SEARCHES} allowed web searches "
+                "are already used. Do NOT call web_search again. Write the final "
+                "biography NOW from the information you already have; if it is "
+                "scarce, write a shorter, more general paragraph."
+            )
+        search_calls += 1
+        logger.info(
+            "[agent→tool] web_search called (%d/%d): query=%r fetch_content=%s",
+            search_calls, _MAX_WEB_SEARCHES, query, fetch_content,
+        )
         result = smart_web_search(query, fetch_content)
         logger.info("[agent→tool] web_search result length: %d chars", len(result))
         return result
@@ -301,7 +346,12 @@ async def web_research_bio(
             f'IMPORTANT: The artist name must appear EXACTLY as "{artist_name}" — do not translate or modify it.'
         )
     try:
-        result = await agent.run(prompt)
+        # request_limit is a last-resort backstop against a model that ignores
+        # the tool's SEARCH-LIMIT refusal and loops forever; the graceful path
+        # (agent finishes on its own after 3 searches) never gets near it.
+        result = await agent.run(
+            prompt, usage_limits=UsageLimits(request_limit=_MAX_LLM_REQUESTS),
+        )
         return (result.output or "").strip()
     except Exception as e:
         logger.warning("[web_research_bio] agent error for %s: %s", artist_name, e)
