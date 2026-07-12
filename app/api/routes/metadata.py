@@ -77,10 +77,18 @@ class FactOut(BaseModel):
 
 
 class RandomFact(BaseModel):
-    """Random fact with attribution context."""
+    """Random fact with attribution context.
+
+    ``image`` is a relative ``/covers/...`` URL: the track's album art for
+    song facts (artist photo as fallback), the cached AudioDB photo for
+    artist facts. None when neither exists — the frontend shows a placeholder.
+    """
     fact: str
     context: str
     type: Literal["artist", "song"]
+    artist: str = ""
+    title: Optional[str] = None
+    image: Optional[str] = None
 
 
 # ── Artist facts ─────────────────────────────────────────────────────────────
@@ -143,8 +151,53 @@ def add_song_fact(
 
 # ── Random facts (landing page) ──────────────────────────────────────────────
 
+def _artist_photo(slug: str | None, collection_name: str) -> str | None:
+    """Cached AudioDB photo (thumb/cutout) for an artist — a cheap SQLite read."""
+    if not slug:
+        return None
+    try:
+        ad = MetadataDB.get_artist_audiodb(slug, collection_name) or {}
+    except Exception:
+        return None
+    return ad.get("thumb_path") or ad.get("cutout_path")
+
+
+def _song_cover(request: Request, collection_name: str, artist: str, title: str) -> str | None:
+    """cover_art_path of the track matching (artist, title) — one filtered scroll.
+
+    The SQLite fact row stores the PRIMARY artist's name, while the Qdrant
+    ``artist`` payload keeps the raw tag ("Eminem, Nate Dogg") — so the match
+    also accepts the per-participant ``artists`` list (element-wise match).
+    """
+    db_client = getattr(request.app.state, "db_client", None) if request else None
+    if db_client is None or not artist or not title:
+        return None
+    from qdrant_client import models as qmodels
+    flt = qmodels.Filter(
+        must=[qmodels.FieldCondition(key="title", match=qmodels.MatchValue(value=title))],
+        should=[
+            qmodels.FieldCondition(key="artist", match=qmodels.MatchValue(value=artist)),
+            qmodels.FieldCondition(key="artists", match=qmodels.MatchValue(value=artist)),
+        ],
+    )
+    try:
+        points, _ = db_client.qdrant.scroll(
+            collection_name=collection_name,
+            scroll_filter=flt,
+            limit=1,
+            with_payload=["cover_art_path"],
+            with_vectors=False,
+        )
+    except Exception:
+        return None
+    if not points:
+        return None
+    return (points[0].payload or {}).get("cover_art_path")
+
+
 @router.get("/metadata/random-facts")
 def get_random_facts(
+    request: Request,
     current_user: User = Depends(get_current_user),
     limit: int = Query(5, ge=1, le=20, description="Number of random facts"),
     lang: str = Query("en", description="Preferred language for refined facts"),
@@ -152,11 +205,21 @@ def get_random_facts(
     """Return random facts from the collection's fact pool.
 
     Refined (AI-shortened) facts in the requested language are preferred;
-    raw English facts only top up the remainder.
+    raw English facts only top up the remainder. Each fact carries an
+    attribution image (album cover / artist photo) for the home strip.
     """
     derived = derive_collection_for_user(current_user)
     raw = MetadataDB.get_random_facts(collection_name=derived, limit=limit, lang=lang)
-    return [RandomFact(**r) for r in raw]
+    out: List[RandomFact] = []
+    for r in raw:
+        artist_slug = r.pop("artist_slug", None)
+        image = None
+        if r.get("type") == "song":
+            image = _song_cover(request, derived, r.get("artist") or "", r.get("title") or "")
+        if not image:
+            image = _artist_photo(artist_slug, derived)
+        out.append(RandomFact(**{k: v for k, v in r.items() if v is not None} | {"image": image}))
+    return out
 
 
 # ── Track-level facts (landing player) ───────────────────────────────────────

@@ -3281,10 +3281,14 @@
        only where the free air actually exists: the desktop split on windows
        tall enough that the strip can't collide with the hero content. */
     .home-extras{display:none}
-    @media (min-width:901px) and (min-height:760px){
+    /* 640px height gate (was 760): 16" laptops at 125-150% scaling land at
+       ~700-860px viewport height and lost the strip entirely. The bigger
+       bottom padding keeps the facts off the window edge (they used to sit
+       flush against it and read as clipped). */
+    @media (min-width:901px) and (min-height:640px){
       .home-extras{display:flex;position:absolute;left:0;right:0;bottom:0;
         max-width:1380px;margin:0 auto;width:100%;box-sizing:border-box;
-        padding:0 clamp(20px,3vw,48px) clamp(16px,2.4vh,28px);
+        padding:0 clamp(20px,3vw,48px) clamp(26px,4vh,48px);
         align-items:flex-end;gap:clamp(32px,4vw,64px);
         pointer-events:none;animation:homeExtrasIn .9s ease .2s both}
     }

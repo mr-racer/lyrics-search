@@ -2324,7 +2324,13 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
     // box below on mobile, since a shrunk flex box doesn't clip an
     // auto-margin-pushed child by default).
     <div className="efir-hero" style={{
-      position:'relative', display:'flex', flexDirection:'column', flex:1, minHeight:0, overflow:'hidden',
+      // overflow:clip + clip-margin (not plain hidden): the orb's glow
+      // (fyGlowPulse box-shadow + halo) reaches ~60px past the hero's left
+      // edge — hidden cut it at the box line, a hard vertical seam by the
+      // play orb. 72px of slack lets the glow fade out naturally while still
+      // clipping runaway content on short windows.
+      position:'relative', display:'flex', flexDirection:'column', flex:1, minHeight:0,
+      overflow:'clip', overflowClipMargin:'72px',
       padding: isMobile ? '4px 2px 4px' : '4px 0 0',
       animation:'fadeInUp .55s cubic-bezier(.22,.9,.3,1)',
     }}>
@@ -3082,7 +3088,9 @@ function HomeDailyExtras({ isDark, lang }) {
   useEffect(() => {
     let alive = true;
     const today = new Date().toDateString();
-    const cacheKey = 'musix_daily_facts';
+    // v2: facts now carry artist/title/image for the attribution thumbs —
+    // a stale v1 cache (text-only shape) would render a day of empty thumbs.
+    const cacheKey = 'musix_daily_facts_v2';
     let cached = null;
     try { cached = JSON.parse(localStorage.getItem(cacheKey) || 'null'); } catch {}
     if (cached && cached.date === today && cached.lang === lang && Array.isArray(cached.facts)) {
@@ -3128,37 +3136,85 @@ function HomeDailyExtras({ isDark, lang }) {
     fmtDiscoveries(pulse.discoveries),
   ].filter(Boolean) : [];
 
+  // Attribution line under each fact — who/what it is about. The server now
+  // sends artist/title/image directly; the context split is a fallback for
+  // an older server ("Artist — Title").
+  const factWho = (f) => {
+    if (f.type === 'song') return f.title || ((f.context || '').split(' — ').slice(1).join(' — ')) || f.context || '';
+    return f.artist || f.context || '';
+  };
+  const factSub = (f) => {
+    if (f.type === 'song') return f.artist || (f.context || '').split(' — ')[0] || '';
+    return lang === 'ru' ? 'об артисте' : 'about the artist';
+  };
+
   return (
     <div className="home-extras">
-      {/* Left: the day's facts — bare lines separated by air, no card chrome */}
-      <div style={{ display:'flex', gap:'clamp(26px,3.4vw,48px)', flex:'1 1 auto', minWidth:0, alignItems:'flex-end' }}>
-        {hasFacts && facts.slice(0, 3).map((f, i) => (
-          <div key={i} style={{ flex:'1 1 0', minWidth:0, maxWidth:340 }}>
-            <div className="mono" style={{ fontSize:9, letterSpacing:'.18em', color:c.textSubtle,
-              marginBottom:7, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', textTransform:'uppercase' }}>
-              {f.type === 'artist' ? (lang==='ru'?'ОБ АРТИСТЕ':'ARTIST') : (lang==='ru'?'О ПЕСНЕ':'SONG')}
-              {f.context ? ` · ${f.context}` : ''}
+      {/* Left: the day's facts — thumb (album art / artist photo) + a bold
+          who-line, then the fact itself. The weight contrast (650 name vs
+          regular fact) is what keeps the two from blending. */}
+      <div style={{ display:'flex', gap:'clamp(22px,3vw,44px)', flex:'1 1 auto', minWidth:0, alignItems:'flex-end' }}>
+        {hasFacts && facts.slice(0, 3).map((f, i) => {
+          const img = homeCoverUrl(f.image);
+          const isArtist = f.type === 'artist';
+          return (
+            <div key={i} style={{ flex:'1 1 0', minWidth:0, maxWidth:380 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:11, marginBottom:9 }}>
+                <div style={{ width:44, height:44, flex:'none', borderRadius: isArtist ? '50%' : 10,
+                  overflow:'hidden', display:'grid', placeItems:'center',
+                  background: isDark ? 'rgba(255,255,255,.06)' : 'rgba(0,0,0,.05)',
+                  boxShadow: isDark
+                    ? '0 8px 18px rgba(0,0,0,.35), inset 0 0 0 1px rgba(255,255,255,.09)'
+                    : '0 8px 18px rgba(60,45,100,.16), inset 0 0 0 1px rgba(0,0,0,.05)' }}>
+                  {img
+                    ? <img src={img} alt="" loading="lazy" style={{ width:'100%', height:'100%', objectFit:'cover' }} />
+                    : <span style={{ fontSize:17, opacity:.45 }}>{isArtist ? '👤' : '♪'}</span>}
+                </div>
+                <div style={{ minWidth:0 }}>
+                  <div style={{ fontSize:13, fontWeight:650, color:c.text, lineHeight:1.25,
+                    whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                    {factWho(f)}
+                  </div>
+                  <div className="mono" style={{ fontSize:9.5, letterSpacing:'.14em', color:c.textSubtle,
+                    marginTop:3, textTransform:'uppercase', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                    {factSub(f)}
+                  </div>
+                </div>
+              </div>
+              <div style={{ fontSize:13, color:c.textMuted, lineHeight:1.55,
+                display:'-webkit-box', WebkitLineClamp:3, WebkitBoxOrient:'vertical', overflow:'hidden' }}>
+                {f.fact}
+              </div>
             </div>
-            <div style={{ fontSize:12, color:c.textMuted, lineHeight:1.55, opacity:.85,
-              display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical', overflow:'hidden' }}>
-              {f.fact}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
-      {/* Right: the weekly pulse — a single serif accent + one quiet line,
-          mirroring the hero's type scale instead of a widget box */}
+      {/* Right: the weekly pulse — gradient serif accent + tinted chips
+          instead of one grey line, so the stats read as alive, not ambient dust. */}
       {hasPulse && (
         <div style={{ flexShrink:0, textAlign:'right' }}>
-          <div className="mono" style={{ fontSize:9, letterSpacing:'.18em', color:c.textSubtle, marginBottom:6 }}>
+          <div className="mono" style={{ fontSize:9.5, letterSpacing:'.2em', color:c.textSubtle, marginBottom:9 }}>
             {lang==='ru'?'ЗА ЭТУ НЕДЕЛЮ':'THIS WEEK'}
           </div>
-          <div className="serif" style={{ fontSize:21, lineHeight:1, color:c.text, opacity:.82, letterSpacing:'-0.01em' }}>
+          <div className="serif" style={{ fontSize:30, lineHeight:1, letterSpacing:'-0.01em',
+            background: isDark
+              ? 'linear-gradient(100deg, oklch(78% 0.14 285), oklch(78% 0.15 340))'
+              : 'linear-gradient(100deg, oklch(46% 0.19 285), oklch(50% 0.2 340))',
+            WebkitBackgroundClip:'text', backgroundClip:'text', WebkitTextFillColor:'transparent', color:'transparent' }}>
             {fmtDur(pulse.seconds_listened) || (lang==='ru' ? 'пока тихо' : 'quiet so far')}
           </div>
           {pulseBits.length > 0 && (
-            <div style={{ fontSize:11, color:c.textSubtle, marginTop:6 }}>
-              {pulseBits.join(' · ')}
+            <div style={{ display:'flex', gap:8, justifyContent:'flex-end', flexWrap:'wrap', marginTop:12 }}>
+              {pulseBits.map((b, i) => (
+                <span key={i} style={{ display:'inline-flex', alignItems:'center', gap:7,
+                  padding:'5px 11px', borderRadius:999, fontSize:11.5, color:c.textMuted,
+                  background: isDark ? 'rgba(255,255,255,.05)' : 'rgba(0,0,0,.04)',
+                  boxShadow:'inset 0 1px 0 rgba(255,255,255,.07)' }}>
+                  <span style={{ width:5, height:5, borderRadius:'50%', flex:'none',
+                    background: i === 0 ? 'oklch(68% 0.19 285)' : 'oklch(70% 0.19 340)' }} />
+                  {b}
+                </span>
+              ))}
             </div>
           )}
         </div>
@@ -5714,28 +5770,6 @@ function PlaylistsListView({ playlists, onOpen, onCreate, onPlayAll, lang }) {
   );
 }
 
-// Deterministic per-day pick: same formula spirit as the backend's
-// featured-artist rotation (sha1(date) % N) — a tiny string hash seeded by
-// today's date + a per-slot salt, linear-probed to avoid picking the same
-// index twice. Everyone sees the same picks on a given day; they roll over
-// at local midnight.
-function dailyPickIndices(length, count, salt) {
-  if (length <= 0) return [];
-  const day = new Date().toDateString();
-  const seen = new Set();
-  const picks = [];
-  for (let slot = 0; slot < count && seen.size < length; slot++) {
-    const s = `${day}|${salt}|${slot}`;
-    let h = 0;
-    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
-    let idx = h % length;
-    while (seen.has(idx)) idx = (idx + 1) % length;
-    seen.add(idx);
-    picks.push(idx);
-  }
-  return picks;
-}
-
 // ─── VIBE ALBUM RAIL («под твою волну» — AI album picks in the library) ──────
 // Airy and unboxed on purpose: an ai-orb + kicker line, a serif subline, then
 // a loose row of covers with enlarged captions. Data comes from
@@ -5799,11 +5833,6 @@ function AlbumsGridTab({ albums, suggestions, sort, onSortChange, onAlbumOpen, i
     {id:'year_asc',     label: lang==='ru' ? 'год ↑' : 'year ↑'},
     {id:'track_count_desc', label: lang==='ru' ? 'больше треков' : 'most tracks'},
   ];
-  const todaysPicks = useMemo(() => (
-    (albums && albums.length > 3)
-      ? dailyPickIndices(albums.length, 3, 'lib-albums-today').map(i => albums[i])
-      : []
-  ), [albums]);
   if (!albums || albums.length === 0) {
     return <div style={{ padding:'64px 20px', textAlign:'center', color:c.textSubtle, fontSize:'14px' }}>{lang==='ru' ? 'Нет треков с album-тегом в этой библиотеке' : 'No tracks with album tag in this library'}</div>;
   }
@@ -5816,27 +5845,6 @@ function AlbumsGridTab({ albums, suggestions, sort, onSortChange, onAlbumOpen, i
           onAlbumOpen={onAlbumOpen}
           isDark={isDark} lang={lang}
         />
-      )}
-      {todaysPicks.length > 0 && (
-        <div style={{ marginBottom:24 }}>
-          <div className="mono" style={{ fontSize:11, letterSpacing:'.18em', color:c.textSubtle, marginBottom:11 }}>
-            {lang==='ru' ? 'СЕГОДНЯ В ПОДБОРКЕ' : "TODAY'S PICKS"}
-          </div>
-          <div className="lib-grid" style={{ '--lib-grid-min':'176px' }}>
-            {todaysPicks.map((a, i) => (
-              <AlbumCard
-                key={`today-${a.primary_artist_slug}-${a.album_title}`}
-                album={a} index={i} isDark={isDark} lang={lang}
-                navigateToArtist={navigateToArtist}
-                onClick={(e) => {
-                  const coverEl = e?.currentTarget?.querySelector('.lib-album-cover');
-                  const r = (coverEl || e?.currentTarget)?.getBoundingClientRect?.();
-                  onAlbumOpen(a, r ? { top:r.top, left:r.left, width:r.width, height:r.height } : null);
-                }}
-              />
-            ))}
-          </div>
-        </div>
       )}
       <div className="lib-sortrow" style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'6px 2px 18px', fontSize:'13px' }}>
         <span className="mono" style={{ color:c.textSubtle, letterSpacing:'0.06em' }}>{albums.length} {lang==='ru'?'альбомов':'albums'}</span>
@@ -6651,9 +6659,33 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
     apiFetch(`/library/listening-stats?lang=${lang}&tz_offset_minutes=${tzOffset}`).then(setListenData).catch(() => setListenData(null));
     apiFetch(`/library/rhythm?lang=${lang}&tz_offset_minutes=${tzOffset}`).then(setRhythmData).catch(() => setRhythmData(null));
     apiFetch(`/library/engagement?lang=${lang}`).then(setEngagementData).catch(() => setEngagementData(null));
-    // Vibe-based album picks (server caches ~6h, so the refire per visit is cheap).
+  }, [lang, visible]);
+
+  // ── AI album picks («под твою волну») — 6h localStorage cache ─────────
+  // The endpoint can take seconds on a cold server cache (per-vibe CLAP mean
+  // over albums), which made the rail pop in late on every Library visit.
+  // Fresh cache → render instantly, no request at all; only a stale/absent
+  // cache hits the network. Empty results are NOT cached, so a library that
+  // grows its first vibes isn't stuck railless for 6 hours.
+  useEffect(() => {
+    if (visible === false) return;
+    const cacheKey = `musix_vibe_albums_${lang}`;
+    try {
+      const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null');
+      if (cached && Array.isArray(cached.suggestions) && cached.suggestions.length > 0
+          && (Date.now() - (cached.ts || 0)) < 6 * 3600 * 1000) {
+        setAiAlbums(cached.suggestions);
+        return;
+      }
+    } catch {}
     apiFetch(`/recommend/vibes/album-suggestions?lang=${lang}`)
-      .then(d => setAiAlbums(d?.suggestions || []))
+      .then(d => {
+        const s = (d && d.suggestions) || [];
+        setAiAlbums(s);
+        if (s.length > 0) {
+          try { localStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), suggestions: s })); } catch {}
+        }
+      })
       .catch(() => setAiAlbums([]));
   }, [lang, visible]);
 

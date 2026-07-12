@@ -760,7 +760,9 @@ class TestRandomFacts(_IsolatedDB):
             lang="ru", refined=["Отшлифованный факт"])
         out = MetadataDB.get_random_facts("c", limit=1, lang="ru")
         assert out == [{"fact": "Отшлифованный факт",
-                        "context": "Radiohead", "type": "artist"}]
+                        "context": "Radiohead", "type": "artist",
+                        "artist": "Radiohead", "artist_slug": "radiohead",
+                        "title": None}]
 
     def test_falls_back_to_refined_en_before_raw(self):
         self._seed_artist()
@@ -789,7 +791,9 @@ class TestRandomFacts(_IsolatedDB):
             lang="ru", refined=["Факт о песне"])
         out = MetadataDB.get_random_facts("c", limit=1, lang="ru")
         assert out == [{"fact": "Факт о песне",
-                        "context": "Radiohead — Creep", "type": "song"}]
+                        "context": "Radiohead — Creep", "type": "song",
+                        "artist": "Radiohead", "artist_slug": "radiohead",
+                        "title": "Creep"}]
 
     def test_one_fact_per_entity(self):
         self._seed_artist()

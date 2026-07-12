@@ -1068,7 +1068,10 @@ class MetadataDB:
         ``artists``/``songs`` join — refined rows themselves are
         collection-independent (see :meth:`get_refined_facts`).
 
-        Returns list of dicts: ``{"fact": str, "context": str, "type": str}``.
+        Returns list of dicts:
+        ``{"fact", "context", "type", "artist", "artist_slug", "title"}``
+        (``title`` is None for artist facts) — the extra attribution fields
+        let the route resolve a cover / artist image for the home strip.
         """
         import json as _json
         import random as _random
@@ -1083,11 +1086,14 @@ class MetadataDB:
                 break
             rows = conn.execute(
                 """
-                SELECT refined_json, context, type FROM (
+                SELECT refined_json, context, type, artist, artist_slug, title FROM (
                     SELECT
                         rf.refined_json,
                         a.name AS context,
-                        'artist' AS type
+                        'artist' AS type,
+                        a.name AS artist,
+                        a.slug AS artist_slug,
+                        NULL AS title
                     FROM refined_facts rf
                     JOIN artists a ON a.slug = rf.scope_key
                     WHERE rf.scope = 'artist' AND rf.lang = ?
@@ -1098,7 +1104,10 @@ class MetadataDB:
                     SELECT
                         rf.refined_json,
                         a.name || ' — ' || s.title AS context,
-                        'song' AS type
+                        'song' AS type,
+                        a.name AS artist,
+                        a.slug AS artist_slug,
+                        s.title AS title
                     FROM refined_facts rf
                     JOIN songs s ON s.slug = rf.scope_key
                     JOIN artists a ON a.slug = s.artist_slug
@@ -1110,7 +1119,7 @@ class MetadataDB:
                 """,
                 (lng, collection_name, lng, collection_name, limit * 4),
             ).fetchall()
-            for refined_json, context, ftype in rows:
+            for refined_json, context, ftype, artist, artist_slug, title in rows:
                 if len(out) >= limit:
                     break
                 key = (ftype, context)
@@ -1136,17 +1145,23 @@ class MetadataDB:
                     "fact": _random.choice(texts),
                     "context": context,
                     "type": ftype,
+                    "artist": artist,
+                    "artist_slug": artist_slug,
+                    "title": title,
                 })
                 seen.add(key)
 
         if len(out) < limit:
             rows = conn.execute(
                 """
-                SELECT fact, context, type FROM (
+                SELECT fact, context, type, artist, artist_slug, title FROM (
                     SELECT
                         af.fact,
                         a.name AS context,
-                        'artist' AS type
+                        'artist' AS type,
+                        a.name AS artist,
+                        a.slug AS artist_slug,
+                        NULL AS title
                     FROM artist_facts af
                     JOIN artists a ON a.slug = af.artist_slug
                     WHERE a.collection_name = ? AND af.lang = 'en'
@@ -1156,7 +1171,10 @@ class MetadataDB:
                     SELECT
                         sf.fact,
                         a.name || ' — ' || s.title AS context,
-                        'song' AS type
+                        'song' AS type,
+                        a.name AS artist,
+                        a.slug AS artist_slug,
+                        s.title AS title
                     FROM song_facts sf
                     JOIN songs s ON s.slug = sf.song_slug
                     JOIN artists a ON a.slug = s.artist_slug
@@ -1167,13 +1185,16 @@ class MetadataDB:
                 """,
                 (collection_name, collection_name, limit * 4),
             ).fetchall()
-            for fact, context, ftype in rows:
+            for fact, context, ftype, artist, artist_slug, title in rows:
                 if len(out) >= limit:
                     break
                 key = (ftype, context)
                 if key in seen:
                     continue
-                out.append({"fact": fact, "context": context, "type": ftype})
+                out.append({
+                    "fact": fact, "context": context, "type": ftype,
+                    "artist": artist, "artist_slug": artist_slug, "title": title,
+                })
                 seen.add(key)
         return out
 
