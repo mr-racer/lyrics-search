@@ -187,6 +187,99 @@ async def enrich_profile(
     return {**content, "islands": profile["islands"]}
 
 
+# ── Vibe names: short labels for the ephemeral «вайбики» clusters ────────────
+#
+# Same shape as island naming, but its own prompt/cache: vibes are the fast
+# mood layer (halflife ~2.5 days), so their names are cached under a separate
+# kind keyed by the vibes' membership hash — the cache self-invalidates as the
+# vibes churn, exactly like island names do when taste drifts.
+
+VIBE_NAMES_KIND = "vibe_names"
+
+_VIBE_NAMES_SYSTEM = """You name a music listener's current "vibes" — small short-lived clusters of tracks they keep returning to these days — for a music player. Output names in {lang_name}.
+
+INPUT: each vibe has an id, its genre tags, and its member tracks (artist — title).
+
+For EACH vibe write ONE name, 2-3 words, in {lang_name}:
+- Name the actual sound: the genre plus one concrete quality (pace, mood, texture). A genre term is welcome.
+- Plain and matter-of-fact, like a label on a shelf. No pathos, no poetry, no invented scenes or places.
+- Never use artist or song names.
+- Ground every word in the given tracks and genres — if the data doesn't show it, don't write it.
+
+OUTPUT: ONLY minified JSON, no prose, no fences:
+{{"vibe_names": {{"<vibe_id>": "...", ...}}}}"""
+
+
+def _vibe_names_user_prompt(vibes: list[dict]) -> str:
+    lines = ["CURRENT VIBES (strongest first):"]
+    for i, v in enumerate(vibes, 1):
+        tracks = v["tracks"]
+        genres = _distinct_genres(tracks)
+        members = "; ".join(f"{m['artist']} — {m['title']}" for m in tracks)
+        lines.append(f"{i}. id={v['track_id']}")
+        lines.append(f"   genres: {', '.join(genres) if genres else '(no genre tags)'}")
+        lines.append(f"   tracks: {members}")
+    return "\n".join(lines)
+
+
+def get_cached_vibe_names(collection_name: str, lang: str, vibes: list[dict]) -> dict:
+    """Cached ``{vibe_track_id: name}`` if it matches the CURRENT vibes, else {}.
+
+    ``profile_source_hash`` works verbatim here — vibes reuse the island shape,
+    and the hash is membership-based, so any churn in the clusters is a miss.
+    """
+    if not vibes:
+        return {}
+    cached = MetadataDB.get_recsys_llm_text(
+        collection_name, VIBE_NAMES_KIND, lang,
+        source_hash=profile_source_hash(vibes),
+    )
+    return (cached or {}).get("vibe_names") or {}
+
+
+async def generate_vibe_names(
+    *,
+    qdrant_client,
+    collection_name: str,
+    lang: str = "en",
+    llm_base_url: str | None = None,
+    llm_model: str | None = None,
+) -> dict:
+    """Generate + cache names for the current vibes.
+
+    Returns ``{"vibe_names": {vibe_track_id: name}}`` (empty when there are no
+    vibes). Vibes are recomputed via ``long_term_profile`` so the names are
+    hashed against exactly what GET /recommend/profile serves.
+    """
+    profile = stream_service.long_term_profile(
+        qdrant_client=qdrant_client, collection_name=collection_name,
+    )
+    vibes = profile.get("vibes") or []
+    if not vibes:
+        return {"vibe_names": {}}
+
+    raw = await ask_llm(
+        _vibe_names_user_prompt(vibes),
+        system_prompt=_VIBE_NAMES_SYSTEM.format(lang_name=_lang_name(lang)),
+        base_url=llm_base_url,
+        model=llm_model,
+        temperature=0.6,
+        parse_json=True,
+    )
+    valid_ids = {v["track_id"] for v in vibes}
+    vibe_names = {
+        k: str(v).strip()
+        for k, v in (raw.get("vibe_names") or {}).items()
+        if k in valid_ids and str(v).strip()
+    }
+    content = {"vibe_names": vibe_names}
+    MetadataDB.set_recsys_llm_text(
+        collection_name, VIBE_NAMES_KIND, lang,
+        profile_source_hash(vibes), content,
+    )
+    return content
+
+
 # ── Taste vibe: one short "wave" phrase for the For-You hero ─────────────────
 #
 # Blends LONG-TERM taste (islands + axes) with SHORT-TERM rotation (recently
@@ -207,7 +300,8 @@ You are given the listener's LONG-TERM taste (stable islands of tracks they love
 Rules:
 - ONE phrase, max ~110 characters. No second sentence.
 - Evocative and concrete: name the sound, the mood, the energy. NEVER filler ("eclectic", "diverse taste", "music lover", "wide range").
-- No emoji, no quotes, no artist names, no hashtags.
+- No emoji, no quotes, no hashtags. Prefer describing the sound over name-dropping artists.
+- HARD RULE — artist names are untouchable: if you mention an artist at all, copy the name EXACTLY as it is spelled in the input, character for character. NEVER translate, transliterate, localize or grammatically decline an artist name into {lang_name} (or any language). "Twenty One Pilots" must never become "Двадцать один пилот". This rule outranks the output-language rule: the phrase is in {lang_name}, artist names stay verbatim.
 - No trailing period unless it reads naturally.
 
 Output ONLY the phrase text — nothing else."""

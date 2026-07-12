@@ -822,11 +822,11 @@
     /* Hidden scrollbars for the facts shelf + albums timeline strip */
     .atlas-shelf { scrollbar-width: none; -ms-overflow-style: none; }
     .atlas-shelf::-webkit-scrollbar { display: none; }
-    /* AudioDB cutout/monogram rises in with the hero; hides on narrow
-       viewports where the name needs the room */
+    /* AudioDB cutout/monogram rises in with the hero. Stays visible on narrow
+       viewports too — AtlasHero shrinks/repositions it inline via isMobile
+       (it used to be display:none here, which read as "no artist photo"). */
     @keyframes atlasCutoutIn { from { opacity: 0; transform: translateY(18px); } to { opacity: 1; transform: translateY(0); } }
     .atlas-cutout { animation: atlasCutoutIn 0.8s cubic-bezier(.22,.9,.3,1) 0.15s both; }
-    @media (max-width: 880px) { .atlas-cutout { display: none; } }
     @media (prefers-reduced-motion: reduce) {
       .atlas-cutout { animation: none !important; opacity: 1 !important; }
     }
@@ -3551,9 +3551,10 @@
 
     /* ═══ Mobile battery policy (пакет C) ═══════════════════════════════════
        Continuous decorative animations are OFF on phones. Deliberately kept:
-       the home wave/orb (fy-*, efir-*), the playing-track EQ bars, marquee
-       for long titles, loading spinners/skeletons, the fire/water cover
-       effect, and every interaction-driven transition. */
+       the playing-track EQ bars, marquee for long titles, loading
+       spinners/skeletons, the fire/water cover effect, the orb's ring spin
+       (its one always-on sign of life), and every interaction-driven
+       transition. */
     @media (max-width: 768px), (hover: none) and (pointer: coarse) {
       .rec2-rim,                       /* rec2Flow — animated background-position (repaints) */
       .rec2-lq-hue,                    /* rec2Hue — 16s hue-rotate filter, the costliest */
@@ -3570,6 +3571,26 @@
       .tc-hero-orb {                   /* tcFloat */
         animation: none !important;
       }
+      /* Home («Эфир») — the wave/orb used to be exempt, but the stack (four
+         blur(40px) aurora blobs + caustics overlay + the orb's animated
+         box-shadow) is the main battery drain on phones. Freeze the drift:
+         all the gradients stay visible, only the perpetual motion stops.
+         The .fy-ring spin is deliberately NOT frozen (small element, cheap
+         transform loop) so the orb still reads as alive. */
+      .efir-caustics { display: none !important; }        /* mix-blend-mode overlay layer */
+      .efir-wave .fy-bg1, .efir-wave .fy-bg2,             /* page aurora blobs (blur 40px) */
+      .efir-wave .fy-bg3, .efir-wave .fy-bg4,
+      .fy-hybrid,                                          /* fyGlowPulse — animated box-shadow */
+      .fy-hybrid .fy-bg1, .fy-hybrid .fy-bg2,              /* orb blobs (blur 9px each) */
+      .fy-hybrid .fy-bg3, .fy-hybrid .fy-bg4,
+      .fy-breathe,                                         /* fyBreath / fyBreathPlay scale */
+      .fy-halo {                                           /* fyHaloOut pulse */
+        animation: none !important;
+      }
+      .fy-glasscap {
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+      }
       /* Fixed bars over scrolling content are the most expensive
          backdrop-filters; their backgrounds are ~0.97 opaque anyway. */
       .mobile-tabbar, .mobile-miniplayer {
@@ -3582,5 +3603,14 @@
        browser freezes on its own). App toggles the class on <html> via
        visibilitychange — GPU goes quiet while the music keeps playing. */
     html.app-hidden *, html.app-hidden *::before, html.app-hidden *::after {
+      animation-play-state: paused !important;
+    }
+
+    /* Off-stage section: every screen (home included) stays permanently
+       mounted with visibility:hidden — but visibility does NOT stop CSS
+       animations, so the home orb/aurora (and the artist-page rays, player
+       glows, …) kept burning GPU behind whichever section was actually on
+       screen. App stamps this class on every inactive section wrapper. */
+    .section-offstage *, .section-offstage *::before, .section-offstage *::after {
       animation-play-state: paused !important;
     }

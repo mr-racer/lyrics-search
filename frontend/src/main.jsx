@@ -956,38 +956,52 @@ function useAIStatus() {
   };
 }
 
-// ─── useMediaSession — expose now-playing to the OS ─────────────────────────
-// Feeds the Media Session API → Windows SMTC (the media flyout by the clock,
-// lock screen, and hardware/media keys), the same mechanism Spotify/Yandex web
-// use. Title/artist/album + album art + play/pause/prev/next + a position
-// scrubber. No-op where unsupported; Chromium/Edge give the full SMTC.
+// ─── Media Session — expose now-playing to the OS ───────────────────────────
+// applyMediaSessionNow is module-level and SYNCHRONOUS on purpose: track
+// auto-advance happens directly inside the <audio> 'ended' handler (see
+// setSrc), because on a locked phone mobile Chrome freezes timers and React
+// commits while non-audible. The old flow updated the OS notification only
+// from a React effect (state → props → derived track → effect), so with the
+// screen off the audio moved on but the notification stayed on the previous
+// track. Advance paths now call this in the same sync task as el.src = …;
+// the hook effect below re-applies the same metadata later as a reconciler.
+function applyMediaSessionNow(track) {
+  if (!('mediaSession' in navigator)) return;
+  if (!track) { try { navigator.mediaSession.metadata = null; } catch {} return; }
+  let art = null;
+  const rel = track.cover_art_path;
+  if (rel) {
+    const u = rel.startsWith('http') ? rel : `${API}${rel}`;
+    art = u.startsWith('http') ? u : window.location.origin + u;
+  }
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: track.title || '',
+      artist: track.artist || '',
+      album: track.album || '',
+      artwork: art ? [
+        { src: art, sizes: '256x256', type: 'image/jpeg' },
+        { src: art, sizes: '512x512', type: 'image/jpeg' },
+      ] : [],
+    });
+  } catch {}
+}
+
+// useMediaSession feeds the Media Session API → Windows SMTC (the media flyout
+// by the clock, lock screen, and hardware/media keys), the same mechanism
+// Spotify/Yandex web use. Title/artist/album + album art +
+// play/pause/prev/next + a position scrubber. No-op where unsupported;
+// Chromium/Edge give the full SMTC.
 function useMediaSession({ currentTrack, isPlaying, audioRef, onPlay, onPause, onNext, onPrev, onSeek }) {
   // Action callbacks via a ref so handlers register once but always call the
   // latest closures (next/prev/seek are recreated each render).
   const cbs = useRef({});
   cbs.current = { onPlay, onPause, onNext, onPrev, onSeek };
 
-  // Metadata on track change.
+  // Metadata on track change (reconciler for the sync path above — also covers
+  // manual track picks that go through normal React renders).
   useEffect(() => {
-    if (!('mediaSession' in navigator)) return;
-    if (!currentTrack) { navigator.mediaSession.metadata = null; return; }
-    let art = null;
-    const rel = currentTrack.cover_art_path;
-    if (rel) {
-      const u = rel.startsWith('http') ? rel : `${API}${rel}`;
-      art = u.startsWith('http') ? u : window.location.origin + u;
-    }
-    try {
-      navigator.mediaSession.metadata = new MediaMetadata({
-        title: currentTrack.title || '',
-        artist: currentTrack.artist || '',
-        album: currentTrack.album || '',
-        artwork: art ? [
-          { src: art, sizes: '256x256', type: 'image/jpeg' },
-          { src: art, sizes: '512x512', type: 'image/jpeg' },
-        ] : [],
-      });
-    } catch {}
+    applyMediaSessionNow(currentTrack);
   }, [currentTrack?.track_id, currentTrack?.title, currentTrack?.artist, currentTrack?.album, currentTrack?.cover_art_path]);
 
   // Register action handlers once.
@@ -2106,7 +2120,7 @@ function axisPalette(axes) {
   };
 }
 
-function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigateToArtist, onPlayTrack, onPalette }) {
+function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigateToArtist, onPlayTrack, onPalette, aiActive }) {
   const c = useColors(isDark);
   const isMobile = useIsMobile();
   const [profile, setProfile] = useState(null);
@@ -2148,6 +2162,40 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, []);
+
+  // Auto-name the «вайбики» (AI) — same pattern as island naming on the
+  // recommend tab: the server never returns a stale name (its cache is keyed
+  // by the vibes' membership hash), so a missing name means "generate now".
+  // Guarded per vibe-set+lang so the setProfile below can't loop the effect.
+  const vibeNamesAttempted = useRef(null);
+  useEffect(() => {
+    if (!aiActive) return;
+    const vs = (profile && profile.vibes) || [];
+    if (!vs.length || !vs.some(v => !v.name)) return;
+    const key = lang + '::' + vs.map(v => v.track_id).join('|');
+    if (vibeNamesAttempted.current === key) return;
+    vibeNamesAttempted.current = key;
+    let alive = true;
+    apiFetch('/recommend/vibes/ai-name', {
+      method: 'POST',
+      body: JSON.stringify({
+        lang,
+        llm_base_url: localStorage.getItem('llm_base_url') || undefined,
+        llm_model: localStorage.getItem('llm_model') || undefined,
+      }),
+    })
+      .then(res => {
+        if (!alive || !res) return;
+        setProfile(prev => prev ? {
+          ...prev,
+          vibes: (prev.vibes || []).map(v => ({
+            ...v, name: (res.vibe_names && res.vibe_names[v.track_id]) || v.name,
+          })),
+        } : prev);
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [profile, aiActive, lang]);
 
   // The wave/vibe phrase — a short AI line over long- + short-term taste. The
   // endpoint returns an instant phrase (cached AI or deterministic fallback)
@@ -2989,7 +3037,7 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLi
           <ForYouHero isDark={isDark} lang={lang}
                       onStartStream={onStartStream} streamActive={streamActive} audio={audio}
                       navigateToArtist={navigateToArtist} onPlayTrack={onPlayTrack}
-                      onPalette={setAuroraBlobs} />
+                      onPalette={setAuroraBlobs} aiActive={aiActive} />
           <LyricsSearchPath isDark={isDark} lang={lang} aiActive={aiActive} onSubmit={onSearchLyrics} compact />
           <LibraryPathCard isDark={isDark} lang={lang} stats={stats} onClick={() => onNav('library')} />
         </div>
@@ -3002,7 +3050,7 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLi
           <ForYouHero isDark={isDark} lang={lang}
                       onStartStream={onStartStream} streamActive={streamActive} audio={audio}
                       navigateToArtist={navigateToArtist} onPlayTrack={onPlayTrack}
-                      onPalette={setAuroraBlobs} />
+                      onPalette={setAuroraBlobs} aiActive={aiActive} />
           {/* Right wing — no cards, just the two paths separated by air. The
               top padding drops the wing's optical start to the hero phrase. */}
           <div className="efir-wing">
@@ -4006,7 +4054,7 @@ function LyricSnippet({ lyrics, query, matchedLine, lang, c }) {
 }
 
 // ─── SEARCH SECTION (redesigned) ──────────────────────────────────────────────
-function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, onAddToPlaylist, searchHandoff }) {
+function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, onAddToPlaylist, searchHandoff, onSearchHandoffDone }) {
   const c = useColors(isDark);
   const aiActive = !!(aiStatus && aiStatus.aiActive);
   const isMobileChat = useIsMobile();  // compact best-hit cover on phones
@@ -4031,7 +4079,9 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
   const [autoMode, setAutoMode] = useState(true);
   const [showHistory, setShowHistory] = useState(false);
   const [historyClosing, setHistoryClosing] = useState(false);
-  const [railOpen, setRailOpen] = useState(() => localStorage.getItem('musix_chat_rail') !== '0');
+  // Hidden by default — the rail only opens when the user explicitly opened it
+  // before ('1' persisted). Anything else (unset / '0') starts collapsed.
+  const [railOpen, setRailOpen] = useState(() => localStorage.getItem('musix_chat_rail') === '1');
   const sessionIdRef = useRef(null);  // current conversation's history-session id (upsert target)
   const chatEndRef = useRef(null);
   const toggleRail = () => setRailOpen(v => {
@@ -4197,8 +4247,10 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
   };
 
   // ── One-shot query handoff (landing lyrics field / spotlight «ещё») ──
-  // ts deduping lets the same query re-fire on a second submit. mode 'grid'
-  // forces the classic tab; 'auto' prefers the AI chat when it's up.
+  // Strictly one-shot: once handled, the parent clears the handoff (and dedupes
+  // repeat submits of the same query itself), so navigating back to this tab
+  // can never re-fire the search/LLM call — it just shows the existing chat.
+  // mode 'grid' forces the classic tab; 'auto' prefers the AI chat when it's up.
   const handledHandoffRef = useRef(null);
   useEffect(() => {
     if (!searchHandoff || !searchHandoff.query) return;
@@ -4213,6 +4265,7 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
       setSearchQuery(searchHandoff.query);
       handleSearch(searchHandoff.query);
     }
+    if (onSearchHandoffDone) onSearchHandoffDone();
   }, [searchHandoff]);
 
   // ── Filter autocomplete: fetch suggestions from /browse ──
@@ -5117,6 +5170,34 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream, 
       })
       .catch(() => {})
       .finally(() => { if (alive) setAutoEnriching(false); });
+    return () => { alive = false; };
+  }, [profile, aiOn, lang]);
+
+  // Same auto-naming for the «вайбики» row — separate endpoint/cache: vibes
+  // churn on a days scale, so their names live under their own membership
+  // hash and regenerate independently of the island names above.
+  const vibeNamesAttempted = useRef(null);
+  useEffect(() => {
+    if (!aiOn) return;
+    const vs = (profile && profile.vibes) || [];
+    if (!vs.length || !vs.some(v => !v.name)) return;
+    const key = lang + '::' + vs.map(v => v.track_id).join('|');
+    if (vibeNamesAttempted.current === key) return;
+    vibeNamesAttempted.current = key;
+    let alive = true;
+    apiFetch('/recommend/vibes/ai-name', {
+      method: 'POST', body: JSON.stringify({ lang, ...llmKw() }),
+    })
+      .then(res => {
+        if (!alive || !res) return;
+        setProfile(prev => prev ? {
+          ...prev,
+          vibes: (prev.vibes || []).map(v => ({
+            ...v, name: (res.vibe_names && res.vibe_names[v.track_id]) || v.name,
+          })),
+        } : prev);
+      })
+      .catch(() => {});
     return () => { alive = false; };
   }, [profile, aiOn, lang]);
 
@@ -14024,6 +14105,9 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
     const track = playlist[index].track;
     const url = buildStreamUrl(track.track_id);
     if (audio) audio.setSrc(url, { trackId: track.track_id, noInfluence: !!playlist[index]._noInfluence }, { autoplay: true });
+    // Sync with the src switch — the React-effect path is frozen on a locked
+    // phone, which left the OS notification stuck on the previous track.
+    applyMediaSessionNow(track);
     // Propagate the new track up so App.playerTrack stays in sync. Without
     // this, LandingScreen / NowPlayingPebble / MiniPlaybackPopout (which all
     // read playerTrack at App level) would keep showing the *initial* track
@@ -14105,6 +14189,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
           audio.setSrc(buildStreamUrl(t.track_id),
             { trackId: t.track_id, noInfluence: !!first._noInfluence },
             { autoplay: true });
+          applyMediaSessionNow(t);
           if (onTrackChange) onTrackChange(t);
         }).catch(() => {});
       }
@@ -15104,17 +15189,21 @@ const atlasGlareMove = (e) => {
 };
 
 function AtlasSpinButton({ onSpin, lang, compact }) {
+  // On phones the full label never fits the hero dock — icon-only everywhere there.
+  const isMobile = useIsMobile();
+  const iconOnly = compact || isMobile;
   return (
     <button onClick={onSpin} className="atlas-glare atlas-play-btn" onMouseMove={atlasGlareMove}
       title={lang==='ru'?'Включить артиста':'Play artist'}
+      aria-label={lang==='ru'?'Включить артиста':'Play artist'}
       style={{
-        padding: compact ? '7px 13px' : '9px 18px', borderRadius:99, flexShrink:0,
+        padding: iconOnly ? '7px 13px' : '9px 18px', borderRadius:99, flexShrink:0,
         background:'linear-gradient(135deg, oklch(67% 0.18 270), oklch(52% 0.22 285))',
-        color:'#fff', fontSize: compact ? 11 : 13, fontWeight:600, letterSpacing:'0.04em',
+        color:'#fff', fontSize: iconOnly ? 11 : 13, fontWeight:600, letterSpacing:'0.04em',
         border:'1px solid oklch(50% 0.2 275 / 0.4)', cursor:'pointer',
         // box-shadow lives in .atlas-play-btn (inline would beat the :hover lift)
       }}>
-      ▶{compact ? '' : ` ${lang==='ru'?'Включить артиста':'Play artist'}`}
+      ▶{iconOnly ? '' : ` ${lang==='ru'?'Включить артиста':'Play artist'}`}
     </button>
   );
 }
@@ -15203,9 +15292,22 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere }) {
                 : `radial-gradient(ellipse 92% 71% at 73% 32%, oklch(96% 0.012 ${hue}) 0%, oklch(92% 0.01 ${hue}) 55%, ${c.bg} 100%)`,
             }} />
             {/* Light-burst inside the centred box (63% ≈ the hero's share of the
-                field) so --burst-x keeps tracking the cutout; rays/flare spill
-                past the box and get clipped by the field, not the hero. */}
-            <div style={{ position:'relative', maxWidth:1120, margin:'0 auto', height:'63%', padding:'0 32px' }}>
+                field) so --burst-x keeps tracking the cutout. The box clips the
+                oversized ray/flare pseudo-elements itself (they are 150vmax) and
+                a two-axis mask dissolves them softly, so the rays die out by the
+                hero's bottom edge instead of riding the field down over the facts. */}
+            <div style={{
+              position:'relative', maxWidth:1120, margin:'0 auto', height:'63%', padding:'0 32px',
+              overflow:'hidden',
+              WebkitMaskImage:
+                'linear-gradient(180deg, #000 0%, #000 55%, transparent 97%), ' +
+                'linear-gradient(90deg, transparent 0%, #000 10%, #000 90%, transparent 100%)',
+              WebkitMaskComposite: 'source-in intersect',
+              maskImage:
+                'linear-gradient(180deg, #000 0%, #000 55%, transparent 97%), ' +
+                'linear-gradient(90deg, transparent 0%, #000 10%, #000 90%, transparent 100%)',
+              maskComposite: 'intersect',
+            }}>
               <div className="atlas-burst" style={{
                 '--burst-x': '80%',
                 '--burst-hue': hue,
@@ -15270,6 +15372,16 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere }) {
         </div>
       )}
 
+      {/* photo mode: bottom scrim under the name block — a plain photo (no cutout)
+          sits right behind the bottom-anchored title/country line, so without this
+          wash the text lands on faces/bright areas and becomes unreadable */}
+      {mode === 'photo' && (
+        <div aria-hidden="true" style={{
+          position:'absolute', left:0, right:0, bottom:0, height:'58%', pointerEvents:'none', zIndex:1,
+          background:`linear-gradient(180deg, transparent 0%, ${isDark?'rgba(13,13,16,0.42)':'rgba(242,241,246,0.5)'} 55%, ${isDark?'rgba(13,13,16,0.78)':'rgba(242,241,246,0.85)'} 100%)`,
+        }} />
+      )}
+
       {/* top readability veil for the breadcrumb (the old bottom wash to c.bg is
           gone — the field's mask owns the dissolve now) */}
       <div aria-hidden="true" style={{
@@ -15279,17 +15391,33 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere }) {
 
       <div style={{ position:'relative', maxWidth:1120, margin:'0 auto', height:'100%', padding:'0 32px' }}>
         {/* Light-burst (cutout only) — inside the container so --burst-x is measured
-            against the same centred box as the figure, keeping the glow on the cutout. */}
+            against the same centred box as the figure, keeping the glow on the cutout.
+            The clipping wrapper is load-bearing: the burst's pseudo-elements are
+            150vmax, and unclipped they ran far below the header (over the facts) and
+            widened the page on mobile (horizontal scroll). The mask keeps the clip
+            soft so the rays melt out at the hero's edges instead of hard-cutting. */}
         {mode === 'cutout' && (
-          <div className="atlas-burst" aria-hidden="true" style={{
-            '--burst-x': '80%',
-            '--burst-hue': hue,
-            '--ray-color': isDark ? 'rgba(255,255,255,0.14)' : 'rgba(120,92,220,0.18)',
-            '--flare-inner': isDark ? 'rgba(255,250,240,0.68)' : 'rgba(255,255,255,0.85)',
-            '--flare-mid': isDark ? `oklch(68% 0.14 ${hue} / 0.42)` : `oklch(80% 0.12 ${hue} / 0.45)`,
-            '--spark': isDark ? 'rgba(255,238,205,0.95)' : `oklch(58% 0.16 ${hue} / 0.7)`,
+          <div aria-hidden="true" style={{
+            position:'absolute', inset:0, overflow:'hidden', pointerEvents:'none',
+            WebkitMaskImage:
+              'linear-gradient(180deg, #000 0%, #000 55%, transparent 97%), ' +
+              'linear-gradient(90deg, transparent 0%, #000 10%, #000 90%, transparent 100%)',
+            WebkitMaskComposite: 'source-in intersect',
+            maskImage:
+              'linear-gradient(180deg, #000 0%, #000 55%, transparent 97%), ' +
+              'linear-gradient(90deg, transparent 0%, #000 10%, #000 90%, transparent 100%)',
+            maskComposite: 'intersect',
           }}>
-            <div className="atlas-particles" />
+            <div className="atlas-burst" style={{
+              '--burst-x': '80%',
+              '--burst-hue': hue,
+              '--ray-color': isDark ? 'rgba(255,255,255,0.14)' : 'rgba(120,92,220,0.18)',
+              '--flare-inner': isDark ? 'rgba(255,250,240,0.68)' : 'rgba(255,255,255,0.85)',
+              '--flare-mid': isDark ? `oklch(68% 0.14 ${hue} / 0.42)` : `oklch(80% 0.12 ${hue} / 0.45)`,
+              '--spark': isDark ? 'rgba(255,238,205,0.95)' : `oklch(58% 0.16 ${hue} / 0.7)`,
+            }}>
+              <div className="atlas-particles" />
+            </div>
           </div>
         )}
 
@@ -15319,7 +15447,7 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere }) {
             ending at a rectangle. Both ride the mid parallax layer. */}
         {mode === 'cutout' && (
           <img src={cutout} alt="" aria-hidden="true" className="atlas-cutout-echo atlas-plx-mid" style={{
-            position:'absolute', right:36, top:44, bottom:34, maxWidth:'44%',
+            position:'absolute', right: isMobile ? 10 : 36, top: isMobile ? 30 : 44, bottom: isMobile ? 14 : 34, maxWidth: isMobile ? '48%' : '44%',
             objectFit:'contain', objectPosition:'top right', zIndex:1,
             filter:`blur(26px) saturate(1.35) ${isDark ? 'brightness(1.5)' : 'brightness(1.1)'}`,
             opacity: isDark ? 0.5 : 0.42,
@@ -15328,7 +15456,7 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere }) {
         )}
         {mode === 'cutout' && (
           <img src={cutout} alt="" className="atlas-cutout atlas-plx-mid" style={{
-            position:'absolute', right:36, top:44, bottom:34, maxWidth:'44%',
+            position:'absolute', right: isMobile ? 10 : 36, top: isMobile ? 30 : 44, bottom: isMobile ? 14 : 34, maxWidth: isMobile ? '48%' : '44%',
             objectFit:'contain', objectPosition:'top right', zIndex:1,
             // No drop-shadow: it would paint a blurred black silhouette into the
             // cutout's transparent margins, graying the otherwise-clear backdrop.
@@ -15347,11 +15475,13 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere }) {
         {/* Name + context lines. In cutout mode the name sits on the left,
             vertically centred against the figure; otherwise it anchors bottom-left. */}
         <div className="atlas-plx-near" style={{
-          position:'absolute', left:32, right: mode==='cutout' ? '46%' : (mode==='aurora' ? 32 : '44%'), zIndex:2, minWidth:0,
+          position:'absolute', left: isMobile ? 16 : 32, right: mode==='cutout' ? (isMobile ? '50%' : '46%') : (mode==='aurora' ? (isMobile ? 16 : 32) : '44%'), zIndex:2, minWidth:0,
           ...(mode==='cutout' ? { top:'50%', transform:'translateY(-50%)' } : mode==='aurora' ? { top:52 } : { bottom:58 }),
         }}>
           <h1 className="serif" style={{
-            fontSize: mode==='cutout' ? 'clamp(46px, 5.6vw, 78px)' : 'clamp(38px, 4.6vw, 60px)',
+            fontSize: isMobile
+              ? (mode==='cutout' ? 'clamp(26px, 8vw, 40px)' : 'clamp(24px, 7.4vw, 36px)')
+              : (mode==='cutout' ? 'clamp(46px, 5.6vw, 78px)' : 'clamp(38px, 4.6vw, 60px)'),
             fontWeight:300, lineHeight:1.02,
             color:c.text, letterSpacing:'-0.025em', margin:0,
             textShadow: isDark ? '0 2px 26px rgba(0,0,0,0.6)' : '0 2px 22px rgba(255,255,255,0.8)',
@@ -15360,7 +15490,7 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere }) {
               glyph Windows' system emoji font lacks, so it stops rendering as bare "US". */}
           {originLine && (
             <div className="mono" style={{
-              marginTop:14, fontSize:15, fontWeight:600, letterSpacing:'0.16em', textTransform:'uppercase',
+              marginTop: isMobile ? 10 : 14, fontSize: isMobile ? 12 : 15, fontWeight:600, letterSpacing:'0.16em', textTransform:'uppercase',
               fontFamily: "'JetBrains Mono', 'Noto Color Emoji', ui-monospace, monospace",
               color: isDark ? 'rgba(228,219,255,0.96)' : 'oklch(34% 0.16 282)',
               textShadow: isDark ? '0 1px 12px rgba(0,0,0,0.6)' : 'none',
@@ -15451,7 +15581,18 @@ function AtlasFactsShelf({ facts, isDark, lang }) {
   const isMobile = useIsMobile();
   const shelfRef = useRef(null);
   const [pos, setPos] = useState({ idx:0, atStart:true, atEnd:false });
-  const CARD_W = isMobile ? 168 : 300, GAP = 14;
+  // Mobile: one full-width card per "page" (168px cards were too narrow to read);
+  // the width is measured from the shelf itself so snap/dots/arrows stay in sync.
+  const [shelfW, setShelfW] = useState(0);
+  useEffect(() => {
+    if (!isMobile) return;
+    const measure = () => { const el = shelfRef.current; if (el) setShelfW(el.clientWidth); };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [isMobile]);
+  const GAP = 14;
+  const CARD_W = isMobile ? Math.max(220, shelfW - 4) : 300;
   const recompute = () => {
     const el = shelfRef.current; if (!el) return;
     const idx = Math.round(el.scrollLeft / (CARD_W + GAP));
@@ -15463,9 +15604,9 @@ function AtlasFactsShelf({ facts, isDark, lang }) {
   };
   const nudge = (dir) => {
     const el = shelfRef.current; if (!el) return;
-    el.scrollBy({ left: dir * (CARD_W + GAP) * 2, behavior:'smooth' });
+    el.scrollBy({ left: dir * (CARD_W + GAP) * (isMobile ? 1 : 2), behavior:'smooth' });
   };
-  const showNav = facts.length > 3;
+  const showNav = facts.length > (isMobile ? 1 : 3);
   const arrowStyle = (off) => ({
     width: isMobile ? 40 : 30, height: isMobile ? 40 : 30, borderRadius:'50%', display:'grid', placeItems:'center',
     cursor: off ? 'default' : 'pointer', fontSize:14, color:c.textMuted,
@@ -16347,15 +16488,24 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
 
   // ── Spotlight (find-and-play) + search handoff from the landing ──────────
   // spotlightOpen: the global ⌘K overlay. searchHandoff: a one-shot query the
-  // landing (lyrics field) or the spotlight («ещё») throws into SearchSection;
-  // ts makes repeated identical queries re-fire. mode 'auto' → AI chat when
+  // landing (lyrics field) or the spotlight («ещё») throws into SearchSection.
+  // Re-submitting the SAME query (the landing input keeps its text because home
+  // stays mounted) must NOT re-run the search/LLM — it just opens the chat page
+  // with the already-running/finished conversation. mode 'auto' → AI chat when
   // the assistant is up, classic grid otherwise; 'grid' forces the classic tab.
   const [spotlightOpen, setSpotlightOpen] = useState(false);
   const [searchHandoff, setSearchHandoff] = useState(null);  // { query, mode, ts } | null
+  const lastHandoffRef = useRef(null);                       // { query, mode } of the last fired handoff
   const handoffToSearch = useCallback((query, mode = 'auto') => {
+    const prev = lastHandoffRef.current;
+    if (prev && prev.query === query && prev.mode === mode) { setSection('search'); return; }
+    lastHandoffRef.current = { query, mode };
     setSearchHandoff({ query, mode, ts: Date.now() });
     setSection('search');
   }, []);
+  // SearchSection reports back once it has consumed the handoff, so a stale
+  // {query, ts} can never replay the LLM call (e.g. if the section remounts).
+  const consumeSearchHandoff = useCallback(() => setSearchHandoff(null), []);
   useEffect(() => {
     const onKey = (e) => {
       if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === 'k' || e.key === 'K' || e.key === 'л' || e.key === 'Л')) {
@@ -16839,8 +16989,10 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     if (nextHit) {
       const t = (nextHit.track) ? nextHit.track : nextHit;
       // Synchronous src+play inside the 'ended' event — see setSrc for why
-      // (background-tab timers are throttled/frozen once audio stops).
+      // (background-tab timers are throttled/frozen once audio stops). The OS
+      // notification must switch in the same sync task, for the same reason.
       audio.setSrc(buildStreamUrl(t.track_id), { trackId: t.track_id, noInfluence: !!nextHit._noInfluence }, { autoplay: true });
+      applyMediaSessionNow(t);
       handleTrackChange(t);
       return;
     }
@@ -16856,6 +17008,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     if (firstFresh) {
       const t = firstFresh.track ? firstFresh.track : firstFresh;
       audio.setSrc(buildStreamUrl(t.track_id), { trackId: t.track_id, noInfluence: !!firstFresh._noInfluence }, { autoplay: true });
+      applyMediaSessionNow(t);
       handleTrackChange(t);
     }
   };
@@ -16880,6 +17033,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     if (!prevHit) return;
     const t = prevHit.track ? prevHit.track : prevHit;
     audio.setSrc(buildStreamUrl(t.track_id), { trackId: t.track_id, noInfluence: !!prevHit._noInfluence }, { autoplay: true });
+    applyMediaSessionNow(t);
     handleTrackChange(t);
   };
 
@@ -16999,7 +17153,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
           sectionMap below) — it used to fully unmount on nav-away, which threw
           out the wave/vibes state and re-fired their fetches (LLM call
           included) on every return to the home page. */}
-      <div style={{
+      <div className={section === 'home' ? undefined : 'section-offstage'} style={{
         display: 'flex',
         flex: section === 'home' ? 1 : 0,
         width: section === 'home' ? 'auto' : 0,
@@ -17045,7 +17199,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
           )}
           {/* Render all sections; visibility toggled (NOT display:none) to preserve audio across navigation */}
           {Object.entries(sectionMap).map(([id, Comp]) => (
-            <div key={id} style={{
+            <div key={id} className={section === id ? undefined : 'section-offstage'} style={{
               display: 'flex',
               flex: section === id ? 1 : 0,
               width: section === id ? 'auto' : 0,
@@ -17079,6 +17233,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
                 onNav={setSection}
                 onAddToPlaylist={openAddToPlaylist}
                 searchHandoff={id === 'search' ? searchHandoff : undefined}
+                onSearchHandoffDone={id === 'search' ? consumeSearchHandoff : undefined}
                 playlistsListing={appPlaylists}
                 onQueueNext={id === 'player' ? handleQueueNext : undefined}
                 onReorderQueue={id === 'player' ? setPlayerPlaylist : undefined}

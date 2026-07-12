@@ -202,12 +202,18 @@ def stream_profile(
         )
         for i in result["islands"]
     ]
-    # «Вайбики» reuse the island shape; no LLM naming in v1 (frontend falls
-    # back to genre/artist naming, same as unnamed islands).
+    # «Вайбики» reuse the island shape. LLM names are attached from cache when
+    # fresh (populated by POST /recommend/vibes/ai-name; the membership hash
+    # self-invalidates as the vibes churn) — frontend falls back to
+    # genre/artist naming while a name is missing.
+    vibe_names = recsys_ai_service.get_cached_vibe_names(
+        derived, lang, result.get("vibes", []),
+    )
     vibes = [
         ProfileIsland(
             track_id=v["track_id"], weight=v["weight"],
             tracks=[ProfileIslandTrack(**t) for t in v["tracks"]],
+            name=vibe_names.get(v["track_id"]),
         )
         for v in result.get("vibes", [])
     ]
@@ -289,6 +295,35 @@ async def profile_ai_enrich(
         portrait=result["portrait"], island_names=result["island_names"],
         headline=result.get("headline"),
     )
+
+
+@router.post("/vibes/ai-name")
+async def vibes_ai_name(
+    body: ProfileEnrichIn,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Generate (and cache) LLM names for the current «вайбики» (AI mode).
+
+    Mirrors /profile/ai-enrich: the frontend calls this once when the profile
+    arrives with unnamed vibes, then merges the names in place. Shape:
+    ``{"vibe_names": {vibe_track_id: name}}``.
+    """
+    db_client = request.app.state.db_client
+    if db_client is None or db_client.qdrant is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    derived = derive_collection_for_user(current_user)
+    try:
+        return await recsys_ai_service.generate_vibe_names(
+            qdrant_client=db_client.qdrant,
+            collection_name=derived,
+            lang=body.lang,
+            llm_base_url=body.llm_base_url,
+            llm_model=body.llm_model,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"LLM vibe naming failed: {e}")
 
 
 @router.post("/ai-playlist", response_model=AIPlaylistResponse)
