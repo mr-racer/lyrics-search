@@ -1726,6 +1726,38 @@ class MetadataDB:
         return [(r[0], int(r[1])) for r in rows if r[0]]
 
     @classmethod
+    def get_weekly_listening_summary(
+        cls, collection_name: str, tz_offset_minutes: int = 0,
+    ) -> tuple[float, str | None]:
+        """Return (seconds_listened, top_genre) over the last 7 local days
+        (today plus the preceding 6), bucketed by the caller's UTC offset —
+        same modifier pattern as ``get_plays_by_local_day``."""
+        modifier = f"{int(tz_offset_minutes):+d} minutes"
+        conn = cls._connect()
+        total_row = conn.execute(
+            """SELECT COALESCE(SUM(played_sec), 0)
+               FROM playback_events
+               WHERE collection_name = ?
+                 AND date(played_at, ?) >= date('now', ?, '-6 days')""",
+            (collection_name, modifier, modifier),
+        ).fetchone()
+        genre_row = conn.execute(
+            """SELECT tm.genre, COUNT(*) AS plays
+               FROM playback_events pe
+               JOIN track_metadata tm
+                 ON tm.collection_name = pe.collection_name AND tm.track_id = pe.track_id
+               WHERE pe.collection_name = ?
+                 AND pe.skipped_early = 0
+                 AND date(pe.played_at, ?) >= date('now', ?, '-6 days')
+                 AND tm.genre IS NOT NULL AND tm.genre != ''
+               GROUP BY tm.genre
+               ORDER BY plays DESC
+               LIMIT 1""",
+            (collection_name, modifier, modifier),
+        ).fetchone()
+        return float(total_row[0] or 0), (genre_row[0] if genre_row else None)
+
+    @classmethod
     def get_plays_by_local_hour(
         cls, collection_name: str, tz_offset_minutes: int = 0,
     ) -> list[int]:

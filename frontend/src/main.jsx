@@ -1925,25 +1925,40 @@ function useTrackChat(trackId, userId, lang) {
 }
 
 // ─── Brand mark ───────────────────────────────────────────────────────────────
+const BRAND_EQ_BARS = [
+  { h: 0.44, c: 'oklch(64% 0.19 268)' },
+  { h: 0.70, c: 'oklch(69% 0.17 278)' },
+  { h: 0.94, c: 'oklch(74% 0.14 292)' },
+  { h: 0.60, c: 'oklch(72% 0.09 350)' },
+  { h: 0.36, c: 'oklch(76% 0.13 80)' },
+];
 function BrandMark({ size=34, isDark }) {
+  const barW = 3.1, gap = 1.3;
+  const totalW = BRAND_EQ_BARS.length * barW + (BRAND_EQ_BARS.length - 1) * gap;
+  const startX = (24 - totalW) / 2;
   return (
     <div style={{
-      width:size, height:size, borderRadius:`${size*0.32}px`, flexShrink:0, position:'relative',
-      background:'linear-gradient(145deg, oklch(67% 0.18 265), oklch(54% 0.22 285))',
+      width:size, height:size, borderRadius:`${size*0.28}px`, flexShrink:0, position:'relative',
+      background:'linear-gradient(150deg, #211c30, #0c0a13)',
       display:'flex', alignItems:'center', justifyContent:'center',
       boxShadow: isDark
-        ? 'inset 0 1px 0 rgba(255,255,255,0.3), inset 0 -1px 0 rgba(0,0,0,0.3), 0 4px 12px oklch(60% 0.18 270 / 0.55), 0 0 0 1px rgba(0,0,0,0.4)'
-        : 'inset 0 1px 0 rgba(255,255,255,0.45), inset 0 -1px 0 rgba(0,0,0,0.2), 0 3px 10px oklch(60% 0.18 270 / 0.45), 0 0 0 1px rgba(0,0,0,0.05)',
+        ? 'inset 0 1px 0 rgba(255,255,255,0.12), inset 0 -1px 0 rgba(0,0,0,0.4), 0 4px 12px rgba(0,0,0,0.5), 0 0 0 1px rgba(0,0,0,0.4)'
+        : 'inset 0 1px 0 rgba(255,255,255,0.16), inset 0 -1px 0 rgba(0,0,0,0.3), 0 3px 10px rgba(0,0,0,0.35), 0 0 0 1px rgba(0,0,0,0.08)',
     }}>
-      <svg width={size*0.5} height={size*0.5} viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+      <svg width={size*0.6} height={size*0.6} viewBox="0 0 24 24" fill="none">
+        {BRAND_EQ_BARS.map((b, i) => {
+          const h = b.h * 19;
+          const x = startX + i * (barW + gap);
+          const y = 12 - h / 2;
+          return <rect key={i} x={x} y={y} width={barW} height={h} rx={barW/2} fill={b.c} />;
+        })}
       </svg>
     </div>
   );
 }
 
 // ─── Top right corner: settings + theme + lang (used on landing) ──────────────
-function TopRightControls({ isDark, lang, onLang, onTheme, onSettings, floating=false, showTheme=true, showSettings=true }) {
+function TopRightControls({ isDark, lang, onLang, onTheme, onSettings, floating=false, showTheme=true, showSettings=true, showLang=true }) {
   const c = useColors(isDark);
   const wrap = floating ? {
     position:'absolute', top:'24px', right:'28px', zIndex:5,
@@ -1951,6 +1966,7 @@ function TopRightControls({ isDark, lang, onLang, onTheme, onSettings, floating=
   return (
     <div style={{ display:'flex', alignItems:'center', gap:'8px', ...wrap }}>
       {/* Lang switch — segmented physical control */}
+      {showLang && (
       <div className={ske('inset', isDark)} style={{ display:'flex', padding:'3px', borderRadius:'10px', gap:'2px' }}>
         {['ru','en'].map(l => {
           const active = lang === l;
@@ -1965,6 +1981,7 @@ function TopRightControls({ isDark, lang, onLang, onTheme, onSettings, floating=
           );
         })}
       </div>
+      )}
       {/* Theme knob */}
       {showTheme && (
         <Knob size={36} isDark={isDark} angle={isDark ? -55 : 55} glow={!isDark}
@@ -2253,11 +2270,14 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
   return (
     // The lead element — borderless now: no glass card, no frame. The page
     // aurora behind it lives in LandingScreen (fed via onPalette); the hero is
-    // pure content in the page's light. Flex column; the vibes row pins to the
-    // bottom and levels the hero with the right wing.
+    // pure content in the page's light. Flex column, natural content flow —
+    // the vibes row sits right under the wave rather than pinned to the hero
+    // bottom (that pushed it out of view on desktop and overlapped the search
+    // box below on mobile, since a shrunk flex box doesn't clip an
+    // auto-margin-pushed child by default).
     <div className="efir-hero" style={{
-      position:'relative', display:'flex', flexDirection:'column', flex:1, minHeight:0,
-      padding: isMobile ? '10px 2px 4px' : '4px 0 0',
+      position:'relative', display:'flex', flexDirection:'column', flex:1, minHeight:0, overflow:'hidden',
+      padding: isMobile ? '4px 2px 4px' : '4px 0 0',
       animation:'fadeInUp .55s cubic-bezier(.22,.9,.3,1)',
     }}>
         {/* Top: kicker + the wave/vibe phrase headline (no concrete song) */}
@@ -2292,7 +2312,7 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
         {/* Orb row — left-aligned: the orb + caption column with the wave
             settings disclosure right under the caption (not at the hero
             bottom — the bottom now belongs to the vibes). */}
-        <div style={{ display:'flex', alignItems:'flex-start', gap:'clamp(18px,1.8vw,28px)', marginTop:'clamp(22px,3.4vh,38px)' }}>
+        <div style={{ display:'flex', alignItems:'flex-start', gap:'clamp(18px,1.8vw,28px)', marginTop: isMobile ? 'clamp(14px,2.2vh,22px)' : 'clamp(22px,3.4vh,38px)' }}>
             <div style={{ width: isMobile ? 84 : 112, height: isMobile ? 84 : 112, flex:'none', display:'grid', placeItems:'center' }}>
               <div style={{ transform:`scale(${isMobile ? 1.25 : 1.7})` }}>
                 <div ref={orbRef} className={`fy-hybrid tint-irid${wavePlaying ? ' fy-playing' : ''}`}
@@ -2355,17 +2375,17 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
                     boxShadow:'inset 0 1px 0 rgba(255,255,255,.07)' }}>
                     <div style={{ display:'flex', alignItems:'center', gap:13 }}>
                       <span className="mono" style={{ fontSize:11.5, letterSpacing:'.18em', color:c.textMuted, flex:'none' }}>
-                        {lang==='ru'?'НОВОЕ':'NEW'}
+                        {lang==='ru'?'РЕДКОЕ':'RARE'}
                       </span>
                       <SkeRange min={0} max={100} step={10} value={Math.round(likedShare*100)}
                              onChange={v => setShare(v / 100)} accent="oklch(62% 0.2 275)" style={{ flex:1 }}
-                             ariaLabel={lang==='ru'?'Баланс нового и любимого в потоке':'Balance of new vs liked in the stream'} />
+                             ariaLabel={lang==='ru'?'Баланс редкого и любимого в потоке':'Balance of rare vs liked in the stream'} />
                       <span className="mono" style={{ fontSize:11.5, letterSpacing:'.18em', color:c.textMuted, flex:'none' }}>
                         {lang==='ru'?'ЛЮБИМОЕ':'LIKED'}
                       </span>
                     </div>
                     <div className="mono" style={{ fontSize:10.5, letterSpacing:'.12em', color:c.textSubtle, textAlign:'center', marginTop:11 }}>
-                      {lang==='ru'?'ПО УМОЛЧАНИЮ — 70% НОВОГО · 30% ЛЮБИМОГО':'DEFAULT — 70% NEW · 30% LIKED'}
+                      {lang==='ru'?'ПО УМОЛЧАНИЮ — 70% РЕДКОГО · 30% ЛЮБИМОГО':'DEFAULT — 70% RARE · 30% LIKED'}
                     </div>
                   </div>
                 </div>
@@ -2394,11 +2414,12 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
           </div>
         )}
 
-        {/* «Вайбики» — the days-scale mood chips pinned to the hero bottom;
-            they also level the hero with the right wing. Absent entirely when
-            the fast layer has nothing (optional layer, no empty state). */}
+        {/* «Вайбики» — the days-scale mood chips, right under the wave/orb
+            (natural flow, not pinned to the hero bottom anymore). Absent
+            entirely when the fast layer has nothing (optional layer, no
+            empty state). */}
         {vibes.length > 0 && (
-          <div style={{ marginTop:'auto', paddingTop:'clamp(20px,3vh,34px)' }}>
+          <div style={{ marginTop: isMobile ? 'clamp(14px,2.2vh,20px)' : 'clamp(18px,2.6vh,28px)' }}>
             <div className="mono" style={{ fontSize:10.5, letterSpacing:'.2em', color:c.textSubtle, marginBottom:11 }}>
               {lang==='ru' ? 'ВАЙБИКИ' : 'VIBES'} · <span style={{ color:c.textSubtle, opacity:.7, letterSpacing:'.08em' }}>
                 {lang==='ru' ? 'то, что держит тебя сейчас' : 'what holds you right now'}</span>
@@ -2445,7 +2466,7 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
 // ✦ Lyrics search — a live input that hands the query off to the search screen
 // (AI chat when the assistant is up, classic grid otherwise). No hover glow on
 // purpose (user pref): focus/hover is a soft border tint only.
-function LyricsSearchPath({ isDark, lang, aiActive, onSubmit }) {
+function LyricsSearchPath({ isDark, lang, aiActive, onSubmit, compact=false }) {
   const c = useColors(isDark);
   const [q, setQ] = useState('');
   const [focus, setFocus] = useState(false);
@@ -2473,7 +2494,9 @@ function LyricsSearchPath({ isDark, lang, aiActive, onSubmit }) {
             : '0 14px 34px rgba(60,45,100,.12), inset 0 1px 0 rgba(255,255,255,.9)',
           backdropFilter:'blur(14px)', WebkitBackdropFilter:'blur(14px)',
           transition:'border-color .3s ease' }}>
-        <span aria-hidden="true" style={{ color:kicker, fontSize:17, flex:'none' }}>✦</span>
+        <span aria-hidden="true" style={{ color:kicker, flex:'none', display:'flex' }}>
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-5.5-5.5"/></svg>
+        </span>
         <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)}
           onFocus={() => setFocus(true)} onBlur={() => setFocus(false)}
           onKeyDown={e => { if (e.key === 'Enter') submit(); }}
@@ -2481,6 +2504,12 @@ function LyricsSearchPath({ isDark, lang, aiActive, onSubmit }) {
           aria-label={lang==='ru'?'Поиск песни по тексту':'Search a song by its lyrics'}
           style={{ flex:1, minWidth:0, background:'transparent', border:0, outline:'none',
             color:c.text, fontSize:14.5, fontFamily:'inherit' }} />
+        {!compact && (
+          <span className="mono" aria-hidden="true" style={{ flex:'none', fontSize:10, letterSpacing:'.1em',
+            color:c.textSubtle, whiteSpace:'nowrap' }}>
+            {lang==='ru'?'найти песню':'find a song'}
+          </span>
+        )}
         {aiActive ? (
           <button onClick={(e) => { e.stopPropagation(); submit(); }} title={lang==='ru'?'Найти с ИИ':'Search with AI'}
             className="mono" style={{ flex:'none', fontSize:9, letterSpacing:'.1em', color:'#9a7bff', cursor:'pointer',
@@ -2917,7 +2946,8 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLi
           Library pill is gone — the library is a full path on the page now. */}
       <div style={{
         position:'relative', display:'flex', alignItems:'center', justifyContent:'space-between', gap:16,
-        padding:'clamp(18px,2.4vh,26px) clamp(20px,3vw,40px)', flexWrap:'wrap',
+        padding: isMobile ? 'clamp(10px,1.6vh,16px) clamp(14px,3vw,22px)' : 'clamp(18px,2.4vh,26px) clamp(20px,3vw,40px)',
+        flexWrap:'wrap',
       }}>
         <div style={{ display:'flex', alignItems:'center', gap:'14px', flex:'1 1 0', minWidth:0 }}>
           <BrandMark size={42} isDark={isDark} />
@@ -2946,7 +2976,7 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLi
             style={{ width:38, height:38, borderRadius:'50%', display:'grid', placeItems:'center', color:c.textMuted }}>
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
           </button>
-          <TopRightControls isDark={isDark} lang={lang} onLang={onLang} onTheme={onTheme} onSettings={onSettings} />
+          <TopRightControls isDark={isDark} lang={lang} onLang={onLang} onTheme={onTheme} onSettings={onSettings} showLang={false} showTheme={false} />
         </div>
       </div>
 
@@ -2960,7 +2990,7 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLi
                       onStartStream={onStartStream} streamActive={streamActive} audio={audio}
                       navigateToArtist={navigateToArtist} onPlayTrack={onPlayTrack}
                       onPalette={setAuroraBlobs} />
-          <LyricsSearchPath isDark={isDark} lang={lang} aiActive={aiActive} onSubmit={onSearchLyrics} />
+          <LyricsSearchPath isDark={isDark} lang={lang} aiActive={aiActive} onSubmit={onSearchLyrics} compact />
           <LibraryPathCard isDark={isDark} lang={lang} stats={stats} onClick={() => onNav('library')} />
         </div>
       ) : (
@@ -2982,6 +3012,95 @@ function LandingScreen({ isDark, lang, onLang, onTheme, onSettings, onNav, hasLi
         </div>
       </div>
       )}
+
+      {/* Under-the-fold extras — desktop only, deliberately quiet so they never
+          compete with the wave/search/library trio above. Mobile has no room
+          and stays exactly as-is (per design: no scroll needed on the phone). */}
+      {!isMobile && hasLibrary && <HomeDailyExtras isDark={isDark} lang={lang} />}
+    </div>
+  );
+}
+
+// ─── Home daily extras (desktop only) — a couple of static facts + a quiet
+// weekly pulse, both fixed for the day (cached under a date key) so they
+// don't reshuffle every time the page is revisited.
+function HomeDailyExtras({ isDark, lang }) {
+  const c = useColors(isDark);
+  const [facts, setFacts] = useState(null);
+  const [pulse, setPulse] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    const today = new Date().toDateString();
+    const cacheKey = 'musix_daily_facts';
+    let cached = null;
+    try { cached = JSON.parse(localStorage.getItem(cacheKey) || 'null'); } catch {}
+    if (cached && cached.date === today && Array.isArray(cached.facts)) {
+      setFacts(cached.facts);
+    } else {
+      apiFetch('/metadata/random-facts?limit=3').then(r => {
+        if (!alive) return;
+        const list = Array.isArray(r) ? r : [];
+        setFacts(list);
+        try { localStorage.setItem(cacheKey, JSON.stringify({ date: today, facts: list })); } catch {}
+      }).catch(() => { if (alive) setFacts([]); });
+    }
+    const tzOffset = -new Date().getTimezoneOffset();
+    apiFetch(`/library/weekly-pulse?tz_offset_minutes=${tzOffset}`)
+      .then(r => { if (alive) setPulse(r || null); })
+      .catch(() => { if (alive) setPulse(null); });
+    return () => { alive = false; };
+  }, []);
+
+  const fmtDur = (sec) => {
+    if (!sec) return null;
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const hU = lang === 'ru' ? 'ч' : 'h', mU = lang === 'ru' ? 'м' : 'm';
+    return h > 0 ? `${h}${hU} ${m}${mU}` : `${m}${mU}`;
+  };
+
+  const hasFacts = !!(facts && facts.length > 0);
+  const hasPulse = !!(pulse && (pulse.seconds_listened > 0 || pulse.top_genre));
+  if (facts === null && pulse === null) return null;   // still loading — nothing to flash in
+  if (!hasFacts && !hasPulse) return null;
+
+  const cardStyle = {
+    borderRadius: 14, padding: '14px 16px', flex: '1 1 220px', minWidth: 200,
+    background: isDark ? 'rgba(255,255,255,.025)' : 'rgba(0,0,0,.02)',
+    border: `1px solid ${c.border}`,
+  };
+
+  return (
+    <div style={{ padding: '10px clamp(20px,3vw,40px) 40px', marginTop: 18 }}>
+      <div style={{ display:'flex', flexWrap:'wrap', gap:14 }}>
+        {hasFacts && facts.slice(0, 3).map((f, i) => (
+          <div key={i} style={cardStyle}>
+            <div className="mono" style={{ fontSize:9.5, letterSpacing:'.16em', color:c.textSubtle, marginBottom:6 }}>
+              {f.type === 'artist'
+                ? (lang==='ru'?'ОБ АРТИСТЕ':'ABOUT THE ARTIST')
+                : (lang==='ru'?'О ПЕСНЕ':'ABOUT THE SONG')}
+            </div>
+            <div style={{ fontSize:12.5, color:c.textMuted, lineHeight:1.5 }}>{f.fact}</div>
+            {f.context && (
+              <div style={{ fontSize:11, color:c.textSubtle, marginTop:6 }}>{f.context}</div>
+            )}
+          </div>
+        ))}
+        {hasPulse && (
+          <div style={cardStyle}>
+            <div className="mono" style={{ fontSize:9.5, letterSpacing:'.16em', color:c.textSubtle, marginBottom:6 }}>
+              {lang==='ru'?'ЗА ЭТУ НЕДЕЛЮ':'THIS WEEK'}
+            </div>
+            <div style={{ fontSize:12.5, color:c.textMuted, lineHeight:1.5 }}>
+              {fmtDur(pulse.seconds_listened)
+                ? (lang==='ru' ? `Прослушано ${fmtDur(pulse.seconds_listened)}` : `${fmtDur(pulse.seconds_listened)} listened`)
+                : (lang==='ru' ? 'Пока тихо' : 'Quiet so far')}
+              {pulse.top_genre && (lang==='ru' ? ` · любимый жанр — ${pulse.top_genre}` : ` · favorite genre — ${pulse.top_genre}`)}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -3045,18 +3164,11 @@ function FloatingIconNav({ section, onNav, isDark, lang, onSettings, currentTrac
       alignItems:'center', padding:'14px 0 16px',
       background:'transparent', zIndex:10, flexShrink:0, position:'relative',
     }}>
-      {/* Brand mark — free-floating letterpress glyph, returns to the landing */}
+      {/* Brand mark — returns to the landing */}
       <button className="lg-logo" onClick={() => onNav('home')} title={lang==='ru'?'На главную':'Home'}
         style={{ width:50, height:50, display:'grid', placeItems:'center', cursor:'pointer',
                  background:'transparent', border:0, color:c.text, padding:0 }}>
-        <span className="serif-display" style={{
-          fontSize:22, lineHeight:1, fontStyle:'normal',
-          textShadow: isDark
-            ? '0 1px 0 rgba(255,255,255,0.10), 0 -1px 1px rgba(0,0,0,0.65), 0 3px 8px rgba(0,0,0,0.50)'
-            : '0 1px 0 rgba(255,255,255,0.95), 0 -1px 1px rgba(40,30,80,0.22), 0 3px 8px rgba(40,30,80,0.12)',
-        }}>
-          M<i style={{ color:'oklch(60% 0.18 270)' }}>X</i>
-        </span>
+        <BrandMark size={36} isDark={isDark} />
       </button>
 
       <div style={{ flex:1 }} />
@@ -5507,6 +5619,28 @@ function PlaylistsListView({ playlists, onOpen, onCreate, onPlayAll, lang }) {
   );
 }
 
+// Deterministic per-day pick: same formula spirit as the backend's
+// featured-artist rotation (sha1(date) % N) — a tiny string hash seeded by
+// today's date + a per-slot salt, linear-probed to avoid picking the same
+// index twice. Everyone sees the same picks on a given day; they roll over
+// at local midnight.
+function dailyPickIndices(length, count, salt) {
+  if (length <= 0) return [];
+  const day = new Date().toDateString();
+  const seen = new Set();
+  const picks = [];
+  for (let slot = 0; slot < count && seen.size < length; slot++) {
+    const s = `${day}|${salt}|${slot}`;
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    let idx = h % length;
+    while (seen.has(idx)) idx = (idx + 1) % length;
+    seen.add(idx);
+    picks.push(idx);
+  }
+  return picks;
+}
+
 // ─── ALBUMS GRID TAB ──────────────────────────────────────────────────────────
 function AlbumsGridTab({ albums, sort, onSortChange, onAlbumOpen, isDark, lang, navigateToArtist }) {
   const c = useColors(isDark);
@@ -5516,11 +5650,37 @@ function AlbumsGridTab({ albums, sort, onSortChange, onAlbumOpen, isDark, lang, 
     {id:'year_asc',     label: lang==='ru' ? 'год ↑' : 'year ↑'},
     {id:'track_count_desc', label: lang==='ru' ? 'больше треков' : 'most tracks'},
   ];
+  const todaysPicks = useMemo(() => (
+    (albums && albums.length > 3)
+      ? dailyPickIndices(albums.length, 3, 'lib-albums-today').map(i => albums[i])
+      : []
+  ), [albums]);
   if (!albums || albums.length === 0) {
     return <div style={{ padding:'64px 20px', textAlign:'center', color:c.textSubtle, fontSize:'14px' }}>{lang==='ru' ? 'Нет треков с album-тегом в этой библиотеке' : 'No tracks with album tag in this library'}</div>;
   }
   return (
     <>
+      {todaysPicks.length > 0 && (
+        <div style={{ marginBottom:24 }}>
+          <div className="mono" style={{ fontSize:11, letterSpacing:'.18em', color:c.textSubtle, marginBottom:11 }}>
+            {lang==='ru' ? 'СЕГОДНЯ В ПОДБОРКЕ' : "TODAY'S PICKS"}
+          </div>
+          <div className="lib-grid" style={{ '--lib-grid-min':'176px' }}>
+            {todaysPicks.map((a, i) => (
+              <AlbumCard
+                key={`today-${a.primary_artist_slug}-${a.album_title}`}
+                album={a} index={i} isDark={isDark} lang={lang}
+                navigateToArtist={navigateToArtist}
+                onClick={(e) => {
+                  const coverEl = e?.currentTarget?.querySelector('.lib-album-cover');
+                  const r = (coverEl || e?.currentTarget)?.getBoundingClientRect?.();
+                  onAlbumOpen(a, r ? { top:r.top, left:r.left, width:r.width, height:r.height } : null);
+                }}
+              />
+            ))}
+          </div>
+        </div>
+      )}
       <div className="lib-sortrow" style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'6px 2px 18px', fontSize:'13px' }}>
         <span className="mono" style={{ color:c.textSubtle, letterSpacing:'0.06em' }}>{albums.length} {lang==='ru'?'альбомов':'albums'}</span>
         <div className="lib-sortpills" style={{ display:'flex', gap:'6px' }}>
@@ -9517,13 +9677,14 @@ function OwnerAdminDashboard({ onLogout }) {
 function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, onTheme, onLang, collections, userPoints, onLogout, instanceMode, showToast, indexingJob }) {
   const c = useColors(isDark);
   const isMobile = useIsMobile();  // full-screen panel + tighter gutters on phones
+  const [closing, setClosing] = useState(false);
+  const requestClose = () => { setClosing(true); setTimeout(onClose, 260); };
   // 'light' | 'heavy' — derived from the legacy text_model localStorage key so
   // an earlier explicit heavy pick survives the UI change.
   const [modelTier, setModelTier] = useState(() =>
     localStorage.getItem('text_model') === HEAVY_TEXT_MODEL ? 'heavy' : 'light');
   const [collName, setCollName] = useState('');
   const [folderPath, setFolderPath] = useState('');
-  const [picking, setPicking] = useState(false);
   const [betterLyrics, setBetterLyrics] = useState(false);
   const [refineMetadata, setRefineMetadata] = useState(false);
   // Progress state comes from the App-level indexingJob hook (spec phase 2):
@@ -9572,10 +9733,8 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
   // (llm_client.resolve_*), so the per-member endpoint/model form is dead UI.
   const serverMember = instanceMode === 'server';
 
-  // Section UI state: collection switcher list, LLM advanced fields, and the
-  // new-collection modal.
+  // Section UI state: collection switcher list + LLM advanced fields.
   const [llmOpen, setLlmOpen] = useState(false);
-  const [createOpen, setCreateOpen] = useState(false);
 
   // Persist the heavy pick under the legacy key; remove it for light so the
   // backend falls back to its default model (never store the string "null").
@@ -9583,19 +9742,6 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
     if (modelTier === 'heavy') localStorage.setItem('text_model', HEAVY_TEXT_MODEL);
     else localStorage.removeItem('text_model');
   }, [modelTier]);
-
-  const handlePick = async () => {
-    setPicking(true);
-    try { const res = await apiFetch('/library/pick-folder'); if (res.path) setFolderPath(res.path); }
-    catch {} finally { setPicking(false); }
-  };
-
-  const handleIndex = () => {
-    if (!folderPath.trim() || indexing) return;
-    setCreateOpen(false);  // the staged IndexingModal takes over from the form
-    setIndexPhase('ai-setup');
-    setShowModal(true);
-  };
 
   // `aiEnabledArg` is passed explicitly by the caller because React state
   // updates batched in the same tick won't have flushed yet — reading
@@ -9659,11 +9805,11 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
 
   return (
     <>
-      <div onClick={onClose} style={{
+      <div onClick={requestClose} style={{
         position:'fixed', inset:0, zIndex:90,
         background: isDark ? 'rgba(0,0,0,0.5)' : 'rgba(40,30,60,0.25)',
         backdropFilter:'blur(4px)',
-        animation:'fadeIn 0.2s ease',
+        animation: closing ? 'fadeOut 0.22s ease forwards' : 'fadeIn 0.2s ease',
       }} />
       <div className="grain" style={{
         position:'fixed', top:0, right:0, bottom:0, zIndex:91,
@@ -9676,7 +9822,7 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
         WebkitBackdropFilter:'blur(28px) saturate(1.3)',
         borderLeft:`1px solid ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'}`,
         boxShadow: isDark ? '-18px 0 50px rgba(0,0,0,0.5)' : '-18px 0 50px rgba(40,30,80,0.14)',
-        animation:'slideRight 0.32s cubic-bezier(.22,.9,.3,1)',
+        animation: closing ? 'slideRightOut 0.26s cubic-bezier(.22,.9,.3,1) forwards' : 'slideRight 0.32s cubic-bezier(.22,.9,.3,1)',
       }}>
         <div style={{ padding:'24px clamp(16px,5vw,28px) 18px', display:'flex', alignItems:'center', justifyContent:'space-between' }}>
           <div>
@@ -9687,7 +9833,7 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
               {lang==='ru'?'Студия':'Studio'} <i style={{ color:'oklch(62% 0.2 275)' }}>{lang==='ru'?'настроек':'tools'}</i>
             </div>
           </div>
-          <button onClick={onClose} className="pill-v3" style={{
+          <button onClick={requestClose} className="pill-v3" style={{
             width:34, height:34, padding:0, borderRadius:'50%',
             display:'grid', placeItems:'center',
           }}>
@@ -9726,12 +9872,6 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
                   background:'rgba(255,80,80,0.12)', color:'#ff9090',
                   border:'1px solid rgba(255,80,80,0.2)' }}>
                 {lang==='ru'?'Выйти':'Log out'}
-              </button>
-            </div>
-
-            <div style={{ display:'flex', gap:8, marginTop:14, flexWrap:'wrap' }}>
-              <button className="pill-v3" onClick={() => setCreateOpen(true)}>
-                {lang==='ru'?'Заменить музыку':'Replace music'}
               </button>
             </div>
           </section>
@@ -9835,101 +9975,6 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
           </div>
         </div>
 
-        {/* ─── New collection modal (form moved out of the panel body) ─── */}
-        {createOpen && (
-          <Fragment>
-            <div onClick={() => !indexing && setCreateOpen(false)} style={{
-              position:'fixed', inset:0, zIndex:99,
-              background: isDark ? 'rgba(0,0,0,0.55)' : 'rgba(40,30,60,0.30)',
-              backdropFilter:'blur(4px)', animation:'fadeIn 0.2s ease',
-            }} />
-            <div className="panel-v3 grain" style={{
-              position:'fixed', top:'50%', left:'50%', transform:'translate(-50%,-50%)', zIndex:100,
-              width:'min(480px, 92vw)', maxHeight:'90vh', overflowY:'auto',
-              padding:'24px 26px', animation:'fadeIn 0.25s ease',
-              background: isDark
-                ? 'linear-gradient(180deg, rgba(28,28,38,0.96) 0%, rgba(18,18,26,0.97) 100%)'
-                : 'linear-gradient(180deg, rgba(252,251,255,0.97) 0%, rgba(242,241,248,0.98) 100%)',
-            }}>
-              <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:18 }}>
-                <div>
-                  <div className="serif" style={{ fontSize:22, color:c.text, letterSpacing:'-0.01em' }}>
-                    {lang==='ru'?'Новая библиотека':'New library'}
-                  </div>
-                  <div className="mono-label" style={{ color:c.textSubtle, marginTop:4 }}>
-                    {lang==='ru'?'ДОБАВИТЬ ПАПКУ':'ADD A FOLDER'}
-                  </div>
-                </div>
-                <button onClick={() => setCreateOpen(false)} className="pill-v3" style={{
-                  width:30, height:30, padding:0, borderRadius:'50%', display:'grid', placeItems:'center',
-                }}>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
-                </button>
-              </div>
-
-              {fieldLabel(lang==='ru'?'ИМЯ БИБЛИОТЕКИ':'LIBRARY NAME')}
-              <input value={collName} onChange={e=>setCollName(e.target.value)} disabled={indexing}
-                placeholder={lang==='ru'?'например: my_music':'e.g. my_music'} style={{ ...inputStyle, marginBottom:14 }} />
-
-              {fieldLabel(lang==='ru'?'ПУТЬ К ПАПКЕ':'FOLDER PATH')}
-              <div style={{ display:'flex', gap:8, marginBottom:14 }}>
-                <button onClick={handlePick} disabled={picking||indexing} className="pill-v3" style={{
-                  borderRadius:10, display:'flex', alignItems:'center', gap:6, flexShrink:0,
-                  cursor: picking||indexing?'not-allowed':'pointer',
-                }}>
-                  {picking ? <Spinner size={12} /> : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>}
-                  {lang==='ru'?'Выбрать':'Pick'}
-                </button>
-                <input value={folderPath} onChange={e=>setFolderPath(e.target.value)} disabled={indexing}
-                  placeholder="/path/to/music" style={{ ...inputStyle, flex:1, width:'auto' }} />
-              </div>
-
-              {fieldLabel(lang==='ru'?'МОДЕЛЬ':'MODEL')}
-              <div className="tier-slider" data-tier={modelTier}
-                onClick={() => !indexing && setModelTier(t => t === 'light' ? 'heavy' : 'light')}>
-                <div className="tier-slider-knob" />
-                <button type="button" className="tier-slider-opt" data-active={modelTier==='light'}
-                  onClick={(e) => { e.stopPropagation(); if (!indexing) setModelTier('light'); }}>
-                  {lang==='ru'?'Лёгкая':'Light'}
-                </button>
-                <button type="button" className="tier-slider-opt" data-active={modelTier==='heavy'}
-                  onClick={(e) => { e.stopPropagation(); if (!indexing) setModelTier('heavy'); }}>
-                  {lang==='ru'?'Тяжёлая':'Heavy'}
-                </button>
-              </div>
-              <div style={{ fontSize:11, color:c.textMuted, lineHeight:1.5, margin:'8px 2px 16px' }}>
-                {modelTier === 'light'
-                  ? (lang==='ru'
-                      ? 'Быстрая и экономная — отлично работает на CPU.'
-                      : 'Fast and lean — runs great on CPU.')
-                  : (lang==='ru'
-                      ? 'Заметно точнее, но медленнее — для комфортной обработки лучше иметь видеокарту.'
-                      : 'Noticeably more accurate but slower — a graphics card is recommended for processing.')}
-              </div>
-
-              <label style={{ display:'flex', alignItems:'center', gap:8, fontSize:13, color:c.textMuted, marginBottom:8 }}>
-                <ToggleSwitch checked={betterLyrics} onChange={v=>setBetterLyrics(v)} isDark={isDark} />
-                {lang==='ru'?'Лучшее качество текстов (медленнее)':'Better lyrics quality (slower)'}
-              </label>
-              <label style={{ display:'flex', alignItems:'center', gap:8, fontSize:13, color:c.textMuted, marginBottom:18 }}>
-                <ToggleSwitch checked={refineMetadata} onChange={v=>setRefineMetadata(v)} isDark={isDark} />
-                {lang==='ru'?'Дополнить метаданные из интернета':'Refine metadata with online lookup'}
-              </label>
-
-              <button onClick={handleIndex} disabled={indexing||!folderPath.trim()}
-                className="cta-v3" style={{
-                  width:'100%',
-                  opacity: indexing||!folderPath.trim() ? 0.45 : 1,
-                  cursor: indexing||!folderPath.trim() ? 'not-allowed' : 'pointer',
-                  display:'flex', alignItems:'center', justifyContent:'center', gap:8,
-                }}>
-                {indexing
-                  ? <Fragment><Spinner size={14} color="white" /> {lang==='ru'?'Идёт добавление…':'Adding…'}</Fragment>
-                  : (lang==='ru'?'▶ Добавить музыку':'▶ Add music')}
-              </button>
-            </div>
-          </Fragment>
-        )}
 
         {showModal && (
           <IndexingModal isDark={isDark} lang={lang} collectionName={collName||'my_collection'}
@@ -16950,7 +16995,20 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
       <div className="app-main-area" style={{
         flex:1, minWidth:0, minHeight:0, display:'flex', position:'relative',
       }}>
-      {section === 'home' ? (
+      {/* Home stays permanently mounted too (same visibility-toggle pattern as
+          sectionMap below) — it used to fully unmount on nav-away, which threw
+          out the wave/vibes state and re-fired their fetches (LLM call
+          included) on every return to the home page. */}
+      <div style={{
+        display: 'flex',
+        flex: section === 'home' ? 1 : 0,
+        width: section === 'home' ? 'auto' : 0,
+        minWidth: 0,
+        flexDirection: 'column',
+        overflow: 'hidden',
+        position: section === 'home' ? 'relative' : 'absolute',
+        visibility: section === 'home' ? 'visible' : 'hidden',
+      }}>
         <LandingScreen
           isDark={isDark} lang={lang}
           onLang={handleLang} onTheme={handleTheme} onSettings={() => setSettingsOpen(true)}
@@ -16970,9 +17028,9 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
           onSearchLyrics={(q) => handoffToSearch(q, 'auto')}
           aiActive={!!(aiStatus && aiStatus.aiActive)}
         />
-      ) : (
-        <Fragment>
-          {!isMobile && (
+      </div>
+      <Fragment>
+          {!isMobile && section !== 'home' && (
           <FloatingIconNav
             section={section}
             onNav={setSection}
@@ -17032,7 +17090,6 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
             </div>
           ))}
         </Fragment>
-      )}
         {isMobile && section === 'player' && (
           <button onClick={closeMobilePlayer}
             aria-label={lang==='ru'?'Свернуть плеер':'Minimize player'}

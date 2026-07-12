@@ -146,6 +146,8 @@
     @keyframes themeFade    { from { opacity: 0; } to { opacity: 1; } }
     @keyframes slideUp      { from { opacity:0; transform: translateY(20px); } to { opacity:1; transform: translateY(0); } }
     @keyframes slideRight   { from { opacity:0; transform: translateX(-12px); } to { opacity:1; transform: translateX(0); } }
+    @keyframes slideRightOut { from { opacity:1; transform: translateX(0); } to { opacity:0; transform: translateX(28px); } }
+    @keyframes fadeOut      { from { opacity:1; } to { opacity:0; } }
     @keyframes scaleIn      { from { opacity:0; transform: scale(0.92); } to { opacity:1; transform: scale(1); } }
     @keyframes bgDrift      { 0%{background-position:0% 0%} 50%{background-position:100% 100%} 100%{background-position:0% 0%} }
     @keyframes ambientIn    { from{opacity:0} to{opacity:1} }
@@ -3209,6 +3211,13 @@
        the glass warps as it drifts, without re-computing noise per frame.
        Browsers without SVG filter refs simply skip it (blobs stay as before). */
     .efir-liquid{position:absolute;inset:0;filter:url(#efir-liquid-lens)}
+    /* Mobile browsers can render one black/garbled frame the instant an
+       external SVG filter (feTurbulence+feDisplacementMap) first links against
+       an isolated stacking context (.efir-wave has isolation:isolate) — drop
+       the lens on touch/small screens instead of chasing the flash. */
+    @media (max-width: 768px), (hover: none) and (pointer: coarse) {
+      .efir-liquid{filter:none}
+    }
     /* Caustics — two skewed light streaks collected by the "liquid"; they live
        UNDER the lens, so the displacement bends them with the wave. */
     .efir-caustics{position:absolute;inset:0;mix-blend-mode:overlay;opacity:.55;

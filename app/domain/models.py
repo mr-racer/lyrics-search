@@ -685,6 +685,14 @@ class RhythmResponse(BaseModel):
     busiest_day: Optional[BusiestDay] = None
 
 
+class WeeklyPulseResponse(BaseModel):
+    """Light "this week" summary for the home page's under-the-fold widget:
+    total listening time over the last 7 local days plus the top genre played
+    in that window. Bucketed in the caller's local time via ``tz_offset_minutes``."""
+    seconds_listened: int = 0
+    top_genre: Optional[str] = None
+
+
 class EngagementTrack(BaseModel):
     track_id: str
     title: str

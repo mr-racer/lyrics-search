@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-from app.domain.models import ArtistAggregate, IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RhythmResponse, EngagementResponse, TasteMapResponse, RediscoverResponse, User
+from app.domain.models import ArtistAggregate, IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RhythmResponse, WeeklyPulseResponse, EngagementResponse, TasteMapResponse, RediscoverResponse, User
 from app.api.dependencies import get_current_user, require_mode
 from app.api.helpers import derive_collection_for_user, member_index_root, path_within_root
 from app.services.library_service import LibraryService
@@ -543,6 +543,23 @@ async def get_library_rhythm(
         collection_name=derived,
         lang=lang,
         tz_offset_minutes=tz_offset_minutes,
+    )
+
+
+@router.get("/weekly-pulse", response_model=WeeklyPulseResponse)
+async def get_library_weekly_pulse(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    tz_offset_minutes: int = Query(
+        0, ge=-840, le=840,
+        description="Client UTC offset in minutes (e.g. UTC+3 → 180) for local-day bucketing",
+    ),
+) -> WeeklyPulseResponse:
+    """Light "this week" summary for the home page's under-the-fold widget —
+    total listening time and top genre over the last 7 local days."""
+    derived = derive_collection_for_user(current_user)
+    return LibraryService.get_weekly_pulse(
+        collection_name=derived, tz_offset_minutes=tz_offset_minutes,
     )
 
 

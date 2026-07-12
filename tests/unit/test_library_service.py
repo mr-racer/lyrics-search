@@ -543,6 +543,38 @@ class TestListeningStats:
 
 
 # --------------------------------------------------------------------------- #
+# LibraryService.get_weekly_pulse — home-page "this week" widget.
+# --------------------------------------------------------------------------- #
+@pytest.mark.usefixtures("_isolated_db")
+class TestWeeklyPulse:
+    def test_weekly_pulse_empty_when_no_events(self):
+        res = LibraryService.get_weekly_pulse(collection_name="c", tz_offset_minutes=0)
+        assert res.seconds_listened == 0
+        assert res.top_genre is None
+
+    def test_weekly_pulse_sums_seconds_and_picks_top_genre(self):
+        _upsert("t1", genre="Rock")
+        _upsert("t2", genre="Pop")
+        MetadataDB.record_playback_event(session_id="s", collection_name="c",
+                                         track_id="t1", played_sec=120, total_dur=240)
+        MetadataDB.record_playback_event(session_id="s", collection_name="c",
+                                         track_id="t1", played_sec=90, total_dur=240)
+        MetadataDB.record_playback_event(session_id="s", collection_name="c",
+                                         track_id="t2", played_sec=5, total_dur=240)
+        res = LibraryService.get_weekly_pulse(collection_name="c", tz_offset_minutes=0)
+        assert res.seconds_listened == 215
+        assert res.top_genre == "Rock"
+
+    def test_weekly_pulse_scoped_to_collection(self):
+        _upsert("t1", genre="Rock")
+        MetadataDB.record_playback_event(session_id="s", collection_name="c",
+                                         track_id="t1", played_sec=100, total_dur=240)
+        res = LibraryService.get_weekly_pulse(collection_name="other", tz_offset_minutes=0)
+        assert res.seconds_listened == 0
+        assert res.top_genre is None
+
+
+# --------------------------------------------------------------------------- #
 # Global semaphore: at most MAX_PARALLEL_INDEXING_JOBS jobs may hold the slot.
 # --------------------------------------------------------------------------- #
 class TestSemaphore:

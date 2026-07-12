@@ -1782,6 +1782,20 @@ class LibraryService:
         )
 
     @classmethod
+    def get_weekly_pulse(
+        cls, *, collection_name: str, tz_offset_minutes: int = 0,
+    ):
+        """Light "this week" summary for the home page: seconds listened and
+        top genre over the last 7 local days. Accounts with little recent
+        activity simply get sparse/zero values."""
+        from app.domain.models import WeeklyPulseResponse
+
+        seconds, top_genre = MetadataDB.get_weekly_listening_summary(
+            collection_name, tz_offset_minutes,
+        )
+        return WeeklyPulseResponse(seconds_listened=int(seconds), top_genre=top_genre)
+
+    @classmethod
     def get_engagement(
         cls, *, qdrant_client, collection_name: str, lang: str = "en",
     ):

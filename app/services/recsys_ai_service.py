@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 
 from app.resources.metadata_db import MetadataDB
 from app.services import stream_service
@@ -324,6 +325,28 @@ def _validate_vibe(phrase: str) -> str:
     return phrase
 
 
+_CYRILLIC_RE = re.compile(r"[Ѐ-ӿ]")
+_LATIN_RE = re.compile(r"[A-Za-z]")
+
+
+def _lang_conforms(phrase: str, lang: str) -> bool:
+    """Reject a reply whose script doesn't match the requested language.
+
+    The prompt embeds raw (often Latin-script) artist/genre names inside a
+    Russian instruction, and a small local model occasionally mirrors that
+    dominant script instead of following ``lang`` — caching that reply would
+    stick a wrong-language phrase in the DB until an unrelated cache-key
+    change happens to roll a correct one. Phrases with no alphabetic
+    characters at all (rare) are let through, nothing to judge.
+    """
+    cyrillic = len(_CYRILLIC_RE.findall(phrase))
+    latin = len(_LATIN_RE.findall(phrase))
+    total = cyrillic + latin
+    if total == 0:
+        return True
+    return (cyrillic / total) >= 0.6 if lang == "ru" else (latin / total) >= 0.6
+
+
 def _top_artists_from_islands(islands: list[dict], n: int = 2) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
@@ -413,15 +436,26 @@ async def generate_taste_vibe(
         return {"phrase": None, "source": None}
     recent = recent_rotation(qdrant_client, collection_name)
     phrase = ""
-    try:
-        raw = await ask_llm(
-            _vibe_user_prompt(profile, recent),
-            system_prompt=_VIBE_SYSTEM.format(lang_name=_lang_name(lang)),
-            base_url=llm_base_url, model=llm_model, temperature=0.7,
+    for attempt in range(2):
+        try:
+            raw = await ask_llm(
+                _vibe_user_prompt(profile, recent),
+                system_prompt=_VIBE_SYSTEM.format(lang_name=_lang_name(lang)),
+                base_url=llm_base_url, model=llm_model, temperature=0.7,
+            )
+        except Exception:
+            logger.warning("[taste_vibe] LLM error — deterministic fallback", exc_info=True)
+            break
+        candidate = _validate_vibe(raw or "")
+        if not candidate:
+            break
+        if _lang_conforms(candidate, lang):
+            phrase = candidate
+            break
+        logger.warning(
+            "[taste_vibe] LLM replied in the wrong script for lang=%s (attempt %d) — %s",
+            lang, attempt, "retrying" if attempt == 0 else "falling back to deterministic",
         )
-        phrase = _validate_vibe(raw or "")
-    except Exception:
-        logger.warning("[taste_vibe] LLM error — deterministic fallback", exc_info=True)
     if not phrase:
         return deterministic_taste_vibe(profile, recent, lang)
     content = {"phrase": phrase, "source": "ai"}
