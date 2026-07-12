@@ -1,5 +1,6 @@
 """Similarity analysis service — compute top-similar / top-dissimilar track pairs."""
 
+import asyncio
 import json
 import logging
 import time
@@ -362,19 +363,25 @@ async def analyze_collection(
         )
 
     # ── Step 1: Scroll all points with CLAP vectors + payload ──
-    points = []
-    offset = None
-    while True:
-        response, next_offset = qdrant_client.scroll(
-            collection_name,
-            offset=offset,
-            with_payload=True,
-            with_vectors=True,
-        )
-        points.extend(response)
-        if next_offset is None:
-            break
-        offset = next_offset
+    # The whole loop runs in a worker thread: it drags every vector of the
+    # collection over sync HTTP, which takes seconds while an indexing job is
+    # hammering Qdrant — inline on the loop it froze the entire server.
+    def _scroll_all_points() -> list:
+        out = []
+        offset = None
+        while True:
+            response, next_offset = qdrant_client.scroll(
+                collection_name,
+                offset=offset,
+                with_payload=True,
+                with_vectors=True,
+            )
+            out.extend(response)
+            if next_offset is None:
+                return out
+            offset = next_offset
+
+    points = await asyncio.to_thread(_scroll_all_points)
 
     if not points:
         raise ValueError(f"Collection '{collection_name}' is empty")
@@ -421,7 +428,8 @@ async def analyze_collection(
             IndexStage.ANALYSIS, 0, 1, "Вычисление матрицы расстояний..."
         )
 
-    dist_matrix = compute_similarity_matrix(vectors)
+    # O(N²) matrix — minutes of CPU on a big library, keep it off the loop.
+    dist_matrix = await asyncio.to_thread(compute_similarity_matrix, vectors)
 
     if progress_callback:
         await progress_callback(
@@ -432,13 +440,15 @@ async def analyze_collection(
     # Same-album similars are excluded at BUILD time (scanning deeper to backfill)
     # so the cached list holds genuinely different-album neighbours; the player
     # rail's read-time same-album drop then never falls short of its top-3 cap.
-    similar, dissimilar = get_top_pairs(
+    # Per-track argsort over the N×N matrix — also worker-thread material.
+    similar, dissimilar = await asyncio.to_thread(
+        get_top_pairs,
         dist_matrix, ids, id2name, id2payload, top_k=12,
         drop_same_album_similar=True,
     )
 
     # ── Step 4: Save to cache ──
-    cache_path = save_top_pairs(similar, dissimilar, collection_name)
+    cache_path = await asyncio.to_thread(save_top_pairs, similar, dissimilar, collection_name)
 
     if progress_callback:
         await progress_callback(

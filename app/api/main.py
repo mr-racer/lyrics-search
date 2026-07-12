@@ -229,8 +229,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         while True:
             try:
                 await asyncio.sleep(3600)  # 1h
-                nq = sweep_old_quarantine()
-                np_ = _MDB.purge_old_pending_uploads()
+                nq = await asyncio.to_thread(sweep_old_quarantine)
+                np_ = await asyncio.to_thread(_MDB.purge_old_pending_uploads)
                 if nq or np_:
                     logger.info(
                         "[cleanup] swept %d quarantine, purged %d done uploads", nq, np_,

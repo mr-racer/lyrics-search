@@ -65,8 +65,12 @@ def _relevance(q_words: list, q_full: str, title: str, artist: str, album: str) 
     return score
 
 
+# NOTE: most read endpoints below are sync `def` on purpose — their bodies are
+# sync Qdrant/SQLite calls, and as `async def` they froze the event loop for
+# every other request whenever Qdrant was busy with an indexing job. As plain
+# `def` Starlette runs them in its threadpool (same pattern as /taste-map).
 @router.get("/browse")
-async def browse_tracks(
+def browse_tracks(
     request: Request = None,
     current_user: User = Depends(get_current_user),
     q: Optional[str] = Query(None, min_length=2, description="Search query (title / artist / album). Omit to return all tracks."),
@@ -217,7 +221,7 @@ async def browse_tracks(
 # ── Random tracks (landing page) ──────────────────────────────────────────────
 
 @router.get("/random")
-async def get_random_tracks(
+def get_random_tracks(
     request: Request = None,
     current_user: User = Depends(get_current_user),
     limit: int = Query(1, ge=1, le=20, description="Number of random tracks"),
@@ -292,7 +296,7 @@ async def get_random_tracks(
 # ── Collections info ──────────────────────────────────────────────────────────
 
 @router.get("/collections")
-async def get_collections(
+def get_collections(
     request: Request,
     current_user: User = Depends(get_current_user),
 ) -> dict:
@@ -358,7 +362,7 @@ async def get_collections(
 
 
 @router.get("/settings")
-async def get_collection_settings(
+def get_collection_settings(
     current_user: User = Depends(get_current_user),
 ) -> dict:
     """Return persisted per-collection settings for the caller's account.
@@ -393,7 +397,7 @@ async def get_collection_settings_legacy(collection_name: str) -> dict:
 
 
 @router.patch("/ai-enabled")
-async def set_collection_ai_enabled(
+def set_collection_ai_enabled(
     req: AIEnabledRequest,
     current_user: User = Depends(get_current_user),
 ) -> dict:
@@ -423,7 +427,7 @@ async def set_collection_ai_enabled_legacy(collection_name: str, req: AIEnabledR
 # ── Albums overview ───────────────────────────────────────────────────────────
 
 @router.get("/albums", response_model=LibraryAlbumsResponse)
-async def get_library_albums(
+def get_library_albums(
     request: Request,
     current_user: User = Depends(get_current_user),
     sort: str = Query("alphabetical", description="alphabetical | year_desc | year_asc | track_count_desc"),
@@ -444,7 +448,7 @@ async def get_library_albums(
 # ── Liked songs ───────────────────────────────────────────────────────────────
 
 @router.get("/liked-songs", response_model=LikedSongsResponse)
-async def get_library_liked_songs(
+def get_library_liked_songs(
     request: Request,
     current_user: User = Depends(get_current_user),
 ) -> LikedSongsResponse:
@@ -461,7 +465,7 @@ async def get_library_liked_songs(
 # ── Rediscover ────────────────────────────────────────────────────────────────
 
 @router.get("/rediscover", response_model=RediscoverResponse)
-async def get_library_rediscover(
+def get_library_rediscover(
     request: Request,
     current_user: User = Depends(get_current_user),
 ) -> RediscoverResponse:
@@ -478,7 +482,7 @@ async def get_library_rediscover(
 # ── Featured artist (deterministic daily rotation) ───────────────────────────
 
 @router.get("/featured-artist", response_model=ArtistAggregate)
-async def get_library_featured_artist(
+def get_library_featured_artist(
     request: Request,
     current_user: User = Depends(get_current_user),
     date: str | None = Query(None, description="YYYY-MM-DD; defaults to today"),
@@ -503,7 +507,7 @@ async def get_library_featured_artist(
 # ── Listening stats ───────────────────────────────────────────────────────────
 
 @router.get("/listening-stats", response_model=ListeningStatsResponse)
-async def get_library_listening_stats(
+def get_library_listening_stats(
     request: Request,
     current_user: User = Depends(get_current_user),
     lang: str = Query("en", pattern="^(en|ru)$"),
@@ -525,7 +529,7 @@ async def get_library_listening_stats(
 
 
 @router.get("/rhythm", response_model=RhythmResponse)
-async def get_library_rhythm(
+def get_library_rhythm(
     request: Request,
     current_user: User = Depends(get_current_user),
     lang: str = Query("en", pattern="^(en|ru)$"),
@@ -547,7 +551,7 @@ async def get_library_rhythm(
 
 
 @router.get("/weekly-pulse", response_model=WeeklyPulseResponse)
-async def get_library_weekly_pulse(
+def get_library_weekly_pulse(
     request: Request,
     current_user: User = Depends(get_current_user),
     tz_offset_minutes: int = Query(
@@ -564,7 +568,7 @@ async def get_library_weekly_pulse(
 
 
 @router.get("/engagement", response_model=EngagementResponse)
-async def get_library_engagement(
+def get_library_engagement(
     request: Request,
     current_user: User = Depends(get_current_user),
     lang: str = Query("en", pattern="^(en|ru)$"),
@@ -601,7 +605,7 @@ def get_library_taste_map(
 # ── Library statistics ────────────────────────────────────────────────────────
 
 @router.get("/stats")
-async def get_stats(
+def get_stats(
     request: Request,
     current_user: User = Depends(get_current_user),
 ) -> dict:
@@ -806,7 +810,7 @@ async def get_stats(
 # ── Top similar/dissimilar pairs ──────────────────────────────────────────────
 
 @router.get("/top-pairs")
-async def get_top_pairs(
+def get_top_pairs(
     request: Request,
     current_user: User = Depends(get_current_user),
     sample: int | None = Query(
@@ -918,7 +922,7 @@ async def get_top_pairs(
 
 
 @router.get("/top-pairs/{track_id}")
-async def get_top_pairs_for_track(
+def get_top_pairs_for_track(
     track_id: str,
     request: Request,
     current_user: User = Depends(get_current_user),
@@ -1084,7 +1088,7 @@ async def index_folder(
 # ── Server-mode uploads (Phase C) ──────────────────────────────────────────────
 
 @router.post("/upload", dependencies=[Depends(require_mode("server"))])
-async def upload_audio(
+def upload_audio(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
 ) -> dict:
@@ -1175,7 +1179,7 @@ async def upload_audio(
 
 
 @router.get("/upload/{upload_id}", dependencies=[Depends(require_mode("server"))])
-async def get_upload_status(
+def get_upload_status(
     upload_id: str,
     current_user: User = Depends(get_current_user),
 ) -> dict:
@@ -1242,7 +1246,7 @@ async def batch_commit_uploads(
 
 
 @router.delete("/tracks/{track_id}", dependencies=[Depends(require_mode("server"))])
-async def delete_track(
+def delete_track(
     track_id: str,
     request: Request,
     current_user: User = Depends(get_current_user),
@@ -1348,7 +1352,7 @@ async def delete_collection(collection_name: str, request: Request):
 # ── Sonic Descriptor ──────────────────────────────────────────────────────────
 
 @router.get("/sonic-descriptor/{track_slug}")
-async def get_sonic_descriptor(track_slug: str) -> dict:
+def get_sonic_descriptor(track_slug: str) -> dict:
     """Return tags + sonic_class + audio_signature for a track. 404 if track unknown."""
     from app.resources.metadata_db import MetadataDB
     MetadataDB.init()
@@ -1359,7 +1363,7 @@ async def get_sonic_descriptor(track_slug: str) -> dict:
 
 
 @router.get("/sonic-facets")
-async def get_sonic_facets(top_k: int = 50) -> dict:
+def get_sonic_facets(top_k: int = 50) -> dict:
     """Return aggregate counts of top-K sonic_tags across the library.
 
     Powers the SonicFiltersChips UI in SearchSectionV2 — the chip set is
@@ -1370,7 +1374,7 @@ async def get_sonic_facets(top_k: int = 50) -> dict:
 
 
 @router.get("/year-facets")
-async def get_year_facets(
+def get_year_facets(
     top_k: int = 30,
     collection_name: Optional[str] = Query(None, description="Collection to aggregate (omit for all)"),
     request: Request = None,

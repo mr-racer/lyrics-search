@@ -13,6 +13,7 @@ Two features:
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -156,7 +157,10 @@ async def enrich_profile(
     Returns ``{"portrait", "island_names", "islands"}`` (islands included so the
     frontend can re-render immediately without refetching the profile).
     """
-    profile = stream_service.long_term_profile(
+    # long_term_profile does sync Qdrant retrieves + SQLite reads — under
+    # indexing load those take seconds and must not freeze the event loop.
+    profile = await asyncio.to_thread(
+        stream_service.long_term_profile,
         qdrant_client=qdrant_client, collection_name=collection_name,
     )
     if not profile["islands"]:
@@ -251,7 +255,8 @@ async def generate_vibe_names(
     vibes). Vibes are recomputed via ``long_term_profile`` so the names are
     hashed against exactly what GET /recommend/profile serves.
     """
-    profile = stream_service.long_term_profile(
+    profile = await asyncio.to_thread(
+        stream_service.long_term_profile,
         qdrant_client=qdrant_client, collection_name=collection_name,
     )
     vibes = profile.get("vibes") or []
@@ -523,12 +528,13 @@ async def generate_taste_vibe(
     Safe as a background task: recomputes its own profile + rotation (no caller
     state) and degrades to the deterministic phrase on any LLM failure.
     """
-    profile = stream_service.long_term_profile(
+    profile = await asyncio.to_thread(
+        stream_service.long_term_profile,
         qdrant_client=qdrant_client, collection_name=collection_name,
     )
     if not profile["islands"]:
         return {"phrase": None, "source": None}
-    recent = recent_rotation(qdrant_client, collection_name)
+    recent = await asyncio.to_thread(recent_rotation, qdrant_client, collection_name)
     phrase = ""
     for attempt in range(2):
         try:
@@ -621,7 +627,8 @@ async def _execute_action(
         if not seed_hits:
             return []
         seed_id = seed_hits[0].track.track_id
-        result = stream_service.similar_tracks(
+        result = await asyncio.to_thread(
+            stream_service.similar_tracks,
             qdrant_client=qdrant_client, collection_name=collection_name,
             seed_track_id=seed_id, limit=limit,
         )
@@ -646,7 +653,8 @@ async def _execute_action(
         # Catalog tracks mode: match by NAME (title/album/artist) and return the
         # actual songs (album/artist queries explode into their tracks).
         from app.services import catalog_search_service
-        tracks = catalog_search_service.search_catalog_tracks(
+        tracks = await asyncio.to_thread(
+            catalog_search_service.search_catalog_tracks,
             qdrant_client, collection_name, query, limit,
         )
         for t in tracks:

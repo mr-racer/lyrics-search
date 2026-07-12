@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -253,7 +254,10 @@ async def taste_vibe(
         return {"phrase": None, "source": None}
     derived = derive_collection_for_user(current_user)
     try:
-        result = recsys_ai_service.taste_vibe_cached_or_fallback(
+        # Sync Qdrant + SQLite inside — off the event loop, or every request
+        # stalls while Qdrant is busy with an indexing job.
+        result = await asyncio.to_thread(
+            recsys_ai_service.taste_vibe_cached_or_fallback,
             qdrant_client=db_client.qdrant, collection_name=derived, lang=lang,
         )
     except Exception:

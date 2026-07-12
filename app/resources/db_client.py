@@ -49,7 +49,16 @@ class DbClient:
         # trust_env=False so QdrantClient's httpx never auto-detects a (shell-
         # exported) HTTP_PROXY and routes this internal Qdrant connection through
         # it — internal traffic always stays direct, on every deployment path.
-        self._qdrant_client = QdrantClient(url=self.qdrant_url, trust_env=False)
+        # Explicit timeout: the httpx default (5s) is too tight for full-library
+        # scrolls while an indexing job is hammering Qdrant, but requests must
+        # not hang unbounded either.
+        try:
+            qdrant_timeout = int(os.environ.get("QDRANT_TIMEOUT_SEC", "30"))
+        except ValueError:
+            qdrant_timeout = 30
+        self._qdrant_client = QdrantClient(
+            url=self.qdrant_url, trust_env=False, timeout=qdrant_timeout,
+        )
 
         # Create LyricsSearchEngine with lazy model loading (default)
         # Models are NOT loaded here — they load on first search access

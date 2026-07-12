@@ -902,10 +902,14 @@ class LibraryService:
             stage_lyrics.started_at = time.time()
             stage_lyrics.message = "Чтение тегов..."
 
-            audio_files = [
-                p for p in Path(folder_path).rglob("*")
-                if p.suffix.lower() in (".flac", ".m4a", ".mp3")
-            ]
+            # rglob walks the whole tree synchronously — on a big/network
+            # folder that's seconds of blocked event loop, so off-thread it.
+            audio_files = await asyncio.to_thread(
+                lambda: [
+                    p for p in Path(folder_path).rglob("*")
+                    if p.suffix.lower() in (".flac", ".m4a", ".mp3")
+                ]
+            )
             stage_lyrics.total = len(audio_files)
             await self._notify_progress(job, {
                 "stage": IndexStage.LYRICS.value,
