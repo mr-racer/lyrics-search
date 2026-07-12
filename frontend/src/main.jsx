@@ -3093,7 +3093,11 @@ function HomeDailyExtras({ isDark, lang }) {
     const cacheKey = 'musix_daily_facts_v2';
     let cached = null;
     try { cached = JSON.parse(localStorage.getItem(cacheKey) || 'null'); } catch {}
-    if (cached && cached.date === today && cached.lang === lang && Array.isArray(cached.facts)) {
+    // Shape guard: a day-cache filled from a pre-attribution server (facts
+    // without artist/title/image) would render a whole day of empty thumbs
+    // and raw context strings — treat those entries as a miss and refetch.
+    const freshShape = (f) => f && typeof f === 'object' && ('artist' in f);
+    if (cached && cached.date === today && cached.lang === lang && Array.isArray(cached.facts) && cached.facts.every(freshShape)) {
       setFacts(cached.facts);
     } else {
       apiFetch(`/metadata/random-facts?limit=3&lang=${encodeURIComponent(lang)}`).then(r => {
@@ -3167,7 +3171,8 @@ function HomeDailyExtras({ isDark, lang }) {
                     ? '0 8px 18px rgba(0,0,0,.35), inset 0 0 0 1px rgba(255,255,255,.09)'
                     : '0 8px 18px rgba(60,45,100,.16), inset 0 0 0 1px rgba(0,0,0,.05)' }}>
                   {img
-                    ? <img src={img} alt="" loading="lazy" style={{ width:'100%', height:'100%', objectFit:'cover' }} />
+                    ? <img src={img} alt="" loading="lazy" style={{ width:'100%', height:'100%', objectFit:'cover' }}
+                        onError={(e) => { e.currentTarget.style.display = 'none'; }} />
                     : <span style={{ fontSize:17, opacity:.45 }}>{isArtist ? '👤' : '♪'}</span>}
                 </div>
                 <div style={{ minWidth:0 }}>
@@ -15446,12 +15451,16 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere }) {
           (z6) and the content column (z2) render over its fading tail. */}
       <div className="atlas-field" aria-hidden="true">
         {mode === 'photo' ? (
-          // blurred backdrop — fills the whole field so the photo's glow melts
-          // into the content instead of stopping at the hero's edge
+          // blurred backdrop — the photo's glow melting into the content. Heavy
+          // blur + its own vertical fade: at 28px the tail below the crisp photo
+          // still read as a second (mirrored-looking) copy of the image under
+          // the header — now it dissolves into pure colour before the bio.
           <img src={backdrop} alt="" className="atlas-plx-far" style={{
-            position:'absolute', top:'-4%', left:'-5%', width:'110%', height:'108%',
+            position:'absolute', top:'-6%', left:'-6%', width:'112%', height:'112%',
             objectFit:'cover', objectPosition:'50% 40%',
-            filter:`blur(28px) ${isDark ? 'brightness(0.7) saturate(1.1)' : 'brightness(0.85) saturate(1.05)'}`,
+            filter:`blur(56px) ${isDark ? 'brightness(0.7) saturate(1.1)' : 'brightness(0.85) saturate(1.05)'}`,
+            WebkitMaskImage:'linear-gradient(180deg, #000 0%, #000 52%, transparent 82%)',
+            maskImage:'linear-gradient(180deg, #000 0%, #000 52%, transparent 82%)',
           }} />
         ) : mode === 'cutout' ? (
           <div className="atlas-plx-far" style={{ position:'absolute', inset:0 }}>
@@ -15463,27 +15472,23 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere }) {
                 ? `radial-gradient(ellipse 92% 71% at 73% 32%, oklch(21% 0.015 ${hue}) 0%, oklch(13% 0.01 ${hue}) 55%, ${c.bg} 100%)`
                 : `radial-gradient(ellipse 92% 71% at 73% 32%, oklch(96% 0.012 ${hue}) 0%, oklch(92% 0.01 ${hue}) 55%, ${c.bg} 100%)`,
             }} />
-            {/* Light-burst inside the centred box (63% ≈ the hero's share of the
-                field) so --burst-x keeps tracking the cutout. The box clips the
-                oversized ray/flare pseudo-elements itself (they are 150vmax) and
-                a two-axis mask dissolves them softly, so the rays die out by the
-                hero's bottom edge instead of riding the field down over the facts. */}
+            {/* Light-burst — full-bleed inside the field (63% ≈ the hero's share)
+                so the rays reach the viewport edges on wide screens instead of
+                dying at the 1120 column (that read as looking through a slit).
+                The box clips the oversized ray/flare pseudo-elements (150vmax);
+                a vertical mask dissolves them by the hero's bottom edge so they
+                don't ride the field down over the facts. --burst-x mirrors the
+                cutout's centre: 80% of the container while it's narrower than
+                1120, then pinned to the centred column (50% + 336px) beyond. */}
             <div style={{
-              position:'relative', maxWidth:1120, margin:'0 auto', height:'63%', padding:'0 32px',
-              overflow:'hidden',
-              WebkitMaskImage:
-                'linear-gradient(180deg, #000 0%, #000 55%, transparent 97%), ' +
-                'linear-gradient(90deg, transparent 0%, #000 10%, #000 90%, transparent 100%)',
-              WebkitMaskComposite: 'source-in intersect',
-              maskImage:
-                'linear-gradient(180deg, #000 0%, #000 55%, transparent 97%), ' +
-                'linear-gradient(90deg, transparent 0%, #000 10%, #000 90%, transparent 100%)',
-              maskComposite: 'intersect',
+              position:'relative', height:'63%', overflow:'hidden',
+              WebkitMaskImage: 'linear-gradient(180deg, #000 0%, #000 55%, transparent 97%)',
+              maskImage: 'linear-gradient(180deg, #000 0%, #000 55%, transparent 97%)',
             }}>
               <div className="atlas-burst" style={{
-                '--burst-x': '80%',
+                '--burst-x': 'min(80%, calc(50% + 336px))',
                 '--burst-hue': hue,
-                '--ray-color': isDark ? 'rgba(255,255,255,0.14)' : 'rgba(120,92,220,0.18)',
+                '--ray-color': isDark ? 'rgba(255,255,255,0.2)' : 'rgba(120,92,220,0.24)',
                 '--flare-inner': isDark ? 'rgba(255,250,240,0.68)' : 'rgba(255,255,255,0.85)',
                 '--flare-mid': isDark ? `oklch(68% 0.14 ${hue} / 0.42)` : `oklch(80% 0.12 ${hue} / 0.45)`,
                 '--spark': isDark ? 'rgba(255,238,205,0.95)' : `oklch(58% 0.16 ${hue} / 0.7)`,
@@ -15562,36 +15567,9 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere }) {
       }} />
 
       <div style={{ position:'relative', maxWidth:1120, margin:'0 auto', height:'100%', padding:'0 32px' }}>
-        {/* Light-burst (cutout only) — inside the container so --burst-x is measured
-            against the same centred box as the figure, keeping the glow on the cutout.
-            The clipping wrapper is load-bearing: the burst's pseudo-elements are
-            150vmax, and unclipped they ran far below the header (over the facts) and
-            widened the page on mobile (horizontal scroll). The mask keeps the clip
-            soft so the rays melt out at the hero's edges instead of hard-cutting. */}
-        {mode === 'cutout' && (
-          <div aria-hidden="true" style={{
-            position:'absolute', inset:0, overflow:'hidden', pointerEvents:'none',
-            WebkitMaskImage:
-              'linear-gradient(180deg, #000 0%, #000 55%, transparent 97%), ' +
-              'linear-gradient(90deg, transparent 0%, #000 10%, #000 90%, transparent 100%)',
-            WebkitMaskComposite: 'source-in intersect',
-            maskImage:
-              'linear-gradient(180deg, #000 0%, #000 55%, transparent 97%), ' +
-              'linear-gradient(90deg, transparent 0%, #000 10%, #000 90%, transparent 100%)',
-            maskComposite: 'intersect',
-          }}>
-            <div className="atlas-burst" style={{
-              '--burst-x': '80%',
-              '--burst-hue': hue,
-              '--ray-color': isDark ? 'rgba(255,255,255,0.14)' : 'rgba(120,92,220,0.18)',
-              '--flare-inner': isDark ? 'rgba(255,250,240,0.68)' : 'rgba(255,255,255,0.85)',
-              '--flare-mid': isDark ? `oklch(68% 0.14 ${hue} / 0.42)` : `oklch(80% 0.12 ${hue} / 0.45)`,
-              '--spark': isDark ? 'rgba(255,238,205,0.95)' : `oklch(58% 0.16 ${hue} / 0.7)`,
-            }}>
-              <div className="atlas-particles" />
-            </div>
-          </div>
-        )}
+        {/* (the light-burst lives in the field above — a second copy used to be
+            layered here, doubling the rays/particles and clipping them to the
+            1120 column; the field one is full-bleed now, so it's the only one) */}
 
         {/* Breadcrumb */}
         <div className="mono" style={{
@@ -15616,32 +15594,39 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere }) {
         {/* Cutout figure — cutout mode only. A blurred, brightened echo of the
             same PNG glows behind the figure, and the main image gets a 4-edge
             mask, so AudioDB's hard crop lines dissolve into light instead of
-            ending at a rectangle. Both ride the mid parallax layer. */}
+            ending at a rectangle. Both ride the mid (cursor) parallax layer AND
+            a shared scroll-parallax wrapper: .atlas-scroll-plx lags the page
+            scroll (×0.35 via --sy, fed by the Atlas scroll handler), so the
+            figure glides behind the liquid-glass docks before dissolving. The
+            wrapper uses `transform` (the imgs can't — atlasCutoutIn's fill-mode
+            would pin theirs) and fills the padding box, so the imgs' inset
+            coordinates are unchanged. */}
         {mode === 'cutout' && (
-          <img src={cutout} alt="" aria-hidden="true" className="atlas-cutout-echo atlas-plx-mid" style={{
-            position:'absolute', right: isMobile ? 10 : 36, top: isMobile ? 30 : 44, bottom: isMobile ? 14 : 34, maxWidth: isMobile ? '48%' : '44%',
-            objectFit:'contain', objectPosition:'top right', zIndex:1,
-            filter:`blur(26px) saturate(1.35) ${isDark ? 'brightness(1.5)' : 'brightness(1.1)'}`,
-            opacity: isDark ? 0.5 : 0.42,
-            transform:'scale(1.07)',
-          }} />
-        )}
-        {mode === 'cutout' && (
-          <img src={cutout} alt="" className="atlas-cutout atlas-plx-mid" style={{
-            position:'absolute', right: isMobile ? 10 : 36, top: isMobile ? 30 : 44, bottom: isMobile ? 14 : 34, maxWidth: isMobile ? '48%' : '44%',
-            objectFit:'contain', objectPosition:'top right', zIndex:1,
-            // No drop-shadow: it would paint a blurred black silhouette into the
-            // cutout's transparent margins, graying the otherwise-clear backdrop.
-            // Depth comes from the light-burst and the blurred echo instead.
-            WebkitMaskImage:
-              'linear-gradient(180deg, transparent 0%, #000 4%, #000 90%, transparent 100%), ' +
-              'linear-gradient(90deg, transparent 0%, #000 6%, #000 94%, transparent 100%)',
-            WebkitMaskComposite: 'source-in intersect',
-            maskImage:
-              'linear-gradient(180deg, transparent 0%, #000 4%, #000 90%, transparent 100%), ' +
-              'linear-gradient(90deg, transparent 0%, #000 6%, #000 94%, transparent 100%)',
-            maskComposite: 'intersect',
-          }} />
+          <div className="atlas-scroll-plx" aria-hidden="true"
+            style={{ position:'absolute', inset:0, zIndex:1, pointerEvents:'none' }}>
+            <img src={cutout} alt="" className="atlas-cutout-echo atlas-plx-mid" style={{
+              position:'absolute', right: isMobile ? 10 : 36, top: isMobile ? 30 : 44, bottom: isMobile ? 14 : 34, maxWidth: isMobile ? '48%' : '44%',
+              objectFit:'contain', objectPosition:'top right',
+              filter:`blur(26px) saturate(1.35) ${isDark ? 'brightness(1.5)' : 'brightness(1.1)'}`,
+              opacity: isDark ? 0.5 : 0.42,
+              transform:'scale(1.07)',
+            }} />
+            <img src={cutout} alt="" className="atlas-cutout atlas-plx-mid" style={{
+              position:'absolute', right: isMobile ? 10 : 36, top: isMobile ? 30 : 44, bottom: isMobile ? 14 : 34, maxWidth: isMobile ? '48%' : '44%',
+              objectFit:'contain', objectPosition:'top right',
+              // No drop-shadow: it would paint a blurred black silhouette into the
+              // cutout's transparent margins, graying the otherwise-clear backdrop.
+              // Depth comes from the light-burst and the blurred echo instead.
+              WebkitMaskImage:
+                'linear-gradient(180deg, transparent 0%, #000 4%, #000 90%, transparent 100%), ' +
+                'linear-gradient(90deg, transparent 0%, #000 6%, #000 94%, transparent 100%)',
+              WebkitMaskComposite: 'source-in intersect',
+              maskImage:
+                'linear-gradient(180deg, transparent 0%, #000 4%, #000 90%, transparent 100%), ' +
+                'linear-gradient(90deg, transparent 0%, #000 6%, #000 94%, transparent 100%)',
+              maskComposite: 'intersect',
+            }} />
+          </div>
         )}
 
         {/* Name + context lines. In cutout mode the name sits on the left,
@@ -16084,6 +16069,12 @@ function ArtistAtlasSection({
     const sc = scrollRef.current;
     if (!sc) return;
     const heroH = heroRef.current ? heroRef.current.offsetHeight : 340;
+    // Scroll-parallax feed for the hero cutout (.atlas-scroll-plx): the px
+    // scrolled goes straight onto the hero node as --sy — no state, so no
+    // re-renders at scroll rate (same trick as the cursor --hx/--hy).
+    if (heroRef.current && !(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)) {
+      heroRef.current.style.setProperty('--sy', String(Math.max(0, sc.scrollTop)));
+    }
     setCondensed(sc.scrollTop > heroH - 70);
     const probe = sc.scrollTop + 170;
     let act = null;

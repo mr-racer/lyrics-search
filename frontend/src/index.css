@@ -908,8 +908,9 @@
     /* Cutout hero backdrop: a burst of light rays + a drifting particle field
        behind the figure, replacing the flat colour wash. Hue/intensity are
        fed per-artist via CSS custom properties from the component. */
-    /* Lives inside the centred 1120 container so its origin tracks the cutout on
-       wide screens; --burst-x marks the figure's horizontal centre. */
+    /* Full-bleed inside .atlas-field (rays must reach the viewport edges on wide
+       screens); --burst-x marks the figure's horizontal centre — pinned to the
+       centred 1120 column via min(80%, calc(50% + 336px)). */
     .atlas-burst { position: absolute; inset: 0; pointer-events: none; }
     .atlas-burst::before {           /* slowly rotating light rays */
       content: ''; position: absolute; top: 50%; left: var(--burst-x, 80%);
@@ -972,6 +973,19 @@
     /* the echo hides with the figure on narrow viewports (it has no entry
        animation — atlasCutoutIn's fill-mode would override its inline opacity) */
     @media (max-width: 880px) { .atlas-cutout-echo { display: none; } }
+    /* Scroll parallax: the cutout figure lags the page scroll (×0.35) so it
+       glides behind the liquid-glass docks, then dissolves once it would start
+       hanging over the bio. --sy (px scrolled, unitless) is written on the hero
+       node by the Atlas scroll handler; no transition — scroll-linked movement
+       must track the finger/wheel directly. */
+    .atlas-scroll-plx {
+      transform: translateY(calc(var(--sy, 0) * 0.35px));
+      opacity: clamp(0, calc(1 - (var(--sy, 0) - 160) / 420), 1);
+      will-change: transform;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .atlas-scroll-plx { transform: none !important; opacity: 1 !important; }
+    }
     .atlas-plx-far  { translate: calc(var(--hx, 0) * 6px)   calc(var(--hy, 0) * 4px);   transition: translate .7s  cubic-bezier(.22,.9,.3,1); }
     .atlas-plx-dust { translate: calc(var(--hx, 0) * 8px)   calc(var(--hy, 0) * 6px);   transition: translate .55s cubic-bezier(.22,.9,.3,1); }
     .atlas-plx-mid  { translate: calc(var(--hx, 0) * 3px)   calc(var(--hy, 0) * 2px);   transition: translate .7s  cubic-bezier(.22,.9,.3,1); }
