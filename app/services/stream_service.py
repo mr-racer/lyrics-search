@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import math
 import random as _random_module
+import time
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -1954,3 +1955,164 @@ def axis_playlist(
             "axis_stats_source": axis_stats.get("source"),
         },
     }
+
+
+# ── Vibe album suggestions («что послушать» в библиотеке) ───────────────────
+# Per vibe: the library album whose mean CLAP (over its own tracks) is closest
+# to the vibe's centroid, excluding albums already represented inside the vibe.
+# Candidates come from a clap search around the centroid (so we only compute
+# full album means for albums that plausibly match, not the whole library).
+
+VIBE_ALBUM_SEARCH_LIMIT = 300     # top clap hits per vibe → candidate albums
+VIBE_ALBUM_CANDIDATES_MAX = 24    # albums fully scored per vibe
+VIBE_ALBUM_SAMPLE = 12            # tracks per album used for the album mean
+VIBE_ALBUM_MIN_TRACKS = 3         # 1–2-track "albums" are singles, not подборка
+VIBE_ALBUM_MAX_PER_VIBE = 2
+VIBE_ALBUM_TOTAL_MAX = 6
+_VIBE_ALBUM_CACHE_TTL_SEC = 6 * 3600.0
+# {collection_name: (monotonic_ts, result_dict)} — vibes drift on a days scale
+# (H_VIBE_DAYS=2.5), so a 6h in-process cache keeps the endpoint cheap without
+# the suggestions going stale in any user-visible way.
+_vibe_album_cache: dict[str, tuple[float, dict]] = {}
+
+
+def _album_key(title) -> str | None:
+    t = (title or "").strip().lower()
+    return t or None
+
+
+def vibe_album_suggestions(
+    *,
+    qdrant_client,
+    collection_name: str,
+    albums,
+    now: datetime | None = None,
+) -> dict:
+    """Album picks for the library rail, one per current vibe first.
+
+    ``albums`` is ``LibraryService.get_albums(...).albums`` (the route passes it
+    in so this module stays free of the library-service dependency). Returns
+    ``{"suggestions": [dict], "vibes": [vibe dict]}`` — the raw vibes ride along
+    so the route can attach cached LLM vibe names.
+
+    Selection is round-robin across vibes (strongest vibe first): every vibe
+    places its best album before any vibe places its second, ≤2 per vibe and
+    ≤6 total — diversity over depth, per the feature spec. current_vibes caps
+    at VIBES_MAX=3, so 3×2 fills the rail exactly.
+    """
+    cached = _vibe_album_cache.get(collection_name)
+    if cached and (time.monotonic() - cached[0]) < _VIBE_ALBUM_CACHE_TTL_SEC:
+        return cached[1]
+
+    now = now or datetime.utcnow()
+    raw_signals = MetadataDB.get_playback_signals(collection_name, LONG_TERM_EVENT_CAP)
+    signals = [PlaybackSignal(**r) for r in raw_signals]
+    all_taste = _fire_signals(MetadataDB.get_taste_signals(collection_name))
+    vibes = current_vibes(
+        qdrant_client=qdrant_client, collection_name=collection_name,
+        signals=signals, taste_signals=all_taste, now=now,
+    )
+
+    albums_by_key: dict[str, object] = {}
+    for a in albums or []:
+        k = _album_key(a.album_title)
+        if k and a.track_count >= VIBE_ALBUM_MIN_TRACKS and a.tracks:
+            albums_by_key[k] = a
+
+    result: dict = {"suggestions": [], "vibes": vibes}
+    if not vibes or not albums_by_key:
+        _vibe_album_cache[collection_name] = (time.monotonic(), result)
+        return result
+
+    album_centroids: dict[str, np.ndarray | None] = {}
+    ranked_per_vibe: list[list[tuple[float, str]]] = []
+
+    for vibe in vibes:
+        member_ids = [t["track_id"] for t in vibe["tracks"]]
+        vectors, _ = _retrieve_track_data(qdrant_client, collection_name, member_ids)
+        centroid = _vibe_centroid(member_ids, vectors)
+        if centroid is None:
+            ranked_per_vibe.append([])
+            continue
+        # Albums already inside the vibe are excluded — the point is to lead
+        # the user somewhere adjacent, not back to what the vibe is made of.
+        vibe_album_keys = {_album_key(t.get("album")) for t in vibe["tracks"]}
+        vibe_album_keys.discard(None)
+
+        try:
+            hits = qdrant_client.query_points(
+                collection_name=collection_name,
+                query=[float(x) for x in centroid],
+                using="clap",
+                limit=VIBE_ALBUM_SEARCH_LIMIT,
+                with_payload=["album"],
+            ).points
+        except Exception:
+            logger.exception("[vibe-albums] clap search failed")
+            ranked_per_vibe.append([])
+            continue
+
+        cand_keys: list[str] = []
+        for h in hits:
+            k = _album_key((h.payload or {}).get("album"))
+            if not k or k in vibe_album_keys or k not in albums_by_key:
+                continue
+            if k not in cand_keys:
+                cand_keys.append(k)
+            if len(cand_keys) >= VIBE_ALBUM_CANDIDATES_MAX:
+                break
+
+        # Album mean CLAP over an even sample of its tracklist, one batched
+        # retrieve for every album this vibe still needs.
+        need_ids: list[str] = []
+        sample_by_key: dict[str, list[str]] = {}
+        for k in cand_keys:
+            if k in album_centroids:
+                continue
+            tracks = albums_by_key[k].tracks
+            step = max(1, len(tracks) // VIBE_ALBUM_SAMPLE)
+            sample = [t.track_id for t in tracks[::step]][:VIBE_ALBUM_SAMPLE]
+            sample_by_key[k] = sample
+            need_ids.extend(sample)
+        if need_ids:
+            vecs, _ = _retrieve_track_data(qdrant_client, collection_name, need_ids)
+            for k, sample in sample_by_key.items():
+                album_centroids[k] = _vibe_centroid(sample, vecs)
+
+        ranked = [
+            (float(ac @ centroid), k)
+            for k in cand_keys
+            if (ac := album_centroids.get(k)) is not None
+        ]
+        ranked.sort(reverse=True)
+        ranked_per_vibe.append(ranked)
+
+    suggestions: list[dict] = []
+    seen_keys: set[str] = set()
+    iters = [iter(r) for r in ranked_per_vibe]
+    for _round in range(VIBE_ALBUM_MAX_PER_VIBE):
+        for vibe, it in zip(vibes, iters):
+            if len(suggestions) >= VIBE_ALBUM_TOTAL_MAX:
+                break
+            for score, k in it:
+                if k in seen_keys:
+                    continue
+                seen_keys.add(k)
+                a = albums_by_key[k]
+                suggestions.append({
+                    "album_title": a.album_title,
+                    "primary_artist": a.primary_artist,
+                    "primary_artist_slug": a.primary_artist_slug,
+                    "cover_art_path": a.cover_art_path,
+                    "track_count": a.track_count,
+                    "year": a.year,
+                    "score": round(score, 3),
+                    "vibe_track_id": vibe["track_id"],
+                })
+                break
+        if len(suggestions) >= VIBE_ALBUM_TOTAL_MAX:
+            break
+
+    result["suggestions"] = suggestions
+    _vibe_album_cache[collection_name] = (time.monotonic(), result)
+    return result

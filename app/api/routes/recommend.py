@@ -26,6 +26,8 @@ from app.domain.models import (
     TasteSignalIn,
     TasteSignalOut,
     User,
+    VibeAlbumSuggestion,
+    VibeAlbumSuggestionsResponse,
 )
 from app.api.dependencies import get_current_user
 from app.api.helpers import derive_collection_for_user
@@ -324,6 +326,45 @@ async def vibes_ai_name(
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"LLM vibe naming failed: {e}")
+
+
+@router.get("/vibes/album-suggestions", response_model=VibeAlbumSuggestionsResponse)
+def vibes_album_suggestions(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    lang: str = Query("en", min_length=2, max_length=5),
+) -> VibeAlbumSuggestionsResponse:
+    """Album picks for the library rail: per current «вайбик», the album whose
+    mean CLAP is closest to the vibe's centroid but which is not represented
+    inside the vibe. ≤2 per vibe, ≤6 total, round-robin for diversity (service
+    docstring has the full policy). Vibe names are attached from the ai-name
+    cache when fresh — no LLM call happens here (pure vector math), so the
+    rail works even with AI off; names just stay empty then.
+    """
+    db_client = request.app.state.db_client
+    library_service = request.app.state.library_service
+    if db_client is None or db_client.qdrant is None or library_service is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    derived = derive_collection_for_user(current_user)
+    try:
+        albums = library_service.get_albums(
+            qdrant_client=db_client.qdrant, collection_name=derived,
+        ).albums
+    except Exception:
+        # Fresh account / collection not indexed yet — an empty rail, not a 500.
+        logger.exception("[vibe-albums] get_albums failed for %s", derived)
+        albums = []
+    result = stream_service.vibe_album_suggestions(
+        qdrant_client=db_client.qdrant, collection_name=derived, albums=albums,
+    )
+    vibe_names = recsys_ai_service.get_cached_vibe_names(
+        derived, lang, result.get("vibes", []),
+    )
+    return VibeAlbumSuggestionsResponse(suggestions=[
+        VibeAlbumSuggestion(**s, vibe_name=vibe_names.get(s["vibe_track_id"]))
+        for s in result.get("suggestions", [])
+    ])
 
 
 @router.post("/ai-playlist", response_model=AIPlaylistResponse)

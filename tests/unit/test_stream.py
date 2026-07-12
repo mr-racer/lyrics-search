@@ -1371,3 +1371,135 @@ class TestStreamTokenRoute:
         assert body["expires_in"] == STREAM_TOKEN_TTL_SECONDS
         verified = auth.verify_stream_token(body["token"])
         assert verified.id == owner.id
+
+
+# ── Vibe album suggestions (library rail) ────────────────────────────────────
+
+class _FakeQdrantVibeAlbums:
+    """retrieve() serves clap vectors by id; query_points() returns canned
+    album hits keyed by the centroid's first component (same marker trick as
+    _FakeQdrantSearch)."""
+
+    def __init__(self, points, hits_by_marker):
+        self.points = {p.id: p for p in points}
+        self.hits_by_marker = hits_by_marker
+
+    def retrieve(self, collection_name, ids, with_payload=True, with_vectors=False):
+        return [self.points[t] for t in ids if t in self.points]
+
+    def query_points(self, collection_name, query, using, limit, with_payload):
+        from types import SimpleNamespace
+        return SimpleNamespace(points=self.hits_by_marker[round(query[0], 1)])
+
+
+def _album(title, artist, track_ids, year=2001):
+    from app.domain.models import AlbumSummary, AlbumTrack
+    return AlbumSummary(
+        album_title=title, primary_artist=artist,
+        primary_artist_slug=artist.lower().replace(" ", "-"),
+        year=year, cover_art_path=None,
+        track_count=len(track_ids), duration_seconds=0,
+        tracks=[AlbumTrack(track_id=t, title=t, artist=artist) for t in track_ids],
+    )
+
+
+def _vibe(rep, member_ids, album):
+    return {
+        "track_id": rep, "weight": 1.0,
+        "tracks": [
+            {"track_id": m, "title": m, "artist": "a", "album": album,
+             "genre": None, "cover_art_path": None}
+            for m in member_ids
+        ],
+    }
+
+
+@pytest.mark.usefixtures("_isolated_db")
+class TestVibeAlbumSuggestions:
+    def _points(self):
+        # vibe1 members sit at [1,0,0]; vibe2 members at [0,1,0]. Album tracks
+        # are placed so cos(vibe centroid, album mean) ranks them clearly.
+        mk = lambda tid, vec: _Point(tid, vector=vec)
+        pts = [mk("m1", [1, 0, 0]), mk("m2", [1, 0, 0]),
+               mk("m3", [0, 1, 0]), mk("m4", [0, 1, 0])]
+        pts += [mk(f"a{i}", [1, 0, 0]) for i in range(3)]          # Album A ≈ vibe1
+        pts += [mk(f"b{i}", [0.8, 0.0, 0.6]) for i in range(3)]    # Album B — 2nd for vibe1
+        pts += [mk(f"c{i}", [0, 1, 0]) for i in range(3)]          # Album C ≈ vibe2
+        pts += [mk(f"d{i}", [0.0, 0.8, 0.6]) for i in range(3)]    # Album D — 2nd for vibe2
+        pts += [mk(f"iv{i}", [1, 0, 0]) for i in range(3)]         # album inside vibe1
+        pts += [mk(f"t{i}", [1, 0, 0]) for i in range(2)]          # 2-track "album"
+        return pts
+
+    def _albums(self):
+        return [
+            _album("Album A", "Artist A", ["a0", "a1", "a2"]),
+            _album("Album B", "Artist B", ["b0", "b1", "b2"]),
+            _album("Album C", "Artist C", ["c0", "c1", "c2"]),
+            _album("Album D", "Artist D", ["d0", "d1", "d2"]),
+            _album("In Vibe One", "Artist V", ["iv0", "iv1", "iv2"]),
+            _album("Tiny", "Artist T", ["t0", "t1"]),
+        ]
+
+    def _hits(self, albums):
+        return [_Hit(f"h{i}-{a}", 0.9, payload={"album": a})
+                for i, a in enumerate(albums)]
+
+    def test_round_robin_exclusion_and_min_tracks(self, monkeypatch):
+        ss._vibe_album_cache.clear()
+        vibes = [_vibe("v1", ["m1", "m2"], "In Vibe One"),
+                 _vibe("v2", ["m3", "m4"], "Other")]
+        monkeypatch.setattr(ss, "current_vibes", lambda **kw: vibes)
+        fake = _FakeQdrantVibeAlbums(self._points(), {
+            1.0: self._hits(["In Vibe One", "Album A", "Album B", "Tiny"]),
+            0.0: self._hits(["Album C", "Album D"]),
+        })
+        out = ss.vibe_album_suggestions(
+            qdrant_client=fake, collection_name="col-rr", albums=self._albums())
+        titles = [s["album_title"] for s in out["suggestions"]]
+        # Round-robin: each vibe places its best before anyone's second pick.
+        assert titles == ["Album A", "Album C", "Album B", "Album D"]
+        assert [s["vibe_track_id"] for s in out["suggestions"]] == ["v1", "v2", "v1", "v2"]
+        # The vibe's own album never comes back; 2-track albums are ignored.
+        assert "In Vibe One" not in titles and "Tiny" not in titles
+        assert all(s["score"] <= 1.0 for s in out["suggestions"])
+        assert out["vibes"] is vibes
+
+    def test_same_top_album_deduped_across_vibes(self, monkeypatch):
+        ss._vibe_album_cache.clear()
+        # Two vibes with identical sound: the second must skip the first's pick.
+        vibes = [_vibe("v1", ["m1"], "In Vibe One"),
+                 _vibe("v2", ["m2"], "In Vibe One")]
+        monkeypatch.setattr(ss, "current_vibes", lambda **kw: vibes)
+        fake = _FakeQdrantVibeAlbums(self._points(), {
+            1.0: self._hits(["In Vibe One", "Album A", "Album B"]),
+        })
+        out = ss.vibe_album_suggestions(
+            qdrant_client=fake, collection_name="col-dedup", albums=self._albums())
+        titles = [s["album_title"] for s in out["suggestions"]]
+        assert titles[:2] == ["Album A", "Album B"]
+        assert len(titles) == len(set(titles))
+
+    def test_result_cached_per_collection(self, monkeypatch):
+        ss._vibe_album_cache.clear()
+        vibes = [_vibe("v1", ["m1", "m2"], "In Vibe One")]
+        monkeypatch.setattr(ss, "current_vibes", lambda **kw: vibes)
+        fake = _FakeQdrantVibeAlbums(self._points(), {
+            1.0: self._hits(["Album A"]),
+        })
+        first = ss.vibe_album_suggestions(
+            qdrant_client=fake, collection_name="col-cache", albums=self._albums())
+
+        def _boom(**kw):
+            raise AssertionError("must not recompute within TTL")
+        monkeypatch.setattr(ss, "current_vibes", _boom)
+        second = ss.vibe_album_suggestions(
+            qdrant_client=fake, collection_name="col-cache", albums=self._albums())
+        assert second is first
+
+    def test_no_vibes_returns_empty(self, monkeypatch):
+        ss._vibe_album_cache.clear()
+        monkeypatch.setattr(ss, "current_vibes", lambda **kw: [])
+        out = ss.vibe_album_suggestions(
+            qdrant_client=_FakeQdrantVibeAlbums([], {}),
+            collection_name="col-empty", albums=self._albums())
+        assert out["suggestions"] == []

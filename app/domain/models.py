@@ -577,6 +577,25 @@ class StreamProfileResponse(BaseModel):
     liked_share: float = 0.3           # persisted slider position (default 30%)
 
 
+class VibeAlbumSuggestion(BaseModel):
+    """One album pick for the library rail: sounds like a current vibe's mean
+    CLAP but is not represented inside that vibe."""
+    album_title: str
+    primary_artist: str
+    primary_artist_slug: str
+    cover_art_path: Optional[str] = None
+    track_count: int
+    year: Optional[int] = None
+    score: float                       # cosine(vibe centroid, album mean CLAP)
+    vibe_track_id: str                 # representative track of the source vibe
+    vibe_name: Optional[str] = None    # cached LLM vibe name, when fresh
+
+
+class VibeAlbumSuggestionsResponse(BaseModel):
+    """Result of GET /recommend/vibes/album-suggestions."""
+    suggestions: List[VibeAlbumSuggestion] = []
+
+
 class AxisPlaylistIn(BaseModel):
     """Body for POST /recommend/axis-playlist — the radar-knob targets.
 

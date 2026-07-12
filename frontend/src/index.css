@@ -797,6 +797,80 @@
       .lib-album-card:hover, .lib-album-card:hover .lib-album-cover { transform: none; }
     }
 
+    /* ── Playlist detail open/close ──────────────────────────────────────
+       The detail view swaps in place of the playlists grid; the root gets a
+       soft rise on mount, and PlaylistDetailView defers onClose ~230ms so
+       the exit animation below plays before the unmount. */
+    @keyframes plDetailIn  { from { opacity: 0; transform: translateY(18px) scale(0.988); } to { opacity: 1; transform: none; } }
+    @keyframes plDetailOut { from { opacity: 1; transform: none; } to { opacity: 0; transform: translateY(14px) scale(0.988); } }
+    @keyframes plListIn    { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+    .pl-detail { animation: plDetailIn 0.38s cubic-bezier(.22,.9,.3,1) both; }
+    .pl-detail--closing { animation: plDetailOut 0.24s cubic-bezier(.4,0,.85,.5) both; pointer-events: none; }
+    .pl-list-enter { animation: plListIn 0.32s cubic-bezier(.22,.9,.3,1) both; }
+    @media (prefers-reduced-motion: reduce) {
+      .pl-detail, .pl-detail--closing, .pl-list-enter { animation: none !important; opacity: 1 !important; }
+    }
+
+    /* ── Vibe album rail (library «под твою волну») ──────────────────────
+       Deliberately unboxed: no panel background, just the ai-orb header, a
+       serif subline and floating covers — «подборка», not another card. */
+    .vibe-albums { margin: 4px 0 34px; }
+    .vibe-albums-rail { display: flex; flex-wrap: wrap; gap: 20px 22px; }
+    .vibe-album-tile {
+      width: 158px; cursor: pointer; opacity: 0;
+      animation: libCardIn 0.55s cubic-bezier(.22,.9,.3,1) forwards;
+      animation-delay: var(--vt-d, 0s);
+      transition: transform 0.35s cubic-bezier(.22,.9,.3,1);
+    }
+    .vibe-album-tile:hover { transform: translateY(-5px); }
+    .vibe-album-cover {
+      position: relative; aspect-ratio: 1; border-radius: 16px; overflow: hidden;
+      box-shadow: 0 10px 26px rgba(0,0,0,.32), 0 0 0 1px rgba(255,255,255,.07);
+      transition: box-shadow 0.35s ease;
+    }
+    body[data-theme="light"] .vibe-album-cover { box-shadow: 0 10px 24px rgba(46,36,86,.16), 0 0 0 1px rgba(22,22,32,.08); }
+    .vibe-album-tile:hover .vibe-album-cover {
+      box-shadow: 0 16px 34px rgba(0,0,0,.42), 0 0 0 1px rgba(124,91,255,.35), 0 0 18px oklch(60% 0.18 270 / .22);
+    }
+    .vibe-album-caption { padding: 10px 2px 0; }
+    .vibe-album-title {
+      font-size: 15px; font-weight: 600; line-height: 1.3;
+      overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    }
+    .vibe-album-artist { font-size: 13px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .vibe-album-vibe {
+      font-family: 'Noto Serif Display', Georgia, serif; font-style: italic;
+      font-size: 12.5px; margin-top: 5px; color: oklch(72% 0.12 295 / .9);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    body[data-theme="light"] .vibe-album-vibe { color: oklch(46% 0.11 295); }
+    @media (max-width: 768px) {
+      /* Phones: smaller covers in one horizontally-scrolling row, and the
+         rail is set apart from the rest of the library by soft hairlines
+         instead of a box (keeps the airy look). */
+      .vibe-albums { position: relative; padding: 16px 0 14px; margin: 0 0 24px; }
+      .vibe-albums::before, .vibe-albums::after {
+        content: ''; position: absolute; left: 6%; right: 6%; height: 1px;
+        background: linear-gradient(90deg, transparent, oklch(70% 0.12 285 / .38), transparent);
+      }
+      .vibe-albums::before { top: 0; }
+      .vibe-albums::after { bottom: 0; }
+      .vibe-albums-rail {
+        flex-wrap: nowrap; overflow-x: auto; gap: 14px; padding: 2px 2px 6px;
+        -webkit-overflow-scrolling: touch; scrollbar-width: none;
+      }
+      .vibe-albums-rail::-webkit-scrollbar { display: none; }
+      .vibe-album-tile { width: 128px; flex: none; }
+      .vibe-album-cover { border-radius: 13px; }
+      .vibe-album-title { font-size: 13.5px; }
+      .vibe-album-artist { font-size: 12px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .vibe-album-tile { animation: none; opacity: 1; }
+      .vibe-album-tile:hover { transform: none; }
+      .vibe-album-tile:hover .vibe-album-cover { box-shadow: 0 10px 26px rgba(0,0,0,.32), 0 0 0 1px rgba(124,91,255,.35); }
+    }
+
     /* ── Library responsive primitives (Phase 1 mobile) ──────────────────
        Desktop values live here as the class defaults, so desktop is
        unchanged; the @media (max-width:768px) block narrows them on phones.
@@ -3370,6 +3444,22 @@
       .lib-sortpills::-webkit-scrollbar { display: none; }
       .lib-sortpill { min-height: 44px; }  /* tap target; text stays compact */
 
+      /* ── Library → Stats tab: phone layout ────────────────────────────
+         The readout chips are content-sized flex items on desktop (they hug
+         the left edge and look ragged on a narrow screen); on phones they
+         become a tidy 2-up grid with the wide "busiest day" chip spanning
+         both columns. !important beats the inline desktop styles. */
+      .stats-card { padding: 18px 14px !important; }
+      .rhythm-readouts { display: grid !important; grid-template-columns: 1fr 1fr; gap: 10px !important; }
+      .rhythm-readout { padding: 12px 13px !important; gap: 10px !important; border-radius: 13px !important; }
+      .rhythm-readout--grow { grid-column: 1 / -1; }
+      /* Year-pulse heatmap: at 53 weeks the cells shrink to ~4px on a phone —
+         unreadable. Give the grid a fixed comfortable width and scroll it
+         horizontally instead (JS lands the scroll on the newest weeks). */
+      .heatmap-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+      .heatmap-scroll::-webkit-scrollbar { display: none; }
+      .heatmap-inner { min-width: 672px; }
+
       /* ── Player: touch targets + comfier progress drag ──────────────── */
       .player-icon-btn { width: 44px; height: 44px; }
       .player-progress-row, .player-actions-row { padding: 0 14px; }
@@ -3629,4 +3719,71 @@
        screen. App stamps this class on every inactive section wrapper. */
     .section-offstage *, .section-offstage *::before, .section-offstage *::after {
       animation-play-state: paused !important;
+    }
+
+    /* ═══ Login / welcome screen ════════════════════════════════════════════
+       Pre-auth screen: a mini welcome page (brand + greeting + feature chips)
+       beside a liquid-glass sign-in card. The pointer feeds --mx/--my on the
+       root (set in JS without re-rendering) and .login-glow paints a soft
+       accent halo under the cursor; touch devices drop the glow entirely. */
+    .login-screen {
+      min-height: 100vh; min-height: 100dvh;
+      display: grid; place-items: center;
+      position: relative; overflow: hidden;
+      padding: 28px 18px;
+      background: radial-gradient(120% 90% at 70% -10%, #1c1830 0%, #12101c 45%, #0a0a10 100%);
+      color: #eeeef3;
+    }
+    .login-aurora { position: absolute; border-radius: 50%; filter: blur(70px); pointer-events: none; }
+    .login-aurora--a { width: 46vmax; height: 46vmax; top: -18vmax; left: -12vmax;
+      background: radial-gradient(circle, oklch(45% 0.16 290 / .32), transparent 65%); }
+    .login-aurora--b { width: 40vmax; height: 40vmax; bottom: -16vmax; right: -10vmax;
+      background: radial-gradient(circle, oklch(50% 0.12 210 / .20), transparent 65%); }
+    .login-glow {
+      position: absolute; inset: 0; pointer-events: none;
+      opacity: 0; transition: opacity .6s ease;
+      background: radial-gradient(520px circle at var(--mx, 50%) var(--my, 40%), oklch(60% 0.18 270 / 0.11), transparent 65%);
+    }
+    .login-screen:hover .login-glow { opacity: 1; }
+    .login-wrap {
+      display: grid; grid-template-columns: minmax(0, 1fr) 384px;
+      gap: clamp(30px, 5.5vw, 72px); align-items: center;
+      width: 100%; max-width: 940px; position: relative; z-index: 1;
+    }
+    .login-brandrow { display: flex; align-items: center; gap: 14px; }
+    .login-features { display: flex; flex-direction: column; gap: 10px; margin-top: 28px; max-width: 420px; }
+    .login-feature {
+      display: flex; align-items: center; gap: 13px;
+      padding: 12px 17px; border-radius: 15px;
+      font-size: 14.5px; color: rgba(238,238,243,.82);
+    }
+    .login-feature .login-feature-icon { font-size: 17px; flex: none; }
+    .login-card { border-radius: 22px; padding: 30px 28px; }
+    .login-input {
+      width: 100%; box-sizing: border-box;
+      padding: 12px 14px; margin-bottom: 10px; border-radius: 12px;
+      background: rgba(0,0,0,0.32); border: 1px solid rgba(255,255,255,0.10);
+      color: #eeeef3; font-size: 14px; outline: none;
+      transition: border-color .15s ease, box-shadow .15s ease;
+    }
+    .login-input:focus { border-color: rgba(124,91,255,0.55); box-shadow: 0 0 0 3px oklch(60% 0.18 270 / 0.15); }
+    .login-tab {
+      flex: 1; padding: 9px 12px; border-radius: 11px; cursor: pointer;
+      border: 1px solid transparent; background: transparent;
+      color: rgba(238,238,243,.55); font-size: 13px; font-weight: 500;
+      transition: all .18s ease;
+    }
+    .login-tab--active { background: rgba(124,91,255,0.16); color: #bba8ff; border-color: rgba(124,91,255,0.35); }
+    .login-rise { opacity: 0; animation: fadeInUp .6s cubic-bezier(.22,.9,.3,1) forwards; animation-delay: var(--d, 0s); }
+    @media (max-width: 860px) {
+      .login-wrap { grid-template-columns: 1fr; gap: 28px; max-width: 460px; }
+      .login-hero { text-align: center; }
+      .login-brandrow { justify-content: center; }
+      .login-features { margin: 22px auto 0; }
+      .login-aurora { filter: blur(44px); }
+    }
+    @media (hover: none), (pointer: coarse) { .login-glow { display: none; } }
+    @media (prefers-reduced-motion: reduce) {
+      .login-rise { animation: none !important; opacity: 1 !important; }
+      .login-glow { display: none; }
     }
