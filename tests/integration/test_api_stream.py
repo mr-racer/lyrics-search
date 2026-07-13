@@ -255,6 +255,26 @@ class TestStreamNext:
         assert adapt["tracks"][0]["track_id"] == "a1"
         assert adapt["tracks"][0]["title"]
 
+    def test_taste_signal_state_reflects_latest_reaction(self, client):
+        """GET /taste-signal/state returns the newest reaction per track (water
+        cancels an older fire), fresh signals are locked, unknown tracks omitted."""
+        client.post("/api/v1/recommend/taste-signal", json={
+            "session_id": "s1", "track_id": "hot", "kind": "fire"})
+        # water over an older fire on the same track → latest-wins
+        client.post("/api/v1/recommend/taste-signal", json={
+            "session_id": "s1", "track_id": "hot", "kind": "fire"})
+        client.post("/api/v1/recommend/taste-signal", json={
+            "session_id": "s1", "track_id": "hot", "kind": "water"})
+
+        resp = client.get("/api/v1/recommend/taste-signal/state",
+                          params={"track_ids": "hot,never_touched"})
+        assert resp.status_code == 200
+        states = resp.json()["states"]
+        assert set(states) == {"hot"}                 # untouched track omitted
+        assert states["hot"]["kind"] == "water"       # water superseded the fire
+        assert states["hot"]["contribution"] == pytest.approx(1.0, abs=1e-2)
+        assert states["hot"]["locked"] is True        # fresh → still charged >50%
+
     def test_session_signals_adapt_queue_toward_cluster(self, client):
         """«15 событий → очередь адаптировалась»: full listens of B-cluster in
         the session must surface B-cluster anchor candidates."""

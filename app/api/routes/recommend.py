@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
@@ -26,6 +27,8 @@ from app.domain.models import (
     StreamTrack,
     TasteSignalIn,
     TasteSignalOut,
+    TasteSignalState,
+    TasteSignalStateOut,
     User,
     VibeAlbumSuggestion,
     VibeAlbumSuggestionsResponse,
@@ -172,6 +175,39 @@ def taste_signal(
         kind=body.kind,
     )
     return TasteSignalOut(id=new_id)
+
+
+@router.get("/taste-signal/state", response_model=TasteSignalStateOut)
+def taste_signal_state(
+    track_ids: str = Query(..., description="Comma-separated track ids"),
+    current_user: User = Depends(get_current_user),
+) -> TasteSignalStateOut:
+    """Active огонёк/вода per track for the frontend meter/lock.
+
+    For each requested track with a signal, returns the newest reaction
+    (latest-wins), its remaining «заряд» (contribution ∈ [0,1], half-life 1 day)
+    and whether the same-kind button is locked (contribution still > 0.5). The
+    collection is derived from the JWT — the client cannot query another account.
+    """
+    derived = derive_collection_for_user(current_user)
+    ids = [t.strip() for t in track_ids.split(",") if t.strip()]
+    latest = MetadataDB.get_latest_taste_signals(derived, ids)
+    now = datetime.utcnow()
+    states: dict[str, TasteSignalState] = {}
+    for tid, (kind, created_iso) in latest.items():
+        if kind not in ("fire", "water"):
+            continue
+        created = stream_service._parse_iso(created_iso)
+        if created is None:
+            continue
+        age_days = max(0.0, (now - created).total_seconds() / 86400.0)
+        contribution = stream_service.reaction_contribution(age_days)
+        states[tid] = TasteSignalState(
+            kind=kind,
+            contribution=round(contribution, 4),
+            locked=contribution > 0.5,
+        )
+    return TasteSignalStateOut(states=states)
 
 
 @router.get("/profile", response_model=StreamProfileResponse)

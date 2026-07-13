@@ -1686,6 +1686,37 @@ class MetadataDB:
         ]
 
     @classmethod
+    def get_latest_taste_signals(
+        cls, collection_name: str, track_ids: list[str],
+    ) -> dict:
+        """Newest огонёк/вода per requested track: ``{track_id: (kind, created_at_iso)}``.
+
+        Powers the frontend meter/lock: only the latest row per track is the
+        active reaction (latest-wins). Tracks with no signal are omitted.
+        """
+        ids = [t for t in dict.fromkeys(track_ids) if t]
+        if not ids:
+            return {}
+        conn = cls._connect()
+        placeholders = ",".join("?" for _ in ids)
+        # Newest-first; the first row seen per track_id wins (latest-wins).
+        rows = conn.execute(
+            f"SELECT track_id, kind, created_at FROM taste_signals "
+            f"WHERE collection_name = ? AND track_id IN ({placeholders}) "
+            f"ORDER BY id DESC",
+            (collection_name, *ids),
+        ).fetchall()
+        out: dict = {}
+        for tid, kind, created_at in rows:
+            if tid in out:
+                continue
+            out[tid] = (
+                kind,
+                created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at),
+            )
+        return out
+
+    @classmethod
     def get_recent_tracks(
         cls, collection_name: str, limit: int = 50,
     ) -> list[tuple[str, str, int]]:

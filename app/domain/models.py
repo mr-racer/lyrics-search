@@ -317,6 +317,20 @@ class TasteSignalOut(BaseModel):
     id: int
 
 
+class TasteSignalState(BaseModel):
+    """Active огонёк/вода on a track: which kind, its remaining «заряд» (0..1)
+    and whether the button is locked (charge still above the halfway unlock)."""
+    kind: Literal["fire", "water"]
+    contribution: float
+    locked: bool
+
+
+class TasteSignalStateOut(BaseModel):
+    """GET /recommend/taste-signal/state — active reaction per requested track.
+    Tracks with no active signal are omitted from ``states``."""
+    states: dict[str, TasteSignalState]
+
+
 class AutoplayQueueDiagnostics(BaseModel):
     """Counters from the autoplay filter pipeline — for telemetry / debug."""
     candidates_fetched: int

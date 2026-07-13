@@ -477,6 +477,26 @@ async function postTasteSignal(trackId, kind) {
   }
 }
 
+// Огонёк/Вода: read the active reaction for a track — its kind, remaining «заряд»
+// (contribution ∈ [0,1], 1-day half-life) and lock flag. Powers the icon fill +
+// button lock, and persists across re-login (state lives in the DB, keyed by
+// track). Returns null when there's no signal or the fetch fails.
+async function fetchTasteState(trackId) {
+  const token = getStoredToken();
+  if (!token || !trackId) return null;
+  try {
+    const r = await fetch(
+      `${API}/recommend/taste-signal/state?track_ids=${encodeURIComponent(trackId)}`,
+      { headers: { 'Authorization': `Bearer ${token}` } });
+    if (!r.ok) return null;
+    const data = await r.json();
+    return (data.states && data.states[trackId]) || null;
+  } catch (e) {
+    console.warn('[taste] failed to fetch state', e);
+    return null;
+  }
+}
+
 // ─── Listening-time accumulator ──────────────────────────────────────────────
 // A single continuous listen of a track must produce exactly ONE playback event
 // whose played_sec is the real number of seconds the user actually heard — NOT
@@ -2736,6 +2756,38 @@ function HintBadge({ size = 20, label, ariaLabel, placement = 'up' }) {
         style={{ width: px, height: px, fontSize: Math.max(10, Math.round(px * 0.58)) }}>i</span>
       <span className="hint-badge__pop" role="tooltip">{label}</span>
     </span>
+  );
+}
+
+// ─── TasteButtonIcon — огонёк/вода glyph with a bottom-up «charge» fill ──────
+// The outline is always drawn (stroke). When this kind is the track's ACTIVE
+// reaction, the glyph is filled from the bottom up to `contribution` (∈[0,1]) —
+// a full orange flame / blue drop means the track still strongly steers recs; a
+// sliver means it has nearly decayed (and the button is about to unlock). The
+// fill uses a vertical gradient with a hard edge at 1−contribution (SVG y grows
+// downward, so the boundary sits above the filled bottom portion).
+function TasteButtonIcon({ kind, active, contribution = 0 }) {
+  const path = kind === 'fire'
+    ? 'M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z'
+    : 'M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z';
+  const fillColor = kind === 'fire' ? '#ff7a18' : '#38bdf8';
+  const gid = `taste-fill-${kind}`;
+  const boundary = Math.max(0, Math.min(1, 1 - (active ? contribution : 0)));
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24"
+      fill={active ? `url(#${gid})` : 'none'}
+      stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round">
+      {active && (
+        <defs>
+          <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+            <stop offset={boundary} stopColor={fillColor} stopOpacity="0" />
+            <stop offset={boundary} stopColor={fillColor} stopOpacity="0.9" />
+          </linearGradient>
+        </defs>
+      )}
+      <path d={path} />
+    </svg>
   );
 }
 
@@ -14042,6 +14094,19 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
   const [burstFor, setBurstFor] = useState(null);
   const burstTimerRef = useRef(null);
 
+  // Огонёк/Вода per-track state: { kind, contribution, locked } | null. Drives
+  // the icon fill (how active the track still is in recs) + button lock. Fetched
+  // from the backend on every track change so it survives re-login.
+  const [tasteState, setTasteState] = useState(null);
+  useEffect(() => {
+    const tid = currentTrack?.track_id;
+    if (!tid) { setTasteState(null); return; }
+    let alive = true;
+    setTasteState(null);
+    fetchTasteState(tid).then(st => { if (alive) setTasteState(st); });
+    return () => { alive = false; };
+  }, [currentTrack?.track_id]);
+
   // Огонёк/Вода cover combustion: kind drives fire vs water; the nonce remounts
   // <CoverCombustion> so each press replays cleanly even mid-burn.
   const [fxKind, setFxKind] = useState(null);
@@ -14349,9 +14414,14 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
   // ephemeral signal, and ask App to rebuild the wave (it's a strong signal).
   const sendTaste = (kind) => {
     if (!currentTrack?.track_id) return;
+    // Guard: the active kind's button is locked until its charge decays to ≤50%.
+    // The opposite kind is always allowed — it supersedes (cancels) the active one.
+    if (tasteState?.kind === kind && tasteState.locked) return;
     markPlaybackInteracted(audio?.audioRef?.current);
     triggerCoverFx(kind);
     triggerBurst(kind);
+    // Optimistic: full charge + locked immediately (the opposite kind clears).
+    setTasteState({ kind, contribution: 1, locked: true });
     postTasteSignal(currentTrack.track_id, kind);
     if (onStreamSignal) onStreamSignal('reaction', currentTrack);
   };
@@ -14810,35 +14880,51 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
             {/* Action icons — like / dislike / lyrics / ask AI.
                 (No transport row on phones: play/pause = cover tap, prev/next =
                 the flank arrows beside the cover + swipe.) */}
-            <div className="player-actions-row" style={{ display:'flex', justifyContent:'center', gap:4 }}>
+            <div className="player-actions-row" style={{ display:'flex', justifyContent:'center', alignItems:'center', gap:4 }}>
+              <HintBadge size={15}
+                ariaLabel={lang === 'ru' ? 'Как работают огонёк и вода' : 'How fire and water work'}
+                label={lang === 'ru'
+                  ? 'Нажми на огонёк — похожих треков станет больше в рекомендациях, на водичку — меньше. Эффект длится несколько дней.'
+                  : 'Tap fire — more of this in your recs, water — less. The effect lasts a few days.'} />
+              {(() => {
+                const fireActive = tasteState?.kind === 'fire';
+                const fireLocked = fireActive && tasteState.locked;
+                const waterActive = tasteState?.kind === 'water';
+                const waterLocked = waterActive && tasteState.locked;
+                const lockedTip = lang === 'ru'
+                  ? 'Разблокируется, когда заряд опустится до ≤50% (примерно через сутки)'
+                  : 'Unlocks once its charge drops to ≤50% (about a day)';
+                return (<>
               <button
                 type="button" className="player-icon-btn"
                 onClick={() => sendTaste('fire')}
-                disabled={!currentTrack?.track_id}
-                title={lang === 'ru' ? 'Огонёк — больше такого в волне' : 'Fire — more like this in the wave'}
+                disabled={!currentTrack?.track_id || fireLocked}
+                data-active={fireActive ? 'fire' : ''}
+                style={fireLocked ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
+                title={fireLocked ? lockedTip
+                  : (lang === 'ru' ? 'Огонёк — больше такого в волне' : 'Fire — more like this in the wave')}
                 aria-label={lang === 'ru' ? 'Огонёк' : 'Fire'}
               >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-                  stroke="currentColor" strokeWidth="2"
-                  strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>
-                </svg>
+                <TasteButtonIcon kind="fire" active={fireActive}
+                  contribution={fireActive ? tasteState.contribution : 0} />
                 {burstFor === 'fire' && <span className="player-icon-burst player-icon-burst--fire" />}
               </button>
               <button
                 type="button" className="player-icon-btn"
                 onClick={() => sendTaste('water')}
-                disabled={!currentTrack?.track_id}
-                title={lang === 'ru' ? 'Вода — остудить волну' : 'Water — cool the wave'}
+                disabled={!currentTrack?.track_id || waterLocked}
+                data-active={waterActive ? 'water' : ''}
+                style={waterLocked ? { opacity: 0.5, cursor: 'not-allowed' } : undefined}
+                title={waterLocked ? lockedTip
+                  : (lang === 'ru' ? 'Вода — остудить волну' : 'Water — cool the wave')}
                 aria-label={lang === 'ru' ? 'Вода' : 'Water'}
               >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none"
-                  stroke="currentColor" strokeWidth="2"
-                  strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z"/>
-                </svg>
+                <TasteButtonIcon kind="water" active={waterActive}
+                  contribution={waterActive ? tasteState.contribution : 0} />
                 {burstFor === 'water' && <span className="player-icon-burst player-icon-burst--water" />}
               </button>
+                </>);
+              })()}
               <button
                 type="button" className="player-icon-btn"
                 onClick={(e) => onAddToPlaylist && onAddToPlaylist(currentTrack?.track_id, e.currentTarget)}

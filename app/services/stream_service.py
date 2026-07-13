@@ -71,9 +71,17 @@ FIRE_COUNT_FULL = 30       # full weight until this many session tracks since th
 FIRE_COUNT_ZERO = 50       # zero weight at/after this many session tracks
 WATER_W = 0.3              # score penalty per unit watered-proximity
 
+# Persistent «заряд» of an огонёк/вода: the multi-day memory that feeds the vibe
+# layer AND drives the frontend meter/lock. Single honest clock, half-life 1 day
+# (contribution = 0.5^(age_days/H); a fresh signal is 100%, ≤50% after a day →
+# the button unlocks and can be re-pressed). Separate from the minutes/hours
+# ephemeral wave above and from the slow island trail below.
+H_REACTION_DAYS = 1.0
+
 # Islands = long-term taste, LOW learning rate: fed ONLY by fires (fat) + ≥85%
 # completions (weak). Partial (65–85%) listens and skips never shape islands.
-FIRE_ISLAND_DEPOSIT = 1.0  # a fire's permanent contribution to taste islands
+FIRE_ISLAND_DEPOSIT = 0.35 # a fire's (weak) long-term island trail — deliberately
+                           # low so 3–5 fires/day steer the vibe, not the taste
 COMPLETION_DEPOSIT = 0.2   # a ≥85% listen's (weak) contribution to taste islands
 H_ISLAND_DAYS = 30.0       # decay of the long-term island deposit — a month of
                            # silence halves-ish a track's claim, so islands
@@ -84,7 +92,7 @@ H_ISLAND_DAYS = 30.0       # decay of the long-term island deposit — a month o
 # allowed and an explicit negative loop: skips/water on tracks that sound like
 # a vibe (cos ≥ VIBE_NEG_SIM to its centroid) press its net weight back down.
 H_VIBE_DAYS = 2.5          # e-folding of vibe deposits — a mood, not a taste
-VIBE_FIRE_DEPOSIT = 1.0    # огонёк
+VIBE_FIRE_DEPOSIT = 0.7    # огонёк (decayed on H_REACTION_DAYS, not H_VIBE_DAYS)
 VIBE_FULL_DEPOSIT = 0.4    # ≥85% listen
 VIBE_MOST_DEPOSIT = 0.15   # partial 65–85% listen (fast clock → noise dies fast)
 VIBE_POOL_SIZE = 30        # top positive candidates clustered into vibes
@@ -98,7 +106,8 @@ VIBE_SIGNAL_MAX_AGE_DAYS = 10.0  # ≈4×H — older signals weigh nothing anywa
 
 # «Favorites» — the slider's liked pool, now COMPUTED (hearts removed): most
 # fired (dominant) + most listened-through.
-FAV_FIRE_W = 1.0           # favorites rank: decayed fire-count weight
+FAV_FIRE_W = 0.35          # favorites rank: decayed fire-count weight (lowered so
+                           # a fire marks a vibe, not a long-term «favorite»)
 FAV_LISTEN_W = 0.3         # favorites rank: decayed ≥85%-listen weight
 FAV_POOL_SIZE = 60         # top-N favorites eligible for the liked slot quota
 
@@ -1030,6 +1039,31 @@ def fire_count_factor(n_tracks: int) -> float:
     return (FIRE_COUNT_ZERO - n_tracks) / (FIRE_COUNT_ZERO - FIRE_COUNT_FULL)
 
 
+def latest_per_track(signals: list[FireSignal]) -> list[FireSignal]:
+    """Collapse the append-only journal to the single newest signal per track.
+
+    Implements «одна активная реакция на трек»: water pressed over a fire (or vice
+    versa) supersedes it — the older opposite signal no longer counts anywhere
+    (wave, vibes, islands, favorites). Re-pressing the same kind just refreshes
+    the timestamp instead of double-counting.
+    """
+    newest: dict[str, FireSignal] = {}
+    for s in signals:
+        cur = newest.get(s.track_id)
+        if cur is None or s.created_at > cur.created_at:
+            newest[s.track_id] = s
+    return list(newest.values())
+
+
+def reaction_contribution(age_days: float) -> float:
+    """Persistent «заряд» of an огонёк/вода as a fraction ∈ [0,1]: 1.0 fresh,
+    0.5 at exactly H_REACTION_DAYS (the unlock boundary), decaying toward 0.
+    Single source of truth for the frontend meter AND the fire's vibe weight."""
+    if age_days <= 0.0:
+        return 1.0
+    return max(0.0, min(1.0, 0.5 ** (age_days / H_REACTION_DAYS)))
+
+
 def aggregate_taste_anchors(
     signals: list[FireSignal],
     *,
@@ -1132,12 +1166,13 @@ def vibe_taste_weights(
     playback_signals: list[PlaybackSignal],
     now: datetime,
 ) -> dict[str, float]:
-    """Positive vibe weights: fires (fat) + full listens + partial listens, all
-    on the fast H_VIBE_DAYS clock. Skips and water never deposit — they act as
+    """Positive vibe weights: fires + full listens + partial listens. Fires decay
+    on the short H_REACTION_DAYS clock (a fire is a «вайб дня», not a taste);
+    listens stay on H_VIBE_DAYS. Skips and water never deposit — they act as
     pressure against already-formed vibes instead (see current_vibes)."""
     fires = {tid: VIBE_FIRE_DEPOSIT * c
              for tid, c in decayed_fire_counts(
-                 fire_signals, now, half_life=H_VIBE_DAYS).items()}
+                 fire_signals, now, half_life=H_REACTION_DAYS).items()}
     fulls = {tid: VIBE_FULL_DEPOSIT * c
              for tid, c in completion_counts(
                  playback_signals, now, half_life=H_VIBE_DAYS).items()}
@@ -1221,7 +1256,7 @@ def current_vibes(
         v = _unit(vectors[w.track_id]) if w.track_id in vectors else None
         if v is not None:
             negatives.append((v, VIBE_WATER_PENALTY * decayed(
-                1.0, _age_days(w.created_at, now), H_VIBE_DAYS)))
+                1.0, _age_days(w.created_at, now), H_REACTION_DAYS)))
 
     scored: list[tuple[float, Anchor]] = []
     for a in merged:
@@ -1392,9 +1427,12 @@ def next_chunk(
         dt = _parse_iso(ts)
         if dt is not None:
             reactions.append(ReactionSignal(track_id=tid, reaction=reaction, updated_at=dt))
-    session_taste = _fire_signals(
-        MetadataDB.get_taste_signals(collection_name, session_id=session_id))
-    all_taste = _fire_signals(MetadataDB.get_taste_signals(collection_name))
+    # latest-wins: at most one active reaction per track (water cancels an older
+    # fire and vice versa) — session-scoped for the wave, global for islands/favs.
+    session_taste = latest_per_track(_fire_signals(
+        MetadataDB.get_taste_signals(collection_name, session_id=session_id)))
+    all_taste = latest_per_track(_fire_signals(
+        MetadataDB.get_taste_signals(collection_name)))
 
     # 2. Session split (events only — reactions are dislikes/«hide» now).
     session_events = [s for s in signals if s.session_id == session_id]
@@ -1812,7 +1850,8 @@ def long_term_profile(*, qdrant_client, collection_name: str, now: datetime | No
 
     raw_signals = MetadataDB.get_playback_signals(collection_name, LONG_TERM_EVENT_CAP)
     signals = [PlaybackSignal(**r) for r in raw_signals]
-    all_taste = _fire_signals(MetadataDB.get_taste_signals(collection_name))
+    all_taste = latest_per_track(_fire_signals(
+        MetadataDB.get_taste_signals(collection_name)))
 
     # Low learning rate: islands are fed ONLY by the clearest explicit signals —
     # fires (fat) + ≥85% completions (weak). Partial listens and skips never enter,

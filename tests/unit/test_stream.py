@@ -618,7 +618,8 @@ class TestLongTermProfile:
         ])
         out = long_term_profile(qdrant_client=fake, collection_name="acct_u", now=NOW)
 
-        assert out["n_signals"] == 9  # 4 fires + 5 completions
+        # latest-wins collapses t1's two fires to one → 3 unique fires + 5 completions
+        assert out["n_signals"] == 8
         assert out["confidence"] > 0.0
         # Only the 3-track cluster survives: the t4+t5 pair is dropped
         # (islands start at 3 members).
@@ -675,11 +676,11 @@ class TestLongTermProfile:
 
 class TestIslandWeights:
     def test_island_decay_time_constant_is_30_days(self):
-        """Islands breathe: a fire is worth 1/e after 30 days (was 180)."""
+        """Islands breathe: a fire's (weak) deposit is worth 1/e after 30 days."""
         fire = ss.FireSignal(track_id="a", kind="fire",
                              created_at=NOW - timedelta(days=30.0))
         w = ss.island_taste_weights([fire], [], NOW)
-        assert w["a"] == pytest.approx(1.0 / 2.718281828, rel=1e-6)
+        assert w["a"] == pytest.approx(ss.FIRE_ISLAND_DEPOSIT / 2.718281828, rel=1e-6)
 
 
 # ── «Вайбики»: ephemeral mood clusters (fast layer under the islands) ────────
@@ -714,7 +715,9 @@ class TestVibeWeights:
         assert w == {}
 
     def test_vibe_decay_is_days_not_months(self):
-        w = ss.vibe_taste_weights([_fire("f", days_ago=ss.H_VIBE_DAYS)], [], NOW)
+        # A fire in the vibe layer decays on the short reaction clock (1 day),
+        # not the slower listen clock — «вайб дня», worth 1/e after H_REACTION_DAYS.
+        w = ss.vibe_taste_weights([_fire("f", days_ago=ss.H_REACTION_DAYS)], [], NOW)
         assert w["f"] == pytest.approx(
             ss.VIBE_FIRE_DEPOSIT / 2.718281828, rel=1e-6)
 
@@ -772,7 +775,7 @@ class TestCurrentVibes:
         sk = _Point("sk", vector=self.A1, payload={"title": "S", "artist": "A"})
         skips = [_vev("sk", played=5.0) for _ in range(5)]  # 5 × 0.35 = 1.75
         out = self._vibes(taste, skips, self._points(extra=[sk]))
-        assert out == []  # net 2.0 − 1.75 = 0.25 < VIBE_MIN_NET
+        assert out == []  # net 1.4 − 1.75 < 0 < VIBE_MIN_NET
 
     def test_dissimilar_skips_do_not_touch_a_vibe(self):
         taste = [_fire("a1"), _fire("a2")]
@@ -780,7 +783,7 @@ class TestCurrentVibes:
         skips = [_vev("sk", played=5.0) for _ in range(5)]
         out = self._vibes(taste, skips, self._points(extra=[sk]))
         assert len(out) == 1
-        assert out[0]["weight"] == pytest.approx(2.0)
+        assert out[0]["weight"] == pytest.approx(2 * ss.VIBE_FIRE_DEPOSIT)
 
     def test_water_hits_harder_than_a_skip(self):
         taste = [_fire("a1"), _fire("a2")]
@@ -789,8 +792,9 @@ class TestCurrentVibes:
             taste + [], [_vev("sk", played=5.0)], self._points(extra=[sk]))
         watered = self._vibes(
             taste + [_fire("sk", kind="water")], [], self._points(extra=[sk]))
-        assert skipped[0]["weight"] == pytest.approx(2.0 - ss.VIBE_SKIP_PENALTY)
-        assert watered[0]["weight"] == pytest.approx(2.0 - ss.VIBE_WATER_PENALTY)
+        base = 2 * ss.VIBE_FIRE_DEPOSIT
+        assert skipped[0]["weight"] == pytest.approx(base - ss.VIBE_SKIP_PENALTY)
+        assert watered[0]["weight"] == pytest.approx(base - ss.VIBE_WATER_PENALTY)
 
 
 # ── Session wave: anchor rotation + pivot («резко сменить пластинку») ────────

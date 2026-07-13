@@ -14,6 +14,7 @@ import pytest
 
 from app.services import stream_service as ss
 from app.services.stream_service import (
+    H_REACTION_DAYS,
     COMPLETION_DEPOSIT,
     EXPLORE_SHARE,
     FIRE_BASE,
@@ -36,6 +37,8 @@ from app.services.stream_service import (
     fire_count_factor,
     fire_time_factor,
     island_taste_weights,
+    latest_per_track,
+    reaction_contribution,
     score_candidates,
 )
 
@@ -238,3 +241,47 @@ class TestWaterPenalty:
         )
         # pure novelty term, no penalty
         assert a.score == pytest.approx(ss.SCORE_W_NOVELTY)
+
+
+# ── latest-wins: one active reaction per track (cancel semantics) ────────────
+
+class TestLatestPerTrack:
+    def test_water_supersedes_older_fire(self):
+        fire = FireSignal("a", "fire", NOW - timedelta(hours=2))
+        water = FireSignal("a", "water", NOW - timedelta(hours=1))
+        out = {s.track_id: s.kind for s in latest_per_track([fire, water])}
+        assert out == {"a": "water"}
+
+    def test_fire_supersedes_older_water(self):
+        water = FireSignal("a", "water", NOW - timedelta(hours=2))
+        fire = FireSignal("a", "fire", NOW - timedelta(hours=1))
+        out = {s.track_id: s.kind for s in latest_per_track([water, fire])}
+        assert out == {"a": "fire"}
+
+    def test_repeat_fire_collapses_to_newest(self):
+        old = FireSignal("a", "fire", NOW - timedelta(days=3))
+        new = FireSignal("a", "fire", NOW - timedelta(hours=1))
+        out = latest_per_track([old, new])
+        assert len(out) == 1 and out[0].created_at == new.created_at
+
+    def test_distinct_tracks_kept(self):
+        out = latest_per_track([_fire("a"), _fire("b", kind="water")])
+        assert {s.track_id for s in out} == {"a", "b"}
+
+
+# ── Persistent «заряд»: meter + unlock boundary ─────────────────────────────
+
+class TestReactionContribution:
+    def test_full_when_fresh(self):
+        assert reaction_contribution(0.0) == pytest.approx(1.0)
+
+    def test_half_at_halflife(self):
+        # exactly at the unlock boundary (age == H_REACTION_DAYS == 1 day)
+        assert reaction_contribution(H_REACTION_DAYS) == pytest.approx(0.5)
+
+    def test_quarter_at_two_halflives(self):
+        assert reaction_contribution(2 * H_REACTION_DAYS) == pytest.approx(0.25)
+
+    def test_monotonic_decreasing_and_clamped(self):
+        assert reaction_contribution(0.5) > reaction_contribution(1.5) > 0.0
+        assert reaction_contribution(-1.0) == 1.0
