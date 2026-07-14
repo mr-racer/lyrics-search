@@ -967,6 +967,7 @@ class MetadataDB:
         collection_name: str,
         facts: List[str],
         source: Optional[str] = None,
+        category: Optional[str] = None,
     ) -> None:
         conn = cls._connect()
         parts = slug.split("-", 1)
@@ -991,9 +992,9 @@ class MetadataDB:
             (slug, slug.replace("-", " "), artist_slug, collection_name),
         )
         conn.executemany(
-            """INSERT OR IGNORE INTO song_facts (song_slug, lang, fact, source)
-               VALUES (?, 'en', ?, ?)""",
-            [(slug, f, source) for f in facts],
+            """INSERT OR IGNORE INTO song_facts (song_slug, lang, fact, source, category)
+               VALUES (?, 'en', ?, ?, ?)""",
+            [(slug, f, source, category) for f in facts],
         )
         conn.commit()
 
@@ -3509,6 +3510,29 @@ class MetadataDB:
         except Exception:
             conn.rollback()
             raise
+
+    @classmethod
+    def update_track_producer_label(
+        cls,
+        collection_name: str,
+        track_id: str,
+        producer: Optional[str],
+        label: Optional[str],
+    ) -> None:
+        """Narrow update of just producer/label on an existing track_metadata row.
+
+        Deliberately not ``upsert_track_metadata``: that call requires a full
+        payload dict and would blank out title/artist/album/etc. on the
+        existing row if given only producer/label.
+        """
+        track_id = canonical_track_id(track_id)
+        conn = cls._connect()
+        conn.execute(
+            """UPDATE track_metadata SET producer = ?, label = ?
+               WHERE collection_name = ? AND track_id = ?""",
+            (producer, label, collection_name, track_id),
+        )
+        conn.commit()
 
     @classmethod
     def get_tracks_for_artist(cls, collection_name: str, artist_slug: str) -> list[dict]:
