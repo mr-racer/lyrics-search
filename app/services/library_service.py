@@ -24,6 +24,7 @@ from .artist_split import (
     split_artists, normalize_artist_name, primary_artist, artist_slugs,
     artist_refs as _artist_refs,
 )
+from .genius_facts_service import fetch_genius_facts_for_songs
 from .index_pipeline import IndexPipeline
 from .job_tracker import JobTracker, IndexStage, IndexStatus
 from .similarity_service import analyze_collection
@@ -318,9 +319,11 @@ class LibraryService:
 
             # Wait for FACTS before AI (the AI tasks consume facts/bio as input).
             try:
-                await facts_task
+                producer_label_by_song = await facts_task
             except Exception:
                 logger.exception("[enrich] upload FACTS task failed (tracks already indexed)")
+            else:
+                self._apply_producer_label(producer_label_by_song, track_ids, collection_name)
 
             # Persist which text model this collection was indexed with so future
             # searches resolve the matching vector_name.
@@ -569,15 +572,21 @@ class LibraryService:
                     error="track did not appear in Qdrant after upsert",
                 )
 
-    async def _fetch_facts_batch(self, job, collection_name: str, indexed_data: dict, lang: str = "ru") -> None:
+    async def _fetch_facts_batch(self, job, collection_name: str, indexed_data: dict, lang: str = "ru") -> dict:
         """FACTS stage shared by the upload and folder flows — song/artist facts +
         AudioDB biography + artist images. Launched CONCURRENTLY with the encode
         pipeline (it needs only artist+title), so it overlaps the lyrics fetch and
         the GPU passes. Collab tags are split into individual artists ('DNCE, Nicki
         Minaj' → two artist lookups); song facts use the primary artist.
+
+        Returns the Genius producer/label mapping (``"{artist} — {title}" ->
+        (producer, label)``) collected along the way — no Qdrant point id
+        exists yet at this point, so the caller applies it once track ids are
+        resolved after the encode pipeline's upsert (see
+        ``_apply_producer_label``).
         """
         if not indexed_data:
-            return
+            return {}
 
         from app.services.audiodb_service import fetch_audiodb_for_artists
 
@@ -605,8 +614,9 @@ class LibraryService:
         stage_facts = job.stages[IndexStage.FACTS]
         stage_facts.status = IndexStatus.RUNNING
         stage_facts.started_at = time.time()
-        # Each artist contributes 2 units (songfacts + audiodb); each song 1.
-        facts_total = len(unique_artists) * 2 + len(unique_songs)
+        # Each artist contributes 2 units (songfacts + audiodb); each song 2
+        # (songfacts + genius).
+        facts_total = len(unique_artists) * 2 + len(unique_songs) * 2
         stage_facts.total = facts_total
         stage_facts.message = "Поиск фактов..."
         await self._notify_progress(job, {
@@ -619,8 +629,8 @@ class LibraryService:
             len(unique_artists), len(unique_songs), collection_name,
         )
 
-        facts_progress = {"artists": 0, "songs": 0, "audiodb": 0}
-        facts_found = {"artists": 0, "songs": 0, "audiodb": 0}
+        facts_progress = {"artists": 0, "songs": 0, "audiodb": 0, "genius": 0}
+        facts_found = {"artists": 0, "songs": 0, "audiodb": 0, "genius": 0}
 
         def _make_cb(bucket: str):
             def _cb(current: int, total: int, label: str, found: bool):
@@ -640,33 +650,43 @@ class LibraryService:
                 }))
             return _cb
 
-        # No wall-clock timeout: both fetchers are idempotent (cached artists are
-        # skipped), so a large library enriches fully instead of being cut off
-        # mid-alphabet after N seconds and never backfilled on later runs.
+        # No wall-clock timeout: all fetchers are idempotent (cached artists/
+        # songs are skipped), so a large library enriches fully instead of
+        # being cut off mid-alphabet after N seconds and never backfilled on
+        # later runs. All four sources run CONCURRENTLY — none depends on
+        # another's output.
+        producer_label_by_song: dict = {}
+
+        async def _run_genius() -> None:
+            nonlocal producer_label_by_song
+            producer_label_by_song = await fetch_genius_facts_for_songs(
+                unique_songs, collection_name,
+                progress_callback=_make_cb("genius"),
+            )
+
         if facts_total:
+            tasks = []
             if unique_artists or unique_songs:
+                tasks.append(fetch_facts_for_artists(
+                    unique_artists, collection_name,
+                    progress_callback=_make_cb("artists"),
+                ))
+                tasks.append(fetch_facts_for_songs(
+                    unique_songs, collection_name,
+                    progress_callback=_make_cb("songs"),
+                ))
+            if unique_artists:
+                tasks.append(fetch_audiodb_for_artists(
+                    unique_artists, collection_name,
+                    progress_callback=_make_cb("audiodb"),
+                ))
+            if unique_songs:
+                tasks.append(_run_genius())
+            if tasks:
                 try:
-                    await asyncio.gather(
-                        fetch_facts_for_artists(
-                            unique_artists, collection_name,
-                            progress_callback=_make_cb("artists"),
-                        ),
-                        fetch_facts_for_songs(
-                            unique_songs, collection_name,
-                            progress_callback=_make_cb("songs"),
-                        ),
-                        return_exceptions=True,
-                    )
+                    await asyncio.gather(*tasks, return_exceptions=True)
                 except Exception as e:
                     logger.warning("[enrich] facts fetch failed: %s", e)
-            if unique_artists:
-                try:
-                    await fetch_audiodb_for_artists(
-                        unique_artists, collection_name,
-                        progress_callback=_make_cb("audiodb"),
-                    )
-                except Exception as e:
-                    logger.warning("[enrich] AudioDB enrichment failed: %s", e)
 
         stage_facts.status = IndexStatus.COMPLETED
         stage_facts.current = facts_total
@@ -688,6 +708,21 @@ class LibraryService:
             "[enrich] FACTS stage done: %d/%d found (collection=%s)",
             stage_facts.found, facts_total, collection_name,
         )
+        return producer_label_by_song
+
+    def _apply_producer_label(
+        self, producer_label_by_song: dict, track_ids: dict, collection_name: str,
+    ) -> None:
+        """Write Genius producer/label onto track_metadata once ids are known.
+
+        ``track_ids`` and ``producer_label_by_song`` are both keyed by
+        ``"{artist} — {title}"`` (see ``IndexPipeline._resolve_track_ids`` and
+        ``genius_facts_service.fetch_genius_facts_for_songs``).
+        """
+        for key, (producer, label) in producer_label_by_song.items():
+            track_id = track_ids.get(key)
+            if track_id:
+                MetadataDB.update_track_producer_label(collection_name, track_id, producer, label)
 
     async def _run_ai_tasks(
         self, collection_name: str, n_total: int, lang: str = "ru", job=None,
@@ -1059,6 +1094,7 @@ class LibraryService:
                 "message": stage_audio.message, "current": 0, "total": track_count,
             })
 
+            track_ids: dict = {}
             if self.db_client and processed_files:
                 # Text model for THIS batch goes into the pipeline explicitly
                 # (ModelRegistry is the cache) — the shared engine is never
@@ -1079,10 +1115,13 @@ class LibraryService:
                     )
 
                 pipeline = IndexPipeline(engine, model_name=text_model)
-                await pipeline.run(
+                # resolve_track_ids=True: needed to apply Genius producer/label
+                # (collected by the concurrent FACTS stage) onto track_metadata
+                # once point ids exist post-upsert — see _apply_producer_label.
+                _, track_ids = await pipeline.run(
                     processed_files, collection_name,
                     better_lyrics_quality=better_lyrics_quality,
-                    progress=_pipeline_cb, resolve_track_ids=False,
+                    progress=_pipeline_cb, resolve_track_ids=True,
                 )
                 logger.info("[LibraryService] IndexPipeline.run done")
 
@@ -1112,9 +1151,11 @@ class LibraryService:
             # FACTS were launched concurrently with encoding — await before ANALYSIS
             # so the job doesn't report COMPLETED while facts are still writing.
             try:
-                await facts_task
+                producer_label_by_song = await facts_task
             except Exception:
                 logger.exception("[LibraryService] folder FACTS task failed (tracks indexed)")
+            else:
+                self._apply_producer_label(producer_label_by_song, track_ids, collection_name)
 
             # ── Stage ANALYSIS: Similarity analysis ───────────────────────────
             logger.info("[LibraryService] Stage ANALYSIS: similarity analysis")

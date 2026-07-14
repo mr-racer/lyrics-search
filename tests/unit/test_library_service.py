@@ -181,6 +181,39 @@ class TestActiveJobs:
         assert sum(wins) == 1, f"expected exactly one winner, got {sum(wins)}"
 
 
+class TestApplyProducerLabel:
+    """Genius producer/label is collected during the FACTS stage (no track id
+    exists yet) and applied here once ids are resolved post-upsert — see
+    genius_facts_service.py's module docstring for why."""
+
+    def test_writes_producer_label_for_resolved_track_ids(self, svc, _isolated_db):
+        # The bulk metadata upsert (title/artist/etc, done inside the encode
+        # pipeline) always runs before this — the row must already exist for
+        # the narrow UPDATE in update_track_producer_label to have any effect.
+        MetadataDB.upsert_track_metadata(
+            "test_col", "tid-1", {"title": "Stronger", "artist": "Kanye West"},
+        )
+        svc._apply_producer_label(
+            producer_label_by_song={"Kanye West — Stronger": ("Kanye West", "Roc-A-Fella")},
+            track_ids={"Kanye West — Stronger": "tid-1"},
+            collection_name="test_col",
+        )
+        row = MetadataDB.get_track_by_id("test_col", "tid-1")
+        assert row is not None
+        assert row["producer"] == "Kanye West"
+        assert row["label"] == "Roc-A-Fella"
+
+    def test_skips_songs_with_no_resolved_track_id(self, svc, _isolated_db):
+        """A song the Genius fetch found producer/label for, but whose track id
+        never resolved (e.g. it failed to upsert) — must not raise or write."""
+        svc._apply_producer_label(
+            producer_label_by_song={"Unresolved Artist — Unresolved Song": ("X", "Y")},
+            track_ids={},
+            collection_name="test_col",
+        )
+        # No matching row was ever created — nothing to assert other than "no raise".
+
+
 # --------------------------------------------------------------------------- #
 # LibraryService.get_albums — pure aggregation over a fake Qdrant scroll.
 # --------------------------------------------------------------------------- #
