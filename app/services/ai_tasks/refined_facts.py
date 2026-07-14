@@ -55,6 +55,7 @@ RULES:
 - Do not add any explanations or text before or after the JSON.
 - Do NOT wrap the JSON in markdown code blocks (no ```json or ``` markers).
 - Output the "short_fact" values in {lang}.
+- Any person or artist name in a fact (the subject, a producer, a featured guest, a sampled artist, a band member) must stay EXACTLY as given in the source fact — character for character. NEVER translate, transliterate, localize, or grammatically decline a name into {lang}.
 
 PROCEED WITH THIS FACTS:
 {facts}

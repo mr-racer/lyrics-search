@@ -86,6 +86,20 @@ _SCHEMA_SQL: Tuple[str, ...] = (
         source TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )""",
+    # Per-account fact visibility. artist_facts/song_facts are a SHARED pool
+    # keyed only by slug (the same real-world artist/song has the same facts
+    # for everyone) — but each account must only see facts for artists/songs
+    # IT has indexed. That used to be gated by artists.collection_name /
+    # songs.collection_name, a single mutable column on a globally-PK'd row:
+    # whichever account indexed that slug LAST silently stole every other
+    # account's visibility. This table gives each account its own row instead,
+    # so two accounts sharing a song never collide.
+    """CREATE TABLE IF NOT EXISTS fact_visibility (
+        kind            TEXT NOT NULL,
+        slug            TEXT NOT NULL,
+        collection_name TEXT NOT NULL,
+        PRIMARY KEY (kind, slug, collection_name)
+    )""",
     """CREATE TABLE IF NOT EXISTS track_reactions (
         collection_name TEXT NOT NULL,
         track_id TEXT NOT NULL,
@@ -527,8 +541,45 @@ class MetadataDB:
 
         cls._migrate_dashed_track_ids(conn, existing_tables)
 
+        if "artists" in existing_tables or "songs" in existing_tables:
+            cls._migrate_fact_visibility_backfill(conn, existing_tables)
+
         conn.commit()
         logger.info("[MetadataDB] Schema initialised")
+
+    @classmethod
+    def _migrate_fact_visibility_backfill(
+        cls, conn: sqlite3.Connection, existing_tables: set,
+    ) -> None:
+        """One-time backfill of ``fact_visibility`` from the legacy single
+        ``collection_name`` column on ``artists``/``songs``.
+
+        Preserves whatever visibility each account currently has (the account
+        that happens to be the last writer of that column) rather than
+        dropping it outright; going forward, new writes register a dedicated
+        visibility row per account instead of clobbering this shared column.
+        INSERT OR IGNORE makes this a no-op on every startup after the first.
+        """
+        # Legacy/test schemas may predate the `slug` column (or the table
+        # entirely) — best-effort, matches the other migrations in this file.
+        if "artists" in existing_tables:
+            try:
+                conn.execute(
+                    """INSERT OR IGNORE INTO fact_visibility (kind, slug, collection_name)
+                       SELECT 'artist', slug, collection_name FROM artists
+                       WHERE collection_name IS NOT NULL AND collection_name != ''"""
+                )
+            except sqlite3.OperationalError:
+                logger.warning("[MetadataDB] fact_visibility backfill failed for artists", exc_info=True)
+        if "songs" in existing_tables:
+            try:
+                conn.execute(
+                    """INSERT OR IGNORE INTO fact_visibility (kind, slug, collection_name)
+                       SELECT 'song', slug, collection_name FROM songs
+                       WHERE collection_name IS NOT NULL AND collection_name != ''"""
+                )
+            except sqlite3.OperationalError:
+                logger.warning("[MetadataDB] fact_visibility backfill failed for songs", exc_info=True)
 
     # Tables whose track ids may still carry the legacy undashed uuid4().hex
     # spelling (written by indexing / upload flows before point ids were minted
@@ -698,6 +749,22 @@ class MetadataDB:
     # ── Artists ──
 
     @classmethod
+    def _mark_visible(cls, conn: sqlite3.Connection, kind: str, slug: str, collection_name: str) -> None:
+        """Register that ``collection_name`` has its own visibility of ``slug``.
+
+        See the ``fact_visibility`` table comment in ``_SCHEMA_SQL``. Callers
+        still commit (this doesn't), so it composes with the rest of each
+        write method's transaction.
+        """
+        if not slug or not collection_name:
+            return
+        conn.execute(
+            """INSERT OR IGNORE INTO fact_visibility (kind, slug, collection_name)
+               VALUES (?, ?, ?)""",
+            (kind, slug, collection_name),
+        )
+
+    @classmethod
     def upsert_artist(cls, slug: str, name: str, collection_name: str, mbid: Optional[str] = None) -> None:
         conn = cls._connect()
         conn.execute(
@@ -708,6 +775,7 @@ class MetadataDB:
                    collection_name=excluded.collection_name""",
             (slug, name, collection_name, mbid),
         )
+        cls._mark_visible(conn, "artist", slug, collection_name)
         conn.commit()
 
     @classmethod
@@ -716,12 +784,22 @@ class MetadataDB:
 
         A row that exists but has audiodb_fetched_at IS NULL returns the dict with
         all-None values, so the caller can distinguish 'never fetched' from
-        'no such artist'."""
+        'no such artist'. Gated through ``fact_visibility`` (per-account) rather
+        than the legacy ``artists.collection_name`` column — see the
+        ``fact_visibility`` table comment in ``_SCHEMA_SQL``. The bio/photo data
+        itself is genuinely shared (same real artist, same public bio for every
+        account); only visibility is per-account.
+        """
         conn = cls._connect()
         row = conn.execute(
             """SELECT audiodb_bio, mood, country_code, country, label,
                       cutout_path, thumb_path, audiodb_mbid, audiodb_fetched_at
-               FROM artists WHERE slug = ? AND collection_name = ?""",
+               FROM artists a
+               WHERE a.slug = ? AND EXISTS (
+                   SELECT 1 FROM fact_visibility fv
+                   WHERE fv.kind = 'artist' AND fv.slug = a.slug
+                     AND fv.collection_name = ?
+               )""",
             (slug, collection_name),
         ).fetchone()
         if not row:
@@ -790,6 +868,7 @@ class MetadataDB:
                 (slug, slug, collection_name, audiodb_bio, mood, country_code,
                  country, label, cutout_path, thumb_path, audiodb_mbid),
             )
+        cls._mark_visible(conn, "artist", slug, collection_name)
         conn.commit()
 
     @classmethod
@@ -827,6 +906,7 @@ class MetadataDB:
                VALUES (?, 'en', ?, ?, ?)""",
             (slug, fact_text, category, source),
         )
+        cls._mark_visible(conn, "artist", slug, collection_name)
         conn.commit()
 
     @classmethod
@@ -853,16 +933,27 @@ class MetadataDB:
                VALUES (?, 'en', ?, ?)""",
             [(slug, f, source) for f in facts],
         )
+        cls._mark_visible(conn, "artist", slug, collection_name)
         conn.commit()
 
     @classmethod
     def get_artist_facts(cls, slug: str, collection_name: str) -> List[str]:
-        """Return all English facts for an artist in a collection."""
+        """Return all English facts for an artist visible to this collection.
+
+        ``artist_facts`` is a SHARED pool keyed only by slug (the same
+        real-world artist has the same facts for every account); visibility is
+        gated through ``fact_visibility`` (per-account) instead of the legacy
+        ``artists.collection_name`` column — see the ``fact_visibility`` table
+        comment in ``_SCHEMA_SQL`` for why that column was unsafe to gate on.
+        """
         conn = cls._connect()
         rows = conn.execute(
             """SELECT af.fact FROM artist_facts af
-               JOIN artists a ON a.slug = af.artist_slug
-               WHERE af.artist_slug = ? AND a.collection_name = ? AND af.lang = 'en'
+               WHERE af.artist_slug = ? AND af.lang = 'en' AND EXISTS (
+                   SELECT 1 FROM fact_visibility fv
+                   WHERE fv.kind = 'artist' AND fv.slug = af.artist_slug
+                     AND fv.collection_name = ?
+               )
                ORDER BY af.id""",
             (slug, collection_name),
         ).fetchall()
@@ -887,8 +978,9 @@ class MetadataDB:
         conn = cls._connect()
         rows = conn.execute(
             """SELECT af.artist_slug, af.fact FROM artist_facts af
-               JOIN artists a ON a.slug = af.artist_slug
-               WHERE a.collection_name = ? AND af.lang = 'en'
+               JOIN fact_visibility fv
+                 ON fv.kind = 'artist' AND fv.slug = af.artist_slug
+               WHERE fv.collection_name = ? AND af.lang = 'en'
                ORDER BY af.artist_slug, af.id""",
             (collection_name,),
         ).fetchall()
@@ -917,6 +1009,7 @@ class MetadataDB:
                    recording_mbid=excluded.recording_mbid""",
             (slug, title, artist_slug, collection_name, recording_mbid),
         )
+        cls._mark_visible(conn, "song", slug, collection_name)
         conn.commit()
 
     # ── Song facts ──
@@ -958,6 +1051,8 @@ class MetadataDB:
                VALUES (?, 'en', ?, ?, ?)""",
             (slug, fact_text, category, source),
         )
+        cls._mark_visible(conn, "artist", artist_slug, collection_name)
+        cls._mark_visible(conn, "song", slug, collection_name)
         conn.commit()
 
     @classmethod
@@ -996,16 +1091,28 @@ class MetadataDB:
                VALUES (?, 'en', ?, ?, ?)""",
             [(slug, f, source, category) for f in facts],
         )
+        cls._mark_visible(conn, "artist", artist_slug, collection_name)
+        cls._mark_visible(conn, "song", slug, collection_name)
         conn.commit()
 
     @classmethod
     def get_song_facts(cls, slug: str, collection_name: str) -> List[str]:
-        """Return all English facts for a song in a collection."""
+        """Return all English facts for a song visible to this collection.
+
+        ``song_facts`` is a SHARED pool keyed only by slug (the same
+        real-world song has the same facts for every account); visibility is
+        gated through ``fact_visibility`` (per-account) instead of the legacy
+        ``songs.collection_name`` column — see the ``fact_visibility`` table
+        comment in ``_SCHEMA_SQL`` for why that column was unsafe to gate on.
+        """
         conn = cls._connect()
         rows = conn.execute(
             """SELECT sf.fact FROM song_facts sf
-               JOIN songs s ON s.slug = sf.song_slug
-               WHERE sf.song_slug = ? AND s.collection_name = ? AND sf.lang = 'en'
+               WHERE sf.song_slug = ? AND sf.lang = 'en' AND EXISTS (
+                   SELECT 1 FROM fact_visibility fv
+                   WHERE fv.kind = 'song' AND fv.slug = sf.song_slug
+                     AND fv.collection_name = ?
+               )
                ORDER BY sf.id""",
             (slug, collection_name),
         ).fetchall()
@@ -1017,8 +1124,9 @@ class MetadataDB:
         conn = cls._connect()
         rows = conn.execute(
             """SELECT sf.song_slug, sf.fact FROM song_facts sf
-               JOIN songs s ON s.slug = sf.song_slug
-               WHERE s.collection_name = ? AND sf.lang = 'en'
+               JOIN fact_visibility fv
+                 ON fv.kind = 'song' AND fv.slug = sf.song_slug
+               WHERE fv.collection_name = ? AND sf.lang = 'en'
                ORDER BY sf.song_slug, sf.id""",
             (collection_name,),
         ).fetchall()
@@ -1034,18 +1142,17 @@ class MetadataDB:
         misleading track count.
         """
         conn = cls._connect()
-        # Artist facts scoped to collection via the artists table
+        # Scoped via fact_visibility (per-account) — see get_song_facts docstring.
         artist_row = conn.execute(
             "SELECT COUNT(*) FROM artist_facts af "
-            "JOIN artists a ON a.slug = af.artist_slug "
-            "WHERE a.collection_name = ? AND af.lang = 'en'",
+            "JOIN fact_visibility fv ON fv.kind = 'artist' AND fv.slug = af.artist_slug "
+            "WHERE fv.collection_name = ? AND af.lang = 'en'",
             (collection_name,),
         ).fetchone()
-        # Song facts scoped to collection via the songs table
         song_row = conn.execute(
             "SELECT COUNT(*) FROM song_facts sf "
-            "JOIN songs s ON s.slug = sf.song_slug "
-            "WHERE s.collection_name = ? AND sf.lang = 'en'",
+            "JOIN fact_visibility fv ON fv.kind = 'song' AND fv.slug = sf.song_slug "
+            "WHERE fv.collection_name = ? AND sf.lang = 'en'",
             (collection_name,),
         ).fetchone()
         return (artist_row[0] or 0) + (song_row[0] or 0)
@@ -1065,8 +1172,8 @@ class MetadataDB:
         keyed per entity) in the requested language, then refined English, and
         only then tops up from the raw ``artist_facts``/``song_facts`` pool
         (which is English-only). One fact per entity, so the picks never all
-        come from the same artist/song. Scoped to the collection via the
-        ``artists``/``songs`` join — refined rows themselves are
+        come from the same artist/song. Scoped to the collection via
+        ``fact_visibility`` (per-account) — refined rows themselves are
         collection-independent (see :meth:`get_refined_facts`).
 
         Returns list of dicts:
@@ -1097,8 +1204,9 @@ class MetadataDB:
                         NULL AS title
                     FROM refined_facts rf
                     JOIN artists a ON a.slug = rf.scope_key
+                    JOIN fact_visibility fv ON fv.kind = 'artist' AND fv.slug = a.slug
                     WHERE rf.scope = 'artist' AND rf.lang = ?
-                      AND a.collection_name = ?
+                      AND fv.collection_name = ?
 
                     UNION ALL
 
@@ -1112,8 +1220,9 @@ class MetadataDB:
                     FROM refined_facts rf
                     JOIN songs s ON s.slug = rf.scope_key
                     JOIN artists a ON a.slug = s.artist_slug
+                    JOIN fact_visibility fv ON fv.kind = 'song' AND fv.slug = s.slug
                     WHERE rf.scope = 'song' AND rf.lang = ?
-                      AND s.collection_name = ?
+                      AND fv.collection_name = ?
                 )
                 ORDER BY RANDOM()
                 LIMIT ?
@@ -1165,7 +1274,8 @@ class MetadataDB:
                         NULL AS title
                     FROM artist_facts af
                     JOIN artists a ON a.slug = af.artist_slug
-                    WHERE a.collection_name = ? AND af.lang = 'en'
+                    JOIN fact_visibility fv ON fv.kind = 'artist' AND fv.slug = a.slug
+                    WHERE fv.collection_name = ? AND af.lang = 'en'
 
                     UNION ALL
 
@@ -1179,7 +1289,8 @@ class MetadataDB:
                     FROM song_facts sf
                     JOIN songs s ON s.slug = sf.song_slug
                     JOIN artists a ON a.slug = s.artist_slug
-                    WHERE s.collection_name = ? AND sf.lang = 'en'
+                    JOIN fact_visibility fv ON fv.kind = 'song' AND fv.slug = s.slug
+                    WHERE fv.collection_name = ? AND sf.lang = 'en'
                 )
                 ORDER BY RANDOM()
                 LIMIT ?

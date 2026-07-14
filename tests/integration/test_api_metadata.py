@@ -196,6 +196,14 @@ def client(tmp_path, monkeypatch):
     )
     conn.execute("INSERT INTO artist_facts (artist_slug, fact) VALUES (?, ?)",
                  ("bar", "Original artist fact"))
+    # fact_visibility is the per-account gate (see metadata_db.py) — production
+    # writes always go through MetadataDB.add_*_fact/upsert_* which register it;
+    # this fixture inserts raw rows, so it must register visibility itself too.
+    conn.execute(
+        "INSERT INTO fact_visibility (kind, slug, collection_name) VALUES "
+        "('artist', 'bar', ?), ('song', 'bar-foo', ?)",
+        (_DERIVED_COLLECTION, _DERIVED_COLLECTION),
+    )
     conn.commit()
 
     c = TestClient(app)

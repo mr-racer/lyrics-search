@@ -5295,7 +5295,12 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream, 
           })),
         } : prev);
       })
-      .catch(() => {})
+      .catch(() => {
+        // Failed (LLM error / malformed JSON / etc.) — clear the guard so the
+        // next profile refresh (tab revisit) retries instead of leaving the
+        // islands permanently unnamed for the life of this kept-alive section.
+        if (alive) enrichAttempted.current = null;
+      })
       .finally(() => { if (alive) setAutoEnriching(false); });
     return () => { alive = false; };
   }, [profile, aiOn, lang]);
@@ -5324,7 +5329,11 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream, 
           })),
         } : prev);
       })
-      .catch(() => {});
+      .catch(() => {
+        // Same reasoning as the island-name guard above: don't let one failed
+        // call permanently block retries for the life of this kept-alive tab.
+        if (alive) vibeNamesAttempted.current = null;
+      });
     return () => { alive = false; };
   }, [profile, aiOn, lang]);
 

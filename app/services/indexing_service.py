@@ -77,13 +77,23 @@ def _build_payload_for_upsert(song_info: dict, slug: str | None = None) -> dict:
             pass
     artists = split_artists(song_info.get("artist") or "")
     slugs = _artist_slugs(song_info.get("artist") or "")
+    # primary_artist_slug drives album grouping (library_service, catalog
+    # search) — it must be the ALBUM's artist, not just whoever is credited
+    # on this one track, or a compilation / a "feat." track fragments its
+    # album across multiple "artists". Prefer the file's Album Artist tag
+    # (TPE2 / aART / albumartist); fall back to the track artist when absent.
+    album_artist_slugs = _artist_slugs(song_info.get("album_artist") or "")
+    primary_artist_slug = (
+        album_artist_slugs[0] if album_artist_slugs
+        else (slugs[0] if slugs else None)
+    )
     return {
         "lyrics":              song_info["lyrics"],
         "title":               song_info["title"],
         "artist":              song_info["artist"],
         "artists":             artists,
         "artist_slugs":        slugs,
-        "primary_artist_slug": slugs[0] if slugs else None,
+        "primary_artist_slug": primary_artist_slug,
         "album":               song_info["album"],
         "year":                song_info.get("year"),
         "year_range":          song_info.get("year_range"),
