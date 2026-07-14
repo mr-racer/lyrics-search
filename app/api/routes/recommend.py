@@ -332,6 +332,7 @@ async def profile_ai_enrich(
             llm_model=body.llm_model,
         )
     except Exception as e:
+        logger.exception("[profile-ai-enrich] failed for %s", derived)
         raise HTTPException(status_code=502, detail=f"LLM enrichment failed: {e}")
     return ProfileEnrichResponse(
         portrait=result["portrait"], island_names=result["island_names"],
@@ -365,6 +366,7 @@ async def vibes_ai_name(
             llm_model=body.llm_model,
         )
     except Exception as e:
+        logger.exception("[vibes-ai-name] failed for %s", derived)
         raise HTTPException(status_code=502, detail=f"LLM vibe naming failed: {e}")
 
 

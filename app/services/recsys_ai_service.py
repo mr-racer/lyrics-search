@@ -44,7 +44,7 @@ def _lang_name(lang: str) -> str:
 
 _ENRICH_SYSTEM = """You write a grounded music-taste portrait for a music player and name the listener's taste clusters. Address the listener directly as "you" (ты). Describe, never flatter — no "great taste", no "you have an ear for". Never name any artist or song title in any output field.
 
-Language for ALL output strings: {lang_name}.
+Language for ALL output strings: {lang_name}. If an artist or song name were ever to appear anyway, it must stay EXACTLY as given — never translated, transliterated, localized, or grammatically declined into {lang_name}.
 
 INPUT:
 - taste islands: clusters of tracks the listener demonstrably loves, each with a weight (how central it is to them) and its member tracks.
@@ -207,7 +207,7 @@ INPUT: each vibe has an id, its genre tags, and its member tracks (artist — ti
 For EACH vibe write ONE name, 2-3 words, in {lang_name}:
 - Name the actual sound: the genre plus one concrete quality (pace, mood, texture). A genre term is welcome.
 - Plain and matter-of-fact, like a label on a shelf. No pathos, no poetry, no invented scenes or places.
-- Never use artist or song names.
+- Never use artist or song names. If one were ever to appear anyway, it must stay EXACTLY as given — never translated, transliterated, localized, or grammatically declined into {lang_name}.
 - Ground every word in the given tracks and genres — if the data doesn't show it, don't write it.
 
 OUTPUT: ONLY minified JSON, no prose, no fences:
@@ -579,6 +579,7 @@ Rules:
 - 1 to {max_actions} actions. One focused action beats three vague ones.
 - A wish can mix kinds: "что-нибудь энергичное у Queen" → clap_search (energetic sound) + library_search (Queen).
 - "title": a short playlist name in {lang_name} that captures the wish.
+- Any artist name, wherever it appears (a query or the title), must stay EXACTLY as given by the user — never translated, transliterated, localized, or grammatically declined.
 
 Output ONLY minified JSON, no prose, no fences:
 {{"title": "...", "actions": [{{"tool": "clap_search", "query": "...", "limit": 20}}]}}"""
@@ -588,6 +589,7 @@ _SELECT_SYSTEM = """You curate the final playlist from candidate tracks found in
 The listener's wish and a numbered candidate list follow. Pick up to {limit} tracks in a good listening order (flow matters: don't whiplash between extremes unless the wish asks for it).
 
 For each pick give a SHORT reason in {lang_name} (max 12 words) tied to the wish — concrete sound or lyrics, never filler like "great track" or "fits the mood".
+If a reason names an artist, copy the name EXACTLY as it appears in the candidate list — never translated, transliterated, localized, or grammatically declined.
 
 Output ONLY minified JSON, no prose, no fences:
 {{"picks": [{{"n": 3, "reason": "..."}}, ...]}}"""

@@ -50,6 +50,7 @@ INPUTS:
 <search_filter_query>{search_filter_query}</search_filter_query>
 
 RULES:
+0. Any artist name you output (in filters, filter_lookup, or queries) must stay EXACTLY as given — never translated, transliterated, localized, or grammatically declined. Rule 3 below allows fuzzy MATCHING against <resolved_filters>, but the value you emit is the resolved_filters spelling, never your own translation of it.
 1. If the user explicitly mentions an artist, album, genre, or time period — extract it as a potential filter. Always use ENGLISH as a filter query.
 2. If <resolved_filters> is empty AND filters are needed → set action="request_filter" to look up valid DB values.
 3. If <resolved_filters> is NOT empty → select the best matching filter value from it (fuzzy match allowed, e.g. "канье уест" → "Kanye West"). If no match — set filters=null.
@@ -125,6 +126,7 @@ CONSTRAINTS:
 1. ONLY use <context> for answers. Never use internal knowledge.
 2. message is ALWAYS present and human-friendly.
 3. On final_answer: give best guess even if confidence is low; explain uncertainty in message.
+4. Any artist name in "artist" or "message" must appear EXACTLY as given in <context> — never translated, transliterated, localized, or grammatically declined.
 """.strip()
 
 # ---------------------------------------------------------------------------
@@ -245,6 +247,8 @@ Briefly paraphrase what the user was looking for, then name the best match.
 Example: "По вашему описанию — песня с приятным женским голосом и динамичным припевом — наиболее
 подходящий трек «{title}» от {artist}."
 
+The artist name must appear EXACTLY as given in <best_match> — never translated, transliterated, localized, or grammatically declined, regardless of the reply language.
+
 Keep it under 50 words. Return ONLY a JSON object:
 {{"message": "your reply here"}}
 """.strip()
@@ -295,6 +299,7 @@ Filters: {active_filters}
 valid=true if lyrics contain the requested words/themes or match the described mood.
 valid=false if excerpt is empty, unrelated, or clearly wrong song.
 If previous_queries are already exhaustive — set valid=true to avoid endless loop.
+If "reason" names the artist, keep the name EXACTLY as given in "{artist}" — never translated, transliterated, localized, or grammatically declined.
 
 {{"valid": true|false, "reason": "one sentence", "queries": [{{"query": "..."}}]|null}}
 queries only when valid=false: 1-2 new English queries not in previous searches.

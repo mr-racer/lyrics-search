@@ -88,6 +88,7 @@ CONSTRAINTS:
 2. If action="search": Provide 2-3 queries (3-10 words each) in english language.
 3. If action="answer": Use confidence "high", "medium", or "low".
 4. If <context> has a confident match → action="answer". Otherwise → action="search".
+5. Any artist name in "artist" or "message" must appear EXACTLY as given in <context> — never translated, transliterated, localized, or grammatically declined.
 
 OUTPUT FORMAT:
 {{

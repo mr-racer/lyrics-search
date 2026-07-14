@@ -118,6 +118,7 @@ def get_flac_metadata(filepath: str) -> dict:
     return {
         "title":        (audio.get("title")  or [""])[0].strip(),
         "artist":       (audio.get("artist") or [""])[0].strip(),
+        "album_artist": (audio.get("albumartist") or [""])[0].strip() or None,
         "album":        (audio.get("album")  or [""])[0].strip(),
         "year":         validate_year(raw_year),
         "genre":        (audio.get("genre")  or [""])[0].strip() or None,
@@ -149,6 +150,7 @@ def get_alac_metadata(filepath: str) -> dict:
     return {
         "title":        _tag("©nam"),
         "artist":       _tag("©ART"),
+        "album_artist": _tag("aART") or None,
         "album":        _tag("©alb"),
         "year":         validate_year(raw_year),
         "genre":        _tag("©gen") or None,
@@ -183,12 +185,13 @@ def get_mp3_metadata(filepath: str) -> dict:
 
     raw_year = (audio.get("date") or audio.get("originaldate") or [""])[0]
     return {
-        "title":    (audio.get("title")  or [""])[0].strip(),
-        "artist":   (audio.get("artist") or [""])[0].strip(),
-        "album":    (audio.get("album")  or [""])[0].strip(),
-        "year":     validate_year(raw_year),
-        "genre":    (audio.get("genre")  or [""])[0].strip() or None,
-        "duration": duration,
+        "title":        (audio.get("title")  or [""])[0].strip(),
+        "artist":       (audio.get("artist") or [""])[0].strip(),
+        "album_artist": (audio.get("albumartist") or [""])[0].strip() or None,
+        "album":        (audio.get("album")  or [""])[0].strip(),
+        "year":         validate_year(raw_year),
+        "genre":        (audio.get("genre")  or [""])[0].strip() or None,
+        "duration":     duration,
         "track_number": parse_track_index((audio.get("tracknumber") or [None])[0]),
         "disc_number":  parse_track_index((audio.get("discnumber")  or [None])[0]),
     }
