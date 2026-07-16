@@ -278,8 +278,8 @@ def main() -> None:
                         help="print accounts in metadata.db and exit")
     parser.add_argument("--qdrant-url",
                         default=os.environ.get("QDRANT_URL", "http://localhost:6333"))
-    parser.add_argument("--delay", type=float, default=0.5,
-                        help="seconds between Genius requests (default: 0.5)")
+    parser.add_argument("--delay", type=float, default=0.3,
+                        help="seconds between Genius requests (default: 0.3)")
     parser.add_argument("--dry-run", action="store_true",
                         help="list what would be processed; hit no network")
     parser.add_argument("--force", action="store_true",

@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from html import unescape
 from typing import List, Optional, Tuple, TypedDict
 
@@ -313,20 +314,33 @@ def _fetch_single_referent(url: str, referent_id: str) -> Optional[Tuple[str, st
         return None
 
 
+ANNOTATION_WORKERS = 4
+
+
 def _fetch_all_annotations(data: dict, delay: float) -> List[Tuple[str, str]]:
-    """Returns list of (fragment_text, annotation_text) pairs."""
+    """Returns list of (fragment_text, annotation_text) pairs, in lyric order.
+
+    Referents are fetched in parallel batches of ANNOTATION_WORKERS with a
+    single `delay` pause between batches — AudioDB-style pacing instead of the
+    old one-request-per-`delay` crawl (a 20-annotation song took 10+ s).
+    """
     links = _get_referent_links(data)
     referent_ids = data["songPage"]["lyricsData"]["referents"]
     unique_ids = list(dict.fromkeys(str(r) for r in referent_ids))
 
     out: List[Tuple[str, str]] = []
-    for rid in unique_ids:
-        url = links.get(rid, f"https://genius.com/{rid}")
-        result = _fetch_single_referent(url, rid)
-        if result:
-            out.append(result)
-        if delay:
-            time.sleep(delay)
+    with ThreadPoolExecutor(max_workers=ANNOTATION_WORKERS) as pool:
+        for start in range(0, len(unique_ids), ANNOTATION_WORKERS):
+            batch = unique_ids[start:start + ANNOTATION_WORKERS]
+            results = pool.map(
+                lambda rid: _fetch_single_referent(
+                    links.get(rid, f"https://genius.com/{rid}"), rid,
+                ),
+                batch,
+            )
+            out.extend(r for r in results if r)
+            if delay and start + ANNOTATION_WORKERS < len(unique_ids):
+                time.sleep(delay)
     return out
 
 

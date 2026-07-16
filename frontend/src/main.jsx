@@ -8735,6 +8735,7 @@ function openIndexProgressStream(jobId, { onProgress, onComplete, onError }) {
   const statusMap = { completed: 'done', failed: 'failed', running: 'running', pending: 'pending' };
   let stepStatus = {};
   let stageProgress = {};
+  let aiStages = null;   // guru AI tasks (`ai_stages` frames) — published during the awaited AI phase
   let closed = false;
   const close = () => { closed = true; evt.close(); };
   evt.onmessage = (event) => {
@@ -8764,18 +8765,19 @@ function openIndexProgressStream(jobId, { onProgress, onComplete, onError }) {
           };
         }
       }
+      if (data.ai_stages) aiStages = data.ai_stages;
       if (data.overall_status === 'completed') {
         close();
         // Anything still pending when the job completes is implicitly done.
         stepStatus = Object.fromEntries(Object.entries(stepStatus).map(([k, v]) => [k, v === 'pending' ? 'done' : v]));
-        onProgress({ stepStatus, stageProgress });
+        onProgress({ stepStatus, stageProgress, aiStages });
         onComplete(data.stages?.lyrics?.current || data.stages?.metadata?.current || 0);
       } else if (data.overall_status === 'failed') {
         close();
-        onProgress({ stepStatus, stageProgress });
+        onProgress({ stepStatus, stageProgress, aiStages });
         onError(data.error || data.message || 'failed');
-      } else if (data.stages) {
-        onProgress({ stepStatus, stageProgress });
+      } else if (data.stages || data.ai_stages) {
+        onProgress({ stepStatus, stageProgress, aiStages });
       }
     } catch {}
   };
@@ -8793,6 +8795,7 @@ function useIndexingJob({ onCompleted } = {}) {
   const [jobInfo, setJobInfo] = useState(null);   // { jobId, resumed } | null
   const [stepStatus, setStepStatus] = useState({});
   const [stageProgress, setStageProgress] = useState({});
+  const [aiStages, setAiStages] = useState(null);  // guru AI tasks from the SSE stream (null until the AI phase)
   const [error, setError] = useState(null);
   const [trackCount, setTrackCount] = useState(null);
   const closeRef = useRef(null);
@@ -8808,6 +8811,7 @@ function useIndexingJob({ onCompleted } = {}) {
     setError(null); setTrackCount(null);
     setStepStatus({ lyrics:'idle', facts:'idle', metadata:'idle', dense:'idle', audio:'idle', analysis:'idle' });
     setStageProgress({});
+    setAiStages(null);
   }, []);
 
   const attach = useCallback((jobId, { resumed = false } = {}) => {
@@ -8815,9 +8819,9 @@ function useIndexingJob({ onCompleted } = {}) {
     closeRef.current?.();
     setJobInfo({ jobId, resumed });
     setStatus('running');
-    if (resumed) { setError(null); setTrackCount(null); setStepStatus({}); setStageProgress({}); }
+    if (resumed) { setError(null); setTrackCount(null); setStepStatus({}); setStageProgress({}); setAiStages(null); }
     closeRef.current = openIndexProgressStream(jobId, {
-      onProgress: (p) => { setStepStatus(p.stepStatus); setStageProgress(p.stageProgress); },
+      onProgress: (p) => { setStepStatus(p.stepStatus); setStageProgress(p.stageProgress); setAiStages(p.aiStages ?? null); },
       onComplete: (count) => { setStatus('completed'); setTrackCount(count); onCompletedRef.current?.(count); },
       onError: (msg) => { setStatus('failed'); setError(msg); },
     });
@@ -8835,20 +8839,37 @@ function useIndexingJob({ onCompleted } = {}) {
   const reset = useCallback(() => {
     closeRef.current?.(); closeRef.current = null;
     setJobInfo(null); setStatus('idle'); setError(null); setTrackCount(null);
-    setStepStatus({}); setStageProgress({});
+    setStepStatus({}); setStageProgress({}); setAiStages(null);
   }, []);
 
   useEffect(() => () => { closeRef.current?.(); }, []);
 
-  return { status, jobInfo, stepStatus, stageProgress, error, trackCount, begin, attach, completeSync, fail, reset };
+  return { status, jobInfo, stepStatus, stageProgress, aiStages, error, trackCount, begin, attach, completeSync, fail, reset };
 }
 
 // Floating indicator for an indexing job running while its origin UI (settings
-// panel / onboarding modal) is closed. Click reopens Settings with the staged
-// modal. Percent mirrors JobTracker.get_progress_summary's stage weights.
-function IndexingStatusPill({ isDark, lang, stepStatus, stageProgress, onClick }) {
+// panel / onboarding modal) is closed. Click toggles a compact popover with the
+// live task list (still-running core stages, then the guru AI tasks) — it does
+// NOT reopen Settings' full indexing modal, which by the AI phase shows only
+// long-finished stages. Percent mirrors JobTracker.get_progress_summary's
+// stage weights; once every core stage is done the label switches to the AI
+// task counter so the pill doesn't sit at a lying "100%".
+function IndexingStatusDock({ isDark, lang, stepStatus, stageProgress, aiStages }) {
   const c = useColors(isDark);
   const isMobile = useIsMobile();
+  const ru = lang === 'ru';
+  const [open, setOpen] = useState(false);
+  const dockRef = useRef(null);
+
+  // Outside mousedown closes; the ref wraps pill AND popover so toggling via
+  // the pill doesn't fight the outside-close handler.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e) => { if (dockRef.current && !dockRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
+
   const weights = { lyrics: 0.25, facts: 0.10, metadata: 0.05, dense: 0.20, audio: 0.25, analysis: 0.15 };
   let pct = 0;
   for (const [key, w] of Object.entries(weights)) {
@@ -8857,22 +8878,71 @@ function IndexingStatusPill({ isDark, lang, stepStatus, stageProgress, onClick }
     else if (stepStatus[key] === 'running' && sp?.total) pct += w * (sp.current / sp.total) * 100;
   }
   pct = Math.min(100, Math.round(pct));
+
+  const coreKeys = Object.keys(WIZ_STAGE_LABELS);
+  const coreDone = coreKeys.every(k => stepStatus[k] === 'done');
+  const corePending = coreKeys.filter(k => stepStatus[k] !== 'done');
+  const aiList = aiStages ? Object.values(aiStages) : [];
+  const aiDone = aiList.filter(s => ['done', 'skipped', 'failed', 'cancelled'].includes(s.status)).length;
+  const pillLabel = (coreDone && aiList.length)
+    ? `${ru ? 'ИИ-ОБРАБОТКА' : 'AI TASKS'} · ${aiDone}/${aiList.length}`
+    : `${ru ? 'ИНДЕКСАЦИЯ' : 'INDEXING'} · ${pct}%`;
+
+  const glass = {
+    border: `1px solid ${isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.12)'}`,
+    background: isDark ? 'rgba(20,20,28,0.85)' : 'rgba(255,255,255,0.9)',
+    backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)',
+    boxShadow: '0 6px 24px rgba(0,0,0,0.25)',
+  };
   return (
-    <button onClick={onClick} className="mono" style={{
+    <div ref={dockRef} style={{
       position: 'fixed', right: 18,
       // Mobile: clear the bottom tab bar + mini player stack.
       bottom: isMobile ? 'calc(env(safe-area-inset-bottom, 0px) + 132px)' : 18,
-      zIndex: 80,
-      display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', borderRadius: 999,
-      border: `1px solid ${isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.12)'}`,
-      background: isDark ? 'rgba(20,20,28,0.85)' : 'rgba(255,255,255,0.9)',
-      backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)',
-      color: c.text, fontSize: 12, letterSpacing: '0.08em', cursor: 'pointer',
-      boxShadow: '0 6px 24px rgba(0,0,0,0.25)', animation: 'fadeInUp 0.3s ease',
+      zIndex: 80, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10,
     }}>
-      <Spinner size={13} />
-      {(lang === 'ru' ? 'ИНДЕКСАЦИЯ' : 'INDEXING')} · {pct}%
-    </button>
+      {open && (
+        <div style={{
+          ...glass, width: 300, maxWidth: 'calc(100vw - 36px)', borderRadius: 16,
+          padding: '16px 18px 6px', color: c.text, animation: 'fadeInUp 0.2s ease',
+        }}>
+          <div className="mono" style={{ fontSize: 11, letterSpacing: '0.18em', textTransform: 'uppercase',
+            color: c.textSubtle, marginBottom: 12 }}>
+            {ru ? 'Подготовка библиотеки' : 'Preparing library'}
+          </div>
+          {/* Core stages: only the ones still running/pending — finished ones are noise here. */}
+          {!coreDone && corePending.map(k => {
+            const st = stepStatus[k] || 'pending';
+            const pr = stageProgress[k] || { current: 0, total: 0 };
+            const stagePct = pr.total > 0 ? Math.round(100 * (pr.current || 0) / pr.total) : 0;
+            const count = (st === 'running' && pr.total > 1) ? `${pr.current || 0}/${pr.total}` : null;
+            return (
+              <OBStageBar key={k} c={c} label={ru ? WIZ_STAGE_LABELS[k].ru : WIZ_STAGE_LABELS[k].en}
+                state={st} pct={stagePct} count={count}
+                indeterminate={st === 'running' && !pr.total} />
+            );
+          })}
+          {(aiStages || coreDone) && (
+            <>
+              <div className="mono" style={{ display: 'flex', alignItems: 'center', gap: 9,
+                margin: `${coreDone ? 0 : 8}px 0 10px`, fontSize: 11, letterSpacing: '0.2em',
+                textTransform: 'uppercase', color: '#c3b8ff' }}>
+                ✨ {ru ? 'С помощью гуру' : 'With the guru'}
+              </div>
+              <GuruStagesFromSse ru={ru} c={c} aiStages={aiStages} />
+            </>
+          )}
+        </div>
+      )}
+      <button onClick={() => setOpen(o => !o)} className="mono" style={{
+        ...glass, display: 'flex', alignItems: 'center', gap: 10, padding: '10px 16px', borderRadius: 999,
+        color: c.text, fontSize: 12, letterSpacing: '0.08em', cursor: 'pointer',
+        animation: 'fadeInUp 0.3s ease',
+      }}>
+        <Spinner size={13} />
+        {pillLabel}
+      </button>
+    </div>
   );
 }
 
@@ -17943,11 +18013,13 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
       )}
 
       {/* Background indexing indicator: the job started in Settings (or was
-          resumed after a reload) keeps reporting while the panel is closed. */}
+          resumed after a reload) keeps reporting while the panel is closed.
+          Click expands an in-place popover with the live tasks (running core
+          stages + guru AI tasks) instead of reopening Settings. */}
       {indexingJob.status === 'running' && !settingsOpen && (
-        <IndexingStatusPill isDark={isDark} lang={lang}
+        <IndexingStatusDock isDark={isDark} lang={lang}
           stepStatus={indexingJob.stepStatus} stageProgress={indexingJob.stageProgress}
-          onClick={() => setSettingsOpen(true)} />
+          aiStages={indexingJob.aiStages} />
       )}
 
       {toast && (

@@ -80,7 +80,7 @@ async def fetch_genius_facts_for_song(
 async def fetch_genius_facts_for_songs(
     songs: List[Tuple[str, str]],
     collection_name: str,
-    delay: float = 0.5,
+    delay: float = 0.3,
     progress_callback: Optional[Callable[[int, int, str, bool], None]] = None,
 ) -> Dict[str, Tuple[Optional[str], Optional[str]]]:
     """Fetch Genius facts for multiple songs sequentially with delay between requests.
