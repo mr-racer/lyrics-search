@@ -2597,7 +2597,7 @@ function LyricsSearchPath({ isDark, lang, aiActive, onSubmit, compact=false }) {
         <span aria-hidden="true" style={{ color:kicker, flex:'none', display:'flex' }}>
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-5.5-5.5"/></svg>
         </span>
-        <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)}
+        <input type="search" enterKeyHint="search" autoComplete="off" autoCorrect="off" spellCheck={false} ref={inputRef} value={q} onChange={e => setQ(e.target.value)}
           onFocus={() => setFocus(true)} onBlur={() => setFocus(false)}
           onKeyDown={e => { if (e.key === 'Enter') submit(); }}
           placeholder={lang==='ru'?'строчка из песни…':'a line from the lyrics…'}
@@ -2926,7 +2926,7 @@ function SpotlightSearch({ open, onClose, isDark, lang, onPlayTrack, onAddToPlay
             ? '0 30px 80px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.14)'
             : '0 26px 60px rgba(46,36,86,.22), inset 0 1px 0 rgba(255,255,255,.95)' }}>
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke={c.textMuted} strokeWidth="2" strokeLinecap="round" style={{ flex:'none' }}><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-          <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)} onKeyDown={onInputKey}
+          <input type="search" enterKeyHint="search" autoComplete="off" autoCorrect="off" spellCheck={false} ref={inputRef} value={q} onChange={e => setQ(e.target.value)} onKeyDown={onInputKey}
             placeholder={lang==='ru'?'название, артист или альбом…':'song, artist or album…'}
             aria-label={lang==='ru'?'Найти песню':'Find a song'}
             style={{ flex:1, minWidth:0, background:'transparent', border:0, outline:'none',
@@ -4652,6 +4652,7 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-5.5-5.5"/></svg>
                 </div>
                 <input
+                  type="search" enterKeyHint="search" autoComplete="off" autoCorrect="off" spellCheck={false}
                   value={searchQuery} onChange={e=>setSearchQuery(e.target.value)}
                   onKeyDown={e=>e.key==='Enter'&&handleSearch()}
                   placeholder={lang==='ru'?'Опишите, что ищете — текст, настроение, жанр…':'Describe what you want — lyrics, mood, genre…'}
@@ -6617,6 +6618,7 @@ function CatalogSearchBar({ value, onChange, isDark, lang, loading }) {
   return (
     <div style={{ position:'relative' }}>
       <input
+        type="search" enterKeyHint="search" autoComplete="off" autoCorrect="off" spellCheck={false}
         value={value}
         onChange={e => onChange(e.target.value)}
         placeholder={lang==='ru' ? 'Поиск: песня, альбом или исполнитель…' : 'Search: song, album or artist…'}
@@ -9886,7 +9888,7 @@ function InstanceAISettings({ isDark, lang, showToast }) {
           </div>
           <div>
             {label(ru ? 'API-КЛЮЧ · ПУСТО = НЕ МЕНЯТЬ' : 'API KEY · BLANK = KEEP')}
-            <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)}
+            <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} autoComplete="off"
               placeholder={hasKey ? (ru ? 'ключ задан · ••••••' : 'key set · ••••••') : (ru ? 'обычно не нужен локально' : 'usually not needed locally')}
               style={inputStyle} />
           </div>
@@ -10369,7 +10371,7 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
                 {isOwner && (
                   <>
                     {fieldLabel(lang==='ru'?'API-КЛЮЧ · ОСТАВЬТЕ ПУСТЫМ, ЧТОБЫ НЕ МЕНЯТЬ':'API KEY · LEAVE BLANK TO KEEP')}
-                    <input type="password" value={llmKey} onChange={e=>setLlmKey(e.target.value)}
+                    <input type="password" value={llmKey} onChange={e=>setLlmKey(e.target.value)} autoComplete="off"
                       placeholder={lang==='ru'?'для локального сервера обычно не нужен':'usually not needed for a local server'}
                       style={{ ...inputStyle, marginBottom:14 }} />
                   </>
@@ -12125,6 +12127,18 @@ function LyricsBackFace({
   const headingColor = isDark ? '#666' : '#8a8275';
   const bodyColor    = isDark ? '#d8d4c8' : '#2a2620';
 
+  // One-time hint that lines are tappable (localStorage-backed, same pattern
+  // as the cover-flip hint). Auto-dismissed the first time a line is expanded.
+  const [explainHintSeen, setExplainHintSeen] = useState(() => {
+    try { return localStorage.getItem('musix_hint_lyric_explain') === '1'; } catch { return true; }
+  });
+  useEffect(() => {
+    if (!explainHintSeen && expandedLines && expandedLines.size > 0) {
+      setExplainHintSeen(true);
+      try { localStorage.setItem('musix_hint_lyric_explain', '1'); } catch {}
+    }
+  }, [expandedLines, explainHintSeen]);
+
   return (
     <div
       ref={scrollRef}
@@ -12152,6 +12166,19 @@ function LyricsBackFace({
         {title} · {lang === 'ru' ? 'ТЕКСТ' : 'LYRICS'}
       </div>
 
+      {lyrics && aiActive && !explainHintSeen && (
+        <div style={{
+          display: 'inline-flex', alignItems: 'center', gap: 8,
+          fontFamily: "'Geist', 'Inter', system-ui, sans-serif",
+          fontSize: 12.5, lineHeight: 1.4, color: isDark ? 'rgba(216,204,255,.85)' : '#4a3a86',
+          background: isDark ? 'rgba(124,91,255,.10)' : 'rgba(124,91,255,.08)',
+          border: `1px solid ${isDark ? 'rgba(124,91,255,.30)' : 'rgba(124,91,255,.28)'}`,
+          borderRadius: 12, padding: '8px 12px', marginBottom: 14,
+        }}>
+          <span aria-hidden="true">✨</span>
+          {lang === 'ru' ? 'Нажми на строку — гуру объяснит, что за ней стоит' : 'Tap a line — the guru explains what stands behind it'}
+        </div>
+      )}
       {lyrics ? (
         <div style={{ whiteSpace: 'pre-wrap' }}>
           {lyrics.split('\n').map((line, i) => (
@@ -12967,13 +12994,13 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, showToast }) {
               className="pill-v3"
               aria-label={lang === 'ru' ? 'Новый чат' : 'New chat'}
               title={lang === 'ru' ? 'Новый чат' : 'New chat'}
-              style={{ padding: '3px 9px', fontSize: '13px', cursor: 'pointer' }}>↺</button>
+              style={{ minWidth: 38, minHeight: 34, padding: '3px 9px', fontSize: '14px', cursor: 'pointer' }}>↺</button>
           )}
           <button onClick={onClose}
             className="pill-v3"
             aria-label={lang === 'ru' ? 'Закрыть' : 'Close'}
             title={lang === 'ru' ? 'Закрыть' : 'Close'}
-            style={{ padding: '3px 9px', fontSize: '13px', cursor: 'pointer' }}>✕</button>
+            style={{ minWidth: 38, minHeight: 34, padding: '3px 9px', fontSize: '14px', cursor: 'pointer' }}>✕</button>
         </div>
 
         {/* Messages — or, when the chat is empty, a hero state with a
@@ -13043,14 +13070,15 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, showToast }) {
           ))}
         </div>
 
-        {/* Input */}
+        {/* Input — bottom padding clears the home indicator on notched phones */}
         <div style={{
           display: 'flex', gap: '8px', alignItems: 'center',
-          padding: '10px 18px 12px', flexShrink: 0,
+          padding: '10px 18px calc(12px + env(safe-area-inset-bottom, 0px))', flexShrink: 0,
         }}>
           <input
             ref={inputRef}
             className="tc-input"
+            enterKeyHint="send" autoComplete="off"
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
@@ -13068,7 +13096,7 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, showToast }) {
             className={sending || !input.trim() ? '' : 'cta-v3'}
             aria-label={lang === 'ru' ? 'Отправить' : 'Send'}
             style={{
-              width: '36px', height: '36px', borderRadius: '10px', padding: 0, flexShrink: 0,
+              width: '44px', height: '44px', borderRadius: '12px', padding: 0, flexShrink: 0,
               background: (sending || !input.trim()) ? (isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)') : undefined,
               color: (sending || !input.trim()) ? c.textSubtle : 'white',
               cursor: (sending || !input.trim()) ? 'not-allowed' : 'pointer',
@@ -13085,6 +13113,10 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, showToast }) {
 }
 
 // ─── InlineLyricExplain — per-line draw-under explanation panel ──────────────
+// Genius-style interaction: the WHOLE line is the tap target (a hover-only ✨
+// was undiscoverable — hover doesn't exist on touch, and the bare icon carried
+// no meaning). The sparkle is now a persistent, dimmed indicator at the line's
+// edge; hover/expanded states light it up. Row toggles on click/Enter/Space.
 function InlineLyricExplain({
   line, lineIdx, expandedLines, explainStates,
   onToggle, isDark, aiActive, lang,
@@ -13093,6 +13125,7 @@ function InlineLyricExplain({
   const [hovered, setHovered] = useState(false);
   const isExpanded = expandedLines.has(lineIdx);
   const state = explainStates.get(lineIdx);
+  const interactive = !!(aiActive && line.trim());
 
   const handleClick = (e) => {
     e.stopPropagation();
@@ -13105,20 +13138,34 @@ function InlineLyricExplain({
       onMouseLeave={() => setHovered(false)}
       style={{ position: 'relative', padding: '2px 0' }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+      <div
+        onClick={interactive ? handleClick : undefined}
+        role={interactive ? 'button' : undefined}
+        tabIndex={interactive ? 0 : undefined}
+        aria-expanded={interactive ? isExpanded : undefined}
+        aria-label={interactive ? (lang === 'ru' ? `Объяснить строку: ${line}` : `Explain line: ${line}`) : undefined}
+        onKeyDown={interactive ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick(e); } } : undefined}
+        style={{
+          display: 'flex', alignItems: 'center', gap: '8px',
+          cursor: interactive ? 'pointer' : 'default',
+          margin: '0 -8px', padding: '2px 8px', borderRadius: 8,
+          background: (interactive && (hovered || isExpanded))
+            ? (isDark ? 'rgba(124,91,255,.10)' : 'rgba(124,91,255,.08)')
+            : 'transparent',
+          transition: 'background 140ms ease',
+        }}
+      >
         <span style={{ flex: 1 }}>{line}</span>
-        {aiActive && line.trim() && (hovered || isExpanded) && (
-          <button
-            onClick={handleClick}
-            title={isExpanded ? (lang === 'ru' ? 'Свернуть' : 'Collapse') : (lang === 'ru' ? 'Объяснить эту строку' : 'Explain this line')}
+        {interactive && (
+          <span
+            aria-hidden="true"
             style={{
-              background: 'none', border: 'none', cursor: 'pointer',
               color: isExpanded ? c.accent : c.textSubtle,
-              fontSize: '14px', padding: '2px 6px',
-              opacity: isExpanded ? 1 : 0.7,
-              transition: 'opacity 120ms',
+              fontSize: '13px', lineHeight: 1, flex: 'none',
+              opacity: isExpanded ? 1 : (hovered ? 0.9 : 0.32),
+              transition: 'opacity 140ms',
             }}
-          >✨</button>
+          >✨</span>
         )}
       </div>
       {isExpanded && state && (
@@ -14153,6 +14200,12 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
   const [drawerOpen, setDrawerOpen] = useState(false);
   // Close the drawer whenever the playing track changes
   useEffect(() => { setDrawerOpen(false); }, [currentTrack?.track_id]);
+
+  // Android back / swipe-back closes the mobile overlays instead of leaving
+  // the player section (same history contract as Settings). Desktop keeps its
+  // usual behavior — the chat hook is gated to mobile.
+  useHistoryOverlay(queueOpen, () => setQueueOpen(false), 'queue');
+  useHistoryOverlay(drawerOpen && isMobile, () => setDrawerOpen(false), 'trackchat');
 
   // Inline lyric explain state — per-line expansion + fetched explanations
   const [expandedLines, setExpandedLines] = useState(new Set());
@@ -15262,7 +15315,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
             {isMobile && (
               <div style={{ display:'flex', justifyContent:'flex-end', flexShrink:0 }}>
                 <button type="button" onClick={() => setQueueOpen(false)} aria-label={lang==='ru'?'Закрыть':'Close'}
-                  style={{ width:40, height:40, borderRadius:'50%', display:'grid', placeItems:'center', background:'transparent', border:0, cursor:'pointer', color:pText }}>
+                  style={{ width:44, height:44, borderRadius:'50%', display:'grid', placeItems:'center', background:'transparent', border:0, cursor:'pointer', color:pText }}>
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
                 </button>
               </div>
@@ -16624,6 +16677,9 @@ function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
             type="email" required autoFocus
             className="login-input"
             placeholder="email"
+            autoComplete="email" inputMode="email"
+            autoCapitalize="none" autoCorrect="off" spellCheck={false}
+            enterKeyHint="next"
             value={email}
             onChange={e => setEmail(e.target.value)}
           />
@@ -16631,6 +16687,8 @@ function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
             type="password" required
             className="login-input"
             placeholder={ru ? 'пароль' : 'password'}
+            autoComplete={tab === 'register' ? 'new-password' : 'current-password'}
+            enterKeyHint={tab === 'register' ? 'next' : 'go'}
             value={password}
             onChange={e => setPassword(e.target.value)}
           />
@@ -16639,6 +16697,9 @@ function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
               type="text" required
               className="login-input"
               placeholder={ru ? 'инвайт-код (12 символов)' : 'invite code (12 chars)'}
+              autoComplete="one-time-code"
+              autoCapitalize="characters" autoCorrect="off" spellCheck={false}
+              enterKeyHint="go"
               value={invite}
               onChange={e => setInvite(e.target.value)}
               maxLength={12}
@@ -16928,7 +16989,7 @@ function GuideCarousel({ isDark, lang, onClose }) {
   const navBtn = (dir) => (
     <button onClick={() => go(dir)} disabled={dir === -1 && idx === 0}
       aria-label={dir === 1 ? (ru?'Дальше':'Next') : (ru?'Назад':'Back')}
-      className="pill-v3" style={{ width:36, height:36, padding:0, borderRadius:'50%',
+      className="pill-v3" style={{ width:42, height:42, padding:0, borderRadius:'50%',
         display:'grid', placeItems:'center', flexShrink:0,
         opacity: dir === -1 && idx === 0 ? 0.35 : 1,
         cursor: dir === -1 && idx === 0 ? 'default' : 'pointer' }}>
@@ -16969,7 +17030,7 @@ function GuideCarousel({ isDark, lang, onClose }) {
             {(ru ? 'КАК ПОЛЬЗОВАТЬСЯ' : 'HOW IT WORKS') + ` · ${idx + 1}/${slides.length}`}
           </div>
           <button onClick={onClose} aria-label={ru?'Закрыть':'Close'} className="pill-v3" style={{
-            width:30, height:30, padding:0, borderRadius:'50%', display:'grid', placeItems:'center' }}>
+            width:40, height:40, padding:0, borderRadius:'50%', display:'grid', placeItems:'center' }}>
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
           </button>
         </div>
@@ -17067,7 +17128,7 @@ function BottomTabBar({ section, onNav, isDark, lang }) {
               transition:'color .18s ease', minWidth:0 }}>
             <span style={{ display:'flex' }}>{item.icon(active)}</span>
             <span style={{ fontFamily:"'Geist', 'Inter', system-ui, sans-serif", fontWeight:600,
-              fontSize:9, letterSpacing:'0.03em', whiteSpace:'nowrap', overflow:'hidden',
+              fontSize:10, letterSpacing:'0.02em', whiteSpace:'nowrap', overflow:'hidden',
               textOverflow:'ellipsis', maxWidth:'100%' }}>{item.label}</span>
           </button>
         );
@@ -17099,7 +17160,7 @@ function MiniPlayerBar({ track, audio, isDark, lang, onOpen, onPrev, onNext, onA
 
   return (
     <div className="mobile-miniplayer" onClick={onOpen} style={{
-      flexShrink:0, display:'flex', alignItems:'center', gap:10, padding:'7px 12px',
+      flexShrink:0, display:'flex', alignItems:'center', gap:6, padding:'7px 10px',
       background: barBg, borderTop:`1px solid ${topBorder}`,
       backdropFilter:'blur(18px) saturate(1.1)', WebkitBackdropFilter:'blur(18px) saturate(1.1)',
       cursor:'pointer', position:'relative', zIndex:31,
@@ -17114,21 +17175,23 @@ function MiniPlayerBar({ track, audio, isDark, lang, onOpen, onPrev, onNext, onA
       </div>
       <div style={{ flex:1, minWidth:0, display:'flex', flexDirection:'column', gap:2 }}>
         <div style={{ fontSize:13, fontWeight:600, color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{title}</div>
-        <div style={{ fontSize:11, color:c.textMuted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{artist}</div>
+        <div style={{ fontSize:11.5, color:c.textMuted, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{artist}</div>
       </div>
+      {/* 44×44 targets (HIG minimum) — these four are the most-tapped mobile
+          controls; 34×40 produced constant mis-taps between neighbours. */}
       <button title={lang==='ru'?'В плейлист':'Add to playlist'}
         onClick={(e)=>{ e.stopPropagation(); onAddToPlaylist && onAddToPlaylist(track?.track_id, e.currentTarget); }}
-        style={{ flexShrink:0, width:34, height:40, display:'grid',
+        style={{ flexShrink:0, width:44, height:44, display:'grid',
           placeItems:'center', background:'transparent', border:0, color:c.textMuted, cursor:'pointer', fontSize:19, lineHeight:1 }}>＋</button>
       <button title={lang==='ru'?'Предыдущий':'Previous'}
         onClick={(e)=>{ e.stopPropagation(); onPrev && onPrev(); }}
-        style={{ flexShrink:0, width:34, height:40, display:'grid',
+        style={{ flexShrink:0, width:44, height:44, display:'grid',
           placeItems:'center', background:'transparent', border:0, color:c.text, cursor:'pointer' }}>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="19 20 9 12 19 4"/><rect x="5" y="4" width="2" height="16"/></svg>
       </button>
       <button title={isPlaying ? (lang==='ru'?'Пауза':'Pause') : (lang==='ru'?'Играть':'Play')}
         onClick={(e)=>{ e.stopPropagation(); audio?.togglePlay?.(); }}
-        style={{ flexShrink:0, width:40, height:40, borderRadius:20, display:'grid',
+        style={{ flexShrink:0, width:44, height:44, borderRadius:22, display:'grid',
           placeItems:'center', background:'transparent', border:0, color:c.text, cursor:'pointer' }}>
         {isPlaying
           ? <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
@@ -17136,7 +17199,7 @@ function MiniPlayerBar({ track, audio, isDark, lang, onOpen, onPrev, onNext, onA
       </button>
       <button title={lang==='ru'?'Следующий':'Next'}
         onClick={(e)=>{ e.stopPropagation(); onNext && onNext(); }}
-        style={{ flexShrink:0, width:34, height:40, display:'grid',
+        style={{ flexShrink:0, width:44, height:44, display:'grid',
           placeItems:'center', background:'transparent', border:0, color:c.text, cursor:'pointer' }}>
         <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 4 15 12 5 20"/><rect x="17" y="4" width="2" height="16"/></svg>
       </button>
@@ -17211,8 +17274,13 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
 
   // Reflect theme on <body data-theme> so CSS class overrides (.panel-v3, .pill-v3,
   // .mono-label, .ask-ai-btn, .atmospheric-bg) can target light/dark independently.
+  // The <meta theme-color> follows too — index.html ships the dark value, and
+  // without this the phone's browser chrome / PWA status bar stays black in
+  // the light theme.
   useEffect(() => {
     document.body.setAttribute('data-theme', isDark ? 'dark' : 'light');
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', isDark ? '#0d0d10' : '#f2f1f6');
   }, [isDark]);
 
   // SPA routing: the initial section comes from the URL (deep links / F5).
@@ -17409,6 +17477,9 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
   // Back gesture closes the settings overlay instead of leaving the section
   // (spec phase 3). SettingsPanel's own ✕ pops the entry it pushed.
   useHistoryOverlay(settingsOpen, () => setSettingsOpen(false), 'settings');
+  // Android back also closes the global overlays instead of exiting the app.
+  useHistoryOverlay(spotlightOpen, () => setSpotlightOpen(false), 'spotlight');
+  useHistoryOverlay(!!addToPopoverInfo, () => setAddToPopoverInfo(null), 'addpl');
 
   // Global keyboard shortcuts (Task 11 + Task 12)
   useGlobalKeyboardShortcuts({
@@ -18075,7 +18146,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
             aria-label={lang==='ru'?'Свернуть плеер':'Minimize player'}
             title={lang==='ru'?'Свернуть':'Close'} style={{
               position:'absolute', top:'calc(env(safe-area-inset-top, 0px) + 10px)', left:12, zIndex:50,
-              width:40, height:40, borderRadius:20, display:'grid', placeItems:'center',
+              width:44, height:44, borderRadius:22, display:'grid', placeItems:'center',
               background: isDark ? 'rgba(20,20,26,0.55)' : 'rgba(255,255,255,0.62)',
               backdropFilter:'blur(10px)', WebkitBackdropFilter:'blur(10px)',
               border:`1px solid ${isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.10)'}`,
@@ -18720,12 +18791,14 @@ function SetupWizard({ onComplete }) {
       </p>
       <div className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'8px' }}>EMAIL</div>
       <input type="email" autoFocus value={email} onChange={e => setEmail(e.target.value)}
+        autoComplete="email" inputMode="email" autoCapitalize="none" autoCorrect="off" spellCheck={false} enterKeyHint="next"
         className={ske('inset', isDark)}
         style={{ width:'100%', padding:'11px 13px', borderRadius:'10px', border:'none', color:c.text, fontSize:'15px', outline:'none', marginBottom:'14px' }} />
       <div className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'8px' }}>
         {ru ? 'ПАРОЛЬ · МИН. 6 СИМВОЛОВ' : 'PASSWORD · MIN 6 CHARS'}
       </div>
       <input type="password" value={password} onChange={e => setPassword(e.target.value)}
+        autoComplete="new-password" enterKeyHint="go"
         className={ske('inset', isDark)}
         style={{ width:'100%', padding:'11px 13px', borderRadius:'10px', border:'none', color:c.text, fontSize:'15px', outline:'none', marginBottom:'18px' }} />
 
@@ -18912,7 +18985,7 @@ function SetupWizard({ onComplete }) {
       <div className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'8px' }}>
         {ru ? 'API-КЛЮЧ · НЕОБЯЗАТЕЛЬНО' : 'API KEY · OPTIONAL'}
       </div>
-      <input type="password" value={llmKey} onChange={e => setLlmKey(e.target.value)}
+      <input type="password" value={llmKey} onChange={e => setLlmKey(e.target.value)} autoComplete="off"
         placeholder={ru ? 'для локального сервера обычно не нужен' : 'usually not needed for a local server'} disabled={aiBusy}
         className={ske('inset', isDark)} style={{ width:'100%', padding:'11px 13px', borderRadius:'10px', border:'none',
           color:c.text, fontSize:'14px', outline:'none', fontFamily:"'Geist', 'Inter', system-ui, sans-serif", marginBottom:'14px' }} />
@@ -19002,7 +19075,7 @@ function SetupWizard({ onComplete }) {
         className={ske('inset', isDark)} style={{ width:'100%', padding:'11px 13px', borderRadius:'10px', border:'none',
           color:c.text, fontSize:'14px', outline:'none', fontFamily:"'Geist', 'Inter', system-ui, sans-serif", marginBottom:'14px' }} />
       <div className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'8px' }}>{ru ? 'API-КЛЮЧ · НЕОБЯЗАТЕЛЬНО' : 'API KEY · OPTIONAL'}</div>
-      <input type="password" value={llmKey} onChange={e => setLlmKey(e.target.value)}
+      <input type="password" value={llmKey} onChange={e => setLlmKey(e.target.value)} autoComplete="off"
         placeholder={ru ? 'для локального сервера обычно не нужен' : 'usually not needed for a local server'} disabled={policyBusy}
         className={ske('inset', isDark)} style={{ width:'100%', padding:'11px 13px', borderRadius:'10px', border:'none',
           color:c.text, fontSize:'14px', outline:'none', fontFamily:"'Geist', 'Inter', system-ui, sans-serif", marginBottom:'14px' }} />
