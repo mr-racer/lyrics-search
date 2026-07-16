@@ -334,11 +334,12 @@ _SCHEMA_SQL: Tuple[str, ...] = (
     # token so re-imports / enrichment don't require re-login. The token blob is
     # Fernet-encrypted by app.services.yandex.token_store — never store plaintext.
     """CREATE TABLE IF NOT EXISTS yandex_accounts (
-        account_id  TEXT PRIMARY KEY REFERENCES users(id),
-        enc_token   TEXT NOT NULL,
-        yandex_uid  TEXT,
-        expires_at  REAL,
-        linked_at   REAL NOT NULL
+        account_id   TEXT PRIMARY KEY REFERENCES users(id),
+        enc_token    TEXT NOT NULL,
+        yandex_uid   TEXT,
+        yandex_login TEXT,
+        expires_at   REAL,
+        linked_at    REAL NOT NULL
     )""",
     # Yandex Music import: dedup + per-track report. (account_id, yandex_track_id)
     # is unique so a re-run skips already-imported tracks; status/reason drive the
@@ -487,6 +488,12 @@ class MetadataDB:
             cls._ensure_columns(conn, "artists", {"mbid": "TEXT"})
             # AudioDB enrichment columns (idempotent — see _AUDIODB_COLUMNS).
             cls._migrate_audiodb_columns(conn)
+
+        # Yandex Music import: display login (not a secret — the encrypted
+        # token blob already holds the actual credentials) for older DBs
+        # created before this column existed.
+        if "yandex_accounts" in existing_tables:
+            cls._ensure_columns(conn, "yandex_accounts", {"yandex_login": "TEXT"})
 
         # AI Mode infrastructure (Plan 6) — per-collection opt-in for live-LLM
         # features. DEFAULT 1 means existing rows immediately report on,
@@ -1156,6 +1163,46 @@ class MetadataDB:
             (collection_name,),
         ).fetchone()
         return (artist_row[0] or 0) + (song_row[0] or 0)
+
+    # ── Fact relations (producers/samples — GLiNER2+LLM pipeline) ──
+
+    @classmethod
+    def set_song_relations(cls, slug: str, producers_json: str, samples_json: str) -> None:
+        """Persist the producer/sample extraction result for one song.
+
+        ``producers_json``/``samples_json`` are pre-serialized JSON strings
+        (see ``app.services.fact_relations.service.process_song_facts``)
+        written straight into the ``songs.producers``/``songs.samples_json``
+        columns. No-op (0 rows updated) if ``slug`` doesn't exist yet.
+        """
+        conn = cls._connect()
+        conn.execute(
+            "UPDATE songs SET producers = ?, samples_json = ? WHERE slug = ?",
+            (producers_json, samples_json, slug),
+        )
+        conn.commit()
+
+    @classmethod
+    def get_songs_needing_relations(cls, collection_name: str) -> List[Tuple[str, str, str]]:
+        """Return ``(slug, title, artist_slug)`` for songs visible to
+        ``collection_name`` that have facts but no producers/samples
+        extraction yet.
+
+        For a future backfill pass over songs indexed before this pipeline
+        existed. Idempotent: songs that already have a non-null
+        ``producers`` or ``samples_json`` are excluded.
+        """
+        conn = cls._connect()
+        rows = conn.execute(
+            """SELECT DISTINCT s.slug, s.title, s.artist_slug
+               FROM songs s
+               JOIN fact_visibility fv ON fv.kind = 'song' AND fv.slug = s.slug
+               JOIN song_facts sf ON sf.song_slug = s.slug AND sf.lang = 'en'
+               WHERE fv.collection_name = ?
+                 AND s.producers IS NULL AND s.samples_json IS NULL""",
+            (collection_name,),
+        ).fetchall()
+        return [(r[0], r[1], r[2]) for r in rows]
 
     # ── Random facts ──
 
@@ -3095,20 +3142,27 @@ class MetadataDB:
     def save_yandex_account(
         cls, *, account_id: str, enc_token: str,
         yandex_uid: str | None = None, expires_at: float | None = None,
+        yandex_login: str | None = None,
     ) -> None:
-        """Upsert the encrypted Yandex token for an account (re-link overwrites)."""
+        """Upsert the encrypted Yandex token for an account (re-link overwrites).
+
+        ``yandex_login`` is the display login/name resolved at link time — it
+        is not a secret (unlike the token blob) and is stored in plaintext so
+        the UI can show which account is linked without decrypting anything.
+        """
         import time
         conn = cls._connect()
         conn.execute(
             """INSERT INTO yandex_accounts
-                 (account_id, enc_token, yandex_uid, expires_at, linked_at)
-               VALUES (?, ?, ?, ?, ?)
+                 (account_id, enc_token, yandex_uid, yandex_login, expires_at, linked_at)
+               VALUES (?, ?, ?, ?, ?, ?)
                ON CONFLICT(account_id) DO UPDATE SET
                  enc_token = excluded.enc_token,
                  yandex_uid = excluded.yandex_uid,
+                 yandex_login = excluded.yandex_login,
                  expires_at = excluded.expires_at,
                  linked_at = excluded.linked_at""",
-            (account_id, enc_token, yandex_uid, expires_at, time.time()),
+            (account_id, enc_token, yandex_uid, yandex_login, expires_at, time.time()),
         )
         conn.commit()
 
@@ -3116,7 +3170,7 @@ class MetadataDB:
     def get_yandex_account(cls, account_id: str) -> dict | None:
         conn = cls._connect()
         row = conn.execute(
-            """SELECT account_id, enc_token, yandex_uid, expires_at, linked_at
+            """SELECT account_id, enc_token, yandex_uid, yandex_login, expires_at, linked_at
                FROM yandex_accounts WHERE account_id = ?""",
             (account_id,),
         ).fetchone()
@@ -3124,7 +3178,7 @@ class MetadataDB:
             return None
         return {
             "account_id": row[0], "enc_token": row[1], "yandex_uid": row[2],
-            "expires_at": row[3], "linked_at": row[4],
+            "yandex_login": row[3], "expires_at": row[4], "linked_at": row[5],
         }
 
     @classmethod

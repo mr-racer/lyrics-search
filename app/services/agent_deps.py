@@ -6,6 +6,7 @@ music library: search, filter resolution, and LLM configuration.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 
 from app.domain.models import SearchFilters, TrackHit
@@ -63,26 +64,33 @@ class SearchDeps:
         lyrics_db = self.service.lyrics_db
         collection = self.collection_name or lyrics_db.collection_name
 
-        seen: set[str] = set()
-        try:
-            offset = None
-            for _ in range(100):  # safety cap: max 100 pages × 128 = 12800 entries
-                points, offset = lyrics_db.qdrant_client.scroll(
-                    collection_name=collection,
-                    limit=128,
-                    offset=offset,
-                    with_payload=[filter_key],
-                    with_vectors=False,
-                )
-                for pt in points:
-                    val = (pt.payload or {}).get(filter_key)
-                    if val:
-                        seen.add(str(val))
-                if offset is None:
-                    break
-        except Exception:
-            pass  # collection unavailable — return empty
+        def _scan() -> set[str]:
+            # Blocking Qdrant scroll (up to 100 pages × 128 points). On a large
+            # library the cold scan takes real time, so it must run off the
+            # event loop — otherwise it stalls concurrent audio streaming and
+            # other requests.
+            found: set[str] = set()
+            try:
+                offset = None
+                for _ in range(100):  # safety cap: max 100 pages × 128 = 12800 entries
+                    points, offset = lyrics_db.qdrant_client.scroll(
+                        collection_name=collection,
+                        limit=128,
+                        offset=offset,
+                        with_payload=[filter_key],
+                        with_vectors=False,
+                    )
+                    for pt in points:
+                        val = (pt.payload or {}).get(filter_key)
+                        if val:
+                            found.add(str(val))
+                    if offset is None:
+                        break
+            except Exception:
+                pass  # collection unavailable — return empty
+            return found
 
+        seen = await asyncio.to_thread(_scan)
         candidates = sorted(seen, key=str.lower)
         self._filter_cache[cache_key] = candidates
         return candidates

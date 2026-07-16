@@ -63,8 +63,14 @@ def save_token(
     refresh_token: str | None = None,
     expires_at: float | None = None,
     yandex_uid: str | None = None,
+    yandex_login: str | None = None,
 ) -> None:
-    """Encrypt and persist the token for ``account_id`` (re-link overwrites)."""
+    """Encrypt and persist the token for ``account_id`` (re-link overwrites).
+
+    ``yandex_login`` (display login/name, not a secret) is stored alongside
+    the encrypted blob in a plaintext column so the UI can show which account
+    is linked without decrypting anything.
+    """
     blob = json.dumps(
         {
             "access_token": access_token,
@@ -79,6 +85,7 @@ def save_token(
     MetadataDB.save_yandex_account(
         account_id=account_id, enc_token=enc,
         yandex_uid=yandex_uid, expires_at=expires_at,
+        yandex_login=yandex_login,
     )
 
 
@@ -104,6 +111,7 @@ def load_token(account_id: str) -> dict | None:
     # Surface the stored metadata alongside the decrypted secrets.
     blob.setdefault("yandex_uid", row.get("yandex_uid"))
     blob.setdefault("expires_at", row.get("expires_at"))
+    blob.setdefault("yandex_login", row.get("yandex_login"))
     return blob
 
 

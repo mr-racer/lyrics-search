@@ -61,6 +61,7 @@ async def link_status(current_user: User = Depends(get_current_user)) -> dict:
     return {
         "linked": row is not None,
         "yandex_uid": row.get("yandex_uid") if row else None,
+        "yandex_login": row.get("yandex_login") if row else None,
         "expires_at": row.get("expires_at") if row else None,
     }
 

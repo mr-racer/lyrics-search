@@ -96,11 +96,15 @@ def start_session(account_id: str) -> dict:
             if getattr(token, "expires_in", None):
                 expires_at = time.time() + float(token.expires_in)
 
-            # Best-effort: resolve the Yandex uid for display (non-fatal).
+            # Best-effort: resolve the Yandex uid + display login (non-fatal).
             yandex_uid = None
+            yandex_login = None
             try:
                 authed = build_client(token.access_token)
-                yandex_uid = str(authed.me.account.uid) if authed.me and authed.me.account else None
+                acc = authed.me.account if authed.me else None
+                yandex_uid = str(acc.uid) if acc else None
+                if acc is not None:
+                    yandex_login = getattr(acc, "login", None) or getattr(acc, "display_name", None)
             except Exception:
                 logger.debug("[yandex/auth] could not resolve yandex uid", exc_info=True)
 
@@ -110,6 +114,7 @@ def start_session(account_id: str) -> dict:
                 refresh_token=getattr(token, "refresh_token", None),
                 expires_at=expires_at,
                 yandex_uid=yandex_uid,
+                yandex_login=yandex_login,
             )
             _set(session_id, status="authorized", yandex_uid=yandex_uid)
         except Exception as e:  # noqa: BLE001 - report to the poller, don't crash

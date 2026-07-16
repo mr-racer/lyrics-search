@@ -1,5 +1,6 @@
 import React from 'react';
 import * as ReactDOM from 'react-dom/client';
+import { createPortal } from 'react-dom';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import './index.css';
@@ -2373,7 +2374,13 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
       // edge — hidden cut it at the box line, a hard vertical seam by the
       // play orb. 72px of slack lets the glow fade out naturally while still
       // clipping runaway content on short windows.
-      position:'relative', display:'flex', flexDirection:'column', flex:1, minHeight:0,
+      // Mobile: flex:none, NOT flex:1+minHeight:0 — inside the scrolling home
+      // column the hero used to SHRINK to its allotted share, and whatever
+      // overflowed (the unfolded wave settings, the vibes strip) painted
+      // straight over the lyrics-search box below through the 72px
+      // clip-margin. Sized by content, the column just scrolls instead.
+      position:'relative', display:'flex', flexDirection:'column',
+      flex: isMobile ? '0 0 auto' : 1, minHeight: isMobile ? undefined : 0,
       overflow:'clip', overflowClipMargin:'72px',
       padding: isMobile ? '4px 2px 4px' : '4px 0 0',
       animation:'fadeInUp .55s cubic-bezier(.22,.9,.3,1)',
@@ -2774,10 +2781,37 @@ function HeaderNowPlaying({ track, audio, isDark, lang, onOpenPlayer, playlist, 
 // of an overflow:hidden container, where an upward pop would be clipped.
 function HintBadge({ size = 20, label, ariaLabel, placement = 'up' }) {
   const px = Math.max(14, size);
+  const isMobile = useIsMobile();
+  const [open, setOpen] = useState(false);
+  const a11y = ariaLabel || (typeof label === 'string' ? label : 'Info');
+
+  // Mobile: the hover tooltip both can't hover and used to spill past the
+  // screen edge. Tap opens a bottom sheet instead (portal — the badge often
+  // sits inside overflow-clipped rows).
+  if (isMobile) {
+    return (
+      <span className="hint-badge" role="note" aria-label={a11y}
+        tabIndex={0} onClick={() => setOpen(true)}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(true); } }}>
+        <span className="hint-badge__dot" aria-hidden="true"
+          style={{ width: px, height: px, fontSize: Math.max(10, Math.round(px * 0.58)) }}>i</span>
+        {open && createPortal(
+          <div className="hint-sheet-scrim" onClick={(e) => { e.stopPropagation(); setOpen(false); }}>
+            <div className="hint-sheet" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+              <span className="hint-sheet__grip" aria-hidden="true" />
+              <div className="hint-sheet__body">{label}</div>
+            </div>
+          </div>,
+          document.body
+        )}
+      </span>
+    );
+  }
+
   return (
     <span className={`hint-badge${placement === 'down' ? ' hint-badge--down' : ''}`}
       tabIndex={0} role="note"
-      aria-label={ariaLabel || (typeof label === 'string' ? label : 'Info')}>
+      aria-label={a11y}>
       <span className="hint-badge__dot" aria-hidden="true"
         style={{ width: px, height: px, fontSize: Math.max(10, Math.round(px * 0.58)) }}>i</span>
       <span className="hint-badge__pop" role="tooltip">{label}</span>
@@ -2817,13 +2851,39 @@ function TasteButtonIcon({ kind, active, contribution = 0 }) {
   );
 }
 
+// ─── QueueNextBtn — «поставить следующим в очереди» ─────────────────────────
+// The one shared affordance for queueing from any track row/card. Visual
+// dress (className/style) is supplied by the call site so it matches the
+// sibling add-to-playlist «+» button there; the glyph (list + plus) and the
+// click contract (stopPropagation — row clicks play, this must not) are
+// fixed here. Renders nothing when the handler or track is absent, so call
+// sites can pass it through unconditionally.
+function QueueNextBtn({ track, onQueueNext, lang = 'ru', className, style, iconSize = 15 }) {
+  if (!onQueueNext || !track || !track.track_id) return null;
+  const tip = lang === 'ru' ? 'Следующим в очереди' : 'Play next in queue';
+  return (
+    <button type="button" className={className} style={style}
+      onClick={(e) => { e.stopPropagation(); onQueueNext(track); }}
+      title={tip} aria-label={tip}>
+      <svg width={iconSize} height={iconSize} viewBox="0 0 24 24" fill="none"
+        stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <line x1="4" y1="6" x2="14" y2="6" />
+        <line x1="4" y1="11" x2="14" y2="11" />
+        <line x1="4" y1="16" x2="10" y2="16" />
+        <line x1="17" y1="13" x2="17" y2="19" />
+        <line x1="14" y1="16" x2="20" y2="16" />
+      </svg>
+    </button>
+  );
+}
+
 // ─── SpotlightSearch — global find-and-play overlay (🔍 in the header, Ctrl/Cmd+K) ──
 // macOS-Spotlight-style: dim + blur under a centered glass bar; instant rows
 // from /library/browse. Click a row (or ↵) = play it with the other matches
 // queued behind; «+» = add to a playlist without playing; Tab / «ещё» hands
 // the query to the full search screen. One shared highlight pill slides
 // between rows (hover and ↑↓) with a light bounce — no per-row glow.
-function SpotlightSearch({ open, onClose, isDark, lang, onPlayTrack, onAddToPlaylist, onMore }) {
+function SpotlightSearch({ open, onClose, isDark, lang, onPlayTrack, onAddToPlaylist, onQueueNext, onMore, navigateToArtist }) {
   const c = useColors(isDark);
   const [q, setQ] = useState('');
   const [rows, setRows] = useState([]);
@@ -2849,7 +2909,9 @@ function SpotlightSearch({ open, onClose, isDark, lang, onPlayTrack, onAddToPlay
     if (term.length < 2) { setRows([]); setSearched(false); setHasMore(false); return; }
     let alive = true;
     const timer = setTimeout(() => {
-      apiFetch(`/library/browse?q=${encodeURIComponent(term)}&limit=9`)
+      // Same catalog engine as the library search: BM25F over songs/albums/
+      // artists with transliteration, so Spotlight matches names identically.
+      apiFetch(`/search/catalog?q=${encodeURIComponent(term)}&limit=9`)
         .then(d => {
           if (!alive) return;
           const list = Array.isArray(d) ? d : [];
@@ -2880,11 +2942,21 @@ function SpotlightSearch({ open, onClose, isDark, lang, onPlayTrack, onAddToPlay
 
   if (!open) return null;
 
-  const playRow = (i) => {
+  // Typed open: a song plays (queueing the other song hits behind it); an
+  // album or artist navigates to the artist page (where that album lives).
+  const openRow = (i) => {
     const r = rows[i];
     if (!r) return;
-    const hits = rows.map(t => ({ track: t, score: t.score || 0, matched_on: 'browse' }));
-    if (onPlayTrack) onPlayTrack(hits[i], hits);
+    if (r.type === 'song') {
+      const toHit = (x) => ({
+        track: { track_id: x.track_id, title: x.title, artist: x.artist, album: x.album, cover_art_path: x.cover_art_path },
+        score: x.score || 0, matched_on: 'catalog',
+      });
+      const songRows = rows.filter(x => x.type === 'song');
+      if (onPlayTrack) onPlayTrack(toHit(r), songRows.map(toHit));
+    } else if (r.artist_slug && navigateToArtist) {
+      navigateToArtist(r.artist_slug);
+    }
     if (onClose) onClose();
   };
   const goMore = () => {
@@ -2894,13 +2966,8 @@ function SpotlightSearch({ open, onClose, isDark, lang, onPlayTrack, onAddToPlay
   const onInputKey = (e) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); setActive(i => Math.min(rows.length - 1, i + 1)); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(i => Math.max(0, i - 1)); }
-    else if (e.key === 'Enter') { e.preventDefault(); playRow(active); }
+    else if (e.key === 'Enter') { e.preventDefault(); openRow(active); }
     else if (e.key === 'Tab') { e.preventDefault(); goMore(); }
-  };
-  const fmtDur = (s) => {
-    if (typeof s !== 'number' || !isFinite(s) || s <= 0) return null;
-    const m = Math.floor(s / 60), sec = Math.round(s % 60);
-    return `${m}:${String(sec).padStart(2, '0')}`;
   };
   const glass = {
     background: isDark
@@ -2948,46 +3015,45 @@ function SpotlightSearch({ open, onClose, isDark, lang, onPlayTrack, onAddToPlay
                     }} />
                   )}
                   {rows.map((r, i) => {
-                    const cover = homeCoverUrl(r.cover_art_path);
-                    const dur = fmtDur(r.duration);
-                    const sub = [r.artist, r.album ? `${lang==='ru'?'альбом ':''}${r.album}` : null, r.year || null]
-                      .filter(Boolean).join(' · ');
-                    return (
-                      <div key={r.track_id || i} ref={el => { rowRefs.current[i] = el; }}
-                        onMouseEnter={() => setActive(i)} onClick={() => playRow(i)}
-                        style={{ position:'relative', display:'flex', alignItems:'center', gap:12,
-                          padding:'11px 14px', borderRadius:12, cursor:'pointer' }}>
-                        <div style={{ width:44, height:44, borderRadius:8, overflow:'hidden', flex:'none',
-                          background:'linear-gradient(135deg,#4a3d78,#251d3f)',
-                          boxShadow:'0 6px 16px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.15)' }}>
-                          {cover && <img src={cover} alt="" loading="lazy" style={{ width:'100%', height:'100%', objectFit:'cover', display:'block' }} />}
-                        </div>
-                        <div style={{ minWidth:0, flex:1 }}>
-                          <div style={{ color:c.text, fontSize:14.5, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{r.title || '—'}</div>
-                          <div style={{ color:c.textMuted, fontSize:11.5, marginTop:2, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{sub}</div>
-                        </div>
-                        {r.genre && (
-                          <span className="mono" style={{ flex:'none', fontSize:9, letterSpacing:'.1em', color:isDark?'#a79cc9':'#6a5b96',
-                            border:`1px solid ${isDark?'rgba(167,156,201,.3)':'rgba(106,91,150,.3)'}`, borderRadius:6, padding:'3px 8px',
-                            maxWidth:130, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', textTransform:'uppercase' }}>{r.genre}</span>
+                    const key = `${r.type}-${r.track_id || r.artist_slug || ''}-${r.album || r.title || ''}-${i}`;
+                    // Songs can be added to a playlist; albums/artists can't (no track_id).
+                    const trailing = (
+                      <Fragment>
+                        {r.type === 'song' && (
+                          <button onClick={(e) => { e.stopPropagation(); onAddToPlaylist && onAddToPlaylist(r.track_id, e.currentTarget); }}
+                            title={lang==='ru'?'Добавить в плейлист':'Add to playlist'} className="spotlight-add"
+                            style={{ flex:'none', width:32, height:32, borderRadius:'50%', display:'grid', placeItems:'center',
+                              background:'linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.02))',
+                              boxShadow:'0 5px 12px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.16)',
+                              border:0, color:c.textMuted, fontSize:15, cursor:'pointer' }}>＋</button>
                         )}
-                        <span style={{ width:14, flex:'none' }} />
-                        {dur && <span className="mono" style={{ flex:'none', fontSize:10.5, letterSpacing:'.05em', color:isDark?'#a79cc9':'#6a5b96' }}>{dur}</span>}
-                        <button onClick={(e) => { e.stopPropagation(); onAddToPlaylist && onAddToPlaylist(r.track_id, e.currentTarget); }}
-                          title={lang==='ru'?'Добавить в плейлист':'Add to playlist'} className="spotlight-add"
-                          style={{ flex:'none', width:32, height:32, borderRadius:'50%', display:'grid', placeItems:'center',
-                            background:'linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.02))',
-                            boxShadow:'0 5px 12px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.16)',
-                            border:0, color:c.textMuted, fontSize:15, cursor:'pointer' }}>＋</button>
+                        {r.type === 'song' && (
+                          <QueueNextBtn track={r} onQueueNext={onQueueNext} lang={lang}
+                            className="spotlight-add"
+                            style={{ flex:'none', width:32, height:32, borderRadius:'50%', display:'grid', placeItems:'center',
+                              background:'linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.02))',
+                              boxShadow:'0 5px 12px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.16)',
+                              border:0, color:c.textMuted, cursor:'pointer' }} />
+                        )}
+                        <span className="mono" style={{ flex:'none', fontSize:9, textTransform:'uppercase', letterSpacing:'.08em', color:c.textSubtle }}>
+                          {catalogTypeLabel(r.type, lang)}
+                        </span>
                         <span className="mono" style={{ flex:'none', width:12, fontSize:9, color:'#9a7bff', opacity: i === active ? 1 : 0 }}>↵</span>
-                      </div>
+                      </Fragment>
+                    );
+                    return (
+                      <CatalogHitRow key={key} hit={r} isDark={isDark} lang={lang} compact
+                        rowRef={el => { rowRefs.current[i] = el; }}
+                        onMouseEnter={() => setActive(i)}
+                        onClick={() => openRow(i)}
+                        trailing={trailing} />
                     );
                   })}
                 </div>
                 <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:10,
                   padding:'9px 14px 4px', marginTop:6, borderTop:`1px solid ${isDark?'rgba(255,255,255,.05)':'rgba(0,0,0,.06)'}` }}>
                   <span className="mono" style={{ fontSize:9, letterSpacing:'.08em', color:c.textSubtle }}>
-                    {lang==='ru'?'↑↓ ВЫБОР · ↵ ИГРАТЬ · TAB — ВЕСЬ ПОИСК':'↑↓ SELECT · ↵ PLAY · TAB — FULL SEARCH'}
+                    {lang==='ru'?'↑↓ ВЫБОР · ↵ ОТКРЫТЬ · TAB — ВЕСЬ ПОИСК':'↑↓ SELECT · ↵ OPEN · TAB — FULL SEARCH'}
                   </span>
                   {hasMore && (
                     <button onClick={goMore} className="mono"
@@ -3702,7 +3768,7 @@ function Segmented({ value, onChange, options, isDark, size='md', style } = {}) 
 }
 
 // ─── SCORE BREAKDOWN TOOLTIP ──────────────────────────────────────────────────
-function ScoreBreakdownTooltip({ hit, breakdown, isDark, onPlay, onAddToPlaylist, lang }) {
+function ScoreBreakdownTooltip({ hit, breakdown, isDark, onPlay, onAddToPlaylist, onQueueNext, lang }) {
   const c = useColors(isDark);
   if (!breakdown && !hit) return null;
   const rows = breakdown ? [
@@ -3742,6 +3808,14 @@ function ScoreBreakdownTooltip({ hit, breakdown, isDark, onPlay, onAddToPlaylist
           style={{ padding:'4px 10px', fontSize:'11px', cursor:'pointer' }}
           title={lang === 'ru' ? 'Добавить в плейлист' : 'Add to playlist'}
         >＋ {lang === 'ru' ? 'В плейлист' : 'Add'}</button>
+        {onQueueNext && (
+          <button
+            className="pill-v3"
+            onClick={e => { e.stopPropagation(); onQueueNext(hit.track || hit); }}
+            style={{ padding:'4px 10px', fontSize:'11px', cursor:'pointer' }}
+            title={lang === 'ru' ? 'Следующим в очереди' : 'Play next in queue'}
+          >⤴ {lang === 'ru' ? 'В очередь' : 'Queue'}</button>
+        )}
       </div>
     </div>
   );
@@ -4216,7 +4290,7 @@ function LyricSnippet({ lyrics, query, matchedLine, lang, c }) {
 }
 
 // ─── SEARCH SECTION (redesigned) ──────────────────────────────────────────────
-function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, onAddToPlaylist, searchHandoff, onSearchHandoffDone }) {
+function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, onAddToPlaylist, onQueueNext, searchHandoff, onSearchHandoffDone }) {
   const c = useColors(isDark);
   const aiActive = !!(aiStatus && aiStatus.aiActive);
   const isMobileChat = useIsMobile();  // compact best-hit cover on phones
@@ -4504,6 +4578,10 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
         background: c.accentBg, color: c.accent, flexShrink:0 }}>
         {Math.round((hit.score||0)*100)}%
       </div>
+      <QueueNextBtn track={hit.track} onQueueNext={onQueueNext} lang={lang} iconSize={14}
+        style={{ width:'28px', height:'28px', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center',
+          flexShrink:0, background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)',
+          border:0, color:c.textMuted, cursor:'pointer' }} />
       <button onClick={e => { e.stopPropagation(); onPlayTrack && onPlayTrack(hit, hits); }}
         style={{ width:'28px', height:'28px', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center',
           flexShrink:0, background:'linear-gradient(180deg, oklch(60% 0.21 270), oklch(48% 0.22 285))',
@@ -4539,6 +4617,10 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
             background:c.accentBg, color:c.accent, flexShrink:0 }}>
             {Math.round((hit.score||0)*100)}%
           </div>
+          <QueueNextBtn track={hit.track} onQueueNext={onQueueNext} lang={lang}
+            style={{ width:'34px', height:'34px', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center',
+              flexShrink:0, background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)',
+              border:0, color:c.textMuted, cursor:'pointer' }} />
           <button onClick={e => { e.stopPropagation(); onPlayTrack && onPlayTrack(hit, hits); }}
             style={{ width:'34px', height:'34px', borderRadius:'50%', display:'flex', alignItems:'center', justifyContent:'center',
               flexShrink:0, background:'linear-gradient(180deg, oklch(60% 0.21 270), oklch(48% 0.22 285))',
@@ -4813,22 +4895,29 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
                             {Math.round((hit.score||0)*100)}%
                           </div>
                         </div>
-                        {/* Info */}
-                        <div style={{ padding:'12px 14px' }}>
-                          <div style={{ fontSize:'14px', fontWeight:'600', color:c.text,
-                            whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
-                            letterSpacing:'-0.01em' }}>
-                            {hit.track?.title||'—'}
-                          </div>
-                          <div style={{ fontSize:'13px', color:c.textMuted, marginTop:'3px',
-                            whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-                            <ArtistCredit track={hit.track} navigateToArtist={navigateToArtist} lang={lang} color={c.textMuted} />{hit.track?.year ? ` · ${hit.track?.year}` : ''}
-                          </div>
-                          {hit.track?.genre && (
-                            <div className="mono" style={{ fontSize:'11px', color:c.textSubtle, marginTop:'6px', letterSpacing:'0.1em' }}>
-                              {hit.track.genre.toUpperCase()}
+                        {/* Info — queue btn lives here (always visible: the
+                            hover tooltip below never fires on touch) */}
+                        <div style={{ padding:'12px 14px', display:'flex', alignItems:'center', gap:8 }}>
+                          <div style={{ flex:1, minWidth:0 }}>
+                            <div style={{ fontSize:'14px', fontWeight:'600', color:c.text,
+                              whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+                              letterSpacing:'-0.01em' }}>
+                              {hit.track?.title||'—'}
                             </div>
-                          )}
+                            <div style={{ fontSize:'13px', color:c.textMuted, marginTop:'3px',
+                              whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                              <ArtistCredit track={hit.track} navigateToArtist={navigateToArtist} lang={lang} color={c.textMuted} />{hit.track?.year ? ` · ${hit.track?.year}` : ''}
+                            </div>
+                            {hit.track?.genre && (
+                              <div className="mono" style={{ fontSize:'11px', color:c.textSubtle, marginTop:'6px', letterSpacing:'0.1em' }}>
+                                {hit.track.genre.toUpperCase()}
+                              </div>
+                            )}
+                          </div>
+                          <QueueNextBtn track={hit.track} onQueueNext={onQueueNext} lang={lang}
+                            style={{ flex:'none', width:32, height:32, borderRadius:'50%', display:'grid', placeItems:'center',
+                              background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)',
+                              border:0, color:c.textMuted, cursor:'pointer' }} />
                         </div>
                         {hoveredHit === hit.track?.track_id && (
                           <ScoreBreakdownTooltip
@@ -4837,6 +4926,7 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
                             isDark={isDark}
                             onPlay={(h) => onPlayTrack && onPlayTrack(h, results)}
                             onAddToPlaylist={onAddToPlaylist}
+                            onQueueNext={onQueueNext}
                             lang={lang}
                           />
                         )}
@@ -5183,7 +5273,7 @@ function AxisRadar({ values, targets, isDark, lang, size }) {
   );
 }
 
-function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream, visible }) {
+function RecommendSection({ isDark, lang, onPlayTrack, onQueueNext, aiStatus, onStartStream, visible }) {
   const c = useColors(isDark);
   const aiOn = !!(aiStatus && aiStatus.aiActive);
   const llmKw = () => ({
@@ -5462,6 +5552,10 @@ function RecommendSection({ isDark, lang, onPlayTrack, aiStatus, onStartStream, 
               <div className="serif" style={{ fontSize:'12.5px', fontStyle:'italic', color:c.textMuted, marginTop:'2px' }}>↳ {h.track.reason}</div>
             )}
           </div>
+          <QueueNextBtn track={h.track} onQueueNext={onQueueNext} lang={lang}
+            style={{ flex:'none', width:32, height:32, borderRadius:'50%', display:'grid', placeItems:'center',
+              background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)',
+              border:0, color:c.textMuted, cursor:'pointer' }} />
         </div>
       ))}
     </div>
@@ -5854,9 +5948,173 @@ function NewPlaylistTile({ onClick, lang, isDark = true }) {
 }
 
 
-function PlaylistsListView({ playlists, onOpen, onCreate, onPlayAll, lang, isDark = true }) {
+// ─── AI playlist builder («Собери плейлист…») ─────────────────────────────────
+// A prompt → the backend agent web-searches for real songs (artist hits or a
+// film/game soundtrack), matches them against the library, and proposes a
+// draft. The user reviews the preview (fuzzy matches flagged, missing songs
+// listed) and saves via the normal playlists CRUD.
+function AiPlaylistBuilder({ listing, onOpenPlaylist, lang, isDark }) {
+  const c = useColors(isDark);
+  const ru = lang === 'ru';
+  const [prompt, setPrompt] = useState('');
+  const [phase, setPhase] = useState('idle');  // idle | running | preview | error
+  const [stage, setStage] = useState('thinking');
+  const [draft, setDraft] = useState(null);
+  const [tracks, setTracks] = useState([]);
+  const [err, setErr] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  const stageLabel = (s) => ru
+    ? (s === 'web_search' ? 'Ищем в интернете…' : s === 'matching' ? 'Сверяем с библиотекой…' : 'Придумываем…')
+    : (s === 'web_search' ? 'Searching the web…' : s === 'matching' ? 'Matching your library…' : 'Thinking…');
+
+  const applyResult = (d, t) => {
+    setDraft(d || null); setTracks(Array.isArray(t) ? t : []); setPhase('preview');
+  };
+
+  const run = async () => {
+    const p = prompt.trim();
+    if (!p || phase === 'running') return;
+    setPhase('running'); setStage('thinking'); setErr(null); setDraft(null); setTracks([]);
+    let got = false;
+    const onEvent = (e) => {
+      if (e.type === 'status') setStage(e.stage);
+      else if (e.type === 'result') { got = true; applyResult(e.draft, e.tracks); }
+      else if (e.type === 'error') { got = true; setErr(e.message || 'error'); setPhase('error'); }
+    };
+    try {
+      await apiStream('/chat/playlist-builder/stream', { prompt: p, lang }, onEvent);
+      if (!got) throw new Error('no result frame');
+    } catch (streamErr) {
+      // Fall back to the non-streaming endpoint (same as the chat drawer does).
+      try {
+        const r = await apiFetch('/chat/playlist-builder', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt: p, lang }),
+        });
+        applyResult(r.draft, r.tracks);
+      } catch (e2) { setErr(e2.message); setPhase('error'); }
+    }
+  };
+
+  const save = async () => {
+    if (!draft || saving) return;
+    setSaving(true);
+    try {
+      const created = await listing.createPlaylist(draft.title || (ru ? 'Новый плейлист' : 'New playlist'), draft.comment || null);
+      const id = created && created.id;
+      if (id) {
+        for (const tid of (draft.track_ids || [])) {
+          try { await listing.addTrack(id, tid); } catch (e) { /* skip a track that won't resolve */ }
+        }
+        if (onOpenPlaylist) onOpenPlaylist(id);
+      }
+    } catch (e) { setErr(e.message); }
+    finally { setSaving(false); }
+  };
+
+  const missing = (draft && draft.missing) || [];
+  const panel = {
+    marginBottom: 20, padding: '16px 18px', borderRadius: 16,
+    background: isDark ? 'rgba(255,255,255,.04)' : 'rgba(255,255,255,.75)',
+    border: `1px solid ${c.border}`,
+  };
+
+  return (
+    <div style={panel}>
+      <div style={{ display:'flex', alignItems:'center', gap:9, marginBottom:10 }}>
+        <span className="ai-orb" aria-hidden />
+        <span className="mono" style={{ fontSize:11, letterSpacing:'.18em', textTransform:'uppercase', color:c.textSubtle }}>
+          {ru ? 'ИИ · СОБЕРЁТ ПЛЕЙЛИСТ' : 'AI · BUILDS A PLAYLIST'}
+        </span>
+      </div>
+      <div style={{ display:'flex', gap:8, flexWrap:'wrap' }}>
+        <input
+          value={prompt}
+          onChange={e => setPrompt(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') run(); }}
+          disabled={phase === 'running'}
+          placeholder={ru ? 'напр. хиты Radiohead или саундтрек к Интерстеллару' : 'e.g. Radiohead hits or the Interstellar soundtrack'}
+          style={{ flex:'1 1 260px', minWidth:0, background: isDark ? 'rgba(0,0,0,.2)' : '#fff',
+            border:`1px solid ${c.border}`, borderRadius:11, padding:'11px 14px', color:c.text, fontSize:14, outline:'none' }}
+        />
+        <button onClick={run} disabled={phase === 'running' || !prompt.trim()}
+          className={ske('btn', isDark)}
+          style={{ padding:'11px 18px', borderRadius:11, fontSize:13.5, fontWeight:600,
+            cursor: (phase === 'running' || !prompt.trim()) ? 'default' : 'pointer',
+            opacity: (phase === 'running' || !prompt.trim()) ? 0.6 : 1 }}>
+          {ru ? 'Собрать' : 'Build'}
+        </button>
+      </div>
+
+      {phase === 'running' && (
+        <div style={{ display:'flex', alignItems:'center', gap:9, marginTop:12, fontSize:13, color:c.textMuted }}>
+          <Spinner size={13} /> {stageLabel(stage)}
+        </div>
+      )}
+
+      {phase === 'error' && (
+        <div style={{ marginTop:12, fontSize:13, color:c.red }}>
+          {ru ? 'Не получилось собрать плейлист. ' : 'Could not build the playlist. '}{err}
+        </div>
+      )}
+
+      {phase === 'preview' && draft && (
+        <div style={{ marginTop:14 }}>
+          <div style={{ fontSize:16, fontWeight:700, color:c.text }}>{draft.title}</div>
+          {draft.comment && <div style={{ fontSize:13, color:c.textMuted, marginTop:4, lineHeight:1.5 }}>{draft.comment}</div>}
+
+          {tracks.length > 0 ? (
+            <div style={{ display:'flex', flexDirection:'column', gap:6, marginTop:12 }}>
+              {tracks.map((t, i) => (
+                <div key={t.track_id || i} style={{ display:'flex', alignItems:'center', gap:10, fontSize:13.5, color:c.text }}>
+                  <span style={{ color:c.textSubtle, width:20, textAlign:'right', flexShrink:0 }}>{i + 1}</span>
+                  <span style={{ flex:1, minWidth:0, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                    <b>{t.title}</b>{t.artist ? <span style={{ color:c.textMuted }}> — {t.artist}</span> : null}
+                  </span>
+                  {t.match === 'fuzzy' && (
+                    <span style={{ flexShrink:0, fontSize:10.5, color:'oklch(70% 0.12 70)', border:'1px solid oklch(70% 0.12 70 / 0.5)', borderRadius:6, padding:'2px 7px' }}>
+                      {ru ? 'неточно' : 'approx.'}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ marginTop:12, fontSize:13, color:c.textMuted }}>
+              {ru ? 'В библиотеке ничего из этого не нашлось.' : 'None of these are in your library.'}
+            </div>
+          )}
+
+          {missing.length > 0 && (
+            <div style={{ marginTop:12, fontSize:12.5, color:c.textSubtle, lineHeight:1.6 }}>
+              {ru ? 'Нет в библиотеке: ' : 'Not in your library: '}{missing.join(', ')}
+            </div>
+          )}
+
+          <div style={{ display:'flex', gap:8, marginTop:14 }}>
+            <button onClick={save} disabled={saving || tracks.length === 0}
+              className={ske('btn', isDark)}
+              style={{ padding:'10px 18px', borderRadius:10, fontSize:13, fontWeight:600,
+                cursor: (saving || tracks.length === 0) ? 'default' : 'pointer', opacity: (saving || tracks.length === 0) ? 0.6 : 1 }}>
+              {saving ? (ru ? 'Сохраняем…' : 'Saving…') : (ru ? 'Сохранить плейлист' : 'Save playlist')}
+            </button>
+            <button onClick={() => { setPhase('idle'); setDraft(null); setTracks([]); }}
+              className={ske('btn', isDark)}
+              style={{ padding:'10px 16px', borderRadius:10, fontSize:13, color:c.textMuted, cursor:'pointer' }}>
+              {ru ? 'Отмена' : 'Cancel'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PlaylistsListView({ playlists, onOpen, onCreate, onPlayAll, lang, isDark = true, listing }) {
   return (
     <div className="pl-list-enter">
+      {listing && <AiPlaylistBuilder listing={listing} onOpenPlaylist={onOpen} lang={lang} isDark={isDark} />}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 18 }}>
         <span className="mono" style={{ fontSize: 11, letterSpacing: '0.18em', color: isDark ? 'rgba(238,238,243,.5)' : 'rgba(10,10,18,.55)' }}>
           {playlists.length} {lang === 'ru' ? 'ПЛЕЙЛИСТОВ' : 'PLAYLISTS'}
@@ -6010,7 +6268,7 @@ function AlbumsGridTab({ albums, suggestions, suggestionsLoading, sort, onSortCh
 }
 
 // ─── LIBRARY GLASSY ROW (shared by Liked + Recently) ──────────────────────────
-function LibraryGlassyRow({ track, when, playCount, isDark, lang, onClick, navigateToArtist, onAlbumClick, isCurrent, onAddToPlaylist }) {
+function LibraryGlassyRow({ track, when, playCount, isDark, lang, onClick, navigateToArtist, onAlbumClick, isCurrent, onAddToPlaylist, onQueueNext }) {
   const c = useColors(isDark);
   const fmtDur = (s) => {
     if (!s) return '—';
@@ -6072,6 +6330,8 @@ function LibraryGlassyRow({ track, when, playCount, isDark, lang, onClick, navig
       {!isMobile && <div />}
       {!isMobile && <div className="mono" style={{ color:c.textMuted, fontSize:'13px', textAlign:'right' }}>{fmtDur(track.duration)}</div>}
       <div style={{ display:'flex', gap:'5px' }}>
+        <QueueNextBtn track={track} onQueueNext={onQueueNext} lang={lang}
+          className="player-icon-btn" style={{ width: 36, height: 36 }} />
         <button
           className="player-icon-btn"
           title={lang === 'ru' ? 'Добавить в плейлист' : 'Add to playlist'}
@@ -6103,7 +6363,7 @@ function formatRelativeTime(iso, lang) {
 }
 
 // ─── RECENTLY PLAYED TAB ──────────────────────────────────────────────────────
-function RecentlyPlayedTab({ tracks, sort, onSortChange, isDark, lang, onPlayTrack, navigateToArtist, onAlbumClick, currentTrackId, onAddToPlaylist }) {
+function RecentlyPlayedTab({ tracks, sort, onSortChange, isDark, lang, onPlayTrack, navigateToArtist, onAlbumClick, currentTrackId, onAddToPlaylist, onQueueNext }) {
   const c = useColors(isDark);
   if (!tracks || tracks.length === 0) {
     return <div style={{ padding:'40px 20px', textAlign:'center', color:c.textSubtle, fontSize:'13px' }}>{lang==='ru' ? 'История пуста — выбери что-нибудь и сыграй' : 'No playback history yet — pick something and play'}</div>;
@@ -6146,6 +6406,7 @@ function RecentlyPlayedTab({ tracks, sort, onSortChange, isDark, lang, onPlayTra
             navigateToArtist={navigateToArtist}
             onAlbumClick={(name) => onAlbumClick && onAlbumClick(name)}
             onAddToPlaylist={onAddToPlaylist}
+            onQueueNext={onQueueNext}
           />
         ))}
       </div>
@@ -6307,7 +6568,7 @@ function AddToPlaylistPopover({ trackId, anchor, onClose, listing, lang, isDark 
 }
 
 // ─── PLAYLIST TRACK ROW (Task 18) ────────────────────────────────────────────
-function PlaylistTrackRow({ track, isDragging, onDragStart, onDragOver, onDragLeave, onDrop, onPlay, navigateToArtist, onRemove, onAddToPlaylist, playlistId, listing, lang, isDark = true }) {
+function PlaylistTrackRow({ track, isDragging, onDragStart, onDragOver, onDragLeave, onDrop, onPlay, navigateToArtist, onRemove, onQueueNext, playlistId, listing, lang, isDark = true }) {
   const fmtDur = (s) => { if (!s) return '—'; const m = Math.floor(s/60), r = Math.floor(s%60); return `${m}:${String(r).padStart(2,'0')}`; };
   // Phone layout: HTML5 drag-and-drop never fires on touch, and the fixed
   // 20px grip + 78px duration columns pushed the title into a sliver — drop
@@ -6366,8 +6627,11 @@ function PlaylistTrackRow({ track, isDragging, onDragStart, onDragOver, onDragLe
       </div>
       {!isMobile && <div />}
       {!isMobile && <div className="mono" style={{ fontSize: 12, color: isDark ? 'rgba(238,238,243,.5)' : 'rgba(10,10,18,.55)', textAlign: 'right' }}>{fmtDur(track.duration)}</div>}
+      {/* «В плейлист» dropped here on purpose — inside an open playlist the
+          track is already in one; queue-next is the useful action. */}
       <div style={{ display: 'flex', gap: isMobile ? 4 : 8 }}>
-        <button className="player-icon-btn" style={{ width: 40, height: 40, fontSize: 22 }} onClick={(e) => { e.stopPropagation(); onAddToPlaylist && onAddToPlaylist(track.track_id, e.currentTarget); }} title={lang === 'ru' ? 'Добавить в плейлист' : 'Add to playlist'}>＋</button>
+        <QueueNextBtn track={track} onQueueNext={onQueueNext} lang={lang} iconSize={17}
+          className="player-icon-btn" style={{ width: 40, height: 40 }} />
         <button className="player-icon-btn" style={{ width: 40, height: 40, fontSize: 22 }} onClick={(e) => { e.stopPropagation(); handleRemove(e); }} title={lang === 'ru' ? 'Убрать из плейлиста' : 'Remove from playlist'}>⨯</button>
       </div>
     </div>
@@ -6375,7 +6639,7 @@ function PlaylistTrackRow({ track, isDragging, onDragStart, onDragOver, onDragLe
 }
 
 // ─── PLAYLIST DETAIL VIEW (Task 17) ──────────────────────────────────────────
-function PlaylistDetailView({ playlistId, lang, isDark, onClose, onPlayTrack, navigateToArtist, listing, onAddToPlaylist }) {
+function PlaylistDetailView({ playlistId, lang, isDark, onClose, onPlayTrack, navigateToArtist, listing, onQueueNext }) {
   const [detail, setDetail] = React.useState(null);
   const [error, setError] = React.useState(null);
   const [dragId, setDragId] = React.useState(null);
@@ -6570,7 +6834,7 @@ function PlaylistDetailView({ playlistId, lang, isDark, onClose, onPlayTrack, na
               onPlay={() => onPlayTrack({ track: t }, queue)}
               navigateToArtist={navigateToArtist}
               onRemove={() => onRemoveTrack(t.track_id)}
-              onAddToPlaylist={onAddToPlaylist}
+              onQueueNext={onQueueNext}
               playlistId={playlistId}
               listing={listing}
               lang={lang}
@@ -6584,7 +6848,7 @@ function PlaylistDetailView({ playlistId, lang, isDark, onClose, onPlayTrack, na
 }
 
 // ─── PLAYLISTS TAB ────────────────────────────────────────────────────────────
-function PlaylistsTab({ listing, activePlaylistId, onOpenPlaylist, onCloseDetail, onRequestCreate, onPlayTrack, isDark, lang, navigateToArtist, onAddToPlaylist }) {
+function PlaylistsTab({ listing, activePlaylistId, onOpenPlaylist, onCloseDetail, onRequestCreate, onPlayTrack, isDark, lang, navigateToArtist, onQueueNext }) {
   if (activePlaylistId == null) {
     return (
       <PlaylistsListView
@@ -6594,6 +6858,7 @@ function PlaylistsTab({ listing, activePlaylistId, onOpenPlaylist, onCloseDetail
         onOpen={onOpenPlaylist}
         onCreate={onRequestCreate}
         onPlayAll={(id) => { /* wired in Task 17 via detail view */ }}
+        listing={listing}
       />
     );
   }
@@ -6606,7 +6871,7 @@ function PlaylistsTab({ listing, activePlaylistId, onOpenPlaylist, onCloseDetail
       onPlayTrack={onPlayTrack}
       navigateToArtist={navigateToArtist}
       listing={listing}
-      onAddToPlaylist={onAddToPlaylist}
+      onQueueNext={onQueueNext}
     />
   );
 }
@@ -6638,28 +6903,83 @@ function CatalogSearchBar({ value, onChange, isDark, lang, loading }) {
   );
 }
 
-function CatalogResults({ hits, loading, onOpen, isDark, lang }) {
-  const c = useColors(isDark);
-  const badge = (t) => t === 'song' ? '♪' : t === 'album' ? '💿' : '🎤';
-  const typeLabel = (t) => lang === 'ru'
+// ─── Catalog hit visuals (shared by CatalogResults + SpotlightSearch) ─────────
+// One visual language for typed catalog rows so the library search and the
+// global Spotlight never drift apart: same badge, same per-type tint, same
+// circular-artist / rounded-square-cover treatment.
+function catalogBadge(t) { return t === 'song' ? '♪' : t === 'album' ? '💿' : '🎤'; }
+function catalogTypeLabel(t, lang) {
+  return lang === 'ru'
     ? (t === 'song' ? 'Песня' : t === 'album' ? 'Альбом' : 'Исполнитель')
     : (t === 'song' ? 'Song' : t === 'album' ? 'Album' : 'Artist');
-
-  // Per-type row tint. Songs stay neutral; albums get a pastel violet wash,
-  // artists a pastel teal that complements the violet and keeps text legible.
-  // Low-alpha oklch tints read as a soft wash over both light and dark themes,
-  // so the foreground stays c.text either way.
-  const tint = (t) => {
-    if (t === 'album') return {
-      bg: 'oklch(70% 0.11 295 / 0.14)', border: 'oklch(72% 0.13 295 / 0.34)',
-      glow: 'oklch(62% 0.2 295 / 0.30)', ring: 'oklch(72% 0.13 295 / 0.42)',
-    };
-    if (t === 'artist') return {
-      bg: 'oklch(74% 0.09 200 / 0.15)', border: 'oklch(74% 0.11 200 / 0.36)',
-      glow: 'oklch(64% 0.13 200 / 0.30)', ring: 'oklch(74% 0.11 200 / 0.42)',
-    };
-    return { bg: isDark ? 'rgba(255,255,255,.04)' : 'rgba(255,255,255,.7)', border: c.border, glow: null, ring: null };
+}
+// Per-type row tint. Albums get a pastel violet wash, artists a pastel teal;
+// songs stay neutral (or fully transparent in Spotlight's glass panel, where
+// the sliding highlight pill already carries focus). Low-alpha oklch tints read
+// as a soft wash over both themes, so foreground text stays legible.
+function catalogTint(t, isDark, c, neutralTransparent) {
+  if (t === 'album') return {
+    bg: 'oklch(70% 0.11 295 / 0.14)', border: 'oklch(72% 0.13 295 / 0.34)',
+    glow: 'oklch(62% 0.2 295 / 0.30)', ring: 'oklch(72% 0.13 295 / 0.42)',
   };
+  if (t === 'artist') return {
+    bg: 'oklch(74% 0.09 200 / 0.15)', border: 'oklch(74% 0.11 200 / 0.36)',
+    glow: 'oklch(64% 0.13 200 / 0.30)', ring: 'oklch(74% 0.11 200 / 0.42)',
+  };
+  if (neutralTransparent) return { bg: 'transparent', border: 'transparent', glow: null, ring: null };
+  return { bg: isDark ? 'rgba(255,255,255,.04)' : 'rgba(255,255,255,.7)', border: c.border, glow: null, ring: null };
+}
+
+// One typed catalog row: badge/tint/cover/primary+secondary text. `trailing`
+// hosts the caller's right-side chrome (type label in the library, add-button +
+// ↵ hint in Spotlight). `compact` tightens padding and drops the song tint so
+// song rows blend into Spotlight's glass.
+function CatalogHitRow({ hit, isDark, lang, compact = false, trailing = null, rowRef, onMouseEnter, onClick }) {
+  const c = useColors(isDark);
+  const cover = hit.type === 'artist' ? hit.image : hit.cover_art_path;
+  const coverUrl = homeCoverUrl(cover);
+  const primary = hit.type === 'song' ? hit.title : (hit.type === 'album' ? hit.album : hit.artist);
+  const secondary = hit.type === 'song'
+    ? hit.artist
+    : (hit.type === 'album'
+        ? hit.artist
+        : (hit.track_count != null ? `${hit.track_count} ${lang === 'ru' ? 'треков' : 'tracks'}` : ''));
+  const tn = catalogTint(hit.type, isDark, c, compact);
+  return (
+    <div
+      ref={rowRef}
+      className="lift-row"
+      onMouseEnter={onMouseEnter}
+      onClick={onClick}
+      style={{
+        position: 'relative',
+        display:'flex', alignItems:'center', gap:'12px', cursor:'pointer',
+        background:tn.bg, border:`1px solid ${tn.border}`,
+        borderRadius:'12px', padding: compact ? '11px 14px' : '10px 14px',
+        ...(tn.glow ? { '--lift-glow': tn.glow, '--lift-ring': tn.ring } : {}),
+      }}
+    >
+      <div style={{
+        width:'44px', height:'44px', flex:'0 0 auto',
+        borderRadius: hit.type === 'artist' ? '50%' : '8px',
+        overflow:'hidden', background: isDark ? 'rgba(255,255,255,.06)' : 'rgba(10,10,18,.06)',
+        display:'flex', alignItems:'center', justifyContent:'center', fontSize:'18px',
+      }}>
+        {coverUrl
+          ? <img src={coverUrl} alt="" loading="lazy" style={{ width:'100%', height:'100%', objectFit:'cover' }} />
+          : catalogBadge(hit.type)}
+      </div>
+      <div style={{ flex:1, minWidth:0 }}>
+        <div style={{ color:c.text, fontWeight:600, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{primary}</div>
+        <div style={{ color:c.textMuted, fontSize:'13px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{secondary}</div>
+      </div>
+      {trailing}
+    </div>
+  );
+}
+
+function CatalogResults({ hits, loading, onOpen, onQueueNext, isDark, lang }) {
+  const c = useColors(isDark);
 
   if (!hits.length) {
     return (
@@ -6674,57 +6994,32 @@ function CatalogResults({ hits, loading, onOpen, isDark, lang }) {
   return (
     <div className="lib-tab-pane" style={{ display:'flex', flexDirection:'column', gap:'8px' }}>
       {hits.map((h, i) => {
-        const cover = h.type === 'artist' ? h.image : h.cover_art_path;
-        const coverUrl = homeCoverUrl(cover);
-        const primary = h.type === 'song' ? h.title : (h.type === 'album' ? h.album : h.artist);
-        const secondary = h.type === 'song'
-          ? h.artist
-          : (h.type === 'album'
-              ? h.artist
-              : (h.track_count != null ? `${h.track_count} ${lang === 'ru' ? 'треков' : 'tracks'}` : ''));
         const key = `${h.type}-${h.track_id || h.artist_slug || ''}-${h.album || h.title || ''}-${i}`;
-        const tn = tint(h.type);
-        return (
-          <div
-            key={key}
-            className="lift-row"
-            onClick={() => onOpen(h)}
-            style={{
-              display:'flex', alignItems:'center', gap:'12px', cursor:'pointer',
-              background:tn.bg, border:`1px solid ${tn.border}`,
-              borderRadius:'12px', padding:'10px 14px',
-              ...(tn.glow ? { '--lift-glow': tn.glow, '--lift-ring': tn.ring } : {}),
-            }}
-          >
-            <div style={{
-              width:'44px', height:'44px', flex:'0 0 auto',
-              borderRadius: h.type === 'artist' ? '50%' : '8px',
-              overflow:'hidden', background: isDark ? 'rgba(255,255,255,.06)' : 'rgba(10,10,18,.06)',
-              display:'flex', alignItems:'center', justifyContent:'center', fontSize:'18px',
-            }}>
-              {coverUrl
-                ? <img src={coverUrl} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />
-                : badge(h.type)}
-            </div>
-            <div style={{ flex:1, minWidth:0 }}>
-              <div style={{ color:c.text, fontWeight:600, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{primary}</div>
-              <div style={{ color:c.textMuted, fontSize:'13px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{secondary}</div>
-            </div>
-            <div style={{
-              color:c.textMuted, fontSize:'11px', textTransform:'uppercase', letterSpacing:'.5px',
-              flex:'0 0 auto', display:'flex', alignItems:'center', gap:'7px', textAlign:'right',
-            }}>
-              <span>{typeLabel(h.type)}</span>
-              <span style={{ fontSize:'14px', width:'1.2em', textAlign:'center', flexShrink:0 }}>{badge(h.type)}</span>
-            </div>
+        const trailing = (
+          <div style={{
+            color:c.textMuted, fontSize:'11px', textTransform:'uppercase', letterSpacing:'.5px',
+            flex:'0 0 auto', display:'flex', alignItems:'center', gap:'7px', textAlign:'right',
+          }}>
+            {h.type === 'song' && (
+              <QueueNextBtn track={h} onQueueNext={onQueueNext} lang={lang}
+                style={{ flex:'none', width:32, height:32, borderRadius:'50%', display:'grid', placeItems:'center',
+                  background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)',
+                  border:0, color:c.textMuted, cursor:'pointer' }} />
+            )}
+            <span>{catalogTypeLabel(h.type, lang)}</span>
+            <span style={{ fontSize:'14px', width:'1.2em', textAlign:'center', flexShrink:0 }}>{catalogBadge(h.type)}</span>
           </div>
+        );
+        return (
+          <CatalogHitRow key={key} hit={h} isDark={isDark} lang={lang}
+            onClick={() => onOpen(h)} trailing={trailing} />
         );
       })}
     </div>
   );
 }
 
-function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTrack, onAddToPlaylist, playlistsListing, visible }) {
+function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTrack, onAddToPlaylist, onQueueNext, playlistsListing, visible }) {
   const c = useColors(isDark);
 
   // ── Data fetching ─────────────────────────────────────────────────────
@@ -6920,6 +7215,7 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
               hits={catalogHits}
               loading={catalogLoading}
               onOpen={openCatalogHit}
+              onQueueNext={onQueueNext}
               isDark={isDark} lang={lang}
             />
           ) : (
@@ -6962,6 +7258,7 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
               }}
               currentTrackId={playerTrack?.track_id || null}
               onAddToPlaylist={onAddToPlaylist}
+              onQueueNext={onQueueNext}
             />
           )}
           {activeTab === 'playlists' && (
@@ -6975,7 +7272,7 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
               isDark={isDark}
               lang={lang}
               navigateToArtist={navigateToArtist}
-              onAddToPlaylist={onAddToPlaylist}
+              onQueueNext={onQueueNext}
             />
           )}
           {activeTab === 'stats' && (
@@ -7008,6 +7305,7 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
           isDark={isDark}
           lang={lang}
           onAddToPlaylist={onAddToPlaylist}
+          onQueueNext={onQueueNext}
         />
       )}
       {showNewPlaylistModal && (
@@ -8172,7 +8470,7 @@ function NewPlaylistModal({ onCancel, onSubmit, lang, isDark = true }) {
   );
 }
 
-function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist, isDark, lang, onAddToPlaylist }) {
+function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist, isDark, lang, onAddToPlaylist, onQueueNext }) {
   const c = useColors(isDark);
   const [hoverRow, setHoverRow] = useState(-1);
   // 10+ feat-артистов заполоняли всю страницу — прячем хвост под "+N".
@@ -8430,7 +8728,7 @@ function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist,
                       onMouseLeave={() => setHoverRow(-1)}
                       style={{
                         '--ar-i': Math.min(i, 20),
-                        display:'grid', gridTemplateColumns:'28px 1fr 60px 30px',
+                        display:'grid', gridTemplateColumns:'28px 1fr 60px 30px 30px',
                         gap:'10px', padding:'9px 14px', alignItems:'center',
                         borderBottom:'1px solid rgba(255,255,255,.06)',
                         fontSize:'13px', cursor:'pointer',
@@ -8441,6 +8739,11 @@ function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist,
                       <span className="mono" style={{ color: hoverRow === i ? '#cdbcff' : 'rgba(238,235,248,.4)', fontSize:'11px', textAlign:'center' }}>{hoverRow === i ? '▶' : i+1}</span>
                       <span style={{ color:'#ece9f4', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t.title}</span>
                       <span className="mono" style={{ color:'rgba(238,235,248,.4)', fontSize:'11px', textAlign:'right' }}>{fmtDur(t.duration)}</span>
+                      {onQueueNext ? (
+                        <QueueNextBtn track={t} onQueueNext={onQueueNext} lang={lang} iconSize={15}
+                          style={{ background:'transparent', border:'none', cursor:'pointer', lineHeight:1,
+                            color:'rgba(238,235,248,.45)', padding:0, display:'grid', placeItems:'center' }} />
+                      ) : <span />}
                       {onAddToPlaylist ? (
                         <button
                           onClick={(e) => { e.stopPropagation(); onAddToPlaylist(t.track_id, e.currentTarget); }}
@@ -10744,6 +11047,7 @@ function YandexEnhanceLink({ isDark, lang }) {
   const c = useColors(isDark);
   const ru = lang === 'ru';
   const [linked, setLinked] = useState(null);     // null = loading, else bool
+  const [login, setLogin] = useState(null);       // linked Yandex account login/display name
   const [session, setSession] = useState(null);   // {session_id, user_code, verification_url}
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -10751,18 +11055,30 @@ function YandexEnhanceLink({ isDark, lang }) {
   useEffect(() => {
     let alive = true;
     apiFetch('/import/yandex')
-      .then(r => { if (alive) setLinked(!!(r && r.linked)); })
+      .then(r => { if (alive) { setLinked(!!(r && r.linked)); setLogin((r && r.yandex_login) || null); } })
       .catch(() => { if (alive) setLinked(false); });
     return () => { alive = false; };
   }, []);
+
+  // Re-read the link status to pick up the account login after a fresh sign-in
+  // (the device-flow status frame doesn't carry it).
+  const refreshLogin = () => {
+    apiFetch('/import/yandex').then(r => setLogin((r && r.yandex_login) || null)).catch(() => {});
+  };
 
   const startAuth = async () => {
     setErr(null); setBusy(true);
     try {
       const res = await apiFetch('/import/yandex/auth/start', { method: 'POST' });
-      if (res.status === 'authorized') { setLinked(true); setBusy(false); return; }
+      if (res.status === 'authorized') { setLinked(true); setBusy(false); refreshLogin(); return; }
       setSession(res);
     } catch (e) { setErr(e.message); setBusy(false); }
+  };
+
+  const unlink = async () => {
+    setBusy(true);
+    try { await apiFetch('/import/yandex', { method: 'DELETE' }); } catch (e) { /* best-effort */ }
+    setLinked(false); setLogin(null); setSession(null); setErr(null); setBusy(false);
   };
 
   // Poll the device session until authorized / expired / error.
@@ -10773,7 +11089,7 @@ function YandexEnhanceLink({ isDark, lang }) {
       try {
         const s = await apiFetch(`/import/yandex/auth/status?session_id=${encodeURIComponent(session.session_id)}`);
         if (stop) return;
-        if (s.status === 'authorized') { setLinked(true); setSession(null); setBusy(false); return; }
+        if (s.status === 'authorized') { setLinked(true); setSession(null); setBusy(false); refreshLogin(); return; }
         if (s.status === 'expired' || s.status === 'error') {
           setErr(s.error || (s.status === 'expired' ? (ru ? 'Код истёк' : 'Code expired') : (ru ? 'Ошибка входа' : 'Login error')));
           setSession(null); setBusy(false); return;
@@ -10795,11 +11111,19 @@ function YandexEnhanceLink({ isDark, lang }) {
       <div className="ob-glass" style={wrap}>
         <div style={{ display:'flex', alignItems:'center', gap:'10px' }}>
           <span style={{ color:'oklch(70% 0.18 145)', fontSize:'16px' }}>✓</span>
-          <div style={{ fontSize:'13px', color:c.textMuted, lineHeight:1.5 }}>
-            {ru
-              ? 'Яндекс подключён — обложки и метаданные загруженных файлов будут качественнее.'
-              : 'Yandex connected — album art and metadata for your uploads will be higher quality.'}
+          <div style={{ flex:1, minWidth:0, fontSize:'13px', color:c.textMuted, lineHeight:1.5 }}>
+            {login
+              ? (ru ? <>Подключён: <b style={{ color:c.text }}>{login}</b>. Обложки и метаданные загруженных файлов будут качественнее.</>
+                    : <>Connected: <b style={{ color:c.text }}>{login}</b>. Album art and metadata for your uploads will be higher quality.</>)
+              : (ru ? 'Яндекс подключён — обложки и метаданные загруженных файлов будут качественнее.'
+                    : 'Yandex connected — album art and metadata for your uploads will be higher quality.')}
           </div>
+          <button onClick={unlink} disabled={busy} className={ske('btn', isDark)}
+            title={ru ? 'Не тот аккаунт? Отвязать' : 'Wrong account? Disconnect'}
+            style={{ flexShrink:0, padding:'6px 12px', borderRadius:'8px', fontSize:'12px',
+              cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.6 : 1, color:c.textMuted }}>
+            {ru ? 'Отвязать' : 'Disconnect'}
+          </button>
         </div>
       </div>
     );
@@ -10871,6 +11195,7 @@ function YandexImportFlow({ isDark, lang, onDone, onBack, onPhase }) {
   const [step, setStep] = useState('auth');     // 'auth' | 'sources' | 'progress'
   const [authErr, setAuthErr] = useState(null);
   const [session, setSession] = useState(null); // {session_id, user_code, verification_url}
+  const [login, setLogin] = useState(null);     // linked account login/display name
 
   // ── Auth: device flow ────────────────────────────────────────────────────
   const startAuth = useCallback(async () => {
@@ -10889,9 +11214,16 @@ function YandexImportFlow({ isDark, lang, onDone, onBack, onPhase }) {
   useEffect(() => {
     let cancelled = false;
     apiFetch('/import/yandex')
-      .then(res => { if (!cancelled) { if (res && res.linked) setStep('sources'); else startAuth(); } })
+      .then(res => { if (!cancelled) { setLogin((res && res.yandex_login) || null); if (res && res.linked) setStep('sources'); else startAuth(); } })
       .catch(() => { if (!cancelled) startAuth(); });
     return () => { cancelled = true; };
+  }, [startAuth]);
+
+  // "Wrong account?" — drop the linked token and restart the device flow so the
+  // user can sign into a different Yandex account.
+  const unlinkAndRestart = useCallback(async () => {
+    try { await apiFetch('/import/yandex', { method: 'DELETE' }); } catch (e) { /* best-effort */ }
+    setLogin(null); setSession(null); setStep('auth'); startAuth();
   }, [startAuth]);
 
   // Poll the device session until authorized / expired / error.
@@ -11074,6 +11406,14 @@ function YandexImportFlow({ isDark, lang, onDone, onBack, onPhase }) {
     return (
       <div className="ob-glass" style={{ padding:'26px 28px' }}>
         {kicker(ru ? 'Яндекс · Шаг 2' : 'Yandex · Step 2')}
+        <div style={{ display:'flex', alignItems:'center', gap:'8px', flexWrap:'wrap', fontSize:'12.5px', color:c.textSubtle, marginBottom:'8px' }}>
+          <span>{ru ? 'Аккаунт' : 'Account'}: <b style={{ color:c.textMuted }}>{login || (ru ? 'Яндекс' : 'Yandex')}</b></span>
+          <span aria-hidden="true">·</span>
+          <button onClick={unlinkAndRestart} className={ske('btn', isDark)}
+            style={{ padding:'3px 10px', borderRadius:'7px', fontSize:'12px', color:c.textMuted, cursor:'pointer' }}>
+            {ru ? 'Не тот аккаунт? Выйти' : 'Wrong account? Sign out'}
+          </button>
+        </div>
         <h2 className="serif" style={{ fontSize:'28px', letterSpacing:'-0.02em', marginBottom:'6px' }}>
           {ru ? <>Что <i style={{ color:'oklch(62% 0.2 275)' }}>импортировать</i></> : <>What to <i style={{ color:'oklch(62% 0.2 275)' }}>import</i></>}
         </h2>
@@ -13122,7 +13462,6 @@ function InlineLyricExplain({
   onToggle, isDark, aiActive, lang,
 }) {
   const c = useColors(isDark);
-  const [hovered, setHovered] = useState(false);
   const isExpanded = expandedLines.has(lineIdx);
   const state = explainStates.get(lineIdx);
   const interactive = !!(aiActive && line.trim());
@@ -13133,39 +13472,22 @@ function InlineLyricExplain({
   };
 
   return (
-    <div
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{ position: 'relative', padding: '2px 0' }}
-    >
+    <div style={{ position: 'relative', padding: '2px 0' }}>
+      {/* Hover is pure CSS (.lyric-line) — the old per-line React hover state
+          re-rendered on every mouseenter/leave, which janked the whole lyrics
+          pane on small laptops while the player's canvases were running. */}
       <div
+        className={`lyric-line${interactive ? ' lyric-line--on' : ''}${isExpanded ? ' lyric-line--open' : ''}`}
         onClick={interactive ? handleClick : undefined}
         role={interactive ? 'button' : undefined}
         tabIndex={interactive ? 0 : undefined}
         aria-expanded={interactive ? isExpanded : undefined}
         aria-label={interactive ? (lang === 'ru' ? `Объяснить строку: ${line}` : `Explain line: ${line}`) : undefined}
         onKeyDown={interactive ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick(e); } } : undefined}
-        style={{
-          display: 'flex', alignItems: 'center', gap: '8px',
-          cursor: interactive ? 'pointer' : 'default',
-          margin: '0 -8px', padding: '2px 8px', borderRadius: 8,
-          background: (interactive && (hovered || isExpanded))
-            ? (isDark ? 'rgba(124,91,255,.10)' : 'rgba(124,91,255,.08)')
-            : 'transparent',
-          transition: 'background 140ms ease',
-        }}
       >
         <span style={{ flex: 1 }}>{line}</span>
         {interactive && (
-          <span
-            aria-hidden="true"
-            style={{
-              color: isExpanded ? c.accent : c.textSubtle,
-              fontSize: '13px', lineHeight: 1, flex: 'none',
-              opacity: isExpanded ? 1 : (hovered ? 0.9 : 0.32),
-              transition: 'opacity 140ms',
-            }}
-          >✨</span>
+          <span className="lyric-line__spark" aria-hidden="true">✨</span>
         )}
       </div>
       {isExpanded && state && (
@@ -15083,15 +15405,15 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                 <span style={{ color:pTextSubtle, fontFamily:"'JetBrains Mono', monospace", minWidth:'38px', textAlign:'right', fontSize:'11px' }}>
                   {fmt(currentTime)}
                 </span>
+                {/* Fill is painted in CSS from --pct with half-knob
+                    compensation, so the fill edge meets the knob center
+                    instead of running past it. */}
                 <input
                   type="range" min={0} max={duration || 0} step={0.5}
                   value={currentTime}
                   onChange={e => seek(Number(e.target.value))}
                   className="player-progress"
-                  style={{
-                    flex:1, height:'6px', borderRadius:'3px',
-                    background: `linear-gradient(to right, ${pAccent} ${progressPct}%, ${pUnfilled} ${progressPct}%)`,
-                  }}
+                  style={{ flex:1, '--pct': progressPct }}
                 />
                 <span style={{ color:pTextSubtle, fontFamily:"'JetBrains Mono', monospace", minWidth:'38px', fontSize:'11px' }}>
                   {fmt(duration)}
@@ -15182,7 +15504,6 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                   </svg>
                 </button>
               )}
-              <VolumeControl volume={volume} onChange={setVolume} isDark={isDark} lang={lang} />
               {/* Shuffle — hidden in stream mode: the wave picks the next track
                   itself, so a hand-shuffled order would be a lie there. */}
               {!streamActive && (
@@ -15205,6 +15526,12 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                     <line x1="4" y1="4" x2="9" y2="9" />
                   </svg>
                 </button>
+              )}
+              {/* Volume — last in the row so its slide-out slider expands into
+                  free air to the right instead of covering the shuffle button.
+                  Phones: system volume rules there, the control is dead weight. */}
+              {!isMobile && (
+                <VolumeControl volume={volume} onChange={setVolume} isDark={isDark} lang={lang} />
               )}
             </div>
 
@@ -15762,6 +16089,121 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere }) {
     const el = heroRef.current;
     if (el) { el.style.setProperty('--hx', '0'); el.style.setProperty('--hy', '0'); }
   };
+
+  // ── Mobile: a stacked hero instead of the desktop left/right split. ──────
+  // A phone has no width to share between the name column and the figure —
+  // the pinned-right cutout ended up masked/parallaxed out of view entirely.
+  // Vertical budget is fine though: full-width image band on top (cutout
+  // bottom-anchored, photo as cover), then name + meta in normal flow on the
+  // page background (no text-over-photo readability problem), then the facts.
+  // No cursor/scroll parallax and no slide-in animation here — the mobile
+  // tree simply never mounts the .atlas-plx-*/.atlas-scroll-plx/.atlas-cutout
+  // classes.
+  if (isMobile) {
+    const bandH = mode === 'aurora'
+      ? 'clamp(150px, 36vw, 210px)'
+      : 'clamp(230px, 62vw, 340px)';
+    return (
+      <div ref={heroRef} style={{ position:'relative' }}>
+        <div style={{ position:'relative', width:'100%', height:bandH, overflow:'hidden' }}>
+          {mode === 'cutout' && (
+            <Fragment>
+              <div aria-hidden="true" style={{
+                position:'absolute', inset:0,
+                background: isDark
+                  ? `radial-gradient(ellipse 110% 96% at 50% 18%, oklch(23% 0.02 ${hue}) 0%, oklch(14% 0.012 ${hue}) 62%, transparent 100%)`
+                  : `radial-gradient(ellipse 110% 96% at 50% 18%, oklch(96% 0.012 ${hue}) 0%, oklch(92% 0.01 ${hue}) 62%, transparent 100%)`,
+              }} />
+              <img src={cutout} alt="" style={{
+                position:'absolute', left:0, right:0, bottom:0, width:'100%', height:'calc(100% - 8px)',
+                objectFit:'contain', objectPosition:'bottom center',
+                WebkitMaskImage:'linear-gradient(180deg, transparent 0%, #000 7%, #000 100%)',
+                maskImage:'linear-gradient(180deg, transparent 0%, #000 7%, #000 100%)',
+              }} />
+            </Fragment>
+          )}
+          {mode === 'photo' && (
+            <img src={backdrop} alt="" style={{
+              position:'absolute', inset:0, width:'100%', height:'100%',
+              objectFit:'cover', objectPosition:'50% 30%',
+              filter: isDark ? 'brightness(0.94) saturate(1.04)' : 'saturate(1.02)',
+              WebkitMaskImage:'linear-gradient(180deg, #000 0%, #000 88%, transparent 100%)',
+              maskImage:'linear-gradient(180deg, #000 0%, #000 88%, transparent 100%)',
+            }} />
+          )}
+          {mode === 'aurora' && (
+            <div aria-hidden="true" style={{ position:'absolute', inset:0 }}>
+              <div style={{
+                position:'absolute', inset:0,
+                background:`linear-gradient(150deg, ${auroraCss.join(', ')})`,
+                WebkitMaskImage:'linear-gradient(180deg, #000 0%, #000 70%, transparent 100%)',
+                maskImage:'linear-gradient(180deg, #000 0%, #000 70%, transparent 100%)',
+              }} />
+            </div>
+          )}
+          {/* breadcrumb — readability veil behind it */}
+          <div aria-hidden="true" style={{
+            position:'absolute', left:0, right:0, top:0, height:'34%', pointerEvents:'none',
+            background:`linear-gradient(180deg, ${isDark?'rgba(13,13,16,0.35)':'rgba(242,241,246,0.3)'} 0%, transparent 100%)`,
+          }} />
+          <div className="mono" style={{
+            position:'absolute', top:14, left:16, right:16, zIndex:3, fontSize:10,
+            letterSpacing:'0.2em', textTransform:'uppercase',
+            whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+            color: isDark ? 'rgba(255,255,255,0.6)' : 'rgba(20,18,32,0.6)',
+            textShadow: isDark ? '0 1px 8px rgba(0,0,0,0.5)' : 'none',
+          }}>
+            <span style={{ cursor:'pointer' }} onClick={() => onNav?.('library')}>{lang==='ru'?'БИБЛИОТЕКА':'LIBRARY'}</span>
+            {' / '}
+            <span style={{ color: isDark ? '#fff' : '#161620' }}>{data.name.toUpperCase()}</span>
+            {playingHere && (
+              <span className="hero-eq" aria-hidden="true" style={{ marginLeft:10, marginRight:0, height:10, verticalAlign:'middle' }}>
+                <span /><span /><span /><span /><span />
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Name + meta — normal flow on the page background */}
+        <div style={{ padding:'14px 16px 0' }}>
+          <h1 className="serif" style={{
+            fontSize:'clamp(28px, 8.6vw, 42px)', fontWeight:300, lineHeight:1.05,
+            color:c.text, letterSpacing:'-0.025em', margin:0,
+          }}>{data.name}</h1>
+          {originLine && (
+            <div className="mono" style={{
+              marginTop:9, fontSize:12, fontWeight:600, letterSpacing:'0.16em', textTransform:'uppercase',
+              fontFamily: "'Geist', 'Inter', 'Noto Color Emoji', system-ui, sans-serif",
+              color: isDark ? 'rgba(228,219,255,0.96)' : 'oklch(34% 0.16 282)',
+              whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+            }}>{originLine}</div>
+          )}
+          {(data.decade_range || countsLine) && (
+            <div style={{ marginTop:10, display:'flex', flexDirection:'column', gap:4 }}>
+              {data.decade_range && (
+                <div className="mono" style={{
+                  fontSize:12, letterSpacing:'0.12em',
+                  color: isDark ? 'rgba(210,202,228,0.7)' : 'oklch(46% 0.05 282)',
+                  whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+                }}>
+                  <span style={{ opacity:0.78 }}>{decadeLabel}</span>
+                  {' · '}
+                  <span style={{ textTransform:'uppercase' }}>{data.decade_range}</span>
+                </div>
+              )}
+              {countsLine && (
+                <div className="mono" style={{
+                  fontSize:12, letterSpacing:'0.14em', textTransform:'uppercase',
+                  color: isDark ? 'rgba(210,202,228,0.7)' : 'oklch(46% 0.05 282)',
+                  whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+                }}>{countsLine}</div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div ref={heroRef} onMouseMove={heroMove} onMouseLeave={heroLeave}
@@ -16353,7 +16795,7 @@ function AtlasAlbumStrip({ albums, artistName, isDark, lang, onOpen }) {
 
 function ArtistAtlasSection({
   isDark, lang, artistSlug, visible, onNav,
-  onPlayTrack, navigateToArtist, playerTrack, audioPlaying,
+  onPlayTrack, navigateToArtist, playerTrack, audioPlaying, onQueueNext,
 }) {
   const c = useColors(isDark);
   const [data, setData] = useState(null);
@@ -16532,6 +16974,7 @@ function ArtistAtlasSection({
           navigateToArtist={navigateToArtist}
           isDark={isDark}
           lang={lang}
+          onQueueNext={onQueueNext}
         />
       )}
     </div>
@@ -17666,6 +18109,21 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
   // playback does NOT feed the "For You" taste profile (the user hand-picked it).
   const handleQueueNext = (track) => {
     if (!track || !track.track_id) return;
+    // Dedup: the same track can't be queued twice — a second tap on the same
+    // row (or the row of an already-upcoming track) would silently stack
+    // doubles. Played-and-gone entries above the current one don't count.
+    if (playerTrack && playerTrack.track_id === track.track_id) {
+      showToast(lang === 'ru' ? 'Уже играет' : 'Already playing');
+      return;
+    }
+    const curIdx = playerTrack
+      ? playerPlaylist.findIndex(h => ((h && h.track) ? h.track : h).track_id === playerTrack.track_id)
+      : -1;
+    const upcoming = playerPlaylist.slice(curIdx + 1);
+    if (upcoming.some(h => ((h && h.track) ? h.track : h).track_id === track.track_id)) {
+      showToast(lang === 'ru' ? 'Уже в очереди' : 'Already queued');
+      return;
+    }
     const hit = { track, score: 0, matched_on: 'audio', _queuedNext: true, _noInfluence: true };
     setPlayerPlaylist(prev => {
       const cur = playerTrack;
@@ -18131,7 +18589,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
                 searchHandoff={id === 'search' ? searchHandoff : undefined}
                 onSearchHandoffDone={id === 'search' ? consumeSearchHandoff : undefined}
                 playlistsListing={appPlaylists}
-                onQueueNext={id === 'player' ? handleQueueNext : undefined}
+                onQueueNext={handleQueueNext}
                 onReorderQueue={id === 'player' ? setPlayerPlaylist : undefined}
                 shuffleOn={id === 'player' ? shuffleOn : undefined}
                 onToggleShuffle={id === 'player' ? toggleShuffle : undefined}
@@ -18260,6 +18718,8 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
         isDark={isDark} lang={lang}
         onPlayTrack={handlePlayTrack}
         onAddToPlaylist={openAddToPlaylist}
+        onQueueNext={handleQueueNext}
+        navigateToArtist={navigateToArtist}
         onMore={(q) => handoffToSearch(q, 'grid')} />
     </div>
   );

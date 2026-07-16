@@ -1212,76 +1212,63 @@
 
     /* ═══ Custom range inputs ════════════════════════════════════ */
 
-    /* ── Liquid-glass groove progress bar ────────────────────────
-       Carved-in track (inset shadows) + a translucent glass knob
-       that refracts the accent hue. The native <input> sits at full
-       width; its inline background gradient is the fill layer visible
-       through the transparent track. */
+    /* ── Progress bar — thin line, knob on demand ────────────────
+       Resting state is a bare 4px line with no knob (Spotify-style).
+       Hover/drag thickens the line to 6px and reveals a 12px knob.
+       The fill is painted from --pct (0..100, set inline in JSX)
+       with half-knob compensation, so the fill edge always meets
+       the knob's center — no more fill peeking past the knob.
+       The input itself is 24px tall: that's the click/touch zone. */
     .player-progress {
       -webkit-appearance: none; appearance: none; outline: none; cursor: pointer;
+      height: 24px; background: none;
+      --pp-h: 4px;
+      --pp-knob: 12px;
+      --pp-rest: rgba(255, 255, 255, 0.16);
+      --pp-fill: calc(var(--pp-knob) / 2 + (var(--pct, 0) / 100) * (100% - var(--pp-knob)));
     }
+    .player-progress:hover, .player-progress:active { --pp-h: 6px; }
 
-    /* WebKit — groove carved into the track surface */
+    /* WebKit */
     .player-progress::-webkit-slider-runnable-track {
-      height: 6px; border-radius: 3px; background: transparent;
-      box-shadow:
-        inset 0 2px 3px rgba(0,0,0,0.45),
-        inset 0 -1px 1px rgba(255,255,255,0.06),
-        0 1px 0 rgba(255,255,255,0.04);
+      height: var(--pp-h); border-radius: 999px;
+      background: linear-gradient(to right,
+        var(--player-accent, #7C5BFF) var(--pp-fill),
+        var(--pp-rest) var(--pp-fill));
+      transition: height .18s ease;
     }
-
-    /* Glass knob — translucent sphere with accent-glow halo */
     .player-progress::-webkit-slider-thumb {
-      -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%;
-      background: radial-gradient(circle at 40% 30%,
-        rgba(255,255,255,0.92) 0%,
-        rgba(255,255,255,0.28) 40%,
-        rgba(255,255,255,0.08) 100%);
-      box-shadow:
-        0 0 0 1px rgba(255,255,255,0.20),
-        0 0 10px -2px var(--player-accent, #7C5BFF),
-        0 1px 3px rgba(0,0,0,0.35),
-        inset 0 1px 2px rgba(255,255,255,0.55);
+      -webkit-appearance: none;
+      width: var(--pp-knob); height: var(--pp-knob); border-radius: 50%;
+      margin-top: calc((var(--pp-h) - var(--pp-knob)) / 2);
+      background: #fff;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.40);
+      opacity: 0;
+      transition: opacity .15s ease, margin-top .18s ease;
       cursor: grab;
-      transition: transform 0.15s ease, box-shadow 0.18s ease;
     }
-    .player-progress::-webkit-slider-thumb:hover {
-      transform: scale(1.25);
-      box-shadow:
-        0 0 0 1.5px rgba(255,255,255,0.25),
-        0 0 14px -1px var(--player-accent, #7C5BFF),
-        0 2px 6px rgba(0,0,0,0.40),
-        inset 0 1px 2px rgba(255,255,255,0.60);
-    }
+    .player-progress:hover::-webkit-slider-thumb,
+    .player-progress:active::-webkit-slider-thumb { opacity: 1; }
+    .player-progress:active::-webkit-slider-thumb { cursor: grabbing; }
 
-    /* Firefox — same liquid-glass look via moz pseudo-elements */
+    /* Firefox */
     .player-progress::-moz-range-track {
-      height: 6px; border-radius: 3px; background: transparent;
-      box-shadow:
-        inset 0 2px 3px rgba(0,0,0,0.45),
-        inset 0 -1px 1px rgba(255,255,255,0.06),
-        0 1px 0 rgba(255,255,255,0.04);
+      height: var(--pp-h); border-radius: 999px;
+      background: var(--pp-rest);
+      transition: height .18s ease;
     }
     .player-progress::-moz-range-progress {
-      border-radius: 3px;
+      height: var(--pp-h); border-radius: 999px;
       background: var(--player-accent, #7C5BFF);
-      box-shadow:
-        inset 0 1px 1px rgba(255,255,255,0.40),
-        0 0 7px -2px var(--player-accent, #7C5BFF);
     }
     .player-progress::-moz-range-thumb {
-      width: 14px; height: 14px; border-radius: 50%; border: none;
-      background: radial-gradient(circle at 40% 30%,
-        rgba(255,255,255,0.92) 0%,
-        rgba(255,255,255,0.28) 40%,
-        rgba(255,255,255,0.08) 100%);
-      box-shadow:
-        0 0 0 1px rgba(255,255,255,0.20),
-        0 0 10px -2px var(--player-accent, #7C5BFF),
-        0 1px 3px rgba(0,0,0,0.35),
-        inset 0 1px 2px rgba(255,255,255,0.55);
-      cursor: grab;
+      width: var(--pp-knob); height: var(--pp-knob); border-radius: 50%; border: none;
+      background: #fff;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.40);
+      opacity: 0; transition: opacity .15s ease; cursor: grab;
     }
+    .player-progress:hover::-moz-range-thumb,
+    .player-progress:active::-moz-range-thumb { opacity: 1; }
 
     /* ── Volume slider (unchanged) ─────────────────────────────── */
     .player-volume {
@@ -1905,6 +1892,43 @@
       .hint-badge__pop { transition: opacity .2s ease; }
     }
 
+    /* ── HintBadge, mobile: tap → bottom sheet (portal to <body>) ─────────
+       The hover pop can't hover on touch and used to spill past the screen
+       edge. Same visual language as the pop, but pinned to the bottom. */
+    .hint-sheet-scrim {
+      position: fixed; inset: 0; z-index: 9000;
+      background: rgba(8, 8, 14, 0.52);
+      display: flex; align-items: flex-end;
+      animation: hintScrimIn .22s ease;
+    }
+    .hint-sheet {
+      width: 100%;
+      border-radius: 20px 20px 0 0;
+      padding: 10px 20px calc(20px + env(safe-area-inset-bottom, 0px));
+      color: rgba(240,238,248,0.96);
+      background: linear-gradient(172deg, rgba(58,56,74,0.99), rgba(38,36,52,0.99));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.10), 0 -18px 44px rgba(0,0,0,0.45);
+      font-size: 13.5px; line-height: 1.55;
+      animation: hintSheetUp .28s cubic-bezier(.22,.9,.3,1);
+    }
+    .hint-sheet__grip {
+      display: block; width: 40px; height: 4px; border-radius: 2px;
+      margin: 0 auto 12px; background: rgba(255,255,255,0.22);
+    }
+    .hint-sheet__body strong { color: #fff; }
+    body[data-theme="light"] .hint-sheet {
+      color: rgba(40,33,58,0.95);
+      background: linear-gradient(172deg, rgba(255,255,255,0.99), rgba(238,235,247,0.99));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.95), 0 -18px 44px rgba(40,30,70,0.28);
+    }
+    body[data-theme="light"] .hint-sheet__grip { background: rgba(40,30,80,0.18); }
+    body[data-theme="light"] .hint-sheet__body strong { color: #1a1430; }
+    @keyframes hintScrimIn { from { opacity: 0; } }
+    @keyframes hintSheetUp { from { transform: translateY(24px); opacity: .4; } }
+    @media (prefers-reduced-motion: reduce) {
+      .hint-sheet-scrim, .hint-sheet { animation: none; }
+    }
+
     /* ── Lift-on-hover row (reuses the welcome FeatureCard feel) ──────────
        A list row that rises slightly and casts a tinted glow on hover.
        --lift-glow sets the shadow colour; defaults to the purple accent.
@@ -2119,6 +2143,36 @@
     .player-icon-burst--fire  { background: radial-gradient(circle, rgba(255,150,40,0.78) 0%, rgba(255,90,0,0) 70%); }
     .player-icon-burst--water { background: radial-gradient(circle, rgba(80,176,255,0.74) 0%, rgba(40,120,255,0) 70%); }
 
+    /* ─── Lyric line (объясни строку): CSS-only hover ────────────────────────
+       The row tint + ✨ spark used to be per-line React hover state — every
+       mouseenter re-rendered a line while the player canvases ran, which read
+       as the lyrics "juddering" on small laptops. The spark span is always in
+       the flow (constant width), so the text itself never shifts. */
+    .lyric-line {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 0 -8px;
+      padding: 2px 8px;
+      border-radius: 8px;
+    }
+    .lyric-line--on { cursor: pointer; }
+    .lyric-line__spark {
+      flex: none;
+      font-size: 13px;
+      line-height: 1;
+      opacity: 0.32;
+      transition: opacity 140ms;
+    }
+    .lyric-line--open { background: rgba(124,91,255,0.10); }
+    .lyric-line--open .lyric-line__spark { opacity: 1; }
+    body[data-theme="light"] .lyric-line--open { background: rgba(124,91,255,0.08); }
+    @media (hover: hover) {
+      .lyric-line--on:hover { background: rgba(124,91,255,0.10); }
+      .lyric-line--on:hover .lyric-line__spark { opacity: 0.9; }
+      body[data-theme="light"] .lyric-line--on:hover { background: rgba(124,91,255,0.08); }
+    }
+
     /* ─── Огонёк/Вода: cover combustion ──────────────────────────────────────
        Two absolutely-positioned <canvas> layers overflow the cover box. The
        BACK layer (z:-1) renders behind the art — flame walls / mist rising
@@ -2127,7 +2181,7 @@
        pre-rendered sprites; here we only place the layers + the ambient aura. */
     .cover-fx {
       position: absolute;
-      inset: -30% -18% -14% -18%;
+      inset: -45% -18% -14% -18%;
       pointer-events: none;
     }
     .cover-fx--back  { z-index: -1; }
@@ -2137,16 +2191,26 @@
       inset: 0;
       width: 100%;
       height: 100%;
+      /* 4-edge feather: particles dissolve before reaching the canvas
+         boundary instead of hard-clipping against it. Vertical × horizontal
+         gradients intersected = a rectangular vignette (same pattern as the
+         atlas cutout mask). */
+      -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 10%, #000 92%, transparent 100%),
+                          linear-gradient(90deg, transparent 0, #000 7%, #000 93%, transparent 100%);
+      -webkit-mask-composite: source-in;
+      mask-image: linear-gradient(180deg, transparent 0, #000 10%, #000 92%, transparent 100%),
+                  linear-gradient(90deg, transparent 0, #000 7%, #000 93%, transparent 100%);
+      mask-composite: intersect;
     }
-    /* Mobile: the flames used to hit the canvas's own -30%/-14% bounds well
-       before the screen edge — a hard horizontal cut mid-flame. Give the
-       canvas more vertical headroom and fade the last stretch with a mask so
-       whatever still reaches the edge dies out smoothly instead of clipping. */
+    /* Mobile: full-bleed sideways — the old -18% side bounds left a dead
+       band of untouched background between the effect and the screen edge.
+       Stretch the layer to the viewport (the art wrap is centered) and let
+       the shared 4-edge mask fade the last stretch on every side. */
     @media (max-width: 768px) {
-      .cover-fx { inset: -58% -18% -32% -18%; }
-      .cover-fx__canvas {
-        -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 14%, #000 88%, transparent 100%);
-        mask-image: linear-gradient(180deg, transparent 0, #000 14%, #000 88%, transparent 100%);
+      .cover-fx {
+        inset: -58% auto -32% auto;
+        left: calc(50% - 50vw);
+        right: calc(50% - 50vw);
       }
     }
 
@@ -3058,55 +3122,14 @@
         0 30px 80px rgba(40,30,60,0.22),
         0 0 0 1px rgba(22,22,32,0.08) inset;
     }
-    /* Slider thumbs: glass knob adapts to light — softer groove, frosted border,
-       and a tinted accent glow that stays visible on pale surfaces. */
+    /* Light theme: dimmer resting line + a knob that keeps a visible edge
+       on pale surfaces. */
+    body[data-theme="light"] .player-progress { --pp-rest: rgba(24, 18, 48, 0.16); }
     body[data-theme="light"] .player-progress::-webkit-slider-thumb {
-      background: radial-gradient(circle at 40% 30%,
-        rgba(255,255,255,1) 0%,
-        rgba(255,255,255,0.45) 40%,
-        rgba(255,255,255,0.18) 100%);
-      box-shadow:
-        0 0 0 1px rgba(40,30,60,0.10),
-        0 0 10px -2px color-mix(in srgb, var(--player-accent, #7C5BFF) 60%, transparent),
-        0 1px 4px rgba(40,30,60,0.18),
-        inset 0 1px 2px rgba(255,255,255,0.70);
-    }
-    body[data-theme="light"] .player-progress::-webkit-slider-thumb:hover {
-      box-shadow:
-        0 0 0 1.5px rgba(40,30,60,0.12),
-        0 0 14px -1px color-mix(in srgb, var(--player-accent, #7C5BFF) 70%, transparent),
-        0 2px 6px rgba(40,30,60,0.22),
-        inset 0 1px 2px rgba(255,255,255,0.80);
+      box-shadow: 0 0 0 1px rgba(40,30,60,0.16), 0 1px 4px rgba(40,30,60,0.22);
     }
     body[data-theme="light"] .player-progress::-moz-range-thumb {
-      background: radial-gradient(circle at 40% 30%,
-        rgba(255,255,255,1) 0%,
-        rgba(255,255,255,0.45) 40%,
-        rgba(255,255,255,0.18) 100%);
-      box-shadow:
-        0 0 0 1px rgba(40,30,60,0.10),
-        0 0 10px -2px color-mix(in srgb, var(--player-accent, #7C5BFF) 60%, transparent),
-        0 1px 4px rgba(40,30,60,0.18),
-        inset 0 1px 2px rgba(255,255,255,0.70);
-    }
-
-    /* Light theme groove — shallower inset, frosted highlights */
-    body[data-theme="light"] .player-progress::-webkit-slider-runnable-track {
-      box-shadow:
-        inset 0 2px 3px rgba(40,30,60,0.18),
-        inset 0 -1px 1px rgba(255,255,255,0.70),
-        0 1px 0 rgba(255,255,255,0.60);
-    }
-    body[data-theme="light"] .player-progress::-moz-range-track {
-      box-shadow:
-        inset 0 2px 3px rgba(40,30,60,0.18),
-        inset 0 -1px 1px rgba(255,255,255,0.70),
-        0 1px 0 rgba(255,255,255,0.60);
-    }
-    body[data-theme="light"] .player-progress::-moz-range-progress {
-      box-shadow:
-        inset 0 1px 1px rgba(255,255,255,0.50),
-        0 0 7px -2px color-mix(in srgb, var(--player-accent, #7C5BFF) 60%, transparent);
+      box-shadow: 0 0 0 1px rgba(40,30,60,0.16), 0 1px 4px rgba(40,30,60,0.22);
     }
 
     /* Volume thumb: frosted glass for light */
@@ -3562,14 +3585,16 @@
       /* Facts rail: the ‹ › arrows and scope pills are finger targets here. */
       .fact-nav-btn { width: 36px; height: 36px; }
       .facts-scope-toggle > button { padding: 9px 14px; }
-      .player-progress-row, .player-actions-row { padding: 0 14px; }
-      /* Fatter seek bar: the 6px desktop groove was too fine to scrub
-         precisely with a finger. !important beats the inline height/radius. */
-      .player-progress { height: 14px !important; border-radius: 7px !important; }
-      .player-progress::-webkit-slider-runnable-track { height: 14px; border-radius: 7px; }
-      .player-progress::-moz-range-track { height: 14px; border-radius: 7px; }
-      .player-progress::-webkit-slider-thumb { width: 22px; height: 22px; }
-      .player-progress::-moz-range-thumb { width: 22px; height: 22px; }
+      .player-actions-row { padding: 0 14px; }
+      /* Near-full-width seek line: the touch zone is the input's height
+         (32px), the visible line stays slim (5px). The knob only shows
+         while actually scrubbing. */
+      .player-progress-row { padding: 0 6px; }
+      .player-progress { height: 32px; --pp-h: 5px; --pp-knob: 14px; }
+      .player-progress:active { --pp-h: 7px; }
+      .player-progress:hover:not(:active) { --pp-h: 5px; }
+      .player-progress:hover:not(:active)::-webkit-slider-thumb { opacity: 0; }
+      .player-progress:hover:not(:active)::-moz-range-thumb { opacity: 0; }
 
       /* ── Recommend / For You: tighter gutters + bigger tap targets ───── */
       .rec2-go { padding: 12px 16px; }

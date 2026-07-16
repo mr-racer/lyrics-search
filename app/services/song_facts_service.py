@@ -139,6 +139,32 @@ def _save_song_facts_to_sqlite(collection_name: str, artist: str, song: str, fac
     MetadataDB.add_song_facts_batch(key, collection_name, facts, source="songfacts.com")
 
 
+async def _apply_fact_relations(slug: str, facts: List[str], title: str, artist: str) -> None:
+    """Best-effort producer/sample extraction hook, run inline after facts save.
+
+    NLP (GLiNER2) and LLM errors here must never break facts fetching/indexing
+    -- everything is swallowed, same pattern as
+    ``app/services/yandex/enrichment.py``. The heavy work (GLiNER2 + LLM) runs
+    off the event loop inside ``process_song_facts_async`` since
+    ``fetch_song_facts`` is awaited from ``library_service``'s
+    ``asyncio.gather`` on the running loop.
+    """
+    try:
+        from .fact_relations import process_song_facts_async
+
+        res = await process_song_facts_async(slug, facts, title, artist, MetadataDB)
+        producers = res.get("producers", []) or []
+        samples = res.get("samples", []) or []
+        sampled_by = res.get("sampled_by", []) or []
+        n_samples = len(samples) + len(sampled_by)
+        logger.info(
+            "[facts-re] slug=%s producers=%d samples=%d/%d",
+            slug, len(producers), n_samples, len(facts),
+        )
+    except Exception as e:
+        logger.warning("[facts-re] slug=%s failed: %s", slug, e)
+
+
 async def fetch_song_facts(
     artist: str,
     song: str,
@@ -160,6 +186,8 @@ async def fetch_song_facts(
 
     _save_song_facts_to_sqlite(collection_name, artist, song, facts)
     logger.info("[SongFacts] Cached %d facts for '%s — %s'", len(facts), artist, song)
+    key = get_song_facts_key(artist, song)
+    await _apply_fact_relations(key, facts, song, artist)
     return "\n\n".join(facts)
 
 
