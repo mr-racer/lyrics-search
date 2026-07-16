@@ -1089,7 +1089,7 @@ function useMediaSession({ currentTrack, isPlaying, audioRef, onPlay, onPause, o
 let _playerOwnsSpace = false;
 
 // ─── useGlobalKeyboardShortcuts — document-level playback + nav shortcuts ───
-function useGlobalKeyboardShortcuts({ audio, onNavToSection, onToggleLyrics, onCloseLyrics }) {
+function useGlobalKeyboardShortcuts({ audio, onNavToSection, onToggleLyrics, onCloseLyrics, onStepTrack }) {
   useEffect(() => {
     function onKey(e) {
       // Skip if focus is in an input/textarea/contentEditable
@@ -1110,8 +1110,10 @@ function useGlobalKeyboardShortcuts({ audio, onNavToSection, onToggleLyrics, onC
       if (e.key === 'ArrowLeft') {
         e.preventDefault();
         if (e.shiftKey) {
-          // TODO Plan 4: prev track in queue
-        } else {
+          onStepTrack?.(-1);
+        } else if (!_playerOwnsSpace) {
+          // Plain-arrow seek only when PlayerSection is unmounted — its own
+          // handler seeks too, and both firing doubled every seek step.
           const t = (audio?.audioRef?.current?.currentTime || 0) - 10;
           audio?.seek?.(Math.max(0, t));
         }
@@ -1120,8 +1122,8 @@ function useGlobalKeyboardShortcuts({ audio, onNavToSection, onToggleLyrics, onC
       if (e.key === 'ArrowRight') {
         e.preventDefault();
         if (e.shiftKey) {
-          // TODO Plan 4: next track in queue
-        } else {
+          onStepTrack?.(1);
+        } else if (!_playerOwnsSpace) {
           const t = (audio?.audioRef?.current?.currentTime || 0) + 10;
           audio?.seek?.(Math.min(audio?.duration || t, t));
         }
@@ -1166,7 +1168,7 @@ function useGlobalKeyboardShortcuts({ audio, onNavToSection, onToggleLyrics, onC
     }
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [audio, onNavToSection, onToggleLyrics, onCloseLyrics]);
+  }, [audio, onNavToSection, onToggleLyrics, onCloseLyrics, onStepTrack]);
 }
 
 function secsToMMSS(s) {
@@ -2284,8 +2286,27 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
     el.classList.add('fy-launching');
     setTimeout(() => { el.classList.remove('fy-launching'); }, 650);
   };
+  // Loading state: a fresh wave takes ~1-2s of server work before anything
+  // audible happens — without feedback the click reads as "nothing happened".
+  // While waveLaunching the orb boils (.fy-loading) and the glyph becomes a
+  // spinner; playback starting (or a 10s safety net) clears it.
+  const [waveLaunching, setWaveLaunching] = useState(false);
+  const launchClearRef = useRef(null);
+  useEffect(() => {
+    if (waveLaunching && wavePlaying) {
+      setWaveLaunching(false);
+      if (launchClearRef.current) { clearTimeout(launchClearRef.current); launchClearRef.current = null; }
+    }
+  }, [waveLaunching, wavePlaying]);
+  useEffect(() => () => { if (launchClearRef.current) clearTimeout(launchClearRef.current); }, []);
   const handleOrbClick = () => {
-    if (!waveLive) launchSpring();
+    if (waveLaunching) return;  // wave is already being built — swallow re-clicks
+    if (!waveLive) {
+      launchSpring();
+      setWaveLaunching(true);
+      if (launchClearRef.current) clearTimeout(launchClearRef.current);
+      launchClearRef.current = setTimeout(() => setWaveLaunching(false), 10000);
+    }
     handleOrb();
   };
 
@@ -2392,7 +2413,7 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
         <div style={{ display:'flex', alignItems:'flex-start', gap:'clamp(18px,1.8vw,28px)', marginTop: isMobile ? 'clamp(14px,2.2vh,22px)' : 'clamp(22px,3.4vh,38px)' }}>
             <div style={{ width: isMobile ? 84 : 112, height: isMobile ? 84 : 112, flex:'none', display:'grid', placeItems:'center' }}>
               <div style={{ transform:`scale(${isMobile ? 1.25 : 1.7})` }}>
-                <div ref={orbRef} className={`fy-hybrid tint-irid${wavePlaying ? ' fy-playing' : ''}`}
+                <div ref={orbRef} className={`fy-hybrid tint-irid${wavePlaying ? ' fy-playing' : ''}${waveLaunching ? ' fy-loading' : ''}`}
                      style={orbVars}
                      onMouseEnter={() => setHoverCtl(true)} onMouseLeave={orbLeave} onMouseMove={orbMove}
                      onClick={handleOrbClick} role="button" tabIndex={0}
@@ -2405,9 +2426,11 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
                   {/* .fy-breathe — idle-only slow swell (CSS drops it while playing) */}
                   <span className="fy-clip"><span className="fy-breathe"><span className="fy-blob fy-bg1" /><span className="fy-blob fy-bg2" /><span className="fy-blob fy-bg3" /><span className="fy-blob fy-bg4" /></span></span>
                   <span className="fy-glasscap" />
-                  {wavePlaying
-                    ? <span className="fy-glyph" style={{ marginLeft: 0 }}><svg width="15" height="15" viewBox="0 0 24 24" fill="#fff"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg></span>
-                    : <span className="fy-glyph">▶</span>}
+                  {waveLaunching
+                    ? <span className="fy-glyph" style={{ marginLeft: 0 }}><span className="fy-spinner" /></span>
+                    : wavePlaying
+                      ? <span className="fy-glyph" style={{ marginLeft: 0 }}><svg width="15" height="15" viewBox="0 0 24 24" fill="#fff"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg></span>
+                      : <span className="fy-glyph">▶</span>}
                   <span className="fy-halo" />
                 </div>
               </div>
@@ -2899,7 +2922,9 @@ function SpotlightSearch({ open, onClose, isDark, lang, onPlayTrack, onAddToPlay
       <div style={{ width:'min(92vw, 680px)' }} onMouseDown={(e) => e.stopPropagation()}>
         {/* Search bar */}
         <div style={{ ...glass, display:'flex', alignItems:'center', gap:12, padding:'16px 20px', borderRadius:20,
-          boxShadow:'0 30px 80px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.14)' }}>
+          boxShadow: isDark
+            ? '0 30px 80px rgba(0,0,0,.55), inset 0 1px 0 rgba(255,255,255,.14)'
+            : '0 26px 60px rgba(46,36,86,.22), inset 0 1px 0 rgba(255,255,255,.95)' }}>
           <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke={c.textMuted} strokeWidth="2" strokeLinecap="round" style={{ flex:'none' }}><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
           <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)} onKeyDown={onInputKey}
             placeholder={lang==='ru'?'название, артист или альбом…':'song, artist or album…'}
@@ -3143,9 +3168,10 @@ function HomeDailyExtras({ isDark, lang }) {
   useEffect(() => {
     let alive = true;
     const today = new Date().toDateString();
-    // v2: facts now carry artist/title/image for the attribution thumbs —
-    // a stale v1 cache (text-only shape) would render a day of empty thumbs.
-    const cacheKey = 'musix_daily_facts_v2';
+    // v3: server now prettifies slug-shaped names and always resolves a thumb;
+    // facts are shown in full, so we pick the 3 shortest of a larger batch.
+    // The key bump invalidates v2 day-caches built from the old shape.
+    const cacheKey = 'musix_daily_facts_v3';
     let cached = null;
     try { cached = JSON.parse(localStorage.getItem(cacheKey) || 'null'); } catch {}
     // Shape guard: a day-cache filled from a pre-attribution server (facts
@@ -3155,9 +3181,14 @@ function HomeDailyExtras({ isDark, lang }) {
     if (cached && cached.date === today && cached.lang === lang && Array.isArray(cached.facts) && cached.facts.every(freshShape)) {
       setFacts(cached.facts);
     } else {
-      apiFetch(`/metadata/random-facts?limit=3&lang=${encodeURIComponent(lang)}`).then(r => {
+      apiFetch(`/metadata/random-facts?limit=6&lang=${encodeURIComponent(lang)}`).then(r => {
         if (!alive) return;
-        const list = Array.isArray(r) ? r : [];
+        const all = Array.isArray(r) ? r : [];
+        // Facts render in full (no clamp) — of the fetched batch keep the 3
+        // shortest so the strip stays a quiet footnote, not a paragraph wall.
+        const list = [...all]
+          .sort((a, b) => (a.fact || '').length - (b.fact || '').length)
+          .slice(0, 3);
         setFacts(list);
         try { localStorage.setItem(cacheKey, JSON.stringify({ date: today, lang, facts: list })); } catch {}
       }).catch(() => { if (alive) setFacts([]); });
@@ -3241,8 +3272,9 @@ function HomeDailyExtras({ isDark, lang }) {
                   </div>
                 </div>
               </div>
-              <div style={{ fontSize:13, color:c.textMuted, lineHeight:1.55,
-                display:'-webkit-box', WebkitLineClamp:3, WebkitBoxOrient:'vertical', overflow:'hidden' }}>
+              {/* Full text, no clamp — a cut-off fact is a broken promise; the
+                  batch above is pre-filtered to the shortest ones instead. */}
+              <div style={{ fontSize:13, color:c.textMuted, lineHeight:1.55 }}>
                 {f.fact}
               </div>
             </div>
@@ -5846,7 +5878,7 @@ function PlaylistsListView({ playlists, onOpen, onCreate, onPlayAll, lang, isDar
 // a loose row of covers with enlarged captions. Data comes from
 // /recommend/vibes/album-suggestions (per-vibe closest album by mean CLAP);
 // clicks resolve into the full AlbumSummary so the shared AlbumModal opens.
-function VibeAlbumRail({ suggestions, albums, onAlbumOpen, isDark, lang }) {
+function VibeAlbumRail({ suggestions, albums, onAlbumOpen, isDark, lang, loading = false }) {
   const c = useColors(isDark);
   const ru = lang === 'ru';
   const resolve = (s) =>
@@ -5865,8 +5897,27 @@ function VibeAlbumRail({ suggestions, albums, onAlbumOpen, isDark, lang }) {
         fontSize:'clamp(16px, 1.6vw, 19px)', lineHeight:1.4,
         color: isDark ? 'rgba(216,204,255,.8)' : 'oklch(44% 0.09 295)', margin:'7px 0 16px',
       }}>
-        {ru ? 'Альбомы, которые звучат как твои вайбики — но целиком' : 'Albums that sound like your vibes — front to back'}
+        {loading
+          ? (ru ? 'Подбираем альбомы под твои вайбики…' : 'Picking albums for your vibes…')
+          : (ru ? 'Альбомы, которые звучат как твои вайбики — но целиком' : 'Albums that sound like your vibes — front to back')}
       </div>
+      {loading ? (
+        /* Reserved-space skeleton: same tile geometry as the real rail, so the
+           picks materialize in place instead of shoving the grid down later. */
+        <div className="vibe-albums-rail" aria-hidden="true">
+          {[0, 1, 2, 3].map(i => (
+            <div key={i} className="vibe-album-tile" style={{ '--vt-d': `${i * 70}ms`, cursor: 'default' }}>
+              <div className="vibe-album-cover" style={{ boxShadow: 'none' }}>
+                <Skel w={'100%'} h={'100%'} r={16} isDark={isDark} />
+              </div>
+              <div className="vibe-album-caption">
+                <Skel w={'82%'} h={13} r={6} isDark={isDark} />
+                <Skel w={'56%'} h={11} r={6} isDark={isDark} style={{ marginTop: 6 }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
       <div className="vibe-albums-rail">
         {suggestions.map((s, i) => {
           const full = resolve(s);
@@ -5891,12 +5942,13 @@ function VibeAlbumRail({ suggestions, albums, onAlbumOpen, isDark, lang }) {
           );
         })}
       </div>
+      )}
     </div>
   );
 }
 
 // ─── ALBUMS GRID TAB ──────────────────────────────────────────────────────────
-function AlbumsGridTab({ albums, suggestions, sort, onSortChange, onAlbumOpen, isDark, lang, navigateToArtist }) {
+function AlbumsGridTab({ albums, suggestions, suggestionsLoading, sort, onSortChange, onAlbumOpen, isDark, lang, navigateToArtist }) {
   const c = useColors(isDark);
   const sortOpts = [
     {id:'alphabetical', label: lang==='ru' ? 'А-Я' : 'A-Z'},
@@ -5909,9 +5961,10 @@ function AlbumsGridTab({ albums, suggestions, sort, onSortChange, onAlbumOpen, i
   }
   return (
     <>
-      {suggestions && suggestions.length > 0 && (
+      {(suggestionsLoading || (suggestions && suggestions.length > 0)) && (
         <VibeAlbumRail
-          suggestions={suggestions}
+          suggestions={suggestions || []}
+          loading={!!suggestionsLoading && !(suggestions && suggestions.length > 0)}
           albums={albums}
           onAlbumOpen={onAlbumOpen}
           isDark={isDark} lang={lang}
@@ -6676,6 +6729,7 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
   const [stats, setStats] = useState(null);                  // /library/stats
   const [albumsData, setAlbumsData] = useState(null);        // /library/albums
   const [aiAlbums, setAiAlbums] = useState([]);              // /recommend/vibes/album-suggestions
+  const [aiAlbumsLoading, setAiAlbumsLoading] = useState(true); // reserve the rail slot until the picks resolve
   const [recentData, setRecentData] = useState(null);        // /playback/recent
   const [listenData, setListenData] = useState(null);        // /library/listening-stats
   const [rhythmData, setRhythmData] = useState(null);        // /library/rhythm
@@ -6763,9 +6817,11 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
       if (cached && Array.isArray(cached.suggestions) && cached.suggestions.length > 0
           && (Date.now() - (cached.ts || 0)) < 6 * 3600 * 1000) {
         setAiAlbums(cached.suggestions);
+        setAiAlbumsLoading(false);
         return;
       }
     } catch {}
+    setAiAlbumsLoading(true);
     apiFetch(`/recommend/vibes/album-suggestions?lang=${lang}`)
       .then(d => {
         const s = (d && d.suggestions) || [];
@@ -6774,7 +6830,8 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
           try { localStorage.setItem(cacheKey, JSON.stringify({ ts: Date.now(), suggestions: s })); } catch {}
         }
       })
-      .catch(() => setAiAlbums([]));
+      .catch(() => setAiAlbums([]))
+      .finally(() => setAiAlbumsLoading(false));
   }, [lang, visible]);
 
   // ── Taste map: lazy — only built/fetched the first time the Stats tab opens
@@ -6881,6 +6938,7 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
             <AlbumsGridTab
               albums={albumsData?.albums || []}
               suggestions={aiAlbums}
+              suggestionsLoading={aiAlbumsLoading}
               sort={albumSort}
               onSortChange={setAlbumSort}
               onAlbumOpen={(a, rect) => setAlbumModal({ album: a, originRect: rect || null })}
@@ -6974,7 +7032,7 @@ function LibraryHeroLine({ stats, albumCount, isDark, lang }) {
   const genres = stats?.unique_genres ?? '—';
   const yr = stats?.year_range;
   const yearText = yr ? `${yr.min}—${yr.max}` : '—';
-  const dot = <span style={{ color: 'rgba(255,255,255,.18)', margin:'0 9px' }}>·</span>;
+  const dot = <span style={{ color: isDark ? 'rgba(255,255,255,.18)' : 'rgba(10,10,18,.22)', margin:'0 9px' }}>·</span>;
   return (
     <div style={{
       background: 'linear-gradient(90deg, transparent 0%, rgba(120,80,200,.13) 50%, transparent 100%)',
@@ -14637,8 +14695,10 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
       // and was the original cause of the playback re-render storm.)
       const now = audio?.audioRef?.current?.currentTime || 0;
       if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
-      if (e.code === 'ArrowLeft') seek(Math.max(0, now - 10));
-      if (e.code === 'ArrowRight') seek(Math.min(duration, now + 10));
+      // Shift+arrows = prev/next track — handled by the global shortcut hook;
+      // seeking here too would double-act on one keypress.
+      if (e.code === 'ArrowLeft' && !e.shiftKey) seek(Math.max(0, now - 10));
+      if (e.code === 'ArrowRight' && !e.shiftKey) seek(Math.min(duration, now + 10));
       if (e.code === 'ArrowUp') { e.preventDefault(); setVolume(v => Math.min(1, v + 0.05)); }
       if (e.code === 'ArrowDown') { e.preventDefault(); setVolume(v => Math.max(0, v - 0.05)); }
     };
@@ -17356,6 +17416,14 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     onNavToSection: setSection,
     onToggleLyrics: () => { if (section === 'player') setLyricsMode(m => !m); },
     onCloseLyrics:  () => { if (section === 'player') setLyricsMode(false); },
+    // Shift+←/→ — prev/next in the current queue (same unwrap+handoff recipe
+    // as MiniPlaybackPopout: handleTrackChange takes the FLAT track).
+    onStepTrack: (dir) => {
+      const flat = (playerPlaylist || []).map(h => (h && h.track) ? h.track : h);
+      const idx = playerTrack ? flat.findIndex(t => t && t.track_id === playerTrack.track_id) : -1;
+      const nxt = idx >= 0 ? flat[idx + dir] : null;
+      if (nxt) handleTrackChange(nxt);
+    },
   });
 
   // Best-effort playback event on tab close / navigation away.
@@ -17916,6 +17984,9 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
         overflow: 'hidden',
         position: section === 'home' ? 'relative' : 'absolute',
         visibility: section === 'home' ? 'visible' : 'hidden',
+        // Re-entry animation: sections in sectionMap below get the same
+        // fadeIn on activation; without it the home snaps into view.
+        animation: section === 'home' ? 'fadeIn 0.35s ease' : 'none',
       }}>
         <LandingScreen
           isDark={isDark} lang={lang}

@@ -151,6 +151,23 @@ def add_song_fact(
 
 # ── Random facts (landing page) ──────────────────────────────────────────────
 
+def _prettify_name(name: str | None) -> str | None:
+    """Display-name guard: slug-shaped strings → Title Case.
+
+    ``upsert_artist_audiodb`` inserts ``name=slug`` as a fallback when the
+    facts pipeline hasn't named the artist yet, so attribution rows can carry
+    "the-weeknd" instead of "The Weeknd". Only strings that LOOK like slugs
+    (all-lowercase latin/digits with hyphens) are rewritten — anything with
+    uppercase, spaces or non-latin letters passes through untouched.
+    """
+    if not name:
+        return name
+    import re
+    if re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name) and ("-" in name or len(name) > 2):
+        return name.replace("-", " ").title()
+    return name
+
+
 def _artist_photo(slug: str | None, collection_name: str) -> str | None:
     """Cached AudioDB photo (thumb/cutout) for an artist — a cheap SQLite read."""
     if not slug:
@@ -162,12 +179,45 @@ def _artist_photo(slug: str | None, collection_name: str) -> str | None:
     return ad.get("thumb_path") or ad.get("cutout_path")
 
 
+def _artist_any_cover(request: Request, collection_name: str, artist: str) -> str | None:
+    """Fallback thumb for artist facts without an AudioDB photo: the cover of
+    any track by this artist (one filtered scroll)."""
+    db_client = getattr(request.app.state, "db_client", None) if request else None
+    if db_client is None or not artist:
+        return None
+    from qdrant_client import models as qmodels
+    flt = qmodels.Filter(
+        should=[
+            qmodels.FieldCondition(key="artist", match=qmodels.MatchValue(value=artist)),
+            qmodels.FieldCondition(key="artists", match=qmodels.MatchValue(value=artist)),
+        ],
+    )
+    try:
+        points, _ = db_client.qdrant.scroll(
+            collection_name=collection_name,
+            scroll_filter=flt,
+            limit=24,
+            with_payload=["cover_art_path"],
+            with_vectors=False,
+        )
+    except Exception:
+        return None
+    for p in points or []:
+        cover = (p.payload or {}).get("cover_art_path")
+        if cover:
+            return cover
+    return None
+
+
 def _song_cover(request: Request, collection_name: str, artist: str, title: str) -> str | None:
     """cover_art_path of the track matching (artist, title) — one filtered scroll.
 
     The SQLite fact row stores the PRIMARY artist's name, while the Qdrant
     ``artist`` payload keeps the raw tag ("Eminem, Nate Dogg") — so the match
     also accepts the per-participant ``artists`` list (element-wise match).
+    Exact title match first; on a miss (SQLite titles can be normalized
+    differently than the tag payload) fall back to a case-insensitive
+    comparison over the artist's tracks.
     """
     db_client = getattr(request.app.state, "db_client", None) if request else None
     if db_client is None or not artist or not title:
@@ -190,9 +240,32 @@ def _song_cover(request: Request, collection_name: str, artist: str, title: str)
         )
     except Exception:
         return None
-    if not points:
+    if points:
+        return (points[0].payload or {}).get("cover_art_path")
+    # Fallback: exact-title miss — compare case-insensitively across the
+    # artist's tracks (covers "Back In Black" vs "Back in Black" mismatches).
+    flt2 = qmodels.Filter(
+        should=[
+            qmodels.FieldCondition(key="artist", match=qmodels.MatchValue(value=artist)),
+            qmodels.FieldCondition(key="artists", match=qmodels.MatchValue(value=artist)),
+        ],
+    )
+    try:
+        points, _ = db_client.qdrant.scroll(
+            collection_name=collection_name,
+            scroll_filter=flt2,
+            limit=64,
+            with_payload=["cover_art_path", "title"],
+            with_vectors=False,
+        )
+    except Exception:
         return None
-    return (points[0].payload or {}).get("cover_art_path")
+    want = title.casefold().strip()
+    for p in points or []:
+        payload = p.payload or {}
+        if (payload.get("title") or "").casefold().strip() == want and payload.get("cover_art_path"):
+            return payload.get("cover_art_path")
+    return None
 
 
 @router.get("/metadata/random-facts")
@@ -218,6 +291,11 @@ def get_random_facts(
             image = _song_cover(request, derived, r.get("artist") or "", r.get("title") or "")
         if not image:
             image = _artist_photo(artist_slug, derived)
+        if not image:
+            image = _artist_any_cover(request, derived, r.get("artist") or "")
+        # Display-name guard: slug-shaped attribution ("the-weeknd") → Title Case.
+        r["artist"] = _prettify_name(r.get("artist"))
+        r["title"] = _prettify_name(r.get("title"))
         out.append(RandomFact(**{k: v for k, v in r.items() if v is not None} | {"image": image}))
     return out
 

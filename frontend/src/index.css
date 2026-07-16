@@ -3213,8 +3213,23 @@
        class for ~650ms). Overshoot bezier gives the release its "pop". */
     .fy-hybrid.fy-launching{animation:fyLaunch .6s cubic-bezier(.34,1.56,.64,1)}
     @keyframes fyLaunch{0%{transform:scale(1)}40%{transform:scale(.92)}100%{transform:scale(1)}}
+    /* Loading — the click landed but the wave is still being built server-side
+       (~1-2s). The orb visibly "boils": bright fast ring, blobs at a rolling
+       simmer, halo pulsing outward, glow breathing fast. Cursor says busy. */
+    .fy-hybrid.fy-loading{animation:fyGlowPulse 1.4s ease infinite;cursor:progress}
+    .fy-hybrid.fy-loading .fy-ring{opacity:1;animation-duration:1.1s}
+    .fy-hybrid.fy-loading .fy-halo{animation:fyHaloOut .8s ease-out infinite}
+    .fy-hybrid.fy-loading .fy-bg1{animation-duration:1.7s}
+    .fy-hybrid.fy-loading .fy-bg2{animation-duration:2s}
+    .fy-hybrid.fy-loading .fy-bg3{animation-duration:2.2s}
+    .fy-hybrid.fy-loading .fy-bg4{animation-duration:1.8s}
+    .fy-spinner{display:block;width:14px;height:14px;border-radius:50%;
+      border:2px solid rgba(255,255,255,.35);border-top-color:#fff;
+      animation:spin .7s linear infinite}
     @media (prefers-reduced-motion: reduce){
-      .fy-hybrid.fy-playing,.fy-hybrid.fy-launching{animation:none}
+      .fy-hybrid.fy-playing,.fy-hybrid.fy-launching,
+      .fy-hybrid.fy-loading,.fy-hybrid.fy-loading .fy-halo{animation:none}
+      .fy-spinner{animation-duration:1.4s}
     }
     /* Cursor parallax — JS writes --px/--py (-.5…+.5) onto .fy-hybrid; each
        blob sits at its own depth, so the liquid "refracts" toward the pointer.
