@@ -14,7 +14,14 @@
     .serif { font-family: 'Noto Sans', 'Times New Roman', serif; font-weight: 400; letter-spacing: -0.01em; }
     /* Expressive display serif for the "Твой Вайб" line — Playfair (Cyrillic OK). */
     .vibe-serif { font-family: 'Playfair Display', Georgia, 'Times New Roman', serif; }
-    .mono  { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+    /* UI label voice. Historically JetBrains Mono ("console" look), which at
+       8–11px + wide tracking destroyed word shapes, especially in Cyrillic.
+       Now the same tracked-caps grammar set in the UI sans at medium weight —
+       call sites keep their own size/tracking via inline styles. Real
+       monospace remains only for code blocks (.md-content code/pre). */
+    .mono  { font-family: 'Geist', 'Inter', system-ui, sans-serif; font-weight: 500; }
+    /* Timecodes / counters: lining tabular figures so digits don't jiggle. */
+    .num-tab { font-variant-numeric: tabular-nums; }
 
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
@@ -24,6 +31,20 @@
     textarea { overflow: auto; }
     button { background: none; border: none; color: inherit; cursor: pointer; }
     a { color: inherit; text-decoration: none; }
+
+    /* Keyboard focus is a first-class state: one visible accent ring for every
+       interactive element, in both themes. Mouse/touch clicks don't trigger it
+       (:focus-visible), and inline `outline:none` on inputs is overridden here
+       because this rule targets :focus-visible specifically. */
+    :where(a, button, input, select, textarea, summary,
+           [role="button"], [tabindex]):focus-visible {
+      outline: 2px solid oklch(68% 0.17 275 / 0.9) !important;
+      outline-offset: 2px;
+    }
+    body[data-theme="light"] :where(a, button, input, select, textarea, summary,
+           [role="button"], [tabindex]):focus-visible {
+      outline-color: oklch(46% 0.20 275 / 0.95) !important;
+    }
 
     /* ── Landing player range inputs ──────────────────────────── */
     input[type=range] { -webkit-appearance:none; appearance:none; outline:none; cursor:pointer; background:transparent; }
@@ -281,12 +302,17 @@
     .rec-div--islands .rec-div__ln{background:linear-gradient(90deg,transparent,oklch(70% 0.13 165 / .5),transparent);} .rec-div--islands .rec-div__nd{background:oklch(70% 0.13 165);box-shadow:0 0 8px oklch(70% 0.13 165);}
     .rec-div--build   .rec-div__ln{background:linear-gradient(90deg,transparent,oklch(78% 0.13 75 / .55),transparent);} .rec-div--build   .rec-div__nd{background:oklch(78% 0.13 75);box-shadow:0 0 8px oklch(78% 0.13 75);}
 
-    .rec-playall{display:inline-flex;align-items:center;gap:7px;padding:9px 16px;border-radius:999px;font-size:13px;font-weight:800;color:#fff;white-space:nowrap;cursor:pointer;border:0;
+    /* Dark text on the amber gradient (was white — 2.5:1, an AA fail in BOTH
+       themes; matches the .rec2-go / .ske-amber twin buttons). */
+    .rec-playall{display:inline-flex;align-items:center;gap:7px;padding:9px 16px;border-radius:999px;font-size:13px;font-weight:800;color:#2a1f0a;white-space:nowrap;cursor:pointer;border:0;
       background:linear-gradient(180deg,#ffc15e,#f08a12);box-shadow:0 11px 24px -8px rgba(240,138,18,.7),inset 0 1px 0 rgba(255,255,255,.5);backdrop-filter:blur(6px);transition:transform .16s ease, box-shadow .16s ease;}
     .rec-playall:hover{transform:translateY(-2px);box-shadow:0 16px 30px -9px rgba(240,138,18,.78),inset 0 1px 0 rgba(255,255,255,.6);}
 
     .rec-trk{display:flex;align-items:center;gap:13px;padding:10px 12px;border-radius:15px;cursor:pointer;background:rgba(255,255,255,.05);margin-top:8px;transition:transform .15s ease, background .15s ease;}
     .rec-trk:hover{transform:translateX(2px);background:rgba(255,255,255,.12);}
+    /* Light: the white-tint row is invisible on a white page — use an ink tint. */
+    body[data-theme="light"] .rec-trk{background:rgba(22,22,32,.045);}
+    body[data-theme="light"] .rec-trk:hover{background:rgba(22,22,32,.09);}
     .rec-trk__ix{width:24px;text-align:center;font-size:14px;font-weight:700;opacity:.6;flex:none;}
     .rec-trk__cov{width:46px;height:46px;border-radius:10px;flex:none;background-size:cover;background-position:center;box-shadow:0 5px 12px -3px rgba(10,5,30,.5);}
 
@@ -396,6 +422,7 @@
     .rec2-isl--big{grid-column:span 2;grid-row:span 2;padding:18px 18px 16px 22px;}
     .rec2-badge{position:absolute;top:12px;right:12px;font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;font-weight:800;padding:4px 9px;border-radius:999px;
       color:#ffd9a0;background:rgba(240,138,18,.16);box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 0 0 1px rgba(240,138,18,.3);}
+    body[data-theme="light"] .rec2-badge{color:#8a4d05;background:rgba(240,138,18,.14);box-shadow:inset 0 1px 0 rgba(255,255,255,.5),0 0 0 1px rgba(190,105,10,.4);}
     .rec2-covs{display:flex;}
     .rec2-cov{position:relative;flex:none;width:32px;height:32px;border-radius:8px;margin-left:-9px;border:1.5px solid rgba(255,255,255,.45);
       box-shadow:0 5px 10px -3px rgba(0,0,0,.6);background-size:cover;background-position:center;
@@ -423,6 +450,9 @@
     body[data-theme="light"] .rec2-display{background:linear-gradient(180deg,#f4f2e9,#e8e5d8);
       box-shadow:inset 0 2px 5px rgba(70,55,30,.18),inset 0 0 0 1px rgba(70,55,30,.13),0 1px 0 rgba(255,255,255,.85);}
     body[data-theme="light"] .rec2-isl{background:rgba(40,30,60,.045);box-shadow:inset 0 1px 0 rgba(255,255,255,.8),0 10px 22px -14px rgba(40,30,60,.5);}
+    /* Light: cursor spotlights are white-on-white — switch them to a violet ink tint. */
+    body[data-theme="light"] .rec2-panel::before{background:radial-gradient(340px circle at var(--mx,50%) var(--my,50%),rgba(96,66,220,.07),transparent 65%);}
+    body[data-theme="light"] .rec2-isl::before{background:radial-gradient(200px circle at var(--mx,50%) var(--my,50%),rgba(96,66,220,.08),transparent 60%);}
     body[data-theme="light"] .rec2-isl:hover{box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 22px 40px -18px rgba(40,30,60,.55),0 0 0 1px oklch(62% .2 275 / .3);}
     body[data-theme="light"] .rec2-cov{border-color:rgba(255,255,255,.9);}
     body[data-theme="light"] .rec2-isl-count{color:oklch(48% .2 280);}
@@ -654,8 +684,9 @@
     /* ── Hero search bar ──────────────────────────────────────── */
     @keyframes heroFocus {
       from { box-shadow: 0 0 0 0 rgba(99, 102, 240, 0); }
-      to   { box-shadow: 0 0 0 3px oklch(60% 0.18 270 / 0.25), 0 8px 30px rgba(0,0,0,0.3); }
+      to   { box-shadow: 0 0 0 3px oklch(60% 0.18 270 / 0.25), 0 8px 30px var(--hero-focus-cast, rgba(0,0,0,0.3)); }
     }
+    body[data-theme="light"] .hero-bar { --hero-focus-cast: rgba(46,36,86,0.14); }
 
     .hero-bar {
       transition: box-shadow 0.3s ease;
@@ -780,6 +811,11 @@
     .lib-album-card:hover {
       transform: translateY(-6px) scale(1.015);
       box-shadow: 0 16px 36px rgba(0,0,0,.34), 0 0 0 1px rgba(124,91,255,.28);
+    }
+    /* Light: the near-black hover halo reads as a dirty smudge on white —
+       a tinted, softer cast keeps the same lift. */
+    body[data-theme="light"] .lib-album-card:hover {
+      box-shadow: 0 16px 32px rgba(46,36,86,.18), 0 0 0 1px rgba(124,91,255,.35);
     }
     .lib-album-cover {
       position: absolute;
@@ -1332,6 +1368,7 @@
       box-shadow:
         inset 0 1px 0 rgba(255,255,255,0.95),
         inset 0 -1px 0 rgba(255,255,255,0.40),
+        0 0 0 1px rgba(46,36,86,0.09),
         0 18px 42px rgba(46,36,86,0.16),
         0 2px 10px rgba(46,36,86,0.08);
     }
@@ -1702,10 +1739,11 @@
       border-radius: 99px;
       border: 0;
       background: transparent;
-      font-family: 'JetBrains Mono', ui-monospace, monospace;
-      font-size: 10px;
-      letter-spacing: 0.18em;
-      color: rgba(255,255,255,0.45);
+      font-family: 'Geist', 'Inter', system-ui, sans-serif;
+      font-weight: 600;
+      font-size: 10.5px;
+      letter-spacing: 0.12em;
+      color: rgba(255,255,255,0.5);
       cursor: pointer;
       transition: background 200ms ease, color 200ms ease, opacity 200ms ease;
       outline: none;
@@ -1733,7 +1771,7 @@
     .facts-scope-toggle > button:not(:disabled):hover {
       color: rgba(255,255,255,0.85);
     }
-    body[data-theme="light"] .facts-scope-toggle > button { color: rgba(22,22,32,0.45); }
+    body[data-theme="light"] .facts-scope-toggle > button { color: rgba(22,22,32,0.58); }
     body[data-theme="light"] .facts-scope-toggle > button[data-active="true"] {
       background: rgba(22,22,32,0.10);
       color: rgba(22,22,32,0.92);
@@ -1744,7 +1782,6 @@
       width: 20px; height: 20px; padding: 0;
       border: 0; background: transparent; border-radius: 6px;
       color: rgba(255,255,255,0.45);
-      font-family: 'JetBrains Mono', ui-monospace, monospace;
       font-size: 15px; line-height: 1; cursor: pointer;
       transition: background 160ms ease, color 160ms ease;
     }
@@ -1951,17 +1988,18 @@
     /* Mono-label hint above the cover row — shown for the first 3 cover
        clicks (localStorage-backed), then fades out gracefully. */
     .player-art-hint {
-      font-family: 'JetBrains Mono', ui-monospace, monospace;
-      font-size: 10px;
-      letter-spacing: 0.18em;
+      font-family: 'Geist', 'Inter', system-ui, sans-serif;
+      font-weight: 600;
+      font-size: 10.5px;
+      letter-spacing: 0.14em;
       text-transform: uppercase;
-      color: rgba(255,255,255,0.45);
+      color: rgba(255,255,255,0.55);
       transition: opacity 500ms ease, transform 500ms ease;
       pointer-events: none;
       text-align: center;
       flex-shrink: 0;
     }
-    body[data-theme="light"] .player-art-hint { color: rgba(22,22,32,0.45); }
+    body[data-theme="light"] .player-art-hint { color: rgba(22,22,32,0.60); }
     .player-art-hint--hidden { opacity: 0; transform: translateY(-4px); }
 
     /* Side prev/next buttons flanking cover */
@@ -2343,8 +2381,8 @@
       color: #7C5BFF;
     }
     .player-fact-label {
-      font-size: 12px; color: rgba(255,255,255,0.35);
-      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px; color: rgba(255,255,255,0.48);
+      font-weight: 600;
       letter-spacing: 0.08em; text-transform: uppercase;
       min-width: 55px;
     }
@@ -2488,12 +2526,12 @@
       letter-spacing: -0.01em;
     }
     .mono-label {
-      font-family: 'JetBrains Mono', ui-monospace, monospace;
-      font-size: 10px;
-      font-weight: 500;
-      letter-spacing: 0.22em;
+      font-family: 'Geist', 'Inter', system-ui, sans-serif;
+      font-size: 10.5px;
+      font-weight: 600;
+      letter-spacing: 0.14em;
       text-transform: uppercase;
-      color: rgba(238,238,243,0.5);
+      color: rgba(238,238,243,0.58);
     }
 
     /* Atmospheric background (opt-in for v3 screens) */
@@ -2963,9 +3001,11 @@
     body[data-theme="light"] .md-content blockquote {
       border-left-color: rgba(0,0,0,0.30);
     }
+    /* Light: oklch(70%) lavender links wash out on white — darken to AA. */
+    body[data-theme="light"] .md-content a { color: oklch(47% 0.17 275); }
 
     body[data-theme="light"] .mono-label {
-      color: rgba(22,22,32,0.55);
+      color: rgba(22,22,32,0.66);
     }
     body[data-theme="light"] .atmospheric-bg {
       background:
@@ -2998,7 +3038,7 @@
       border-bottom: 1px solid rgba(22,22,32,0.06);
     }
     body[data-theme="light"] .player-fact-label {
-      color: rgba(22,22,32,0.50);
+      color: rgba(22,22,32,0.62);
     }
     body[data-theme="light"] .player-fact-value {
       color: rgba(22,22,32,0.85);
@@ -3188,6 +3228,9 @@
     /* Watch-bezel progress dial (rendered only while the wave plays) */
     .fy-dial{position:absolute;inset:-7px;z-index:5;pointer-events:none;
       filter:drop-shadow(0 0 4px rgba(255,255,255,.3))}
+    /* Light: a white bezel arc vanishes on the pale page — ink-violet strokes. */
+    body[data-theme="light"] .fy-dial{--dial-track:rgba(46,36,86,.18);--dial-fill:oklch(46% 0.20 275);
+      filter:drop-shadow(0 0 4px rgba(124,91,255,.25))}
     /* Keyboard affordance for the orb's role="button" */
     .fy-hybrid:focus-visible{outline:2px solid rgba(255,255,255,.65);outline-offset:8px}
     /* ── Artist-hero aurora: drifting album-colour blobs for the no-photo state.
@@ -3239,6 +3282,7 @@
       background:radial-gradient(160px circle at var(--mx,50%) var(--my,50%),rgba(255,255,255,.12),transparent 60%)}
     .efir-vibe-chip:hover{--ty:-2px}
     .efir-vibe-chip:hover::before{opacity:1}
+    body[data-theme="light"] .efir-vibe-chip::before{background:radial-gradient(160px circle at var(--mx,50%) var(--my,50%),rgba(96,66,220,.09),transparent 60%)}
     .efir-vibe-chip:focus-visible{outline:2px solid rgba(154,123,255,.65);outline-offset:2px}
     @media (prefers-reduced-motion: reduce){.efir-vibe-chip{transform:none}}
     /* Library portal card — same tilt+spot grammar; the cover fan peeks from
@@ -3249,6 +3293,8 @@
       background:radial-gradient(240px circle at var(--mx,50%) var(--my,50%),rgba(255,255,255,.10),transparent 60%)}
     .efir-lib-card:hover{--ty:-3px}
     .efir-lib-card:hover::before{opacity:1}
+    body[data-theme="light"] .efir-lib-card::before{background:radial-gradient(240px circle at var(--mx,50%) var(--my,50%),rgba(96,66,220,.07),transparent 60%)}
+    body[data-theme="light"] .efir-lib-cov{box-shadow:0 6px 14px rgba(46,36,86,.22),inset 0 1px 0 rgba(255,255,255,.6)}
     .efir-lib-card:focus-visible{outline:2px solid rgba(154,123,255,.65);outline-offset:2px}
     .efir-lib-fan{position:absolute;right:-14px;top:50%;transform:translateY(-50%) rotate(8deg);display:flex;pointer-events:none}
     .efir-lib-cov{display:block;border-radius:8px;overflow:hidden;flex:none;

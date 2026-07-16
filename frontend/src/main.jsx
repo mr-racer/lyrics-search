@@ -580,11 +580,14 @@ function useColors(isDark) {
     surface:      isDark ? '#17171b'    : '#ffffff',
     surface2:     isDark ? '#1e1e24'    : '#ebebf0',
     surface3:     isDark ? '#26262d'    : '#e4e3e9',
-    border:       isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.09)',
-    borderStrong: isDark ? 'rgba(255,255,255,0.13)' : 'rgba(0,0,0,0.16)',
+    border:       isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.11)',
+    borderStrong: isDark ? 'rgba(255,255,255,0.13)' : 'rgba(0,0,0,0.20)',
     text:         isDark ? '#eeeef3'    : '#161620',
-    textMuted:    isDark ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.5)',
-    textSubtle:   isDark ? 'rgba(255,255,255,0.28)' : 'rgba(0,0,0,0.32)',
+    // Light values are deliberately denser than a naive mirror of the dark
+    // alphas: black-on-#f2f1f6 loses contrast faster than white-on-#0d0d10,
+    // and these two tokens carry most 10-12px labels (WCAG AA ≥ 4.5:1).
+    textMuted:    isDark ? 'rgba(255,255,255,0.5)' : 'rgba(10,10,18,0.60)',
+    textSubtle:   isDark ? 'rgba(255,255,255,0.28)' : 'rgba(10,10,18,0.46)',
     accent:       'oklch(60% 0.18 270)',
     accentBg:     isDark ? 'oklch(60% 0.18 270 / 0.15)' : 'oklch(60% 0.18 270 / 0.10)',
     accentLight:  'oklch(70% 0.16 270)',
@@ -1377,7 +1380,7 @@ function FactsRail({ trackId, isDark, lang, accent, variant = "landing" }) {
           border:`1px solid ${c.border}`,
           fontSize:9.5, letterSpacing:'0.18em',
           color: meta.color,
-          fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+          fontFamily: "'Geist', 'Inter', system-ui, sans-serif",
           background: isDark ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.6)',
         }}>{meta.label}</div>
         )}
@@ -1620,7 +1623,7 @@ function AlbumCover({ title='', artist='', size=44, isDark, coverPath, radius, f
             span.style.cssText = `display:flex;align-items:center;justify-content:center;width:100%;height:100%;
               background:linear-gradient(135deg, oklch(38% 0.13 ${hue}), oklch(52% 0.18 ${(hue+45)%360}));
               font-size:${fs};font-weight:700;color:rgba(255,255,255,0.65);
-              font-family:'JetBrains Mono', monospace;letter-spacing:0.5px;`;
+              font-family:'Geist', 'Inter', system-ui, sans-serif;letter-spacing:0.5px;`;
             span.textContent = (title||'?').slice(0,2).toUpperCase();
             parent.appendChild(span);
           }}
@@ -1634,7 +1637,7 @@ function AlbumCover({ title='', artist='', size=44, isDark, coverPath, radius, f
       background: `linear-gradient(135deg, oklch(38% 0.13 ${hue}), oklch(52% 0.18 ${(hue+45)%360}))`,
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       fontSize: fs, fontWeight: '700',
-      color: 'rgba(255,255,255,0.65)', fontFamily: "'JetBrains Mono', monospace",
+      color: 'rgba(255,255,255,0.65)', fontFamily: "'Geist', 'Inter', system-ui, sans-serif",
       letterSpacing: '0.5px',
     }}>
       {(title||'?').slice(0,2).toUpperCase()}
@@ -2007,7 +2010,7 @@ function TopRightControls({ isDark, lang, onLang, onTheme, onSettings, floating=
           return (
             <button key={l} onClick={() => onLang(l)} className={active ? ske('btn', isDark) : ''}
               style={{
-                padding:'5px 11px', borderRadius:'7px', fontFamily:"'JetBrains Mono', monospace",
+                padding:'5px 11px', borderRadius:'7px', fontFamily:"'Geist', 'Inter', system-ui, sans-serif",
                 fontSize:'15px', fontWeight:'600', letterSpacing:'0.4px',
                 color: active ? c.text : c.textSubtle,
                 transition:'color 0.2s',
@@ -2070,8 +2073,8 @@ function OrbProgressArc({ audio }) {
   const C = 2 * Math.PI * R;
   return (
     <svg className="fy-dial" viewBox="0 0 76 76" aria-hidden="true">
-      <circle cx="38" cy="38" r={R} fill="none" stroke="rgba(255,255,255,.16)" strokeWidth="1.3" />
-      <circle cx="38" cy="38" r={R} fill="none" stroke="rgba(255,255,255,.92)" strokeWidth="1.6"
+      <circle cx="38" cy="38" r={R} fill="none" stroke="var(--dial-track, rgba(255,255,255,.16))" strokeWidth="1.3" />
+      <circle cx="38" cy="38" r={R} fill="none" stroke="var(--dial-fill, rgba(255,255,255,.92))" strokeWidth="1.6"
         strokeLinecap="round" strokeDasharray={C} strokeDashoffset={C * (1 - p)}
         transform="rotate(-90 38 38)" style={{ transition: 'stroke-dashoffset .35s linear' }} />
     </svg>
@@ -3370,7 +3373,7 @@ function FloatingIconNav({ section, onNav, isDark, lang, onSettings, currentTrac
               onMouseEnter={e => { if(!active) e.currentTarget.style.color = hoverColor; }}
               onMouseLeave={e => { if(!active) e.currentTarget.style.color = inactiveColor; }}>
               <span style={{ display:'flex' }}>{item.icon}</span>
-              <span style={{ fontFamily:"'JetBrains Mono', ui-monospace, monospace", fontWeight:500, textTransform:'uppercase', fontSize:8, color:'inherit', letterSpacing:'0.16em' }}>{item.label}</span>
+              <span style={{ fontFamily:"'Geist', 'Inter', system-ui, sans-serif", fontWeight:600, textTransform:'uppercase', fontSize:9.5, color:'inherit', letterSpacing:'0.1em' }}>{item.label}</span>
             </button>
           );
         })}
@@ -3475,7 +3478,7 @@ function NowPlayingPebble({ track, isPlaying, isDark = true, onClick, onHoverCha
           {(track.title || '?')[0]?.toUpperCase()}
         </span>
       ) : (
-        <span style={{ fontFamily:"'JetBrains Mono', ui-monospace, monospace", fontWeight:500, letterSpacing:'0.22em', textTransform:'uppercase', fontSize: 7, color: placeholderColor }}>MX</span>
+        <span style={{ fontFamily:"'Geist', 'Inter', system-ui, sans-serif", fontWeight:500, letterSpacing:'0.22em', textTransform:'uppercase', fontSize: 7, color: placeholderColor }}>MX</span>
       )}
     </button>
   );
@@ -3594,7 +3597,7 @@ function MiniPlaybackPopout({ track, audio, isDark = true, onOpenPlayer, onClose
           <div style={{ flex: 1 }} />
           <button onClick={onOpenPlayer} title="Open Player"
                   style={{ background: 'transparent', border: 0, color: 'oklch(70% 0.16 75)', cursor: 'pointer', fontSize: 9, padding: '4px 6px',
-                           fontFamily:"'JetBrains Mono', ui-monospace, monospace", fontWeight:500, letterSpacing:'0.18em', textTransform:'uppercase' }}>
+                           fontFamily:"'Geist', 'Inter', system-ui, sans-serif", fontWeight:500, letterSpacing:'0.18em', textTransform:'uppercase' }}>
             OPEN →
           </button>
         </div>
@@ -3654,7 +3657,7 @@ function Segmented({ value, onChange, options, isDark, size='md', style } = {}) 
             style={{
               padding:`${padY} 14px`, borderRadius:'8px',
               fontSize: size === 'sm' ? '11px' : '12px', fontWeight:'600',
-              fontFamily:"'JetBrains Mono', monospace", letterSpacing:'0.06em',
+              fontFamily:"'Geist', 'Inter', system-ui, sans-serif", letterSpacing:'0.06em',
               color: active ? c.text : c.textSubtle,
               transition:'all 0.18s', whiteSpace:'nowrap',
             }}>
@@ -4586,14 +4589,14 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
             <button
               className={`pill-v3${tab==='search' ? ' pill-v3-active' : ''}`}
               onClick={() => pickTab('search')}
-              style={{ fontFamily:"'JetBrains Mono', monospace", fontSize:'11px', letterSpacing:'0.06em', fontWeight:'600' }}>
+              style={{ fontFamily:"'Geist', 'Inter', system-ui, sans-serif", fontSize:'11px', letterSpacing:'0.06em', fontWeight:'600' }}>
               {lang==='ru'?'🔍 Поиск':'🔍 Search'}
             </button>
             {aiActive && (
               <button
                 className={`pill-v3${tab==='chat' ? ' pill-v3-active' : ''}`}
                 onClick={() => pickTab('chat')}
-                style={{ fontFamily:"'JetBrains Mono', monospace", fontSize:'11px', letterSpacing:'0.06em', fontWeight:'600' }}>
+                style={{ fontFamily:"'Geist', 'Inter', system-ui, sans-serif", fontSize:'11px', letterSpacing:'0.06em', fontWeight:'600' }}>
                 {lang==='ru'?'💬 Чат':'💬 Chat'}
               </button>
             )}
@@ -4675,7 +4678,7 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
                         placeholder={f.l}
                         className="panel-v3"
                         style={{ width:'100%', padding:'8px 12px', borderRadius:'9px',
-                          color:c.text, fontSize:'13px', outline:'none', fontFamily:"'JetBrains Mono', monospace", boxSizing:'border-box',
+                          color:c.text, fontSize:'13px', outline:'none', fontFamily:"'Geist', 'Inter', system-ui, sans-serif", boxSizing:'border-box',
                           background: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.7)',
                           border: `1px solid ${c.border}` }} />
                       {filterSuggestions[f.k]?.length > 0 && activeFilterField === f.k && (
@@ -4770,7 +4773,7 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
                           <div style={{
                             position:'absolute', top:'8px', right:'8px',
                             padding:'4px 10px', borderRadius:'12px', fontSize:'12px', fontWeight:'600',
-                            fontFamily:"'JetBrains Mono', monospace",
+                            fontFamily:"'Geist', 'Inter', system-ui, sans-serif",
                             background: isDark ? 'rgba(0,0,0,0.7)' : 'rgba(255,255,255,0.9)',
                             backdropFilter:'blur(8px)', color: c.accent,
                           }}>
@@ -4864,7 +4867,7 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
                     className={autoMode ? 'ske-accent' : ske('btn', isDark)}
                     style={{
                       padding:'5px 12px', borderRadius:'8px',
-                      fontSize:'11px', fontWeight:'600', fontFamily:"'JetBrains Mono', monospace",
+                      fontSize:'11px', fontWeight:'600', fontFamily:"'Geist', 'Inter', system-ui, sans-serif",
                       letterSpacing:'0.06em', color: autoMode ? 'white' : c.textSubtle,
                       transition:'all 0.18s',
                     }}>
@@ -4884,7 +4887,7 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
                   <button onClick={() => { setHistoryClosing(false); setShowHistory(true); }}
                     className={`chat-history-btn ${ske('btn', isDark)}`}
                     style={{ padding:'5px 10px', borderRadius:'8px', fontSize:'11px', fontWeight:'600',
-                      fontFamily:"'JetBrains Mono', monospace", letterSpacing:'0.08em', color:c.textMuted,
+                      fontFamily:"'Geist', 'Inter', system-ui, sans-serif", letterSpacing:'0.08em', color:c.textMuted,
                       display:'inline-flex', alignItems:'center', gap:'5px' }}>
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
                     {lang==='ru'?'ЧАТЫ':'CHATS'}
@@ -4893,7 +4896,7 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
                     <button onClick={startNewChat}
                       className={`chat-history-btn ${ske('btn', isDark)}`}
                       style={{ padding:'5px 10px', borderRadius:'8px', fontSize:'11px', fontWeight:'600',
-                        fontFamily:"'JetBrains Mono', monospace", letterSpacing:'0.08em', color:c.textMuted }}>
+                        fontFamily:"'Geist', 'Inter', system-ui, sans-serif", letterSpacing:'0.08em', color:c.textMuted }}>
                       + {lang==='ru'?'НОВЫЙ':'NEW'}
                     </button>
                   )}
@@ -5689,7 +5692,7 @@ function AlbumCard({ album, isDark, onClick, navigateToArtist, lang, index = 0 }
       style={{
         '--lib-i': Math.min(index, 18),
         borderRadius:'14px', overflow:'hidden',
-        background:'rgba(255,255,255,.04)',
+        background: isDark ? 'rgba(255,255,255,.04)' : '#ffffff',
         border:`1px solid ${c.border}`,
         cursor:'pointer',
       }}
@@ -5700,18 +5703,20 @@ function AlbumCard({ album, isDark, onClick, navigateToArtist, lang, index = 0 }
         </div>
         <div style={{
           position:'absolute', top:'8px', right:'8px',
-          padding:'3px 9px', borderRadius:'12px', fontSize:'12px', fontFamily:"'JetBrains Mono', monospace",
-          background:'rgba(0,0,0,.7)', color:'#bba8ff', backdropFilter:'blur(6px)',
+          padding:'3px 9px', borderRadius:'12px', fontSize:'12px', fontFamily:"'Geist', 'Inter', system-ui, sans-serif",
+          background: isDark ? 'rgba(0,0,0,.7)' : 'rgba(255,255,255,.92)',
+          color: isDark ? '#bba8ff' : '#4a32b8', backdropFilter:'blur(6px)',
+          boxShadow: isDark ? 'none' : '0 1px 4px rgba(46,36,86,.18)',
         }}>{album.track_count} {lang==='ru'?'тр':'tr'}</div>
       </div>
       <div className="lib-album-body">
         <div className="lib-album-title" style={{ fontWeight:600, color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{album.album_title}</div>
         <div className="lib-album-sub" style={{ marginTop:'3px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-          <span style={{ color:'#bba8ff', cursor:'pointer' }} onClick={onArtistClick(album.primary_artist_slug)} title={lang==='ru'?'Открыть страницу артиста':'Open artist'}>{album.primary_artist}</span>
+          <span style={{ color: isDark ? '#bba8ff' : '#4a32b8', cursor:'pointer' }} onClick={onArtistClick(album.primary_artist_slug)} title={lang==='ru'?'Открыть страницу артиста':'Open artist'}>{album.primary_artist}</span>
           {album.feat_artists?.slice(0, 2).map(f => (
             <React.Fragment key={f.slug}>
               <span style={{ color:c.textSubtle }}> · </span>
-              <span style={{ color:'#bba8ff', cursor:'pointer' }} onClick={onArtistClick(f.slug)}>{f.name}</span>
+              <span style={{ color: isDark ? '#bba8ff' : '#4a32b8', cursor:'pointer' }} onClick={onArtistClick(f.slug)}>{f.name}</span>
             </React.Fragment>
           ))}
           {(album.feat_artists?.length || 0) > 2 && <span style={{ color:c.textSubtle }}> +{album.feat_artists.length - 2}</span>}
@@ -5731,7 +5736,7 @@ function AlbumCard({ album, isDark, onClick, navigateToArtist, lang, index = 0 }
 // Same card anatomy/classes as AlbumCard (.lib-album-card / .lib-album-cover /
 // .lib-album-body) so playlists inherit the album grid's sizing — including the
 // 150px/132px mobile columns — instead of the old oversized 218px tiles.
-function PlaylistCard({ playlist, onOpen, onPlayAll, lang, index = 0 }) {
+function PlaylistCard({ playlist, onOpen, onPlayAll, lang, index = 0, isDark = true }) {
   return (
     <div
       onClick={() => onOpen(playlist.id)}
@@ -5739,8 +5744,8 @@ function PlaylistCard({ playlist, onOpen, onPlayAll, lang, index = 0 }) {
       style={{
         '--lib-i': Math.min(index, 18),
         borderRadius:'14px', overflow:'hidden',
-        background:'rgba(255,255,255,.04)',
-        border:'1px solid rgba(255,255,255,.06)',
+        background: isDark ? 'rgba(255,255,255,.04)' : '#ffffff',
+        border: isDark ? '1px solid rgba(255,255,255,.06)' : '1px solid rgba(0,0,0,.10)',
         cursor:'pointer',
       }}
       onMouseEnter={(e) => {
@@ -5774,10 +5779,10 @@ function PlaylistCard({ playlist, onOpen, onPlayAll, lang, index = 0 }) {
         >▶</button>
       </div>
       <div className="lib-album-body">
-        <div className="lib-album-title" style={{ fontWeight:600, color:'#eeeef3', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+        <div className="lib-album-title" style={{ fontWeight:600, color: isDark ? '#eeeef3' : '#161620', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
           {playlist.name}
         </div>
-        <div className="mono" style={{ fontSize: 10, letterSpacing: '0.15em', color: 'rgba(238,238,243,.45)', marginTop: 4, textTransform: 'uppercase' }}>
+        <div className="mono" style={{ fontSize: 10, letterSpacing: '0.15em', color: isDark ? 'rgba(238,238,243,.45)' : 'rgba(10,10,18,.5)', marginTop: 4, textTransform: 'uppercase' }}>
           {playlist.track_count} {lang === 'ru' ? (playlist.track_count === 1 ? 'трек' : 'треков') : 'tracks'}
         </div>
       </div>
@@ -5786,7 +5791,7 @@ function PlaylistCard({ playlist, onOpen, onPlayAll, lang, index = 0 }) {
 }
 
 
-function NewPlaylistTile({ onClick, lang }) {
+function NewPlaylistTile({ onClick, lang, isDark = true }) {
   return (
     <div
       onClick={onClick}
@@ -5804,10 +5809,10 @@ function NewPlaylistTile({ onClick, lang }) {
         <span style={{ fontSize: 44, color: 'rgba(124,91,255,.5)', fontWeight: 200 }}>＋</span>
       </div>
       <div className="lib-album-body">
-        <div className="lib-album-title" style={{ fontWeight:500, color:'#d8ccff', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+        <div className="lib-album-title" style={{ fontWeight:500, color: isDark ? '#d8ccff' : '#4a32b8', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
           {lang === 'ru' ? 'Новый плейлист' : 'New playlist'}
         </div>
-        <div className="mono" style={{ fontSize: 10, letterSpacing: '0.15em', color: 'rgba(238,238,243,.4)', marginTop: 4, textTransform: 'uppercase' }}>
+        <div className="mono" style={{ fontSize: 10, letterSpacing: '0.15em', color: isDark ? 'rgba(238,238,243,.4)' : 'rgba(10,10,18,.5)', marginTop: 4, textTransform: 'uppercase' }}>
           {lang === 'ru' ? 'создать с нуля' : 'create from scratch'}
         </div>
       </div>
@@ -5816,20 +5821,20 @@ function NewPlaylistTile({ onClick, lang }) {
 }
 
 
-function PlaylistsListView({ playlists, onOpen, onCreate, onPlayAll, lang }) {
+function PlaylistsListView({ playlists, onOpen, onCreate, onPlayAll, lang, isDark = true }) {
   return (
     <div className="pl-list-enter">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 18 }}>
-        <span className="mono" style={{ fontSize: 11, letterSpacing: '0.18em', color: 'rgba(238,238,243,.5)' }}>
+        <span className="mono" style={{ fontSize: 11, letterSpacing: '0.18em', color: isDark ? 'rgba(238,238,243,.5)' : 'rgba(10,10,18,.55)' }}>
           {playlists.length} {lang === 'ru' ? 'ПЛЕЙЛИСТОВ' : 'PLAYLISTS'}
         </span>
       </div>
       {/* No --lib-grid-min override: inherit the album grid's column sizing
           (216px desktop, 150px/132px mobile via the shared media rules). */}
       <div className="lib-grid">
-        <NewPlaylistTile onClick={onCreate} lang={lang} />
+        <NewPlaylistTile onClick={onCreate} lang={lang} isDark={isDark} />
         {playlists.map((p, i) => (
-          <PlaylistCard key={p.id} playlist={p} onOpen={onOpen} onPlayAll={onPlayAll} lang={lang} index={i + 1} />
+          <PlaylistCard key={p.id} playlist={p} onOpen={onOpen} onPlayAll={onPlayAll} lang={lang} index={i + 1} isDark={isDark} />
         ))}
       </div>
     </div>
@@ -5920,8 +5925,8 @@ function AlbumsGridTab({ albums, suggestions, sort, onSortChange, onAlbumOpen, i
               className="mono lib-sortpill"
               style={{
                 padding:'5px 13px', borderRadius:'14px', fontSize:'12px', cursor:'pointer',
-                background: sort===o.id ? 'rgba(120,80,200,.18)' : 'rgba(255,255,255,.04)',
-                color: sort===o.id ? '#bba8ff' : c.textMuted,
+                background: sort===o.id ? 'rgba(120,80,200,.18)' : (isDark ? 'rgba(255,255,255,.04)' : 'rgba(10,10,18,.05)'),
+                color: sort===o.id ? (isDark ? '#bba8ff' : '#4a32b8') : c.textMuted,
                 border:'none',
                 transition:'all .2s',
               }}>{o.label}</button>
@@ -5972,18 +5977,18 @@ function LibraryGlassyRow({ track, when, playCount, isDark, lang, onClick, navig
         gap: isMobile ? '10px' : '16px', alignItems:'center',
         padding: isMobile ? '8px 8px 8px 8px' : '11px 17px 11px 11px',
         borderRadius:'14px',
-        background: isCurrent ? 'rgba(120,80,200,.13)' : 'rgba(255,255,255,.04)',
+        background: isCurrent ? 'rgba(120,80,200,.13)' : (isDark ? 'rgba(255,255,255,.04)' : 'rgba(255,255,255,.75)'),
         // Mobile: a long list of blurred rows is pure GPU burn — the tint alone
         // reads the same on the flat section background.
         backdropFilter: isMobile ? 'none' : 'blur(22px) saturate(1.1)',
         WebkitBackdropFilter: isMobile ? 'none' : 'blur(22px) saturate(1.1)',
         border:`1px solid ${isCurrent ? 'rgba(120,80,200,.32)' : c.border}`,
-        boxShadow:'inset 0 1px 0 rgba(255,255,255,.04)',
+        boxShadow: isDark ? 'inset 0 1px 0 rgba(255,255,255,.04)' : 'inset 0 1px 0 rgba(255,255,255,.9), 0 1px 3px rgba(46,36,86,.06)',
         cursor:'pointer',
         transition:'all .18s cubic-bezier(.22,.9,.3,1)',
       }}
-      onMouseEnter={e => { e.currentTarget.style.background = isCurrent ? 'rgba(120,80,200,.18)' : 'rgba(255,255,255,.07)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
-      onMouseLeave={e => { e.currentTarget.style.background = isCurrent ? 'rgba(120,80,200,.13)' : 'rgba(255,255,255,.04)'; e.currentTarget.style.transform = 'translateY(0)'; }}
+      onMouseEnter={e => { e.currentTarget.style.background = isCurrent ? 'rgba(120,80,200,.18)' : (isDark ? 'rgba(255,255,255,.07)' : '#ffffff'); e.currentTarget.style.transform = 'translateY(-1px)'; }}
+      onMouseLeave={e => { e.currentTarget.style.background = isCurrent ? 'rgba(120,80,200,.13)' : (isDark ? 'rgba(255,255,255,.04)' : 'rgba(255,255,255,.75)'); e.currentTarget.style.transform = 'translateY(0)'; }}
     >
       <div style={{ position:'relative', width:coverSize, height:coverSize, borderRadius:'10px', overflow:'hidden' }}>
         <AlbumCover title={track.title} artist={track.artist} size={coverSize} isDark={isDark} coverPath={track.cover_art_path} radius={10} fluid />
@@ -5994,7 +5999,7 @@ function LibraryGlassyRow({ track, when, playCount, isDark, lang, onClick, navig
           <ArtistCredit track={track} navigateToArtist={navigateToArtist} lang={lang} />
           {track.album && (<>
             <span style={{ color:c.textSubtle, margin:'0 7px' }}>·</span>
-            <span onClick={(e) => { e.stopPropagation(); onAlbumClick && onAlbumClick(track.album); }} style={{ color:'#a8b8c8', cursor:'pointer' }}>{track.album}</span>
+            <span onClick={(e) => { e.stopPropagation(); onAlbumClick && onAlbumClick(track.album); }} style={{ color: isDark ? '#a8b8c8' : '#4d6274', cursor:'pointer' }}>{track.album}</span>
           </>)}
           {when && (<>
             <span style={{ color:c.textSubtle, margin:'0 7px' }}>·</span>
@@ -6067,8 +6072,8 @@ function RecentlyPlayedTab({ tracks, sort, onSortChange, isDark, lang, onPlayTra
               className="mono"
               style={{
                 padding:'3px 9px', borderRadius:'12px', fontSize:'10px', cursor:'pointer',
-                background: sort===o.id ? 'rgba(120,80,200,.18)' : 'rgba(255,255,255,.04)',
-                color: sort===o.id ? '#bba8ff' : c.textMuted,
+                background: sort===o.id ? 'rgba(120,80,200,.18)' : (isDark ? 'rgba(255,255,255,.04)' : 'rgba(10,10,18,.05)'),
+                color: sort===o.id ? (isDark ? '#bba8ff' : '#4a32b8') : c.textMuted,
                 border:'none',
               }}>{o.label}</button>
           ))}
@@ -6095,7 +6100,7 @@ function RecentlyPlayedTab({ tracks, sort, onSortChange, isDark, lang, onPlayTra
 }
 
 // ─── ADD TO PLAYLIST POPOVER (Task 19) ───────────────────────────────────────
-function AddToPlaylistPopover({ trackId, anchor, onClose, listing, lang }) {
+function AddToPlaylistPopover({ trackId, anchor, onClose, listing, lang, isDark = true }) {
   const [data, setData] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
   const [inlineMode, setInlineMode] = React.useState(false);
@@ -6164,29 +6169,33 @@ function AddToPlaylistPopover({ trackId, anchor, onClose, listing, lang }) {
           width: 'min(360px, calc(100vw - 32px))', maxHeight: '70vh',
           display: 'flex', flexDirection: 'column',
           padding: 10, borderRadius: 16,
-          background: 'linear-gradient(180deg, rgba(28,24,40,0.97) 0%, rgba(18,16,28,0.97) 60%)',
+          background: isDark
+            ? 'linear-gradient(180deg, rgba(28,24,40,0.97) 0%, rgba(18,16,28,0.97) 60%)'
+            : 'linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(242,240,250,0.98) 60%)',
           backdropFilter: 'blur(24px) saturate(1.3)', WebkitBackdropFilter: 'blur(24px) saturate(1.3)',
-          border: '1px solid rgba(255,255,255,.08)',
-          boxShadow: 'inset 0 1px 0 rgba(255,255,255,.12), 0 24px 60px rgba(0,0,0,.6), 0 0 0 1px rgba(124,91,255,.12)',
+          border: isDark ? '1px solid rgba(255,255,255,.08)' : '1px solid rgba(255,255,255,.85)',
+          boxShadow: isDark
+            ? 'inset 0 1px 0 rgba(255,255,255,.12), 0 24px 60px rgba(0,0,0,.6), 0 0 0 1px rgba(124,91,255,.12)'
+            : 'inset 0 1px 0 rgba(255,255,255,.95), 0 24px 54px rgba(46,36,86,.22), 0 0 0 1px rgba(124,91,255,.18)',
           animation: 'toastIn 0.22s cubic-bezier(0.22,0.9,0.3,1)',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 6px 8px', borderBottom: '1px solid rgba(255,255,255,.05)', marginBottom: 4 }}>
-          <span className="mono" style={{ fontSize: 9.5, letterSpacing: '0.24em', color: 'rgba(238,238,243,.45)', textTransform: 'uppercase' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 6px 8px', borderBottom: `1px solid ${isDark ? 'rgba(255,255,255,.05)' : 'rgba(10,10,18,.07)'}`, marginBottom: 4 }}>
+          <span className="mono" style={{ fontSize: 9.5, letterSpacing: '0.24em', color: isDark ? 'rgba(238,238,243,.45)' : 'rgba(10,10,18,.55)', textTransform: 'uppercase' }}>
             {lang === 'ru' ? 'Добавить в плейлист' : 'Add to playlist'}
           </span>
           <button
             onClick={onClose}
             aria-label={lang === 'ru' ? 'Закрыть' : 'Close'}
-            style={{ background: 'none', border: 'none', color: 'rgba(238,238,243,.5)', cursor: 'pointer', fontSize: 17, lineHeight: 1, padding: '2px 6px' }}
+            style={{ background: 'none', border: 'none', color: isDark ? 'rgba(238,238,243,.5)' : 'rgba(10,10,18,.55)', cursor: 'pointer', fontSize: 17, lineHeight: 1, padding: '2px 6px' }}
           >✕</button>
         </div>
 
         <div style={{ overflowY: 'auto', flex: 1, minHeight: 0 }}>
           {data === null ? (
-            <div style={{ padding: '14px 10px', color: 'rgba(238,238,243,.4)', fontSize: 12 }}>…</div>
+            <div style={{ padding: '14px 10px', color: isDark ? 'rgba(238,238,243,.4)' : 'rgba(10,10,18,.5)', fontSize: 12 }}>…</div>
           ) : data.playlists.length === 0 ? (
-            <div style={{ padding: '14px 10px', color: 'rgba(238,238,243,.4)', fontSize: 12 }}>
+            <div style={{ padding: '14px 10px', color: isDark ? 'rgba(238,238,243,.4)' : 'rgba(10,10,18,.5)', fontSize: 12 }}>
               {lang === 'ru' ? 'У вас пока нет плейлистов' : 'No playlists yet'}
             </div>
           ) : (
@@ -6197,21 +6206,23 @@ function AddToPlaylistPopover({ trackId, anchor, onClose, listing, lang }) {
                   display: 'grid', gridTemplateColumns: '24px 1fr auto', gap: 8, alignItems: 'center',
                   padding: '9px 10px', borderRadius: 9,
                   cursor: pl.contains_track ? 'default' : 'pointer',
-                  color: pl.contains_track ? 'rgba(238,238,243,.55)' : '#eeeef3',
+                  color: pl.contains_track
+                    ? (isDark ? 'rgba(238,238,243,.55)' : 'rgba(10,10,18,.55)')
+                    : (isDark ? '#eeeef3' : '#161620'),
                   transition: 'background .12s',
                 }}
-                onMouseEnter={(e) => { if (!pl.contains_track) e.currentTarget.style.background = 'rgba(124,91,255,.12)'; }}
+                onMouseEnter={(e) => { if (!pl.contains_track) e.currentTarget.style.background = isDark ? 'rgba(124,91,255,.12)' : 'rgba(124,91,255,.10)'; }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
               >
-                <span style={{ color: 'oklch(72% 0.13 145)', fontSize: 14 }}>{pl.contains_track ? '✓' : ''}</span>
+                <span style={{ color: isDark ? 'oklch(72% 0.13 145)' : 'oklch(50% 0.15 145)', fontSize: 14 }}>{pl.contains_track ? '✓' : ''}</span>
                 <span style={{ fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pl.name}</span>
-                <span className="mono" style={{ fontSize: 10, color: 'rgba(238,238,243,.4)', letterSpacing: '0.08em' }}>{pl.track_count}</span>
+                <span className="mono" style={{ fontSize: 10, color: isDark ? 'rgba(238,238,243,.4)' : 'rgba(10,10,18,.5)', letterSpacing: '0.08em' }}>{pl.track_count}</span>
               </div>
             ))
           )}
         </div>
 
-        <div style={{ height: 1, background: 'rgba(255,255,255,.05)', margin: '4px 0' }} />
+        <div style={{ height: 1, background: isDark ? 'rgba(255,255,255,.05)' : 'rgba(10,10,18,.07)', margin: '4px 0' }} />
         {inlineMode ? (
           <div style={{ display: 'flex', gap: 6, padding: 6 }}>
             <input
@@ -6219,7 +6230,7 @@ function AddToPlaylistPopover({ trackId, anchor, onClose, listing, lang }) {
               value={inlineName} onChange={(e) => setInlineName(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') onCreateInline(); else if (e.key === 'Escape') setInlineMode(false); }}
               placeholder={lang === 'ru' ? 'Название плейлиста' : 'Playlist name'}
-              style={{ flex: 1, background: 'rgba(0,0,0,.3)', border: '1px solid rgba(124,91,255,.35)', borderRadius: 8, padding: '8px 10px', color: '#fff', fontSize: 13, outline: 'none' }}
+              style={{ flex: 1, background: isDark ? 'rgba(0,0,0,.3)' : '#ffffff', border: '1px solid rgba(124,91,255,.35)', borderRadius: 8, padding: '8px 10px', color: isDark ? '#fff' : '#161620', fontSize: 13, outline: 'none' }}
             />
             <button onClick={onCreateInline}
               style={{ background: 'linear-gradient(180deg, oklch(72% 0.2 275) 0%, oklch(52% 0.24 282) 100%)', color: '#fff', border: 'none', borderRadius: 8, padding: '0 12px', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>
@@ -6229,8 +6240,8 @@ function AddToPlaylistPopover({ trackId, anchor, onClose, listing, lang }) {
         ) : (
           <div
             onClick={() => setInlineMode(true)}
-            style={{ padding: '9px 10px', borderRadius: 9, cursor: 'pointer', color: '#d8ccff', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}
-            onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(124,91,255,.15)'}
+            style={{ padding: '9px 10px', borderRadius: 9, cursor: 'pointer', color: isDark ? '#d8ccff' : '#4a32b8', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}
+            onMouseEnter={(e) => e.currentTarget.style.background = isDark ? 'rgba(124,91,255,.15)' : 'rgba(124,91,255,.10)'}
             onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}>
             <span style={{ fontSize: 16, lineHeight: 1 }}>＋</span>
             {lang === 'ru' ? 'Новый плейлист…' : 'New playlist…'}
@@ -6242,7 +6253,7 @@ function AddToPlaylistPopover({ trackId, anchor, onClose, listing, lang }) {
 }
 
 // ─── PLAYLIST TRACK ROW (Task 18) ────────────────────────────────────────────
-function PlaylistTrackRow({ track, isDragging, onDragStart, onDragOver, onDragLeave, onDrop, onPlay, navigateToArtist, onRemove, onAddToPlaylist, playlistId, listing, lang }) {
+function PlaylistTrackRow({ track, isDragging, onDragStart, onDragOver, onDragLeave, onDrop, onPlay, navigateToArtist, onRemove, onAddToPlaylist, playlistId, listing, lang, isDark = true }) {
   const fmtDur = (s) => { if (!s) return '—'; const m = Math.floor(s/60), r = Math.floor(s%60); return `${m}:${String(r).padStart(2,'0')}`; };
   // Phone layout: HTML5 drag-and-drop never fires on touch, and the fixed
   // 20px grip + 78px duration columns pushed the title into a sliver — drop
@@ -6277,30 +6288,30 @@ function PlaylistTrackRow({ track, isDragging, onDragStart, onDragOver, onDragLe
         gridTemplateColumns: isMobile ? '44px minmax(0, 1fr) auto' : '20px 44px 1fr auto 78px auto',
         gap: isMobile ? 10 : 14, alignItems: 'center',
         padding: isMobile ? '8px 8px' : '9px 14px 9px 6px', borderRadius: 12,
-        background: 'rgba(255,255,255,.025)',
-        border: '1px solid rgba(255,255,255,.04)',
+        background: isDark ? 'rgba(255,255,255,.025)' : 'rgba(255,255,255,.7)',
+        border: `1px solid ${isDark ? 'rgba(255,255,255,.04)' : 'rgba(10,10,18,.08)'}`,
         cursor: 'pointer',
         transition: 'all .15s cubic-bezier(.22,.9,.3,1)',
         opacity: isDragging ? 0.35 : 1,
         position: 'relative',
       }}
       onClick={onPlay}
-      onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,.06)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,.08)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
-      onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(255,255,255,.025)'; e.currentTarget.style.borderColor = 'rgba(255,255,255,.04)'; e.currentTarget.style.transform = ''; }}
+      onMouseEnter={(e) => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,.06)' : '#ffffff'; e.currentTarget.style.borderColor = isDark ? 'rgba(255,255,255,.08)' : 'rgba(10,10,18,.14)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
+      onMouseLeave={(e) => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,.025)' : 'rgba(255,255,255,.7)'; e.currentTarget.style.borderColor = isDark ? 'rgba(255,255,255,.04)' : 'rgba(10,10,18,.08)'; e.currentTarget.style.transform = ''; }}
     >
-      {!isMobile && <span title={lang === 'ru' ? 'Перетащите' : 'Drag to reorder'} style={{ cursor: 'grab', color: 'rgba(238,238,243,.25)', fontSize: 14, letterSpacing: -2, userSelect: 'none' }}>⋮⋮</span>}
+      {!isMobile && <span title={lang === 'ru' ? 'Перетащите' : 'Drag to reorder'} style={{ cursor: 'grab', color: isDark ? 'rgba(238,238,243,.25)' : 'rgba(10,10,18,.3)', fontSize: 14, letterSpacing: -2, userSelect: 'none' }}>⋮⋮</span>}
       <div style={{ width: 44, height: 44, borderRadius: 8, overflow: 'hidden' }}>
         <AlbumCover title={track.title} artist={track.artist} size={44} coverPath={track.cover_art_path} radius={8} fluid />
       </div>
       <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 15, color: '#eeeef3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', letterSpacing: '-0.005em' }}>{track.title}</div>
-        <div style={{ fontSize: 12, color: 'rgba(238,238,243,.55)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <div style={{ fontSize: 15, color: isDark ? '#eeeef3' : '#161620', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', letterSpacing: '-0.005em' }}>{track.title}</div>
+        <div style={{ fontSize: 12, color: isDark ? 'rgba(238,238,243,.55)' : 'rgba(10,10,18,.6)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           <ArtistCredit track={track} navigateToArtist={navigateToArtist} lang={lang} />
           {track.album && (<>{' · '}{track.album}</>)}
         </div>
       </div>
       {!isMobile && <div />}
-      {!isMobile && <div className="mono" style={{ fontSize: 12, color: 'rgba(238,238,243,.5)', textAlign: 'right' }}>{fmtDur(track.duration)}</div>}
+      {!isMobile && <div className="mono" style={{ fontSize: 12, color: isDark ? 'rgba(238,238,243,.5)' : 'rgba(10,10,18,.55)', textAlign: 'right' }}>{fmtDur(track.duration)}</div>}
       <div style={{ display: 'flex', gap: isMobile ? 4 : 8 }}>
         <button className="player-icon-btn" style={{ width: 40, height: 40, fontSize: 22 }} onClick={(e) => { e.stopPropagation(); onAddToPlaylist && onAddToPlaylist(track.track_id, e.currentTarget); }} title={lang === 'ru' ? 'Добавить в плейлист' : 'Add to playlist'}>＋</button>
         <button className="player-icon-btn" style={{ width: 40, height: 40, fontSize: 22 }} onClick={(e) => { e.stopPropagation(); handleRemove(e); }} title={lang === 'ru' ? 'Убрать из плейлиста' : 'Remove from playlist'}>⨯</button>
@@ -6401,17 +6412,21 @@ function PlaylistDetailView({ playlistId, lang, isDark, onClose, onPlayTrack, na
 
   return (
     <div className={closing ? 'pl-detail pl-detail--closing' : (reduced ? undefined : 'pl-detail')}>
-      <button onClick={requestClose} className="mono" style={{ background: 'none', border: 'none', color: 'rgba(238,238,243,.5)', cursor: 'pointer', fontSize: 11, letterSpacing: '0.22em', padding: '0 0 18px' }}>
+      <button onClick={requestClose} className="mono" style={{ background: 'none', border: 'none', color: isDark ? 'rgba(238,238,243,.5)' : 'rgba(10,10,18,.55)', cursor: 'pointer', fontSize: 11, letterSpacing: '0.22em', padding: '0 0 18px' }}>
         ← {lang === 'ru' ? 'К ПЛЕЙЛИСТАМ' : 'BACK TO PLAYLISTS'}
       </button>
 
       <div style={{
         display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '240px 1fr', gap: isMobile ? 18 : 28,
         padding: isMobile ? 16 : 20, borderRadius: 18,
-        background: 'linear-gradient(180deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.015) 60%)',
+        background: isDark
+          ? 'linear-gradient(180deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.015) 60%)'
+          : 'linear-gradient(180deg, rgba(255,255,255,0.9) 0%, rgba(255,255,255,0.6) 60%)',
         backdropFilter: 'blur(22px) saturate(1.1)', WebkitBackdropFilter: 'blur(22px) saturate(1.1)',
-        border: '1px solid rgba(255,255,255,.07)',
-        boxShadow: 'inset 0 1px 0 rgba(255,255,255,.12), 0 6px 24px rgba(0,0,0,.32)',
+        border: isDark ? '1px solid rgba(255,255,255,.07)' : '1px solid rgba(255,255,255,.8)',
+        boxShadow: isDark
+          ? 'inset 0 1px 0 rgba(255,255,255,.12), 0 6px 24px rgba(0,0,0,.32)'
+          : 'inset 0 1px 0 rgba(255,255,255,.95), 0 6px 22px rgba(46,36,86,.12), 0 0 0 1px rgba(46,36,86,.05)',
         marginBottom: 22,
         animation: reduced ? undefined : 'fadeInUp 0.45s cubic-bezier(.22,.9,.3,1) both',
       }}>
@@ -6419,7 +6434,7 @@ function PlaylistDetailView({ playlistId, lang, isDark, onClose, onPlayTrack, na
           <MosaicCover trackIds={detail.tracks.slice(0,4).map(t => t.track_id)} coverPaths={detail.tracks.slice(0,4).map(t => t.cover_art_path)} size={isMobile ? 172 : 240} radius={14} />
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', padding: '4px 0', minWidth: 0, textAlign: isMobile ? 'center' : 'left' }}>
-          <div className="mono" style={{ fontSize: 10, letterSpacing: '0.22em', color: 'rgba(238,238,243,.5)', marginBottom: 12, textTransform: 'uppercase' }}>
+          <div className="mono" style={{ fontSize: 10, letterSpacing: '0.22em', color: isDark ? 'rgba(238,238,243,.5)' : 'rgba(10,10,18,.55)', marginBottom: 12, textTransform: 'uppercase' }}>
             {lang === 'ru' ? 'ПЛЕЙЛИСТ' : 'PLAYLIST'}
           </div>
           <h1
@@ -6432,7 +6447,7 @@ function PlaylistDetailView({ playlistId, lang, isDark, onClose, onPlayTrack, na
               cursor: 'text', padding: 0, border: '1px solid transparent', borderRadius: 8, outline: 'none',
             }}
           >{detail.name}</h1>
-          <div className="mono" style={{ fontSize: 11, letterSpacing: '0.16em', color: 'rgba(238,238,243,.55)', marginBottom: 16, textTransform: 'uppercase' }}>
+          <div className="mono" style={{ fontSize: 11, letterSpacing: '0.16em', color: isDark ? 'rgba(238,238,243,.55)' : 'rgba(10,10,18,.6)', marginBottom: 16, textTransform: 'uppercase' }}>
             {detail.tracks.length} {lang === 'ru' ? 'ТРЕКОВ' : 'TRACKS'} · {fmtTotal(totalDur)}
           </div>
           <p
@@ -6440,7 +6455,9 @@ function PlaylistDetailView({ playlistId, lang, isDark, onClose, onPlayTrack, na
             onBlur={onDescBlur}
             style={{
               fontFamily: "'Noto Serif Display', Georgia, serif", fontStyle: 'italic', fontWeight: 300,
-              color: detail.description ? 'rgba(216,204,255,.85)' : 'rgba(238,238,243,.3)',
+              color: detail.description
+                ? (isDark ? 'rgba(216,204,255,.85)' : '#4a3a86')
+                : (isDark ? 'rgba(238,238,243,.3)' : 'rgba(10,10,18,.35)'),
               fontSize: isMobile ? 15.5 : 17, lineHeight: 1.45, maxWidth: 540, margin: isMobile ? '0 auto 22px' : '0 0 22px',
               cursor: 'text', padding: '2px 0', border: '1px solid transparent', borderRadius: 8, outline: 'none',
             }}
@@ -6461,8 +6478,9 @@ function PlaylistDetailView({ playlistId, lang, isDark, onClose, onPlayTrack, na
               title={lang === 'ru' ? 'Удалить плейлист' : 'Delete playlist'}
               style={{
                 width: 40, height: 40, borderRadius: '50%',
-                background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.06)',
-                color: 'rgba(238,238,243,.7)', cursor: 'pointer', fontSize: 16,
+                background: isDark ? 'rgba(255,255,255,.04)' : 'rgba(10,10,18,.05)',
+                border: `1px solid ${isDark ? 'rgba(255,255,255,.06)' : 'rgba(10,10,18,.10)'}`,
+                color: isDark ? 'rgba(238,238,243,.7)' : 'rgba(10,10,18,.7)', cursor: 'pointer', fontSize: 16,
               }}>🗑</button>
           </div>
         </div>
@@ -6471,8 +6489,9 @@ function PlaylistDetailView({ playlistId, lang, isDark, onClose, onPlayTrack, na
       {detail.missing_track_ids.length > 0 && (
         <div className="mono" style={{
           padding: '10px 14px', borderRadius: 10, fontSize: 12, letterSpacing: '0.08em',
-          background: 'rgba(255,180,80,.05)', border: '1px solid rgba(255,180,80,.18)',
-          color: 'rgba(255,200,140,.7)', margin: '12px 0',
+          background: isDark ? 'rgba(255,180,80,.05)' : 'rgba(240,138,18,.09)',
+          border: `1px solid ${isDark ? 'rgba(255,180,80,.18)' : 'rgba(190,105,10,.35)'}`,
+          color: isDark ? 'rgba(255,200,140,.7)' : '#8a4d05', margin: '12px 0',
         }}>
           ⚠ {detail.missing_track_ids.length} {lang === 'ru' ? 'ТРЕК(А) НЕ НАЙДЕНЫ В ТЕКУЩЕЙ БИБЛИОТЕКЕ — СКРЫТЫ, НО НЕ УДАЛЕНЫ. ПОВТОРНОЕ ДОБАВЛЕНИЕ ВЕРНЁТ ИХ' : 'TRACK(S) NOT FOUND IN CURRENT LIBRARY — HIDDEN, NOT REMOVED. RE-ADD MUSIC TO RESTORE'}
         </div>
@@ -6501,6 +6520,7 @@ function PlaylistDetailView({ playlistId, lang, isDark, onClose, onPlayTrack, na
               playlistId={playlistId}
               listing={listing}
               lang={lang}
+              isDark={isDark}
             />
           ));
         })()}
@@ -6516,6 +6536,7 @@ function PlaylistsTab({ listing, activePlaylistId, onOpenPlaylist, onCloseDetail
       <PlaylistsListView
         playlists={listing.playlists}
         lang={lang}
+        isDark={isDark}
         onOpen={onOpenPlaylist}
         onCreate={onRequestCreate}
         onPlayAll={(id) => { /* wired in Task 17 via detail view */ }}
@@ -6549,7 +6570,8 @@ function CatalogSearchBar({ value, onChange, isDark, lang, loading }) {
         aria-label={lang==='ru' ? 'Поиск по библиотеке' : 'Search the library'}
         style={{
           width:'100%', boxSizing:'border-box',
-          background:'rgba(255,255,255,.04)', border:`1px solid ${c.border}`,
+          background: isDark ? 'rgba(255,255,255,.04)' : 'rgba(255,255,255,.8)',
+          border:`1px solid ${c.border}`,
           borderRadius:'14px', padding:'14px 44px 14px 16px',
           color:c.text, fontSize:'15px', outline:'none', backdropFilter:'blur(20px)',
         }}
@@ -6581,7 +6603,7 @@ function CatalogResults({ hits, loading, onOpen, isDark, lang }) {
       bg: 'oklch(74% 0.09 200 / 0.15)', border: 'oklch(74% 0.11 200 / 0.36)',
       glow: 'oklch(64% 0.13 200 / 0.30)', ring: 'oklch(74% 0.11 200 / 0.42)',
     };
-    return { bg: 'rgba(255,255,255,.04)', border: c.border, glow: null, ring: null };
+    return { bg: isDark ? 'rgba(255,255,255,.04)' : 'rgba(255,255,255,.7)', border: c.border, glow: null, ring: null };
   };
 
   if (!hits.length) {
@@ -6622,7 +6644,7 @@ function CatalogResults({ hits, loading, onOpen, isDark, lang }) {
             <div style={{
               width:'44px', height:'44px', flex:'0 0 auto',
               borderRadius: h.type === 'artist' ? '50%' : '8px',
-              overflow:'hidden', background:'rgba(255,255,255,.06)',
+              overflow:'hidden', background: isDark ? 'rgba(255,255,255,.06)' : 'rgba(10,10,18,.06)',
               display:'flex', alignItems:'center', justifyContent:'center', fontSize:'18px',
             }}>
               {coverUrl
@@ -6931,6 +6953,7 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
       {showNewPlaylistModal && (
         <NewPlaylistModal
           lang={lang}
+          isDark={isDark}
           onCancel={() => setShowNewPlaylistModal(false)}
           onSubmit={async (name, desc) => {
             const created = await playlistsListing.createPlaylist(name, desc);
@@ -7125,9 +7148,9 @@ function ArtistMosaic({ artists, isDark, lang, labelStyle, navigateToArtist }) {
           return (
             <div key={a.artist} onClick={()=>{ if (clickable) navigateToArtist(a.slug); }}
               style={{ display:'flex', alignItems:'center', gap:12, padding:'9px 11px', borderRadius:13, cursor: clickable?'pointer':'default',
-              background:'rgba(255,255,255,.04)', border:`1px solid ${c.border}`, transition:'transform .16s ease, background .16s ease' }}
-              onMouseEnter={e=>{ e.currentTarget.style.transform='translateY(-2px)'; e.currentTarget.style.background='rgba(255,255,255,.08)'; }}
-              onMouseLeave={e=>{ e.currentTarget.style.transform='translateY(0)'; e.currentTarget.style.background='rgba(255,255,255,.04)'; }}>
+              background: isDark ? 'rgba(255,255,255,.04)' : 'rgba(255,255,255,.7)', border:`1px solid ${c.border}`, transition:'transform .16s ease, background .16s ease' }}
+              onMouseEnter={e=>{ e.currentTarget.style.transform='translateY(-2px)'; e.currentTarget.style.background = isDark ? 'rgba(255,255,255,.08)' : '#ffffff'; }}
+              onMouseLeave={e=>{ e.currentTarget.style.transform='translateY(0)'; e.currentTarget.style.background = isDark ? 'rgba(255,255,255,.04)' : 'rgba(255,255,255,.7)'; }}>
               <AlbumCover title={a.artist} artist={a.artist} coverPath={a.image} size={42} radius={11} isDark={isDark} />
               <div style={{ minWidth:0, flex:1 }}>
                 <div style={{ fontSize:'clamp(14px, 1.3vw, 16px)', color:c.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{a.artist}</div>
@@ -7397,7 +7420,7 @@ function RhythmSection({ rhythm, isDark, lang }) {
   const c = useColors(isDark);
   const reduced = usePrefersReducedMotion();
   const days = rhythm?.days || [];
-  const lbl = { fontFamily:"'JetBrains Mono', monospace", fontSize:'clamp(10px, 1vw, 12px)', color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase', marginBottom:12 };
+  const lbl = { fontFamily:"'Geist', 'Inter', system-ui, sans-serif", fontSize:'clamp(10px, 1vw, 12px)', color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase', marginBottom:12 };
   if (!days.length) {
     return (
       <div className={brushed(isDark)} style={{ borderRadius:18, padding:'28px 24px', textAlign:'center' }}>
@@ -7683,7 +7706,7 @@ function SkipTimeReadout({ seconds, count, hue=30, isDark, lang }) {
 // One column of the honest-mirror panel (loved or guilty).
 function EngagementColumn({ title, tracks, variant, isDark, lang, onPlayTrack, emptyText }) {
   const c = useColors(isDark);
-  const lbl = { fontFamily:"'JetBrains Mono', monospace", fontSize:'clamp(10px, 1vw, 12px)', color:c.textSubtle, letterSpacing:'0.14em', textTransform:'uppercase', marginBottom:12 };
+  const lbl = { fontFamily:"'Geist', 'Inter', system-ui, sans-serif", fontSize:'clamp(10px, 1vw, 12px)', color:c.textSubtle, letterSpacing:'0.14em', textTransform:'uppercase', marginBottom:12 };
   const hue = variant==='loved' ? 145 : 30;
   return (
     <div style={{ minWidth:0 }}>
@@ -7700,7 +7723,7 @@ function EngagementColumn({ title, tracks, variant, isDark, lang, onPlayTrack, e
         <div key={t.track_id}
           onClick={()=>{ if (onPlayTrack) onPlayTrack({ track:{ track_id:t.track_id, title:t.title, artist:t.artist, cover_art_path:t.cover_art_path }, score:1 }, []); }}
           style={{ display:'flex', alignItems:'center', gap:12, padding:'8px 9px', borderRadius:12, cursor:'pointer', transition:'background .15s ease' }}
-          onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,.06)'}
+          onMouseEnter={e=>e.currentTarget.style.background = isDark ? 'rgba(255,255,255,.06)' : 'rgba(10,10,18,.05)'}
           onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
           <AlbumCover title={t.title} artist={t.artist} size={44} isDark={isDark} coverPath={t.cover_art_path} radius={9} />
           <div style={{ minWidth:0, flex:1 }}>
@@ -7765,7 +7788,7 @@ function DistributionsPanel({ stats, isDark, lang, navigateToArtist }) {
   const durations = stats?.duration_buckets || [];
   const formats = stats?.formats || [];
   const losslessPct = stats?.lossless_pct ?? 0;
-  const colLbl = { fontFamily:"'JetBrains Mono', monospace", fontSize:'clamp(10px, 1vw, 12px)', color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase', marginBottom:'14px' };
+  const colLbl = { fontFamily:"'Geist', 'Inter', system-ui, sans-serif", fontSize:'clamp(10px, 1vw, 12px)', color:c.textSubtle, letterSpacing:'0.2em', textTransform:'uppercase', marginBottom:'14px' };
 
   return (
     <div className={brushed(isDark) + ' stats-card'} style={{
@@ -7919,12 +7942,12 @@ function LibraryTabsStrip({ active, onChange, counts, lang, isDark }) {
                 borderRadius:12, cursor:'pointer',
                 background: isActive
                   ? 'linear-gradient(180deg, oklch(64% 0.18 272) 0%, oklch(53% 0.2 276) 100%)'
-                  : 'rgba(255,255,255,.04)',
+                  : (isDark ? 'rgba(255,255,255,.04)' : 'rgba(255,255,255,.7)'),
                 color: isActive ? '#fff' : c.textMuted,
                 border: `1px solid ${isActive ? 'rgba(124,91,255,.45)' : c.border}`,
                 boxShadow: isActive
                   ? 'inset 0 1px 0 rgba(255,255,255,.28), 0 6px 18px rgba(124,91,255,.28)'
-                  : 'inset 0 1px 0 rgba(255,255,255,.04)',
+                  : (isDark ? 'inset 0 1px 0 rgba(255,255,255,.04)' : 'inset 0 1px 0 rgba(255,255,255,.9)'),
                 transition:'all .25s cubic-bezier(.22,.9,.3,1)',
               }}>
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
@@ -7950,21 +7973,21 @@ function LibraryTabsStrip({ active, onChange, counts, lang, isDark }) {
               padding:'10px 18px', borderRadius:12, fontSize:13, cursor:'pointer',
               background: isActive
                 ? 'linear-gradient(180deg, oklch(64% 0.18 272) 0%, oklch(53% 0.2 276) 100%)'
-                : 'rgba(255,255,255,.04)',
+                : (isDark ? 'rgba(255,255,255,.04)' : 'rgba(255,255,255,.7)'),
               color: isActive ? '#fff' : c.textMuted,
               border: `1px solid ${isActive ? 'rgba(124,91,255,.45)' : c.border}`,
               boxShadow: isActive
                 ? 'inset 0 1px 0 rgba(255,255,255,.28), 0 6px 18px rgba(124,91,255,.28)'
-                : 'inset 0 1px 0 rgba(255,255,255,.04)',
+                : (isDark ? 'inset 0 1px 0 rgba(255,255,255,.04)' : 'inset 0 1px 0 rgba(255,255,255,.9)'),
               transition:'all .25s cubic-bezier(.22,.9,.3,1)',
             }}
-            onMouseEnter={e => { if (!isActive) { e.currentTarget.style.background = 'rgba(255,255,255,.08)'; e.currentTarget.style.color = c.text; e.currentTarget.style.transform = 'translateY(-1px)'; } }}
-            onMouseLeave={e => { if (!isActive) { e.currentTarget.style.background = 'rgba(255,255,255,.04)'; e.currentTarget.style.color = c.textMuted; e.currentTarget.style.transform = 'translateY(0)'; } }}
+            onMouseEnter={e => { if (!isActive) { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,.08)' : '#ffffff'; e.currentTarget.style.color = c.text; e.currentTarget.style.transform = 'translateY(-1px)'; } }}
+            onMouseLeave={e => { if (!isActive) { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,.04)' : 'rgba(255,255,255,.7)'; e.currentTarget.style.color = c.textMuted; e.currentTarget.style.transform = 'translateY(0)'; } }}
           >
             <span>{label}</span>
             {n != null && <span className="mono" style={{
               fontSize:10, padding:'2px 8px', borderRadius:9, letterSpacing:'0.04em',
-              background: isActive ? 'rgba(255,255,255,.2)' : 'rgba(255,255,255,.06)',
+              background: isActive ? 'rgba(255,255,255,.2)' : (isDark ? 'rgba(255,255,255,.06)' : 'rgba(10,10,18,.06)'),
               color: isActive ? '#fff' : c.textSubtle,
               transition:'all .25s',
             }}>{n}</span>}
@@ -7975,7 +7998,7 @@ function LibraryTabsStrip({ active, onChange, counts, lang, isDark }) {
   );
 }
 // ─── NEW PLAYLIST MODAL ───────────────────────────────────────────────────────
-function NewPlaylistModal({ onCancel, onSubmit, lang }) {
+function NewPlaylistModal({ onCancel, onSubmit, lang, isDark = true }) {
   const [name, setName] = React.useState('');
   const [description, setDescription] = React.useState('');
   const [busy, setBusy] = React.useState(false);
@@ -8020,15 +8043,19 @@ function NewPlaylistModal({ onCancel, onSubmit, lang }) {
     >
       <div style={{
         width: 'min(440px, 92vw)', padding: 28,
-        background: 'linear-gradient(180deg, rgba(32,28,48,0.97) 0%, rgba(20,16,32,0.97) 60%)',
-        border: '1px solid rgba(255,255,255,.08)',
+        background: isDark
+          ? 'linear-gradient(180deg, rgba(32,28,48,0.97) 0%, rgba(20,16,32,0.97) 60%)'
+          : 'linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(242,240,250,0.98) 60%)',
+        border: isDark ? '1px solid rgba(255,255,255,.08)' : '1px solid rgba(255,255,255,.85)',
         borderRadius: 18,
-        boxShadow: 'inset 0 1px 0 rgba(255,255,255,.14), 0 28px 70px rgba(0,0,0,.6), 0 0 0 1px rgba(124,91,255,.18)',
+        boxShadow: isDark
+          ? 'inset 0 1px 0 rgba(255,255,255,.14), 0 28px 70px rgba(0,0,0,.6), 0 0 0 1px rgba(124,91,255,.18)'
+          : 'inset 0 1px 0 rgba(255,255,255,.95), 0 28px 60px rgba(46,36,86,.24), 0 0 0 1px rgba(124,91,255,.2)',
       }}>
-        <div className="mono" style={{ fontSize: 10, letterSpacing: '0.24em', color: 'rgba(238,238,243,.5)', marginBottom: 18, textTransform: 'uppercase' }}>
+        <div className="mono" style={{ fontSize: 10, letterSpacing: '0.24em', color: isDark ? 'rgba(238,238,243,.5)' : 'rgba(10,10,18,.55)', marginBottom: 18, textTransform: 'uppercase' }}>
           {lang === 'ru' ? 'Новый плейлист' : 'New playlist'}
         </div>
-        <div style={{ fontSize: 12, color: 'rgba(238,238,243,.6)', margin: '14px 0 6px', letterSpacing: '0.02em' }}>
+        <div style={{ fontSize: 12, color: isDark ? 'rgba(238,238,243,.6)' : 'rgba(10,10,18,.65)', margin: '14px 0 6px', letterSpacing: '0.02em' }}>
           {lang === 'ru' ? 'Название' : 'Name'}
         </div>
         <input
@@ -8038,12 +8065,13 @@ function NewPlaylistModal({ onCancel, onSubmit, lang }) {
           placeholder={lang === 'ru' ? 'Например: Late night ride' : 'e.g.: Late night ride'}
           style={{
             width: '100%', padding: '10px 12px',
-            background: 'rgba(0,0,0,.32)', border: '1px solid rgba(255,255,255,.07)',
-            borderRadius: 10, color: '#fff', fontSize: 14, outline: 'none',
-            boxShadow: 'inset 0 1px 2px rgba(0,0,0,.3)',
+            background: isDark ? 'rgba(0,0,0,.32)' : '#ffffff',
+            border: `1px solid ${isDark ? 'rgba(255,255,255,.07)' : 'rgba(10,10,18,.14)'}`,
+            borderRadius: 10, color: isDark ? '#fff' : '#161620', fontSize: 14, outline: 'none',
+            boxShadow: isDark ? 'inset 0 1px 2px rgba(0,0,0,.3)' : 'inset 0 1px 2px rgba(46,36,86,.08)',
           }}
         />
-        <div style={{ fontSize: 12, color: 'rgba(238,238,243,.6)', margin: '14px 0 6px', letterSpacing: '0.02em' }}>
+        <div style={{ fontSize: 12, color: isDark ? 'rgba(238,238,243,.6)' : 'rgba(10,10,18,.65)', margin: '14px 0 6px', letterSpacing: '0.02em' }}>
           {lang === 'ru' ? 'Описание (опционально)' : 'Description (optional)'}
         </div>
         <textarea
@@ -8051,14 +8079,15 @@ function NewPlaylistModal({ onCancel, onSubmit, lang }) {
           rows={3}
           style={{
             width: '100%', padding: '10px 12px',
-            background: 'rgba(0,0,0,.32)', border: '1px solid rgba(255,255,255,.07)',
-            borderRadius: 10, color: '#fff',
+            background: isDark ? 'rgba(0,0,0,.32)' : '#ffffff',
+            border: `1px solid ${isDark ? 'rgba(255,255,255,.07)' : 'rgba(10,10,18,.14)'}`,
+            borderRadius: 10, color: isDark ? '#fff' : '#161620',
             fontFamily: "'Noto Serif Display', Georgia, serif", fontStyle: 'italic', fontSize: 15,
-            outline: 'none', boxShadow: 'inset 0 1px 2px rgba(0,0,0,.3)', resize: 'vertical', minHeight: 76,
+            outline: 'none', boxShadow: isDark ? 'inset 0 1px 2px rgba(0,0,0,.3)' : 'inset 0 1px 2px rgba(46,36,86,.08)', resize: 'vertical', minHeight: 76,
           }}
         />
         {error && (
-          <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 8, fontSize: 12, color: '#ffc99a', background: 'rgba(255,180,80,.08)', border: '1px solid rgba(255,180,80,.25)' }}>
+          <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 8, fontSize: 12, color: isDark ? '#ffc99a' : '#8a4d05', background: isDark ? 'rgba(255,180,80,.08)' : 'rgba(240,138,18,.10)', border: `1px solid ${isDark ? 'rgba(255,180,80,.25)' : 'rgba(190,105,10,.35)'}` }}>
             {error}
           </div>
         )}
@@ -8066,8 +8095,9 @@ function NewPlaylistModal({ onCancel, onSubmit, lang }) {
           <button
             onClick={onCancel}
             style={{
-              background: 'rgba(255,255,255,.04)', border: '1px solid rgba(255,255,255,.07)',
-              color: 'rgba(238,238,243,.7)', padding: '10px 18px', borderRadius: 10, fontSize: 13, cursor: 'pointer',
+              background: isDark ? 'rgba(255,255,255,.04)' : 'rgba(10,10,18,.05)',
+              border: `1px solid ${isDark ? 'rgba(255,255,255,.07)' : 'rgba(10,10,18,.12)'}`,
+              color: isDark ? 'rgba(238,238,243,.7)' : 'rgba(10,10,18,.75)', padding: '10px 18px', borderRadius: 10, fontSize: 13, cursor: 'pointer',
             }}>{lang === 'ru' ? 'Отмена' : 'Cancel'}</button>
           <button
             className="cta-v3"
@@ -8201,7 +8231,7 @@ function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist,
               <div style={{
                 width:'100%', height:'100%', display:'grid', placeItems:'center',
                 background:`linear-gradient(135deg, oklch(38% 0.13 ${hue}), oklch(52% 0.18 ${(hue+45)%360}))`,
-                fontFamily:"'JetBrains Mono', monospace", fontSize:'52px', fontWeight:700, color:'rgba(255,255,255,.65)', letterSpacing:'0.04em',
+                fontFamily:"'Geist', 'Inter', system-ui, sans-serif", fontSize:'52px', fontWeight:700, color:'rgba(255,255,255,.65)', letterSpacing:'0.04em',
               }}>{(album.album_title||'?').slice(0,2).toUpperCase()}</div>
             )}
             {/* sleeve sheen */}
@@ -8315,7 +8345,7 @@ function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist,
               {/* Actions */}
               <div className="album-back-rise" style={{ '--ab-d':'0.55s', display:'flex', gap:'8px' }}>
                 <button onClick={() => playFromIdx(0)} style={{
-                  padding:'9px 18px', borderRadius:'10px', fontSize:'12px', fontFamily:"'JetBrains Mono', monospace", letterSpacing:'0.06em',
+                  padding:'9px 18px', borderRadius:'10px', fontSize:'12px', fontFamily:"'Geist', 'Inter', system-ui, sans-serif", letterSpacing:'0.06em',
                   background:'linear-gradient(180deg, oklch(62% 0.21 272), oklch(49% 0.22 283))', color:'#fff', border:'none', cursor:'pointer',
                   boxShadow:'inset 0 1px 0 rgba(255,255,255,.3), 0 6px 18px rgba(124,91,255,.35)',
                 }}>▶ {lang==='ru'?'Играть всё':'Play All'}</button>
@@ -8623,7 +8653,7 @@ function IndexingProgress({ stepStatus, stageProgress, lang, c, isDark, premiumN
             <div style={{
               width:'35px', height:'35px', borderRadius:'10px', flexShrink:0, marginTop:'2px',
               display:'flex', alignItems:'center', justifyContent:'center',
-              fontSize:'17px', color: accent, fontFamily:"'JetBrains Mono', monospace",
+              fontSize:'17px', color: accent, fontFamily:"'Geist', 'Inter', system-ui, sans-serif",
               background: iconBg,
               boxShadow: isDark ? 'inset 0 1px 0 rgba(255,255,255,0.05)' : 'inset 0 1px 0 rgba(255,255,255,0.85)',
             }}>
@@ -9337,7 +9367,7 @@ function AIIndexingCard({ isDark, lang, aiStatus }) {
 
       <div style={{
         marginTop: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
-        fontSize: 11, color: c.textMuted, fontFamily: "'JetBrains Mono', monospace",
+        fontSize: 11, color: c.textMuted, fontFamily: "'Geist', 'Inter', system-ui, sans-serif",
       }}>
         <span>
           {agg.ran === 0
@@ -9371,7 +9401,7 @@ function AIIndexingCard({ isDark, lang, aiStatus }) {
                 ↻ {lang === 'ru' ? 'Сброс' : 'Reset'}
               </button>
             </div>
-            <div style={{ marginTop: 4, fontSize: 11, color: c.textMuted, fontFamily: "'JetBrains Mono', monospace" }}>
+            <div style={{ marginTop: 4, fontSize: 11, color: c.textMuted, fontFamily: "'Geist', 'Inter', system-ui, sans-serif" }}>
               {fmtStatus(s)}
             </div>
             {isEmptyDone(s) && (
@@ -9755,7 +9785,7 @@ function InstanceAISettings({ isDark, lang, showToast }) {
     width: '100%', padding: '10px 13px', borderRadius: 10,
     border: `1px solid ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.10)'}`,
     background: isDark ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.75)',
-    color: c.text, fontSize: 14, outline: 'none', fontFamily: "'JetBrains Mono', monospace",
+    color: c.text, fontSize: 14, outline: 'none', fontFamily: "'Geist', 'Inter', system-ui, sans-serif",
   };
 
   if (!loaded) return <div style={{ padding: '18px 0' }}><Spinner size={16} /></div>;
@@ -10159,7 +10189,7 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
     width:'100%', minHeight:44, padding:'10px 13px', borderRadius:10,
     border:`1px solid ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.10)'}`,
     background: isDark ? 'rgba(0,0,0,0.25)' : 'rgba(255,255,255,0.75)',
-    color: c.text, fontSize:14, outline:'none', fontFamily:"'JetBrains Mono', monospace",
+    color: c.text, fontSize:14, outline:'none', fontFamily:"'Geist', 'Inter', system-ui, sans-serif",
   };
 
   return (
@@ -11857,7 +11887,7 @@ function OnboardingScreen({ isDark, lang, onDone, onLang, onTheme, indexingJob }
           </div>
           <input value={collName} onChange={e=>setCollName(e.target.value)} disabled={indexing}
             className={ske('inset', isDark)} style={{ width:'100%', padding:'10px 13px', borderRadius:'10px', border:'none',
-              color:c.text, fontSize:'15px', outline:'none', fontFamily:"'JetBrains Mono', monospace", marginBottom:'18px' }} />
+              color:c.text, fontSize:'15px', outline:'none', fontFamily:"'Geist', 'Inter', system-ui, sans-serif", marginBottom:'18px' }} />
 
           <div className="mono" style={{ fontSize:'14px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'8px' }}>
             {lang==='ru'?'ПАПКА С МУЗЫКОЙ':'MUSIC FOLDER'}
@@ -11873,7 +11903,7 @@ function OnboardingScreen({ isDark, lang, onDone, onLang, onTheme, indexingJob }
             <input value={folderPath} onChange={e=>setFolderPath(e.target.value)} disabled={indexing}
               placeholder="/path/to/music"
               className={ske('inset', isDark)} style={{ flex:1, padding:'11px 13px', borderRadius:'10px', border:'none',
-                color:c.text, fontSize:'15px', outline:'none', fontFamily:"'JetBrains Mono', monospace" }} />
+                color:c.text, fontSize:'15px', outline:'none', fontFamily:"'Geist', 'Inter', system-ui, sans-serif" }} />
           </div>
 
           <label style={{ display:'flex', alignItems:'center', gap:'8px', fontSize:'14px', color:c.textMuted, marginBottom:'8px' }}>
@@ -12054,7 +12084,7 @@ function LyricsBackFace({
       }}
     >
       <div style={{
-        fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+        fontFamily: "'Geist', 'Inter', system-ui, sans-serif",
         fontSize: 9,
         letterSpacing: '0.18em',
         color: headingColor,
@@ -12166,7 +12196,7 @@ function PlayerScoreBars({ breakdown, isDark }) {
         alignItems: 'center',
         gap: 8,
         fontSize: 9,
-        fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+        fontFamily: "'Geist', 'Inter', system-ui, sans-serif",
         opacity: present ? 1 : 0.35,
         marginBottom: 4,
       }}>
@@ -13254,7 +13284,7 @@ function SimilarityColumn({ accent, label, items, tint, glow, isDark, lang, onQu
     <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 6 }}>
       <div style={{
         fontSize: 10, letterSpacing: '0.18em',
-        fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+        fontFamily: "'Geist', 'Inter', system-ui, sans-serif",
         color: accent, display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2,
       }}>
         <span style={{ width: 6, height: 6, borderRadius: '50%', background: accent }} />
@@ -14928,7 +14958,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
               </div>
             ) : (
               <div style={{ textAlign:'center', padding:'30px 0' }}>
-                <div style={{ fontSize:'14px', color:pTextSubtle, fontFamily:"'JetBrains Mono', monospace", letterSpacing:'0.15em' }}>
+                <div style={{ fontSize:'14px', color:pTextSubtle, fontFamily:"'Geist', 'Inter', system-ui, sans-serif", letterSpacing:'0.15em' }}>
                   {lang==='ru'?'ВЫБЕРИТЕ ТРЕК':'SELECT A TRACK'}
                 </div>
               </div>
@@ -15153,7 +15183,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
               style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10, width:'100%', minHeight:48, padding:'0 16px', borderRadius:14, cursor:'pointer', color:pText,
                 background: isDark ? 'rgba(255,255,255,.05)' : 'rgba(22,22,32,.04)',
                 border:`1px solid ${isDark ? 'rgba(255,255,255,.08)' : 'rgba(22,22,32,.10)'}` }}>
-              <span style={{ fontFamily:"'JetBrains Mono', ui-monospace, monospace", fontSize:11, letterSpacing:'0.16em' }}>{lang==='ru'?'ОЧЕРЕДЬ':'QUEUE'} · {playlist.length}</span>
+              <span style={{ fontFamily:"'Geist', 'Inter', system-ui, sans-serif", fontSize:11, letterSpacing:'0.16em' }}>{lang==='ru'?'ОЧЕРЕДЬ':'QUEUE'} · {playlist.length}</span>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
             </button>
           )}
@@ -15227,7 +15257,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
               fontSize: 10,
               letterSpacing: '0.20em',
               color: isDark ? '#888' : '#5a5a66',
-              fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+              fontFamily: "'Geist', 'Inter', system-ui, sans-serif",
               marginBottom: 10,
               flexShrink: 0,
               display: 'flex',
@@ -15273,7 +15303,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                           margin: '6px 0 4px',
                           color: isDark ? '#666' : '#8a8275',
                           fontSize: 9,
-                          fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+                          fontFamily: "'Geist', 'Inter', system-ui, sans-serif",
                           letterSpacing: '0.18em',
                         }}>
                           <span style={{ flex: 1, height: 1, background: isDark ? '#2a2a32' : 'rgba(22,22,32,0.10)' }} />
@@ -15309,7 +15339,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                             </div>
                           ) : (
                             <span style={{
-                              fontSize:'12px', fontFamily:"'JetBrains Mono', monospace",
+                              fontSize:'12px', fontFamily:"'Geist', 'Inter', system-ui, sans-serif",
                               color: active ? pAccent : pTextSubtle,
                             }}>{i + 1}</span>
                           )}
@@ -15329,7 +15359,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
 
                         {t.genre && (
                           <span style={{
-                            fontSize:'11px', color:pTextSubtle, fontFamily:"'JetBrains Mono', monospace",
+                            fontSize:'11px', color:pTextSubtle, fontFamily:"'Geist', 'Inter', system-ui, sans-serif",
                             padding:'3px 8px', borderRadius:'9999px',
                             background: pPillBg,
                             border: `1px solid ${pBorderSubtle}`,
@@ -15826,7 +15856,7 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere }) {
           {originLine && (
             <div className="mono" style={{
               marginTop: isMobile ? 10 : 14, fontSize: isMobile ? 12 : 15, fontWeight:600, letterSpacing:'0.16em', textTransform:'uppercase',
-              fontFamily: "'JetBrains Mono', 'Noto Color Emoji', ui-monospace, monospace",
+              fontFamily: "'Geist', 'Inter', 'Noto Color Emoji', system-ui, sans-serif",
               color: isDark ? 'rgba(228,219,255,0.96)' : 'oklch(34% 0.16 282)',
               textShadow: isDark ? '0 1px 12px rgba(0,0,0,0.6)' : 'none',
               whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
@@ -16552,7 +16582,7 @@ function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
               value={invite}
               onChange={e => setInvite(e.target.value)}
               maxLength={12}
-              style={{ fontFamily: "'JetBrains Mono', ui-monospace, monospace", letterSpacing: '0.1em' }}
+              style={{ fontFamily: "'Geist', 'Inter', system-ui, sans-serif", letterSpacing: '0.1em' }}
             />
           )}
 
@@ -16976,7 +17006,7 @@ function BottomTabBar({ section, onNav, isDark, lang }) {
               border:0, cursor:'pointer', color: active ? accent : inactive,
               transition:'color .18s ease', minWidth:0 }}>
             <span style={{ display:'flex' }}>{item.icon(active)}</span>
-            <span style={{ fontFamily:"'JetBrains Mono', ui-monospace, monospace", fontWeight:600,
+            <span style={{ fontFamily:"'Geist', 'Inter', system-ui, sans-serif", fontWeight:600,
               fontSize:9, letterSpacing:'0.03em', whiteSpace:'nowrap', overflow:'hidden',
               textOverflow:'ellipsis', maxWidth:'100%' }}>{item.label}</span>
           </button>
@@ -18077,6 +18107,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
           onClose={closeAddToPlaylist}
           listing={appPlaylists}
           lang={lang}
+          isDark={isDark}
         />
       )}
 
@@ -18717,7 +18748,7 @@ function SetupWizard({ onComplete }) {
         <input value={folderPath} onChange={e => setFolderPath(e.target.value)} disabled={musicBusy}
           placeholder="C:\Music"
           className={ske('inset', isDark)} style={{ flex:1, padding:'11px 13px', borderRadius:'10px', border:'none',
-            color:c.text, fontSize:'15px', outline:'none', fontFamily:"'JetBrains Mono', monospace" }} />
+            color:c.text, fontSize:'15px', outline:'none', fontFamily:"'Geist', 'Inter', system-ui, sans-serif" }} />
       </div>
 
       {mode === 'server' && (
@@ -18799,21 +18830,21 @@ function SetupWizard({ onComplete }) {
       <input value={llmUrl} onChange={e => { setLlmUrl(e.target.value); setProbe(null); }}
         placeholder="http://localhost:1234/v1" disabled={aiBusy}
         className={ske('inset', isDark)} style={{ width:'100%', padding:'11px 13px', borderRadius:'10px', border:'none',
-          color:c.text, fontSize:'14px', outline:'none', fontFamily:"'JetBrains Mono', monospace", marginBottom:'14px' }} />
+          color:c.text, fontSize:'14px', outline:'none', fontFamily:"'Geist', 'Inter', system-ui, sans-serif", marginBottom:'14px' }} />
       <div className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'8px' }}>
         {ru ? 'МОДЕЛЬ' : 'MODEL'}
       </div>
       <input value={llmModel} onChange={e => { setLlmModel(e.target.value); setProbe(null); }}
         placeholder="qwen2.5-14b-instruct" disabled={aiBusy}
         className={ske('inset', isDark)} style={{ width:'100%', padding:'11px 13px', borderRadius:'10px', border:'none',
-          color:c.text, fontSize:'14px', outline:'none', fontFamily:"'JetBrains Mono', monospace", marginBottom:'14px' }} />
+          color:c.text, fontSize:'14px', outline:'none', fontFamily:"'Geist', 'Inter', system-ui, sans-serif", marginBottom:'14px' }} />
       <div className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'8px' }}>
         {ru ? 'API-КЛЮЧ · НЕОБЯЗАТЕЛЬНО' : 'API KEY · OPTIONAL'}
       </div>
       <input type="password" value={llmKey} onChange={e => setLlmKey(e.target.value)}
         placeholder={ru ? 'для локального сервера обычно не нужен' : 'usually not needed for a local server'} disabled={aiBusy}
         className={ske('inset', isDark)} style={{ width:'100%', padding:'11px 13px', borderRadius:'10px', border:'none',
-          color:c.text, fontSize:'14px', outline:'none', fontFamily:"'JetBrains Mono', monospace", marginBottom:'14px' }} />
+          color:c.text, fontSize:'14px', outline:'none', fontFamily:"'Geist', 'Inter', system-ui, sans-serif", marginBottom:'14px' }} />
       <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'18px' }}>
         <button onClick={probeLlm} disabled={probing || !llmUrl.trim()}
           className={ske('btn', isDark)} style={{ padding:'9px 16px', borderRadius:'10px', fontSize:'13px',
@@ -18893,17 +18924,17 @@ function SetupWizard({ onComplete }) {
       <input value={llmUrl} onChange={e => { setLlmUrl(e.target.value); setProbe(null); }}
         placeholder="http://localhost:1234/v1" disabled={policyBusy}
         className={ske('inset', isDark)} style={{ width:'100%', padding:'11px 13px', borderRadius:'10px', border:'none',
-          color:c.text, fontSize:'14px', outline:'none', fontFamily:"'JetBrains Mono', monospace", marginBottom:'14px' }} />
+          color:c.text, fontSize:'14px', outline:'none', fontFamily:"'Geist', 'Inter', system-ui, sans-serif", marginBottom:'14px' }} />
       <div className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'8px' }}>{ru ? 'МОДЕЛЬ' : 'MODEL'}</div>
       <input value={llmModel} onChange={e => { setLlmModel(e.target.value); setProbe(null); }}
         placeholder="qwen2.5-14b-instruct" disabled={policyBusy}
         className={ske('inset', isDark)} style={{ width:'100%', padding:'11px 13px', borderRadius:'10px', border:'none',
-          color:c.text, fontSize:'14px', outline:'none', fontFamily:"'JetBrains Mono', monospace", marginBottom:'14px' }} />
+          color:c.text, fontSize:'14px', outline:'none', fontFamily:"'Geist', 'Inter', system-ui, sans-serif", marginBottom:'14px' }} />
       <div className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'8px' }}>{ru ? 'API-КЛЮЧ · НЕОБЯЗАТЕЛЬНО' : 'API KEY · OPTIONAL'}</div>
       <input type="password" value={llmKey} onChange={e => setLlmKey(e.target.value)}
         placeholder={ru ? 'для локального сервера обычно не нужен' : 'usually not needed for a local server'} disabled={policyBusy}
         className={ske('inset', isDark)} style={{ width:'100%', padding:'11px 13px', borderRadius:'10px', border:'none',
-          color:c.text, fontSize:'14px', outline:'none', fontFamily:"'JetBrains Mono', monospace", marginBottom:'14px' }} />
+          color:c.text, fontSize:'14px', outline:'none', fontFamily:"'Geist', 'Inter', system-ui, sans-serif", marginBottom:'14px' }} />
       <div style={{ display:'flex', alignItems:'center', gap:'10px', marginBottom:'18px' }}>
         <button onClick={probeLlm} disabled={probing || !llmUrl.trim()}
           className={ske('btn', isDark)} style={{ padding:'9px 16px', borderRadius:'10px', fontSize:'13px',
