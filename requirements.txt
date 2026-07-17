@@ -4,8 +4,8 @@ torchvision==0.21.0+cu124
 torchaudio==2.6.0+cu124
 syncedlyrics
 qdrant-client
-# Genius.com scraping (app/services/genius_service.py): impersonates a real
-# browser TLS fingerprint so Genius doesn't block plain `requests`.
+# Genius.com scraping (app/services/genius_service.py): curl-based HTTP client
+# (no browser impersonation — the spoofed fingerprint got blocked by Genius).
 curl_cffi
 sentence-transformers
 mutagen

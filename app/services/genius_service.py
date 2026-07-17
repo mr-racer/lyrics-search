@@ -143,7 +143,9 @@ def _parse_preloaded_state(html: str) -> dict:
 
 def _fetch_page(url: str) -> Tuple[str, dict]:
     proxies = get_proxy()
-    kwargs = {"impersonate": "chrome99_android", "timeout": REQUEST_TIMEOUT}
+    # No impersonate=: the spoofed fingerprint started getting blocked by
+    # Genius (pages stopped parsing) — plain curl works.
+    kwargs = {"timeout": REQUEST_TIMEOUT}
     if proxies:
         kwargs["proxies"] = proxies
     resp = curl_requests.get(url, **kwargs)
