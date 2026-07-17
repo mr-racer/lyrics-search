@@ -117,6 +117,8 @@ def create_playlist_agent(model, deps, catalog, state):
             _emit("filters_done", query=artist_query, best=None)
             return []
         scored = _score_artists(artist_query, values)
+        logger.info("[playlist_agent] fetch_filters query=%r scanned=%d artists -> candidates=%s",
+                    artist_query, len(values), scored)
         _emit("filters_done", query=artist_query,
               best=scored[0]["artist"] if scored else None)
         return scored
@@ -131,11 +133,15 @@ def create_playlist_agent(model, deps, catalog, state):
             )
         state["web"] += 1
         _emit("web_search", query=query)
+        logger.info("[playlist_agent] web_search #%d query=%r", state["web"], query)
         try:
-            return await asyncio.to_thread(smart_web_search, query, False, 5) or "(no web results)"
+            res = await asyncio.to_thread(smart_web_search, query, False, 5) or "(no web results)"
         except Exception as exc:
             logger.warning("[playlist_agent] web_search failed: %s", exc)
             return "(web search unavailable)"
+        logger.info("[playlist_agent] web_search #%d -> %d chars: %.300s",
+                    state["web"], len(res), res.replace("\n", " · "))
+        return res
 
     @agent.tool_plain
     async def get_songs(items: list[SongQuery]) -> list | str:
@@ -146,17 +152,25 @@ def create_playlist_agent(model, deps, catalog, state):
         if state["web"] == 0:
             # Web-first is the whole point: without it the model pattern-matches
             # the request text against the library ("semantic" garbage).
+            logger.info("[playlist_agent] get_songs refused (no web_search yet), items=%s",
+                        [f"{i.title} — {i.artist}" for i in items])
             return (
                 "(refused: call web_search first to get REAL song titles from "
                 "the internet, then call get_songs with those titles.)"
             )
         _emit("matching", count=len(items))
+        logger.info("[playlist_agent] get_songs items=%s",
+                    [f"{i.title} — {i.artist}" for i in items])
         payload = [i.model_dump() for i in items]
         try:
             resolved = await asyncio.to_thread(resolve_songs, payload, catalog)
         except Exception as exc:
             logger.warning("[playlist_agent] get_songs failed: %s", exc)
             return [{"query_title": i.get("title", ""), "match": "none"} for i in payload]
+        logger.info("[playlist_agent] get_songs results=%s",
+                    [(r["query_title"], r["match"],
+                      f'{r.get("title")} — {r.get("artist")}' if r["match"] != "none" else None)
+                     for r in resolved])
         for r in resolved:
             if r["match"] != "none" and r.get("track_id"):
                 state["resolved"][r["track_id"]] = {
@@ -183,10 +197,19 @@ async def run_playlist_agent(prompt, lang, deps, catalog, state,
     state.setdefault("missing", [])
     state["on_status"] = on_status
 
+    logger.info("[playlist_agent] start prompt=%r lang=%s model=%s base_url=%s",
+                prompt, lang, llm_model or "(default)", llm_base_url or "(default)")
     model = _create_pydantic_model(llm_base_url, llm_model)
     agent = create_playlist_agent(model, deps, catalog, state)
     result = await agent.run(
         f"[lang={lang}] {prompt}",
         usage_limits=UsageLimits(request_limit=_MAX_LLM_REQUESTS),
     )
-    return result.output
+    draft = result.output
+    logger.info(
+        "[playlist_agent] done title=%r draft_track_ids=%s (resolved_in_library=%d, "
+        "missing=%d, web_searches=%d)",
+        draft.title, draft.track_ids, len(state["resolved"]),
+        len(state["missing"]), state["web"],
+    )
+    return draft

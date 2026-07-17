@@ -1239,11 +1239,21 @@ def _tracks_for(draft, state) -> list:
     """Assemble the resolved-track preview from the agent's ``state``, keeping
     only ids the agent actually matched (drops any hallucinated track_id)."""
     resolved = state.get("resolved", {})
-    return [
+    dropped = [tid for tid in draft.track_ids if tid not in resolved]
+    if dropped:
+        logger.warning(
+            "[playlist_builder] dropped %d hallucinated track_id(s) not returned "
+            "by get_songs: %s (get_songs resolved: %s)",
+            len(dropped), dropped, list(resolved) or "(nothing)",
+        )
+    tracks = [
         {"track_id": tid, **resolved[tid]}
         for tid in draft.track_ids
         if tid in resolved
     ]
+    logger.info("[playlist_builder] draft %r -> %d/%d tracks in preview",
+                draft.title, len(tracks), len(draft.track_ids))
+    return tracks
 
 
 @router.post("/playlist-builder")
