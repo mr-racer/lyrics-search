@@ -30,7 +30,7 @@ PROFILE_ENRICH_KIND = "profile_enrich"
 _LANG_NAMES = {"en": "English", "ru": "Russian"}
 
 # Prompt-to-playlist guardrails.
-ALLOWED_TOOLS = ("clap_search", "library_search", "similar_tracks")
+ALLOWED_TOOLS = ("clap_search", "library_search", "similar_tracks", "web_hits")
 MAX_PLAN_ACTIONS = 3
 MAX_ACTION_LIMIT = 25
 MAX_SELECT_CANDIDATES = 60
@@ -574,9 +574,11 @@ Available tools:
 - "clap_search" — search by SOUND. The query must be an English description of sound/mood/instrumentation, written like an audio caption (e.g. "a calm late-night jazz track with soft female vocals and brushed drums"). Use for any wish about vibe, genre, energy, instruments.
 - "library_search" — find specific songs by NAME: a song title, an album name, or an artist name. Query = the name exactly as the user wrote it, in their own language/script (do NOT translate). Returns the actual songs (an album or artist name returns that album's / artist's tracks). Use when the wish names a song, album, or artist.
 - "similar_tracks" — tracks that SOUND like one specific track the user explicitly named. Query = "Artist Title" exactly as the user named it. Use ONLY when a concrete song is named.
+- "web_hits" — an artist's HITS / best-of ("хиты Канье", "Kanye hits", "лучшее у Queen") or a film/game SOUNDTRACK ("саундтрек к Интерстеллару"). These need a REAL well-known song list from the internet — the library alone cannot answer them. Query = the wish as the user wrote it.
 
 Rules:
 - 1 to {max_actions} actions. One focused action beats three vague ones.
+- A hits/best-of/soundtrack wish → ONE web_hits action and nothing else. NEVER treat such a wish as a sound/mood description for clap_search.
 - A wish can mix kinds: "что-нибудь энергичное у Queen" → clap_search (energetic sound) + library_search (Queen).
 - "title": a short playlist name in {lang_name} that captures the wish.
 - Any artist name, wherever it appears (a query or the title), must stay EXACTLY as given by the user — never translated, transliterated, localized, or grammatically declined.
@@ -685,6 +687,74 @@ async def _execute_action(
     return out
 
 
+async def _web_hits_playlist(
+    *,
+    search_service,
+    qdrant_client,
+    collection_name: str,
+    prompt: str,
+    lang: str,
+    limit: int,
+    llm_base_url: str | None,
+    llm_model: str | None,
+) -> dict:
+    """Delegate a hits/soundtrack wish to the playlist-builder agent
+    (web search + library matching) and reshape its output to the
+    ai_playlist contract {title, steps, tracks}."""
+    from app.services.agent_deps import SearchDeps
+    from app.services.playlist_agent.agent import run_playlist_agent
+    from app.services.playlist_agent.resolver import CatalogAdapter
+    from app.services.playlists_service import _resolve_payloads
+
+    deps = SearchDeps(service=search_service, collection_name=collection_name)
+    catalog = CatalogAdapter(qdrant_client, collection_name)
+    steps: list[dict] = []
+
+    def on_status(event: dict) -> None:
+        stage = event.get("stage")
+        if stage == "filters_done":
+            steps.append({"tool": "fetch_filters", "query": event.get("query") or "",
+                          "found": 1 if event.get("best") else 0})
+        elif stage == "web_search":
+            steps.append({"tool": "web_search", "query": event.get("query") or "",
+                          "found": 0})
+        elif stage == "matching_done":
+            steps.append({"tool": "get_songs", "query": "",
+                          "found": int(event.get("found") or 0)})
+
+    state: dict = {}
+    draft = await run_playlist_agent(
+        prompt, lang, deps, catalog, state,
+        llm_base_url=llm_base_url, llm_model=llm_model, on_status=on_status,
+    )
+    resolved = state.get("resolved", {})
+    ids = [tid for tid in draft.track_ids if tid in resolved][:limit]
+    payloads = await asyncio.to_thread(
+        _resolve_payloads, qdrant_client, collection_name, ids,
+    )
+    tracks = []
+    for tid in ids:
+        p = payloads.get(tid)
+        if p is None:
+            continue
+        tracks.append({
+            "track_id": tid,
+            "title": p.get("title") or resolved[tid].get("title") or "—",
+            "artist": p.get("artist") or resolved[tid].get("artist") or "—",
+            "album": p.get("album"),
+            "year": p.get("year"),
+            "genre": p.get("genre"),
+            "duration": p.get("duration"),
+            "file_path": p.get("file_path") or "",
+            "cover_art_path": p.get("cover_art_path"),
+            "tool": "web_hits",
+            "reason": None,
+        })
+    logger.info("[ai-playlist] web_hits done: title=%r tracks=%d steps=%s",
+                draft.title, len(tracks), steps)
+    return {"title": draft.title or "Playlist", "steps": steps, "tracks": tracks}
+
+
 async def ai_playlist(
     *,
     search_service,
@@ -701,6 +771,10 @@ async def ai_playlist(
     ``steps`` narrate what the pipeline actually did (tool, query, found) —
     the frontend animates them. Selection failures degrade gracefully to the
     un-curated candidate order instead of erroring the whole request.
+
+    A hits/best-of/soundtrack wish (the plan answers with a ``web_hits``
+    action) is delegated wholesale to the playlist-builder agent, which finds
+    the real song list on the web and matches it against the library.
     """
     llm_kw = {"base_url": llm_base_url, "model": llm_model}
 
@@ -713,9 +787,20 @@ async def ai_playlist(
         temperature=0.3, parse_json=True, **llm_kw,
     )
     title, actions = _validate_plan(raw_plan)
+    logger.info("[ai-playlist] prompt=%r plan title=%r actions=%s", prompt, title, actions)
     if not actions:
         # Degenerate plan — fall back to treating the whole wish as a sound query.
         actions = [{"tool": "clap_search", "query": prompt, "limit": 20}]
+
+    # Hits/soundtrack → the web-capable playlist agent instead of library-only
+    # search (the library has no notion of what an artist's "hits" are).
+    if any(a["tool"] == "web_hits" for a in actions):
+        logger.info("[ai-playlist] plan requests web_hits — delegating to playlist agent")
+        return await _web_hits_playlist(
+            search_service=search_service, qdrant_client=qdrant_client,
+            collection_name=collection_name, prompt=prompt, lang=lang,
+            limit=limit, llm_base_url=llm_base_url, llm_model=llm_model,
+        )
 
     # 2. Execute (dedup across actions, first tool wins the attribution).
     steps = []

@@ -229,6 +229,41 @@ class TestAIPlaylist:
         assert sim_mock.call_args.kwargs["seed_track_id"] == "seed"
         assert out["tracks"][0]["track_id"] == "sim1"
 
+    @pytest.mark.asyncio
+    async def test_web_hits_plan_delegates_to_playlist_agent(self):
+        """A hits-shaped wish → the plan answers web_hits → the whole request is
+        handled by the playlist-builder agent; hallucinated ids are dropped and
+        the agent's progress events become steps."""
+        plan = {"title": "Хиты",
+                "actions": [{"tool": "web_hits", "query": "хиты канье", "limit": 15}]}
+
+        async def fake_agent(prompt, lang, deps, catalog, state,
+                             llm_base_url=None, llm_model=None, on_status=None):
+            on_status({"stage": "web_search", "query": "Kanye West greatest hits"})
+            on_status({"stage": "matching_done", "found": 1, "total": 2})
+            state.setdefault("resolved", {})["k1"] = {
+                "title": "Stronger", "artist": "Kanye West", "match": "exact"}
+            return SimpleNamespace(title="Хиты Kanye West",
+                                   track_ids=["k1", "hallucinated"])
+
+        payloads = {"k1": {"title": "Stronger", "artist": "Kanye West",
+                           "file_path": "/k1.mp3", "duration": 200.0}}
+        with patch.object(svc, "ask_llm", new=AsyncMock(return_value=plan)), \
+             patch("app.services.playlist_agent.agent.run_playlist_agent", new=fake_agent), \
+             patch("app.services.playlists_service._resolve_payloads", return_value=payloads):
+            out = await ai_playlist(
+                search_service=object(), qdrant_client=object(),
+                collection_name="col", prompt="хиты канье", lang="ru", limit=5,
+            )
+
+        assert out["title"] == "Хиты Kanye West"
+        assert [t["track_id"] for t in out["tracks"]] == ["k1"]  # hallucinated dropped
+        assert out["tracks"][0]["tool"] == "web_hits"
+        assert out["tracks"][0]["file_path"] == "/k1.mp3"
+        assert [s["tool"] for s in out["steps"]] == ["web_search", "get_songs"]
+        assert out["steps"][0]["query"] == "Kanye West greatest hits"
+        assert out["steps"][1]["found"] == 1
+
 
 # ── Taste vibe (For-You hero phrase) ────────────────────────────────────────
 

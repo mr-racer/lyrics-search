@@ -5223,8 +5223,12 @@ const RECSYS_AXIS_LABELS = {
 };
 const RECSYS_TOOL_LABELS = {
   clap_search:    { ru: 'поиск по звучанию', en: 'sound search' },
-  library_search: { ru: 'поиск по смыслу',   en: 'meaning search' },
+  library_search: { ru: 'поиск по названию', en: 'name search' },
   similar_tracks: { ru: 'похожие на трек',   en: 'similar to a track' },
+  // web_hits delegation (hits / soundtracks): steps come from the playlist agent.
+  fetch_filters:  { ru: 'ищем исполнителя в библиотеке', en: 'artist lookup in your library' },
+  web_search:     { ru: 'ищем в интернете', en: 'searching the web' },
+  get_songs:      { ru: 'сверяем с библиотекой', en: 'matching your library' },
 };
 
 // Hexagonal taste radar: filled polygon = the listener's profile, dashed
@@ -5476,9 +5480,19 @@ function RecommendSection({ isDark, lang, onPlayTrack, onQueueNext, aiStatus, on
     } catch (e) {}
   };
 
-  // Re-present the agent's plan in plain words (never raw tool ids / queries).
+  // Re-present the agent's plan in plain words (never raw tool ids). Short
+  // queries (names, web searches) are shown; clap_search captions are long
+  // English audio prompts — label only.
   const friendlySteps = (steps) => (steps || [])
-    .map(s => (RECSYS_TOOL_LABELS[s.tool] && RECSYS_TOOL_LABELS[s.tool][lang === 'ru' ? 'ru' : 'en']))
+    .map(s => {
+      const l = RECSYS_TOOL_LABELS[s.tool];
+      if (!l) return null;
+      let text = l[lang === 'ru' ? 'ru' : 'en'];
+      if (s.tool === 'get_songs')
+        return lang === 'ru' ? `${text} — совпало ${s.found}` : `${text} — ${s.found} matched`;
+      if (s.query && s.tool !== 'clap_search') text += `: «${s.query}»`;
+      return text;
+    })
     .filter(Boolean);
 
   const islandName = (isl) =>
@@ -5491,15 +5505,15 @@ function RecommendSection({ isDark, lang, onPlayTrack, onQueueNext, aiStatus, on
   // Demo wishes under the hero field (AI on): show off what the builder can
   // parse — artist-flavoured and niche-genre asks, not generic moods.
   const aiDemoChips = lang === 'ru' ? [
+    { icon:'🔥', text:'хиты Канье' },
     { icon:'🎸', text:'спокойная музыка как у Dire Straits' },
     { icon:'🌍', text:'восточный хип-хоп' },
     { icon:'🌙', text:'медленное и дымное под поздний вечер' },
-    { icon:'⚡', text:'энергичный рок в дорогу' },
   ] : [
+    { icon:'🔥', text:'Kanye hits' },
     { icon:'🎸', text:'calm music like Dire Straits' },
     { icon:'🌍', text:'oriental hip-hop' },
     { icon:'🌙', text:'slow and smoky for late night' },
-    { icon:'⚡', text:'energetic rock for the road' },
   ];
 
   // Mosaic order: most-populated island first — it renders as the big 2×2 tile.
