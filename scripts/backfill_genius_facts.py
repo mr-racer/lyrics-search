@@ -6,8 +6,9 @@ Facts are written to the same ``song_facts`` table / slug scheme that
 facts show up in both the "chat about song" and "explain this line" prompts
 with zero changes to that code. Producer/label are written to
 ``track_metadata`` via a narrow update (title/artist/album etc. are left
-untouched); the label also lands in ``songs.label`` (slug-keyed), where
-``song_facts_service.apply_song_relations`` picks it up for the player UI.
+untouched); the credits also land in ``songs.producers_genius``/``label``
+(slug-keyed), where ``song_facts_service.apply_song_relations`` picks them up
+for the player UI — producers merged with the GLiNER extraction, deduped.
 
 Usage
 -----
@@ -174,10 +175,11 @@ async def process_song(
         )
 
     producer, label = genius_service.build_producer_label(parsed)
-    if label:
-        # Mirror the live pipeline (genius_facts_service): songs.label is what
-        # apply_song_relations overlays onto player/search/artist read paths.
-        MetadataDB.set_song_label(song_slug, label, collection)
+    if parsed["producers"] or label:
+        # Mirror the live pipeline (genius_facts_service): songs.producers_genius
+        # + songs.label are what apply_song_relations overlays (merged with the
+        # GLiNER extraction) onto player/search/artist read paths.
+        MetadataDB.set_song_genius_credits(song_slug, parsed["producers"], label, collection)
     if producer or label:
         for track_id in track_ids:
             MetadataDB.update_track_producer_label(collection, track_id, producer, label)

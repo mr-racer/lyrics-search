@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import threading
 from pathlib import Path
@@ -362,6 +363,38 @@ def _slugify(text: str) -> str:
     return "-".join(text.lower().split())
 
 
+def _name_dedup_key(name: str) -> str:
+    """'Dr. Dre' / 'dr dre' / 'DR DRE' collapse to one key — the same credit
+    coming from Genius (structured) and the GLiNER fact extraction (prose)
+    differs only in case/punctuation, and the player must not show dubs."""
+    key = re.sub(r"[\W_]+", "", name).casefold()
+    return key or name.strip().casefold()
+
+
+def _merge_producer_names(*producer_jsons: Optional[str]) -> Optional[str]:
+    """Union the JSON name lists in argument order (first source wins the
+    spelling and position), dedup via ``_name_dedup_key``, join with ', ' —
+    the display shape ``TrackMetadata.producer`` / the credits UI expect."""
+    names: List[str] = []
+    seen: set = set()
+    for raw in producer_jsons:
+        if not raw:
+            continue
+        try:
+            parsed = json.loads(raw) or []
+        except (json.JSONDecodeError, TypeError):
+            continue
+        for n in parsed:
+            if not n or not isinstance(n, str):
+                continue
+            key = _name_dedup_key(n)
+            if key in seen:
+                continue
+            seen.add(key)
+            names.append(n.strip())
+    return ", ".join(names) if names else None
+
+
 def _fmt_sample_entry(entry) -> Optional[str]:
     """``{"song": ..., "artist": ...}`` (fact_relations shape) -> "Artist —
     Song", matching what the player's SampleRow component parses. Falls back
@@ -489,6 +522,11 @@ class MetadataDB:
             "label":        "TEXT",
             "samples_json": "TEXT",
             "mbid":         "TEXT",
+            # Genius credits live apart from GLiNER's ``producers`` so the two
+            # concurrent FACTS-stage writers never read-modify-write the same
+            # column and get_songs_needing_relations still sees GLiNER's own
+            # state; get_song_relations_bulk merges them at read time.
+            "producers_genius": "TEXT",
         })
         # The artists table may or may not exist in older databases. Skip
         # silently if missing.
@@ -1196,19 +1234,32 @@ class MetadataDB:
         conn.commit()
 
     @classmethod
-    def set_song_label(cls, slug: str, label: str, collection_name: str) -> None:
-        """Persist the Genius label credit into ``songs.label`` — the column
-        ``get_song_relations_bulk`` reads back for the player's credits UI.
+    def set_song_genius_credits(
+        cls,
+        slug: str,
+        producers: Optional[List[str]],
+        label: Optional[str],
+        collection_name: str,
+    ) -> None:
+        """Persist Genius credits into ``songs.producers_genius``/``label`` —
+        the columns ``get_song_relations_bulk`` merges for the credits UI.
+
+        Genius producers live in their own column (not ``songs.producers``,
+        which stays the GLiNER2+LLM pipeline's alone) so the two concurrent
+        FACTS-stage writers never race on one column and
+        ``get_songs_needing_relations`` still sees GLiNER's own state.
 
         Unlike ``set_song_relations`` this upserts the songs row (same
         slug-derived placeholders as ``add_song_facts_batch``): a Genius page
-        can carry a label with no description/annotations, in which case no
-        facts write ever created the row. On conflict only ``label`` is
-        touched, so an existing row's title/artist survive.
+        can carry credits with no description/annotations, in which case no
+        facts write ever created the row. COALESCE keeps the existing value
+        when this fetch lacks a field, and the row's title/artist survive.
         """
         conn = cls._connect()
         parts = slug.split("-", 1)
         artist_slug = parts[0] if len(parts) > 1 else slug
+        names = [n.strip() for n in (producers or []) if n and n.strip()]
+        producers_json = json.dumps(names, ensure_ascii=False) if names else None
         conn.execute(
             """INSERT INTO artists (slug, name, collection_name)
                VALUES (?, ?, ?)
@@ -1216,10 +1267,14 @@ class MetadataDB:
             (artist_slug, artist_slug.replace("-", " "), collection_name),
         )
         conn.execute(
-            """INSERT INTO songs (slug, title, artist_slug, collection_name, label)
-               VALUES (?, ?, ?, ?, ?)
-               ON CONFLICT(slug) DO UPDATE SET label=excluded.label""",
-            (slug, slug.replace("-", " "), artist_slug, collection_name, label),
+            """INSERT INTO songs (slug, title, artist_slug, collection_name,
+                                  producers_genius, label)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(slug) DO UPDATE SET
+                   producers_genius=COALESCE(excluded.producers_genius, producers_genius),
+                   label=COALESCE(excluded.label, label)""",
+            (slug, slug.replace("-", " "), artist_slug, collection_name,
+             producers_json, label),
         )
         cls._mark_visible(conn, "song", slug, collection_name)
         conn.commit()
@@ -1231,12 +1286,15 @@ class MetadataDB:
         ``samples_json`` — the same row ``set_song_relations`` writes and song
         facts are cached under (``get_song_facts_key``).
 
-        ``producer`` is a comma-joined string (multiple credited producers);
+        ``producer`` is a comma-joined string merging both sources — Genius
+        credits (``producers_genius``, first: structured, so it wins spelling
+        and order) and the GLiNER2+LLM extraction (``producers``), deduped
+        case/punctuation-insensitively (see ``_name_dedup_key``);
         ``samples``/``sampled_by`` are ``"Artist — Song"`` strings, matching
         the shapes the player UI parses. ``label`` is written by the Genius
-        import (``set_song_label``). A slug absent from the result has no
-        extraction yet — callers should leave that track's existing fields
-        untouched.
+        import (``set_song_genius_credits``). A slug absent from the result
+        has no extraction yet — callers should leave that track's existing
+        fields untouched.
         """
         if not slugs:
             return {}
@@ -1247,20 +1305,15 @@ class MetadataDB:
             chunk = uniq[i:i + 400]
             placeholders = ",".join("?" * len(chunk))
             rows = conn.execute(
-                f"""SELECT slug, producers, label, samples_json FROM songs
+                f"""SELECT slug, producers, producers_genius, label, samples_json
+                    FROM songs
                     WHERE slug IN ({placeholders})
-                      AND (producers IS NOT NULL OR label IS NOT NULL
-                           OR samples_json IS NOT NULL)""",
+                      AND (producers IS NOT NULL OR producers_genius IS NOT NULL
+                           OR label IS NOT NULL OR samples_json IS NOT NULL)""",
                 chunk,
             ).fetchall()
-            for slug, producers_json, label, samples_json in rows:
-                producer = None
-                if producers_json:
-                    try:
-                        names = [n for n in (json.loads(producers_json) or []) if n]
-                        producer = ", ".join(names) if names else None
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+            for slug, producers_json, producers_genius_json, label, samples_json in rows:
+                producer = _merge_producer_names(producers_genius_json, producers_json)
                 samples: list[str] = []
                 sampled_by: list[str] = []
                 if samples_json:

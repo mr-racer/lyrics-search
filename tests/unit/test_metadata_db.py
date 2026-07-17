@@ -55,27 +55,36 @@ def _seed_user(user_id: str) -> None:
     )
 
 
-class TestSetSongLabel(_IsolatedDB):
-    """set_song_label — Genius label credit into songs.label."""
+class TestSetSongGeniusCredits(_IsolatedDB):
+    """set_song_genius_credits — Genius producers/label into songs, merged with
+    the GLiNER extraction by get_song_relations_bulk."""
 
     def test_creates_row_when_song_missing(self):
-        MetadataDB.set_song_label("kanye-west-stronger", "Roc-A-Fella", "colA")
+        MetadataDB.set_song_genius_credits(
+            "kanye-west-stronger", ["Kanye West"], "Roc-A-Fella", "colA",
+        )
         rel = MetadataDB.get_song_relations_bulk(["kanye-west-stronger"])
         assert rel["kanye-west-stronger"]["label"] == "Roc-A-Fella"
+        assert rel["kanye-west-stronger"]["producer"] == "Kanye West"
 
-    def test_updates_existing_row_without_clobbering(self):
+    def test_merges_genius_and_gliner_producers_without_dubs(self):
         MetadataDB.add_song_facts_batch(
             "kanye-west-stronger", "colA", ["Produced by Kanye West."],
         )
+        # GLiNER extracted a case/punctuation variant of the Genius credit
+        # plus a name Genius doesn't list.
         MetadataDB.set_song_relations(
-            "kanye-west-stronger", '["Kanye West"]',
+            "kanye-west-stronger", '["KANYE WEST", "Mike Dean"]',
             '{"samples": [{"song": "Harder Better Faster Stronger", "artist": "Daft Punk"}], "sampled_by": []}',
         )
-        MetadataDB.set_song_label("kanye-west-stronger", "Roc-A-Fella", "colA")
+        MetadataDB.set_song_genius_credits(
+            "kanye-west-stronger", ["Kanye West"], "Roc-A-Fella", "colA",
+        )
 
         rel = MetadataDB.get_song_relations_bulk(["kanye-west-stronger"])
         assert rel["kanye-west-stronger"] == {
-            "producer": "Kanye West",
+            # Genius spelling wins and goes first; GLiNER-only name appended.
+            "producer": "Kanye West, Mike Dean",
             "label": "Roc-A-Fella",
             "samples": ["Daft Punk — Harder Better Faster Stronger"],
             "sampled_by": None,
@@ -84,12 +93,26 @@ class TestSetSongLabel(_IsolatedDB):
         title = conn.execute(
             "SELECT title FROM songs WHERE slug = ?", ("kanye-west-stronger",),
         ).fetchone()[0]
-        assert title == "kanye west stronger"  # existing title untouched by label upsert
+        assert title == "kanye west stronger"  # existing title untouched by upsert
 
-    def test_overwrites_previous_label(self):
-        MetadataDB.set_song_label("kanye-west-stronger", "Old Label", "colA")
-        MetadataDB.set_song_label("kanye-west-stronger", "Roc-A-Fella", "colA")
+    def test_dedup_is_punctuation_insensitive(self):
+        MetadataDB.set_song_genius_credits(
+            "dr-dre-still-dre", ["Dr. Dre"], None, "colA",
+        )
+        MetadataDB.set_song_relations("dr-dre-still-dre", '["Dr Dre"]', "")
+        rel = MetadataDB.get_song_relations_bulk(["dr-dre-still-dre"])
+        assert rel["dr-dre-still-dre"]["producer"] == "Dr. Dre"
+
+    def test_label_only_page_keeps_existing_genius_producers(self):
+        """COALESCE: a later fetch missing a field must not blank the stored one."""
+        MetadataDB.set_song_genius_credits(
+            "kanye-west-stronger", ["Kanye West"], None, "colA",
+        )
+        MetadataDB.set_song_genius_credits(
+            "kanye-west-stronger", None, "Roc-A-Fella", "colA",
+        )
         rel = MetadataDB.get_song_relations_bulk(["kanye-west-stronger"])
+        assert rel["kanye-west-stronger"]["producer"] == "Kanye West"
         assert rel["kanye-west-stronger"]["label"] == "Roc-A-Fella"
 
     def test_does_not_clobber_existing_artist_name(self):
@@ -99,7 +122,9 @@ class TestSetSongLabel(_IsolatedDB):
             ("kanye", "Kanye West", "colA"),
         )
         conn.commit()
-        MetadataDB.set_song_label("kanye-west-stronger", "Roc-A-Fella", "colA")
+        MetadataDB.set_song_genius_credits(
+            "kanye-west-stronger", None, "Roc-A-Fella", "colA",
+        )
         name = conn.execute(
             "SELECT name FROM artists WHERE slug = ?", ("kanye",),
         ).fetchone()[0]

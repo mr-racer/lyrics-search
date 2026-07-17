@@ -59,9 +59,9 @@ class TestFetchGeniusFactsForSong:
         assert any("resilience" in f for f in facts)
         assert any(f.startswith("Lyrics string: work it, make it. Fact:") for f in facts)
 
-    def test_happy_path_writes_label_into_songs(self, isolated_db):
-        """Label goes straight into songs.label (slug-keyed, no track id needed) —
-        the row apply_song_relations overlays onto every read path."""
+    def test_happy_path_writes_credits_into_songs(self, isolated_db):
+        """Producers/label go straight into songs (slug-keyed, no track id
+        needed) — the row apply_song_relations overlays onto every read path."""
         with patch(
             "app.services.genius_facts_service.genius_service.fetch_song_data",
             return_value=_parsed(),
@@ -70,32 +70,50 @@ class TestFetchGeniusFactsForSong:
 
         rel = MetadataDB.get_song_relations_bulk(["kanye-west-stronger"])
         assert rel["kanye-west-stronger"]["label"] == "Roc-A-Fella"
+        assert rel["kanye-west-stronger"]["producer"] == "Kanye West"
 
-    def test_label_written_even_when_page_has_no_facts(self, isolated_db):
+    def test_credits_written_even_when_page_has_no_facts(self, isolated_db):
         """A Genius page can carry credits but no description/annotations — no
-        facts write creates the songs row, so set_song_label must upsert it."""
+        facts write creates the songs row, so set_song_genius_credits upserts it."""
         with patch(
             "app.services.genius_facts_service.genius_service.fetch_song_data",
             return_value=_parsed(description=None, annotations=[]),
         ):
-            found, _, label = _run(
+            found, producer, label = _run(
                 fetch_genius_facts_for_song("Kanye West", "Stronger", "test_col")
             )
 
         assert found is False
-        assert label == "Roc-A-Fella"
+        assert (producer, label) == ("Kanye West", "Roc-A-Fella")
         rel = MetadataDB.get_song_relations_bulk(["kanye-west-stronger"])
         assert rel["kanye-west-stronger"]["label"] == "Roc-A-Fella"
+        assert rel["kanye-west-stronger"]["producer"] == "Kanye West"
 
-    def test_no_label_write_when_page_has_no_label(self, isolated_db):
+    def test_genius_producers_merge_with_gliner_extraction(self, isolated_db):
+        """Both sources are shown, deduped — the GLiNER pipeline may write the
+        same credit in a different spelling plus names Genius doesn't list."""
         with patch(
             "app.services.genius_facts_service.genius_service.fetch_song_data",
-            return_value=_parsed(label=None),
+            return_value=_parsed(),
+        ):
+            _run(fetch_genius_facts_for_song("Kanye West", "Stronger", "test_col"))
+        MetadataDB.set_song_relations(
+            "kanye-west-stronger", '["KANYE WEST", "Mike Dean"]', "",
+        )
+
+        rel = MetadataDB.get_song_relations_bulk(["kanye-west-stronger"])
+        assert rel["kanye-west-stronger"]["producer"] == "Kanye West, Mike Dean"
+
+    def test_no_credit_write_when_page_has_neither(self, isolated_db):
+        with patch(
+            "app.services.genius_facts_service.genius_service.fetch_song_data",
+            return_value=_parsed(label=None, producers=[]),
         ):
             _run(fetch_genius_facts_for_song("Kanye West", "Stronger", "test_col"))
 
         rel = MetadataDB.get_song_relations_bulk(["kanye-west-stronger"])
         assert rel.get("kanye-west-stronger", {}).get("label") is None
+        assert rel.get("kanye-west-stronger", {}).get("producer") is None
 
     def test_does_not_write_producer_or_label(self, isolated_db):
         """Live pipeline has no track_id yet at FACTS-stage time — must not touch
