@@ -8534,6 +8534,31 @@ function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist,
   const [showAllFeat, setShowAllFeat] = useState(false);
   const isMobile = useIsMobile();
 
+  // Record label for the meta row. AlbumSummary is a slim aggregate without
+  // `label`, so probe a handful of the album's tracks via the batch metadata
+  // endpoint and take the majority vote. 8 ids keeps the response small (the
+  // payload includes lyrics) while still surviving a stray mistagged track.
+  const [albumLabel, setAlbumLabel] = useState(null);
+  useEffect(() => {
+    const ids = (album.tracks || []).map(t => t.track_id).filter(Boolean).slice(0, 8);
+    if (!ids.length) return;
+    let alive = true;
+    apiFetch(`/metadata/tracks?ids=${encodeURIComponent(ids.join(','))}`)
+      .then(full => {
+        if (!alive || !Array.isArray(full)) return;
+        const counts = new Map();
+        for (const t of full) {
+          const l = (t && t.label || '').trim();
+          if (l) counts.set(l, (counts.get(l) || 0) + 1);
+        }
+        let best = null, bestN = 0;
+        for (const [l, n] of counts) { if (n > bestN) { best = l; bestN = n; } }
+        setAlbumLabel(best);
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [album]);
+
   // ── Shared-element fly-in (FLIP): start at the clicked grid cover ────
   // originRect is the viewport rect of the cover the user clicked; the
   // stage starts translated+scaled onto it, then transitions to center
@@ -8747,6 +8772,12 @@ function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist,
                     <span>{album.track_count} {lang==='ru'?'треков':'tracks'}</span>
                     <span>·</span>
                     <span>{totalDurFmt}</span>
+                    {albumLabel && (
+                      <>
+                        <span>·</span>
+                        <span title={lang==='ru'?'Лейбл':'Record label'}>℗ {albumLabel}</span>
+                      </>
+                    )}
                   </div>
                 </div>
                 <button
@@ -12662,6 +12693,233 @@ function VibeLine({ trackId, lang, isDark }) {
   );
 }
 
+// ─── TRACK CREDITS (producer / label / samples) ──────────────────────────────
+// Split a raw producer tag ("Dr. Dre, Mel-Man" / "A; B" / "A & B") into names.
+function splitCredits(raw) {
+  return String(raw || '')
+    .split(/\s*(?:[,;/]|&|\bfeat\.?\b)\s*/i)
+    .map(s => s.trim())
+    .filter(Boolean)
+    .slice(0, 3);
+}
+
+// Producer-name → library artist slug, via the cheap catalog search. Cached
+// module-wide (keyed on lowercased name) so revisiting the same producer across
+// tracks costs zero requests. Resolves to null when the catalog has no artist
+// whose name matches exactly (case-insensitive) — chips then render non-clickable.
+const _producerSlugCache = new Map();
+function resolveLibraryArtistSlug(name) {
+  const key = String(name || '').trim().toLowerCase();
+  if (!key) return Promise.resolve(null);
+  if (_producerSlugCache.has(key)) return Promise.resolve(_producerSlugCache.get(key));
+  const p = apiFetch(`/search/catalog?q=${encodeURIComponent(key)}&limit=6`)
+    .then(hits => {
+      const hit = (Array.isArray(hits) ? hits : []).find(h =>
+        h && h.type === 'artist' && (h.artist || '').trim().toLowerCase() === key);
+      const slug = (hit && hit.artist_slug) || null;
+      _producerSlugCache.set(key, slug);
+      return slug;
+    })
+    .catch(() => { _producerSlugCache.delete(key); return null; });
+  _producerSlugCache.set(key, p);
+  return p;
+}
+
+// One sample row: "Artist — Title" strings (MB enrichment format) split into a
+// muted artist + regular title; anything else renders as-is. Purely
+// informational — sample sources are almost never in the library, so the row
+// must NOT pretend to be clickable.
+function SampleRow({ text, index, isDark }) {
+  const parts = String(text || '').split(/\s+[—–]\s+/);
+  const artist = parts.length >= 2 ? parts[0] : null;
+  const title = parts.length >= 2 ? parts.slice(1).join(' — ') : String(text || '');
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '5px 0', minWidth: 0 }}>
+      <span className="mono" aria-hidden="true" style={{
+        fontSize: 9.5, flexShrink: 0, width: 16, textAlign: 'right',
+        color: isDark ? 'rgba(255,255,255,0.28)' : 'rgba(22,22,32,0.32)',
+      }}>{String(index + 1).padStart(2, '0')}</span>
+      <span style={{ minWidth: 0, fontSize: 13, lineHeight: 1.45, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span style={{ color: isDark ? '#e8e6f2' : '#1d1a28', fontWeight: 500 }}>{title}</span>
+        {artist && (
+          <span style={{ color: isDark ? 'rgba(255,255,255,0.45)' : 'rgba(22,22,32,0.5)' }}>{'  ·  '}{artist}</span>
+        )}
+      </span>
+    </div>
+  );
+}
+
+function SamplesPopBody({ track, isDark, lang }) {
+  const samples = track?.samples || [];
+  const sampledBy = track?.sampled_by || [];
+  const section = (label, accent, items) => items.length > 0 && (
+    <div style={{ minWidth: 0 }}>
+      <div className="mono" style={{
+        display: 'flex', alignItems: 'center', gap: 7,
+        fontSize: 9.5, letterSpacing: '0.2em',
+        color: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(22,22,32,0.55)',
+        margin: '2px 0 4px',
+      }}>
+        <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: '50%', background: accent, boxShadow: `0 0 8px ${accent}` }} />
+        {label}
+      </div>
+      {items.map((s, i) => <SampleRow key={i} text={s} index={i} isDark={isDark} />)}
+    </div>
+  );
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {section(lang === 'ru' ? 'СЭМПЛИРУЕТ' : 'SAMPLES', '#a78bfa', samples)}
+      {section(lang === 'ru' ? 'ЕЁ СЭМПЛИРОВАЛИ' : 'SAMPLED BY', '#f472b6', sampledBy)}
+    </div>
+  );
+}
+
+// Anchored glass popover (desktop) / bottom sheet (mobile) listing what this
+// track samples and who sampled it. Desktop: portal fixed near the chip,
+// flipping below when the chip sits too high; Esc / outside click / scroll away
+// closes. Mobile reuses the hint-sheet scrim+panel (portal too).
+function SamplesPopover({ track, anchorRect, isDark, lang, onClose }) {
+  const isMobile = useIsMobile();
+  const popRef = useRef(null);
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const a11yTitle = lang === 'ru' ? 'Сэмплы трека' : 'Track samples';
+
+  if (isMobile) {
+    return createPortal(
+      <div className="hint-sheet-scrim" onClick={(e) => { e.stopPropagation(); onClose(); }}>
+        <div className="hint-sheet" role="dialog" aria-modal="true" aria-label={a11yTitle}
+          onClick={(e) => e.stopPropagation()}>
+          <span className="hint-sheet__grip" aria-hidden="true" />
+          <div style={{ maxHeight: '55vh', overflowY: 'auto', paddingBottom: 4 }}>
+            <SamplesPopBody track={track} isDark={isDark} lang={lang} />
+          </div>
+        </div>
+      </div>,
+      document.body
+    );
+  }
+
+  // Desktop placement: prefer above the chip; flip below when cramped.
+  const W = 380;
+  const vw = window.innerWidth;
+  const left = anchorRect
+    ? Math.max(12, Math.min(anchorRect.left + anchorRect.width / 2 - W / 2, vw - W - 12))
+    : vw / 2 - W / 2;
+  const openUp = anchorRect ? anchorRect.top > 300 : true;
+  const pos = anchorRect
+    ? (openUp
+        ? { bottom: window.innerHeight - anchorRect.top + 10 }
+        : { top: anchorRect.bottom + 10 })
+    : { top: '30%' };
+
+  return createPortal(
+    <>
+      {/* invisible click-catcher — the page stays visible, any outside click closes */}
+      <div style={{ position: 'fixed', inset: 0, zIndex: 8990 }} onClick={onClose} />
+      <div
+        ref={popRef}
+        className={`samples-pop${openUp ? '' : ' samples-pop--down'}`}
+        role="dialog" aria-label={a11yTitle}
+        style={{ position: 'fixed', left, width: W, zIndex: 8991, ...pos }}
+      >
+        <SamplesPopBody track={track} isDark={isDark} lang={lang} />
+      </div>
+    </>,
+    document.body
+  );
+}
+
+// The credits row under «Альбом · Год»: quiet pill-chips for producer(s),
+// label and a samples counter. Renders nothing when the track carries none of
+// these fields — the meta column keeps its current height for plain tracks.
+function TrackCreditsRow({ track, isDark, lang, navigateToArtist }) {
+  const producers = useMemo(() => splitCredits(track?.producer), [track?.producer]);
+  const label = (track?.label || '').trim();
+  const sampleCount = (track?.samples?.length || 0) + (track?.sampled_by?.length || 0);
+
+  // producer name (lowercased) → slug|null once resolved. Missing key = pending.
+  const [slugs, setSlugs] = useState({});
+  useEffect(() => {
+    setSlugs({});
+    if (!producers.length) return;
+    let alive = true;
+    producers.forEach(name => {
+      resolveLibraryArtistSlug(name).then(slug => {
+        if (alive) setSlugs(prev => ({ ...prev, [name.toLowerCase()]: slug }));
+      });
+    });
+    return () => { alive = false; };
+  }, [producers]);
+
+  const [samplesOpen, setSamplesOpen] = useState(false);
+  const [anchorRect, setAnchorRect] = useState(null);
+  useEffect(() => { setSamplesOpen(false); }, [track?.track_id]);
+
+  if (!producers.length && !label && sampleCount === 0) return null;
+
+  const prodPrefix = lang === 'ru' ? 'прод.' : 'prod.';
+  const samplesWord = lang === 'ru' ? 'сэмплы' : 'samples';
+
+  return (
+    <div style={{
+      display: 'flex', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'center',
+      gap: 6, marginTop: 8, padding: '0 8px',
+      animation: 'vibeSlideIn 240ms cubic-bezier(0.22, 0.9, 0.3, 1)',
+    }}>
+      {producers.map((name, i) => {
+        const slug = slugs[name.toLowerCase()];
+        const clickable = !!slug && !!navigateToArtist;
+        const pre = i === 0 && <span className="credit-chip__pre">{prodPrefix}</span>;
+        // A producer found in the library is a real button that opens their
+        // page; anyone else is a plain informational span — no fake affordance.
+        return clickable ? (
+          <button
+            key={name} type="button" className="credit-chip credit-chip--link"
+            onClick={() => navigateToArtist(slug)}
+            title={lang === 'ru' ? 'Открыть страницу артиста' : 'Open artist page'}
+          >{pre}{name}</button>
+        ) : (
+          <span key={name} className="credit-chip">{pre}{name}</span>
+        );
+      })}
+      {label && (
+        <span className="credit-chip">
+          <span className="credit-chip__pre" aria-hidden="true">℗</span>
+          {label}
+        </span>
+      )}
+      {sampleCount > 0 && (
+        <button
+          type="button"
+          className="credit-chip credit-chip--link"
+          aria-expanded={samplesOpen}
+          onClick={(e) => {
+            setAnchorRect(e.currentTarget.getBoundingClientRect());
+            setSamplesOpen(o => !o);
+          }}
+          title={lang === 'ru' ? 'Показать сэмплы' : 'Show samples'}
+        >
+          <span className="credit-chip__pre" aria-hidden="true">⧉</span>
+          {samplesWord} · {sampleCount}
+        </button>
+      )}
+      {samplesOpen && (
+        <SamplesPopover
+          track={track} anchorRect={anchorRect}
+          isDark={isDark} lang={lang}
+          onClose={() => setSamplesOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
 // ─── PLAYER SCORE BARS ──────────────────────────────────────────────────────
 function PlayerScoreBars({ breakdown, isDark }) {
   if (!breakdown) return null;
@@ -15442,6 +15700,13 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                     {currentTrack.album}{currentTrack.year ? ` · ${currentTrack.year}` : ''}
                   </div>
                 )}
+                <TrackCreditsRow
+                  key={currentTrack.track_id}
+                  track={currentTrack}
+                  isDark={isDark}
+                  lang={lang}
+                  navigateToArtist={navigateToArtist}
+                />
                 <VibeLine
                   trackId={currentTrack?.track_id}
                   lang={lang}
