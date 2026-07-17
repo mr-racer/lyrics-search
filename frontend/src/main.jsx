@@ -389,6 +389,39 @@ async function apiStream(path, body, onEvent, signal) {
   }
 }
 
+// ─── apiStreamNdjson — POST a JSON body, consume an NDJSON response ──────────
+// One JSON object per line, handed to onEvent() as it arrives. Used by the
+// ai-playlist progress stream (/recommend/ai-playlist/stream).
+async function apiStreamNdjson(path, body, onEvent, signal) {
+  const token = getStoredToken();
+  const headers = { "Content-Type": "application/json" };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(API + path, { method: "POST", headers, body: JSON.stringify(body), signal });
+  if (res.status === 401) { _onAuthFailure(); throw new Error("HTTP 401: not authenticated"); }
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`HTTP ${res.status}: ${t.slice(0, 200)}`);
+  }
+  if (!res.body || !res.body.getReader) throw new Error("stream unsupported");
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf("\n")) !== -1) {
+      const line = buf.slice(0, idx).trim();
+      buf = buf.slice(idx + 1);
+      if (!line) continue;
+      try { onEvent(JSON.parse(line)); } catch { /* skip malformed line */ }
+    }
+  }
+  const tail = buf.trim();
+  if (tail) { try { onEvent(JSON.parse(tail)); } catch { /* skip */ } }
+}
+
 // ─── MarkdownText — safe renderer for LLM outputs ────────────────────────────
 // Used by chat answers (search + drawer), lyric explanations, refined facts,
 // artist bios — any place where the backend returns LLM-generated text that
@@ -5221,15 +5254,39 @@ const RECSYS_AXIS_LABELS = {
   brightness:   { ru: 'ЯРКОСТЬ',      en: 'BRIGHTNESS' },
   acousticness: { ru: 'АКУСТИКА',     en: 'ACOUSTIC' },
 };
-const RECSYS_TOOL_LABELS = {
-  clap_search:    { ru: 'поиск по звучанию', en: 'sound search' },
-  library_search: { ru: 'поиск по названию', en: 'name search' },
-  similar_tracks: { ru: 'похожие на трек',   en: 'similar to a track' },
-  // web_hits delegation (hits / soundtracks): steps come from the playlist agent.
-  fetch_filters:  { ru: 'ищем исполнителя в библиотеке', en: 'artist lookup in your library' },
-  web_search:     { ru: 'ищем в интернете', en: 'searching the web' },
-  get_songs:      { ru: 'сверяем с библиотекой', en: 'matching your library' },
-};
+// Live agent progress event → a human phrase for the orb caption. Unknown
+// stages return null (forward-compatible: the caption keeps the previous line).
+function orbStagePhrase(ev, lang) {
+  if (!ev) return null;
+  const ru = lang === 'ru';
+  const q = ev.query ? `«${ev.query}»` : '';
+  switch (ev.stage) {
+    case 'plan': return ru ? 'думаю над планом…' : 'thinking about a plan…';
+    case 'plan_done': return ru ? 'план готов' : 'plan ready';
+    case 'action':
+      if (ev.tool === 'clap_search') return ru ? `ищу по звучанию: ${q}` : `sound search: ${q}`;
+      if (ev.tool === 'library_search') return ru ? `ищу по названию: ${q}` : `name search: ${q}`;
+      if (ev.tool === 'similar_tracks') return ru ? `подбираю похожие: ${q}` : `finding similar: ${q}`;
+      return ru ? `ищу: ${q}` : `searching: ${q}`;
+    case 'action_done': return ru ? `нашёл ${ev.found}` : `found ${ev.found}`;
+    case 'filters': return ru ? 'уточняю исполнителя…' : 'resolving the artist…';
+    case 'filters_done': return ev.best ? (ru ? `в библиотеке: ${ev.best}` : `in your library: ${ev.best}`) : null;
+    case 'web_search': return ru ? `ищу в интернете: ${q}` : `searching the web: ${q}`;
+    case 'matching': return ru ? 'сверяю с библиотекой…' : 'matching your library…';
+    case 'matching_done': return ru ? `совпало ${ev.found} из ${ev.total}` : `matched ${ev.found} of ${ev.total}`;
+    case 'select': return ru ? `выбираю лучшее из ${ev.candidates}` : `picking the best of ${ev.candidates}`;
+    case 'select_done': return ru ? 'почти готово…' : 'almost there…';
+    default: return null;
+  }
+}
+
+// Русская форма «N треков» для подписи готовности у шара.
+function ruTracksWord(n) {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return 'трек';
+  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return 'трека';
+  return 'треков';
+}
 
 // Hexagonal taste radar: filled polygon = the listener's profile, dashed
 // amber polygon = the current knob targets (shown once they diverge).
@@ -5285,33 +5342,48 @@ function RecommendSection({ isDark, lang, onPlayTrack, onQueueNext, aiStatus, on
     llm_model: localStorage.getItem('llm_model') || undefined,
   });
 
-  // ── Zone A: one wish → AI playlist ──
+  // ── Zone A: one wish → AI playlist (streamed; the orb narrates progress) ──
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
   const [aiResult, setAiResult] = useState(null);   // {title, steps, tracks}
   const [aiError, setAiError] = useState(false);
-  const [aiStepsShown, setAiStepsShown] = useState(0);
+  const [orbStage, setOrbStage] = useState(null);   // last live agent status event
 
   // Derived BEFORE any hook that might depend on it (Babel const→var hoisting).
   const aiHits = (aiResult && aiResult.tracks ? aiResult.tracks : [])
     .map(t => ({ track: t, score: t.score || 0, matched_on: 'ai' }));
+  // Orb mascot state → palette + caption. fail covers both errors and 0 tracks.
+  const orbState = aiBusy ? 'work'
+    : aiError ? 'fail'
+    : aiResult ? (aiHits.length ? 'done' : 'fail')
+    : 'idle';
 
-  // promptOverride: demo chips run a canned wish without waiting for state.
+  // promptOverride: floating phrases run a canned wish without waiting for state.
   const runAiPlaylist = async (promptOverride) => {
     const prompt = (typeof promptOverride === 'string' ? promptOverride : aiPrompt).trim();
     if (!prompt || aiBusy) return;
-    setAiBusy(true); setAiResult(null); setAiError(false); setAiStepsShown(0);
+    setAiBusy(true); setAiResult(null); setAiError(false); setOrbStage(null);
     try {
-      const res = await apiFetch('/recommend/ai-playlist', {
-        method: 'POST',
-        body: JSON.stringify({ prompt, lang, limit: 15, ...llmKw() }),
-      });
-      setAiResult(res);
-      (res.steps || []).forEach((_, i) =>
-        setTimeout(() => setAiStepsShown(s => Math.max(s, i + 1)), 220 * (i + 1)));
-      setTimeout(() => setAiStepsShown(99), 220 * ((res.steps || []).length + 1));
-    } catch (e) { setAiError(true); }
-    finally { setAiBusy(false); }
+      let result = null;
+      await apiStreamNdjson('/recommend/ai-playlist/stream',
+        { prompt, lang, limit: 15, ...llmKw() },
+        (ev) => {
+          if (ev.type === 'status' && orbStagePhrase(ev, lang)) setOrbStage(ev);
+          else if (ev.type === 'result') result = ev.payload;
+        });
+      if (result) setAiResult(result); else setAiError(true);
+    } catch (e) {
+      // Streaming endpoint unavailable (older backend / буферизующий прокси) —
+      // same wish through the plain endpoint, without live progress.
+      try {
+        const res = await apiFetch('/recommend/ai-playlist', {
+          method: 'POST',
+          body: JSON.stringify({ prompt, lang, limit: 15, ...llmKw() }),
+        });
+        setAiResult(res);
+      } catch { setAiError(true); }
+    }
+    finally { setAiBusy(false); setOrbStage(null); }
   };
 
   // ── Zone A fallback (AI off): quick-mix presets over plain CLAP search ──
@@ -5480,21 +5552,6 @@ function RecommendSection({ isDark, lang, onPlayTrack, onQueueNext, aiStatus, on
     } catch (e) {}
   };
 
-  // Re-present the agent's plan in plain words (never raw tool ids). Short
-  // queries (names, web searches) are shown; clap_search captions are long
-  // English audio prompts — label only.
-  const friendlySteps = (steps) => (steps || [])
-    .map(s => {
-      const l = RECSYS_TOOL_LABELS[s.tool];
-      if (!l) return null;
-      let text = l[lang === 'ru' ? 'ru' : 'en'];
-      if (s.tool === 'get_songs')
-        return lang === 'ru' ? `${text} — совпало ${s.found}` : `${text} — ${s.found} matched`;
-      if (s.query && s.tool !== 'clap_search') text += `: «${s.query}»`;
-      return text;
-    })
-    .filter(Boolean);
-
   const islandName = (isl) =>
     isl.name || (isl.tracks && isl.tracks[0] && isl.tracks[0].artist) ||
     (lang === 'ru' ? 'Остров' : 'Island');
@@ -5504,16 +5561,20 @@ function RecommendSection({ isDark, lang, onPlayTrack, onQueueNext, aiStatus, on
 
   // Demo wishes under the hero field (AI on): show off what the builder can
   // parse — artist-flavoured and niche-genre asks, not generic moods.
-  const aiDemoChips = lang === 'ru' ? [
-    { icon:'🔥', text:'хиты Канье' },
-    { icon:'🎸', text:'спокойная музыка как у Dire Straits' },
-    { icon:'🌍', text:'восточный хип-хоп' },
-    { icon:'🌙', text:'медленное и дымное под поздний вечер' },
+  // Floating example wishes drifting behind the orb (they replaced the chips):
+  // a click fills the field and runs the wish.
+  const aiPhrases = lang === 'ru' ? [
+    'хиты Канье Уеста',
+    'песни из Watch Dogs',
+    'спокойное как у Dire Straits',
+    'хиты 00-х',
+    'саундтрек из «Назад в будущее»',
   ] : [
-    { icon:'🔥', text:'Kanye hits' },
-    { icon:'🎸', text:'calm music like Dire Straits' },
-    { icon:'🌍', text:'oriental hip-hop' },
-    { icon:'🌙', text:'slow and smoky for late night' },
+    'Kanye West hits',
+    'songs from Watch Dogs',
+    'calm like Dire Straits',
+    'hits of the 00s',
+    'Back to the Future soundtrack',
   ];
 
   // Mosaic order: most-populated island first — it renders as the big 2×2 tile.
@@ -5587,24 +5648,57 @@ function RecommendSection({ isDark, lang, onPlayTrack, onQueueNext, aiStatus, on
   );
   return (
     <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', background:c.bg }}>
-      <SectionHeader
+      {!aiOn && <SectionHeader
         isDark={isDark} lang={lang}
         kicker={lang==='ru'?'РЕКОМЕНДАЦИИ':'RECOMMEND'}
         title={lang==='ru'?'Что включить':"What to play"}
         accent={lang==='ru'?'сегодня':'tonight'}
-      />
+      />}
 
       <div style={{ flex:1, overflowY:'auto', padding:'18px 28px 60px' }}>
         <div className="rec2-wrap">
 
-          {/* ── HERO: одно желание → плейлист (AI) | быстрые миксы (no AI) ── */}
+          {/* ── HERO: шар-талисман + одно желание → плейлист (AI) | быстрые миксы (no AI) ── */}
           {aiOn ? (
             <>
+              {/* Шар-талисман ИИ: в покое дышит среди летающих фраз-примеров,
+                  во время запроса «вдыхает» пылинки и рассказывает этапы,
+                  финал — зелёный (успех) или красноватый (пусто/ошибка). */}
+              <div className={`aio-hero aio-${orbState}`}>
+                {aiPhrases.map((p, i) => (
+                  <span key={p} className={`aio-ph aio-ph${i+1}`}
+                        onClick={() => { setAiPrompt(p); runAiPlaylist(p); }}>{p}</span>
+                ))}
+                <div className="aio-orbwrap">
+                  <div className="aio-ring" />
+                  <div className="aio-orb">
+                    <span className="aio-blob aio-b1" /><span className="aio-blob aio-b2" />
+                    <span className="aio-blob aio-b3" /><span className="aio-blob aio-b4" />
+                  </div>
+                  <div className="aio-cap" />
+                  {orbState === 'work' && <>
+                    <span className="aio-dust aio-d1" /><span className="aio-dust aio-d2" />
+                    <span className="aio-dust aio-d3" /><span className="aio-dust aio-d4" />
+                    <span className="aio-dust aio-d5" /><span className="aio-dust aio-d6" />
+                  </>}
+                </div>
+                <div className="aio-capt">
+                  {orbState === 'idle' && <span className="serif aio-idle-t">{lang==='ru'?'что включить сегодня?':'what to play today?'}</span>}
+                  {orbState === 'work' && (() => {
+                    const phrase = orbStagePhrase(orbStage, lang) || (lang==='ru'?'думаю…':'thinking…');
+                    return <span key={phrase} className="aio-shimmer">{phrase}</span>;
+                  })()}
+                  {orbState === 'done' && <span className="aio-done-t">{aiHits.length} {lang==='ru'?ruTracksWord(aiHits.length):(aiHits.length===1?'track':'tracks')}</span>}
+                  {orbState === 'fail' && <span className="aio-fail-t">{lang==='ru'?'ничего не нашлось — попробуй иначе':'nothing found — try another wish'}</span>}
+                </div>
+              </div>
               <div className="rec2-rim">
                 <div className="rec2-wish" style={{ color:c.text }}
                      onClick={e => { const inp = e.currentTarget.querySelector('input'); if (inp) inp.focus(); }}>
                   <span className="rec2-spark">✨</span>
-                  <input value={aiPrompt} onChange={e => setAiPrompt(e.target.value)}
+                  <input value={aiPrompt}
+                         onChange={e => { setAiPrompt(e.target.value);
+                                          if (aiResult || aiError) { setAiResult(null); setAiError(false); } }}
                          onKeyDown={e => { if (e.key === 'Enter') runAiPlaylist(); }}
                          placeholder={lang==='ru'?'опиши, что хочешь услышать…':'describe what you want to hear…'} />
                   {!aiPrompt && <span className="rec2-caret" />}
@@ -5613,34 +5707,12 @@ function RecommendSection({ isDark, lang, onPlayTrack, onQueueNext, aiStatus, on
                   </button>
                 </div>
               </div>
-              <div className="rec2-chips">
-                {aiDemoChips.map(ch => (
-                  <span key={ch.text} className="rec2-chip" style={{ color:c.textMuted }}
-                        onClick={() => { setAiPrompt(ch.text); runAiPlaylist(ch.text); }}>
-                    <span style={{ fontSize:'14px' }}>{ch.icon}</span>{ch.text}
-                  </span>
-                ))}
-              </div>
-              {(aiBusy || aiError || aiResult) && (
+              {aiResult && !aiBusy && aiHits.length > 0 && (
                 <div className="rec2-results">
-                  {aiBusy && !aiResult && <div style={{ fontStyle:'italic', color:c.textSubtle, margin:'4px 2px', animation:'pulse 1.4s ease-in-out infinite' }}>{lang==='ru'?'Подбираю под твоё желание…':'Tuning to your wish…'}</div>}
-                  {aiError && !aiBusy && <div style={{ color:c.textSubtle, margin:'4px 2px' }}>{lang==='ru'?'Не получилось собрать — попробуй переформулировать желание.':'Could not build — try rephrasing your wish.'}</div>}
-                  {aiResult && !aiBusy && (
-                    <>
-                      <div style={{ fontSize:'12.5px', fontStyle:'italic', color:'#caa14a', margin:'4px 2px' }}>
-                        {friendlySteps(aiResult.steps).slice(0, aiStepsShown).map((s,i) => <span key={i}>✓ {s}{'   ·   '}</span>)}
-                        {aiStepsShown >= friendlySteps(aiResult.steps).length && <span>{lang==='ru'?`собрал ${aiHits.length} треков`:`built ${aiHits.length} tracks`}</span>}
-                      </div>
-                      {aiHits.length ? playlistResult(
-                        aiResult.title,
-                        `${aiHits.length} ${lang==='ru'?'треков · собрано по твоему запросу':'tracks · built from your wish'}`,
-                        aiHits, true) : (
-                        <div className="serif" style={{ fontSize:'14px', color:c.textSubtle, fontStyle:'italic', textAlign:'center', padding:'20px' }}>
-                          {lang==='ru'?'Ничего не нашлось — попробуй переформулировать':'Nothing found — try rephrasing'}
-                        </div>
-                      )}
-                    </>
-                  )}
+                  {playlistResult(
+                    aiResult.title,
+                    `${aiHits.length} ${lang==='ru'?'треков · собрано по твоему запросу':'tracks · built from your wish'}`,
+                    aiHits, true)}
                 </div>
               )}
             </>

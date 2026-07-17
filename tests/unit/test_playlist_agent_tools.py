@@ -102,3 +102,38 @@ async def test_get_songs_refuses_before_web_search_and_emits_progress(monkeypatc
     assert stages == ["web_search", "matching", "matching_done"]
     assert events[0]["query"] == "Kanye West greatest hits"
     assert events[2]["found"] == 1 and events[2]["total"] == 1
+
+
+@pytest.mark.unit
+async def test_web_search_capped_at_six(monkeypatch):
+    """The agent may keep digging when the library yield is poor, but only up
+    to 6 web searches per run — the 7th is refused with the budget message."""
+    from pydantic_ai.messages import ModelResponse, ToolCallPart, ToolReturnPart
+    from pydantic_ai.models.function import FunctionModel
+
+    from app.services.playlist_agent.agent import create_playlist_agent
+
+    monkeypatch.setattr(
+        "app.services.playlist_agent.agent.smart_web_search",
+        lambda q, fetch, n: "some titles",
+    )
+
+    calls = {"n": 0}
+
+    def scripted(messages, info):
+        calls["n"] += 1
+        if calls["n"] <= 7:
+            return ModelResponse(parts=[ToolCallPart(
+                "web_search", {"query": f"query {calls['n']}"})])
+        return ModelResponse(parts=[ToolCallPart("final_result", {
+            "title": "t", "track_ids": [], "comment": "", "missing": [],
+        })])
+
+    state = {"web": 0, "resolved": {}, "missing": [], "on_status": None}
+    agent = create_playlist_agent(FunctionModel(scripted), FakeDeps(), FakeCatalog(), state)
+    result = await agent.run("[lang=ru] хиты канье")
+
+    assert state["web"] == 6
+    returns = [p for m in result.all_messages() for p in getattr(m, "parts", [])
+               if isinstance(p, ToolReturnPart) and p.tool_name == "web_search"]
+    assert "limit reached" in str(returns[6].content)

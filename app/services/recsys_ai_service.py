@@ -697,10 +697,12 @@ async def _web_hits_playlist(
     limit: int,
     llm_base_url: str | None,
     llm_model: str | None,
+    emit=None,
 ) -> dict:
     """Delegate a hits/soundtrack wish to the playlist-builder agent
     (web search + library matching) and reshape its output to the
-    ai_playlist contract {title, steps, tracks}."""
+    ai_playlist contract {title, steps, tracks}. ``emit`` (optional) receives
+    every raw agent progress event for live streaming."""
     from app.services.agent_deps import SearchDeps
     from app.services.playlist_agent.agent import run_playlist_agent
     from app.services.playlist_agent.resolver import CatalogAdapter
@@ -711,6 +713,8 @@ async def _web_hits_playlist(
     steps: list[dict] = []
 
     def on_status(event: dict) -> None:
+        if emit is not None:
+            emit(event)
         stage = event.get("stage")
         if stage == "filters_done":
             steps.append({"tool": "fetch_filters", "query": event.get("query") or "",
@@ -769,6 +773,7 @@ async def ai_playlist(
     limit: int = 15,
     llm_base_url: str | None = None,
     llm_model: str | None = None,
+    on_status=None,
 ) -> dict:
     """One wish → curated playlist. Returns {title, steps, tracks}.
 
@@ -776,13 +781,26 @@ async def ai_playlist(
     the frontend animates them. Selection failures degrade gracefully to the
     un-curated candidate order instead of erroring the whole request.
 
+    ``on_status`` (optional sync callable) receives ``{"stage": ..., ...}``
+    events *while* the pipeline runs — the streaming route forwards them to
+    the UI so progress is visible live, not only in the final ``steps``.
+
     A hits/best-of/soundtrack wish (the plan answers with a ``web_hits``
     action) is delegated wholesale to the playlist-builder agent, which finds
     the real song list on the web and matches it against the library.
     """
     llm_kw = {"base_url": llm_base_url, "model": llm_model}
 
+    def _emit(stage: str, **info) -> None:
+        if on_status is None:
+            return
+        try:
+            on_status({"stage": stage, **info})
+        except Exception:  # a broken callback must never break the pipeline
+            logger.debug("[ai-playlist] on_status failed", exc_info=True)
+
     # 1. Plan.
+    _emit("plan")
     raw_plan = await ask_llm(
         prompt,
         system_prompt=_PLAN_SYSTEM.format(
@@ -795,6 +813,7 @@ async def ai_playlist(
     if not actions:
         # Degenerate plan — fall back to treating the whole wish as a sound query.
         actions = [{"tool": "clap_search", "query": prompt, "limit": 20}]
+    _emit("plan_done", title=title, actions=len(actions))
 
     # Hits/soundtrack → the web-capable playlist agent instead of library-only
     # search (the library has no notion of what an artist's "hits" are).
@@ -804,12 +823,14 @@ async def ai_playlist(
             search_service=search_service, qdrant_client=qdrant_client,
             collection_name=collection_name, prompt=prompt, lang=lang,
             limit=limit, llm_base_url=llm_base_url, llm_model=llm_model,
+            emit=(lambda ev: _emit(**ev)) if on_status else None,
         )
 
     # 2. Execute (dedup across actions, first tool wins the attribution).
     steps = []
     candidates: dict[str, dict] = {}
     for action in actions:
+        _emit("action", tool=action["tool"], query=action["query"])
         try:
             found = await _execute_action(
                 action, search_service=search_service,
@@ -821,12 +842,14 @@ async def ai_playlist(
         for c in found:
             candidates.setdefault(c["track_id"], c)
         steps.append({"tool": action["tool"], "query": action["query"], "found": len(found)})
+        _emit("action_done", tool=action["tool"], found=len(found))
 
     ordered = list(candidates.values())[:MAX_SELECT_CANDIDATES]
     if not ordered:
         return {"title": title, "steps": steps, "tracks": []}
 
     # 3. Select + justify (index-based: small ints survive small models).
+    _emit("select", candidates=len(ordered))
     numbered = "\n".join(
         f"{i}. {c['artist']} — {c['title']}"
         + (f" [{c['genre']}]" if c.get("genre") else "")
@@ -858,4 +881,5 @@ async def ai_playlist(
     if not picked:
         picked = [{**c, "reason": None} for c in ordered[:limit]]
 
+    _emit("select_done", picked=len(picked))
     return {"title": title, "steps": steps, "tracks": picked}

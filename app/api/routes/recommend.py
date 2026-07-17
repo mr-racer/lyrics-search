@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 
 from app.domain.models import (
     AIPlaylistIn,
@@ -435,6 +437,12 @@ async def ai_playlist_route(
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"AI playlist failed: {e}")
+    return _build_ai_playlist_response(result)
+
+
+def _build_ai_playlist_response(result: dict) -> AIPlaylistResponse:
+    """Shape the ai_playlist service dict into the API contract (shared by the
+    plain and the streaming route)."""
     tracks = [
         AIPlaylistTrack(
             track_id=t["track_id"],
@@ -456,6 +464,83 @@ async def ai_playlist_route(
         title=result["title"],
         steps=[AIPlaylistStep(**s) for s in result["steps"]],
         tracks=tracks,
+    )
+
+
+@router.post("/ai-playlist/stream")
+async def ai_playlist_stream_route(
+    body: AIPlaylistIn,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> StreamingResponse:
+    """Streaming twin of /ai-playlist: NDJSON progress events while the
+    pipeline runs, then a final ``result`` (or ``error``) line.
+
+    Line shapes: ``{"type":"status","stage":...}`` /
+    ``{"type":"result","payload":<AIPlaylistResponse>}`` /
+    ``{"type":"error","message":...}``. EventSource can't POST, hence NDJSON
+    over fetch-streaming rather than SSE.
+    """
+    db_client = request.app.state.db_client
+    search_service = getattr(request.app.state, "search_service", None)
+    if db_client is None or db_client.qdrant is None or search_service is None:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    derived = derive_collection_for_user(current_user)
+    queue: asyncio.Queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def on_status(event: dict) -> None:
+        item = {"type": "status", **event}
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is loop:
+            # same-thread emit: enqueue immediately so ordering vs. the final
+            # result is preserved (call_soon would defer past a ready put())
+            queue.put_nowait(item)
+        else:
+            # tool code emitting from a worker thread
+            loop.call_soon_threadsafe(queue.put_nowait, item)
+
+    async def run() -> None:
+        try:
+            result = await recsys_ai_service.ai_playlist(
+                search_service=search_service,
+                qdrant_client=db_client.qdrant,
+                collection_name=derived,
+                prompt=body.prompt,
+                lang=body.lang,
+                limit=body.limit,
+                llm_base_url=body.llm_base_url,
+                llm_model=body.llm_model,
+                on_status=on_status,
+            )
+            payload = _build_ai_playlist_response(result).model_dump(mode="json")
+            await queue.put({"type": "result", "payload": payload})
+        except Exception as e:
+            logger.exception("[ai-playlist/stream] failed")
+            await queue.put({"type": "error", "message": str(e)})
+        finally:
+            await queue.put(None)  # end-of-stream sentinel
+
+    task = asyncio.create_task(run())
+
+    async def gen():
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                yield json.dumps(item, ensure_ascii=False) + "\n"
+        finally:
+            task.cancel()  # no-op when finished; stops the pipeline on disconnect
+
+    return StreamingResponse(
+        gen(), media_type="application/x-ndjson",
+        # disable proxy buffering so events reach the browser as they happen
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

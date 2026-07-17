@@ -264,6 +264,54 @@ class TestAIPlaylist:
         assert out["steps"][0]["query"] == "Kanye West greatest hits"
         assert out["steps"][1]["found"] == 1
 
+    @pytest.mark.asyncio
+    async def test_library_path_emits_status_events(self):
+        """The plan→execute→select path narrates itself through on_status so
+        the streaming route can show live progress (not just final steps)."""
+        plan = {"title": "X",
+                "actions": [{"tool": "clap_search", "query": "rainy calm", "limit": 5}]}
+        selection = {"picks": [{"n": 1, "reason": "ok"}]}
+        events = []
+        with patch.object(svc, "ask_llm", new=AsyncMock(side_effect=[plan, selection])):
+            await ai_playlist(
+                search_service=FakeSearchService(), qdrant_client=object(),
+                collection_name="col", prompt="дождь", limit=5,
+                on_status=events.append,
+            )
+        stages = [e["stage"] for e in events]
+        assert stages == ["plan", "plan_done", "action", "action_done",
+                          "select", "select_done"]
+        assert events[2]["tool"] == "clap_search" and events[2]["query"] == "rainy calm"
+        assert events[3]["found"] == 2
+        assert events[4]["candidates"] == 2
+        assert events[5]["picked"] == 1
+
+    @pytest.mark.asyncio
+    async def test_web_hits_forwards_agent_status_events(self):
+        """web_hits delegation forwards the agent's raw progress events to the
+        caller's on_status in addition to collecting response steps."""
+        plan = {"title": "Хиты",
+                "actions": [{"tool": "web_hits", "query": "хиты канье", "limit": 15}]}
+
+        async def fake_agent(prompt, lang, deps, catalog, state,
+                             llm_base_url=None, llm_model=None, on_status=None):
+            on_status({"stage": "web_search", "query": "Kanye West greatest hits"})
+            state.setdefault("resolved", {})
+            return SimpleNamespace(title="Хиты", track_ids=[])
+
+        events = []
+        with patch.object(svc, "ask_llm", new=AsyncMock(return_value=plan)), \
+             patch("app.services.playlist_agent.agent.run_playlist_agent", new=fake_agent), \
+             patch("app.services.playlists_service._resolve_payloads", return_value={}):
+            await ai_playlist(
+                search_service=object(), qdrant_client=object(),
+                collection_name="col", prompt="хиты канье", lang="ru", limit=5,
+                on_status=events.append,
+            )
+        assert {"stage": "web_search", "query": "Kanye West greatest hits"} in events
+        # the plan stage happened before delegation and was narrated too
+        assert [e["stage"] for e in events][:2] == ["plan", "plan_done"]
+
 
 # ── Taste vibe (For-You hero phrase) ────────────────────────────────────────
 

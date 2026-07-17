@@ -52,10 +52,11 @@ def test_exact_respects_artist_filter():
 
 
 @pytest.mark.unit
-def test_exact_with_wrong_artist_falls_to_fuzzy():
+def test_exact_with_wrong_artist_rejected_by_fuzzy_gate():
+    # exact title exists but artist doesn't match; the fuzzy candidate is the
+    # same track — strict gate must refuse it (right title, wrong artist).
     res = resolve_songs([{"title": "Stronger", "artist": "Nonexistent Person"}], FakeCatalog())
-    # exact title exists but artist doesn't match -> fuzzy (which here returns the track)
-    assert res[0]["match"] == "fuzzy"
+    assert res[0]["match"] == "none"
 
 
 @pytest.mark.unit
@@ -66,4 +67,50 @@ def test_result_shape_and_alignment():
     )
     assert len(res) == 2
     assert set(res[0]) == {"query_title", "match", "track_id", "title", "artist"}
-    assert res[1]["match"] == "fuzzy"  # 'Ghost' misses exact, fuzzy fake returns a hit
+    # 'Ghost' misses exact; the fuzzy hit ('Stronger') shares nothing with the
+    # query title, so the similarity gate turns it into "none".
+    assert res[1]["match"] == "none"
+
+
+@pytest.mark.unit
+def test_fuzzy_rejects_dissimilar_title():
+    class NoisyCatalog:
+        def iter_songs(self):
+            return []
+
+        def search_tracks_fuzzy(self, q, limit=3):
+            # BM25F top-1 that shares only a stop-word-ish token with the query
+            return [{"track_id": "9", "title": "Bohemian Rhapsody", "artist": "Queen"}]
+
+    res = resolve_songs([{"title": "Sunflower", "artist": None}], NoisyCatalog())
+    assert res[0]["match"] == "none"
+
+
+@pytest.mark.unit
+def test_fuzzy_accepts_transliterated_title():
+    res = resolve_songs([{"title": "Стронгер", "artist": None}], FakeCatalog())
+    assert res[0]["match"] == "fuzzy" and res[0]["track_id"] == "1"
+
+
+@pytest.mark.unit
+def test_fuzzy_artist_passes_via_similarity():
+    # artist given in another script: substring check fails, but the
+    # transliteration-aware similarity accepts it.
+    res = resolve_songs([{"title": "Strongr", "artist": "Канье"}], FakeCatalog())
+    assert res[0]["match"] == "fuzzy" and res[0]["track_id"] == "1"
+
+
+@pytest.mark.unit
+def test_fuzzy_picks_valid_candidate_from_top3():
+    class MixedCatalog:
+        def iter_songs(self):
+            return []
+
+        def search_tracks_fuzzy(self, q, limit=3):
+            return [
+                {"track_id": "bad", "title": "Completely Unrelated", "artist": "Nobody"},
+                {"track_id": "good", "title": "Runaway", "artist": "Kanye West"},
+            ]
+
+    res = resolve_songs([{"title": "Runaway", "artist": "Kanye West"}], MixedCatalog())
+    assert res[0]["match"] == "fuzzy" and res[0]["track_id"] == "good"

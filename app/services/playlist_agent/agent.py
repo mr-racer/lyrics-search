@@ -45,7 +45,7 @@ from app.services.playlist_agent.resolver import resolve_songs
 
 logger = logging.getLogger(__name__)
 
-_MAX_WEB_SEARCHES = 4
+_MAX_WEB_SEARCHES = 6
 _MAX_LLM_REQUESTS = 15
 
 _INSTRUCTIONS = """You build a music playlist from the user's request by finding real songs and matching them against THIS user's music library. Two request shapes:
@@ -64,6 +64,7 @@ _INSTRUCTIONS = """You build a music playlist from the user's request by finding
 Rules:
 - Song titles MUST come from web_search results — never from your own memory, and never by reinterpreting the user's request text as a song title or a vibe/mood to search for. get_songs refuses to run until web_search has been called.
 - Only put a track into the playlist if get_songs returned it with match "exact" or "fuzzy" (never "none"). Use the track_id from get_songs verbatim.
+- If get_songs matched FEWER than 8 library tracks and you still have web searches left, dig deeper: run MORE web_search calls with different angles (deep cuts, "full album tracklist", the other language, other soundtrack volumes/parts), then call get_songs again with the NEW titles. Stop digging once ~15 library tracks are matched or the search budget runs out.
 - If fewer than 3 tracks were found in the library, say so honestly in the comment; still return whatever was found.
 - List songs you wanted but that were NOT in the library (match "none") in the "missing" field, as "Title — Artist".
 - web_search is limited; don't waste calls. Do not call get_songs before you have real song titles.

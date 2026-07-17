@@ -3,8 +3,9 @@
 Per item, two-stage matching:
   1. **exact** — normalized (``text_normalize.fold``) title equality, with an
      optional artist constraint;
-  2. **fuzzy** — top-1 of ``catalog_search_service.search_catalog_tracks``
-     (token + transliteration + IDF scoring) when exact misses.
+  2. **fuzzy** — first of the top-3 ``catalog_search_service.search_catalog_tracks``
+     hits (token + transliteration + IDF scoring) that passes the strict
+     similarity gate (``_FUZZY_TITLE_MIN``) when exact misses.
 
 Every result carries its ``match`` mode ("exact" | "fuzzy" | "none") so the
 playlist agent can tell the LLM whether a title matched cleanly, only
@@ -14,7 +15,14 @@ approximately, or not at all — the LLM decides whether to trust a fuzzy hit.
 protocol so it can be unit-tested with a fake; ``CatalogAdapter`` binds it to
 the real ``catalog_search_service`` for one (qdrant, collection).
 """
+from app.services.name_match import score_names
 from app.services.text_normalize import fold
+
+# Fuzzy hits must actually resemble the asked-for song: minimum
+# transliteration-aware similarity between the query title and the candidate
+# title (and, when the artist is known, between the artists too). Below this
+# a BM25F hit is treated as noise ("none"), not a match.
+_FUZZY_TITLE_MIN = 0.6
 
 
 def _norm(s):
@@ -24,6 +32,24 @@ def _norm(s):
 def _artist_matches(query_artist, song_artist):
     na, ns = _norm(query_artist), _norm(song_artist)
     return bool(na) and bool(ns) and (na in ns or ns in na)
+
+
+def _similar(query, value):
+    if not query or not value:
+        return 0.0
+    return score_names(query, [value])[0][0]
+
+
+def _fuzzy_acceptable(qtitle, qartist, hit):
+    """Strict gate for a BM25F candidate: title similarity above the floor,
+    and — when the query names an artist — the hit's artist must match by
+    substring or by the same similarity floor."""
+    if _similar(qtitle, hit.get("title")) < _FUZZY_TITLE_MIN:
+        return False
+    if qartist:
+        return (_artist_matches(qartist, hit.get("artist"))
+                or _similar(qartist, hit.get("artist")) >= _FUZZY_TITLE_MIN)
+    return True
 
 
 def resolve_songs(items, catalog, artist_filter=None):
@@ -67,12 +93,12 @@ def resolve_songs(items, catalog, artist_filter=None):
             if picked is not None:
                 mode = "exact"
 
-        # fuzzy fallback
+        # fuzzy fallback — first of the top-3 that survives the strict gate
         if picked is None and qtitle:
             query = f"{qtitle} {qartist}".strip() if qartist else qtitle
             hits = catalog.search_tracks_fuzzy(query, limit=3)
-            if hits:
-                picked = hits[0]
+            picked = next((h for h in hits if _fuzzy_acceptable(qtitle, qartist, h)), None)
+            if picked is not None:
                 mode = "fuzzy"
 
         if picked is None:

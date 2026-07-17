@@ -483,6 +483,123 @@
       .rec2-stream:hover,.rec2-go:hover,.rec2-chip:hover{transform:none;}
     }
 
+    /* ── AI orb mascot («Рекомендации», aiOn): liquid-glass sphere over the
+       wish field. Same grammar as the home wave (blobs under a glass cap +
+       conic ring) but its own aio- classes and a 4-state palette:
+       idle (brand) → work (cold blue, "inhale" dust) → done (green) /
+       fail (muted red). Blob recolors ride a .8s background transition. ── */
+    @keyframes aioBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
+    @keyframes aioSpin{to{transform:rotate(360deg)}}
+    @keyframes aioBlobA{0%,100%{transform:translate(-18%,-12%) scale(1)}50%{transform:translate(22%,16%) scale(1.25)}}
+    @keyframes aioBlobB{0%,100%{transform:translate(20%,18%) scale(1.1)}50%{transform:translate(-16%,-10%) scale(.9)}}
+    @keyframes aioBlobC{0%,100%{transform:translate(6%,22%) scale(.9)}50%{transform:translate(-22%,-16%) scale(1.2)}}
+    @keyframes aioDrift1{0%,100%{transform:translate(0,0)}50%{transform:translate(9px,-7px)}}
+    @keyframes aioDrift2{0%,100%{transform:translate(0,0)}50%{transform:translate(-11px,6px)}}
+    @keyframes aioDrift3{0%,100%{transform:translate(0,0)}50%{transform:translate(7px,8px)}}
+    @keyframes aioShimmer{0%{background-position:200% center}100%{background-position:-200% center}}
+    @keyframes aioStepIn{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+    @keyframes aioInhale{0%{transform:translate(var(--dx),var(--dy)) scale(1);opacity:0}
+      12%{opacity:.9}70%{opacity:.7}100%{transform:translate(-2px,-2px) scale(.3);opacity:0}}
+    @keyframes aioBreathe{0%,100%{transform:translateY(0) scale(1)}60%{transform:translateY(0) scale(1.045)}}
+
+    .aio-hero{position:relative;max-width:680px;height:216px;margin:40px auto 0;}
+    /* floating example wishes — light airy grotesque, clickable in idle */
+    .aio-ph{position:absolute;font-weight:300;letter-spacing:.07em;color:rgba(201,195,232,.95);
+      white-space:nowrap;cursor:pointer;transition:opacity .6s ease;user-select:none;}
+    .aio-ph:hover{opacity:.75!important;}
+    body[data-theme="light"] .aio-ph{color:rgba(56,48,90,.9);}
+    .aio-ph1{top:9%;left:4%;font-size:13px;opacity:.36;animation:aioDrift1 11s ease-in-out infinite;}
+    .aio-ph2{top:22%;right:3%;font-size:12px;opacity:.27;animation:aioDrift2 14s ease-in-out infinite;}
+    .aio-ph3{top:56%;left:2%;font-size:12.5px;opacity:.31;animation:aioDrift3 12s ease-in-out infinite;}
+    .aio-ph4{top:68%;right:5%;font-size:13.5px;opacity:.36;animation:aioDrift1 13s ease-in-out infinite reverse;}
+    .aio-ph5{top:0;left:36%;font-size:12px;opacity:.24;animation:aioDrift2 16s ease-in-out infinite reverse;}
+    .aio-hero:not(.aio-idle) .aio-ph{opacity:0;pointer-events:none;}
+
+    .aio-orbwrap{position:absolute;top:10px;left:50%;width:104px;height:104px;margin-left:-52px;
+      animation:aioBob 4.5s ease-in-out infinite;}
+    .aio-ring{position:absolute;inset:-6px;border-radius:50%;filter:blur(4px);opacity:.55;
+      background:conic-gradient(from 0deg,#7c5bff,#ff78c8,#e0b341,#7c5bff);
+      animation:aioSpin 7s linear infinite;transition:opacity .6s;}
+    .aio-orb{position:absolute;inset:0;border-radius:50%;overflow:hidden;background:#241f38;
+      box-shadow:0 12px 30px -6px rgba(124,91,255,.55);transition:box-shadow .8s;}
+    body[data-theme="light"] .aio-orb{background:#cfc8e8;}
+    .aio-blob{position:absolute;width:88px;height:88px;border-radius:50%;filter:blur(14px);transition:background .8s ease;}
+    .aio-b1{background:#7c5bff;top:5px;left:2px;animation:aioBlobA 8s ease-in-out infinite;}
+    .aio-b2{background:#ff78c8;top:11px;left:17px;animation:aioBlobB 10s ease-in-out infinite;}
+    .aio-b3{background:#e0b341;top:17px;left:-7px;animation:aioBlobC 12s ease-in-out infinite;}
+    .aio-b4{background:#b06bff;top:-7px;left:13px;animation:aioBlobB 9s ease-in-out infinite reverse;}
+    .aio-cap{position:absolute;inset:0;border-radius:50%;pointer-events:none;
+      background:radial-gradient(60% 42% at 32% 20%,rgba(255,255,255,.42),rgba(255,255,255,.05) 60%,transparent 70%),
+                 linear-gradient(180deg,rgba(255,255,255,.10),transparent 40%,rgba(0,0,0,.25));
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.5),inset 0 -4px 10px rgba(0,0,0,.35);}
+
+    /* work: cold palette, faster liquid, brighter blue ring, inhale + breathe */
+    .aio-work .aio-b1{background:#4d7dff;animation-duration:3s;}
+    .aio-work .aio-b2{background:#6ac8ff;animation-duration:3.6s;}
+    .aio-work .aio-b3{background:#8a5cff;animation-duration:4s;}
+    .aio-work .aio-b4{background:#4dd6c2;animation-duration:3.2s;}
+    .aio-work .aio-orb{box-shadow:0 12px 34px -6px rgba(77,125,255,.6);}
+    .aio-work .aio-ring{opacity:.9;animation-duration:2s;
+      background:conic-gradient(from 0deg,#4d7dff,#6ac8ff,#8a5cff,#4d7dff);}
+    .aio-work .aio-orbwrap{animation:aioBreathe 1.9s ease-in-out infinite;}
+    .aio-dust{position:absolute;width:5px;height:5px;border-radius:50%;pointer-events:none;opacity:0;
+      background:#9db8ff;box-shadow:0 0 8px 2px rgba(122,158,255,.7);top:50%;left:50%;}
+    .aio-work .aio-dust{animation:aioInhale 1.9s ease-in infinite;}
+    .aio-d1{--dx:-78px;--dy:-42px;}
+    .aio-d2{--dx:74px;--dy:-54px;animation-delay:.3s!important;background:#6ac8ff;}
+    .aio-d3{--dx:86px;--dy:28px;animation-delay:.65s!important;background:#8a5cff;}
+    .aio-d4{--dx:-84px;--dy:36px;animation-delay:.95s!important;background:#4dd6c2;}
+    .aio-d5{--dx:-12px;--dy:-82px;animation-delay:1.3s!important;background:#9db8ff;}
+    .aio-d6{--dx:32px;--dy:78px;animation-delay:1.55s!important;background:#6ac8ff;}
+
+    /* done: soft green; fail: muted red */
+    .aio-done .aio-b1{background:#3ecf8e;}
+    .aio-done .aio-b2{background:#6ee7b7;}
+    .aio-done .aio-b3{background:#4dd6c2;}
+    .aio-done .aio-b4{background:#34d399;}
+    .aio-done .aio-orb{box-shadow:0 12px 30px -6px rgba(62,207,142,.5);}
+    .aio-done .aio-ring{opacity:.6;animation-duration:9s;
+      background:conic-gradient(from 0deg,#3ecf8e,#6ee7b7,#4dd6c2,#3ecf8e);}
+    .aio-fail .aio-b1{background:#e0607e;}
+    .aio-fail .aio-b2{background:#c04b6b;}
+    .aio-fail .aio-b3{background:#f08a8a;}
+    .aio-fail .aio-b4{background:#a04057;}
+    .aio-fail .aio-orb{box-shadow:0 12px 30px -6px rgba(224,96,126,.45);}
+    .aio-fail .aio-ring{opacity:.4;animation-duration:11s;
+      background:conic-gradient(from 0deg,#e0607e,#c04b6b,#f08a8a,#e0607e);}
+
+    /* caption under the orb */
+    .aio-capt{position:absolute;top:132px;left:0;right:0;text-align:center;font-size:13.5px;min-height:40px;padding:0 14px;}
+    .aio-idle-t{font-style:italic;color:#a49ec4;}
+    body[data-theme="light"] .aio-idle-t{color:rgba(22,22,32,.5);}
+    .aio-done-t{color:#c9e6d2;letter-spacing:.02em;animation:aioStepIn .4s ease both;}
+    body[data-theme="light"] .aio-done-t{color:#3f7d58;}
+    .aio-fail-t{color:#e8c2cc;letter-spacing:.02em;animation:aioStepIn .4s ease both;}
+    body[data-theme="light"] .aio-fail-t{color:#a05568;}
+    .aio-shimmer{display:inline-block;font-weight:500;animation:aioShimmer 2.1s linear infinite,aioStepIn .35s ease both;
+      background:linear-gradient(90deg,rgba(238,238,243,.35) 0%,#fff 45%,#8fb2ff 55%,rgba(238,238,243,.35) 100%);
+      background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;}
+    body[data-theme="light"] .aio-shimmer{
+      background-image:linear-gradient(90deg,rgba(22,22,32,.35) 0%,#161620 45%,oklch(52% .18 262) 55%,rgba(22,22,32,.35) 100%);}
+
+    @media (max-width: 640px){
+      .aio-hero{height:196px;margin-top:26px;}
+      .aio-ph{font-size:11px!important;}
+      .aio-capt{top:124px;}
+      .aio-orbwrap{width:92px;height:92px;margin-left:-46px;}
+      .aio-blob{width:78px;height:78px;}
+    }
+    /* Battery policy (пакет C): idle decoration freezes on phones — only the
+       cheap bob survives; the work-state burst (short-lived) stays animated. */
+    @media (max-width: 768px), (hover: none) and (pointer: coarse){
+      .aio-idle .aio-blob,.aio-idle .aio-ring,.aio-ph{animation:none!important;}
+    }
+    @media (prefers-reduced-motion: reduce){
+      .aio-orbwrap,.aio-ring,.aio-blob,.aio-ph,.aio-dust,.aio-shimmer,
+      .aio-done-t,.aio-fail-t{animation:none!important;}
+      .aio-shimmer{color:inherit;background:none;-webkit-background-clip:initial;background-clip:initial;}
+    }
+
     /* Brushed metal panel for top decks */
     .brushed-d {
       background:
