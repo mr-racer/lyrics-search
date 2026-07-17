@@ -1196,6 +1196,35 @@ class MetadataDB:
         conn.commit()
 
     @classmethod
+    def set_song_label(cls, slug: str, label: str, collection_name: str) -> None:
+        """Persist the Genius label credit into ``songs.label`` — the column
+        ``get_song_relations_bulk`` reads back for the player's credits UI.
+
+        Unlike ``set_song_relations`` this upserts the songs row (same
+        slug-derived placeholders as ``add_song_facts_batch``): a Genius page
+        can carry a label with no description/annotations, in which case no
+        facts write ever created the row. On conflict only ``label`` is
+        touched, so an existing row's title/artist survive.
+        """
+        conn = cls._connect()
+        parts = slug.split("-", 1)
+        artist_slug = parts[0] if len(parts) > 1 else slug
+        conn.execute(
+            """INSERT INTO artists (slug, name, collection_name)
+               VALUES (?, ?, ?)
+               ON CONFLICT(slug) DO NOTHING""",
+            (artist_slug, artist_slug.replace("-", " "), collection_name),
+        )
+        conn.execute(
+            """INSERT INTO songs (slug, title, artist_slug, collection_name, label)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(slug) DO UPDATE SET label=excluded.label""",
+            (slug, slug.replace("-", " "), artist_slug, collection_name, label),
+        )
+        cls._mark_visible(conn, "song", slug, collection_name)
+        conn.commit()
+
+    @classmethod
     def get_song_relations_bulk(cls, slugs: List[str]) -> Dict[str, dict]:
         """Return ``{slug: {"producer", "label", "samples", "sampled_by"}}``
         for the given song slugs, read from ``songs.producers``/``label``/
@@ -1204,11 +1233,10 @@ class MetadataDB:
 
         ``producer`` is a comma-joined string (multiple credited producers);
         ``samples``/``sampled_by`` are ``"Artist — Song"`` strings, matching
-        the shapes the player UI parses. ``label`` currently has no writer
-        (MusicBrainz enrichment is disabled) so it reads back ``None`` for
-        every song today; the column is wired so a future source needs no
-        further plumbing. A slug absent from the result has no extraction
-        yet — callers should leave that track's existing fields untouched.
+        the shapes the player UI parses. ``label`` is written by the Genius
+        import (``set_song_label``). A slug absent from the result has no
+        extraction yet — callers should leave that track's existing fields
+        untouched.
         """
         if not slugs:
             return {}

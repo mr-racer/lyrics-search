@@ -18,6 +18,11 @@ uses), and the caller in ``library_service`` applies it once track ids are
 resolved post-upsert — mirroring how ``_apply_upload_track_ids`` stamps
 ``pending_uploads.track_id`` from the same resolved mapping.
 
+The label additionally goes straight into ``songs.label`` (slug-keyed, so no
+track id is needed) via ``MetadataDB.set_song_label`` — the same row the
+GLiNER2+LLM pipeline fills with producers/samples, which
+``song_facts_service.apply_song_relations`` overlays onto every read path.
+
 No skip-check for already-processed songs: this only runs against freshly
 indexed collections, which never have prior Genius facts.
 """
@@ -70,6 +75,12 @@ async def fetch_genius_facts_for_song(
         )
 
     producer, label = genius_service.build_producer_label(parsed)
+    if label:
+        # Unlike producer (applied to track_metadata post-upsert, once ids
+        # exist), the label lands in songs.label right here: the slug is known
+        # already, and song_facts_service.apply_song_relations overlays it
+        # onto every read path from that row.
+        MetadataDB.set_song_label(song_slug, label, collection_name)
     logger.info(
         "[genius] ok: %s — %s (%d facts, producer=%r, label=%r)",
         artist, title, len(facts), producer, label,

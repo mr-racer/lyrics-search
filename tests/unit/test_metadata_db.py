@@ -55,6 +55,57 @@ def _seed_user(user_id: str) -> None:
     )
 
 
+class TestSetSongLabel(_IsolatedDB):
+    """set_song_label — Genius label credit into songs.label."""
+
+    def test_creates_row_when_song_missing(self):
+        MetadataDB.set_song_label("kanye-west-stronger", "Roc-A-Fella", "colA")
+        rel = MetadataDB.get_song_relations_bulk(["kanye-west-stronger"])
+        assert rel["kanye-west-stronger"]["label"] == "Roc-A-Fella"
+
+    def test_updates_existing_row_without_clobbering(self):
+        MetadataDB.add_song_facts_batch(
+            "kanye-west-stronger", "colA", ["Produced by Kanye West."],
+        )
+        MetadataDB.set_song_relations(
+            "kanye-west-stronger", '["Kanye West"]',
+            '{"samples": [{"song": "Harder Better Faster Stronger", "artist": "Daft Punk"}], "sampled_by": []}',
+        )
+        MetadataDB.set_song_label("kanye-west-stronger", "Roc-A-Fella", "colA")
+
+        rel = MetadataDB.get_song_relations_bulk(["kanye-west-stronger"])
+        assert rel["kanye-west-stronger"] == {
+            "producer": "Kanye West",
+            "label": "Roc-A-Fella",
+            "samples": ["Daft Punk — Harder Better Faster Stronger"],
+            "sampled_by": None,
+        }
+        conn = MetadataDB._connect()
+        title = conn.execute(
+            "SELECT title FROM songs WHERE slug = ?", ("kanye-west-stronger",),
+        ).fetchone()[0]
+        assert title == "kanye west stronger"  # existing title untouched by label upsert
+
+    def test_overwrites_previous_label(self):
+        MetadataDB.set_song_label("kanye-west-stronger", "Old Label", "colA")
+        MetadataDB.set_song_label("kanye-west-stronger", "Roc-A-Fella", "colA")
+        rel = MetadataDB.get_song_relations_bulk(["kanye-west-stronger"])
+        assert rel["kanye-west-stronger"]["label"] == "Roc-A-Fella"
+
+    def test_does_not_clobber_existing_artist_name(self):
+        conn = MetadataDB._connect()
+        conn.execute(
+            "INSERT INTO artists (slug, name, collection_name) VALUES (?, ?, ?)",
+            ("kanye", "Kanye West", "colA"),
+        )
+        conn.commit()
+        MetadataDB.set_song_label("kanye-west-stronger", "Roc-A-Fella", "colA")
+        name = conn.execute(
+            "SELECT name FROM artists WHERE slug = ?", ("kanye",),
+        ).fetchone()[0]
+        assert name == "Kanye West"
+
+
 class TestAiEnabled(_IsolatedDB):
     """The ai_enabled column on collection_settings."""
 

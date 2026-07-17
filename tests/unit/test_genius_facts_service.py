@@ -59,6 +59,44 @@ class TestFetchGeniusFactsForSong:
         assert any("resilience" in f for f in facts)
         assert any(f.startswith("Lyrics string: work it, make it. Fact:") for f in facts)
 
+    def test_happy_path_writes_label_into_songs(self, isolated_db):
+        """Label goes straight into songs.label (slug-keyed, no track id needed) —
+        the row apply_song_relations overlays onto every read path."""
+        with patch(
+            "app.services.genius_facts_service.genius_service.fetch_song_data",
+            return_value=_parsed(),
+        ):
+            _run(fetch_genius_facts_for_song("Kanye West", "Stronger", "test_col"))
+
+        rel = MetadataDB.get_song_relations_bulk(["kanye-west-stronger"])
+        assert rel["kanye-west-stronger"]["label"] == "Roc-A-Fella"
+
+    def test_label_written_even_when_page_has_no_facts(self, isolated_db):
+        """A Genius page can carry credits but no description/annotations — no
+        facts write creates the songs row, so set_song_label must upsert it."""
+        with patch(
+            "app.services.genius_facts_service.genius_service.fetch_song_data",
+            return_value=_parsed(description=None, annotations=[]),
+        ):
+            found, _, label = _run(
+                fetch_genius_facts_for_song("Kanye West", "Stronger", "test_col")
+            )
+
+        assert found is False
+        assert label == "Roc-A-Fella"
+        rel = MetadataDB.get_song_relations_bulk(["kanye-west-stronger"])
+        assert rel["kanye-west-stronger"]["label"] == "Roc-A-Fella"
+
+    def test_no_label_write_when_page_has_no_label(self, isolated_db):
+        with patch(
+            "app.services.genius_facts_service.genius_service.fetch_song_data",
+            return_value=_parsed(label=None),
+        ):
+            _run(fetch_genius_facts_for_song("Kanye West", "Stronger", "test_col"))
+
+        rel = MetadataDB.get_song_relations_bulk(["kanye-west-stronger"])
+        assert rel.get("kanye-west-stronger", {}).get("label") is None
+
     def test_does_not_write_producer_or_label(self, isolated_db):
         """Live pipeline has no track_id yet at FACTS-stage time — must not touch
         track_metadata (the caller applies producer/label later, once ids resolve)."""
@@ -84,6 +122,7 @@ class TestFetchGeniusFactsForSong:
 
         assert (found, producer, label) == (False, None, None)
         assert MetadataDB.get_song_facts("nobody-unknown-song", "test_col") == []
+        assert MetadataDB.get_song_relations_bulk(["nobody-unknown-song"]) == {}
 
     def test_returns_false_when_no_facts_found(self, isolated_db):
         with patch(
