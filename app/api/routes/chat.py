@@ -30,7 +30,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from app.domain.models import (
-    ChatRequest, PlaylistBuilderRequest, SearchFilters,
+    ChatRequest, SearchFilters,
     TrackChatRequest, TrackChatResponse, TrackHit, User,
 )
 from app.api.dependencies import get_current_user
@@ -47,8 +47,6 @@ from app.services.agents import (
 )
 from app.services.agent_deps import SearchDeps
 from app.services.llm_client import ask_llm
-from app.services.playlist_agent.agent import run_playlist_agent
-from app.services.playlist_agent.resolver import CatalogAdapter
 import logging
 
 logger = logging.getLogger(__name__)
@@ -1197,138 +1195,6 @@ async def track_chat_stream(
                     item = await asyncio.wait_for(queue.get(), timeout=15.0)
                 except asyncio.TimeoutError:
                     yield ": heartbeat\n\n"  # keep the connection warm during long LLM waits
-                    continue
-                if item is DONE:
-                    break
-                yield sse_data(item)
-        finally:
-            if not task.done():
-                task.cancel()
-
-    return StreamingResponse(
-        event_source(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
-# ─── Playlist Builder ─────────────────────────────────────────────────────────
-# Agentic playlist drafting from a natural-language prompt (artist hits or a
-# film/game soundtrack): web_search + fetch_filters + get_songs, then a
-# PlaylistDraft. The agent only PROPOSES — the client persists via the normal
-# playlists CRUD after the user confirms.
-
-
-def _build_playlist_deps(request: Request, current_user: User):
-    """Build (deps, catalog) for the playlist agent, or None if the search
-    service is unavailable."""
-    service = request.app.state.search_service
-    if service is None:
-        return None
-    derived = derive_collection_for_user(current_user)
-    deps = SearchDeps(service=service, collection_name=derived)
-    catalog = CatalogAdapter(service.lyrics_db.qdrant_client, derived)
-    return deps, catalog
-
-
-def _tracks_for(draft, state) -> list:
-    """Assemble the resolved-track preview from the agent's ``state``, keeping
-    only ids the agent actually matched (drops any hallucinated track_id)."""
-    resolved = state.get("resolved", {})
-    dropped = [tid for tid in draft.track_ids if tid not in resolved]
-    if dropped:
-        logger.warning(
-            "[playlist_builder] dropped %d hallucinated track_id(s) not returned "
-            "by get_songs: %s (get_songs resolved: %s)",
-            len(dropped), dropped, list(resolved) or "(nothing)",
-        )
-    tracks = [
-        {"track_id": tid, **resolved[tid]}
-        for tid in draft.track_ids
-        if tid in resolved
-    ]
-    logger.info("[playlist_builder] draft %r -> %d/%d tracks in preview",
-                draft.title, len(tracks), len(draft.track_ids))
-    return tracks
-
-
-@router.post("/playlist-builder")
-async def playlist_builder(
-    req: PlaylistBuilderRequest,
-    request: Request,
-    current_user: User = Depends(get_current_user),
-) -> dict:
-    """Draft a playlist from a prompt (non-streaming)."""
-    built = _build_playlist_deps(request, current_user)
-    if built is None:
-        raise HTTPException(status_code=503, detail="Search service unavailable — is Qdrant running?")
-    deps, catalog = built
-    state: dict = {}
-    try:
-        draft = await run_playlist_agent(
-            req.prompt, req.lang, deps, catalog, state,
-            llm_base_url=req.llm_base_url, llm_model=req.llm_model,
-        )
-    except Exception as exc:
-        logger.error("[playlist_builder] error: %s", exc, exc_info=True)
-        raise HTTPException(status_code=500, detail=f"AI error: {str(exc)[:200]}")
-    return {"draft": draft.model_dump(), "tracks": _tracks_for(draft, state)}
-
-
-@router.post("/playlist-builder/stream")
-async def playlist_builder_stream(
-    req: PlaylistBuilderRequest,
-    request: Request,
-    current_user: User = Depends(get_current_user),
-) -> StreamingResponse:
-    """Streaming variant: emits ``{"type":"status","stage":...}`` frames while
-    the agent works — stages "filters"/"filters_done" (library artist lookup,
-    with ``query``/``best``), "web_search" (with ``query``), and
-    "matching"/"matching_done" (with ``count``/``found``/``total``) — so the
-    client can render a human-readable progress chain, then a terminal
-    ``{"type":"result","draft":...,"tracks":...}`` frame."""
-    built = _build_playlist_deps(request, current_user)
-    if built is None:
-        raise HTTPException(status_code=503, detail="Search service unavailable — is Qdrant running?")
-    deps, catalog = built
-
-    async def event_source() -> AsyncGenerator[str, None]:
-        queue: asyncio.Queue[dict] = asyncio.Queue()
-        DONE = {"__done__": True}
-        state: dict = {}
-
-        def on_status(event: dict) -> None:
-            queue.put_nowait({"type": "status", **event})
-
-        async def run() -> None:
-            try:
-                draft = await run_playlist_agent(
-                    req.prompt, req.lang, deps, catalog, state,
-                    llm_base_url=req.llm_base_url, llm_model=req.llm_model,
-                    on_status=on_status,
-                )
-                queue.put_nowait({
-                    "type": "result",
-                    "draft": draft.model_dump(),
-                    "tracks": _tracks_for(draft, state),
-                })
-            except Exception as exc:
-                logger.error("[playlist_builder/stream] error: %s", exc, exc_info=True)
-                queue.put_nowait({"type": "error", "message": str(exc)[:200]})
-            finally:
-                queue.put_nowait(DONE)
-
-        task = asyncio.create_task(run())
-        try:
-            while True:
-                try:
-                    item = await asyncio.wait_for(queue.get(), timeout=15.0)
-                except asyncio.TimeoutError:
-                    yield ": heartbeat\n\n"
                     continue
                 if item is DONE:
                     break

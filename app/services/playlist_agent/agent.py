@@ -15,9 +15,9 @@ Tools:
     (exact → fuzzy), returning per-item match info so the model can react.
 
 The agent output is a :class:`PlaylistDraft`; ``get_songs`` also records every
-resolved track into the shared ``state`` dict so the route can build a preview
-(and drop any track_id the model might hallucinate) without trusting the LLM to
-echo IDs perfectly.
+resolved track into the shared ``state`` dict so the caller (the recsys
+``web_hits`` delegation) can build the track list (and drop any track_id the
+model might hallucinate) without trusting the LLM to echo IDs perfectly.
 
 Progress: every tool emits a structured event through ``state["on_status"]``
 (``{"stage": ..., "query"/"count"/"found"/...}``) so the streaming route can

@@ -211,19 +211,12 @@ class TrackChatResponse(BaseModel):
     web_search_used: bool = False
 
 
-class PlaylistBuilderRequest(BaseModel):
-    """Request body for POST /chat/playlist-builder(/stream)."""
-    prompt: str
-    lang: str = "ru"
-    llm_base_url: Optional[str] = None
-    llm_model: Optional[str] = None
-
-
 class PlaylistDraft(BaseModel):
     """Playlist proposed by the playlist-builder agent (not yet persisted).
 
     ``track_ids`` reference library tracks the agent matched via ``get_songs``;
-    ``missing`` lists songs the agent wanted but the library doesn't have.
+    ``missing`` lists songs the agent wanted but the library doesn't have —
+    consumed by the recsys ``web_hits`` delegation (`_web_hits_playlist`).
     """
     title: str
     track_ids: List[str] = Field(default_factory=list)

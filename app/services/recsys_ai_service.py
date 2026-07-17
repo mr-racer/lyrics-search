@@ -728,6 +728,10 @@ async def _web_hits_playlist(
         llm_base_url=llm_base_url, llm_model=llm_model, on_status=on_status,
     )
     resolved = state.get("resolved", {})
+    dropped = [tid for tid in draft.track_ids if tid not in resolved]
+    if dropped:
+        logger.warning("[ai-playlist] web_hits: dropped %d hallucinated track_id(s) "
+                       "not returned by get_songs: %s", len(dropped), dropped)
     ids = [tid for tid in draft.track_ids if tid in resolved][:limit]
     payloads = await asyncio.to_thread(
         _resolve_payloads, qdrant_client, collection_name, ids,
