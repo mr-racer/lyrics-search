@@ -5958,27 +5958,73 @@ function AiPlaylistBuilder({ listing, onOpenPlaylist, lang, isDark }) {
   const ru = lang === 'ru';
   const [prompt, setPrompt] = useState('');
   const [phase, setPhase] = useState('idle');  // idle | running | preview | error
-  const [stage, setStage] = useState('thinking');
+  const [steps, setSteps] = useState([]);      // progress chain: {stage, text, done}
   const [draft, setDraft] = useState(null);
   const [tracks, setTracks] = useState([]);
   const [err, setErr] = useState(null);
   const [saving, setSaving] = useState(false);
 
-  const stageLabel = (s) => ru
-    ? (s === 'web_search' ? 'Ищем в интернете…' : s === 'matching' ? 'Сверяем с библиотекой…' : 'Придумываем…')
-    : (s === 'web_search' ? 'Searching the web…' : s === 'matching' ? 'Matching your library…' : 'Thinking…');
+  // «12 песен», «3 песни», «21 песню»
+  const ruSongs = (n) => {
+    const m10 = n % 10, m100 = n % 100;
+    if (m10 === 1 && m100 !== 11) return `${n} песню`;
+    if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return `${n} песни`;
+    return `${n} песен`;
+  };
+
+  // Human wording for a backend progress event ({stage, query?, best?, count?, found?, total?}).
+  const stepText = (e) => {
+    const q = e.query ? `«${e.query}»` : '';
+    switch (e.stage) {
+      case 'filters':
+        return ru ? `Ищем исполнителя ${q} в библиотеке…` : `Looking up ${q} in your library…`;
+      case 'filters_done':
+        return e.best
+          ? (ru ? `В библиотеке нашёлся: ${e.best}` : `Found in your library: ${e.best}`)
+          : (ru ? `В библиотеке ${q} не нашли — уточняем в интернете` : `${q} isn't in your library — checking the web`);
+      case 'web_search':
+        return ru ? `Ищем в интернете: ${q}` : `Searching the web: ${q}`;
+      case 'matching':
+        return ru
+          ? `Сверяем ${e.count != null ? ruSongs(e.count) : 'песни'} с библиотекой…`
+          : `Matching ${e.count != null ? `${e.count} songs` : 'songs'} against your library…`;
+      case 'matching_done':
+        return ru ? `Совпало с библиотекой: ${e.found} из ${e.total}` : `Matched in your library: ${e.found} of ${e.total}`;
+      default:
+        return ru ? 'Думаем…' : 'Thinking…';
+    }
+  };
+
+  // "*_done" events complete their in-flight step in place; anything else
+  // finishes the previous steps and appends a new active one.
+  const onStatus = (e) => {
+    setSteps(prev => {
+      if (typeof e.stage === 'string' && e.stage.endsWith('_done')) {
+        const base = e.stage.slice(0, -'_done'.length);
+        const idx = prev.map(s => s.stage).lastIndexOf(base);
+        if (idx >= 0) {
+          const next = prev.slice();
+          next[idx] = { ...next[idx], text: stepText(e), done: true };
+          return next;
+        }
+      }
+      return [...prev.map(s => ({ ...s, done: true })), { stage: e.stage, text: stepText(e), done: false }];
+    });
+  };
 
   const applyResult = (d, t) => {
+    setSteps(prev => prev.map(s => ({ ...s, done: true })));
     setDraft(d || null); setTracks(Array.isArray(t) ? t : []); setPhase('preview');
   };
 
   const run = async () => {
     const p = prompt.trim();
     if (!p || phase === 'running') return;
-    setPhase('running'); setStage('thinking'); setErr(null); setDraft(null); setTracks([]);
+    setPhase('running'); setErr(null); setDraft(null); setTracks([]);
+    setSteps([{ stage: 'thinking', text: ru ? 'Разбираем запрос…' : 'Reading your request…', done: false }]);
     let got = false;
     const onEvent = (e) => {
-      if (e.type === 'status') setStage(e.stage);
+      if (e.type === 'status') onStatus(e);
       else if (e.type === 'result') { got = true; applyResult(e.draft, e.tracks); }
       else if (e.type === 'error') { got = true; setErr(e.message || 'error'); setPhase('error'); }
     };
@@ -6047,9 +6093,20 @@ function AiPlaylistBuilder({ listing, onOpenPlaylist, lang, isDark }) {
         </button>
       </div>
 
-      {phase === 'running' && (
-        <div style={{ display:'flex', alignItems:'center', gap:9, marginTop:12, fontSize:13, color:c.textMuted }}>
-          <Spinner size={13} /> {stageLabel(stage)}
+      {phase !== 'idle' && steps.length > 0 && (
+        <div style={{ display:'flex', flexDirection:'column', gap:7, marginTop:12 }}>
+          {steps.map((s, i) => {
+            const settled = s.done || phase !== 'running';  // never leave a spinner stuck after error/preview
+            return (
+              <div key={i} style={{ display:'flex', alignItems:'flex-start', gap:9, fontSize:13,
+                color: settled ? c.textSubtle : c.textMuted }}>
+                <span style={{ width:14, flexShrink:0, display:'grid', placeItems:'center', marginTop:1.5 }}>
+                  {settled ? <span style={{ color:'oklch(70% 0.14 155)', fontSize:12, lineHeight:1 }}>✓</span> : <Spinner size={12} />}
+                </span>
+                <span style={{ minWidth:0, overflowWrap:'anywhere' }}>{s.text}</span>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -6099,7 +6156,7 @@ function AiPlaylistBuilder({ listing, onOpenPlaylist, lang, isDark }) {
                 cursor: (saving || tracks.length === 0) ? 'default' : 'pointer', opacity: (saving || tracks.length === 0) ? 0.6 : 1 }}>
               {saving ? (ru ? 'Сохраняем…' : 'Saving…') : (ru ? 'Сохранить плейлист' : 'Save playlist')}
             </button>
-            <button onClick={() => { setPhase('idle'); setDraft(null); setTracks([]); }}
+            <button onClick={() => { setPhase('idle'); setDraft(null); setTracks([]); setSteps([]); }}
               className={ske('btn', isDark)}
               style={{ padding:'10px 16px', borderRadius:10, fontSize:13, color:c.textMuted, cursor:'pointer' }}>
               {ru ? 'Отмена' : 'Cancel'}

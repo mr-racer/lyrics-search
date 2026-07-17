@@ -1275,8 +1275,11 @@ async def playlist_builder_stream(
     request: Request,
     current_user: User = Depends(get_current_user),
 ) -> StreamingResponse:
-    """Streaming variant: emits ``{"type":"status","stage":...}`` frames
-    ("thinking"|"web_search"|"matching") while the agent works, then a terminal
+    """Streaming variant: emits ``{"type":"status","stage":...}`` frames while
+    the agent works — stages "filters"/"filters_done" (library artist lookup,
+    with ``query``/``best``), "web_search" (with ``query``), and
+    "matching"/"matching_done" (with ``count``/``found``/``total``) — so the
+    client can render a human-readable progress chain, then a terminal
     ``{"type":"result","draft":...,"tracks":...}`` frame."""
     built = _build_playlist_deps(request, current_user)
     if built is None:
@@ -1288,8 +1291,8 @@ async def playlist_builder_stream(
         DONE = {"__done__": True}
         state: dict = {}
 
-        def on_status(stage: str) -> None:
-            queue.put_nowait({"type": "status", "stage": stage})
+        def on_status(event: dict) -> None:
+            queue.put_nowait({"type": "status", **event})
 
         async def run() -> None:
             try:

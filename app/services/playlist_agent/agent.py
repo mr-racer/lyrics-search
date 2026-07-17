@@ -6,8 +6,9 @@ Handles two prompt shapes with one instruction set + three tools:
 
 Tools:
   * ``fetch_filters(artist_query)`` — map how the user named an artist to the
-    real names in the library (difflib over the collection's artist values), so
-    "Канье" resolves to "Kanye West" before searching.
+    real names in the library (transliteration-aware difflib over the
+    collection's artist values), so "Канье" resolves to "Kanye West" before
+    searching.
   * ``web_search(query)`` — SearXNG/DDG web search (capped at
     ``_MAX_WEB_SEARCHES`` per run via a closure counter).
   * ``get_songs(items)`` — resolve proposed titles against the library
@@ -17,6 +18,11 @@ The agent output is a :class:`PlaylistDraft`; ``get_songs`` also records every
 resolved track into the shared ``state`` dict so the route can build a preview
 (and drop any track_id the model might hallucinate) without trusting the LLM to
 echo IDs perfectly.
+
+Progress: every tool emits a structured event through ``state["on_status"]``
+(``{"stage": ..., "query"/"count"/"found"/...}``) so the streaming route can
+show the user a human-readable chain of what the agent is doing — which tool,
+with which query, and what it found.
 
 Uses ``instructions=`` (not ``system_prompt=``) per the repo convention: a
 ``system_prompt`` is dropped once ``message_history`` is passed.
@@ -36,6 +42,7 @@ from app.domain.models import PlaylistDraft
 from app.services.agents import _create_pydantic_model
 from app.services.llm_web_search import smart_web_search
 from app.services.playlist_agent.resolver import resolve_songs
+from app.services.text_normalize import fold, translit_variants
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +51,10 @@ _MAX_LLM_REQUESTS = 15
 
 _INSTRUCTIONS = """You build a music playlist from the user's request by finding real songs and matching them against THIS user's music library. Two request shapes:
 
-1) ARTIST HITS ("собери хиты X", "best of X"):
-   - FIRST call fetch_filters with the artist name as the user wrote it, to learn how the artist is actually spelled in the library (e.g. "Канье" -> "Kanye West"). Use the returned real name from then on.
-   - Then call web_search 1-2 times ("<artist> greatest hits", "<artist> most popular songs") to get a list of the artist's best-known song titles.
+1) ARTIST HITS ("собери хиты X", "best of X", "Kanye hits"):
+   - FIRST call fetch_filters with the artist name as the user wrote it, to learn how the artist is actually spelled in the library (e.g. "Канье" -> "Kanye West"; it transliterates across alphabets). Use the returned real name from then on.
+   - If fetch_filters returned nothing, the artist may still be in the library under the canonical name — do NOT give up and do NOT stop: continue with the canonical name you know (or confirm it via web_search).
+   - Then ALWAYS call web_search 1-2 times ("<artist> greatest hits", "<artist> most popular songs") to get a list of the artist's best-known song titles.
    - Then call get_songs with those {title, artist} pairs.
 
 2) FILM / GAME SOUNDTRACK ("саундтрек к <фильм/игра>"):
@@ -55,12 +63,35 @@ _INSTRUCTIONS = """You build a music playlist from the user's request by finding
    - Then call get_songs with those {title, artist} pairs.
 
 Rules:
+- Song titles MUST come from web_search results — never from your own memory, and never by reinterpreting the user's request text as a song title or a vibe/mood to search for. get_songs refuses to run until web_search has been called.
 - Only put a track into the playlist if get_songs returned it with match "exact" or "fuzzy" (never "none"). Use the track_id from get_songs verbatim.
 - If fewer than 3 tracks were found in the library, say so honestly in the comment; still return whatever was found.
 - List songs you wanted but that were NOT in the library (match "none") in the "missing" field, as "Title — Artist".
 - web_search is limited; don't waste calls. Do not call get_songs before you have real song titles.
 - Write the playlist "title" and "comment" in the user's language (given as [lang=..] at the start of the prompt).
 - Output strictly the PlaylistDraft structure."""
+
+
+def _score_artists(query: str, values) -> list[dict]:
+    """Score library artist values against how the user spelled the artist.
+
+    Cross-script aware: the query is compared via its transliteration variants
+    ("канье" also matches as "kane") against both the whole folded artist value
+    and its individual tokens, so a Russian spelling still finds "Kanye West".
+    Returns up to 5 candidates with score >= 0.5, best first.
+    """
+    q_variants = translit_variants(query)
+    scored = []
+    for value in values:
+        v_fold = fold(value)
+        targets = [v_fold] + v_fold.split()
+        best = max(
+            (SequenceMatcher(None, q, t).ratio() for q in q_variants for t in targets),
+            default=0.0,
+        )
+        scored.append((best, value))
+    scored.sort(reverse=True)
+    return [{"artist": v, "score": round(s, 2)} for s, v in scored[:5] if s >= 0.5]
 
 
 class SongQuery(BaseModel):
@@ -74,34 +105,37 @@ def create_playlist_agent(model, deps, catalog, state):
     ``state`` accumulates cross-tool data: ``web`` (search counter),
     ``resolved`` (track_id -> {title, artist, match}), ``missing`` (list of
     "Title — Artist" not in the library), and an optional ``on_status`` sync
-    callback for SSE progress.
+    callback for SSE progress. The callback receives event dicts —
+    ``{"stage": str, ...}`` with human-relevant details (the query a tool ran
+    with, how many songs matched) so the UI can render a progress chain.
     """
     agent = Agent(model, output_type=PlaylistDraft, instructions=_INSTRUCTIONS)
 
-    def _emit(stage: str) -> None:
+    def _emit(stage: str, **info) -> None:
         cb = state.get("on_status")
         if cb is None:
             return
         try:
-            cb(stage)
+            cb({"stage": stage, **info})
         except Exception:  # pragma: no cover — a broken callback must not break the agent
             logger.debug("[playlist_agent] on_status failed", exc_info=True)
 
     @agent.tool_plain
     async def fetch_filters(artist_query: str) -> list:
         """Resolve how the user named an artist to the real artist names present
-        in the library. Returns up to 5 candidates with a similarity score."""
-        _emit("thinking")
+        in the library (transliteration-aware, e.g. "Канье" -> "Kanye West").
+        Returns up to 5 candidates with a similarity score."""
+        _emit("filters", query=artist_query)
         try:
             values = await deps.resolve_filter_values("artist", artist_query)
         except Exception as exc:
             logger.warning("[playlist_agent] fetch_filters failed: %s", exc)
+            _emit("filters_done", query=artist_query, best=None)
             return []
-        scored = sorted(
-            ((SequenceMatcher(None, artist_query.lower(), v.lower()).ratio(), v) for v in values),
-            reverse=True,
-        )[:5]
-        return [{"artist": v, "score": round(s, 2)} for s, v in scored]
+        scored = _score_artists(artist_query, values)
+        _emit("filters_done", query=artist_query,
+              best=scored[0]["artist"] if scored else None)
+        return scored
 
     @agent.tool_plain
     async def web_search(query: str) -> str:
@@ -112,7 +146,7 @@ def create_playlist_agent(model, deps, catalog, state):
                 "Build the playlist from the titles you already have.)"
             )
         state["web"] += 1
-        _emit("web_search")
+        _emit("web_search", query=query)
         try:
             return await asyncio.to_thread(smart_web_search, query, False, 5) or "(no web results)"
         except Exception as exc:
@@ -120,12 +154,19 @@ def create_playlist_agent(model, deps, catalog, state):
             return "(web search unavailable)"
 
     @agent.tool_plain
-    async def get_songs(items: list[SongQuery]) -> list:
+    async def get_songs(items: list[SongQuery]) -> list | str:
         """Match proposed {title, artist} songs against the user's library.
 
         Returns one entry per item with ``match`` ("exact"|"fuzzy"|"none") and,
         when found, the library ``track_id``/``title``/``artist``."""
-        _emit("matching")
+        if state["web"] == 0:
+            # Web-first is the whole point: without it the model pattern-matches
+            # the request text against the library ("semantic" garbage).
+            return (
+                "(refused: call web_search first to get REAL song titles from "
+                "the internet, then call get_songs with those titles.)"
+            )
+        _emit("matching", count=len(items))
         payload = [i.model_dump() for i in items]
         try:
             resolved = await asyncio.to_thread(resolve_songs, payload, catalog)
@@ -139,6 +180,8 @@ def create_playlist_agent(model, deps, catalog, state):
                 }
             elif r["match"] == "none" and r.get("query_title"):
                 state["missing"].append(r["query_title"])
+        found = sum(1 for r in resolved if r["match"] != "none")
+        _emit("matching_done", found=found, total=len(resolved))
         return resolved
 
     return agent
