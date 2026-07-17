@@ -113,6 +113,42 @@ def get_song_facts_key(artist: str, song: str) -> str:
     return f"{_slugify(_artist_query(artist))}-{_slugify(song)}"
 
 
+def apply_song_relations(tracks) -> None:
+    """Overlay producer/label/samples/sampled_by from the GLiNER2+LLM
+    extraction (``songs.producers``/``label``/``samples_json``) onto a list of
+    ``TrackMetadata``-like objects, keyed by the same slug song facts use.
+
+    Mutates in place; a track whose slug has no extraction yet (or whose
+    artist/title is empty) is left untouched, so its existing (currently
+    always-empty, Qdrant-payload-sourced) fields pass through unchanged.
+    Never raises — a lookup failure just skips the overlay.
+    """
+    keyed: Dict[str, list] = {}
+    for t in tracks:
+        artist = getattr(t, "artist", None)
+        title = getattr(t, "title", None)
+        if not artist or not title:
+            continue
+        keyed.setdefault(get_song_facts_key(artist, title), []).append(t)
+    if not keyed:
+        return
+    try:
+        relations = MetadataDB.get_song_relations_bulk(list(keyed.keys()))
+    except Exception:
+        logger.warning("[song_facts] relations overlay failed (non-fatal)", exc_info=True)
+        return
+    for slug, rel in relations.items():
+        for t in keyed.get(slug, []):
+            if rel.get("producer"):
+                t.producer = rel["producer"]
+            if rel.get("label"):
+                t.label = rel["label"]
+            if rel.get("samples"):
+                t.samples = rel["samples"]
+            if rel.get("sampled_by"):
+                t.sampled_by = rel["sampled_by"]
+
+
 def get_cached_song_facts(collection_name: str, artist: str, song: str) -> Optional[str]:
     """Read cached song facts, or None.
 

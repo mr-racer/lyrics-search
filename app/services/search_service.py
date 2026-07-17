@@ -10,7 +10,9 @@ from ..resources.model_registry import ModelRegistry
 from ..resources.metadata_db import MetadataDB
 from .artist_facts_service import load_all_facts_for_collection, _slugify as _slugify_artist
 from .artist_split import artist_refs as _artist_refs
-from .song_facts_service import load_all_song_facts_for_collection, get_song_facts_key
+from .song_facts_service import (
+    load_all_song_facts_for_collection, get_song_facts_key, apply_song_relations,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -502,4 +504,13 @@ class SearchService:
                 artist_facts=artist_facts,
                 song_facts=song_facts,
             ))
+
+        # Qdrant's own producer/label/samples/sampled_by payload fields are
+        # never populated (no live writer — see MusicBrainz scaffold notes);
+        # overlay the real values from the GLiNER2+LLM extraction in SQLite.
+        try:
+            apply_song_relations([h.track for h in hits])
+        except Exception:
+            logger.warning("[SearchService] relations overlay failed (non-fatal)", exc_info=True)
+
         return hits

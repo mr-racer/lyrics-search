@@ -22,7 +22,7 @@ from app.services.artist_split import (
     artist_slugs as _artist_slugs,
     artist_refs as _artist_refs,
 )
-from app.services.song_facts_service import get_song_facts_key
+from app.services.song_facts_service import get_song_facts_key, apply_song_relations
 
 router = APIRouter(tags=["Metadata"])
 
@@ -412,6 +412,7 @@ def get_tracks_metadata_batch(
     out: List[TrackMetadata] = []
     for p in points:
         out.append(_track_from_qdrant_payload(str(p.id), p.payload or {}))
+    apply_song_relations(out)
     return out
 
 
@@ -442,7 +443,9 @@ def get_track_metadata(
         raise HTTPException(status_code=502, detail="Qdrant retrieve failed")
     if not points:
         raise HTTPException(status_code=404, detail="track not found")
-    return _track_from_qdrant_payload(track_id, points[0].payload or {})
+    track = _track_from_qdrant_payload(track_id, points[0].payload or {})
+    apply_song_relations([track])
+    return track
 
 
 # ── Sonic Vibe (Plan 3 Task 14) ──────────────────────────────────────────────

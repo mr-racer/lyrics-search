@@ -16,6 +16,7 @@ from app.resources.qdrant_utils import PAYLOAD_EXCLUDE_LYRICS
 from app.services.artist_facts_service import _slugify as _slugify_artist
 from app.services.artist_split import split_artists, artist_slugs, name_for_slug, artist_refs as _artist_refs
 from app.services._payload_coerce import coerce_float, coerce_year
+from app.services.song_facts_service import apply_song_relations
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/artists", tags=["Artists"])
@@ -182,6 +183,8 @@ def build_artist_aggregate(db, collection: str, canonical_slug: str, lang: str) 
 
     if not artist_tracks and not row:
         raise HTTPException(status_code=404, detail=f"unknown artist: {canonical_slug}")
+
+    apply_song_relations(artist_tracks)
 
     # Display name = THIS artist's own participant name, taken from a track where
     # they appear (raw tags are the real tagged metadata). Crucially NOT the whole

@@ -362,6 +362,19 @@ def _slugify(text: str) -> str:
     return "-".join(text.lower().split())
 
 
+def _fmt_sample_entry(entry) -> Optional[str]:
+    """``{"song": ..., "artist": ...}`` (fact_relations shape) -> "Artist —
+    Song", matching what the player's SampleRow component parses. Falls back
+    to whichever half is present; None if both are empty."""
+    if not isinstance(entry, dict):
+        return None
+    song = (entry.get("song") or "").strip()
+    artist = (entry.get("artist") or "").strip()
+    if artist and song:
+        return f"{artist} — {song}"
+    return song or artist or None
+
+
 class MetadataDB:
     """Lazy singleton wrapper around a local SQLite database.
 
@@ -1181,6 +1194,66 @@ class MetadataDB:
             (producers_json, samples_json, slug),
         )
         conn.commit()
+
+    @classmethod
+    def get_song_relations_bulk(cls, slugs: List[str]) -> Dict[str, dict]:
+        """Return ``{slug: {"producer", "label", "samples", "sampled_by"}}``
+        for the given song slugs, read from ``songs.producers``/``label``/
+        ``samples_json`` — the same row ``set_song_relations`` writes and song
+        facts are cached under (``get_song_facts_key``).
+
+        ``producer`` is a comma-joined string (multiple credited producers);
+        ``samples``/``sampled_by`` are ``"Artist — Song"`` strings, matching
+        the shapes the player UI parses. ``label`` currently has no writer
+        (MusicBrainz enrichment is disabled) so it reads back ``None`` for
+        every song today; the column is wired so a future source needs no
+        further plumbing. A slug absent from the result has no extraction
+        yet — callers should leave that track's existing fields untouched.
+        """
+        if not slugs:
+            return {}
+        conn = cls._connect()
+        uniq = list(dict.fromkeys(s for s in slugs if s))
+        out: Dict[str, dict] = {}
+        for i in range(0, len(uniq), 400):
+            chunk = uniq[i:i + 400]
+            placeholders = ",".join("?" * len(chunk))
+            rows = conn.execute(
+                f"""SELECT slug, producers, label, samples_json FROM songs
+                    WHERE slug IN ({placeholders})
+                      AND (producers IS NOT NULL OR label IS NOT NULL
+                           OR samples_json IS NOT NULL)""",
+                chunk,
+            ).fetchall()
+            for slug, producers_json, label, samples_json in rows:
+                producer = None
+                if producers_json:
+                    try:
+                        names = [n for n in (json.loads(producers_json) or []) if n]
+                        producer = ", ".join(names) if names else None
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                samples: list[str] = []
+                sampled_by: list[str] = []
+                if samples_json:
+                    try:
+                        rel = json.loads(samples_json) or {}
+                        samples = [s for s in (
+                            _fmt_sample_entry(e) for e in (rel.get("samples") or [])
+                        ) if s]
+                        sampled_by = [s for s in (
+                            _fmt_sample_entry(e) for e in (rel.get("sampled_by") or [])
+                        ) if s]
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                if producer or label or samples or sampled_by:
+                    out[slug] = {
+                        "producer": producer,
+                        "label": label,
+                        "samples": samples or None,
+                        "sampled_by": sampled_by or None,
+                    }
+        return out
 
     @classmethod
     def get_songs_needing_relations(cls, collection_name: str) -> List[Tuple[str, str, str]]:
