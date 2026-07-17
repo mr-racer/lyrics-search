@@ -103,10 +103,12 @@ class SearchDeps:
         """Resolve raw filter terms to actual values present in the DB.
 
         For each key in `filter_lookup`, scroll the collection for candidate
-        values and pick the best fuzzy match (threshold ≥ 60 via difflib).
+        values and pick the best fuzzy match (threshold ≥ 0.6 via the shared
+        cross-script ``name_match`` scoring, so «канье» resolves to
+        "Kanye West" even when the planner passed the raw Cyrillic through).
         Already-resolved values in `resolved_filters` are passed through.
         """
-        from difflib import SequenceMatcher
+        from app.services.name_match import score_names
 
         result: dict[str, str] = dict(resolved_filters or {})
 
@@ -120,16 +122,8 @@ class SearchDeps:
             if not candidates:
                 continue
 
-            best_match: str | None = None
-            best_score = 0.0
-            raw_lower = raw.lower()
-            for candidate in candidates:
-                score = SequenceMatcher(None, raw_lower, candidate.lower()).ratio()
-                if score > best_score:
-                    best_score = score
-                    best_match = candidate
-
-            if best_match and best_score >= 0.6:
-                result[key] = best_match
+            scored = score_names(raw, candidates)
+            if scored and scored[0][0] >= 0.6:
+                result[key] = scored[0][1]
 
         return result

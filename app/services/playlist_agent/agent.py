@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from difflib import SequenceMatcher
 from typing import Optional
 
 from pydantic import BaseModel
@@ -41,8 +40,8 @@ from pydantic_ai.usage import UsageLimits
 from app.domain.models import PlaylistDraft
 from app.services.agents import _create_pydantic_model
 from app.services.llm_web_search import smart_web_search
+from app.services.name_match import score_names
 from app.services.playlist_agent.resolver import resolve_songs
-from app.services.text_normalize import fold, translit_variants
 
 logger = logging.getLogger(__name__)
 
@@ -73,24 +72,9 @@ Rules:
 
 
 def _score_artists(query: str, values) -> list[dict]:
-    """Score library artist values against how the user spelled the artist.
-
-    Cross-script aware: the query is compared via its transliteration variants
-    ("канье" also matches as "kane") against both the whole folded artist value
-    and its individual tokens, so a Russian spelling still finds "Kanye West".
-    Returns up to 5 candidates with score >= 0.5, best first.
-    """
-    q_variants = translit_variants(query)
-    scored = []
-    for value in values:
-        v_fold = fold(value)
-        targets = [v_fold] + v_fold.split()
-        best = max(
-            (SequenceMatcher(None, q, t).ratio() for q in q_variants for t in targets),
-            default=0.0,
-        )
-        scored.append((best, value))
-    scored.sort(reverse=True)
+    """Cross-script artist candidates via the shared ``name_match`` scoring
+    ("канье" finds "Kanye West"). Up to 5 with score >= 0.5, best first."""
+    scored = score_names(query, values)
     return [{"artist": v, "score": round(s, 2)} for s, v in scored[:5] if s >= 0.5]
 
 
