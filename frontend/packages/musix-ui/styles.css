@@ -3749,24 +3749,12 @@
     }
     @keyframes homeExtrasIn{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
     @media (prefers-reduced-motion: reduce){.home-extras{animation:none}}
-    /* Daily fact cards: a stretch row + 3-line clamp gives the trio one
-       shared height. Cards whose text IS cut (.is-clamped, measured in JS)
-       lift the clamp on hover and grow UPWARD into the strip's free air —
-       the strip is bottom-anchored, so nothing below shifts. The negative
-       margins mirror the padding: at rest the card is visually identical to
-       the naked text it replaced; the padding only "appears" (as breathing
-       room inside the backdrop) when the hover background fades in.
-       --fact-hover-bg is set inline per theme. */
+    /* Daily fact cards: a stretch row with the fact text pinned to the card
+       bottom — headers align along the top, texts along the bottom, and the
+       full (unclamped) text is always visible; the fetch pre-filters to the
+       shortest facts so the strip stays a quiet footnote. */
     .home-fact{position:relative;flex:1 1 0;min-width:0;max-width:380px;
-      display:flex;flex-direction:column;pointer-events:auto;
-      padding:10px 12px;margin:-10px -12px;border-radius:16px;
-      transition:background-color .25s ease,box-shadow .25s ease}
-    .home-fact-text{display:-webkit-box;-webkit-box-orient:vertical;
-      -webkit-line-clamp:3;overflow:hidden}
-    .home-fact.is-clamped:hover{background:var(--fact-hover-bg,rgba(20,18,32,.55));
-      -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);
-      box-shadow:0 18px 40px rgba(0,0,0,.18)}
-    .home-fact.is-clamped:hover .home-fact-text{-webkit-line-clamp:unset}
+      display:flex;flex-direction:column;pointer-events:auto}
     /* Wide aurora "wave" — reuses the fy-blob keyframes at a larger scale */
     .efir-wave{position:relative;overflow:hidden;isolation:isolate}
     .efir-wave .fy-blob{width:58%;height:200%;filter:blur(40px)}

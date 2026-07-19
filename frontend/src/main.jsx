@@ -3031,22 +3031,15 @@ function HomeDailyExtras({ isDark, lang }) {
 }
 
 // One daily fact card — 48px thumb + bold who-line on top, the fact text
-// pinned to the card's bottom. The text clamps at 3 lines so the three cards
-// share one height; when it IS clamped (measured post-render), hovering lifts
-// the clamp and the card grows upward into the strip's free air over a soft
-// glass backdrop (classes in musix-ui/styles.css: .home-fact*).
+// pinned to the card's bottom and shown IN FULL (a cut-off fact is a broken
+// promise; the batch is pre-filtered to the shortest ones instead). The
+// stretch row + bottom-pinned text keeps the trio's tops and bottoms aligned
+// even when texts differ by a line (classes in musix-ui/styles.css).
 function HomeFactCard({ f, isDark, c, who, sub }) {
   const isArtist = f.type === 'artist';
   const img = homeCoverUrl(f.image);
-  const textRef = useRef(null);
-  const [clamped, setClamped] = useState(false);
-  useEffect(() => {
-    const el = textRef.current;
-    if (el) setClamped(el.scrollHeight > el.clientHeight + 1);
-  }, [f]);
   return (
-    <div className={'home-fact' + (clamped ? ' is-clamped' : '')}
-      style={{ '--fact-hover-bg': isDark ? 'rgba(20,18,32,.55)' : 'rgba(255,255,255,.62)' }}>
+    <div className="home-fact">
       <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:10 }}>
         <div style={{ width:48, height:48, flex:'none', borderRadius: isArtist ? '50%' : 11,
           overflow:'hidden', display:'grid', placeItems:'center',
@@ -3070,8 +3063,7 @@ function HomeFactCard({ f, isDark, c, who, sub }) {
           </div>
         </div>
       </div>
-      <div ref={textRef} className="home-fact-text"
-        style={{ fontSize:14.5, color:c.textMuted, lineHeight:1.5, marginTop:'auto' }}>
+      <div style={{ fontSize:14.5, color:c.textMuted, lineHeight:1.5, marginTop:'auto' }}>
         {f.fact}
       </div>
     </div>
