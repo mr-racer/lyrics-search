@@ -2,6 +2,7 @@
 
 from app.services.artist_split import (
     split_artists, artist_slugs, primary_artist, name_for_slug, artist_refs,
+    parse_title_feat, artist_refs_for_track, display_title_for_track,
 )
 from app.services.indexing_service import _build_payload_for_upsert
 from app.api.routes.artists import _track_from_payload
@@ -207,3 +208,185 @@ class TestTrackFromPayloadArtists:
              "duration": 200}
         t = _track_from_payload("id1", p)
         assert t.primary_artist_slug == "kanye-west"
+
+
+# --- feat-in-title parsing (2026-07-19: 388/5630 library tracks carry feat in the title) ---
+
+class TestParseTitleFeat:
+    def test_plain_title_untouched(self):
+        r = parse_title_feat("Heartless")
+        assert r.clean_title == "Heartless"
+        assert r.feat_names == [] and r.with_names == []
+
+    def test_paren_feat(self):
+        r = parse_title_feat("Bangarang (ft. Sirah)")
+        assert r.clean_title == "Bangarang"
+        assert r.feat_names == ["Sirah"]
+
+    def test_bracket_feat(self):
+        r = parse_title_feat("Beautiful [feat. Enrique Iglesias]")
+        assert r.clean_title == "Beautiful"
+        assert r.feat_names == ["Enrique Iglesias"]
+
+    def test_capital_feat_spelling(self):
+        r = parse_title_feat("Best Friend (Feat. Yelawolf)")
+        assert r.clean_title == "Best Friend"
+        assert r.feat_names == ["Yelawolf"]
+
+    def test_multi_comma_and_and(self):
+        r = parse_title_feat("The Sweet Prince (feat. Ajay Prasanna, Johnny Marr and Anoushka Shankar)")
+        assert r.clean_title == "The Sweet Prince"
+        assert r.feat_names == ["Ajay Prasanna", "Johnny Marr", "Anoushka Shankar"]
+
+    def test_ampersand_inside_feat_chunk(self):
+        r = parse_title_feat("On the Road (ft. Meek Mill & Lil Baby)")
+        assert r.feat_names == ["Meek Mill", "Lil Baby"]
+
+    def test_and_capitalized(self):
+        r = parse_title_feat("4 Minutes (feat. Justin Timberlake And Timbaland)")
+        assert r.feat_names == ["Justin Timberlake", "Timbaland"]
+
+    def test_trailing_text_after_paren_survives(self):
+        r = parse_title_feat("Starboy (ft. Daft Punk) [Kygo Remix]")
+        assert r.clean_title == "Starboy [Kygo Remix]"
+        assert r.feat_names == ["Daft Punk"]
+
+    def test_prefix_inside_paren_stays_in_title(self):
+        r = parse_title_feat("Lighters (Bad Meets Evil Feat. Bruno Mars)")
+        assert r.clean_title == "Lighters (Bad Meets Evil)"
+        assert r.feat_names == ["Bruno Mars"]
+
+    def test_bare_ft_to_end_of_string(self):
+        r = parse_title_feat("Ride ft. MUTEMATH")
+        assert r.clean_title == "Ride"
+        assert r.feat_names == ["MUTEMATH"]
+
+    def test_with_paren_is_co_artist_not_feat(self):
+        r = parse_title_feat("Kids [with Robbie Williams]")
+        assert r.clean_title == "Kids"
+        assert r.with_names == ["Robbie Williams"]
+        assert r.feat_names == []
+
+    def test_with_trailing_remaster_survives(self):
+        r = parse_title_feat("The Motown Song (with The Temptations) (2008 Remaster)")
+        assert r.clean_title == "The Motown Song (2008 Remaster)"
+        assert r.with_names == ["The Temptations"]
+
+    def test_with_oxford_comma_ampersand(self):
+        r = parse_title_feat("Roc The Mic-Remix [With Freeway, Beanie Sigel, & Murphy Lee]")
+        assert r.with_names == ["Freeway", "Beanie Sigel", "Murphy Lee"]
+
+    def test_bare_with_not_honored(self):
+        # Way too many legit titles contain the word "with".
+        r = parse_title_feat("Dancing with a Stranger")
+        assert r.clean_title == "Dancing with a Stranger"
+        assert r.with_names == []
+
+    def test_ft_without_name_is_not_a_feat(self):
+        # Foals — "10,000 Ft." (the only library false-positive candidate).
+        r = parse_title_feat("10,000 Ft.")
+        assert r.clean_title == "10,000 Ft."
+        assert r.feat_names == []
+
+    def test_word_containing_ft_untouched(self):
+        r = parse_title_feat("Shoplifters of the World Unite")
+        assert r.clean_title == "Shoplifters of the World Unite"
+        assert r.feat_names == []
+
+    def test_idempotent_on_clean_output(self):
+        once = parse_title_feat("Bangarang (ft. Sirah)")
+        twice = parse_title_feat(once.clean_title)
+        assert twice.clean_title == once.clean_title
+        assert twice.feat_names == []
+
+    def test_empty_and_none(self):
+        assert parse_title_feat("").clean_title == ""
+        assert parse_title_feat(None).clean_title == ""
+
+
+class TestArtistRefsForTrack:
+    def test_payload_arrays_with_feat_slugs_are_authoritative(self):
+        p = {
+            "title": "Bangarang", "artist": "Skrillex",
+            "artists": ["Skrillex", "Sirah"],
+            "artist_slugs": ["skrillex", "sirah"],
+            "feat_artist_slugs": ["sirah"],
+        }
+        refs = artist_refs_for_track(p)
+        assert refs == [
+            {"name": "Skrillex", "slug": "skrillex", "role": "main"},
+            {"name": "Sirah", "slug": "sirah", "role": "feat"},
+        ]
+
+    def test_legacy_payload_falls_back_to_title_parse(self):
+        # Pre-backfill payload: arrays exist but carry no title-feats.
+        p = {
+            "title": "Bangarang (ft. Sirah)", "artist": "Skrillex",
+            "artists": ["Skrillex"], "artist_slugs": ["skrillex"],
+        }
+        refs = artist_refs_for_track(p)
+        assert {"name": "Sirah", "slug": "sirah", "role": "feat"} in refs
+        assert refs[0] == {"name": "Skrillex", "slug": "skrillex", "role": "main"}
+
+    def test_with_artist_billed_as_main(self):
+        p = {"title": "Kids [with Robbie Williams]", "artist": "Kylie Minogue"}
+        refs = artist_refs_for_track(p)
+        assert refs == [
+            {"name": "Kylie Minogue", "slug": "kylie-minogue", "role": "main"},
+            {"name": "Robbie Williams", "slug": "robbie-williams", "role": "main"},
+        ]
+
+    def test_tag_feat_gets_feat_role(self):
+        # feat in the ARTIST tag: same split as before, but the participant
+        # after the keyword now carries an explicit feat role (previously the
+        # frontend faked this by position, mislabeling «A & B» duos).
+        p = {"title": "Heartless", "artist": "Kanye West feat. Sia"}
+        refs = artist_refs_for_track(p)
+        assert [(r["slug"], r["role"]) for r in refs] == [
+            ("kanye-west", "main"), ("sia", "feat"),
+        ]
+
+    def test_tag_duo_stays_co_primary(self):
+        p = {"title": "One Kiss", "artist": "Calvin Harris & Dua Lipa"}
+        refs = artist_refs_for_track(p)
+        assert [(r["slug"], r["role"]) for r in refs] == [
+            ("calvin-harris", "main"), ("dua-lipa", "main"),
+        ]
+
+    def test_dedupe_feat_already_in_tag_upgrades_role(self):
+        # No duplicate ref; the title's feat signal upgrades the existing
+        # (role-less) credit to feat instead of being dropped.
+        p = {"title": "Under Control (feat. Hurts)", "artist": "Calvin Harris & Alesso & Hurts"}
+        refs = artist_refs_for_track(p)
+        assert [r["slug"] for r in refs] == ["calvin-harris", "alesso", "hurts"]
+        assert [r["role"] for r in refs] == ["main", "main", "feat"]
+
+    def test_sqlite_mirror_arrays_recover_feat_role_from_title(self):
+        # SQLite track_metadata mirrors extended artists/artist_slugs but has
+        # no feat_artist_slugs column — the title parse must restore the role.
+        p = {
+            "title": "Bangarang (ft. Sirah)", "artist": "Skrillex",
+            "artists": ["Skrillex", "Sirah"],
+            "artist_slugs": ["skrillex", "sirah"],
+        }
+        refs = artist_refs_for_track(p)
+        assert refs == [
+            {"name": "Skrillex", "slug": "skrillex", "role": "main"},
+            {"name": "Sirah", "slug": "sirah", "role": "feat"},
+        ]
+
+    def test_empty(self):
+        assert artist_refs_for_track({}) == []
+
+
+class TestDisplayTitleForTrack:
+    def test_payload_title_display_wins(self):
+        p = {"title": "Bangarang (ft. Sirah)", "title_display": "Bangarang"}
+        assert display_title_for_track(p) == "Bangarang"
+
+    def test_fallback_parses_title(self):
+        p = {"title": "Bangarang (ft. Sirah)"}
+        assert display_title_for_track(p) == "Bangarang"
+
+    def test_clean_title_returns_none(self):
+        assert display_title_for_track({"title": "Heartless"}) is None

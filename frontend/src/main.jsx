@@ -30,12 +30,20 @@ function slugifyArtistName(name) {
   return (name || '').toLowerCase().trim().split(/\s+/).join('-');
 }
 
+// Display title: prefers the backend's `title_display` (feat/with credits
+// stripped from the raw title — «Bangarang (ft. Sirah)» → «Bangarang»).
+function trackTitle(t) {
+  return (t && (t.title_display || t.title)) || '';
+}
+
 // Renders a track's artist credit with each participant individually clickable.
-// Uses backend-provided `artist_refs` (aligned {name, slug} per participant) so a
-// collaboration like "Calvin Harris, Dua Lipa" links EACH artist to their own
-// page — primary first, then "feat." the rest. Falls back to the raw `artist`
-// string (navigating to the primary slug) when artist_refs is absent, so older
-// or un-enriched surfaces still work and never 404 on a combined slug.
+// Uses backend-provided `artist_refs` (aligned {name, slug, role} per
+// participant) so a collaboration like "Calvin Harris, Dua Lipa" links EACH
+// artist to their own page. Mains are joined with ", "; refs whose role is
+// "feat" (featured guests, incl. those extracted from the title) follow after
+// a "feat." separator, slightly dimmed. Falls back to the raw `artist` string
+// (navigating to the primary slug) when artist_refs is absent, so older or
+// un-enriched surfaces still work and never 404 on a combined slug.
 function ArtistCredit({ track, navigateToArtist, lang, color = '#bba8ff', stopProp = true }) {
   const refs = (track && Array.isArray(track.artist_refs)) ? track.artist_refs : [];
   const go = (slug) => (e) => {
@@ -43,14 +51,24 @@ function ArtistCredit({ track, navigateToArtist, lang, color = '#bba8ff', stopPr
     if (slug && navigateToArtist) navigateToArtist(slug);
   };
   const linkStyle = { color, cursor: navigateToArtist ? 'pointer' : 'default' };
+  const featStyle = { ...linkStyle, opacity: 0.75 };
   const title = navigateToArtist ? (lang === 'ru' ? 'Открыть страницу артиста' : 'Open artist page') : undefined;
   if (refs.length > 0) {
+    const mains = refs.filter(r => r.role !== 'feat');
+    const feats = refs.filter(r => r.role === 'feat');
     return (
       <>
-        {refs.map((r, i) => (
+        {mains.map((r, i) => (
           <Fragment key={`${r.slug}-${i}`}>
-            {i === 1 ? ' feat. ' : i > 1 ? ', ' : ''}
+            {i > 0 ? ', ' : ''}
             <span onClick={go(r.slug)} style={linkStyle} title={title}>{r.name}</span>
+          </Fragment>
+        ))}
+        {feats.length > 0 && <span style={{ opacity: 0.6 }}>{mains.length > 0 ? ' feat. ' : 'feat. '}</span>}
+        {feats.map((r, i) => (
+          <Fragment key={`${r.slug}-f${i}`}>
+            {i > 0 ? ', ' : ''}
+            <span onClick={go(r.slug)} style={featStyle} title={title}>{r.name}</span>
           </Fragment>
         ))}
       </>
@@ -59,6 +77,28 @@ function ArtistCredit({ track, navigateToArtist, lang, color = '#bba8ff', stopPr
   const name = (track && track.artist) || '';
   const slug = (track && track.primary_artist_slug) || slugifyArtistName(name);
   return <span onClick={go(slug)} style={linkStyle} title={title}>{name}</span>;
+}
+
+// Dim inline «feat. X, Y» suffix for track rows (album tracklists etc.).
+// Renders nothing when the track has no feat-role refs; names are clickable
+// (stopping row-click propagation) when navigateToArtist is provided.
+function FeatSuffix({ track, navigateToArtist, lang, fontSize = '11px' }) {
+  const refs = (track && Array.isArray(track.artist_refs)) ? track.artist_refs : [];
+  const feats = refs.filter(r => r.role === 'feat');
+  if (feats.length === 0) return null;
+  const go = (slug) => (e) => { e.stopPropagation(); if (slug && navigateToArtist) navigateToArtist(slug); };
+  const tip = navigateToArtist ? (lang === 'ru' ? 'Открыть страницу артиста' : 'Open artist page') : undefined;
+  return (
+    <span style={{ opacity: .55, fontSize, fontWeight: 400 }}>
+      {' feat. '}
+      {feats.map((r, i) => (
+        <Fragment key={`${r.slug}-${i}`}>
+          {i > 0 ? ', ' : ''}
+          <span onClick={go(r.slug)} style={{ cursor: navigateToArtist ? 'pointer' : 'inherit' }} title={tip}>{r.name}</span>
+        </Fragment>
+      ))}
+    </span>
+  );
 }
 
 // Best-effort primary-artist slug for click-only targets (avatars, chips) where
@@ -993,7 +1033,7 @@ function applyMediaSessionNow(track) {
   }
   try {
     navigator.mediaSession.metadata = new MediaMetadata({
-      title: track.title || '',
+      title: (track.title_display || track.title) || '',
       artist: track.artist || '',
       album: track.album || '',
       artwork: art ? [
@@ -2148,7 +2188,7 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
               {anchors.slice(0, 5).map((t, i) => {
                 const src = homeCoverUrl(t.cover_art_path);
                 return (
-                  <div key={t.track_id || i} title={`${t.title || ''}${t.artist ? ' — ' + t.artist : ''}`}
+                  <div key={t.track_id || i} title={`${trackTitle(t) || ''}${t.artist ? ' — ' + t.artist : ''}`}
                        onClick={() => { const s = primaryArtistSlug(t); if (s && navigateToArtist) navigateToArtist(s); }}
                        style={{ width:40, height:40, borderRadius:10, overflow:'hidden', marginLeft: i ? -11 : 0, cursor:'pointer',
                                 position:'relative', zIndex: 10 - i, background:'#241d38',
@@ -2387,7 +2427,7 @@ function HeaderNowPlaying({ track, audio, isDark, lang, onOpenPlayer, playlist, 
         {cover && <img src={cover} alt="" style={{ width:'100%', height:'100%', objectFit:'cover' }} />}
       </div>
       <div onClick={onOpenPlayer} style={{ width:128, minWidth:0, cursor:'pointer' }}>
-        <div style={{ fontSize:12.5, fontWeight:600, color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title || '—'}</div>
+        <div style={{ fontSize:12.5, fontWeight:600, color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{trackTitle(track) || '—'}</div>
         <div style={{ position:'relative', height:3, borderRadius:2, marginTop:4, background:isDark?'rgba(255,255,255,.12)':'rgba(0,0,0,.12)' }}>
           <div style={{ position:'absolute', left:0, top:0, bottom:0, width:`${progress*100}%`, borderRadius:2, background:'oklch(62% 0.18 275)' }} />
         </div>
@@ -3217,7 +3257,7 @@ function NowPlayingPebble({ track, isPlaying, isDark = true, onClick, onHoverCha
       onMouseLeave={() => onHoverChange?.(false)}
       onFocus={() => onHoverChange?.(true)}
       onBlur={() => onHoverChange?.(false)}
-      title={hasTrack ? `${track.title || ''} — ${track.artist || ''}` : 'No track playing'}
+      title={hasTrack ? `${trackTitle(track) || ''} — ${track.artist || ''}` : 'No track playing'}
       style={{
         width: 40, height: 40, borderRadius: '50%', padding: 0,
         background: hasTrack ? filledBg : emptyBg,
@@ -3243,7 +3283,7 @@ function NowPlayingPebble({ track, isPlaying, isDark = true, onClick, onHoverCha
 function MiniPlaybackPopout({ track, audio, isDark = true, onOpenPlayer, onClose, playlist, onTrackChange }) {
   const c = useColors(isDark);
   const safe = track || {};
-  const title = safe.title || '—';
+  const title = trackTitle(safe) || '—';
   const artist = safe.artist || '';
   // Prefix relative cover paths with ${API} (matches AlbumCover behavior).
   const rawCover = safe.cover_art_path || safe.coverArt || null;
@@ -4163,7 +4203,7 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
       onMouseLeave={e => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)'; }}>
       <AlbumCover title={hit.track?.title||''} artist={hit.track?.artist||''} size={56} isDark={isDark} coverPath={hit.track?.cover_art_path} />
       <div style={{ flex:1, minWidth:0 }}>
-        <div style={{ fontSize:'14px', fontWeight:'600', color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{hit.track?.title||'—'}</div>
+        <div style={{ fontSize:'14px', fontWeight:'600', color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{trackTitle(hit.track)||'—'}</div>
         <div style={{ fontSize:'13px', color:c.textMuted, display: 'inline-block' }}>
           <ArtistCredit track={hit.track} navigateToArtist={navigateToArtist} lang={lang} color={c.textMuted} />
         </div>
@@ -4202,7 +4242,7 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
         <div style={{ display:'flex', alignItems:'center', gap:'15px' }}>
           <AlbumCover title={hit.track?.title||''} artist={hit.track?.artist||''} size={coverSize} isDark={isDark} coverPath={hit.track?.cover_art_path} />
           <div style={{ flex:1, minWidth:0 }}>
-            <div style={{ fontSize:'18px', fontWeight:'700', color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', letterSpacing:'-0.01em' }}>{hit.track?.title||'—'}</div>
+            <div style={{ fontSize:'18px', fontWeight:'700', color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', letterSpacing:'-0.01em' }}>{trackTitle(hit.track)||'—'}</div>
             <div style={{ fontSize:'14px', color:c.textMuted, display:'inline-block', marginTop:'2px' }}>
               <ArtistCredit track={hit.track} navigateToArtist={navigateToArtist} lang={lang} color={c.textMuted} />
             </div>
@@ -4496,7 +4536,7 @@ function SearchSection({ isDark, lang, onPlayTrack, navigateToArtist, aiStatus, 
                             <div style={{ fontSize:'14px', fontWeight:'600', color:c.text,
                               whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
                               letterSpacing:'-0.01em' }}>
-                              {hit.track?.title||'—'}
+                              {trackTitle(hit.track)||'—'}
                             </div>
                             <div style={{ fontSize:'13px', color:c.textMuted, marginTop:'3px',
                               whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
@@ -5182,7 +5222,7 @@ function RecommendSection({ isDark, lang, onPlayTrack, onQueueNext, aiStatus, on
           <LazyCover className="rec-trk__cov" url={homeCoverUrl(h.track && h.track.cover_art_path)}
                      fallback="linear-gradient(135deg,#7c5cff,#b06bff)" />
           <div style={{ flex:1, minWidth:0 }}>
-            <div style={{ fontSize:'15px', fontWeight:700, color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{h.track && h.track.title}</div>
+            <div style={{ fontSize:'15px', fontWeight:700, color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{h.track && trackTitle(h.track)}</div>
             <div style={{ fontSize:'12.5px', color:c.textSubtle }}>{h.track && h.track.artist}</div>
             {withReasons && h.track && h.track.reason && (
               <div className="serif" style={{ fontSize:'12.5px', fontStyle:'italic', color:c.textMuted, marginTop:'2px' }}>↳ {h.track.reason}</div>
@@ -5789,7 +5829,7 @@ function LibraryGlassyRow({ track, when, playCount, isDark, lang, onClick, navig
         <AlbumCover title={track.title} artist={track.artist} size={coverSize} isDark={isDark} coverPath={track.cover_art_path} radius={10} fluid />
       </div>
       <div style={{ minWidth:0 }}>
-        <div style={{ color:c.text, fontSize: isMobile ? '15px' : '17px', fontWeight:500, letterSpacing:'-0.01em', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{track.title}</div>
+        <div style={{ color:c.text, fontSize: isMobile ? '15px' : '17px', fontWeight:500, letterSpacing:'-0.01em', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{trackTitle(track)}</div>
         <div style={{ color:c.textMuted, fontSize: isMobile ? '12.5px' : '14px', marginTop:'2px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
           <ArtistCredit track={track} navigateToArtist={navigateToArtist} lang={lang} />
           {track.album && (<>
@@ -6102,7 +6142,7 @@ function PlaylistTrackRow({ track, isDragging, onDragStart, onDragOver, onDragLe
         <AlbumCover title={track.title} artist={track.artist} size={44} coverPath={track.cover_art_path} radius={8} fluid />
       </div>
       <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 15, color: isDark ? '#eeeef3' : '#161620', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', letterSpacing: '-0.005em' }}>{track.title}</div>
+        <div style={{ fontSize: 15, color: isDark ? '#eeeef3' : '#161620', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', letterSpacing: '-0.005em' }}>{trackTitle(track)}</div>
         <div style={{ fontSize: 12, color: isDark ? 'rgba(238,238,243,.55)' : 'rgba(10,10,18,.6)', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           <ArtistCredit track={track} navigateToArtist={navigateToArtist} lang={lang} />
           {track.album && (<>{' · '}{track.album}</>)}
@@ -7219,7 +7259,7 @@ function RhythmSection({ rhythm, isDark, lang }) {
             value={fmtLong(busiest.date)}
             label={lang==='ru'?'самый активный день':'most active day'}
             foot={busiest.top_track
-              ? `${busiest.count} ${plural(busiest.count, lang, ['прослушивание','прослушивания','прослушиваний'], ['play','plays'])} · ${lang==='ru'?'хит дня':'top'}: ${busiest.top_track.title}`
+              ? `${busiest.count} ${plural(busiest.count, lang, ['прослушивание','прослушивания','прослушиваний'], ['play','plays'])} · ${lang==='ru'?'хит дня':'top'}: ${trackTitle(busiest.top_track)}`
               : `${busiest.count} ${plural(busiest.count, lang, ['прослушивание','прослушивания','прослушиваний'], ['play','plays'])}`} />
         )}
       </div>
@@ -7448,7 +7488,7 @@ function EngagementColumn({ title, tracks, variant, isDark, lang, onPlayTrack, e
           onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
           <AlbumCover title={t.title} artist={t.artist} size={44} isDark={isDark} coverPath={t.cover_art_path} radius={9} />
           <div style={{ minWidth:0, flex:1 }}>
-            <div style={{ fontSize:'clamp(14px, 1.3vw, 15.5px)', color:c.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{t.title}</div>
+            <div style={{ fontSize:'clamp(14px, 1.3vw, 15.5px)', color:c.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{trackTitle(t)}</div>
             <div style={{ fontSize:'clamp(12px, 1vw, 13.5px)', color:c.textMuted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{sub}</div>
           </div>
           {variant==='loved'
@@ -7608,7 +7648,7 @@ function ListeningWidgetsRow({ data, rhythm, isDark, lang, onPlayTrack, navigate
         <div style={{ display:'flex', alignItems:'center', gap:12, flex:1 }}>
           <AlbumCover title={top_track?.title || ''} artist={top_track?.artist || ''} coverPath={top_track?.cover_art_path} size={44} radius={10} isDark={isDark} />
           <div style={{ minWidth:0 }}>
-            <div style={{ fontSize:'clamp(15px, 1.5vw, 17px)', color:c.text, fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{top_track?.title || '—'}</div>
+            <div style={{ fontSize:'clamp(15px, 1.5vw, 17px)', color:c.text, fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{trackTitle(top_track) || '—'}</div>
             <div style={{ fontSize:'clamp(12px, 1vw, 13.5px)', color:c.textMuted, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
               {top_track ? `${top_track.artist} · ${top_track.play_count} ${plural(top_track.play_count, lang, playsWord, playsWordEn)}` : (lang==='ru'?'нет данных':'no data')}
             </div>
@@ -8152,7 +8192,7 @@ function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist,
                       }}
                     >
                       <span className="mono" style={{ color: hoverRow === i ? '#cdbcff' : 'rgba(238,235,248,.4)', fontSize:'11px', textAlign:'center' }}>{hoverRow === i ? '▶' : i+1}</span>
-                      <span style={{ color:'#ece9f4', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{t.title}</span>
+                      <span style={{ color:'#ece9f4', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{trackTitle(t)}<FeatSuffix track={t} navigateToArtist={navigateToArtist} lang={lang} /></span>
                       <span className="mono" style={{ color:'rgba(238,235,248,.4)', fontSize:'11px', textAlign:'right' }}>{fmtDur(t.duration)}</span>
                       {onQueueNext ? (
                         <QueueNextBtn track={t} onQueueNext={onQueueNext} lang={lang} iconSize={15}
@@ -11827,7 +11867,7 @@ function LyricsBackFace({
   }, [track?.track_id]);
 
   const lyrics = track?.lyrics || null;
-  const title = track?.title || '';
+  const title = trackTitle(track) || '';
 
   const headingColor = isDark ? '#666' : '#8a8275';
   const bodyColor    = isDark ? '#d8d4c8' : '#2a2620';
@@ -12186,7 +12226,7 @@ function ProducerTracksPop({ name, anchorRect, isDark, lang, onClose, onPlayTrac
             color: isDark ? 'rgba(255,255,255,0.28)' : 'rgba(22,22,32,0.32)',
           }}>{String(i + 1).padStart(2, '0')}</span>
           <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            <span style={{ fontWeight: 500 }}>{t.title}</span>
+            <span style={{ fontWeight: 500 }}>{trackTitle(t)}</span>
             <span style={{ color: isDark ? 'rgba(255,255,255,0.45)' : 'rgba(22,22,32,0.5)' }}>{'  ·  '}{t.artist}</span>
           </span>
         </button>
@@ -13597,7 +13637,7 @@ function SimilarityColumn({ accent, label, items, tint, glow, isDark, lang, onQu
             <div style={{
               fontSize: 13, fontWeight: 500, color: text, letterSpacing: '-0.01em',
               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-            }}>{t.title || '—'}</div>
+            }}>{trackTitle(t) || '—'}</div>
             <div style={{
               fontSize: 12, color: muted, marginTop: 1,
               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
@@ -15236,7 +15276,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                   letterSpacing:'-0.02em', lineHeight:'1.15',
                   whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
                 }}>
-                  {currentTrack.title}
+                  {trackTitle(currentTrack)}
                 </div>
                 <div
                   style={{
@@ -15688,7 +15728,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                             color: active ? pText : pTextMuted,
                             whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
                             letterSpacing:'-0.01em',
-                          }}>{t.title || '—'}</div>
+                          }}>{trackTitle(t) || '—'}</div>
                           <div style={{ fontSize:'13px', color:pTextSubtle, marginTop:'1px' }}>{t.artist || '—'}</div>
                         </div>
 
@@ -16790,8 +16830,8 @@ function ArtistAtlasSection({
     track_count: album.tracks.length,
     duration_seconds: album.tracks.reduce((s, t) => s + (t.duration_sec || 0), 0),
     tracks: album.tracks.map(t => ({
-      track_id: t.track_id, title: t.title, artist: t.artist,
-      duration: t.duration_sec, year: t.year, cover_art_path: t.cover_art_path,
+      track_id: t.track_id, title: t.title, title_display: t.title_display, artist: t.artist,
+      artist_refs: t.artist_refs, duration: t.duration_sec, year: t.year, cover_art_path: t.cover_art_path,
     })),
   });
   const openAlbum = (album, rect) => setAlbumModal({ album: toModalAlbum(album), originRect: rect });
@@ -17472,7 +17512,7 @@ function MiniPlayerBar({ track, audio, isDark, lang, onOpen, onPrev, onNext, onA
   const c = useColors(isDark);
   const rawCover = (track && (track.cover_art_path || track.coverArt)) || null;
   const cover = rawCover ? thumbCoverUrl(rawCover.startsWith('http') ? rawCover : `${API}${rawCover}`) : null;
-  const title = track?.title || '—';
+  const title = trackTitle(track) || '—';
   const artist = track?.artist || '';
   const isPlaying = !!(audio && audio.isPlaying);
   const currentTime = useCurrentTime();

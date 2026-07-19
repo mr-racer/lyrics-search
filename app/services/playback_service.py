@@ -9,7 +9,7 @@ from __future__ import annotations
 from app.domain.models import RecentTrack, RecentTracksResponse
 from app.resources.metadata_db import MetadataDB
 from app.services._payload_coerce import coerce_float, coerce_year
-from app.services.artist_split import artist_refs as _artist_refs
+from app.services.artist_split import artist_refs_for_track, display_title_for_track
 
 
 def record_event(
@@ -59,6 +59,7 @@ def get_recent(*, qdrant_client, collection_name: str, limit: int = 50) -> Recen
         tracks.append(RecentTrack(
             track_id=str(p.id),
             title=pl.get("title") or "—",
+            title_display=display_title_for_track(pl),
             artist=pl.get("artist") or "—",
             album=pl.get("album"),
             year=coerce_year(pl.get("year")),
@@ -67,7 +68,7 @@ def get_recent(*, qdrant_client, collection_name: str, limit: int = 50) -> Recen
             genre=pl.get("genre"),
             last_played=lp,
             play_count=pc,
-            artist_refs=_artist_refs(pl.get("artist")),
+            artist_refs=artist_refs_for_track(pl),
         ))
     tracks.sort(key=lambda t: t.last_played, reverse=True)
     return RecentTracksResponse(tracks=tracks, collection_name=collection_name)

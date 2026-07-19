@@ -18,12 +18,18 @@ class ArtistRef(BaseModel):
     their own artist page."""
     name: str
     slug: str
+    # "feat" marks a featured guest (extracted from the title or credits);
+    # "main" default keeps every pre-existing serializer back-compatible.
+    role: Literal["main", "feat"] = "main"
 
 
 class TrackMetadata(BaseModel):
     """Метаданные трека."""
     track_id: str  # хэш file_path или UUID, стабильный между рестартами
     title: str
+    # Title with feat/with credits stripped («Bangarang (ft. Sirah)» →
+    # «Bangarang»); None when the raw title is already clean.
+    title_display: str | None = None
     artist: str
     album: str | None = None
     year: int | None = None
@@ -477,6 +483,7 @@ class ProducerResolveResponse(BaseModel):
 class ProducerTrack(BaseModel):
     track_id: str
     title: str
+    title_display: Optional[str] = None
     artist: str
     album: Optional[str] = None
     year: Optional[int] = None
@@ -494,6 +501,7 @@ class ProducerTracksResponse(BaseModel):
 class LikedSongTrack(BaseModel):
     track_id: str
     title: str
+    title_display: Optional[str] = None
     artist: str
     album: Optional[str] = None
     year: Optional[int] = None
@@ -512,6 +520,7 @@ class LikedSongsResponse(BaseModel):
 class RecentTrack(BaseModel):
     track_id: str
     title: str
+    title_display: Optional[str] = None
     artist: str
     album: Optional[str] = None
     year: Optional[int] = None
@@ -532,6 +541,7 @@ class HomeTrack(BaseModel):
     """Lightweight track for Home (Discovery Magazine) blocks."""
     track_id: str
     title: str
+    title_display: Optional[str] = None
     artist: str
     album: Optional[str] = None
     year: Optional[int] = None
@@ -835,6 +845,7 @@ class PlaylistTrack(BaseModel):
     position: int
     added_at: str
     title: str
+    title_display: Optional[str] = None
     artist: str
     album: Optional[str] = None
     year: Optional[int] = None

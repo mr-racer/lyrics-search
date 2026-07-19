@@ -42,7 +42,13 @@ from app.resources.clap_features import (
 from app.resources.lyrics_search_engine import LyricsSearchEngine
 from app.resources.metadata_db import MetadataDB, _slugify
 from app.resources.qdrant_payload import build_text_for_embedding, prepare_metadata
-from app.services.artist_split import split_artists, artist_slugs as _artist_slugs
+from app.services.artist_split import (
+    split_artists,
+    artist_slugs as _artist_slugs,
+    parse_title_feat,
+    tag_feat_slugs,
+    _resolved_slug,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +83,32 @@ def _build_payload_for_upsert(song_info: dict, slug: str | None = None) -> dict:
             pass
     artists = split_artists(song_info.get("artist") or "")
     slugs = _artist_slugs(song_info.get("artist") or "")
+    # Feat-in-title extraction: «Bangarang (ft. Sirah)» credits Sirah even
+    # though the artist tag says only «Skrillex». «(with X)» co-leads join the
+    # mains right after the tag artists; feats append last + are marked in
+    # feat_artist_slugs so serializers can label their role. The raw `title`
+    # payload field stays untouched — it is baked into the text embeddings.
+    parsed_title = parse_title_feat(song_info.get("title") or "")
+    # Tag-level feats first («Drake feat. Future» in the artist tag), then
+    # title-level ones — feat_artist_slugs marks their role for serializers.
+    _tag_feats = tag_feat_slugs(song_info.get("artist") or "")
+    feat_artist_slugs: list[str] = [s for s in slugs if s in _tag_feats]
+    for name, is_feat in (
+        [(n, False) for n in parsed_title.with_names]
+        + [(n, True) for n in parsed_title.feat_names]
+    ):
+        slug = _resolved_slug(name)
+        if not slug or slug in slugs:
+            continue
+        artists.append(name)
+        slugs.append(slug)
+        if is_feat:
+            feat_artist_slugs.append(slug)
+    title_display = (
+        parsed_title.clean_title
+        if parsed_title.clean_title != " ".join((song_info.get("title") or "").split())
+        else None
+    )
     # primary_artist_slug drives album grouping (library_service, catalog
     # search) — it must be the ALBUM's artist, not just whoever is credited
     # on this one track, or a compilation / a "feat." track fragments its
@@ -90,9 +122,11 @@ def _build_payload_for_upsert(song_info: dict, slug: str | None = None) -> dict:
     return {
         "lyrics":              song_info["lyrics"],
         "title":               song_info["title"],
+        "title_display":       title_display,
         "artist":              song_info["artist"],
         "artists":             artists,
         "artist_slugs":        slugs,
+        "feat_artist_slugs":   feat_artist_slugs,
         "primary_artist_slug": primary_artist_slug,
         "album":               song_info["album"],
         "year":                song_info.get("year"),

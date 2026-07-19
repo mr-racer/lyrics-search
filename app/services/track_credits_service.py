@@ -23,7 +23,7 @@ from typing import Iterable, Optional
 
 from ..domain.models import ProducerCredit, ProducerTrack
 from ..resources.metadata_db import MetadataDB, canonical_track_id
-from .artist_split import artist_refs as _artist_refs, artist_slugs
+from .artist_split import artist_refs_for_track, display_title_for_track, artist_slugs
 
 logger = logging.getLogger(__name__)
 
@@ -153,12 +153,13 @@ def tracks_produced_by(collection_name: str, name: str) -> list[ProducerTrack]:
             out.append(ProducerTrack(
                 track_id=row["track_id"],
                 title=row["title"] or "—",
+                title_display=display_title_for_track(row),
                 artist=row["artist"] or "—",
                 album=row["album"],
                 year=row["year"],
                 duration=row["duration"],
                 cover_art_path=row["cover_art_path"],
-                artist_refs=_artist_refs(row["artist"] or ""),
+                artist_refs=artist_refs_for_track(row),
             ))
         out.sort(key=lambda t: (t.artist.lower(), t.title.lower()))
         return out

@@ -9,7 +9,7 @@ from ..resources.lyrics_search_engine import LyricsSearchEngine as LyricsDB
 from ..resources.model_registry import ModelRegistry
 from ..resources.metadata_db import MetadataDB
 from .artist_facts_service import load_all_facts_for_collection, _slugify as _slugify_artist
-from .artist_split import artist_refs as _artist_refs
+from .artist_split import artist_refs_for_track, display_title_for_track
 from .song_facts_service import (
     load_all_song_facts_for_collection, get_song_facts_key, apply_song_relations,
 )
@@ -481,6 +481,7 @@ class SearchService:
             track = TrackMetadata(
                 track_id=str(point.id),
                 title=payload.get("title", "Unknown"),
+                title_display=display_title_for_track(payload),
                 artist=artist,
                 album=payload.get("album"),
                 year=year,
@@ -494,7 +495,7 @@ class SearchService:
                 samples=payload.get("samples"),
                 sampled_by=payload.get("sampled_by"),
                 bitrate_kbps=payload.get("bitrate_kbps"),
-                artist_refs=_artist_refs(artist),
+                artist_refs=artist_refs_for_track(payload),
             )
             hits.append(TrackHit(
                 track=track,

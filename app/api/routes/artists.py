@@ -14,7 +14,10 @@ from app.domain.models import ArtistAggregate, ArtistAlbum, TrackMetadata, User
 from app.resources.metadata_db import MetadataDB
 from app.resources.qdrant_utils import PAYLOAD_EXCLUDE_LYRICS
 from app.services.artist_facts_service import _slugify as _slugify_artist
-from app.services.artist_split import split_artists, artist_slugs, name_for_slug, artist_refs as _artist_refs
+from app.services.artist_split import (
+    split_artists, artist_slugs, name_for_slug,
+    artist_refs_for_track, display_title_for_track,
+)
 from app.services._payload_coerce import coerce_float, coerce_year
 from app.services.song_facts_service import apply_song_relations
 
@@ -48,10 +51,11 @@ def _track_from_payload(point_id: str, p: dict) -> TrackMetadata:
     return TrackMetadata(
         track_id=point_id,
         title=p.get("title") or "",
+        title_display=display_title_for_track(p),
         artist=p.get("artist") or "",
         artists=names or None,
         primary_artist_slug=primary,
-        artist_refs=_artist_refs(p.get("artist")),
+        artist_refs=artist_refs_for_track(p),
         album=p.get("album"),
         year=_coerce_year(p.get("year")),
         genre=p.get("genre"),
@@ -104,9 +108,11 @@ def _track_from_row(row: dict) -> TrackMetadata:
     return TrackMetadata(
         track_id=row.get("track_id") or "",
         title=row.get("title") or "",
+        title_display=display_title_for_track(row),
         artist=raw,
         artists=names or None,
         primary_artist_slug=primary,
+        artist_refs=artist_refs_for_track(row),
         album=row.get("album"),
         year=row.get("year"),
         genre=row.get("genre"),

@@ -4061,6 +4061,45 @@ class MetadataDB:
         conn.commit()
 
     @classmethod
+    def update_track_artist_arrays(
+        cls,
+        collection_name: str,
+        track_id: str,
+        artists: list[str],
+        artist_slugs: list[str],
+    ) -> bool:
+        """Narrow update of artists/artist_slugs (+ join table) on an existing row.
+
+        Used by the feat-in-title backfill: the mirror row must carry the
+        feat-extended arrays so ``get_tracks_for_artist`` binds the track to the
+        featured artist's page. Deliberately NOT ``upsert_track_metadata`` —
+        that full replace would clobber mirror-only fields (sonic_axes) absent
+        from the Qdrant payload. Returns False when the row doesn't exist.
+        """
+        track_id = canonical_track_id(track_id)
+        conn = cls._connect()
+        cur = conn.execute(
+            """UPDATE track_metadata SET artists = ?, artist_slugs = ?
+               WHERE collection_name = ? AND track_id = ?""",
+            (json.dumps(artists or []), json.dumps(artist_slugs or []),
+             collection_name, track_id),
+        )
+        if cur.rowcount == 0:
+            conn.commit()
+            return False
+        conn.execute(
+            "DELETE FROM track_artist_slugs WHERE collection_name = ? AND track_id = ?",
+            (collection_name, track_id),
+        )
+        for slug in (artist_slugs or []):
+            conn.execute(
+                "INSERT OR IGNORE INTO track_artist_slugs (collection_name, track_id, artist_slug) VALUES (?, ?, ?)",
+                (collection_name, track_id, slug),
+            )
+        conn.commit()
+        return True
+
+    @classmethod
     def get_tracks_for_artist(cls, collection_name: str, artist_slug: str) -> list[dict]:
         """Return all tracks where artist_slug matches — single indexed query.
 

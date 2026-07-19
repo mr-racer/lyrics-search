@@ -40,7 +40,7 @@ from app.api.helpers import derive_collection_for_user
 from app.resources.metadata_db import MetadataDB
 from app.services import autoplay_service, recsys_ai_service, stream_service
 from app.services._payload_coerce import coerce_float, coerce_year
-from app.services.artist_split import artist_refs as _artist_refs
+from app.services.artist_split import artist_refs_for_track, display_title_for_track
 from app.services.settings_service import settings_service
 
 logger = logging.getLogger(__name__)
@@ -82,6 +82,7 @@ def _candidate_to_stream_track(c: "stream_service.StreamCandidate") -> StreamTra
     return StreamTrack(
         track_id=c.track_id,
         title=p.get("title") or "—",
+        title_display=display_title_for_track(p),
         artist=p.get("artist") or "—",
         album=p.get("album"),
         year=coerce_year(p.get("year")),
@@ -93,7 +94,7 @@ def _candidate_to_stream_track(c: "stream_service.StreamCandidate") -> StreamTra
         anchor_track_id=c.anchor_track_id,
         axis_match=c.axis_match,
         score=round(c.score, 4) if c.score is not None else None,
-        artist_refs=_artist_refs(p.get("artist")),
+        artist_refs=artist_refs_for_track(p),
     )
 
 
@@ -447,6 +448,7 @@ def _build_ai_playlist_response(result: dict) -> AIPlaylistResponse:
         AIPlaylistTrack(
             track_id=t["track_id"],
             title=t["title"],
+            title_display=display_title_for_track(t),
             artist=t["artist"],
             album=t.get("album"),
             year=coerce_year(t.get("year")),
@@ -456,7 +458,7 @@ def _build_ai_playlist_response(result: dict) -> AIPlaylistResponse:
             cover_art_path=t.get("cover_art_path"),
             reason=t.get("reason"),
             source_tool=t.get("tool"),
-            artist_refs=_artist_refs(t.get("artist")),
+            artist_refs=artist_refs_for_track(t),
         )
         for t in result["tracks"]
     ]

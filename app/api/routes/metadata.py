@@ -20,7 +20,8 @@ from app.services.artist_facts_service import _slugify as _slugify_artist
 from app.services.artist_split import (
     split_artists,
     artist_slugs as _artist_slugs,
-    artist_refs as _artist_refs,
+    artist_refs_for_track,
+    display_title_for_track,
 )
 from app.services.song_facts_service import get_song_facts_key, apply_song_relations
 
@@ -44,10 +45,11 @@ def _track_from_qdrant_payload(point_id: str, pl: dict) -> TrackMetadata:
     return TrackMetadata(
         track_id=point_id,
         title=pl.get("title") or "",
+        title_display=display_title_for_track(pl),
         artist=raw,
         artists=names or None,
         primary_artist_slug=primary,
-        artist_refs=_artist_refs(raw),
+        artist_refs=artist_refs_for_track(pl),
         album=pl.get("album"),
         year=coerce_year(pl.get("year")),
         genre=pl.get("genre"),

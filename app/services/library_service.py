@@ -22,7 +22,8 @@ from ..resources.db_client import DbClient
 from .artist_facts_service import fetch_facts_for_artists
 from .artist_split import (
     split_artists, normalize_artist_name, primary_artist, artist_slugs,
-    artist_refs as _artist_refs,
+    artist_refs_for_track,
+    display_title_for_track,
 )
 from .genius_facts_service import fetch_genius_facts_for_songs
 from .index_pipeline import IndexPipeline
@@ -1594,6 +1595,7 @@ class LibraryService:
             tracks.append(LikedSongTrack(
                 track_id=str(p.id),
                 title=pl.get("title") or "—",
+                title_display=display_title_for_track(pl),
                 artist=pl.get("artist") or "—",
                 album=pl.get("album"),
                 year=coerce_year(pl.get("year")),
@@ -1601,7 +1603,7 @@ class LibraryService:
                 cover_art_path=pl.get("cover_art_path"),
                 genre=pl.get("genre"),
                 liked_at=liked_at_by_id.get(str(p.id), ""),
-                artist_refs=_artist_refs(pl.get("artist")),
+                artist_refs=artist_refs_for_track(pl),
             ))
 
         # Preserve like-order: re-sort by liked_at DESC (Qdrant.retrieve may not preserve)
@@ -1666,13 +1668,14 @@ class LibraryService:
         track = HomeTrack(
             track_id=str(row.get("track_id") or chosen),
             title=row.get("title") or "—",
+            title_display=display_title_for_track(row),
             artist=row.get("artist") or "—",
             album=row.get("album"),
             year=coerce_year(row.get("year")),
             duration=coerce_float(row.get("duration")),
             cover_art_path=row.get("cover_art_path"),
             genre=row.get("genre"),
-            artist_refs=_artist_refs(row.get("artist")),
+            artist_refs=artist_refs_for_track(row),
         )
         return RediscoverResponse(
             track=track, last_played=last_played, never_played=never_played,
