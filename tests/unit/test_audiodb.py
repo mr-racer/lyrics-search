@@ -235,6 +235,51 @@ class TestAudiodbService:
             _run(fetch_audiodb_for_artist("Cached Artist", "test_col"))
         mock_get.assert_not_called()
 
+    def test_fetch_skips_and_marks_visible_when_other_account_fetched(
+        self, isolated_db, tmp_path, monkeypatch,
+    ):
+        """The shared artists row (keyed by slug alone) may already be fetched
+        by ANOTHER account. Re-fetching would waste network and could clobber
+        the shared images with a failed fetch's NULLs — instead the row must
+        simply become visible to the calling collection."""
+        monkeypatch.setattr("app.services.audiodb_service.ARTIST_COVERS_DIR", tmp_path)
+        MetadataDB.upsert_artist_audiodb(
+            slug="shared-artist", collection_name="acct_A",
+            audiodb_bio="bio", mood=None, country_code=None, country=None,
+            label=None, cutout_path="/covers/artists/c.png",
+            thumb_path="/covers/artists/t.png", audiodb_mbid=None,
+        )
+        mock_get = MagicMock()
+        with patch("app.services.audiodb_service.requests.get", mock_get):
+            _run(fetch_audiodb_for_artist("Shared Artist", "acct_B"))
+        mock_get.assert_not_called()
+        # acct_B now sees the shared row (visibility marked), images intact.
+        row = MetadataDB.get_artist_audiodb("shared-artist", "acct_B")
+        assert row is not None
+        assert row["thumb_path"] == "/covers/artists/t.png"
+        # And acct_A's view is untouched.
+        row_a = MetadataDB.get_artist_audiodb("shared-artist", "acct_A")
+        assert row_a["cutout_path"] == "/covers/artists/c.png"
+
+    def test_upsert_audiodb_nulls_never_clobber_existing_images(self, isolated_db):
+        """A cross-account re-write with empty results must not blank out
+        images/bio already present on the shared row (COALESCE guard)."""
+        MetadataDB.upsert_artist_audiodb(
+            slug="guarded", collection_name="acct_A",
+            audiodb_bio="bio", mood="calm", country_code="US", country="USA",
+            label="Label", cutout_path="/covers/artists/c.png",
+            thumb_path="/covers/artists/t.png", audiodb_mbid="mbid",
+        )
+        MetadataDB.upsert_artist_audiodb(
+            slug="guarded", collection_name="acct_B",
+            audiodb_bio=None, mood=None, country_code=None, country=None,
+            label=None, cutout_path=None, thumb_path=None, audiodb_mbid=None,
+        )
+        row = MetadataDB.get_artist_audiodb("guarded", "acct_A")
+        assert row["thumb_path"] == "/covers/artists/t.png"
+        assert row["cutout_path"] == "/covers/artists/c.png"
+        assert row["audiodb_bio"] == "bio"
+
     def test_fetch_audiodb_for_artist_handles_total_network_failure(self, isolated_db, tmp_path, monkeypatch):
         monkeypatch.setattr("app.services.audiodb_service.ARTIST_COVERS_DIR", tmp_path)
         with patch(

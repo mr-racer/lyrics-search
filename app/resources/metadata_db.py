@@ -823,6 +823,18 @@ class MetadataDB:
         )
 
     @classmethod
+    def mark_visible(cls, kind: str, slug: str, collection_name: str) -> None:
+        """Public visibility marker: the shared knowledge row for ``slug``
+        becomes visible to ``collection_name`` without re-writing the row
+        itself. Used by fetchers that find the shared pool already populated
+        (another account fetched this artist/song first) — re-fetching would
+        at best waste network and at worst clobber good shared data with a
+        failed fetch's NULLs."""
+        conn = cls._connect()
+        cls._mark_visible(conn, kind, slug, collection_name)
+        conn.commit()
+
+    @classmethod
     def upsert_artist(cls, slug: str, name: str, collection_name: str, mbid: Optional[str] = None) -> None:
         conn = cls._connect()
         conn.execute(
@@ -879,6 +891,37 @@ class MetadataDB:
         }
 
     @classmethod
+    def get_artist_audiodb_any(cls, slug: str) -> dict | None:
+        """Like :meth:`get_artist_audiodb` but WITHOUT the per-account
+        visibility gate — reads the shared row directly. For fetch skip-logic
+        only ("has ANY account already fetched this artist?"); UI reads must
+        keep going through the visibility-gated variant."""
+        conn = cls._connect()
+        row = conn.execute(
+            """SELECT audiodb_bio, mood, country_code, country, label,
+                      cutout_path, thumb_path, audiodb_mbid, audiodb_fetched_at
+               FROM artists WHERE slug = ?""",
+            (slug,),
+        ).fetchone()
+        if not row:
+            return None
+        fetched_at = row[8]
+        return {
+            "audiodb_bio": row[0],
+            "mood": row[1],
+            "country_code": row[2],
+            "country": row[3],
+            "label": row[4],
+            "cutout_path": row[5],
+            "thumb_path": row[6],
+            "audiodb_mbid": row[7],
+            "audiodb_fetched_at": (
+                fetched_at.isoformat() if hasattr(fetched_at, "isoformat")
+                else (str(fetched_at) if fetched_at else None)
+            ),
+        }
+
+    @classmethod
     def upsert_artist_audiodb(
         cls, *, slug: str, collection_name: str,
         audiodb_bio: str | None, mood: str | None,
@@ -896,12 +939,22 @@ class MetadataDB:
             "SELECT 1 FROM artists WHERE slug = ? AND collection_name = ?",
             (slug, collection_name),
         ).fetchone()
+        # COALESCE keeps existing shared data when the new fetch came back
+        # empty-handed: the artists row is shared across accounts (keyed by
+        # slug alone), so a partially-failed re-fetch from another account
+        # must never blank out images/bio every other account still shows.
         if existing:
             conn.execute(
                 """UPDATE artists SET
-                     audiodb_bio = ?, mood = ?, country_code = ?, country = ?,
-                     label = ?, cutout_path = ?, thumb_path = ?,
-                     audiodb_mbid = ?, audiodb_fetched_at = CURRENT_TIMESTAMP
+                     audiodb_bio = COALESCE(?, audiodb_bio),
+                     mood = COALESCE(?, mood),
+                     country_code = COALESCE(?, country_code),
+                     country = COALESCE(?, country),
+                     label = COALESCE(?, label),
+                     cutout_path = COALESCE(?, cutout_path),
+                     thumb_path = COALESCE(?, thumb_path),
+                     audiodb_mbid = COALESCE(?, audiodb_mbid),
+                     audiodb_fetched_at = CURRENT_TIMESTAMP
                    WHERE slug = ? AND collection_name = ?""",
                 (audiodb_bio, mood, country_code, country, label,
                  cutout_path, thumb_path, audiodb_mbid, slug, collection_name),
@@ -914,14 +967,14 @@ class MetadataDB:
                     audiodb_fetched_at)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                    ON CONFLICT(slug) DO UPDATE SET
-                       audiodb_bio = excluded.audiodb_bio,
-                       mood = excluded.mood,
-                       country_code = excluded.country_code,
-                       country = excluded.country,
-                       label = excluded.label,
-                       cutout_path = excluded.cutout_path,
-                       thumb_path = excluded.thumb_path,
-                       audiodb_mbid = excluded.audiodb_mbid,
+                       audiodb_bio = COALESCE(excluded.audiodb_bio, audiodb_bio),
+                       mood = COALESCE(excluded.mood, mood),
+                       country_code = COALESCE(excluded.country_code, country_code),
+                       country = COALESCE(excluded.country, country),
+                       label = COALESCE(excluded.label, label),
+                       cutout_path = COALESCE(excluded.cutout_path, cutout_path),
+                       thumb_path = COALESCE(excluded.thumb_path, thumb_path),
+                       audiodb_mbid = COALESCE(excluded.audiodb_mbid, audiodb_mbid),
                        audiodb_fetched_at = CURRENT_TIMESTAMP""",
                 (slug, slug, collection_name, audiodb_bio, mood, country_code,
                  country, label, cutout_path, thumb_path, audiodb_mbid),
@@ -1014,6 +1067,20 @@ class MetadataDB:
                )
                ORDER BY af.id""",
             (slug, collection_name),
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    @classmethod
+    def get_artist_facts_any(cls, slug: str) -> List[str]:
+        """Like :meth:`get_artist_facts` but WITHOUT the per-account visibility
+        gate — reads the shared pool directly. For fetch skip-logic only
+        ("has ANY account already fetched facts for this artist?"); UI reads
+        must keep going through the visibility-gated variant."""
+        conn = cls._connect()
+        rows = conn.execute(
+            """SELECT fact FROM artist_facts
+               WHERE artist_slug = ? AND lang = 'en' ORDER BY id""",
+            (slug,),
         ).fetchall()
         return [r[0] for r in rows]
 
@@ -2618,15 +2685,61 @@ class MetadataDB:
         conn.commit()
 
     @classmethod
-    def delete_refined_facts(cls, collection_name: str) -> int:
-        """Drop all refined-fact rows for the given collection. Returns rows deleted."""
+    def delete_refined_facts(cls, collection_name: str, song_keys: Optional[list[str]] = None) -> int:
+        """Drop refined-fact rows for everything in the collection's LIBRARY.
+
+        ``refined_facts`` is a shared pool: reads are keyed by
+        (scope, scope_key, lang) only, while ``collection_name`` is just
+        last-writer provenance (see get/set above). Deleting by provenance
+        alone therefore misses every row another account wrote (or re-wrote)
+        for artists/songs this library shares — the user-visible symptom was
+        "reset cache" leaving all facts in place. So the reset targets:
+
+        - scope='artist' rows whose key is any artist in this collection
+          (``track_artist_slugs``);
+        - scope='song' rows whose key is in ``song_keys`` — computed by the
+          caller with ``get_song_facts_key`` (the same function refined rows
+          were written with; resources can't import services);
+        - plus any leftover rows carrying this collection as provenance.
+
+        Rows shared with other accounts regenerate on their next AI-index run.
+        """
         conn = cls._connect()
+        total = 0
+        cur = conn.execute(
+            """DELETE FROM refined_facts WHERE scope = 'artist' AND scope_key IN (
+                   SELECT DISTINCT artist_slug FROM track_artist_slugs
+                   WHERE collection_name = ?
+               )""",
+            (collection_name,),
+        )
+        total += cur.rowcount
+        for i in range(0, len(song_keys or []), 500):
+            batch = song_keys[i: i + 500]
+            ph = ",".join("?" * len(batch))
+            cur = conn.execute(
+                f"DELETE FROM refined_facts WHERE scope = 'song' AND scope_key IN ({ph})",
+                batch,
+            )
+            total += cur.rowcount
         cur = conn.execute(
             "DELETE FROM refined_facts WHERE collection_name = ?",
             (collection_name,),
         )
+        total += cur.rowcount
         conn.commit()
-        return int(cur.rowcount)
+        return int(total)
+
+    @classmethod
+    def get_artist_title_pairs_for_collection(cls, collection_name: str) -> list[tuple[str, str]]:
+        """(artist, title) of every track in a collection — for callers that
+        need to recompute per-song slugs (e.g. the refined-facts cache reset)."""
+        conn = cls._connect()
+        rows = conn.execute(
+            "SELECT artist, title FROM track_metadata WHERE collection_name = ?",
+            (collection_name,),
+        ).fetchall()
+        return [(r[0], r[1]) for r in rows]
 
     # ── Artist Bio cache (Plan 5) ──
 
@@ -3083,6 +3196,7 @@ class MetadataDB:
             "track_reactions", "collection_settings", "playback_events",
             "ai_indexing_jobs", "sonic_vibes", "artist_bios",
             "recsys_llm_texts", "playlists", "track_metadata",
+            "fact_visibility",
         )
         by_account = ("pending_uploads", "yandex_accounts", "yandex_imports")
         try:

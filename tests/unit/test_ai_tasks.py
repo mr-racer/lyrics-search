@@ -185,6 +185,45 @@ class TestRefinedFacts:
         n = MetadataDB.delete_refined_facts("music")
         assert n == 2
 
+    def test_delete_refined_facts_hits_rows_written_by_other_collections(self):
+        """refined_facts is a shared pool: reads ignore collection_name, so the
+        reset must too. Rows for artists in MY library and songs I pass as
+        song_keys are deleted even when another account wrote them."""
+        # my library contains dua-lipa (via track_artist_slugs)
+        MetadataDB.upsert_track_metadata("music", "t1", {
+            "title": "Levitating", "artist": "Dua Lipa",
+            "artist_slugs": ["dua-lipa"],
+        })
+        # ...but the refined rows were last written by ANOTHER account
+        MetadataDB.set_refined_facts(
+            scope="artist", scope_key="dua-lipa", collection_name="acct_other",
+            lang="ru", refined=["a"],
+        )
+        MetadataDB.set_refined_facts(
+            scope="song", scope_key="dua-lipa-levitating", collection_name="acct_other",
+            lang="ru", refined=["b"],
+        )
+        n = MetadataDB.delete_refined_facts("music", song_keys=["dua-lipa-levitating"])
+        assert n == 2
+        assert MetadataDB.get_refined_facts(
+            scope="artist", scope_key="dua-lipa", collection_name="music", lang="ru",
+        ) is None
+        assert MetadataDB.get_refined_facts(
+            scope="song", scope_key="dua-lipa-levitating", collection_name="music", lang="ru",
+        ) is None
+
+    def test_delete_refined_facts_leaves_unrelated_rows(self):
+        """Rows for artists NOT in my library and not in song_keys survive."""
+        MetadataDB.set_refined_facts(
+            scope="artist", scope_key="someone-else", collection_name="acct_other",
+            lang="ru", refined=["keep me"],
+        )
+        n = MetadataDB.delete_refined_facts("music")
+        assert n == 0
+        assert MetadataDB.get_refined_facts(
+            scope="artist", scope_key="someone-else", collection_name="music", lang="ru",
+        ) == ["keep me"]
+
     @pytest.mark.asyncio
     async def test_run_refines_each_participant_of_collaboration_separately(self):
         """A multi-artist track must store refined facts under EACH participant's

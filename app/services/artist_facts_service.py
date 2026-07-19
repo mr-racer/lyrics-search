@@ -121,6 +121,18 @@ async def fetch_artist_facts(
     if cached:
         return cached
 
+    # Shared-pool short-circuit: facts are keyed by slug and shared across
+    # accounts — if another account already fetched this artist, don't hit
+    # songfacts.com again; just make the shared facts visible to us.
+    slug = _slugify(artist)
+    try:
+        shared = MetadataDB.get_artist_facts_any(slug)
+    except Exception:
+        shared = []
+    if shared:
+        MetadataDB.mark_visible("artist", slug, collection_name)
+        return "\n\n".join(shared)
+
     html = await asyncio.to_thread(_fetch_facts_html, artist)
     if not html:
         return None

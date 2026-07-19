@@ -167,8 +167,13 @@ async def fetch_audiodb_for_artist(artist: str, collection_name: str) -> None:
     # Normalize Unicode equivalents before canonicalizing and slugifying.
     canonical = _canonical_artist_name(normalize_artist_name(artist))
     slug = _slugify_artist(canonical)
-    existing = MetadataDB.get_artist_audiodb(slug, collection_name)
+    # Skip-if-fetched consults the SHARED row (unscoped), not the per-account
+    # visibility view: if any account already fetched this artist, re-fetching
+    # would waste network and — on a partially-failed fetch — clobber the
+    # shared images/bio for everyone. Just make the row visible to us.
+    existing = MetadataDB.get_artist_audiodb_any(slug)
     if existing and existing.get("audiodb_fetched_at"):
+        MetadataDB.mark_visible("artist", slug, collection_name)
         return
 
     url = f"{AUDIODB_BASE_URL}?s={_audiodb_slug(canonical)}"

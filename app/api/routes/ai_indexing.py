@@ -191,7 +191,16 @@ def reset_cache(
     elif task_type == "refined_facts":
         if not hasattr(MetadataDB, "delete_refined_facts"):
             raise HTTPException(status_code=501, detail="cache reset not yet implemented")
-        n = MetadataDB.delete_refined_facts(derived)
+        # refined_facts is keyed by scope_key (shared pool), not by collection —
+        # build this library's song keys with the same slug function the rows
+        # were written with, so the reset actually hits them.
+        from app.services.song_facts_service import get_song_facts_key
+        song_keys = list({
+            get_song_facts_key(artist, title)
+            for artist, title in MetadataDB.get_artist_title_pairs_for_collection(derived)
+            if artist and title
+        })
+        n = MetadataDB.delete_refined_facts(derived, song_keys=song_keys)
     elif task_type == "artist_bio":
         if not hasattr(MetadataDB, "delete_artist_bios"):
             raise HTTPException(status_code=501, detail="cache reset not yet implemented")
