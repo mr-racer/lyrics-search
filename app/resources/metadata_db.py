@@ -2266,14 +2266,17 @@ class MetadataDB:
     @classmethod
     def get_weekly_listening_summary(
         cls, collection_name: str, tz_offset_minutes: int = 0,
-    ) -> tuple[float, str | None, int]:
-        """Return (seconds_listened, top_genre, discoveries) for the CURRENT
-        calendar week — Monday through today, in the caller's local time
-        (same modifier pattern as ``get_plays_by_local_day``).
+    ) -> tuple[float, str | None, int, list[float]]:
+        """Return (seconds_listened, top_genre, discoveries, daily_seconds)
+        for the CURRENT calendar week — Monday through today, in the caller's
+        local time (same modifier pattern as ``get_plays_by_local_day``).
 
         ``discoveries`` = tracks whose first-ever playback event falls inside
         this week, i.e. music the user heard for the first time. The counter
         grows through the week and resets every Monday.
+
+        ``daily_seconds`` = 7 floats, Monday..Sunday of this week; days with
+        no listening (including future days) are 0.
 
         SQLite Monday idiom: ``weekday 1`` moves FORWARD to Monday (or stays
         if already Monday), so stepping back 6 days first always lands on the
@@ -2314,10 +2317,26 @@ class MetadataDB:
                WHERE date(first_played, ?) >= {week_start}""",
             (collection_name, modifier, modifier),
         ).fetchone()
+        # Per-day breakdown for the week's rhythm bars. strftime('%w') yields
+        # 0=Sunday..6=Saturday; (w + 6) % 7 remaps to 0=Monday..6=Sunday.
+        day_rows = conn.execute(
+            f"""SELECT CAST(strftime('%w', played_at, ?) AS INT) AS w,
+                      COALESCE(SUM(played_sec), 0)
+               FROM playback_events
+               WHERE collection_name = ?
+                 AND date(played_at, ?) >= {week_start}
+               GROUP BY w""",
+            (modifier, collection_name, modifier, modifier),
+        ).fetchall()
+        daily = [0.0] * 7
+        for w, sec in day_rows:
+            if w is not None:
+                daily[(int(w) + 6) % 7] = float(sec or 0)
         return (
             float(total_row[0] or 0),
             (genre_row[0] if genre_row else None),
             int(disc_row[0] or 0),
+            daily,
         )
 
     @classmethod

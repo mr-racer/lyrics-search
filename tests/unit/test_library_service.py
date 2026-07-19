@@ -639,6 +639,7 @@ class TestWeeklyPulse:
         assert res.seconds_listened == 0
         assert res.top_genre is None
         assert res.discoveries == 0
+        assert res.daily_seconds == [0] * 7
 
     def test_weekly_pulse_sums_seconds_and_picks_top_genre(self):
         _upsert("t1", genre="Rock")
@@ -681,6 +682,25 @@ class TestWeeklyPulse:
                                          track_id="t_new", played_sec=100, total_dur=240)
         res = LibraryService.get_weekly_pulse(collection_name="c", tz_offset_minutes=0)
         assert res.discoveries == 1
+
+    def test_weekly_pulse_daily_seconds_bucketed_into_todays_weekday(self):
+        # Events stamped "now" (UTC, tz offset 0) must all land in today's
+        # Monday-based bucket; every other day of the week stays 0.
+        from datetime import datetime, timezone
+        MetadataDB.record_playback_event(session_id="s", collection_name="c",
+                                         track_id="t1", played_sec=120, total_dur=240)
+        MetadataDB.record_playback_event(session_id="s", collection_name="c",
+                                         track_id="t1", played_sec=60, total_dur=240)
+        res = LibraryService.get_weekly_pulse(collection_name="c", tz_offset_minutes=0)
+        idx = datetime.now(timezone.utc).weekday()  # 0=Mon..6=Sun
+        assert len(res.daily_seconds) == 7
+        assert res.daily_seconds[idx] == 180
+        assert sum(res.daily_seconds) == 180
+
+    def test_weekly_pulse_daily_seconds_exclude_last_week(self):
+        _event_before_monday("t_old", played_sec=500)
+        res = LibraryService.get_weekly_pulse(collection_name="c", tz_offset_minutes=0)
+        assert sum(res.daily_seconds) == 0
 
 
 # --------------------------------------------------------------------------- #

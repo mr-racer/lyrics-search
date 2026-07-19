@@ -2876,14 +2876,15 @@ function HomeDailyExtras({ isDark, lang }) {
     const hU = lang === 'ru' ? 'ч' : 'h', mU = lang === 'ru' ? 'м' : 'm';
     return h > 0 ? `${h}${hU} ${m}${mU}` : `${m}${mU}`;
   };
-  // «14 открытий / 2 открытия / 1 открытие» — the week's first-time-heard tracks.
+  // «14 треков впервые» — the week's first-time-heard tracks, in plain words
+  // (the old «открытий» read as jargon nobody decoded).
   const fmtDiscoveries = (n) => {
     if (!n) return null;
-    if (lang !== 'ru') return `${n} ${n === 1 ? 'discovery' : 'discoveries'}`;
+    if (lang !== 'ru') return `${n} first listen${n === 1 ? '' : 's'}`;
     const d10 = n % 10, d100 = n % 100;
-    const word = (d10 === 1 && d100 !== 11) ? 'открытие'
-      : (d10 >= 2 && d10 <= 4 && (d100 < 12 || d100 > 14)) ? 'открытия' : 'открытий';
-    return `${n} ${word}`;
+    const word = (d10 === 1 && d100 !== 11) ? 'трек'
+      : (d10 >= 2 && d10 <= 4 && (d100 < 12 || d100 > 14)) ? 'трека' : 'треков';
+    return `${n} ${word} впервые`;
   };
 
   const hasFacts = !!(facts && facts.length > 0);
@@ -2891,9 +2892,21 @@ function HomeDailyExtras({ isDark, lang }) {
   if (!hasFacts && !hasPulse) return null;
 
   const pulseBits = hasPulse ? [
-    pulse.top_genre ? (lang==='ru' ? `любимый жанр — ${pulse.top_genre}` : `top genre — ${pulse.top_genre}`) : null,
+    pulse.top_genre || null,
     fmtDiscoveries(pulse.discoveries),
   ].filter(Boolean) : [];
+
+  // Week rhythm bars: 7 seconds-per-day values Mon..Sun from the server;
+  // absent field (older server) or an all-zero week simply hides the bars.
+  const daily = (hasPulse && Array.isArray(pulse.daily_seconds) && pulse.daily_seconds.length === 7)
+    ? pulse.daily_seconds : null;
+  const maxDay = daily ? Math.max(...daily) : 0;
+  const hasRhythm = !!(daily && maxDay > 0);
+  const todayIdx = (new Date().getDay() + 6) % 7; // JS 0=Sun → 0=Mon..6=Sun
+  const dayLetters = lang === 'ru' ? ['п','в','с','ч','п','с','в'] : ['m','t','w','t','f','s','s'];
+  const dayNames = lang === 'ru'
+    ? ['пн','вт','ср','чт','пт','сб','вс']
+    : ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
 
   // Attribution line under each fact — who/what it is about. The server now
   // sends artist/title/image directly; the context split is a fallback for
@@ -2909,51 +2922,20 @@ function HomeDailyExtras({ isDark, lang }) {
 
   return (
     <div className="home-extras">
-      {/* Left: the day's facts — thumb (album art / artist photo) + a bold
-          who-line, then the fact itself. The weight contrast (650 name vs
-          regular fact) is what keeps the two from blending. */}
-      <div style={{ display:'flex', gap:'clamp(22px,3vw,44px)', flex:'1 1 auto', minWidth:0, alignItems:'flex-end' }}>
-        {hasFacts && facts.slice(0, 3).map((f, i) => {
-          const img = homeCoverUrl(f.image);
-          const isArtist = f.type === 'artist';
-          return (
-            <div key={i} style={{ flex:'1 1 0', minWidth:0, maxWidth:380 }}>
-              <div style={{ display:'flex', alignItems:'center', gap:11, marginBottom:9 }}>
-                <div style={{ width:44, height:44, flex:'none', borderRadius: isArtist ? '50%' : 10,
-                  overflow:'hidden', display:'grid', placeItems:'center',
-                  background: isDark ? 'rgba(255,255,255,.06)' : 'rgba(0,0,0,.05)',
-                  boxShadow: isDark
-                    ? '0 8px 18px rgba(0,0,0,.35), inset 0 0 0 1px rgba(255,255,255,.09)'
-                    : '0 8px 18px rgba(60,45,100,.16), inset 0 0 0 1px rgba(0,0,0,.05)' }}>
-                  {img
-                    ? <img src={img} alt="" loading="lazy" style={{ width:'100%', height:'100%', objectFit:'cover' }}
-                        onError={(e) => { e.currentTarget.style.display = 'none'; }} />
-                    : <span style={{ fontSize:17, opacity:.45 }}>{isArtist ? '👤' : '♪'}</span>}
-                </div>
-                <div style={{ minWidth:0 }}>
-                  <div style={{ fontSize:13, fontWeight:650, color:c.text, lineHeight:1.25,
-                    whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-                    {factWho(f)}
-                  </div>
-                  <div className="mono" style={{ fontSize:9.5, letterSpacing:'.14em', color:c.textSubtle,
-                    marginTop:3, textTransform:'uppercase', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
-                    {factSub(f)}
-                  </div>
-                </div>
-              </div>
-              {/* Full text, no clamp — a cut-off fact is a broken promise; the
-                  batch above is pre-filtered to the shortest ones instead. */}
-              <div style={{ fontSize:13, color:c.textMuted, lineHeight:1.55 }}>
-                {f.fact}
-              </div>
-            </div>
-          );
-        })}
+      {/* Left: the day's facts — equal-height cards (3-line clamp, stretch
+          row); a card whose text is actually cut expands upward on hover.
+          The weight contrast (650 name vs regular fact) is what keeps the
+          who-line and the fact from blending. */}
+      <div style={{ display:'flex', gap:'clamp(22px,3vw,44px)', flex:'1 1 auto', minWidth:0, alignItems:'stretch' }}>
+        {hasFacts && facts.slice(0, 3).map((f, i) => (
+          <HomeFactCard key={i} f={f} isDark={isDark} c={c} who={factWho(f)} sub={factSub(f)} />
+        ))}
       </div>
-      {/* Right: the weekly pulse — gradient serif accent + tinted chips
-          instead of one grey line, so the stats read as alive, not ambient dust. */}
+      {/* Right: the week's rhythm — gradient serif hours + 7 Mon..Sun mini
+          bars (today accented) + one quiet dotted line for genre/first
+          listens. pointer-events restored so the bars' titles work. */}
       {hasPulse && (
-        <div style={{ flexShrink:0, textAlign:'right' }}>
+        <div style={{ flexShrink:0, textAlign:'right', pointerEvents:'auto' }}>
           <div className="mono" style={{ fontSize:9.5, letterSpacing:'.2em', color:c.textSubtle, marginBottom:9 }}>
             {lang==='ru'?'ЗА ЭТУ НЕДЕЛЮ':'THIS WEEK'}
           </div>
@@ -2964,15 +2946,39 @@ function HomeDailyExtras({ isDark, lang }) {
             WebkitBackgroundClip:'text', backgroundClip:'text', WebkitTextFillColor:'transparent', color:'transparent' }}>
             {fmtDur(pulse.seconds_listened) || (lang==='ru' ? 'пока тихо' : 'quiet so far')}
           </div>
+          {hasRhythm && (
+            <div style={{ display:'flex', gap:6, justifyContent:'flex-end', alignItems:'flex-end', marginTop:12 }}>
+              {daily.map((sec, i) => {
+                const active = sec > 0;
+                const h = active ? Math.max(4, Math.round(26 * sec / maxDay)) : 3;
+                const isToday = i === todayIdx;
+                return (
+                  <div key={i} title={`${dayNames[i]} · ${fmtDur(sec) || (lang==='ru'?'0м':'0m')}`}
+                    style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:5 }}>
+                    <div style={{ width:9, height:h, borderRadius:4,
+                      background: (isToday && active)
+                        ? (isDark
+                            ? 'linear-gradient(180deg, oklch(78% 0.14 285), oklch(78% 0.15 340))'
+                            : 'linear-gradient(180deg, oklch(46% 0.19 285), oklch(50% 0.2 340))')
+                        : active
+                          ? (isDark ? 'rgba(255,255,255,.30)' : 'rgba(30,25,55,.28)')
+                          : (isDark ? 'rgba(255,255,255,.10)' : 'rgba(30,25,55,.10)') }} />
+                    <span className="mono" style={{ fontSize:8.5, lineHeight:1,
+                      color: isToday ? c.textMuted : c.textSubtle }}>
+                      {dayLetters[i]}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
           {pulseBits.length > 0 && (
-            <div style={{ display:'flex', gap:8, justifyContent:'flex-end', flexWrap:'wrap', marginTop:12 }}>
+            <div style={{ display:'flex', gap:14, justifyContent:'flex-end', flexWrap:'wrap',
+              marginTop:11, fontSize:11.5, color:c.textMuted }}>
               {pulseBits.map((b, i) => (
-                <span key={i} style={{ display:'inline-flex', alignItems:'center', gap:7,
-                  padding:'5px 11px', borderRadius:999, fontSize:11.5, color:c.textMuted,
-                  background: isDark ? 'rgba(255,255,255,.05)' : 'rgba(0,0,0,.04)',
-                  boxShadow:'inset 0 1px 0 rgba(255,255,255,.07)' }}>
+                <span key={i} style={{ display:'inline-flex', alignItems:'center', gap:7 }}>
                   <span style={{ width:5, height:5, borderRadius:'50%', flex:'none',
-                    background: i === 0 ? 'oklch(68% 0.19 285)' : 'oklch(70% 0.19 340)' }} />
+                    background: i === 0 && pulse.top_genre ? 'oklch(68% 0.19 285)' : 'oklch(70% 0.19 340)' }} />
                   {b}
                 </span>
               ))}
@@ -2980,6 +2986,54 @@ function HomeDailyExtras({ isDark, lang }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// One daily fact card — 48px thumb + bold who-line on top, the fact text
+// pinned to the card's bottom. The text clamps at 3 lines so the three cards
+// share one height; when it IS clamped (measured post-render), hovering lifts
+// the clamp and the card grows upward into the strip's free air over a soft
+// glass backdrop (classes in musix-ui/styles.css: .home-fact*).
+function HomeFactCard({ f, isDark, c, who, sub }) {
+  const isArtist = f.type === 'artist';
+  const img = homeCoverUrl(f.image);
+  const textRef = useRef(null);
+  const [clamped, setClamped] = useState(false);
+  useEffect(() => {
+    const el = textRef.current;
+    if (el) setClamped(el.scrollHeight > el.clientHeight + 1);
+  }, [f]);
+  return (
+    <div className={'home-fact' + (clamped ? ' is-clamped' : '')}
+      style={{ '--fact-hover-bg': isDark ? 'rgba(20,18,32,.55)' : 'rgba(255,255,255,.62)' }}>
+      <div style={{ display:'flex', alignItems:'center', gap:12, marginBottom:10 }}>
+        <div style={{ width:48, height:48, flex:'none', borderRadius: isArtist ? '50%' : 11,
+          overflow:'hidden', display:'grid', placeItems:'center',
+          background: isDark ? 'rgba(255,255,255,.06)' : 'rgba(0,0,0,.05)',
+          boxShadow: isDark
+            ? '0 8px 18px rgba(0,0,0,.35), inset 0 0 0 1px rgba(255,255,255,.09)'
+            : '0 8px 18px rgba(60,45,100,.16), inset 0 0 0 1px rgba(0,0,0,.05)' }}>
+          {img
+            ? <img src={img} alt="" loading="lazy" style={{ width:'100%', height:'100%', objectFit:'cover' }}
+                onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+            : <span style={{ fontSize:18, opacity:.45 }}>{isArtist ? '👤' : '♪'}</span>}
+        </div>
+        <div style={{ minWidth:0 }}>
+          <div style={{ fontSize:14, fontWeight:650, color:c.text, lineHeight:1.25,
+            whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+            {who}
+          </div>
+          <div className="mono" style={{ fontSize:9.5, letterSpacing:'.14em', color:c.textSubtle,
+            marginTop:3, textTransform:'uppercase', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+            {sub}
+          </div>
+        </div>
+      </div>
+      <div ref={textRef} className="home-fact-text"
+        style={{ fontSize:14.5, color:c.textMuted, lineHeight:1.5, marginTop:'auto' }}>
+        {f.fact}
+      </div>
     </div>
   );
 }

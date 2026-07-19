@@ -771,6 +771,9 @@ class WeeklyPulseResponse(BaseModel):
     seconds_listened: int = 0
     top_genre: Optional[str] = None
     discoveries: int = 0
+    # Monday..Sunday of the current week, seconds listened per local day
+    # (future days are 0). Empty list = older server data, client hides bars.
+    daily_seconds: List[int] = []
 
 
 class EngagementTrack(BaseModel):

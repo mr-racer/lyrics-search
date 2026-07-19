@@ -1858,12 +1858,15 @@ class LibraryService:
         simply get sparse/zero values."""
         from app.domain.models import WeeklyPulseResponse
 
-        seconds, top_genre, discoveries = MetadataDB.get_weekly_listening_summary(
-            collection_name, tz_offset_minutes,
+        seconds, top_genre, discoveries, daily = (
+            MetadataDB.get_weekly_listening_summary(
+                collection_name, tz_offset_minutes,
+            )
         )
         return WeeklyPulseResponse(
             seconds_listened=int(seconds), top_genre=top_genre,
             discoveries=discoveries,
+            daily_seconds=[int(s) for s in daily],
         )
 
     @classmethod
