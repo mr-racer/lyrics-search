@@ -1,11 +1,13 @@
 """Resolve LLM-proposed song titles against the library catalog.
 
 Per item, two-stage matching:
-  1. **exact** — normalized (``text_normalize.fold``) title equality, with an
-     optional artist constraint;
+  1. **exact** — normalized (``text_normalize.fold``), feat-stripped title
+     equality, with an optional artist constraint;
   2. **fuzzy** — first of the top-3 ``catalog_search_service.search_catalog_tracks``
      hits (token + transliteration + IDF scoring) that passes the strict
-     similarity gate (``_FUZZY_TITLE_MIN``) when exact misses.
+     similarity gate (``_FUZZY_TITLE_MIN``) when exact misses. The BM25F query
+     is the title alone — the artist is checked afterwards, never mixed into
+     the query (it would flood the ranking with the artist's discography).
 
 Every result carries its ``match`` mode ("exact" | "fuzzy" | "none") so the
 playlist agent can tell the LLM whether a title matched cleanly, only
@@ -27,6 +29,20 @@ _FUZZY_TITLE_MIN = 0.6
 
 def _norm(s):
     return fold(s or "")
+
+
+# Library tags and web tracklists disagree on where the feature lives:
+# "Hurricane (ft. Lil Baby)" vs "Hurricane". Title comparison cuts the tail
+# starting at the first feat marker so both sides collapse to the same key.
+_FEAT_TOKENS = {"feat", "ft", "featuring"}
+
+
+def _title_key(s):
+    toks = fold(s or "").split()
+    for i, t in enumerate(toks):
+        if t in _FEAT_TOKENS:
+            return " ".join(toks[:i]) or " ".join(toks)
+    return " ".join(toks)
 
 
 def _artist_matches(query_artist, song_artist):
@@ -71,7 +87,7 @@ def resolve_songs(items, catalog, artist_filter=None):
     """
     by_title = {}
     for s in catalog.iter_songs():
-        by_title.setdefault(_norm(s.get("title")), []).append(s)
+        by_title.setdefault(_title_key(s.get("title")), []).append(s)
 
     results = []
     for item in items:
@@ -80,8 +96,8 @@ def resolve_songs(items, catalog, artist_filter=None):
         picked = None
         mode = "none"
 
-        # exact — normalized title equality (+ optional artist constraint)
-        candidates = by_title.get(_norm(qtitle), [])
+        # exact — normalized, feat-stripped title equality (+ optional artist constraint)
+        candidates = by_title.get(_title_key(qtitle), [])
         if candidates:
             if qartist:
                 picked = next(
@@ -93,9 +109,17 @@ def resolve_songs(items, catalog, artist_filter=None):
             if picked is not None:
                 mode = "exact"
 
-        # fuzzy fallback — first of the top-3 that survives the strict gate
+        # fuzzy fallback — first of the top-3 that survives the strict gate.
+        # The query is the feat-stripped title ALONE: with the artist appended,
+        # tracks-mode BM25F explodes the artist hit over the whole discography
+        # and the most-played tracks push the real title out of the top-3.
+        # The artist constraint is enforced after the fact by _fuzzy_acceptable.
         if picked is None and qtitle:
-            query = f"{qtitle} {qartist}".strip() if qartist else qtitle
+            query = _title_key(qtitle)
+            if len(query) < 2 and qartist:
+                # single-char titles ("7") die on the search's minimum query
+                # length — the artist is the only usable signal left
+                query = f"{query} {qartist}".strip()
             hits = catalog.search_tracks_fuzzy(query, limit=3)
             picked = next((h for h in hits if _fuzzy_acceptable(qtitle, qartist, h)), None)
             if picked is not None:

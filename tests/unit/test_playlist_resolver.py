@@ -101,6 +101,66 @@ def test_fuzzy_artist_passes_via_similarity():
 
 
 @pytest.mark.unit
+def test_exact_matches_library_title_with_feat_suffix():
+    # Library titles often embed the feature ("Hurricane (ft. Lil Baby)") while
+    # web tracklists give the clean title — exact must still match.
+    class FeatCatalog:
+        def iter_songs(self):
+            return [{"track_id": "h", "title": "Hurricane (ft. Lil Baby)",
+                     "artist": "Kanye West"}]
+
+        def search_tracks_fuzzy(self, q, limit=3):
+            return []
+
+    res = resolve_songs([{"title": "Hurricane", "artist": "Kanye West"}], FeatCatalog())
+    assert res[0]["match"] == "exact" and res[0]["track_id"] == "h"
+
+
+@pytest.mark.unit
+def test_exact_matches_web_title_with_feat_suffix():
+    # Mirror case: the web title carries the feat, the library one is clean.
+    class CleanCatalog:
+        def iter_songs(self):
+            return [{"track_id": "h", "title": "Hurricane", "artist": "Kanye West"}]
+
+        def search_tracks_fuzzy(self, q, limit=3):
+            return []
+
+    res = resolve_songs(
+        [{"title": "Hurricane (feat. The Weeknd & Lil Baby)", "artist": "Kanye West"}],
+        CleanCatalog(),
+    )
+    assert res[0]["match"] == "exact" and res[0]["track_id"] == "h"
+
+
+@pytest.mark.unit
+def test_fuzzy_query_is_title_only_without_feat():
+    # Appending the artist to the BM25F query floods the ranking with the
+    # artist's whole discography (most-played first) and the real title never
+    # reaches the top-3 — the query must be the feat-stripped title alone;
+    # the artist is enforced afterwards by the acceptance gate.
+    captured = []
+
+    class CapturingCatalog:
+        def iter_songs(self):
+            return []
+
+        def search_tracks_fuzzy(self, q, limit=3):
+            captured.append(q)
+            return []
+
+    resolve_songs(
+        [{"title": "CARNIVAL (feat. Playboi Carti)", "artist": "Kanye West"}],
+        CapturingCatalog(),
+    )
+    assert len(captured) == 1
+    q = captured[0].lower()
+    assert "carnival" in q
+    assert "kanye" not in q and "west" not in q
+    assert "playboi" not in q and "carti" not in q
+
+
+@pytest.mark.unit
 def test_fuzzy_picks_valid_candidate_from_top3():
     class MixedCatalog:
         def iter_songs(self):
