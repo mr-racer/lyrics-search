@@ -7,9 +7,16 @@ process start. The model itself loads lazily, on first real use, exactly like
 ``app/resources/model_registry.py`` does for the text/CLAP models.
 """
 import logging
+import os
 import threading
 
 logger = logging.getLogger(__name__)
+
+# Shared by BOTH GLiNER2 consumers (fact_relations + lyric_gems). multi-v1 won
+# the 2026-07-19 lyrics A/B over base-v1: celebrity precision 0.87 vs 0.46 at
+# threshold 0.6 (base fired on pronouns), car 0.96 vs 0.85, and it's the same
+# model that handles Cyrillic — the future Russian-lyrics pass needs no swap.
+GLINER2_MODEL = os.environ.get("GLINER2_MODEL", "fastino/gliner2-multi-v1")
 
 _lock = threading.Lock()
 _extractor = None
@@ -73,8 +80,8 @@ def get_extractor() -> GlinerRelationExtractor:
         if _extractor is None:
             from gliner2 import GLiNER2
 
-            logger.info("[fact_relations] Loading GLiNER2 model (fastino/gliner2-base-v1)...")
-            model = GLiNER2.from_pretrained("fastino/gliner2-base-v1").cpu().eval()
+            logger.info("[fact_relations] Loading GLiNER2 model (%s)...", GLINER2_MODEL)
+            model = GLiNER2.from_pretrained(GLINER2_MODEL).cpu().eval()
             schema = _build_schema(model)
             _extractor = GlinerRelationExtractor(model, schema)
             logger.info("[fact_relations] GLiNER2 model loaded.")

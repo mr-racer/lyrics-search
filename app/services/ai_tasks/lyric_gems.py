@@ -13,8 +13,9 @@ Two passes over the collection:
 
 Incremental: a processed track (even with zero findings) has rows in
 ``track_gems`` (marker kind='none') and is skipped on re-runs. Cyrillic-heavy
-tracks are marked processed without extraction (the base model is
-English-only — measured garbage on Russian lyrics).
+tracks are marked processed without extraction for now — the model (multi-v1)
+handles Russian, but the gazetteers/catalog matching are English-built; the
+Russian pass is a planned follow-up, not a model limitation.
 
 The ``llm`` parameter of run() is framework compatibility; LLM calls go
 through the resolver, which resolves connection config itself.
