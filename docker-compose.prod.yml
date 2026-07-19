@@ -92,6 +92,27 @@ services:
         max-size: "1m"
         max-file: "1"
 
+  # ── Прокси-мост для Happ/xray ──────────────────────────────────────────────
+  # Happ после каждой перезагрузки сбрасывает listen обратно на 127.0.0.1, и
+  # контейнеры перестают дотягиваться до host.docker.internal:10809 (это IP
+  # docker-шлюза 172.17.0.1, а не loopback хоста). Вместо борьбы с конфигом
+  # Happ держим постоянный мост: socat слушает 172.17.0.1:10809 и переливает
+  # соединения в 127.0.0.1:10809, где всегда живёт xray. Работает и в PROXY,
+  # и в TUN режиме. Если xray выключен — socat просто отдаёт refused per-connection.
+  proxy-bridge:
+    image: alpine/socat:latest
+    container_name: proxy-bridge
+    restart: unless-stopped
+    network_mode: host
+    security_opt:
+      - no-new-privileges:true
+    command: TCP-LISTEN:10809,bind=172.17.0.1,fork,reuseaddr TCP:127.0.0.1:10809
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"
+        max-file: "1"
+
   searxng:
     image: searxng/searxng:latest
     container_name: searxng
@@ -124,3 +145,13 @@ volumes:
   searxng-cache:
   qdrant-storage:
   hf-cache:
+
+# Happ в режиме TUN поднимает tun0 с адресом 172.18.0.1/30 — ровно тем, что
+# Docker по умолчанию выдал бы этой compose-сети (172.18.0.0/16, шлюз .1).
+# Пересечение маршрутов молча отрезает первые контейнеры сети (.2/.3) от хоста.
+# Закрепляем подсеть подальше от диапазона VPN.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
