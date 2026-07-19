@@ -178,7 +178,9 @@ ui:
 #
 outgoing:
   # default timeout in seconds, can be override by engine
-  request_timeout: 3.0
+  # 5.0: google/startpage/musicbrainz часто не укладываются в 3 секунды,
+  # а таймаут движка = молча выпавшие результаты.
+  request_timeout: 5.0
   # the maximum timeout in seconds
   # max_request_timeout: 10.0
   # suffix of searxng_useragent, could contain information like an email address
@@ -513,8 +515,10 @@ engines:
   - name: wikipedia
     engine: wikipedia
     shortcut: wp
-    # add "list" to the array to get results in the results list
-    display_type: ["infobox"]
+    # "list" обязателен: без него Википедия отдаёт только infobox, а страницы
+    # вида "Watch Dogs (video game)" / "<Film> (soundtrack)" не попадают в
+    # results[] JSON-ответа — их-то и не хватало агенту плейлистов.
+    display_type: ["infobox", "list"]
     categories: [general]
 
   - name: bilibili
@@ -525,7 +529,6 @@ engines:
   - name: bing
     engine: bing
     shortcut: bi
-    disabled: true
 
   - name: bing images
     engine: bing_images
@@ -954,6 +957,77 @@ engines:
   - name: genius
     engine: genius
     shortcut: gen
+    # Участвует и в general-поиске: для запросов "artist hits" / "soundtrack"
+    # Genius отдаёт реальные названия песен. weight<1, чтобы не забивал
+    # обычные веб-результаты.
+    categories: [general, music]
+    weight: 0.7
+
+  # ── Кастомные музыкальные движки (MusicBrainz / Discogs) ──────────────────
+  # MusicBrainz: открытое API без ключа, лимит ~1 rps. Релизы находят альбомы
+  # и саундтреки ("Watch Dogs Original Game Soundtrack"), записи — конкретные
+  # песни. Страница релиза musicbrainz.org содержит ПОЛНЫЙ трек-лист — идеальная
+  # цель для fetch_content агента.
+  - name: musicbrainz releases
+    engine: json_engine
+    shortcut: mbr
+    categories: [general, music]
+    paging: false
+    search_url: https://musicbrainz.org/ws/2/release/?query={query}&fmt=json&limit=10
+    results_query: releases
+    url_query: id
+    url_prefix: https://musicbrainz.org/release/
+    title_query: title
+    content_query: artist-credit/name
+    timeout: 5.0
+    weight: 0.8
+    about:
+      website: https://musicbrainz.org
+      official_api_documentation: https://musicbrainz.org/doc/MusicBrainz_API
+      use_official_api: true
+      require_api_key: false
+      results: JSON
+
+  - name: musicbrainz recordings
+    engine: json_engine
+    shortcut: mbrec
+    categories: [music]
+    paging: false
+    search_url: https://musicbrainz.org/ws/2/recording/?query={query}&fmt=json&limit=15
+    results_query: recordings
+    url_query: id
+    url_prefix: https://musicbrainz.org/recording/
+    title_query: title
+    content_query: artist-credit/name
+    timeout: 5.0
+    about:
+      website: https://musicbrainz.org
+      official_api_documentation: https://musicbrainz.org/doc/MusicBrainz_API
+      use_official_api: true
+      require_api_key: false
+      results: JSON
+
+  # Discogs: нужен персональный токен (https://www.discogs.com/settings/developers).
+  # Вставь его в search_url вместо YOUR_DISCOGS_TOKEN и убери inactive.
+  - name: discogs
+    engine: json_engine
+    shortcut: dsc
+    categories: [general, music]
+    paging: false
+    search_url: https://api.discogs.com/database/search?q={query}&per_page=10&token=YOUR_DISCOGS_TOKEN
+    results_query: results
+    url_query: uri
+    url_prefix: https://www.discogs.com
+    title_query: title
+    content_query: type
+    timeout: 5.0
+    inactive: true
+    about:
+      website: https://www.discogs.com
+      official_api_documentation: https://www.discogs.com/developers
+      use_official_api: true
+      require_api_key: true
+      results: JSON
 
   - name: gentoo
     engine: mediawiki

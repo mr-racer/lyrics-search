@@ -137,3 +137,76 @@ async def test_web_search_capped_at_six(monkeypatch):
     returns = [p for m in result.all_messages() for p in getattr(m, "parts", [])
                if isinstance(p, ToolReturnPart) and p.tool_name == "web_search"]
     assert "limit reached" in str(returns[6].content)
+
+
+@pytest.mark.unit
+async def test_web_search_fetch_content_passthrough(monkeypatch):
+    """fetch_content=true from the model reaches smart_web_search and trims
+    max_results to 3 (full pages are ~4k chars each)."""
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+    from pydantic_ai.models.function import FunctionModel
+
+    from app.services.playlist_agent.agent import create_playlist_agent
+
+    seen = []
+    monkeypatch.setattr(
+        "app.services.playlist_agent.agent.smart_web_search",
+        lambda q, fetch, n: seen.append((q, fetch, n)) or "tracklist text",
+    )
+
+    calls = {"n": 0}
+
+    def scripted(messages, info):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ModelResponse(parts=[ToolCallPart(
+                "web_search",
+                {"query": "watch dogs soundtrack tracklist", "fetch_content": True})])
+        return ModelResponse(parts=[ToolCallPart("final_result", {
+            "title": "t", "track_ids": [], "comment": "", "missing": [],
+        })])
+
+    state = {"web": 0, "resolved": {}, "missing": [], "on_status": None}
+    agent = create_playlist_agent(FunctionModel(scripted), FakeDeps(), FakeCatalog(), state)
+    await agent.run("[lang=ru] саундтрек watch dogs")
+
+    assert seen == [("watch dogs soundtrack tracklist", True, 3)]
+
+
+@pytest.mark.unit
+async def test_usage_limit_returns_partial_draft(monkeypatch):
+    """A model that loops past the request budget must yield a partial draft
+    built from state["resolved"] — not crash the whole stream route."""
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+    from pydantic_ai.models.function import FunctionModel
+
+    from app.services.playlist_agent import agent as agent_mod
+
+    monkeypatch.setattr(agent_mod, "smart_web_search",
+                        lambda q, fetch, n: "Kanye West hits: Stronger")
+
+    calls = {"n": 0}
+
+    def scripted(messages, info):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ModelResponse(parts=[ToolCallPart(
+                "web_search", {"query": "kanye hits"})])
+        if calls["n"] == 2:
+            return ModelResponse(parts=[ToolCallPart(
+                "get_songs", {"items": [{"title": "Stronger", "artist": "Kanye West"}]})])
+        # Never emits final_result — keeps calling tools until the request
+        # budget (_MAX_LLM_REQUESTS) is exhausted and UsageLimitExceeded fires.
+        return ModelResponse(parts=[ToolCallPart(
+            "web_search", {"query": f"junk {calls['n']}"})])
+
+    monkeypatch.setattr(agent_mod, "_create_pydantic_model",
+                        lambda base, name: FunctionModel(scripted))
+
+    state = {}
+    draft = await agent_mod.run_playlist_agent(
+        "саундтрек watch dogs", "ru", FakeDeps(), FakeCatalog(), state)
+
+    assert draft.track_ids == ["1"]
+    assert "1" in state["resolved"]
+    assert "оборвался" in draft.comment

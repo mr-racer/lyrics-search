@@ -35,6 +35,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 from pydantic_ai import Agent
+from pydantic_ai.exceptions import UsageLimitExceeded
 from pydantic_ai.usage import UsageLimits
 
 from app.domain.models import PlaylistDraft
@@ -48,23 +49,32 @@ logger = logging.getLogger(__name__)
 _MAX_WEB_SEARCHES = 6
 _MAX_LLM_REQUESTS = 15
 
-_INSTRUCTIONS = """You build a music playlist from the user's request by finding real songs and matching them against THIS user's music library. Two request shapes:
+_INSTRUCTIONS = """You build a music playlist from the user's request by finding real songs and matching them against THIS user's music library. Common request shapes:
 
-1) ARTIST HITS ("собери хиты X", "best of X", "Kanye hits"):
+1) ARTIST SONGS ("собери хиты X", "best of X", "Kanye hits", "свежие песни X"):
    - FIRST call fetch_filters with the artist name as the user wrote it, to learn how the artist is actually spelled in the library (e.g. "Канье" -> "Kanye West"; it transliterates across alphabets). Use the returned real name from then on.
    - If fetch_filters returned nothing, the artist may still be in the library under the canonical name — do NOT give up and do NOT stop: continue with the canonical name you know (or confirm it via web_search).
-   - Then ALWAYS call web_search 1-2 times ("<artist> greatest hits", "<artist> most popular songs") to get a list of the artist's best-known song titles.
+   - Then ALWAYS call web_search 1-2 times, phrased for what was asked: hits → "<artist> greatest hits / most popular songs"; recent releases → "<artist> new songs <current year>" / "<artist> latest album tracklist".
    - Then call get_songs with those {title, artist} pairs.
 
 2) FILM / GAME SOUNDTRACK ("саундтрек к <фильм/игра>"):
-   - FIRST call web_search once to confirm the EXACT official title of the film/game in the right language (titles are often localized or abbreviated).
-   - Then call web_search 1-2 times for its soundtrack / featured songs to get real song titles and their artists.
-   - Then call get_songs with those {title, artist} pairs.
+   - FIRST call web_search once (snippets) to confirm the EXACT official title of the film/game in the right language (titles are often localized or abbreviated).
+   - Then call web_search with fetch_content=true for "<exact title> soundtrack" / "<exact title> soundtrack tracklist".
+   - Then call get_songs with the song titles + artists extracted from the page text.
+
+3) THEME / ERA / CHARTS ("популярные клубные песни 90-х", "летние хиты 2010-х", "top eurodance"):
+   - Call web_search 1-2 times for ranked lists ("best 90s club anthems", "top eurodance songs of the 90s") — such lists live on full pages, so use fetch_content=true when snippets only name the lists themselves.
+   - Collect song titles WITH their artists from those lists, then call get_songs.
+
+Any other shape: same principle — web_search for real song titles that answer the request, then get_songs.
 
 Rules:
+- fetch_content=true downloads the full text of the top pages; use it whenever you need a LIST from a page (tracklist, chart, "best of" ranking) — snippets almost never contain the actual songs. Snippets (fetch_content=false) are enough for confirming names and facts.
+- Album/OST/compilation names ("Original Soundtrack", "OST Vol. 2", "Now That's What I Call Music") are NOT songs — never pass them to get_songs.
 - Song titles MUST come from web_search results — never from your own memory, and never by reinterpreting the user's request text as a song title or a vibe/mood to search for. get_songs refuses to run until web_search has been called.
 - Only put a track into the playlist if get_songs returned it with match "exact" or "fuzzy" (never "none"). Use the track_id from get_songs verbatim.
 - If get_songs matched FEWER than 8 library tracks and you still have web searches left, dig deeper: run MORE web_search calls with different angles (deep cuts, "full album tracklist", the other language, other soundtrack volumes/parts), then call get_songs again with the NEW titles. Stop digging once ~15 library tracks are matched or the search budget runs out.
+- If the request constrains an era or years ("хиты 80-х", "2000s hits"), keep only songs whose ORIGINAL release year (per the web results) fits; a covers/remaster year in the library does not disqualify a song, but a song originally from another era must be dropped.
 - If fewer than 3 tracks were found in the library, say so honestly in the comment; still return whatever was found.
 - List songs you wanted but that were NOT in the library (match "none") in the "missing" field, as "Title — Artist".
 - web_search is limited; don't waste calls. Do not call get_songs before you have real song titles.
@@ -125,8 +135,13 @@ def create_playlist_agent(model, deps, catalog, state):
         return scored
 
     @agent.tool_plain
-    async def web_search(query: str) -> str:
-        """Search the web for real song titles (artist hits, soundtrack tracklists)."""
+    async def web_search(query: str, fetch_content: bool = False) -> str:
+        """Search the web for real song titles (artist hits, soundtrack tracklists).
+
+        fetch_content=true downloads the full text of the top pages (use for
+        soundtrack tracklists — snippets don't contain them); false returns
+        snippets only (fast, enough for artist hits).
+        """
         if state["web"] >= _MAX_WEB_SEARCHES:
             return (
                 f"(web search limit reached — {_MAX_WEB_SEARCHES} searches already used. "
@@ -134,9 +149,13 @@ def create_playlist_agent(model, deps, catalog, state):
             )
         state["web"] += 1
         _emit("web_search", query=query)
-        logger.info("[playlist_agent] web_search #%d query=%r", state["web"], query)
+        logger.info("[playlist_agent] web_search #%d query=%r fetch_content=%s",
+                    state["web"], query, fetch_content)
         try:
-            res = await asyncio.to_thread(smart_web_search, query, False, 5) or "(no web results)"
+            # Полные страницы длинные — при fetch_content берём 3 результата
+            # вместо 5, чтобы не раздувать контекст модели (~4k знаков каждая).
+            n = 3 if fetch_content else 5
+            res = await asyncio.to_thread(smart_web_search, query, fetch_content, n) or "(no web results)"
         except Exception as exc:
             logger.warning("[playlist_agent] web_search failed: %s", exc)
             return "(web search unavailable)"
@@ -202,11 +221,28 @@ async def run_playlist_agent(prompt, lang, deps, catalog, state,
                 prompt, lang, llm_model or "(default)", llm_base_url or "(default)")
     model = _create_pydantic_model(llm_base_url, llm_model)
     agent = create_playlist_agent(model, deps, catalog, state)
-    result = await agent.run(
-        f"[lang={lang}] {prompt}",
-        usage_limits=UsageLimits(request_limit=_MAX_LLM_REQUESTS),
-    )
-    draft = result.output
+    try:
+        result = await agent.run(
+            f"[lang={lang}] {prompt}",
+            usage_limits=UsageLimits(request_limit=_MAX_LLM_REQUESTS),
+        )
+        draft = result.output
+    except UsageLimitExceeded as exc:
+        # Модель зациклилась и сожгла бюджет запросов. Всё, что get_songs уже
+        # успел сматчить, лежит в state["resolved"] — отдаём частичный плейлист
+        # вместо 500 на весь стрим.
+        logger.warning(
+            "[playlist_agent] usage limit hit (%s) — returning partial draft "
+            "with %d resolved tracks", exc, len(state["resolved"]),
+        )
+        ru = str(lang).lower().startswith("ru")
+        draft = PlaylistDraft(
+            title=(prompt or "").strip()[:60] or ("Плейлист" if ru else "Playlist"),
+            track_ids=list(state["resolved"].keys()),
+            comment=("Поиск оборвался на полпути — вот что успел найти." if ru
+                     else "Search ran out of budget — here is what was found so far."),
+            missing=list(state["missing"]),
+        )
     logger.info(
         "[playlist_agent] done title=%r draft_track_ids=%s (resolved_in_library=%d, "
         "missing=%d, web_searches=%d)",

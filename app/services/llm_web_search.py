@@ -22,7 +22,7 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.usage import UsageLimits
 
 from app.services.llm_client import _get_client, resolve_model
-from app.services.proxy_config import get_proxy_url
+from app.services.proxy_config import get_proxy, get_proxy_url
 
 logger = logging.getLogger(__name__)
 logging.getLogger("readability.readability").setLevel(logging.ERROR)
@@ -32,6 +32,13 @@ logging.getLogger("readability.readability").setLevel(logging.ERROR)
 # container can't see the host-published `localhost:8088`. For bare-metal dev set
 # SEARXNG_URL=http://localhost:8088. Always a LOCAL service → never proxied.
 SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://searxng:8080").rstrip("/")
+
+# Optional comma-separated engine override (e.g. "google,duckduckgo"). Empty →
+# no `engines` param is sent, so SearXNG fans out to every enabled engine of the
+# default category and fuses their scores itself. The enabled/disabled flags in
+# searxng/settings.yml are the single tuning knob; hardcoding engines here made
+# that file a no-op (and bing+ddg alone are the two most captcha-prone engines).
+SEARXNG_ENGINES = os.environ.get("SEARXNG_ENGINES", "").strip()
 
 try:
     from bs4 import BeautifulSoup
@@ -69,15 +76,19 @@ def search_searxng(query: str, max_results: int = 5) -> list[dict]:
     """Поиск через локальный SearXNG."""
     if not _WEB_SEARCH_AVAILABLE:
         return []
+    params = {
+        "q": query,
+        "format": "json",
+        # "all", не "en-US": запросы бывают русскими («саундтрек ведьмака»),
+        # а жёсткий en-US душит выдачу по ним.
+        "language": "all",
+    }
+    if SEARXNG_ENGINES:
+        params["engines"] = SEARXNG_ENGINES
     try:
         resp = httpx.get(
             f"{SEARXNG_URL}/search",
-            params={
-                "q": query,
-                "format": "json",
-                "engines": "bing,duckduckgo",
-                "language": "en-US",
-            },
+            params=params,
             headers={
                 "Accept": "application/json, text/javascript, */*",
                 "Accept-Language": "en-US,en;q=0.9",
@@ -145,20 +156,40 @@ def search_ddg(query: str, max_results: int = 5) -> list[dict]:
 # 2. FETCH FULL CONTENT
 # ─────────────────────────────────────────
 
-def fetch_full_content(url: str, max_chars: int = 4000) -> str:
-    """Извлекает основной текст страницы через readability (как «Режим чтения»)."""
+def _http_get_text(url: str, timeout: float = 8.0) -> str:
+    """GET страницы: curl_cffi первым (его TLS-отпечаток проходит Genius и
+    прочие Cloudflare-сайты — тот же приём, что в genius_service, без
+    impersonate=), httpx — фоллбэк, если curl_cffi недоступен."""
+    try:
+        from curl_cffi import requests as curl_requests
+    except ImportError:
+        curl_requests = None
+    if curl_requests is not None:
+        kwargs: dict = {"timeout": timeout, "allow_redirects": True}
+        proxies = get_proxy()
+        if proxies:
+            kwargs["proxies"] = proxies
+        resp = curl_requests.get(url, **kwargs)
+        resp.raise_for_status()
+        return resp.text
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
         )
     }
+    resp = httpx.get(url, headers=headers, timeout=timeout, follow_redirects=True, proxy=get_proxy_url())
+    resp.raise_for_status()
+    return resp.text
+
+
+def fetch_full_content(url: str, max_chars: int = 4000) -> str:
+    """Извлекает основной текст страницы через readability (как «Режим чтения»)."""
     try:
         # External page fetch — route through the proxy when configured.
-        resp = httpx.get(url, headers=headers, timeout=8, follow_redirects=True, proxy=get_proxy_url())
-        resp.raise_for_status()
+        text = _http_get_text(url)
 
-        doc = Document(resp.text)
+        doc = Document(text)
         clean_html = doc.summary()
 
         soup = BeautifulSoup(clean_html, "html.parser")
