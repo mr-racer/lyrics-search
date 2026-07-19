@@ -995,6 +995,72 @@ class MetadataDB:
     # ── Artist facts ──
 
     @classmethod
+    def _ensure_artist_row(
+        cls, conn, slug: str, collection_name: str, name: Optional[str] = None,
+    ) -> None:
+        """Ensure an artists row exists WITHOUT clobbering a real name.
+
+        Without ``name`` this only inserts a slug-derived placeholder when the
+        row is missing (never updates — a placeholder must not overwrite the
+        real name ``ensure_song``/``upsert_artist`` wrote). With ``name`` the
+        real display name is written even over an existing placeholder, so
+        fact fetches self-heal rows the old clobbering writers garbled."""
+        if name:
+            conn.execute(
+                """INSERT INTO artists (slug, name, collection_name)
+                   VALUES (?, ?, ?)
+                   ON CONFLICT(slug) DO UPDATE SET name=excluded.name""",
+                (slug, name, collection_name),
+            )
+        else:
+            conn.execute(
+                """INSERT OR IGNORE INTO artists (slug, name, collection_name)
+                   VALUES (?, ?, ?)""",
+                (slug, slug.replace("-", " "), collection_name),
+            )
+
+    @classmethod
+    def _ensure_song_row(
+        cls,
+        conn,
+        slug: str,
+        collection_name: str,
+        title: Optional[str] = None,
+        artist_slug: Optional[str] = None,
+    ) -> str:
+        """Ensure artists + songs rows exist for a song slug; returns the
+        artist slug used (for visibility marking).
+
+        The legacy behaviour — ``ON CONFLICT DO UPDATE`` with placeholders
+        derived from the slug (``title = slug.replace('-', ' ')``, artist =
+        first hyphen token, so "50-cent-…" became artist "50") — silently
+        vandalised every real row previously written by ``ensure_song``; the
+        home random-facts strip then showed one-line lowercase titles and no
+        cover art (prod: 98% of fact-bearing songs). Placeholders are now
+        insert-if-missing ONLY; real values (when the caller has the tag
+        artist/title in scope) do update, repairing old garbage in place."""
+        a_slug = artist_slug or (
+            slug.split("-", 1)[0] if "-" in slug else slug
+        )
+        cls._ensure_artist_row(conn, a_slug, collection_name)
+        if title:
+            conn.execute(
+                """INSERT INTO songs (slug, title, artist_slug, collection_name)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(slug) DO UPDATE SET
+                       title=excluded.title,
+                       artist_slug=excluded.artist_slug""",
+                (slug, title, a_slug, collection_name),
+            )
+        else:
+            conn.execute(
+                """INSERT OR IGNORE INTO songs (slug, title, artist_slug, collection_name)
+                   VALUES (?, ?, ?, ?)""",
+                (slug, slug.replace("-", " "), a_slug, collection_name),
+            )
+        return a_slug
+
+    @classmethod
     def add_artist_fact(
         cls,
         slug: str,
@@ -1002,16 +1068,11 @@ class MetadataDB:
         fact_text: str,
         category: Optional[str] = None,
         source: Optional[str] = None,
+        name: Optional[str] = None,
     ) -> None:
         """Ensure the artist row exists, then insert a fact."""
         conn = cls._connect()
-        # Make sure artist exists (slug is derived from name)
-        artist_name = slug.replace("-", " ")  # best-effort reverse slugify
-        conn.execute(
-            """INSERT OR IGNORE INTO artists (slug, name, collection_name)
-               VALUES (?, ?, ?)""",
-            (slug, artist_name, collection_name),
-        )
+        cls._ensure_artist_row(conn, slug, collection_name, name=name)
         conn.execute(
             """INSERT OR IGNORE INTO artist_facts (artist_slug, lang, fact, category, source)
                VALUES (?, 'en', ?, ?, ?)""",
@@ -1027,18 +1088,11 @@ class MetadataDB:
         collection_name: str,
         facts: List[str],
         source: Optional[str] = None,
+        name: Optional[str] = None,
     ) -> None:
         """Insert multiple facts for an artist at once."""
         conn = cls._connect()
-        artist_name = slug.replace("-", " ")
-        conn.execute(
-            """INSERT INTO artists (slug, name, collection_name)
-               VALUES (?, ?, ?)
-               ON CONFLICT(slug) DO UPDATE SET
-                   name=excluded.name,
-                   collection_name=excluded.collection_name""",
-            (slug, artist_name, collection_name),
-        )
+        cls._ensure_artist_row(conn, slug, collection_name, name=name)
         conn.executemany(
             """INSERT OR IGNORE INTO artist_facts (artist_slug, lang, fact, source)
                VALUES (?, 'en', ?, ?)""",
@@ -1147,36 +1201,22 @@ class MetadataDB:
         fact_text: str,
         category: Optional[str] = None,
         source: Optional[str] = None,
+        artist_name: Optional[str] = None,
+        title: Optional[str] = None,
+        artist_slug: Optional[str] = None,
     ) -> None:
         conn = cls._connect()
-        # Derive artist_slug and title from song slug (format: artist-song)
-        parts = slug.split("-", 1)
-        artist_slug = parts[0] if len(parts) > 1 else slug
-        artist_name = artist_slug.replace("-", " ")
-        # Ensure artist exists before inserting song (foreign key constraint)
-        conn.execute(
-            """INSERT INTO artists (slug, name, collection_name)
-               VALUES (?, ?, ?)
-               ON CONFLICT(slug) DO UPDATE SET
-                   name=excluded.name,
-                   collection_name=excluded.collection_name""",
-            (artist_slug, artist_name, collection_name),
+        a_slug = cls._ensure_song_row(
+            conn, slug, collection_name, title=title, artist_slug=artist_slug,
         )
-        conn.execute(
-            """INSERT INTO songs (slug, title, artist_slug, collection_name)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(slug) DO UPDATE SET
-                   title=excluded.title,
-                   artist_slug=excluded.artist_slug,
-                   collection_name=excluded.collection_name""",
-            (slug, slug.replace("-", " "), artist_slug, collection_name),
-        )
+        if artist_name:
+            cls._ensure_artist_row(conn, a_slug, collection_name, name=artist_name)
         conn.execute(
             """INSERT OR IGNORE INTO song_facts (song_slug, lang, fact, category, source)
                VALUES (?, 'en', ?, ?, ?)""",
             (slug, fact_text, category, source),
         )
-        cls._mark_visible(conn, "artist", artist_slug, collection_name)
+        cls._mark_visible(conn, "artist", a_slug, collection_name)
         cls._mark_visible(conn, "song", slug, collection_name)
         conn.commit()
 
@@ -1188,35 +1228,22 @@ class MetadataDB:
         facts: List[str],
         source: Optional[str] = None,
         category: Optional[str] = None,
+        artist_name: Optional[str] = None,
+        title: Optional[str] = None,
+        artist_slug: Optional[str] = None,
     ) -> None:
         conn = cls._connect()
-        parts = slug.split("-", 1)
-        artist_slug = parts[0] if len(parts) > 1 else slug
-        artist_name = artist_slug.replace("-", " ")
-        # Ensure artist exists before inserting song (foreign key constraint)
-        conn.execute(
-            """INSERT INTO artists (slug, name, collection_name)
-               VALUES (?, ?, ?)
-               ON CONFLICT(slug) DO UPDATE SET
-                   name=excluded.name,
-                   collection_name=excluded.collection_name""",
-            (artist_slug, artist_name, collection_name),
+        a_slug = cls._ensure_song_row(
+            conn, slug, collection_name, title=title, artist_slug=artist_slug,
         )
-        conn.execute(
-            """INSERT INTO songs (slug, title, artist_slug, collection_name)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(slug) DO UPDATE SET
-                   title=excluded.title,
-                   artist_slug=excluded.artist_slug,
-                   collection_name=excluded.collection_name""",
-            (slug, slug.replace("-", " "), artist_slug, collection_name),
-        )
+        if artist_name:
+            cls._ensure_artist_row(conn, a_slug, collection_name, name=artist_name)
         conn.executemany(
             """INSERT OR IGNORE INTO song_facts (song_slug, lang, fact, source, category)
                VALUES (?, 'en', ?, ?, ?)""",
             [(slug, f, source, category) for f in facts],
         )
-        cls._mark_visible(conn, "artist", artist_slug, collection_name)
+        cls._mark_visible(conn, "artist", a_slug, collection_name)
         cls._mark_visible(conn, "song", slug, collection_name)
         conn.commit()
 
@@ -1307,6 +1334,9 @@ class MetadataDB:
         producers: Optional[List[str]],
         label: Optional[str],
         collection_name: str,
+        artist_name: Optional[str] = None,
+        title: Optional[str] = None,
+        artist_slug: Optional[str] = None,
     ) -> None:
         """Persist Genius credits into ``songs.producers_genius``/``label`` —
         the columns ``get_song_relations_bulk`` merges for the credits UI.
@@ -1316,32 +1346,26 @@ class MetadataDB:
         FACTS-stage writers never race on one column and
         ``get_songs_needing_relations`` still sees GLiNER's own state.
 
-        Unlike ``set_song_relations`` this upserts the songs row (same
-        slug-derived placeholders as ``add_song_facts_batch``): a Genius page
-        can carry credits with no description/annotations, in which case no
-        facts write ever created the row. COALESCE keeps the existing value
-        when this fetch lacks a field, and the row's title/artist survive.
+        The songs row is ensured via ``_ensure_song_row`` (a Genius page can
+        carry credits with no description/annotations, in which case no facts
+        write ever created the row) and the credits land through a separate
+        UPDATE. COALESCE keeps the existing value when this fetch lacks a
+        field, and the row's title/artist survive.
         """
         conn = cls._connect()
-        parts = slug.split("-", 1)
-        artist_slug = parts[0] if len(parts) > 1 else slug
+        a_slug = cls._ensure_song_row(
+            conn, slug, collection_name, title=title, artist_slug=artist_slug,
+        )
+        if artist_name:
+            cls._ensure_artist_row(conn, a_slug, collection_name, name=artist_name)
         names = [n.strip() for n in (producers or []) if n and n.strip()]
         producers_json = json.dumps(names, ensure_ascii=False) if names else None
         conn.execute(
-            """INSERT INTO artists (slug, name, collection_name)
-               VALUES (?, ?, ?)
-               ON CONFLICT(slug) DO NOTHING""",
-            (artist_slug, artist_slug.replace("-", " "), collection_name),
-        )
-        conn.execute(
-            """INSERT INTO songs (slug, title, artist_slug, collection_name,
-                                  producers_genius, label)
-               VALUES (?, ?, ?, ?, ?, ?)
-               ON CONFLICT(slug) DO UPDATE SET
-                   producers_genius=COALESCE(excluded.producers_genius, producers_genius),
-                   label=COALESCE(excluded.label, label)""",
-            (slug, slug.replace("-", " "), artist_slug, collection_name,
-             producers_json, label),
+            """UPDATE songs SET
+                   producers_genius=COALESCE(?, producers_genius),
+                   label=COALESCE(?, label)
+               WHERE slug = ?""",
+            (producers_json, label, slug),
         )
         cls._mark_visible(conn, "song", slug, collection_name)
         conn.commit()

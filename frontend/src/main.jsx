@@ -2838,8 +2838,9 @@ function HomeDailyExtras({ isDark, lang }) {
     const today = new Date().toDateString();
     // v3: server now prettifies slug-shaped names and always resolves a thumb;
     // facts are shown in full, so we pick the 3 shortest of a larger batch.
-    // The key bump invalidates v2 day-caches built from the old shape.
-    const cacheKey = 'musix_daily_facts_v3';
+    // v4: DB-side attribution repair (slug-derived titles/artists fixed) —
+    // the bump discards day-caches holding the garbled pre-repair strings.
+    const cacheKey = 'musix_daily_facts_v4';
     let cached = null;
     try { cached = JSON.parse(localStorage.getItem(cacheKey) || 'null'); } catch {}
     // Shape guard: a day-cache filled from a pre-attribution server (facts

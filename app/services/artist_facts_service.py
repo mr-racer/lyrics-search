@@ -107,9 +107,12 @@ def get_cached_facts(collection_name: str, artist: str) -> Optional[str]:
 
 
 def _save_facts_to_sqlite(collection_name: str, artist: str, facts: List[str]) -> None:
-    """Save parsed facts to SQLite."""
+    """Save parsed facts to SQLite (with the real display name, so the
+    artists row never degrades to a slug-derived placeholder)."""
     slug = _slugify(artist)
-    MetadataDB.add_artist_facts_batch(slug, collection_name, facts, source="songfacts.com")
+    MetadataDB.add_artist_facts_batch(
+        slug, collection_name, facts, source="songfacts.com", name=artist,
+    )
 
 
 async def fetch_artist_facts(

@@ -170,9 +170,17 @@ def get_cached_song_facts(collection_name: str, artist: str, song: str) -> Optio
 
 
 def _save_song_facts_to_sqlite(collection_name: str, artist: str, song: str, facts: List[str]) -> None:
-    """Save parsed song facts to SQLite."""
+    """Save parsed song facts to SQLite.
+
+    Passes the real (tag) title + primary-artist display name/slug down so the
+    songs/artists rows keep human attribution — without them the writer would
+    only be able to insert slug-derived placeholders ("50 cent in da club")."""
     key = get_song_facts_key(artist, song)
-    MetadataDB.add_song_facts_batch(key, collection_name, facts, source="songfacts.com")
+    primary = _artist_query(artist)
+    MetadataDB.add_song_facts_batch(
+        key, collection_name, facts, source="songfacts.com",
+        artist_name=primary, title=song, artist_slug=_slugify(primary),
+    )
 
 
 async def _apply_fact_relations(slug: str, facts: List[str], title: str, artist: str) -> None:

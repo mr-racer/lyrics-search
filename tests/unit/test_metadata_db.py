@@ -131,6 +131,75 @@ class TestSetSongGeniusCredits(_IsolatedDB):
         assert name == "Kanye West"
 
 
+class TestFactWritesPreserveAttribution(_IsolatedDB):
+    """Fact writers must never replace real song titles / artist names with
+    slug-derived placeholders — the home random-facts strip renders exactly
+    these columns (prod incident: 98% of fact-bearing songs had
+    ``title == slug.replace('-', ' ')`` and ``artist_slug == '50'``)."""
+
+    def _song_row(self, slug):
+        conn = MetadataDB._connect()
+        return conn.execute(
+            "SELECT title, artist_slug FROM songs WHERE slug = ?", (slug,),
+        ).fetchone()
+
+    def _artist_name(self, slug):
+        conn = MetadataDB._connect()
+        row = conn.execute(
+            "SELECT name FROM artists WHERE slug = ?", (slug,),
+        ).fetchone()
+        return row[0] if row else None
+
+    def test_add_song_facts_batch_does_not_clobber_existing_row(self):
+        MetadataDB.ensure_song("50 Cent", "In Da Club", "colA")
+        MetadataDB.add_song_facts_batch("50-cent-in-da-club", "colA", ["f1"])
+        assert self._song_row("50-cent-in-da-club") == ("In Da Club", "50-cent")
+        assert self._artist_name("50-cent") == "50 Cent"
+
+    def test_add_song_fact_does_not_clobber_existing_row(self):
+        MetadataDB.ensure_song("50 Cent", "In Da Club", "colA")
+        MetadataDB.add_song_fact("50-cent-in-da-club", "colA", "f1")
+        assert self._song_row("50-cent-in-da-club") == ("In Da Club", "50-cent")
+        assert self._artist_name("50-cent") == "50 Cent"
+
+    def test_add_song_facts_batch_with_names_writes_real_attribution(self):
+        MetadataDB.add_song_facts_batch(
+            "50-cent-in-da-club", "colA", ["f1"],
+            artist_name="50 Cent", title="In Da Club", artist_slug="50-cent",
+        )
+        assert self._song_row("50-cent-in-da-club") == ("In Da Club", "50-cent")
+        assert self._artist_name("50-cent") == "50 Cent"
+
+    def test_add_song_facts_batch_with_names_repairs_garbage_row(self):
+        conn = MetadataDB._connect()
+        conn.execute(
+            "INSERT INTO artists (slug, name, collection_name) VALUES (?, ?, ?)",
+            ("50", "50", "colA"),
+        )
+        conn.execute(
+            "INSERT INTO songs (slug, title, artist_slug, collection_name)"
+            " VALUES (?, ?, ?, ?)",
+            ("50-cent-in-da-club", "50 cent in da club", "50", "colA"),
+        )
+        conn.commit()
+        MetadataDB.add_song_facts_batch(
+            "50-cent-in-da-club", "colA", ["f1"],
+            artist_name="50 Cent", title="In Da Club", artist_slug="50-cent",
+        )
+        assert self._song_row("50-cent-in-da-club") == ("In Da Club", "50-cent")
+
+    def test_add_artist_facts_batch_does_not_clobber_name(self):
+        MetadataDB.upsert_artist("the-weeknd", "The Weeknd", "colA")
+        MetadataDB.add_artist_facts_batch("the-weeknd", "colA", ["f1"])
+        assert self._artist_name("the-weeknd") == "The Weeknd"
+
+    def test_add_artist_facts_batch_with_name_writes_real_name(self):
+        MetadataDB.add_artist_facts_batch(
+            "the-weeknd", "colA", ["f1"], name="The Weeknd",
+        )
+        assert self._artist_name("the-weeknd") == "The Weeknd"
+
+
 class TestAiEnabled(_IsolatedDB):
     """The ai_enabled column on collection_settings."""
 

@@ -37,7 +37,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 from app.resources.metadata_db import MetadataDB
 from app.services import genius_service
-from app.services.song_facts_service import get_song_facts_key
+from app.services.song_facts_service import _artist_query, _slugify, get_song_facts_key
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,11 @@ async def fetch_genius_facts_for_song(
     caller writes these to ``track_metadata`` once a track id is known).
     """
     song_slug = get_song_facts_key(artist, title)
+    # Real attribution for the songs/artists rows: the primary performer's
+    # display name + the slug matching song_slug's artist prefix. Without
+    # these the DB writers would fall back to slug-derived placeholders.
+    primary = _artist_query(artist)
+    primary_slug = _slugify(primary)
     url = genius_service.build_genius_url(artist, title)
     try:
         parsed = await asyncio.to_thread(genius_service.fetch_song_data, url, delay)
@@ -69,11 +74,13 @@ async def fetch_genius_facts_for_song(
         MetadataDB.add_song_facts_batch(
             song_slug, collection_name, description_facts,
             source="genius.com", category="genius_description",
+            artist_name=primary, title=title, artist_slug=primary_slug,
         )
     if annotation_facts:
         MetadataDB.add_song_facts_batch(
             song_slug, collection_name, annotation_facts,
             source="genius.com", category="genius_annotation",
+            artist_name=primary, title=title, artist_slug=primary_slug,
         )
 
     producer, label = genius_service.build_producer_label(parsed)
@@ -84,6 +91,7 @@ async def fetch_genius_facts_for_song(
         # the GLiNER extraction, deduped) onto every read path.
         MetadataDB.set_song_genius_credits(
             song_slug, parsed["producers"], label, collection_name,
+            artist_name=primary, title=title, artist_slug=primary_slug,
         )
     logger.info(
         "[genius] ok: %s — %s (%d facts, producer=%r, label=%r)",
