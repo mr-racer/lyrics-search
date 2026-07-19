@@ -1,0 +1,630 @@
+{
+  "tony montana": {
+    "canonical": "Tony Montana",
+    "type": "character",
+    "work": "Scarface"
+  },
+  "scarface": {
+    "canonical": "Scarface",
+    "type": "movie"
+  },
+  "say hello to my little friend": {
+    "canonical": "Scarface",
+    "type": "movie"
+  },
+  "the godfather": {
+    "canonical": "The Godfather",
+    "type": "movie"
+  },
+  "don corleone": {
+    "canonical": "Don Corleone",
+    "type": "character",
+    "ru": "Дон Корлеоне",
+    "work": "The Godfather"
+  },
+  "michael corleone": {
+    "canonical": "Michael Corleone",
+    "type": "character",
+    "ru": "Майкл Корлеоне",
+    "work": "The Godfather"
+  },
+  "goodfellas": {
+    "canonical": "Goodfellas",
+    "type": "movie"
+  },
+  "tony soprano": {
+    "canonical": "Tony Soprano",
+    "type": "character",
+    "ru": "Тони Сопрано",
+    "work": "The Sopranos"
+  },
+  "the sopranos": {
+    "canonical": "The Sopranos",
+    "type": "movie"
+  },
+  "superman": {
+    "canonical": "Superman",
+    "type": "character",
+    "ru": "Супермен"
+  },
+  "clark kent": {
+    "canonical": "Superman",
+    "type": "character",
+    "ru": "Супермен"
+  },
+  "batman": {
+    "canonical": "Batman",
+    "type": "character",
+    "ru": "Бэтмен"
+  },
+  "bruce wayne": {
+    "canonical": "Batman",
+    "type": "character",
+    "ru": "Бэтмен"
+  },
+  "batmobile": {
+    "canonical": "Batman",
+    "type": "character",
+    "ru": "Бэтмен"
+  },
+  "the joker": {
+    "canonical": "The Joker",
+    "type": "character",
+    "ru": "Джокер"
+  },
+  "spider-man": {
+    "canonical": "Spider-Man",
+    "type": "character",
+    "ru": "Человек-паук"
+  },
+  "spiderman": {
+    "canonical": "Spider-Man",
+    "type": "character",
+    "ru": "Человек-паук"
+  },
+  "peter parker": {
+    "canonical": "Spider-Man",
+    "type": "character",
+    "ru": "Человек-паук"
+  },
+  "hulk": {
+    "canonical": "Hulk",
+    "type": "character",
+    "ru": "Халк"
+  },
+  "iron man": {
+    "canonical": "Iron Man",
+    "type": "character",
+    "ru": "Железный человек"
+  },
+  "tony stark": {
+    "canonical": "Iron Man",
+    "type": "character",
+    "ru": "Железный человек"
+  },
+  "thor": {
+    "canonical": "Thor",
+    "type": "character",
+    "ru": "Тор"
+  },
+  "captain america": {
+    "canonical": "Captain America",
+    "type": "character",
+    "ru": "Капитан Америка"
+  },
+  "wonder woman": {
+    "canonical": "Wonder Woman",
+    "type": "character",
+    "ru": "Чудо-женщина"
+  },
+  "james bond": {
+    "canonical": "James Bond",
+    "type": "character",
+    "ru": "Джеймс Бонд"
+  },
+  "007": {
+    "canonical": "James Bond",
+    "type": "character",
+    "ru": "Джеймс Бонд"
+  },
+  "rambo": {
+    "canonical": "Rambo",
+    "type": "character",
+    "ru": "Рэмбо"
+  },
+  "rocky balboa": {
+    "canonical": "Rocky Balboa",
+    "type": "character",
+    "ru": "Рокки Бальбоа"
+  },
+  "terminator": {
+    "canonical": "Terminator",
+    "type": "character",
+    "ru": "Терминатор"
+  },
+  "robocop": {
+    "canonical": "RoboCop",
+    "type": "character",
+    "ru": "Робокоп"
+  },
+  "godzilla": {
+    "canonical": "Godzilla",
+    "type": "character",
+    "ru": "Годзилла"
+  },
+  "king kong": {
+    "canonical": "King Kong",
+    "type": "character",
+    "ru": "Кинг-Конг"
+  },
+  "darth vader": {
+    "canonical": "Darth Vader",
+    "type": "character",
+    "ru": "Дарт Вейдер",
+    "work": "Star Wars"
+  },
+  "star wars": {
+    "canonical": "Star Wars",
+    "type": "movie"
+  },
+  "yoda": {
+    "canonical": "Yoda",
+    "type": "character",
+    "ru": "Йода",
+    "work": "Star Wars"
+  },
+  "skywalker": {
+    "canonical": "Skywalker",
+    "type": "character",
+    "ru": "Скайуокер",
+    "work": "Star Wars"
+  },
+  "jedi": {
+    "canonical": "Jedi",
+    "type": "character",
+    "ru": "джедай",
+    "work": "Star Wars"
+  },
+  "harry potter": {
+    "canonical": "Harry Potter",
+    "type": "character",
+    "ru": "Гарри Поттер"
+  },
+  "hogwarts": {
+    "canonical": "Hogwarts",
+    "type": "character",
+    "ru": "Хогвартс",
+    "work": "Harry Potter"
+  },
+  "voldemort": {
+    "canonical": "Voldemort",
+    "type": "character",
+    "ru": "Волан-де-Морт",
+    "work": "Harry Potter"
+  },
+  "frodo": {
+    "canonical": "Frodo",
+    "type": "character",
+    "ru": "Фродо",
+    "work": "The Lord of the Rings"
+  },
+  "gandalf": {
+    "canonical": "Gandalf",
+    "type": "character",
+    "ru": "Гэндальф",
+    "work": "The Lord of the Rings"
+  },
+  "the matrix": {
+    "canonical": "The Matrix",
+    "type": "movie",
+    "ru": "Матрица"
+  },
+  "neo": {
+    "canonical": "Neo",
+    "type": "character",
+    "ru": "Нео",
+    "work": "The Matrix"
+  },
+  "morpheus": {
+    "canonical": "Morpheus",
+    "type": "character",
+    "ru": "Морфеус",
+    "work": "The Matrix"
+  },
+  "freddy krueger": {
+    "canonical": "Freddy Krueger",
+    "type": "character",
+    "ru": "Фредди Крюгер"
+  },
+  "jason voorhees": {
+    "canonical": "Jason Voorhees",
+    "type": "character",
+    "ru": "Джейсон Вурхиз"
+  },
+  "michael myers": {
+    "canonical": "Michael Myers",
+    "type": "character",
+    "ru": "Майкл Майерс",
+    "work": "Halloween"
+  },
+  "chucky": {
+    "canonical": "Chucky",
+    "type": "character",
+    "ru": "Чаки"
+  },
+  "hannibal lecter": {
+    "canonical": "Hannibal Lecter",
+    "type": "character",
+    "ru": "Ганнибал Лектер"
+  },
+  "forrest gump": {
+    "canonical": "Forrest Gump",
+    "type": "character",
+    "ru": "Форрест Гамп"
+  },
+  "john wick": {
+    "canonical": "John Wick",
+    "type": "character",
+    "ru": "Джон Уик"
+  },
+  "pulp fiction": {
+    "canonical": "Pulp Fiction",
+    "type": "movie",
+    "ru": "Криминальное чтиво"
+  },
+  "kill bill": {
+    "canonical": "Kill Bill",
+    "type": "movie",
+    "ru": "Убить Билла"
+  },
+  "django": {
+    "canonical": "Django",
+    "type": "character",
+    "ru": "Джанго"
+  },
+  "titanic": {
+    "canonical": "Titanic",
+    "type": "movie",
+    "ru": "Титаник"
+  },
+  "the wolf of wall street": {
+    "canonical": "The Wolf of Wall Street",
+    "type": "movie",
+    "ru": "Волк с Уолл-стрит"
+  },
+  "james dean": {
+    "canonical": "James Dean",
+    "type": "character",
+    "ru": "Джеймс Дин"
+  },
+  "indiana jones": {
+    "canonical": "Indiana Jones",
+    "type": "character",
+    "ru": "Индиана Джонс"
+  },
+  "jack sparrow": {
+    "canonical": "Jack Sparrow",
+    "type": "character",
+    "ru": "Джек Воробей"
+  },
+  "dracula": {
+    "canonical": "Dracula",
+    "type": "character",
+    "ru": "Дракула"
+  },
+  "frankenstein": {
+    "canonical": "Frankenstein",
+    "type": "character",
+    "ru": "Франкенштейн"
+  },
+  "willy wonka": {
+    "canonical": "Willy Wonka",
+    "type": "character",
+    "ru": "Вилли Вонка"
+  },
+  "wizard of oz": {
+    "canonical": "The Wizard of Oz",
+    "type": "movie",
+    "ru": "Волшебник страны Оз"
+  },
+  "peter pan": {
+    "canonical": "Peter Pan",
+    "type": "character",
+    "ru": "Питер Пэн"
+  },
+  "pinocchio": {
+    "canonical": "Pinocchio",
+    "type": "character",
+    "ru": "Пиноккио"
+  },
+  "cinderella": {
+    "canonical": "Cinderella",
+    "type": "character",
+    "ru": "Золушка"
+  },
+  "snow white": {
+    "canonical": "Snow White",
+    "type": "character",
+    "ru": "Белоснежка"
+  },
+  "aladdin": {
+    "canonical": "Aladdin",
+    "type": "character",
+    "ru": "Аладдин"
+  },
+  "shrek": {
+    "canonical": "Shrek",
+    "type": "character",
+    "ru": "Шрек"
+  },
+  "simba": {
+    "canonical": "Simba",
+    "type": "character",
+    "ru": "Симба",
+    "work": "The Lion King"
+  },
+  "mufasa": {
+    "canonical": "Mufasa",
+    "type": "character",
+    "ru": "Муфаса",
+    "work": "The Lion King"
+  },
+  "santa claus": {
+    "canonical": "Santa Claus",
+    "type": "character",
+    "ru": "Санта-Клаус"
+  },
+  "grinch": {
+    "canonical": "The Grinch",
+    "type": "character",
+    "ru": "Гринч"
+  },
+  "homer simpson": {
+    "canonical": "Homer Simpson",
+    "type": "character",
+    "ru": "Гомер Симпсон"
+  },
+  "the simpsons": {
+    "canonical": "The Simpsons",
+    "type": "movie",
+    "ru": "Симпсоны"
+  },
+  "bart simpson": {
+    "canonical": "Bart Simpson",
+    "type": "character",
+    "ru": "Барт Симпсон"
+  },
+  "spongebob": {
+    "canonical": "SpongeBob",
+    "type": "character",
+    "ru": "Губка Боб"
+  },
+  "mickey mouse": {
+    "canonical": "Mickey Mouse",
+    "type": "character",
+    "ru": "Микки Маус"
+  },
+  "bugs bunny": {
+    "canonical": "Bugs Bunny",
+    "type": "character",
+    "ru": "Багз Банни"
+  },
+  "tom and jerry": {
+    "canonical": "Tom and Jerry",
+    "type": "movie",
+    "ru": "Том и Джерри"
+  },
+  "scooby-doo": {
+    "canonical": "Scooby-Doo",
+    "type": "character",
+    "ru": "Скуби-Ду"
+  },
+  "scooby doo": {
+    "canonical": "Scooby-Doo",
+    "type": "character",
+    "ru": "Скуби-Ду"
+  },
+  "pikachu": {
+    "canonical": "Pikachu",
+    "type": "character",
+    "ru": "Пикачу",
+    "work": "Pokémon"
+  },
+  "pokemon": {
+    "canonical": "Pokémon",
+    "type": "movie"
+  },
+  "super mario": {
+    "canonical": "Mario",
+    "type": "character",
+    "ru": "Марио"
+  },
+  "pac-man": {
+    "canonical": "Pac-Man",
+    "type": "character",
+    "ru": "Пакман"
+  },
+  "tetris": {
+    "canonical": "Tetris",
+    "type": "movie",
+    "ru": "Тетрис"
+  },
+  "mortal kombat": {
+    "canonical": "Mortal Kombat",
+    "type": "movie"
+  },
+  "street fighter": {
+    "canonical": "Street Fighter",
+    "type": "movie"
+  },
+  "grand theft auto": {
+    "canonical": "GTA",
+    "type": "movie"
+  },
+  "lara croft": {
+    "canonical": "Lara Croft",
+    "type": "character",
+    "ru": "Лара Крофт"
+  },
+  "tomb raider": {
+    "canonical": "Lara Croft",
+    "type": "character",
+    "ru": "Лара Крофт"
+  },
+  "he-man": {
+    "canonical": "He-Man",
+    "type": "character",
+    "ru": "Хи-Мен"
+  },
+  "g.i. joe": {
+    "canonical": "G.I. Joe",
+    "type": "character"
+  },
+  "barbie": {
+    "canonical": "Barbie",
+    "type": "character",
+    "ru": "Барби"
+  },
+  "bonnie and clyde": {
+    "canonical": "Bonnie and Clyde",
+    "type": "character",
+    "ru": "Бонни и Клайд"
+  },
+  "bonnie & clyde": {
+    "canonical": "Bonnie and Clyde",
+    "type": "character",
+    "ru": "Бонни и Клайд"
+  },
+  "robin hood": {
+    "canonical": "Robin Hood",
+    "type": "character",
+    "ru": "Робин Гуд"
+  },
+  "king arthur": {
+    "canonical": "King Arthur",
+    "type": "character",
+    "ru": "Король Артур"
+  },
+  "sherlock holmes": {
+    "canonical": "Sherlock Holmes",
+    "type": "character",
+    "ru": "Шерлок Холмс"
+  },
+  "star trek": {
+    "canonical": "Star Trek",
+    "type": "movie"
+  },
+  "spock": {
+    "canonical": "Spock",
+    "type": "character",
+    "ru": "Спок",
+    "work": "Star Trek"
+  },
+  "et phone home": {
+    "canonical": "E.T.",
+    "type": "movie",
+    "ru": "Инопланетянин (E.T.)"
+  },
+  "jurassic park": {
+    "canonical": "Jurassic Park",
+    "type": "movie",
+    "ru": "Парк юрского периода"
+  },
+  "back to the future": {
+    "canonical": "Back to the Future",
+    "type": "movie",
+    "ru": "Назад в будущее"
+  },
+  "delorean": {
+    "canonical": "Back to the Future",
+    "type": "movie",
+    "ru": "Назад в будущее"
+  },
+  "ghostbusters": {
+    "canonical": "Ghostbusters",
+    "type": "movie",
+    "ru": "Охотники за привидениями"
+  },
+  "top gun": {
+    "canonical": "Top Gun",
+    "type": "movie"
+  },
+  "rain man": {
+    "canonical": "Rain Man",
+    "type": "movie",
+    "ru": "Человек дождя"
+  },
+  "fight club": {
+    "canonical": "Fight Club",
+    "type": "movie",
+    "ru": "Бойцовский клуб"
+  },
+  "tyler durden": {
+    "canonical": "Tyler Durden",
+    "type": "character",
+    "ru": "Тайлер Дёрден",
+    "work": "Fight Club"
+  },
+  "american psycho": {
+    "canonical": "American Psycho",
+    "type": "movie",
+    "ru": "Американский психопат"
+  },
+  "patrick bateman": {
+    "canonical": "Patrick Bateman",
+    "type": "character",
+    "ru": "Патрик Бейтман",
+    "work": "American Psycho"
+  },
+  "the shining": {
+    "canonical": "The Shining",
+    "type": "movie",
+    "ru": "Сияние"
+  },
+  "star-lord": {
+    "canonical": "Star-Lord",
+    "type": "character",
+    "ru": "Звёздный Лорд"
+  },
+  "deadpool": {
+    "canonical": "Deadpool",
+    "type": "character",
+    "ru": "Дэдпул"
+  },
+  "wolverine": {
+    "canonical": "Wolverine",
+    "type": "character",
+    "ru": "Росомаха"
+  },
+  "magneto": {
+    "canonical": "Magneto",
+    "type": "character",
+    "ru": "Магнето"
+  },
+  "optimus prime": {
+    "canonical": "Optimus Prime",
+    "type": "character",
+    "ru": "Оптимус Прайм"
+  },
+  "megatron": {
+    "canonical": "Megatron",
+    "type": "character",
+    "ru": "Мегатрон"
+  },
+  "kryptonite": {
+    "canonical": "Superman",
+    "type": "character",
+    "ru": "Супермен"
+  },
+  "gotham": {
+    "canonical": "Batman",
+    "type": "character",
+    "ru": "Бэтмен"
+  },
+  "obi-wan": {
+    "canonical": "Obi-Wan Kenobi",
+    "type": "character",
+    "ru": "Оби-Ван Кеноби",
+    "work": "Star Wars"
+  }
+}

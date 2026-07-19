@@ -605,6 +605,37 @@ def get_library_weekly_pulse(
     )
 
 
+class GemTrackRef(BaseModel):
+    track_id: str
+    quote: str = ""
+
+
+class GemTracksResponse(BaseModel):
+    kind: str
+    canonical: str
+    tracks: list[GemTrackRef]
+
+
+@router.get("/gems/tracks", response_model=GemTracksResponse)
+def get_gem_tracks(
+    kind: str = Query(..., description="capsule | namedrop | popculture | songref"),
+    canonical: str = Query(..., description="Canonical entity name as stored"),
+    current_user: User = Depends(get_current_user),
+) -> GemTracksResponse:
+    """All tracks of the library carrying a given lyric-gem entity — the
+    mini-playlist behind a tapped gem chip. Track metadata is hydrated by the
+    client via the existing GET /metadata/tracks?ids=... batch endpoint."""
+    from app.resources.metadata_db import MetadataDB
+
+    derived = derive_collection_for_user(current_user)
+    rows = MetadataDB.get_gem_tracks(derived, kind, canonical)
+    return GemTracksResponse(
+        kind=kind,
+        canonical=canonical,
+        tracks=[GemTrackRef(track_id=r["track_id"], quote=r["quote"] or "") for r in rows],
+    )
+
+
 @router.get("/engagement", response_model=EngagementResponse)
 def get_library_engagement(
     request: Request,

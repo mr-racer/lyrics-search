@@ -356,6 +356,36 @@ _SCHEMA_SQL: Tuple[str, ...] = (
         PRIMARY KEY (account_id, yandex_track_id)
     )""",
     "CREATE INDEX IF NOT EXISTS idx_yandex_imports_account ON yandex_imports (account_id, status)",
+    # ── Lyric gems: rare facts mined from lyrics (capsule / namedrop /
+    #    popculture / songref). kind='none' is a per-track "processed, nothing
+    #    found" marker so re-runs stay cheap. ──
+    """CREATE TABLE IF NOT EXISTS track_gems (
+        collection_name  TEXT NOT NULL,
+        track_id         TEXT NOT NULL,
+        kind             TEXT NOT NULL,
+        canonical        TEXT NOT NULL DEFAULT '',
+        display          TEXT NOT NULL DEFAULT '',
+        quote            TEXT NOT NULL DEFAULT '',
+        detail           TEXT,
+        score            REAL,
+        created_at       TEXT DEFAULT (datetime('now')),
+        PRIMARY KEY (collection_name, track_id, kind, canonical)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_track_gems_entity ON track_gems (collection_name, kind, canonical)",
+    """CREATE TABLE IF NOT EXISTS gem_resolution_cache (
+        kind         TEXT NOT NULL,
+        surface      TEXT NOT NULL,
+        context_key  TEXT NOT NULL DEFAULT '',
+        verdict      TEXT NOT NULL,
+        created_at   TEXT DEFAULT (datetime('now')),
+        PRIMARY KEY (kind, surface, context_key)
+    )""",
+    """CREATE TABLE IF NOT EXISTS artist_aliases (
+        artist_slug  TEXT NOT NULL,
+        alias        TEXT NOT NULL DEFAULT '',
+        source       TEXT NOT NULL DEFAULT 'llm',
+        PRIMARY KEY (artist_slug, alias)
+    )""",
 )
 
 
@@ -2672,6 +2702,175 @@ class MetadataDB:
         )
         conn.commit()
         return int(cur.rowcount)
+
+    # ── Lyric gems (capsule / namedrop / popculture / songref) ──
+
+    @classmethod
+    def set_track_gems(
+        cls, track_id: str, collection_name: str, gems: List[dict],
+    ) -> None:
+        """Replace all gems for a track. Empty ``gems`` writes the kind='none'
+        marker row so the task can tell "processed, nothing found" from
+        "never processed"."""
+        track_id = canonical_track_id(track_id)
+        conn = cls._connect()
+        conn.execute(
+            "DELETE FROM track_gems WHERE collection_name = ? AND track_id = ?",
+            (collection_name, track_id),
+        )
+        rows = gems or [{"kind": "none"}]
+        for g in rows:
+            conn.execute(
+                "INSERT OR REPLACE INTO track_gems "
+                "(collection_name, track_id, kind, canonical, display, quote, detail, score) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    collection_name, track_id, g.get("kind", "none"),
+                    g.get("canonical", ""), g.get("display", ""), g.get("quote", ""),
+                    json.dumps(g["detail"], ensure_ascii=False) if g.get("detail") else None,
+                    g.get("score"),
+                ),
+            )
+        conn.commit()
+
+    @classmethod
+    def get_track_gems(cls, track_id: str, collection_name: str) -> List[dict]:
+        """Gems for one track (marker rows excluded), namedrop/songref first."""
+        track_id = canonical_track_id(track_id)
+        conn = cls._connect()
+        rows = conn.execute(
+            "SELECT kind, canonical, display, quote, detail, score FROM track_gems "
+            "WHERE collection_name = ? AND track_id = ? AND kind != 'none' "
+            "ORDER BY CASE kind WHEN 'namedrop' THEN 0 WHEN 'songref' THEN 1 "
+            "WHEN 'popculture' THEN 2 ELSE 3 END, canonical",
+            (collection_name, track_id),
+        ).fetchall()
+        return [
+            {
+                "kind": r[0], "canonical": r[1], "display": r[2], "quote": r[3],
+                "detail": json.loads(r[4]) if r[4] else None, "score": r[5],
+            }
+            for r in rows
+        ]
+
+    @classmethod
+    def has_track_gems(cls, track_id: str, collection_name: str) -> bool:
+        """True when the track was already processed (marker rows count)."""
+        track_id = canonical_track_id(track_id)
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT 1 FROM track_gems WHERE collection_name = ? AND track_id = ? LIMIT 1",
+            (collection_name, track_id),
+        ).fetchone()
+        return row is not None
+
+    @classmethod
+    def get_gem_tracks(
+        cls, collection_name: str, kind: str, canonical: str, limit: int = 200,
+    ) -> List[dict]:
+        """Tracks of a collection carrying a given gem entity."""
+        conn = cls._connect()
+        rows = conn.execute(
+            "SELECT track_id, display, quote FROM track_gems "
+            "WHERE collection_name = ? AND kind = ? AND canonical = ? "
+            "ORDER BY score DESC LIMIT ?",
+            (collection_name, kind, canonical, limit),
+        ).fetchall()
+        return [{"track_id": r[0], "display": r[1], "quote": r[2]} for r in rows]
+
+    @classmethod
+    def get_random_gems(cls, collection_name: str, limit: int = 10) -> List[dict]:
+        """Random non-marker gems for the home random-facts rotation."""
+        conn = cls._connect()
+        rows = conn.execute(
+            "SELECT track_id, kind, canonical, display, quote, detail FROM track_gems "
+            "WHERE collection_name = ? AND kind != 'none' "
+            "ORDER BY RANDOM() LIMIT ?",
+            (collection_name, limit),
+        ).fetchall()
+        return [
+            {
+                "track_id": r[0], "kind": r[1], "canonical": r[2], "display": r[3],
+                "quote": r[4], "detail": json.loads(r[5]) if r[5] else None,
+            }
+            for r in rows
+        ]
+
+    @classmethod
+    def delete_track_gems(cls, collection_name: str) -> int:
+        """Drop all gems for a collection (full re-run). Returns rows deleted."""
+        conn = cls._connect()
+        cur = conn.execute(
+            "DELETE FROM track_gems WHERE collection_name = ?", (collection_name,),
+        )
+        conn.commit()
+        return int(cur.rowcount)
+
+    @classmethod
+    def get_gem_resolution(
+        cls, kind: str, surface: str, context_key: str = "",
+    ) -> Optional[dict]:
+        """Cached LLM verdict for a (kind, surface, context) or None."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT verdict FROM gem_resolution_cache "
+            "WHERE kind = ? AND surface = ? AND context_key = ?",
+            (kind, surface.lower(), context_key),
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            return json.loads(row[0])
+        except (json.JSONDecodeError, TypeError):
+            return None
+
+    @classmethod
+    def set_gem_resolution(
+        cls, kind: str, surface: str, verdict: dict, context_key: str = "",
+    ) -> None:
+        """Cache an LLM verdict forever — one LLM price per unique candidate."""
+        conn = cls._connect()
+        conn.execute(
+            "INSERT OR REPLACE INTO gem_resolution_cache (kind, surface, context_key, verdict) "
+            "VALUES (?, ?, ?, ?)",
+            (kind, surface.lower(), context_key, json.dumps(verdict, ensure_ascii=False)),
+        )
+        conn.commit()
+
+    @classmethod
+    def get_artist_aliases_map(cls) -> Dict[str, str]:
+        """All known aliases as {alias_lower: artist_slug} (empty markers excluded)."""
+        conn = cls._connect()
+        rows = conn.execute(
+            "SELECT alias, artist_slug FROM artist_aliases WHERE alias != ''",
+        ).fetchall()
+        return {r[0].lower(): r[1] for r in rows}
+
+    @classmethod
+    def has_artist_aliases(cls, artist_slug: str) -> bool:
+        """True when the artist was already alias-checked (marker rows count)."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT 1 FROM artist_aliases WHERE artist_slug = ? LIMIT 1",
+            (artist_slug,),
+        ).fetchone()
+        return row is not None
+
+    @classmethod
+    def set_artist_aliases(
+        cls, artist_slug: str, aliases: List[str], source: str = "llm",
+    ) -> None:
+        """Store aliases for an artist; empty list writes the '' marker row
+        so the LLM is never asked twice about the same artist."""
+        conn = cls._connect()
+        rows = [a.strip() for a in aliases if a and a.strip()] or [""]
+        for alias in rows:
+            conn.execute(
+                "INSERT OR REPLACE INTO artist_aliases (artist_slug, alias, source) "
+                "VALUES (?, ?, ?)",
+                (artist_slug, alias, source),
+            )
+        conn.commit()
 
     # ── Refined Facts cache (Plan 3 Task 15) ──
 

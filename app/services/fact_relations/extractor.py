@@ -79,3 +79,11 @@ def get_extractor() -> GlinerRelationExtractor:
             _extractor = GlinerRelationExtractor(model, schema)
             logger.info("[fact_relations] GLiNER2 model loaded.")
     return _extractor
+
+
+def get_model():
+    """Return the raw GLiNER2 model behind the singleton (shared weights).
+
+    The lyric_gems task runs its own entity schema over the same loaded
+    model — one copy of the weights per process, same lazy-load semantics."""
+    return get_extractor()._model

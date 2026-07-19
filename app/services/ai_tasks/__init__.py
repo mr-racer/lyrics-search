@@ -4,3 +4,4 @@ from app.services.ai_tasks import sonic_vibe  # noqa: F401 — side effect: regi
 from app.services.ai_tasks import refined_facts  # noqa: F401 — side effect: register
 from app.services.ai_tasks import artist_bio  # noqa: F401 — side effect: register
 from app.services.ai_tasks import fact_relations  # noqa: F401 — side effect: register
+from app.services.ai_tasks import lyric_gems  # noqa: F401 — side effect: register

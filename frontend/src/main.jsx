@@ -12498,6 +12498,229 @@ function SamplesAccentChip({ track, isDark, lang }) {
   );
 }
 
+// ─── LYRIC GEMS (капсула / намедроп / поп-культура / упоминание трека) ───────
+// `${trackId}|${lang}` → Promise<gems[]>; lang is part of the key because the
+// server localizes `display` (ru names for capsule/popculture).
+const _trackGemsCache = new Map();
+function fetchTrackGems(trackId, lang) {
+  if (!trackId) return Promise.resolve([]);
+  const key = `${trackId}|${lang}`;
+  if (_trackGemsCache.has(key)) return _trackGemsCache.get(key);
+  const p = apiFetch(`/metadata/tracks/${encodeURIComponent(trackId)}/gems?lang=${encodeURIComponent(lang)}`)
+    .then(res => Array.isArray(res) ? res : [])
+    .catch(() => { _trackGemsCache.delete(key); return []; });
+  _trackGemsCache.set(key, p);
+  return p;
+}
+
+// Gem entity → hydrated library tracks: ids from /library/gems/tracks, full
+// playable shapes from the existing /metadata/tracks?ids= batch endpoint.
+const _gemTracksCache = new Map();
+function fetchGemTracks(kind, canonical) {
+  const key = `${kind}|${String(canonical || '').toLowerCase()}`;
+  if (_gemTracksCache.has(key)) return _gemTracksCache.get(key);
+  const p = apiFetch(`/library/gems/tracks?kind=${encodeURIComponent(kind)}&canonical=${encodeURIComponent(canonical)}`)
+    .then(res => {
+      const ids = ((res && res.tracks) || []).map(t => t.track_id).filter(Boolean);
+      if (!ids.length) return [];
+      return apiFetch(`/metadata/tracks?ids=${encodeURIComponent(ids.join(','))}`)
+        .then(list => Array.isArray(list) ? list : [])
+        .catch(() => []);
+    })
+    .catch(() => { _gemTracksCache.delete(key); return []; });
+  _gemTracksCache.set(key, p);
+  return p;
+}
+
+const GEM_ACCENTS = { capsule: '#fbbf24', namedrop: '#34d399', popculture: '#a78bfa', songref: '#f472b6' };
+const GEM_POP_LABELS = {
+  ru: { capsule: 'Капсула времени', namedrop: 'Упоминается в тексте', popculture: 'Отсылка в тексте', songref: 'Упоминание из текста' },
+  en: { capsule: 'Time capsule', namedrop: 'Name-dropped in the lyrics', popculture: 'Pop-culture reference', songref: 'Mentioned in the lyrics' },
+};
+
+// Anchored popover / bottom sheet for a tapped gem chip: the quote line first
+// (that's the wow), then every other library track carrying the same entity.
+// Twin of ProducerTracksPop — same shells, same play-row mechanics.
+function GemTracksPop({ gem, currentTrackId, anchorRect, isDark, lang, onClose, onPlayTrack }) {
+  const isMobile = useIsMobile();
+  const [tracks, setTracks] = useState(null); // null = loading
+
+  useEffect(() => {
+    let alive = true;
+    fetchGemTracks(gem.kind, gem.canonical).then(list => { if (alive) setTracks(list); });
+    return () => { alive = false; };
+  }, [gem.kind, gem.canonical]);
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const rows = (tracks || []).filter(t => t.track_id !== currentTrackId);
+  const playRow = (t) => {
+    if (onPlayTrack && t?.track_id) {
+      onPlayTrack({ track: t }, rows.map(tt => ({ track: tt })));
+    }
+    onClose();
+  };
+
+  const labels = GEM_POP_LABELS[lang === 'ru' ? 'ru' : 'en'];
+  const body = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+      <div className="mono" style={{
+        display: 'flex', alignItems: 'center', gap: 7,
+        fontSize: 9.5, letterSpacing: '0.2em', textTransform: 'uppercase',
+        color: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(22,22,32,0.55)',
+        margin: '2px 0 4px',
+      }}>
+        <span aria-hidden="true" style={{
+          width: 6, height: 6, borderRadius: '50%',
+          background: GEM_ACCENTS[gem.kind], boxShadow: `0 0 8px ${GEM_ACCENTS[gem.kind]}`,
+        }} />
+        {labels[gem.kind]} · {gem.display}
+      </div>
+      {gem.quote && (
+        <div style={{
+          fontSize: 12.5, lineHeight: 1.5, fontStyle: 'italic', padding: '2px 0 6px',
+          color: isDark ? 'rgba(255,255,255,0.72)' : 'rgba(22,22,32,0.72)',
+        }}>«{gem.quote}»</div>
+      )}
+      {tracks === null && (
+        <div style={{ fontSize: 12.5, opacity: 0.55, padding: '4px 0' }}>
+          {lang === 'ru' ? 'Ищем треки…' : 'Looking for tracks…'}
+        </div>
+      )}
+      {tracks !== null && rows.length === 0 && (
+        <div style={{ fontSize: 12.5, opacity: 0.55, padding: '4px 0' }}>
+          {lang === 'ru' ? 'Больше нигде в библиотеке не встречается' : 'Nowhere else in your library'}
+        </div>
+      )}
+      {rows.length > 0 && (
+        <div className="mono" style={{
+          fontSize: 9.5, letterSpacing: '0.2em',
+          color: isDark ? 'rgba(255,255,255,0.4)' : 'rgba(22,22,32,0.4)',
+          margin: '2px 0 2px',
+        }}>{lang === 'ru' ? 'ГДЕ ЕЩЁ' : 'ALSO IN'}</div>
+      )}
+      {rows.map((t, i) => (
+        <button key={t.track_id || i} type="button" className="producer-track-row"
+          onClick={() => playRow(t)}
+          title={lang === 'ru' ? 'Слушать' : 'Play'}>
+          <span className="mono" aria-hidden="true" style={{
+            fontSize: 9.5, flexShrink: 0, width: 16, textAlign: 'right',
+            color: isDark ? 'rgba(255,255,255,0.28)' : 'rgba(22,22,32,0.32)',
+          }}>{String(i + 1).padStart(2, '0')}</span>
+          <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <span style={{ fontWeight: 500 }}>{trackTitle(t)}</span>
+            <span style={{ color: isDark ? 'rgba(255,255,255,0.45)' : 'rgba(22,22,32,0.5)' }}>{'  ·  '}{t.artist}</span>
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+
+  const a11yTitle = `${labels[gem.kind]}: ${gem.display}`;
+
+  if (isMobile) {
+    return createPortal(
+      <div className="hint-sheet-scrim" onClick={(e) => { e.stopPropagation(); onClose(); }}>
+        <div className="hint-sheet" role="dialog" aria-modal="true" aria-label={a11yTitle}
+          onClick={(e) => e.stopPropagation()}>
+          <span className="hint-sheet__grip" aria-hidden="true" />
+          <div style={{ maxHeight: '55vh', overflowY: 'auto', paddingBottom: 4 }}>{body}</div>
+        </div>
+      </div>,
+      document.body
+    );
+  }
+
+  const W = 380;
+  const vw = window.innerWidth;
+  const left = anchorRect
+    ? Math.max(12, Math.min(anchorRect.left + anchorRect.width / 2 - W / 2, vw - W - 12))
+    : vw / 2 - W / 2;
+  const openUp = anchorRect ? anchorRect.top > 300 : true;
+  const pos = anchorRect
+    ? (openUp
+        ? { bottom: window.innerHeight - anchorRect.top + 10 }
+        : { top: anchorRect.bottom + 10 })
+    : { top: '30%' };
+
+  return createPortal(
+    <>
+      <div style={{ position: 'fixed', inset: 0, zIndex: 8990 }} onClick={onClose} />
+      <div
+        className={`samples-pop${openUp ? '' : ' samples-pop--down'}`}
+        role="dialog" aria-label={a11yTitle}
+        style={{ position: 'fixed', left, width: W, zIndex: 8991, ...pos }}
+      >{body}</div>
+    </>,
+    document.body
+  );
+}
+
+// The gem chips row under the samples pill. Renders nothing while loading or
+// when the track has no gems — the meta zone must not jump. A namedrop chip
+// whose artist is in the library navigates straight to the artist page;
+// every other chip opens the quote + where-else popover.
+function GemsChips({ track, isDark, lang, navigateToArtist, onPlayTrack }) {
+  const [gems, setGems] = useState(null);
+  const [popFor, setPopFor] = useState(null); // {gem, anchorRect}
+
+  useEffect(() => {
+    setGems(null);
+    setPopFor(null);
+    if (!track?.track_id) return;
+    let alive = true;
+    fetchTrackGems(track.track_id, lang).then(list => { if (alive) setGems(list); });
+    return () => { alive = false; };
+  }, [track?.track_id, lang]);
+
+  if (!gems || gems.length === 0) return null;
+
+  return (
+    <div style={{
+      display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 6, marginTop: 8,
+      animation: 'vibeSlideIn 240ms cubic-bezier(0.22, 0.9, 0.3, 1)',
+    }}>
+      {gems.slice(0, 4).map((g) => {
+        const accent = GEM_ACCENTS[g.kind] || '#a78bfa';
+        const slug = g.kind === 'namedrop' && g.detail ? g.detail.artist_slug : null;
+        const labels = GEM_POP_LABELS[lang === 'ru' ? 'ru' : 'en'];
+        return (
+          <button key={`${g.kind}-${g.canonical}`} type="button"
+            className="credit-chip credit-chip--link"
+            title={labels[g.kind]}
+            onClick={(e) => {
+              if (slug && navigateToArtist) { navigateToArtist(slug); return; }
+              const rect = e.currentTarget.getBoundingClientRect();
+              setPopFor(prev => (prev && prev.gem.kind === g.kind && prev.gem.canonical === g.canonical)
+                ? null
+                : { gem: g, anchorRect: rect });
+            }}>
+            <span aria-hidden="true" style={{
+              width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+              display: 'inline-block', marginRight: 6,
+              background: accent, boxShadow: `0 0 6px ${accent}`,
+            }} />
+            {g.display}
+          </button>
+        );
+      })}
+      {popFor && (
+        <GemTracksPop
+          gem={popFor.gem} currentTrackId={track?.track_id}
+          anchorRect={popFor.anchorRect}
+          isDark={isDark} lang={lang}
+          onClose={() => setPopFor(null)}
+          onPlayTrack={onPlayTrack}
+        />
+      )}
+    </div>
+  );
+}
+
 // ─── PLAYER SCORE BARS ──────────────────────────────────────────────────────
 function PlayerScoreBars({ breakdown, isDark }) {
   if (!breakdown) return null;
@@ -15311,6 +15534,14 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                   track={currentTrack}
                   isDark={isDark}
                   lang={lang}
+                />
+                <GemsChips
+                  key={`gems-${currentTrack.track_id}`}
+                  track={currentTrack}
+                  isDark={isDark}
+                  lang={lang}
+                  navigateToArtist={navigateToArtist}
+                  onPlayTrack={onPlayTrack}
                 />
                 <VibeLine
                   trackId={currentTrack?.track_id}

@@ -21,7 +21,7 @@ from app.services import ai_indexing_service
 
 router = APIRouter(prefix="/library/ai-index", tags=["AI Indexing"])
 
-_TASK_TYPES = {"sonic_vibe", "refined_facts", "artist_bio"}
+_TASK_TYPES = {"sonic_vibe", "refined_facts", "artist_bio", "lyric_gems"}
 
 
 class StartJobRequest(BaseModel):
@@ -51,11 +51,12 @@ def _count_eligible(db_client, collection_name: str, task_type: str) -> int:
     The count depends on the task type:
 
     - **sonic_vibe**: number of tracks in the collection (one vibe per track).
+    - **lyric_gems**: number of tracks in the collection (one pass per track).
     - **artist_bio**: number of distinct artists in the collection.
     - **refined_facts**: total number of raw facts (song + artist) that will be
       fed into the LLM.
     """
-    if task_type == "sonic_vibe":
+    if task_type in ("sonic_vibe", "lyric_gems"):
         try:
             info = db_client.qdrant.count(
                 collection_name=collection_name, exact=True
@@ -205,6 +206,8 @@ def reset_cache(
         if not hasattr(MetadataDB, "delete_artist_bios"):
             raise HTTPException(status_code=501, detail="cache reset not yet implemented")
         n = MetadataDB.delete_artist_bios(derived)
+    elif task_type == "lyric_gems":
+        n = MetadataDB.delete_track_gems(derived)
     else:
         raise HTTPException(status_code=404, detail=f"unknown task_type: {task_type}")
     return CacheResetResponse(deleted_rows=int(n))
