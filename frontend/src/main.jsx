@@ -16810,7 +16810,7 @@ function AtlasAlbumCard({ album, artistName, isDark, lang, onOpen, width }) {
   );
 }
 
-function AtlasAlbumStrip({ albums, artistName, isDark, lang, onOpen }) {
+function AtlasAlbumStrip({ albums, artistName, isDark, lang, onOpen, label, accent }) {
   const c = useColors(isDark);
   const wrapRef = useRef(null);
   const scrollRef = useRef(null);
@@ -16847,8 +16847,8 @@ function AtlasAlbumStrip({ albums, artistName, isDark, lang, onOpen }) {
   const timeline = dated.length >= 3 && maxY > minY;
 
   const kicker = (
-    <span className="mono" style={{ fontSize:10, letterSpacing:'0.24em', color:c.textSubtle, textTransform:'uppercase' }}>
-      {lang==='ru'?'АЛЬБОМЫ':'ALBUMS'} · {albums.length}{timeline ? ` · ${minY}–${maxY}` : ''}
+    <span className="mono" style={{ fontSize:10, letterSpacing:'0.24em', color: accent || c.textSubtle, textTransform:'uppercase' }}>
+      {label || (lang==='ru'?'АЛЬБОМЫ':'ALBUMS')} · {albums.length}{timeline ? ` · ${minY}–${maxY}` : ''}
     </span>
   );
 
@@ -17109,11 +17109,35 @@ function ArtistAtlasSection({
                 <AtlasFactsShelf facts={data.facts} isDark={isDark} lang={lang} />
               </section>
             )}
-            {(data.albums || []).length > 0 && (
-              <section ref={albumsRef} className="lib-rise" style={{ '--lib-d':'0.24s', scrollMarginTop:84 }}>
-                <AtlasAlbumStrip albums={data.albums} artistName={data.name} isDark={isDark} lang={lang} onOpen={openAlbum} />
-              </section>
-            )}
+            {(data.albums || []).length > 0 && (() => {
+              // Own discography vs albums where the artist is only a featured
+              // guest — the latter get their own amber-tinted rail below.
+              const ownAlbums = data.albums.filter(a => !a.featured_only);
+              const featAlbums = data.albums.filter(a => a.featured_only);
+              const featAccent = isDark ? 'oklch(76% 0.12 78)' : 'oklch(56% 0.13 70)';
+              return (
+                <section ref={albumsRef} className="lib-rise" style={{ '--lib-d':'0.24s', scrollMarginTop:84 }}>
+                  {ownAlbums.length > 0 && (
+                    <AtlasAlbumStrip albums={ownAlbums} artistName={data.name} isDark={isDark} lang={lang} onOpen={openAlbum} />
+                  )}
+                  {featAlbums.length > 0 && (
+                    <div style={{
+                      marginTop: ownAlbums.length > 0 ? 40 : 0,
+                      padding: '18px 20px 6px',
+                      borderRadius: 16,
+                      borderLeft: `2px solid ${isDark ? 'rgba(222,178,96,0.55)' : 'rgba(170,120,40,0.5)'}`,
+                      background: isDark ? 'rgba(222,178,96,0.045)' : 'rgba(170,120,40,0.05)',
+                    }}>
+                      <AtlasAlbumStrip
+                        albums={featAlbums} artistName={data.name} isDark={isDark} lang={lang} onOpen={openAlbum}
+                        label={lang==='ru' ? 'ФИТЫ · УЧАСТИЕ В АЛЬБОМАХ' : 'FEATURED ON'}
+                        accent={featAccent}
+                      />
+                    </div>
+                  )}
+                </section>
+              );
+            })()}
             {sectionsCfg.length === 0 && (
               <div style={{ color:c.textMuted, fontSize:13 }}>
                 {lang==='ru' ? 'Пока пусто — обогатите библиотеку, чтобы здесь появились факты и альбомы.' : 'Nothing here yet — enrich your library to fill this page.'}

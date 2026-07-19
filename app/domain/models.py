@@ -389,6 +389,9 @@ class ArtistAlbum(BaseModel):
     cover_art_path: Optional[str] = None  # representative track's cover
     tracks: list[TrackMetadata] = Field(default_factory=list)
     liked_track_count: int = 0  # likes among this album's tracks (gold-star marker)
+    # True when this artist appears on the album ONLY as a featured guest —
+    # the Atlas screen shows such albums in a separate "featured on" rail.
+    featured_only: bool = False
 
 
 class ArtistAggregate(BaseModel):

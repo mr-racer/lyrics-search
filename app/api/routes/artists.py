@@ -167,6 +167,25 @@ def _tracks_from_qdrant(db, collection: str, canonical_slug: str) -> list[TrackM
     return artist_tracks
 
 
+def _featured_only(tracks: list[TrackMetadata], canonical_slug: str) -> bool:
+    """True when the artist appears on this album ONLY as a featured guest.
+
+    Any main-role credit, a primary_artist_slug match, or a track without
+    per-participant refs (legacy shapes carry no role signal — assume own)
+    makes the album the artist's own. Co-leads («A & B», «(with X)») are main
+    credits, so duet albums stay in the main discography rail.
+    """
+    saw_feat = False
+    for t in tracks:
+        if t.primary_artist_slug == canonical_slug:
+            return False
+        ref = next((r for r in (t.artist_refs or []) if r.slug == canonical_slug), None)
+        if ref is None or ref.role != "feat":
+            return False
+        saw_feat = True
+    return saw_feat
+
+
 def build_artist_aggregate(db, collection: str, canonical_slug: str, lang: str) -> ArtistAggregate:
     """Build the Atlas aggregate for one artist. Shared by GET /artists/{slug}
     and GET /library/featured-artist. Raises HTTPException(404) if unknown."""
@@ -228,6 +247,7 @@ def build_artist_aggregate(db, collection: str, canonical_slug: str, lang: str) 
             cover_art_path=cover,
             tracks=tracks,
             liked_track_count=sum(1 for t in tracks if t.track_id in liked_ids),
+            featured_only=_featured_only(tracks, canonical_slug),
         ))
     albums.sort(key=lambda a: (a.year or 9999, a.title))
 

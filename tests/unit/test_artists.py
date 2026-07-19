@@ -390,3 +390,54 @@ class TestDisplayTitleForTrack:
 
     def test_clean_title_returns_none(self):
         assert display_title_for_track({"title": "Heartless"}) is None
+
+
+# --- featured-only album detection (Atlas "featured on" rail) ---
+
+from app.api.routes.artists import _featured_only
+from app.domain.models import TrackMetadata
+
+
+def _tm(title, artist, refs=None, primary=None):
+    return TrackMetadata(
+        track_id="x", title=title, artist=artist, duration_sec=1.0,
+        file_path="/f", primary_artist_slug=primary, artist_refs=refs or [],
+    )
+
+
+class TestFeaturedOnlyAlbum:
+    def test_feat_only_album_is_featured(self):
+        tracks = [_tm(
+            "Bangarang", "Skrillex", primary="skrillex",
+            refs=[{"name": "Skrillex", "slug": "skrillex", "role": "main"},
+                  {"name": "Sirah", "slug": "sirah", "role": "feat"}],
+        )]
+        assert _featured_only(tracks, "sirah") is True
+        assert _featured_only(tracks, "skrillex") is False
+
+    def test_main_credit_anywhere_makes_album_own(self):
+        tracks = [
+            _tm("T1", "A", primary="a",
+                refs=[{"name": "A", "slug": "a", "role": "main"},
+                      {"name": "B", "slug": "b", "role": "feat"}]),
+            _tm("T2", "B", primary="a",
+                refs=[{"name": "B", "slug": "b", "role": "main"}]),
+        ]
+        assert _featured_only(tracks, "b") is False
+
+    def test_primary_artist_slug_match_is_own(self):
+        tracks = [_tm("T", "A", primary="b", refs=[])]
+        assert _featured_only(tracks, "b") is False
+
+    def test_legacy_track_without_refs_is_own(self):
+        # No per-participant refs → no role signal → never exile the album.
+        tracks = [_tm("T", "A", primary="a", refs=[])]
+        assert _featured_only(tracks, "b") is False
+
+    def test_co_lead_duet_is_own(self):
+        tracks = [_tm(
+            "One Kiss", "Calvin Harris & Dua Lipa", primary="calvin-harris",
+            refs=[{"name": "Calvin Harris", "slug": "calvin-harris", "role": "main"},
+                  {"name": "Dua Lipa", "slug": "dua-lipa", "role": "main"}],
+        )]
+        assert _featured_only(tracks, "dua-lipa") is False
