@@ -14,10 +14,11 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-from app.domain.models import ArtistAggregate, IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RhythmResponse, WeeklyPulseResponse, EngagementResponse, TasteMapResponse, RediscoverResponse, User
+from app.domain.models import ArtistAggregate, IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RhythmResponse, WeeklyPulseResponse, EngagementResponse, TasteMapResponse, RediscoverResponse, User, ProducerResolveResponse, ProducerTracksResponse
 from app.api.dependencies import get_current_user, require_mode
 from app.api.helpers import derive_collection_for_user, member_index_root, path_within_root
 from app.services.library_service import LibraryService
+from app.services import track_credits_service
 from app.services import uploads_service
 from app.services._magic_sniff import sniff_audio_mime
 from app.services.similarity_service import load_top_pairs, load_top_pairs_index, build_track_pairs
@@ -431,6 +432,7 @@ def get_library_albums(
     request: Request,
     current_user: User = Depends(get_current_user),
     sort: str = Query("alphabetical", description="alphabetical | year_desc | year_asc | track_count_desc"),
+    label: Optional[str] = Query(None, description="Only albums where ≥1 track carries this record label"),
 ) -> LibraryAlbumsResponse:
     derived = derive_collection_for_user(current_user)
     db_client = request.app.state.db_client
@@ -442,6 +444,42 @@ def get_library_albums(
         qdrant_client=db_client.qdrant,
         collection_name=derived,
         sort=sort,
+        label=label,
+    )
+
+
+# ── Producer credits (player drawer) ──────────────────────────────────────────
+
+@router.get("/producers/resolve", response_model=ProducerResolveResponse)
+def resolve_track_producers(
+    track_id: str = Query(..., min_length=1),
+    current_user: User = Depends(get_current_user),
+) -> ProducerResolveResponse:
+    """Resolve the track's producer names against the user's library.
+
+    SQLite-only (works with Qdrant down). For each name: the canonical artist
+    slug when the library also has them as an artist, and how many OTHER
+    tracks credit them as producer. Unknown track / no producers → empty list.
+    """
+    derived = derive_collection_for_user(current_user)
+    return ProducerResolveResponse(
+        producers=track_credits_service.resolve_producers(derived, track_id),
+        collection_name=derived,
+    )
+
+
+@router.get("/producers/tracks", response_model=ProducerTracksResponse)
+def get_producer_tracks(
+    name: str = Query(..., min_length=1),
+    current_user: User = Depends(get_current_user),
+) -> ProducerTracksResponse:
+    """Tracks in the user's library produced by ``name`` (exact name match,
+    case/whitespace-insensitive). SQLite-only."""
+    derived = derive_collection_for_user(current_user)
+    return ProducerTracksResponse(
+        producer=name,
+        tracks=track_credits_service.tracks_produced_by(derived, name),
+        collection_name=derived,
     )
 
 

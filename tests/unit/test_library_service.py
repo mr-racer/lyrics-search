@@ -454,6 +454,44 @@ class TestAlbumsSqlite:
         assert MetadataDB.get_year_facets_from_sqlite()["2010-2019"] == 2
 
 
+class TestAlbumLabels:
+    """AlbumSummary.labels aggregation + the ?label= filter (SQLite fast-path)."""
+
+    def test_labels_aggregated_deduped_and_frequency_ordered(self, temp_db):
+        _upsert("t1", album="MBDTF", artist="Kanye West", artist_slugs=["kanye-west"],
+                title="Runaway", duration=200, label="GOOD Music, Def Jam")
+        _upsert("t2", album="MBDTF", artist="Kanye West", artist_slugs=["kanye-west"],
+                title="Power", duration=200, label="def jam")
+        _upsert("t3", album="MBDTF", artist="Kanye West", artist_slugs=["kanye-west"],
+                title="Monster", duration=200)
+
+        res = LibraryService.get_albums(qdrant_client=_empty_qdrant(), collection_name="c")
+
+        assert len(res.albums) == 1
+        # Def Jam: 2 mentions; GOOD Music: 1 — frequency order, first-seen casing.
+        assert res.albums[0].labels == ["Def Jam", "GOOD Music"]
+
+    def test_label_filter_narrows_to_matching_albums(self, temp_db):
+        _upsert("t1", album="MBDTF", artist="Kanye West", artist_slugs=["kanye-west"],
+                title="Runaway", duration=200, label="Def Jam")
+        _upsert("t2", album="Madvillainy", artist="Madvillain", artist_slugs=["madvillain"],
+                title="Accordion", duration=200, label="Stones Throw")
+
+        res = LibraryService.get_albums(
+            qdrant_client=_empty_qdrant(), collection_name="c", label="def   jam",
+        )
+
+        assert [a.album_title for a in res.albums] == ["MBDTF"]
+
+    def test_label_filter_no_match_yields_empty(self, temp_db):
+        _upsert("t1", album="MBDTF", artist="Kanye West", artist_slugs=["kanye-west"],
+                title="Runaway", duration=200, label="Def Jam")
+        res = LibraryService.get_albums(
+            qdrant_client=_empty_qdrant(), collection_name="c", label="Nonexistent",
+        )
+        assert res.albums == []
+
+
 # --------------------------------------------------------------------------- #
 # LibraryService.get_liked_songs.
 # --------------------------------------------------------------------------- #

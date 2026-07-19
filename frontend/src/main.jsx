@@ -6726,6 +6726,7 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
 
       {albumModal && (
         <AlbumModal
+          key={albumModal.album.album_title}
           album={albumModal.album}
           originRect={albumModal.originRect}
           onClose={() => setAlbumModal(null)}
@@ -6735,6 +6736,7 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
           lang={lang}
           onAddToPlaylist={onAddToPlaylist}
           onQueueNext={onQueueNext}
+          onOpenAlbum={(a) => setAlbumModal({ album: a, originRect: null })}
         />
       )}
       {showNewPlaylistModal && (
@@ -7777,37 +7779,19 @@ function NewPlaylistModal({ onCancel, onSubmit, lang, isDark = true }) {
   );
 }
 
-function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist, isDark, lang, onAddToPlaylist, onQueueNext }) {
+function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist, isDark, lang, onAddToPlaylist, onQueueNext, onOpenAlbum }) {
   const c = useColors(isDark);
   const [hoverRow, setHoverRow] = useState(-1);
   // 10+ feat-артистов заполоняли всю страницу — прячем хвост под "+N".
   const [showAllFeat, setShowAllFeat] = useState(false);
   const isMobile = useIsMobile();
 
-  // Record label for the meta row. AlbumSummary is a slim aggregate without
-  // `label`, so probe a handful of the album's tracks via the batch metadata
-  // endpoint and take the majority vote. 8 ids keeps the response small (the
-  // payload includes lyrics) while still surviving a stray mistagged track.
-  const [albumLabel, setAlbumLabel] = useState(null);
-  useEffect(() => {
-    const ids = (album.tracks || []).map(t => t.track_id).filter(Boolean).slice(0, 8);
-    if (!ids.length) return;
-    let alive = true;
-    apiFetch(`/metadata/tracks?ids=${encodeURIComponent(ids.join(','))}`)
-      .then(full => {
-        if (!alive || !Array.isArray(full)) return;
-        const counts = new Map();
-        for (const t of full) {
-          const l = (t && t.label || '').trim();
-          if (l) counts.set(l, (counts.get(l) || 0) + 1);
-        }
-        let best = null, bestN = 0;
-        for (const [l, n] of counts) { if (n > bestN) { best = l; bestN = n; } }
-        setAlbumLabel(best);
-      })
-      .catch(() => {});
-    return () => { alive = false; };
-  }, [album]);
+  // Record labels now ride on AlbumSummary.labels (server-side aggregation
+  // over track_metadata — deduped, most frequent first). The old client-side
+  // "probe 8 tracks via batch metadata and majority-vote" hack is gone.
+  const albumLabels = Array.isArray(album.labels) ? album.labels : [];
+  // Which label's albums-popover is open: { label, anchorRect } | null.
+  const [labelPop, setLabelPop] = useState(null);
 
   // ── Shared-element fly-in (FLIP): start at the clicked grid cover ────
   // originRect is the viewport rect of the cover the user clicked; the
@@ -7976,15 +7960,17 @@ function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist,
                 <div style={{ flex:1, minWidth:0 }}>
                   <div className="mono" style={{ fontSize:'10px', color:'rgba(238,235,248,.5)', letterSpacing:'0.24em', textTransform:'uppercase' }}>{lang==='ru'?'АЛЬБОМ':'ALBUM'}</div>
                   <div style={{
-                    fontFamily:"'Noto Serif Display', Georgia, serif", fontSize:'30px', lineHeight:1.08,
-                    color:'#f5f3fa', margin:'6px 0 4px', letterSpacing:'-0.01em',
+                    fontFamily:"'Noto Serif Display', Georgia, serif", fontSize:'32px', lineHeight:1.08,
+                    color:'#f5f3fa', margin:'6px 0 6px', letterSpacing:'-0.01em',
                     textShadow:'0 2px 18px rgba(0,0,0,.5)',
                     overflow:'hidden', display:'-webkit-box', WebkitLineClamp:2, WebkitBoxOrient:'vertical',
                   }}>{album.album_title}</div>
-                  <div
+                  <button
+                    type="button"
+                    className="album-artist-pill"
                     onClick={() => { if (album.primary_artist_slug && navigateToArtist) { navigateToArtist(album.primary_artist_slug); requestClose(); } }}
-                    style={{ fontSize:'14px', color:'#cdbcff', cursor:'pointer', display:'inline-block' }}
-                  >{album.primary_artist} →</div>
+                    title={lang==='ru' ? 'Открыть страницу артиста' : 'Open artist page'}
+                  >{album.primary_artist} <span aria-hidden="true">→</span></button>
                   {album.feat_artists?.length > 0 && (() => {
                     const FEAT_LIMIT = 6;
                     const feats = album.feat_artists;
@@ -7995,40 +7981,77 @@ function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist,
                       {shown.map(f => (
                         <span key={f.slug}
                           onClick={() => { if (navigateToArtist) { navigateToArtist(f.slug); requestClose(); } }}
-                          style={{ padding:'2px 9px', borderRadius:'10px', background:'rgba(120,80,200,.25)', border:'1px solid rgba(160,130,255,.35)', color:'#d4c8ff', fontSize:'10px', cursor:'pointer' }}>
+                          style={{ padding:'2px 10px', borderRadius:'10px', background:'rgba(120,80,200,.25)', border:'1px solid rgba(160,130,255,.35)', color:'#d4c8ff', fontSize:'11px', cursor:'pointer' }}>
                           {f.name}
                         </span>
                       ))}
                       {hidden > 0 && (
                         <span
                           onClick={(e) => { e.stopPropagation(); setShowAllFeat(true); }}
-                          style={{ padding:'2px 9px', borderRadius:'10px', background:'rgba(255,255,255,.08)', border:'1px solid rgba(255,255,255,.18)', color:'rgba(238,235,248,.75)', fontSize:'10px', cursor:'pointer' }}>
+                          style={{ padding:'2px 10px', borderRadius:'10px', background:'rgba(255,255,255,.08)', border:'1px solid rgba(255,255,255,.18)', color:'rgba(238,235,248,.75)', fontSize:'11px', cursor:'pointer' }}>
                           {lang==='ru' ? `+${hidden} ещё` : `+${hidden} more`}
                         </span>
                       )}
                       {showAllFeat && feats.length > FEAT_LIMIT && (
                         <span
                           onClick={(e) => { e.stopPropagation(); setShowAllFeat(false); }}
-                          style={{ padding:'2px 9px', borderRadius:'10px', background:'rgba(255,255,255,.05)', border:'1px solid rgba(255,255,255,.12)', color:'rgba(238,235,248,.55)', fontSize:'10px', cursor:'pointer' }}>
+                          style={{ padding:'2px 10px', borderRadius:'10px', background:'rgba(255,255,255,.05)', border:'1px solid rgba(255,255,255,.12)', color:'rgba(238,235,248,.55)', fontSize:'11px', cursor:'pointer' }}>
                           {lang==='ru' ? 'Свернуть' : 'Collapse'}
                         </span>
                       )}
                     </div>
                     );
                   })()}
-                  <div className="mono" style={{ display:'flex', gap:'14px', fontSize:'11px', color:'rgba(238,235,248,.55)', marginTop:'10px', letterSpacing:'0.06em' }}>
-                    <span>{album.year_range || album.year || '—'}</span>
-                    <span>·</span>
-                    <span>{album.track_count} {lang==='ru'?'треков':'tracks'}</span>
-                    <span>·</span>
-                    <span>{totalDurFmt}</span>
-                    {albumLabel && (
-                      <>
-                        <span>·</span>
-                        <span title={lang==='ru'?'Лейбл':'Record label'}>℗ {albumLabel}</span>
-                      </>
-                    )}
-                  </div>
+                  {/* Meta row. flex-wrap + nowrap items: «3 трека» can never
+                      tear apart mid-item on narrow widths; the separator dot
+                      lives INSIDE each item so a wrap leaves no orphan dots. */}
+                  {(() => {
+                    const tracksWord = lang==='ru'
+                      ? ruTracksWord(album.track_count)
+                      : (album.track_count === 1 ? 'track' : 'tracks');
+                    const metaItems = [
+                      String(album.year_range || album.year || '—'),
+                      `${album.track_count} ${tracksWord}`,
+                      totalDurFmt,
+                    ];
+                    return (
+                      <div className="mono" style={{ display:'flex', flexWrap:'wrap', columnGap:'12px', rowGap:'4px', fontSize:'12.5px', color:'rgba(238,235,248,.6)', marginTop:'10px', letterSpacing:'0.06em' }}>
+                        {metaItems.map((item, i) => (
+                          <span key={i} style={{ whiteSpace:'nowrap' }}>
+                            {i > 0 && <span aria-hidden="true" style={{ marginRight:'12px', opacity:.55 }}>·</span>}
+                            {item}
+                          </span>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                  {albumLabels.length > 0 && (
+                    <div style={{ marginTop:'10px' }}>
+                      <div className="mono" style={{ fontSize:'9.5px', letterSpacing:'0.2em', color:'rgba(238,235,248,.5)', marginBottom:'5px' }}>
+                        {albumLabels.length > 1 ? (lang==='ru'?'ЛЕЙБЛЫ':'LABELS') : (lang==='ru'?'ЛЕЙБЛ':'LABEL')}
+                      </div>
+                      <div style={{ display:'flex', flexWrap:'wrap', gap:'5px' }}>
+                        {albumLabels.map(l => (
+                          <button key={l} type="button" className="album-label-chip"
+                            aria-expanded={labelPop?.label === l}
+                            onClick={(e) => setLabelPop(prev => prev?.label === l
+                              ? null
+                              : { label: l, anchorRect: e.currentTarget.getBoundingClientRect() })}
+                            title={lang==='ru' ? 'Альбомы этого лейбла у вас' : 'Albums on this label here'}
+                          >{l}</button>
+                        ))}
+                      </div>
+                      {labelPop && (
+                        <LabelAlbumsPop
+                          label={labelPop.label} anchorRect={labelPop.anchorRect}
+                          excludeAlbumTitle={album.album_title}
+                          isDark={isDark} lang={lang}
+                          onClose={() => setLabelPop(null)}
+                          onOpenAlbum={onOpenAlbum}
+                        />
+                      )}
+                    </div>
+                  )}
                 </div>
                 <button
                   onClick={requestClose}
@@ -11893,35 +11916,55 @@ function VibeLine({ trackId, lang, isDark }) {
   );
 }
 
-// ─── TRACK CREDITS (producer / label / samples) ──────────────────────────────
+// ─── TRACK CREDITS (producer / samples) ──────────────────────────────────────
 // Split a raw producer tag ("Dr. Dre, Mel-Man" / "A; B" / "A & B") into names.
+// Display-only fallback while /library/producers/resolve is in flight — the
+// server port in track_credits_service.py is the source of truth (same rule:
+// `feat\b\.?`, boundary BEFORE the optional dot, else "feat. X" leaves ". X").
 function splitCredits(raw) {
   return String(raw || '')
-    .split(/\s*(?:[,;/]|&|\bfeat\.?\b)\s*/i)
+    .split(/\s*(?:[,;/]|&|\bfeat\b\.?)\s*/i)
     .map(s => s.trim())
     .filter(Boolean)
     .slice(0, 3);
 }
 
-// Producer-name → library artist slug, via the cheap catalog search. Cached
-// module-wide (keyed on lowercased name) so revisiting the same producer across
-// tracks costs zero requests. Resolves to null when the catalog has no artist
-// whose name matches exactly (case-insensitive) — chips then render non-clickable.
-const _producerSlugCache = new Map();
-function resolveLibraryArtistSlug(name) {
+// track_id → Promise<[{name, artist_slug, produced_count}]>. Resolved lazily on
+// first drawer open per track; cached module-wide so reopening costs nothing.
+const _producersResolveCache = new Map();
+function resolveTrackProducers(trackId) {
+  if (!trackId) return Promise.resolve([]);
+  if (_producersResolveCache.has(trackId)) return _producersResolveCache.get(trackId);
+  const p = apiFetch(`/library/producers/resolve?track_id=${encodeURIComponent(trackId)}`)
+    .then(res => (res && Array.isArray(res.producers)) ? res.producers : [])
+    .catch(() => { _producersResolveCache.delete(trackId); return []; });
+  _producersResolveCache.set(trackId, p);
+  return p;
+}
+
+// producer name (lowercased) → Promise<tracks[]> from /library/producers/tracks.
+const _producerTracksCache = new Map();
+function fetchProducerTracks(name) {
   const key = String(name || '').trim().toLowerCase();
-  if (!key) return Promise.resolve(null);
-  if (_producerSlugCache.has(key)) return Promise.resolve(_producerSlugCache.get(key));
-  const p = apiFetch(`/search/catalog?q=${encodeURIComponent(key)}&limit=6`)
-    .then(hits => {
-      const hit = (Array.isArray(hits) ? hits : []).find(h =>
-        h && h.type === 'artist' && (h.artist || '').trim().toLowerCase() === key);
-      const slug = (hit && hit.artist_slug) || null;
-      _producerSlugCache.set(key, slug);
-      return slug;
-    })
-    .catch(() => { _producerSlugCache.delete(key); return null; });
-  _producerSlugCache.set(key, p);
+  if (!key) return Promise.resolve([]);
+  if (_producerTracksCache.has(key)) return _producerTracksCache.get(key);
+  const p = apiFetch(`/library/producers/tracks?name=${encodeURIComponent(name)}`)
+    .then(res => (res && Array.isArray(res.tracks)) ? res.tracks : [])
+    .catch(() => { _producerTracksCache.delete(key); return []; });
+  _producerTracksCache.set(key, p);
+  return p;
+}
+
+// label name (lowercased) → Promise<AlbumSummary[]> from /library/albums?label=.
+const _labelAlbumsCache = new Map();
+function fetchLabelAlbums(label) {
+  const key = String(label || '').trim().toLowerCase();
+  if (!key) return Promise.resolve([]);
+  if (_labelAlbumsCache.has(key)) return _labelAlbumsCache.get(key);
+  const p = apiFetch(`/library/albums?label=${encodeURIComponent(label)}`)
+    .then(res => (res && Array.isArray(res.albums)) ? res.albums : [])
+    .catch(() => { _labelAlbumsCache.delete(key); return []; });
+  _labelAlbumsCache.set(key, p);
   return p;
 }
 
@@ -12035,85 +12078,334 @@ function SamplesPopover({ track, anchorRect, isDark, lang, onClose }) {
   );
 }
 
-// The credits row under «Альбом · Год»: quiet pill-chips for producer(s),
-// label and a samples counter. Renders nothing when the track carries none of
-// these fields — the meta column keeps its current height for plain tracks.
-function TrackCreditsRow({ track, isDark, lang, navigateToArtist }) {
-  const producers = useMemo(() => splitCredits(track?.producer), [track?.producer]);
-  const label = (track?.label || '').trim();
-  const sampleCount = (track?.samples?.length || 0) + (track?.sampled_by?.length || 0);
+// Anchored popover (desktop) / bottom sheet (mobile) listing what a producer
+// made in the user's library. Reuses the samples-pop / hint-sheet shells.
+// Rows are real buttons: click replaces the queue with the producer's tracks.
+function ProducerTracksPop({ name, anchorRect, isDark, lang, onClose, onPlayTrack }) {
+  const isMobile = useIsMobile();
+  const [tracks, setTracks] = useState(null); // null = loading
 
-  // producer name (lowercased) → slug|null once resolved. Missing key = pending.
-  const [slugs, setSlugs] = useState({});
   useEffect(() => {
-    setSlugs({});
-    if (!producers.length) return;
     let alive = true;
-    producers.forEach(name => {
-      resolveLibraryArtistSlug(name).then(slug => {
-        if (alive) setSlugs(prev => ({ ...prev, [name.toLowerCase()]: slug }));
-      });
-    });
+    fetchProducerTracks(name).then(list => { if (alive) setTracks(list); });
     return () => { alive = false; };
-  }, [producers]);
+  }, [name]);
 
-  const [samplesOpen, setSamplesOpen] = useState(false);
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const playRow = (t) => {
+    if (onPlayTrack && t?.track_id) {
+      onPlayTrack({ track: t }, (tracks || []).map(tt => ({ track: tt })));
+    }
+    onClose();
+  };
+
+  const body = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+      <div className="mono" style={{
+        fontSize: 9.5, letterSpacing: '0.2em',
+        color: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(22,22,32,0.55)',
+        margin: '2px 0 4px', textTransform: 'uppercase',
+      }}>
+        {lang === 'ru' ? `Спродюсировано: ${name}` : `Produced by ${name}`}
+      </div>
+      {tracks === null && (
+        <div style={{ fontSize: 12.5, opacity: 0.55, padding: '4px 0' }}>
+          {lang === 'ru' ? 'Ищем треки…' : 'Looking for tracks…'}
+        </div>
+      )}
+      {Array.isArray(tracks) && tracks.length === 0 && (
+        <div style={{ fontSize: 12.5, opacity: 0.55, padding: '4px 0' }}>
+          {lang === 'ru' ? 'В библиотеке ничего не нашлось' : 'Nothing found in your library'}
+        </div>
+      )}
+      {Array.isArray(tracks) && tracks.map((t, i) => (
+        <button key={t.track_id || i} type="button" className="producer-track-row"
+          onClick={() => playRow(t)}
+          title={lang === 'ru' ? 'Слушать' : 'Play'}>
+          <span className="mono" aria-hidden="true" style={{
+            fontSize: 9.5, flexShrink: 0, width: 16, textAlign: 'right',
+            color: isDark ? 'rgba(255,255,255,0.28)' : 'rgba(22,22,32,0.32)',
+          }}>{String(i + 1).padStart(2, '0')}</span>
+          <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <span style={{ fontWeight: 500 }}>{t.title}</span>
+            <span style={{ color: isDark ? 'rgba(255,255,255,0.45)' : 'rgba(22,22,32,0.5)' }}>{'  ·  '}{t.artist}</span>
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+
+  const a11yTitle = lang === 'ru' ? `Треки продюсера ${name}` : `Tracks produced by ${name}`;
+
+  if (isMobile) {
+    return createPortal(
+      <div className="hint-sheet-scrim" onClick={(e) => { e.stopPropagation(); onClose(); }}>
+        <div className="hint-sheet" role="dialog" aria-modal="true" aria-label={a11yTitle}
+          onClick={(e) => e.stopPropagation()}>
+          <span className="hint-sheet__grip" aria-hidden="true" />
+          <div style={{ maxHeight: '55vh', overflowY: 'auto', paddingBottom: 4 }}>{body}</div>
+        </div>
+      </div>,
+      document.body
+    );
+  }
+
+  // Desktop placement mirrors SamplesPopover: above the pill, flip when cramped.
+  const W = 380;
+  const vw = window.innerWidth;
+  const left = anchorRect
+    ? Math.max(12, Math.min(anchorRect.left + anchorRect.width / 2 - W / 2, vw - W - 12))
+    : vw / 2 - W / 2;
+  const openUp = anchorRect ? anchorRect.top > 300 : true;
+  const pos = anchorRect
+    ? (openUp
+        ? { bottom: window.innerHeight - anchorRect.top + 10 }
+        : { top: anchorRect.bottom + 10 })
+    : { top: '30%' };
+
+  return createPortal(
+    <>
+      <div style={{ position: 'fixed', inset: 0, zIndex: 8990 }} onClick={onClose} />
+      <div
+        className={`samples-pop${openUp ? '' : ' samples-pop--down'}`}
+        role="dialog" aria-label={a11yTitle}
+        style={{ position: 'fixed', left, width: W, zIndex: 8991, ...pos }}
+      >{body}</div>
+    </>,
+    document.body
+  );
+}
+
+// Anchored popover (desktop) / bottom sheet (mobile): other albums in the
+// user's library on the same record label. Twin of ProducerTracksPop, opened
+// from a label chip in the album gatefold; a row click swaps the open
+// gatefold to the picked album via onOpenAlbum (full AlbumSummary — the
+// ?label= endpoint returns tracks and labels, so no follow-up fetch).
+function LabelAlbumsPop({ label, anchorRect, excludeAlbumTitle, isDark, lang, onOpenAlbum, onClose }) {
+  const isMobile = useIsMobile();
+  const [albums, setAlbums] = useState(null); // null = loading
+
+  useEffect(() => {
+    let alive = true;
+    fetchLabelAlbums(label).then(list => { if (alive) setAlbums(list); });
+    return () => { alive = false; };
+  }, [label]);
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  const excludeKey = String(excludeAlbumTitle || '').trim().toLowerCase();
+  const rows = (albums || []).filter(a =>
+    (a.album_title || '').trim().toLowerCase() !== excludeKey);
+
+  const pick = (a) => {
+    onClose();
+    if (onOpenAlbum) onOpenAlbum(a);
+  };
+
+  const tracksWordFor = (n) => lang === 'ru'
+    ? ruTracksWord(n)
+    : (n === 1 ? 'track' : 'tracks');
+
+  const body = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+      <div className="mono" style={{
+        fontSize: 9.5, letterSpacing: '0.2em',
+        color: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(22,22,32,0.55)',
+        margin: '2px 0 4px', textTransform: 'uppercase',
+      }}>
+        {(lang === 'ru' ? `На этом лейбле` : `On this label`)}
+        {albums !== null ? ` · ${rows.length}` : ''}
+      </div>
+      {albums === null && (
+        <div style={{ fontSize: 12.5, opacity: 0.55, padding: '4px 0' }}>
+          {lang === 'ru' ? 'Смотрим каталог…' : 'Checking the catalog…'}
+        </div>
+      )}
+      {albums !== null && rows.length === 0 && (
+        <div style={{ fontSize: 12.5, opacity: 0.55, padding: '4px 0' }}>
+          {lang === 'ru' ? 'Других альбомов этого лейбла у вас нет' : 'No other albums on this label here'}
+        </div>
+      )}
+      {rows.map(a => (
+        <button key={`${a.album_title}-${a.year || a.year_range || ''}`} type="button"
+          className="label-album-row" onClick={() => pick(a)}
+          title={lang === 'ru' ? 'Открыть альбом' : 'Open album'}>
+          <div style={{ width: 44, height: 44, flexShrink: 0, borderRadius: 8, overflow: 'hidden' }}>
+            <AlbumCover title={a.album_title} artist={a.primary_artist} size={44}
+              isDark={isDark} coverPath={a.cover_art_path} radius={8} />
+          </div>
+          <span style={{ minWidth: 0, flex: 1 }}>
+            <span style={{ display: 'block', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {a.album_title}
+            </span>
+            <span style={{ display: 'block', fontSize: 11.5, color: isDark ? 'rgba(255,255,255,0.45)' : 'rgba(22,22,32,0.5)' }}>
+              {String(a.year_range || a.year || '—')} · {a.track_count} {tracksWordFor(a.track_count)}
+            </span>
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+
+  const a11yTitle = lang === 'ru' ? `Альбомы лейбла ${label}` : `Albums on ${label}`;
+
+  if (isMobile) {
+    return createPortal(
+      <div className="hint-sheet-scrim" onClick={(e) => { e.stopPropagation(); onClose(); }}>
+        <div className="hint-sheet" role="dialog" aria-modal="true" aria-label={a11yTitle}
+          onClick={(e) => e.stopPropagation()}>
+          <span className="hint-sheet__grip" aria-hidden="true" />
+          <div style={{ maxHeight: '55vh', overflowY: 'auto', paddingBottom: 4 }}>{body}</div>
+        </div>
+      </div>,
+      document.body
+    );
+  }
+
+  const W = 380;
+  const vw = window.innerWidth;
+  const left = anchorRect
+    ? Math.max(12, Math.min(anchorRect.left + anchorRect.width / 2 - W / 2, vw - W - 12))
+    : vw / 2 - W / 2;
+  const openUp = anchorRect ? anchorRect.top > 300 : true;
+  const pos = anchorRect
+    ? (openUp
+        ? { bottom: window.innerHeight - anchorRect.top + 10 }
+        : { top: anchorRect.bottom + 10 })
+    : { top: '30%' };
+
+  return createPortal(
+    <>
+      <div style={{ position: 'fixed', inset: 0, zIndex: 8990 }} onClick={onClose} />
+      <div
+        className={`samples-pop${openUp ? '' : ' samples-pop--down'}`}
+        role="dialog" aria-label={a11yTitle}
+        style={{ position: 'fixed', left, width: W, zIndex: 8991, ...pos }}
+      >{body}</div>
+    </>,
+    document.body
+  );
+}
+
+// The producers drawer: an inline panel below «Альбом · Год», opened by the
+// chevron next to the artist name. Hidden until asked for. Three pill states:
+// producer-as-library-artist → their artist page; producer with other tracks
+// here → ProducerTracksPop; anyone else → muted info pill (no fake affordance).
+function ProducersReveal({ open, track, isDark, lang, navigateToArtist, onPlayTrack }) {
+  const names = useMemo(() => splitCredits(track?.producer), [track?.producer]);
+  const [resolved, setResolved] = useState(null); // null = pending
+  const [popFor, setPopFor] = useState(null);     // {name, anchorRect}
+
+  useEffect(() => {
+    setResolved(null);
+    setPopFor(null);
+    if (!open || !names.length) return;
+    let alive = true;
+    resolveTrackProducers(track?.track_id).then(list => { if (alive) setResolved(list); });
+    return () => { alive = false; };
+  }, [open, track?.track_id, names.length]);
+
+  if (!names.length) return null;
+
+  // While the resolve request is in flight (or if it failed → []), fall back
+  // to muted pills from the client-side split so the panel never sits empty.
+  const pills = (resolved && resolved.length)
+    ? resolved
+    : names.map(n => ({ name: n, artist_slug: null, produced_count: 0 }));
+
+  return (
+    <div className={`credits-reveal${open ? ' credits-reveal--open' : ''}`}>
+      <div className="credits-reveal__inner">
+        <div className="credits-reveal__panel">
+          <div className="mono" style={{
+            fontSize: 9.5, letterSpacing: '0.2em',
+            color: isDark ? 'rgba(255,255,255,0.45)' : 'rgba(22,22,32,0.45)',
+            marginBottom: 6,
+          }}>{lang === 'ru' ? 'ПРОДЮСЕРЫ' : 'PRODUCERS'}</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'center', gap: 6 }}>
+            {pills.map((p) => {
+              if (p.artist_slug && navigateToArtist) {
+                return (
+                  <button key={p.name} type="button" className="credit-chip credit-chip--link"
+                    onClick={() => navigateToArtist(p.artist_slug)}
+                    title={lang === 'ru' ? 'Открыть страницу артиста' : 'Open artist page'}>
+                    <span className="credit-chip__pre" aria-hidden="true">✦</span>
+                    {p.name}
+                  </button>
+                );
+              }
+              if (p.produced_count > 0) {
+                return (
+                  <button key={p.name} type="button" className="credit-chip credit-chip--link"
+                    aria-expanded={popFor?.name === p.name}
+                    onClick={(e) => setPopFor(prev => prev?.name === p.name
+                      ? null
+                      : { name: p.name, anchorRect: e.currentTarget.getBoundingClientRect() })}
+                    title={lang === 'ru' ? 'Ещё треки этого продюсера у вас' : 'More tracks by this producer here'}>
+                    {p.name}
+                    <span className="credit-chip__count">· {p.produced_count}</span>
+                  </button>
+                );
+              }
+              return <span key={p.name} className="credit-chip">{p.name}</span>;
+            })}
+          </div>
+        </div>
+      </div>
+      {popFor && (
+        <ProducerTracksPop
+          name={popFor.name} anchorRect={popFor.anchorRect}
+          isDark={isDark} lang={lang}
+          onClose={() => setPopFor(null)}
+          onPlayTrack={onPlayTrack}
+        />
+      )}
+    </div>
+  );
+}
+
+// The one credit left in the player meta zone: an accent samples pill.
+// Renders nothing when the track has no sample links.
+function SamplesAccentChip({ track, isDark, lang }) {
+  const sampleCount = (track?.samples?.length || 0) + (track?.sampled_by?.length || 0);
+  const [open, setOpen] = useState(false);
   const [anchorRect, setAnchorRect] = useState(null);
-  useEffect(() => { setSamplesOpen(false); }, [track?.track_id]);
+  useEffect(() => { setOpen(false); }, [track?.track_id]);
 
-  if (!producers.length && !label && sampleCount === 0) return null;
-
-  const prodPrefix = lang === 'ru' ? 'прод.' : 'prod.';
-  const samplesWord = lang === 'ru' ? 'сэмплы' : 'samples';
+  if (sampleCount === 0) return null;
 
   return (
     <div style={{
-      display: 'flex', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'center',
-      gap: 6, marginTop: 8, padding: '0 8px',
+      display: 'flex', justifyContent: 'center', marginTop: 8,
       animation: 'vibeSlideIn 240ms cubic-bezier(0.22, 0.9, 0.3, 1)',
     }}>
-      {producers.map((name, i) => {
-        const slug = slugs[name.toLowerCase()];
-        const clickable = !!slug && !!navigateToArtist;
-        const pre = i === 0 && <span className="credit-chip__pre">{prodPrefix}</span>;
-        // A producer found in the library is a real button that opens their
-        // page; anyone else is a plain informational span — no fake affordance.
-        return clickable ? (
-          <button
-            key={name} type="button" className="credit-chip credit-chip--link"
-            onClick={() => navigateToArtist(slug)}
-            title={lang === 'ru' ? 'Открыть страницу артиста' : 'Open artist page'}
-          >{pre}{name}</button>
-        ) : (
-          <span key={name} className="credit-chip">{pre}{name}</span>
-        );
-      })}
-      {label && (
-        <span className="credit-chip">
-          <span className="credit-chip__pre" aria-hidden="true">℗</span>
-          {label}
-        </span>
-      )}
-      {sampleCount > 0 && (
-        <button
-          type="button"
-          className="credit-chip credit-chip--link"
-          aria-expanded={samplesOpen}
-          onClick={(e) => {
-            setAnchorRect(e.currentTarget.getBoundingClientRect());
-            setSamplesOpen(o => !o);
-          }}
-          title={lang === 'ru' ? 'Показать сэмплы' : 'Show samples'}
-        >
-          <span className="credit-chip__pre" aria-hidden="true">⧉</span>
-          {samplesWord} · {sampleCount}
-        </button>
-      )}
-      {samplesOpen && (
+      <button
+        type="button"
+        className="credit-chip credit-chip--link credit-chip--samples"
+        aria-expanded={open}
+        onClick={(e) => {
+          setAnchorRect(e.currentTarget.getBoundingClientRect());
+          setOpen(o => !o);
+        }}
+        title={lang === 'ru' ? 'Показать сэмплы' : 'Show samples'}
+      >
+        <span className="credit-chip__dot" aria-hidden="true" />
+        {lang === 'ru' ? 'Сэмплы' : 'Samples'} · {sampleCount}
+      </button>
+      {open && (
         <SamplesPopover
           track={track} anchorRect={anchorRect}
           isDark={isDark} lang={lang}
-          onClose={() => setSamplesOpen(false)}
+          onClose={() => setOpen(false)}
         />
       )}
     </div>
@@ -13852,6 +14144,11 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
   // and silently skip — i.e. lyric-explain state never reset on track change.
   const currentTrack = currentIndex >= 0 && currentIndex < playlist.length ? playlist[currentIndex].track : null;
 
+  // Producers drawer (chevron next to the artist name). Closed by default;
+  // a track change collapses it so credits never leak across tracks.
+  const [creditsOpen, setCreditsOpen] = useState(false);
+  useEffect(() => { setCreditsOpen(false); }, [currentTrack?.track_id]);
+
   // ── Queue drag-to-reorder ───────────────────────────────────────────────
   // Freshest playlist mirrored into a ref so the commit (snapshotted by the
   // drag hook at grab time) reorders the LATEST array — a stream append landing
@@ -14894,18 +15191,40 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                   }}
                 >
                   <ArtistCredit track={currentTrack} navigateToArtist={navigateToArtist} lang={lang} color={pTextMuted} />
+                  {splitCredits(currentTrack.producer).length > 0 && (
+                    <button
+                      type="button"
+                      className={`credits-toggle${creditsOpen ? ' credits-toggle--open' : ''}`}
+                      aria-expanded={creditsOpen}
+                      onClick={(e) => { e.stopPropagation(); setCreditsOpen(o => !o); }}
+                      title={lang === 'ru' ? 'Продюсеры трека' : 'Track producers'}
+                      aria-label={lang === 'ru' ? 'Продюсеры трека' : 'Track producers'}
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="6 9 12 15 18 9" />
+                      </svg>
+                    </button>
+                  )}
                 </div>
                 {currentTrack.album && (
                   <div style={{ fontSize:'clamp(12px, 1.4vh, 16px)', color:pTextSubtle, marginTop:'3px' }}>
                     {currentTrack.album}{currentTrack.year ? ` · ${currentTrack.year}` : ''}
                   </div>
                 )}
-                <TrackCreditsRow
+                <ProducersReveal
                   key={currentTrack.track_id}
+                  open={creditsOpen}
                   track={currentTrack}
                   isDark={isDark}
                   lang={lang}
                   navigateToArtist={navigateToArtist}
+                  onPlayTrack={onPlayTrack}
+                />
+                <SamplesAccentChip
+                  key={`samples-${currentTrack.track_id}`}
+                  track={currentTrack}
+                  isDark={isDark}
+                  lang={lang}
                 />
                 <VibeLine
                   trackId={currentTrack?.track_id}
@@ -16489,6 +16808,7 @@ function ArtistAtlasSection({
 
       {albumModal && (
         <AlbumModal
+          key={albumModal.album.album_title}
           album={albumModal.album}
           originRect={albumModal.originRect}
           onClose={() => setAlbumModal(null)}
@@ -16497,6 +16817,7 @@ function ArtistAtlasSection({
           isDark={isDark}
           lang={lang}
           onQueueNext={onQueueNext}
+          onOpenAlbum={(a) => setAlbumModal({ album: a, originRect: null })}
         />
       )}
     </div>

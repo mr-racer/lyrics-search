@@ -30,6 +30,7 @@ from .job_tracker import JobTracker, IndexStage, IndexStatus
 from .similarity_service import analyze_collection
 from .song_facts_service import fetch_facts_for_songs
 from .sonic_descriptor_service import SonicDescriptorService
+from .track_credits_service import aggregate_labels, label_key
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +103,7 @@ def _album_summary_from_sqlite(a: dict) -> AlbumSummary:
         track_count=a["track_count"],
         duration_seconds=int(sum(t["duration"] or 0 for t in a["tracks"])),
         top_genres=a["top_genres"],
+        labels=aggregate_labels(a.get("labels_raw") or []),
         tracks=[
             AlbumTrack(
                 track_id=t["track_id"],
@@ -1391,12 +1393,18 @@ class LibraryService:
     def get_albums(
         cls, *, qdrant_client, collection_name: str,
         sort: str = "alphabetical",
+        label: Optional[str] = None,
     ) -> LibraryAlbumsResponse:
         """Group all tracks in the collection by album_title, derive primary
         artist via majority vote, return AlbumSummary list.
 
+        ``label`` narrows the result to albums where at least one track
+        carries that record label (matched via ``label_key`` normalization).
+
         Tries SQLite first (fast indexed query). Falls back to Qdrant scroll
-        if SQLite tables are empty (pre-backfill deploy).
+        if SQLite tables are empty (pre-backfill deploy). The fallback carries
+        no labels (the light payload projection omits them) — acceptable, as
+        it only triggers when track_metadata is empty, i.e. no labels exist.
         """
         # Shared ordering for both the SQLite fast-path and the Qdrant fallback,
         # so the `sort` query param behaves identically regardless of source.
@@ -1421,6 +1429,12 @@ class LibraryService:
                 albums.sort(key=lambda a: a.album_title.lower())
             return albums
 
+        def _apply_label_filter(albums: list) -> list:
+            if not label:
+                return albums
+            wanted = label_key(label)
+            return [a for a in albums if any(label_key(l) == wanted for l in a.labels)]
+
         # ── Fast path: read from SQLite ──
         try:
             sqlite_albums = MetadataDB.get_library_albums_from_sqlite(collection_name)
@@ -1430,9 +1444,9 @@ class LibraryService:
                     len(sqlite_albums), collection_name,
                 )
                 return LibraryAlbumsResponse(
-                    albums=_apply_sort([
+                    albums=_apply_sort(_apply_label_filter([
                         _album_summary_from_sqlite(a) for a in sqlite_albums
-                    ]),
+                    ])),
                     collection_name=collection_name,
                     qdrant_available=True,
                 )
@@ -1543,7 +1557,8 @@ class LibraryService:
             ))
 
         return LibraryAlbumsResponse(
-            albums=_apply_sort(albums), collection_name=collection_name,
+            albums=_apply_sort(_apply_label_filter(albums)),
+            collection_name=collection_name,
             qdrant_available=True,
         )
 

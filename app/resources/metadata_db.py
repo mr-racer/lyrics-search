@@ -3750,7 +3750,7 @@ class MetadataDB:
         rows = conn.execute(
             """
             SELECT album, title, artist, duration, year, cover_art_path,
-                   track_id, genre
+                   track_id, genre, label
             FROM track_metadata
             WHERE collection_name = ? AND album IS NOT NULL AND album != ''
             ORDER BY album, track_id
@@ -3763,7 +3763,7 @@ class MetadataDB:
 
         # Group by album (case-insensitive key, preserves first-seen casing)
         groups: dict[str, dict] = {}
-        for album, title, artist, duration, year, cover_art_path, track_id, genre in rows:
+        for album, title, artist, duration, year, cover_art_path, track_id, genre, label in rows:
             key = album.lower()
             if key not in groups:
                 groups[key] = {
@@ -3771,6 +3771,9 @@ class MetadataDB:
                     "track_count": 0,
                     "cover_art_path": cover_art_path,
                     "tracks": [],
+                    # Raw per-track label strings (may hold several labels each);
+                    # the service layer splits/dedupes them into AlbumSummary.labels.
+                    "labels_raw": [],
                     "_artist_counter": Counter(),
                     "_year_counter": Counter(),
                     "_genre_counter": Counter(),
@@ -3787,6 +3790,8 @@ class MetadataDB:
             gn = (genre or "").strip()
             if gn:
                 g["_genre_counter"][gn] += 1
+            if label and str(label).strip():
+                g["labels_raw"].append(str(label).strip())
             g["tracks"].append({
                 "track_id": track_id,
                 "title": title or "—",
@@ -3967,6 +3972,51 @@ class MetadataDB:
         except Exception:
             conn.rollback()
             raise
+
+    @classmethod
+    def get_track_producer(cls, collection_name: str, track_id: str) -> Optional[str]:
+        """Producer tag of a single track (None when absent or track unknown)."""
+        track_id = canonical_track_id(track_id)
+        conn = cls._connect()
+        row = conn.execute(
+            """SELECT producer FROM track_metadata
+               WHERE collection_name = ? AND track_id = ?""",
+            (collection_name, track_id),
+        ).fetchone()
+        return row[0] if row else None
+
+    @classmethod
+    def get_produced_tracks(cls, collection_name: str) -> list[dict]:
+        """All tracks of the collection that carry a producer tag.
+
+        Slim rows for the producer-credit endpoints
+        (``track_credits_service``): the caller splits the free-text
+        ``producer`` string and does the name matching in Python.
+        """
+        conn = cls._connect()
+        rows = conn.execute(
+            """SELECT track_id, title, artist, album, year, duration,
+                      cover_art_path, producer
+               FROM track_metadata
+               WHERE collection_name = ? AND producer IS NOT NULL AND producer != ''""",
+            (collection_name,),
+        ).fetchall()
+        cols = ["track_id", "title", "artist", "album", "year", "duration",
+                "cover_art_path", "producer"]
+        return [dict(zip(cols, r)) for r in rows]
+
+    @classmethod
+    def has_artist_slug(cls, collection_name: str, artist_slug: str) -> bool:
+        """True when the collection has any track credited to this artist slug."""
+        if not artist_slug:
+            return False
+        conn = cls._connect()
+        row = conn.execute(
+            """SELECT 1 FROM track_artist_slugs
+               WHERE collection_name = ? AND artist_slug = ? LIMIT 1""",
+            (collection_name, artist_slug),
+        ).fetchone()
+        return row is not None
 
     @classmethod
     def update_track_producer_label(

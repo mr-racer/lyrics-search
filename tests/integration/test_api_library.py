@@ -254,6 +254,114 @@ class TestAlbums:
                 assert resp.status_code == 200
 
 
+# ── Producer credits + album label filter (SQLite-only, Qdrant not needed) ────
+
+def _login_credits(app, uid: str) -> None:
+    app.dependency_overrides[get_current_user] = lambda: User(
+        id=uid, email=f"{uid}@x.y", role="member", created_at=0.0,
+    )
+
+
+def _seed_credit_tracks(collection: str) -> None:
+    MetadataDB.upsert_track_metadata(collection, "t1", {
+        "title": "Runaway", "artist": "Kanye West", "album": "MBDTF",
+        "artist_slugs": ["kanye-west"], "producer": "Kanye West, Emile",
+        "label": "GOOD Music, Def Jam", "duration": 200,
+    })
+    MetadataDB.upsert_track_metadata(collection, "t2", {
+        "title": "Power", "artist": "Kanye West", "album": "MBDTF",
+        "artist_slugs": ["kanye-west"], "producer": "kanye west",
+        "label": "def jam", "duration": 200,
+    })
+    MetadataDB.upsert_track_metadata(collection, "t3", {
+        "title": "Accordion", "artist": "Madvillain", "album": "Madvillainy",
+        "artist_slugs": ["madvillain"], "producer": "Madlib",
+        "label": "Stones Throw", "duration": 120,
+    })
+
+
+class TestProducerCredits:
+    def test_resolve_returns_artist_slug_and_counts(self):
+        app = create_app()
+        _login_credits(app, "alice")
+        _seed_credit_tracks("acct_alice")
+        with TestClient(app) as c:
+            resp = c.get("/api/v1/library/producers/resolve", params={"track_id": "t1"})
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["collection_name"] == "acct_alice"
+            got = {p["name"]: p for p in body["producers"]}
+            assert set(got) == {"Kanye West", "Emile"}
+            assert got["Kanye West"]["artist_slug"] == "kanye-west"
+            assert got["Kanye West"]["produced_count"] == 1   # t2 only, t1 excluded
+            assert got["Emile"]["artist_slug"] is None
+            assert got["Emile"]["produced_count"] == 0
+
+    def test_resolve_unknown_track_yields_empty(self):
+        app = create_app()
+        _login_credits(app, "alice")
+        with TestClient(app) as c:
+            resp = c.get("/api/v1/library/producers/resolve", params={"track_id": "nope"})
+            assert resp.status_code == 200
+            assert resp.json()["producers"] == []
+
+    def test_producer_tracks_matches_case_insensitively(self):
+        app = create_app()
+        _login_credits(app, "alice")
+        _seed_credit_tracks("acct_alice")
+        with TestClient(app) as c:
+            resp = c.get("/api/v1/library/producers/tracks", params={"name": "KANYE WEST"})
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["producer"] == "KANYE WEST"
+            assert [t["track_id"] for t in body["tracks"]] == ["t2", "t1"]
+
+    def test_producer_tracks_requires_name(self):
+        app = create_app()
+        _login_credits(app, "alice")
+        with TestClient(app) as c:
+            resp = c.get("/api/v1/library/producers/tracks")
+            assert resp.status_code == 422
+
+    def test_no_cross_account_leak(self):
+        """Bob's resolve must not see Alice's produced tracks."""
+        app = create_app()
+        _login_credits(app, "bob")
+        _seed_credit_tracks("acct_alice")
+        MetadataDB.upsert_track_metadata("acct_bob", "b1", {
+            "title": "Solo", "artist": "Bob", "producer": "Kanye West",
+        })
+        with TestClient(app) as c:
+            resp = c.get("/api/v1/library/producers/resolve", params={"track_id": "b1"})
+            got = {p["name"]: p for p in resp.json()["producers"]}
+            assert got["Kanye West"]["produced_count"] == 0
+            assert got["Kanye West"]["artist_slug"] is None
+
+
+class TestAlbumLabelFilter:
+    def test_albums_carry_labels_and_label_param_filters(self):
+        app = create_app()
+        _login_credits(app, "alice")
+        _seed_credit_tracks("acct_alice")
+        with TestClient(app) as c:
+            # The route needs a non-None db_client; the SQLite fast-path never
+            # touches Qdrant once track_metadata rows exist.
+            c.app.state.db_client = SimpleNamespace(qdrant=MagicMock())
+
+            resp = c.get("/api/v1/library/albums")
+            assert resp.status_code == 200
+            by_title = {a["album_title"]: a for a in resp.json()["albums"]}
+            assert by_title["MBDTF"]["labels"] == ["Def Jam", "GOOD Music"]
+            assert by_title["Madvillainy"]["labels"] == ["Stones Throw"]
+
+            resp = c.get("/api/v1/library/albums", params={"label": "def jam"})
+            assert resp.status_code == 200
+            assert [a["album_title"] for a in resp.json()["albums"]] == ["MBDTF"]
+
+            resp = c.get("/api/v1/library/albums", params={"label": "Nonexistent"})
+            assert resp.json()["albums"] == []
+
+
 # ── DELETE /library/tracks/{track_id} (from test_api_library_delete_track.py) ──
 
 @pytest.fixture

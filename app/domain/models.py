@@ -450,12 +450,45 @@ class AlbumSummary(BaseModel):
     duration_seconds: int
     top_genres: list[str] = Field(default_factory=list)
     tracks: list[AlbumTrack] = Field(default_factory=list)
+    # Record labels across the album's tracks (deduped, most frequent first).
+    labels: list[str] = Field(default_factory=list)
 
 
 class LibraryAlbumsResponse(BaseModel):
     albums: list[AlbumSummary]
     collection_name: Optional[str] = None
     qdrant_available: bool = True
+
+
+class ProducerCredit(BaseModel):
+    """One name from a track's producer tag, resolved against the library."""
+    name: str
+    # Set when the library has this producer as an artist (canonical slug).
+    artist_slug: Optional[str] = None
+    # How many OTHER tracks in the library credit them as producer.
+    produced_count: int = 0
+
+
+class ProducerResolveResponse(BaseModel):
+    producers: list[ProducerCredit]
+    collection_name: Optional[str] = None
+
+
+class ProducerTrack(BaseModel):
+    track_id: str
+    title: str
+    artist: str
+    album: Optional[str] = None
+    year: Optional[int] = None
+    duration: Optional[float] = None
+    cover_art_path: Optional[str] = None
+    artist_refs: list[ArtistRef] = Field(default_factory=list)
+
+
+class ProducerTracksResponse(BaseModel):
+    producer: str
+    tracks: list[ProducerTrack]
+    collection_name: Optional[str] = None
 
 
 class LikedSongTrack(BaseModel):
