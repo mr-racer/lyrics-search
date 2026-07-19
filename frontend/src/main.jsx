@@ -2947,15 +2947,15 @@ function HomeDailyExtras({ isDark, lang }) {
             {fmtDur(pulse.seconds_listened) || (lang==='ru' ? 'пока тихо' : 'quiet so far')}
           </div>
           {hasRhythm && (
-            <div style={{ display:'flex', gap:6, justifyContent:'flex-end', alignItems:'flex-end', marginTop:12 }}>
+            <div style={{ display:'flex', gap:9, justifyContent:'flex-end', alignItems:'flex-end', marginTop:14 }}>
               {daily.map((sec, i) => {
                 const active = sec > 0;
-                const h = active ? Math.max(4, Math.round(26 * sec / maxDay)) : 3;
+                const h = active ? Math.max(9, Math.round(54 * sec / maxDay)) : 6;
                 const isToday = i === todayIdx;
                 return (
                   <div key={i} title={`${dayNames[i]} · ${fmtDur(sec) || (lang==='ru'?'0м':'0m')}`}
-                    style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:5 }}>
-                    <div style={{ width:9, height:h, borderRadius:4,
+                    style={{ display:'flex', flexDirection:'column', alignItems:'center', gap:6 }}>
+                    <div style={{ width:17, height:h, borderRadius:6,
                       background: (isToday && active)
                         ? (isDark
                             ? 'linear-gradient(180deg, oklch(78% 0.14 285), oklch(78% 0.15 340))'
@@ -2963,7 +2963,7 @@ function HomeDailyExtras({ isDark, lang }) {
                         : active
                           ? (isDark ? 'rgba(255,255,255,.30)' : 'rgba(30,25,55,.28)')
                           : (isDark ? 'rgba(255,255,255,.10)' : 'rgba(30,25,55,.10)') }} />
-                    <span className="mono" style={{ fontSize:8.5, lineHeight:1,
+                    <span className="mono" style={{ fontSize:11, lineHeight:1,
                       color: isToday ? c.textMuted : c.textSubtle }}>
                       {dayLetters[i]}
                     </span>
