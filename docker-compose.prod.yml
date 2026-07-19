@@ -21,9 +21,9 @@ services:
     container_name: musix
     restart: unless-stopped
     ports:
-      # ВАЖНО: слушаем только loopback. Обратный SSH-туннель (systemd-сервис на
-      # этом же хосте) коннектится к localhost:8000 — значит наружу/в LAN порт не
-      # торчит вообще. Отдельных правил файрвола для 8000 не требуется.
+      # ВАЖНО: слушаем только loopback. Обратный SSH-туннель запускается на этой
+      # же машине и коннектится к localhost:8000 — значит наружу/в LAN порт не
+      # торчит вообще. Никаких правил Windows Firewall для 8000 не требуется.
       - "127.0.0.1:8000:8000"
     env_file:
       - path: .env
@@ -48,8 +48,8 @@ services:
       - ./frontend/covers:/app/frontend/covers
       - ./.env:/app/.env:ro
       - hf-cache:/app/.hf-cache
-      # Опционально: индексировать внешнюю папку по ссылке, read-only:
-      # - "/mnt/music:/music:ro"
+      # Опционально (Windows): индексировать внешнюю папку по ссылке, read-only:
+      - "/mnt/music:/music"
     depends_on:
       qdrant:
         condition: service_healthy
