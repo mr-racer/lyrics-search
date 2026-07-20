@@ -730,7 +730,7 @@ class LibraryService:
     async def _run_ai_tasks(
         self, collection_name: str, n_total: int, lang: str = "ru", job=None,
     ) -> None:
-        """Auto AI-indexing (sonic_vibe / refined_facts / artist_bio) for a
+        """Auto AI-indexing (see ``task_types`` below) for a
         just-indexed batch — only when the LLM is reachable. Awaited by the runner
         AFTER facts + upsert, so COMPLETED gates player entry (the frontend relies
         on it), and so the AI tasks see the facts/bio they consume.
@@ -760,7 +760,16 @@ class LibraryService:
             base_url, model, collection_name,
         )
 
-        task_types = ("sonic_vibe", "refined_facts", "artist_bio")
+        # Order matters: the tasks run back-to-back so a local LLM serves one at
+        # a time. fact_relations + lyric_gems sit between refined_facts and
+        # artist_bio — all the text/fact mining groups together, and the slow
+        # web-search bio stays last. fact_relations replaces the old inline hook
+        # in song_facts_service (invisible, uncountable); lyric_gems needs the
+        # tracks to be in Qdrant already, which is true here (after upsert) but
+        # not during the FACTS stage.
+        task_types = (
+            "sonic_vibe", "refined_facts", "fact_relations", "lyric_gems", "artist_bio",
+        )
         ai_stages: dict = {
             tt: {"status": "pending", "n_done": 0, "n_total": 0} for tt in task_types
         }

@@ -2513,17 +2513,25 @@ class MetadataDB:
         n_done: Optional[int] = None,
         n_failed: Optional[int] = None,
         n_skipped: Optional[int] = None,
+        n_total: Optional[int] = None,
         error: Optional[str] = None,
         finished: bool = False,
     ) -> None:
         """Patch a job row. Only non-None fields are written.
 
         ``finished=True`` sets ``finished_at = CURRENT_TIMESTAMP``.
+
+        ``n_total`` lets a task correct the denominator its starter guessed:
+        ``library_service._run_ai_tasks`` hands every task the track count,
+        which is right for per-track tasks but wrong for ones whose unit of
+        work is something else (``fact_relations`` counts songs).
         """
         sets: list[str] = []
         params: list = []
         if status is not None:
             sets.append("status = ?"); params.append(status)
+        if n_total is not None:
+            sets.append("n_total = ?"); params.append(n_total)
         if n_done is not None:
             sets.append("n_done = ?"); params.append(n_done)
         if n_failed is not None:

@@ -8409,15 +8409,16 @@ function PremiumMetaHint({ isDark, lang, style }) {
 function IndexingProgress({ stepStatus, stageProgress, lang, c, isDark, premiumNote = false }) {
   // Flat, chronological order matching the real pipeline: lyrics fetch + CLAP
   // (Звучание) start together at t=0, dense (Текстовый поиск) runs after lyrics,
-  // facts overlap, analysis last. `metadata` (MusicBrainz) is skipped server-side
-  // so it is not shown — covers are still read during the lyrics/tag pass. Same
-  // key order as WIZ_STAGE_LABELS so every indexing flow agrees.
+  // facts overlap. `metadata` (MusicBrainz) is skipped server-side so it is not
+  // shown — covers are still read during the lyrics/tag pass. `analysis`
+  // (similarity) is hidden the same way: it still runs server-side, but its bar
+  // never reflected real progress. Same key order as WIZ_STAGE_LABELS so every
+  // indexing flow agrees.
   const stages = [
     { key:'lyrics',   icon:'♪', labelRu:'Тексты песен',          labelEn:'Lyrics' },
     { key:'audio',    icon:'♫', labelRu:'Анализ звучания',        labelEn:'Sound analysis' },
     { key:'dense',    icon:'◆', labelRu:'Подготовка поиска',  labelEn:'Search setup' },
     { key:'facts',    icon:'★', labelRu:'Факты о треках',           labelEn:'Track facts' },
-    { key:'analysis', icon:'∿', labelRu:'Похожие треки',   labelEn:'Similar tracks' },
   ];
 
   const CheckIcon = ({ size=16, color }) => (
@@ -8723,7 +8724,10 @@ function IndexingStatusDock({ isDark, lang, stepStatus, stageProgress, aiStages 
     return () => document.removeEventListener('mousedown', onDown);
   }, [open]);
 
-  const weights = { lyrics: 0.25, facts: 0.10, metadata: 0.05, dense: 0.20, audio: 0.25, analysis: 0.15 };
+  // Sums to 1.0 — `analysis` is no longer weighted (its bar was removed), so the
+  // rest were renormalized from 0.85 back up to a full 100%. Leaving it out
+  // without renormalizing would cap the pill at 85% forever.
+  const weights = { lyrics: 0.29, facts: 0.12, metadata: 0.06, dense: 0.24, audio: 0.29 };
   let pct = 0;
   for (const [key, w] of Object.entries(weights)) {
     const sp = stageProgress[key];
@@ -10302,6 +10306,19 @@ const AI_ENRICH_STAGES = [
   { key:'artist_bio',    ru:'Биографии артистов', en:'Artist bios' },
 ];
 
+// Rows for the SSE-driven guru phase — a SUPERSET of AI_ENRICH_STAGES, in the
+// same order as `task_types` in library_service._run_ai_tasks. fact_relations
+// and lyric_gems only run on that server-side path (the upload/server flow), so
+// they live here and NOT in AI_ENRICH_STAGES: the folder flow fires its tasks
+// from the client and would render two bars that never fill.
+const SSE_GURU_STAGES = [
+  { key:'sonic_vibe',     ru:'Звучание песен',                 en:'Song vibes' },
+  { key:'refined_facts',  ru:'Углубление фактов',              en:'Deeper facts' },
+  { key:'fact_relations', ru:'Извлекаем информацию о семплах', en:'Sample credits' },
+  { key:'lyric_gems',     ru:'Ищем интересное в текстах',      en:'Digging through lyrics' },
+  { key:'artist_bio',     ru:'Биографии артистов',             en:'Artist bios' },
+];
+
 // Live guru progress driven by the indexing SSE stream itself (`ai_stages` key,
 // published by the backend's awaited AI phase). Unlike AiEnrichProgress (below),
 // this can't confuse the current run with a previous run's rows and needs no
@@ -10309,7 +10326,7 @@ const AI_ENRICH_STAGES = [
 function GuruStagesFromSse({ ru, c, aiStages }) {
   return (
     <>
-      {AI_ENRICH_STAGES.map(s => {
+      {SSE_GURU_STAGES.map(s => {
         const st = (aiStages && aiStages[s.key]) || { status: 'pending', n_done: 0, n_total: 0 };
         const raw = st.status;
         const state = (raw === 'done' || raw === 'skipped') ? 'done'
@@ -19158,16 +19175,18 @@ const stepsServer = (ru) => [
 // Stage keys come from the shared JobTracker (same SSE stream the existing
 // IndexingModal/UploadIndexingWizard consume). KEY ORDER = display order, kept
 // identical to IndexingProgress.stages so every indexing flow agrees: lyrics +
-// audio start together, dense after lyrics, facts overlap, analysis last. The
-// backend reports granular progress for every key here (including `dense` via
-// the "lyrics" → DENSE callback), so all show a real X/Y bar. `metadata`
-// (MusicBrainz) is skipped server-side and intentionally omitted.
+// audio start together, dense after lyrics, facts overlap. The backend reports
+// granular progress for every key here (including `dense` via the "lyrics" →
+// DENSE callback), so all show a real X/Y bar. Two backend stages are
+// deliberately omitted: `metadata` (MusicBrainz) is skipped server-side, and
+// `analysis` (similarity) still runs but never reported usable progress.
+// Dropping `analysis` also means coreDone — which is `every` over these keys —
+// now flips before the job completes, so the guru bars appear sooner.
 const WIZ_STAGE_LABELS = {
   lyrics:   { ru: 'Тексты песен',       en: 'Lyrics' },
   audio:    { ru: 'Анализ звучания',   en: 'Sound analysis' },
   dense:    { ru: 'Подготовка поиска',  en: 'Search setup' },
   facts:    { ru: 'Факты о треках',    en: 'Track facts' },
-  analysis: { ru: 'Похожие треки',   en: 'Similar tracks' },
 };
 
 // ─── Onboarding redesign: shared liquid-glass primitives ─────────────────

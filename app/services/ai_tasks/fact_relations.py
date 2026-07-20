@@ -1,12 +1,16 @@
-"""Fact-relations backfill task — extract producers/samples from EXISTING facts.
+"""Fact-relations task — extract producers/samples from a collection's facts.
 
-The inline hook in ``song_facts_service`` runs the GLiNER2+LLM pipeline for
-facts fetched from now on; this task backfills songs whose facts were fetched
-before the pipeline existed. It walks
-``MetadataDB.get_songs_needing_relations`` (songs visible to the collection
-that have English facts but no ``producers``/``samples_json`` yet) and runs the
-same pipeline per song, so the two paths share exactly one extraction/LLM code
-path (``fact_relations.process_song_facts_async``).
+This is the ONLY path that runs the GLiNER2+LLM relation pipeline. It used to
+share the job with an inline per-song hook in ``song_facts_service``, but that
+hook was invisible to the progress UI and impossible to count, so it was
+removed; ``library_service._run_ai_tasks`` runs this task right after the FACTS
+stage instead, with its own progress bar.
+
+It walks ``MetadataDB.get_songs_needing_relations`` (songs visible to the
+collection that have English facts but no ``producers``/``samples_json`` yet)
+and runs ``fact_relations.process_song_facts_async`` per song. Being keyed on
+"no relations yet" makes it idempotent: a re-run only picks up songs added
+since, plus any whose facts arrived outside indexing.
 """
 from __future__ import annotations
 
@@ -20,8 +24,11 @@ logger = logging.getLogger(__name__)
 
 
 async def run(job, db_client, llm) -> None:
-    """Backfill producer/sample relations for songs in the job's collection."""
+    """Extract producer/sample relations for songs in the job's collection."""
     songs = MetadataDB.get_songs_needing_relations(job.collection_name)
+    # The starter sizes every task by track count; ours is per SONG, so correct
+    # the denominator before the progress bar renders it.
+    MetadataDB.update_ai_job(job_id=job.job_id, n_total=len(songs))
 
     n_done = 0
     n_failed = 0
