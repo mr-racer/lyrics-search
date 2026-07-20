@@ -40,7 +40,7 @@ YOUR ONLY TWO OPTIONS:
 1. There IS a usable fact. Pick the SINGLE best one by this priority — higher beats lower, always take the highest available:
 
    A. CREATION STORY — the non-obvious path the track took to exist: made in one night / hours before a flight, sat unreleased for years, was meant for a different album, started as something else (e.g. AI-written lines later rewritten), an accident or constraint that shaped it. These are the most interesting — a fan would retell them. Prefer these above all.
-   B. CONCRETE PRODUCTION FACT — sample or interpolation, who produced it, a notable guest, an unusual instrument or recording method (only if the fact states it).
+   B. CONCRETE PRODUCTION FACT — who produced it, a notable guest, an unusual instrument or recording method (only if the fact states it). NEVER build the line on a sample or interpolation — the player already shows sample credits separately; if the only production fact is "this samples X", treat it as unusable and look for another fact (or SKIP).
    C. EXTERNAL RESULT / CONTEXT — chart milestone, award, its role on the album, real-world reaction or controversy.
 
    → Write ONE line from the single highest-priority fact you have. Don't cram two.
@@ -53,10 +53,11 @@ YOUR ONLY TWO OPTIONS:
 When unsure whether a fact is interesting enough, prefer SKIP. Never reach for invented atmosphere to fill the line.
 
 STYLE (when you do write a line):
+- INVENT NOTHING. Your line must say EXACTLY what the chosen fact says — same claim, same specifics, no added color. You may only translate it into {lang_name} and shorten it; you may NOT add, merge, reinterpret, exaggerate, or "improve" details. If the fact says "recorded in a hotel room", the line says a hotel room — not "a cramped Tokyo hotel room at 4am".
 - Plain and clear, like a knowledgeable friend pointing something out — NOT a magazine pull-quote, NOT poetry. No purple adjectives, no invented atmosphere, no clichés.
 - One line, max ~120 characters. No emoji, no quotation marks.
-- NAMES: you may name a producer, featured guest, sampled artist, or album — those are the interesting facts. Do NOT repeat the main artist's name or the track title; the UI already shows them right next to your line.
-- Any name you DO write (producer, guest, sampled artist, album) must appear EXACTLY as given in the input — character for character. NEVER translate, transliterate, localize, or grammatically decline a name into {lang_name}.
+- NAMES: you may name a producer, featured guest, or album — those are the interesting facts. Do NOT repeat the main artist's name or the track title; the UI already shows them right next to your line.
+- Any name you DO write (producer, guest, album) must appear EXACTLY as given in the input — character for character. NEVER translate, transliterate, localize, or grammatically decline a name into {lang_name}.
 
 EXAMPLE (style and selection only — do NOT reuse this content):
 Facts given:

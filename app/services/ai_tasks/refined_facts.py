@@ -67,8 +67,13 @@ PROCEED WITH THIS FACTS:
 _SONG_SUBJECT_CLAUSE = (
     "\nCONTEXT: All of these facts are about the song \"{title}\", which the "
     "listener is already looking at. Do NOT repeat the song's title in your "
-    "output — replace any mention of it with «Эта песня» when writing in "
-    "Russian, or \"this song\" when writing in English.\n"
+    "output. Refer to the song in plain words woven naturally into the "
+    "sentence — in English \"this song\" / \"it\", in Russian «эта песня», "
+    "grammatically declined to fit the sentence (эта песня / этой песни / "
+    "эту песню / в этой песне). NEVER put this reference in quotation marks "
+    "and never treat it as a title — it is an ordinary noun phrase. Often "
+    "the cleanest option is to drop the subject entirely (e.g. «Записана за "
+    "одну ночь…», \"Was written for another album…\").\n"
 )
 
 # def _build_user_prompt(*, facts: list[str], lang: str) -> str:

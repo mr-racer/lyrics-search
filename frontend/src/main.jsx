@@ -5519,13 +5519,16 @@ function AlbumCard({ album, isDark, onClick, navigateToArtist, lang, index = 0 }
         <div className="lib-album-title" style={{ fontWeight:600, color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{album.album_title}</div>
         <div className="lib-album-sub" style={{ marginTop:'3px', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
           <span style={{ color: isDark ? '#bba8ff' : '#4a32b8', cursor:'pointer' }} onClick={onArtistClick(album.primary_artist_slug)} title={lang==='ru'?'Открыть страницу артиста':'Open artist'}>{album.primary_artist}</span>
-          {album.feat_artists?.slice(0, 2).map(f => (
-            <React.Fragment key={f.slug}>
-              <span style={{ color:c.textSubtle }}> · </span>
-              <span style={{ color: isDark ? '#bba8ff' : '#4a32b8', cursor:'pointer' }} onClick={onArtistClick(f.slug)}>{f.name}</span>
+          {(album.feat_artists?.length || 0) > 0 && (
+            <span style={{ opacity:.55, fontSize:'11px', fontWeight:400 }}> feat. </span>
+          )}
+          {album.feat_artists?.slice(0, 2).map((f, i) => (
+            <React.Fragment key={f.slug || f.name}>
+              {i > 0 && <span style={{ color:c.textSubtle, fontSize:'11px' }}>, </span>}
+              <span style={{ color: isDark ? '#bba8ff' : '#4a32b8', opacity:.75, fontSize:'11px', fontWeight:400, cursor:'pointer' }} onClick={onArtistClick(f.slug)}>{f.name}</span>
             </React.Fragment>
           ))}
-          {(album.feat_artists?.length || 0) > 2 && <span style={{ color:c.textSubtle }}> +{album.feat_artists.length - 2}</span>}
+          {(album.feat_artists?.length || 0) > 2 && <span style={{ color:c.textSubtle, fontSize:'11px' }}> +{album.feat_artists.length - 2}</span>}
           {yearStr && <span style={{ color:c.textMuted }}> · {yearStr}</span>}
         </div>
         {topGenre && (
@@ -6811,19 +6814,21 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
       </div>
 
       {albumModal && (
-        <AlbumModal
-          key={albumModal.album.album_title}
-          album={albumModal.album}
-          originRect={albumModal.originRect}
-          onClose={() => setAlbumModal(null)}
-          onPlayTrack={onPlayTrack}
-          navigateToArtist={navigateToArtist}
-          isDark={isDark}
-          lang={lang}
-          onAddToPlaylist={onAddToPlaylist}
-          onQueueNext={onQueueNext}
-          onOpenAlbum={(a) => setAlbumModal({ album: a, originRect: null })}
-        />
+        <ModalErrorBoundary key={`b-${albumModal.album.album_title}`} onReset={() => setAlbumModal(null)}>
+          <AlbumModal
+            key={albumModal.album.album_title}
+            album={albumModal.album}
+            originRect={albumModal.originRect}
+            onClose={() => setAlbumModal(null)}
+            onPlayTrack={onPlayTrack}
+            navigateToArtist={navigateToArtist}
+            isDark={isDark}
+            lang={lang}
+            onAddToPlaylist={onAddToPlaylist}
+            onQueueNext={onQueueNext}
+            onOpenAlbum={(a) => setAlbumModal({ album: a, originRect: null })}
+          />
+        </ModalErrorBoundary>
       )}
       {showNewPlaylistModal && (
         <NewPlaylistModal
@@ -7865,6 +7870,24 @@ function NewPlaylistModal({ onCancel, onSubmit, lang, isDark = true }) {
   );
 }
 
+// Safety net around the album gatefold stack: a render crash inside the modal
+// (bad album data, a popover edge case) must degrade to «modal quietly closes»,
+// never to a white screen — the SPA has no other error boundary.
+class ModalErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { failed: false };
+  }
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch(error, info) {
+    console.error('[AlbumModal] render crashed — closing modal', error, info?.componentStack);
+    if (this.props.onReset) this.props.onReset();
+  }
+  render() {
+    return this.state.failed ? null : this.props.children;
+  }
+}
+
 function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist, isDark, lang, onAddToPlaylist, onQueueNext, onOpenAlbum }) {
   const c = useColors(isDark);
   const [hoverRow, setHoverRow] = useState(-1);
@@ -7878,6 +7901,9 @@ function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist,
   const albumLabels = Array.isArray(album.labels) ? album.labels : [];
   // Which label's albums-popover is open: { label, anchorRect } | null.
   const [labelPop, setLabelPop] = useState(null);
+  // «См. все» full-screen label catalog, shown IN PLACE of the gatefold
+  // (which stays mounted underneath): label string | null.
+  const [labelAllOpen, setLabelAllOpen] = useState(null);
 
   // ── Shared-element fly-in (FLIP): start at the clicked grid cover ────
   // originRect is the viewport rect of the cover the user clicked; the
@@ -8120,9 +8146,13 @@ function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist,
                         {albumLabels.map(l => (
                           <button key={l} type="button" className="album-label-chip"
                             aria-expanded={labelPop?.label === l}
-                            onClick={(e) => setLabelPop(prev => prev?.label === l
-                              ? null
-                              : { label: l, anchorRect: e.currentTarget.getBoundingClientRect() })}
+                            onClick={(e) => {
+                              // Read the rect NOW: inside the updater the synthetic
+                              // event is already recycled (currentTarget === null) on
+                              // every non-eager update — i.e. from the second click on.
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              setLabelPop(prev => prev?.label === l ? null : { label: l, anchorRect: rect });
+                            }}
                             title={lang==='ru' ? 'Альбомы этого лейбла у вас' : 'Albums on this label here'}
                           >{l}</button>
                         ))}
@@ -8131,9 +8161,21 @@ function AlbumModal({ album, originRect, onClose, onPlayTrack, navigateToArtist,
                         <LabelAlbumsPop
                           label={labelPop.label} anchorRect={labelPop.anchorRect}
                           excludeAlbumTitle={album.album_title}
+                          excludeArtist={album.primary_artist}
                           isDark={isDark} lang={lang}
                           onClose={() => setLabelPop(null)}
                           onOpenAlbum={onOpenAlbum}
+                          onSeeAll={(l) => setLabelAllOpen(l)}
+                        />
+                      )}
+                      {labelAllOpen && (
+                        <LabelAlbumsModal
+                          label={labelAllOpen}
+                          currentAlbumTitle={album.album_title}
+                          currentArtist={album.primary_artist}
+                          isDark={isDark} lang={lang}
+                          onOpenAlbum={onOpenAlbum}
+                          onClose={() => setLabelAllOpen(null)}
                         />
                       )}
                     </div>
@@ -12267,14 +12309,22 @@ function ProducerTracksPop({ name, anchorRect, isDark, lang, onClose, onPlayTrac
   );
 }
 
+// Case-insensitive keys for album/artist comparisons in the label popover.
+const _albumKey = (s) => String(s || '').trim().toLowerCase();
+
 // Anchored popover (desktop) / bottom sheet (mobile): other albums in the
 // user's library on the same record label. Twin of ProducerTracksPop, opened
 // from a label chip in the album gatefold; a row click swaps the open
 // gatefold to the picked album via onOpenAlbum (full AlbumSummary — the
 // ?label= endpoint returns tracks and labels, so no follow-up fetch).
-function LabelAlbumsPop({ label, anchorRect, excludeAlbumTitle, isDark, lang, onOpenAlbum, onClose }) {
+// Shows OTHER artists' albums first (that's the interesting catalog neighbor
+// story); falls back to the current artist's own albums only when no other
+// artist is on the label. Caps at 10 rows — «См. все» hands off to the
+// full-screen LabelAlbumsModal via onSeeAll.
+function LabelAlbumsPop({ label, anchorRect, excludeAlbumTitle, excludeArtist, isDark, lang, onOpenAlbum, onSeeAll, onClose }) {
   const isMobile = useIsMobile();
   const [albums, setAlbums] = useState(null); // null = loading
+  const POP_LIMIT = 10;
 
   useEffect(() => {
     let alive = true;
@@ -12288,9 +12338,13 @@ function LabelAlbumsPop({ label, anchorRect, excludeAlbumTitle, isDark, lang, on
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const excludeKey = String(excludeAlbumTitle || '').trim().toLowerCase();
-  const rows = (albums || []).filter(a =>
-    (a.album_title || '').trim().toLowerCase() !== excludeKey);
+  const excludeKey = _albumKey(excludeAlbumTitle);
+  const artistKey = _albumKey(excludeArtist);
+  const all = (albums || []).filter(a => _albumKey(a.album_title) !== excludeKey);
+  const others = artistKey ? all.filter(a => _albumKey(a.primary_artist) !== artistKey) : all;
+  const pool = others.length > 0 ? others : all;
+  const rows = pool.slice(0, POP_LIMIT);
+  const hiddenCount = all.length - rows.length;
 
   const pick = (a) => {
     onClose();
@@ -12309,7 +12363,7 @@ function LabelAlbumsPop({ label, anchorRect, excludeAlbumTitle, isDark, lang, on
         margin: '2px 0 4px', textTransform: 'uppercase',
       }}>
         {(lang === 'ru' ? `На этом лейбле` : `On this label`)}
-        {albums !== null ? ` · ${rows.length}` : ''}
+        {albums !== null ? ` · ${all.length}` : ''}
       </div>
       {albums === null && (
         <div style={{ fontSize: 12.5, opacity: 0.55, padding: '4px 0' }}>
@@ -12334,11 +12388,19 @@ function LabelAlbumsPop({ label, anchorRect, excludeAlbumTitle, isDark, lang, on
               {a.album_title}
             </span>
             <span style={{ display: 'block', fontSize: 11.5, color: isDark ? 'rgba(255,255,255,0.45)' : 'rgba(22,22,32,0.5)' }}>
-              {String(a.year_range || a.year || '—')} · {a.track_count} {tracksWordFor(a.track_count)}
+              {a.primary_artist} · {String(a.year_range || a.year || '—')} · {a.track_count} {tracksWordFor(a.track_count)}
             </span>
           </span>
         </button>
       ))}
+      {albums !== null && hiddenCount > 0 && onSeeAll && (
+        <button type="button" className="label-album-row"
+          onClick={() => { onClose(); onSeeAll(label); }}
+          style={{ justifyContent: 'center', fontWeight: 500, color: isDark ? '#bba8ff' : '#4a32b8' }}
+          title={lang === 'ru' ? 'Все альбомы этого лейбла у вас' : 'All albums on this label here'}>
+          {lang === 'ru' ? `См. все · ${all.length}` : `See all · ${all.length}`}
+        </button>
+      )}
     </div>
   );
 
@@ -12378,6 +12440,139 @@ function LabelAlbumsPop({ label, anchorRect, excludeAlbumTitle, isDark, lang, on
         style={{ position: 'fixed', left, width: W, zIndex: 8991, ...pos }}
       >{body}</div>
     </>,
+    document.body
+  );
+}
+
+// Full-screen «все альбомы лейбла» modal. Opened from LabelAlbumsPop's
+// «См. все» IN PLACE of the album gatefold (the gatefold stays mounted
+// underneath, so closing this modal drops the user right back into it).
+// Row-based expanded format: other artists' albums first, then the current
+// artist's own section. A row click swaps the gatefold to the picked album.
+function LabelAlbumsModal({ label, currentAlbumTitle, currentArtist, isDark, lang, onOpenAlbum, onClose }) {
+  const [albums, setAlbums] = useState(null); // null = loading
+
+  useEffect(() => {
+    let alive = true;
+    fetchLabelAlbums(label).then(list => { if (alive) setAlbums(list); });
+    return () => { alive = false; };
+  }, [label]);
+
+  // Esc closes ONLY this modal (stopImmediatePropagation keeps the gatefold's
+  // own Esc handler from firing on the same keypress — capture phase runs first).
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.stopImmediatePropagation(); onClose(); }
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => document.removeEventListener('keydown', onKey, true);
+  }, [onClose]);
+
+  const excludeKey = _albumKey(currentAlbumTitle);
+  const artistKey = _albumKey(currentArtist);
+  const all = (albums || []).filter(a => _albumKey(a.album_title) !== excludeKey);
+  const others = artistKey ? all.filter(a => _albumKey(a.primary_artist) !== artistKey) : all;
+  const own = all.filter(a => !others.includes(a));
+
+  const pick = (a) => { onClose(); if (onOpenAlbum) onOpenAlbum(a); };
+
+  const tracksWordFor = (n) => lang === 'ru'
+    ? ruTracksWord(n)
+    : (n === 1 ? 'track' : 'tracks');
+  const fmtAlbumDur = (s) => {
+    if (!s) return null;
+    const m = Math.round(s / 60);
+    return lang === 'ru' ? `${m} мин` : `${m} min`;
+  };
+
+  const sectionHeader = (text, n) => (
+    <div className="mono" style={{
+      fontSize: 10, letterSpacing: '0.22em', textTransform: 'uppercase',
+      color: 'rgba(238,235,248,.5)', margin: '18px 0 8px',
+    }}>{text} · {n}</div>
+  );
+
+  const renderRows = (list) => list.map(a => (
+    <button key={`${a.album_title}-${a.primary_artist}-${a.year || a.year_range || ''}`} type="button"
+      className="label-album-row" onClick={() => pick(a)}
+      style={{ padding: '8px 10px' }}
+      title={lang === 'ru' ? 'Открыть альбом' : 'Open album'}>
+      <div style={{ width: 56, height: 56, flexShrink: 0, borderRadius: 10, overflow: 'hidden' }}>
+        <AlbumCover title={a.album_title} artist={a.primary_artist} size={56}
+          isDark={true} coverPath={a.cover_art_path} radius={10} />
+      </div>
+      <span style={{ minWidth: 0, flex: 1 }}>
+        <span style={{ display: 'block', fontSize: 15, fontWeight: 600, color: '#ece9f4', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {a.album_title}
+        </span>
+        <span style={{ display: 'block', fontSize: 12.5, marginTop: 2, color: 'rgba(238,235,248,.55)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          <span style={{ color: '#bba8ff' }}>{a.primary_artist}</span>
+          {' · '}{String(a.year_range || a.year || '—')}
+          {' · '}{a.track_count} {tracksWordFor(a.track_count)}
+          {fmtAlbumDur(a.duration_seconds) ? ` · ${fmtAlbumDur(a.duration_seconds)}` : ''}
+        </span>
+      </span>
+    </button>
+  ));
+
+  return createPortal(
+    <div
+      onClick={onClose}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 220,
+        background: 'rgba(0,0,0,.72)',
+        backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)',
+        display: 'grid', placeItems: 'center', padding: 'clamp(0px, 2vw, 24px)',
+        animation: 'fadeIn 0.22s ease',
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        role="dialog" aria-modal="true"
+        aria-label={lang === 'ru' ? `Альбомы лейбла ${label}` : `Albums on ${label}`}
+        style={{
+          width: 'min(680px, 100%)', maxHeight: 'min(86vh, 100%)',
+          display: 'flex', flexDirection: 'column',
+          background: 'rgba(13,10,18,.96)', borderRadius: 18,
+          border: '1px solid rgba(255,255,255,.1)',
+          boxShadow: '0 24px 80px rgba(0,0,0,.55)',
+          padding: 'clamp(16px, 2.5vw, 26px)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className="mono" style={{ fontSize: 10, color: 'rgba(238,235,248,.5)', letterSpacing: '0.24em', textTransform: 'uppercase' }}>
+              {lang === 'ru' ? 'ЛЕЙБЛ' : 'LABEL'}
+            </div>
+            <div style={{
+              fontFamily: "'Noto Serif Display', Georgia, serif", fontSize: 'clamp(22px, 3vw, 28px)',
+              color: '#f5f3fa', margin: '4px 0 2px', letterSpacing: '-0.01em', lineHeight: 1.15,
+            }}>{label}</div>
+            <div style={{ fontSize: 12.5, color: 'rgba(238,235,248,.55)' }}>
+              {albums === null
+                ? (lang === 'ru' ? 'Смотрим каталог…' : 'Checking the catalog…')
+                : (lang === 'ru' ? `${all.length} альбомов у вас в библиотеке` : `${all.length} albums in your library`)}
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            title={lang === 'ru' ? 'Назад к альбому' : 'Back to the album'}
+            style={{ background: 'rgba(255,255,255,.06)', color: 'rgba(238,235,248,.7)', fontSize: 15, cursor: 'pointer', width: 34, height: 34, borderRadius: '50%', border: '1px solid rgba(255,255,255,.1)', display: 'grid', placeItems: 'center', flexShrink: 0 }}
+          >✕</button>
+        </div>
+        <div style={{ overflowY: 'auto', minHeight: 0, marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {albums !== null && all.length === 0 && (
+            <div style={{ fontSize: 13, opacity: 0.55, padding: '12px 0' }}>
+              {lang === 'ru' ? 'Других альбомов этого лейбла у вас нет' : 'No other albums on this label here'}
+            </div>
+          )}
+          {others.length > 0 && sectionHeader(lang === 'ru' ? 'Другие исполнители' : 'Other artists', others.length)}
+          {renderRows(others)}
+          {own.length > 0 && sectionHeader(currentArtist || (lang === 'ru' ? 'Этот исполнитель' : 'This artist'), own.length)}
+          {renderRows(own)}
+        </div>
+      </div>
+    </div>,
     document.body
   );
 }
@@ -12433,9 +12628,12 @@ function ProducersReveal({ open, track, isDark, lang, navigateToArtist, onPlayTr
                 return (
                   <button key={p.name} type="button" className="credit-chip credit-chip--link"
                     aria-expanded={popFor?.name === p.name}
-                    onClick={(e) => setPopFor(prev => prev?.name === p.name
-                      ? null
-                      : { name: p.name, anchorRect: e.currentTarget.getBoundingClientRect() })}
+                    onClick={(e) => {
+                      // Same trap as the label chips: currentTarget is null inside
+                      // a deferred updater — grab the rect before setState.
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      setPopFor(prev => prev?.name === p.name ? null : { name: p.name, anchorRect: rect });
+                    }}
                     title={lang === 'ru' ? 'Ещё треки этого продюсера у вас' : 'More tracks by this producer here'}>
                     {p.name}
                     <span className="credit-chip__count">· {p.produced_count}</span>
@@ -13852,7 +14050,7 @@ function SimilarityColumn({ accent, label, items, tint, glow, isDark, lang, onQu
             <div style={{
               fontSize: 13, fontWeight: 500, color: text, letterSpacing: '-0.01em',
               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-            }}>{trackTitle(t) || '—'}</div>
+            }}>{trackTitle(t) || '—'}<FeatSuffix track={t} lang={lang} fontSize="10.5px" /></div>
             <div style={{
               fontSize: 12, color: muted, marginTop: 1,
               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
@@ -14596,7 +14794,12 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
   const playerColRef = useRef(null);
   const playerHintRef = useRef(null);
   const playerMetaRef = useRef(null);
+  const producersWrapRef = useRef(null);
   const [coverPx, setCoverPx] = useState(null);
+  // Cover size as if the producers drawer were CLOSED. The meta column (and
+  // with it the seek bar) is clamped to THIS width, so opening the drawer
+  // never narrows the progress bar even when the cover itself has to shrink.
+  const [coverBasePx, setCoverBasePx] = useState(null);
   useLayoutEffect(() => {
     if (!visible) return;
     const col = playerColRef.current;
@@ -14611,17 +14814,26 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
       const nGaps = Math.max(0, col.children.length - 1);
       const hintH = playerHintRef.current ? playerHintRef.current.offsetHeight : 0;
       const metaH = playerMetaRef.current ? playerMetaRef.current.offsetHeight : 0;
+      const drawerH = producersWrapRef.current ? producersWrapRef.current.offsetHeight : 0;
       const winH = window.innerHeight || colH;
       const capPx = Math.min(760, Math.max(220, 0.72 * winH));  // height cap (raised for a larger cover)
       const reserve = 0.07 * colH;                               // ≥7% free space (logo is shorter now)
-      const avail = colH - padY - gap * nGaps - reserve - hintH - metaH;
+      // Baseline: the drawer's height is excluded — this is the cover size the
+      // player keeps whenever the open drawer still fits into the free space.
+      const availBase = colH - padY - gap * nGaps - reserve - hintH - (metaH - drawerH);
+      // With the drawer counted in, the reserve shrinks to a token 8px: the
+      // drawer may eat ALL the breathing room (content just shifts up) before
+      // the cover is asked to give up a single pixel.
+      const availOpen = colH - padY - gap * nGaps - 8 - hintH - metaH;
       // Horizontal guard: the cover is square + sized only by height, so on a
       // tall-but-narrow viewport it could exceed the column width and clip
       // (col has overflow:hidden). Cap by width minus room for the flanking
       // prev/next buttons + their gaps (~150px).
       const availW = colW - 150;
-      const px = Math.round(Math.max(140, Math.min(capPx, avail, availW)));
+      const px = Math.round(Math.max(140, Math.min(capPx, availBase, availOpen, availW)));
+      const basePx = Math.round(Math.max(140, Math.min(capPx, availBase, availW)));
       setCoverPx(prev => (prev !== null && Math.abs(prev - px) < 2) ? prev : px);
+      setCoverBasePx(prev => (prev !== null && Math.abs(prev - basePx) < 2) ? prev : basePx);
     };
     measure();
     const ro = new ResizeObserver(measure);
@@ -15477,7 +15689,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
               above is the only element allowed to spill outside this clamp. */}
           <div ref={playerMetaRef} style={{
             width:'100%',
-            maxWidth: coverPx ? `min(${Math.round(coverPx * 1.35)}px, 100%)` : 'min(clamp(300px, 80vh, 860px), 100%)',
+            maxWidth: (coverBasePx || coverPx) ? `min(${Math.round((coverBasePx || coverPx) * 1.35)}px, 100%)` : 'min(clamp(300px, 80vh, 860px), 100%)',
             display:'flex', flexDirection:'column',
             gap:'clamp(10px, 1.6vh, 18px)',
             minHeight:0,
@@ -15520,15 +15732,19 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                     {currentTrack.album}{currentTrack.year ? ` · ${currentTrack.year}` : ''}
                   </div>
                 )}
-                <ProducersReveal
-                  key={currentTrack.track_id}
-                  open={creditsOpen}
-                  track={currentTrack}
-                  isDark={isDark}
-                  lang={lang}
-                  navigateToArtist={navigateToArtist}
-                  onPlayTrack={onPlayTrack}
-                />
+                {/* Measured wrapper: the cover-size effect subtracts this
+                    block's height to keep the seek-bar width drawer-agnostic. */}
+                <div ref={producersWrapRef}>
+                  <ProducersReveal
+                    key={currentTrack.track_id}
+                    open={creditsOpen}
+                    track={currentTrack}
+                    isDark={isDark}
+                    lang={lang}
+                    navigateToArtist={navigateToArtist}
+                    onPlayTrack={onPlayTrack}
+                  />
+                </div>
                 <SamplesAccentChip
                   key={`samples-${currentTrack.track_id}`}
                   track={currentTrack}
@@ -15951,7 +16167,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                             color: active ? pText : pTextMuted,
                             whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
                             letterSpacing:'-0.01em',
-                          }}>{trackTitle(t) || '—'}</div>
+                          }}>{trackTitle(t) || '—'}<FeatSuffix track={t} navigateToArtist={navigateToArtist} lang={lang} fontSize="11px" /></div>
                           <div style={{ fontSize:'13px', color:pTextSubtle, marginTop:'1px' }}>{t.artist || '—'}</div>
                         </div>
 
@@ -17148,18 +17364,20 @@ function ArtistAtlasSection({
       </div>
 
       {albumModal && (
-        <AlbumModal
-          key={albumModal.album.album_title}
-          album={albumModal.album}
-          originRect={albumModal.originRect}
-          onClose={() => setAlbumModal(null)}
-          onPlayTrack={onPlayTrack}
-          navigateToArtist={navigateToArtist}
-          isDark={isDark}
-          lang={lang}
-          onQueueNext={onQueueNext}
-          onOpenAlbum={(a) => setAlbumModal({ album: a, originRect: null })}
-        />
+        <ModalErrorBoundary key={`b-${albumModal.album.album_title}`} onReset={() => setAlbumModal(null)}>
+          <AlbumModal
+            key={albumModal.album.album_title}
+            album={albumModal.album}
+            originRect={albumModal.originRect}
+            onClose={() => setAlbumModal(null)}
+            onPlayTrack={onPlayTrack}
+            navigateToArtist={navigateToArtist}
+            isDark={isDark}
+            lang={lang}
+            onQueueNext={onQueueNext}
+            onOpenAlbum={(a) => setAlbumModal({ album: a, originRect: null })}
+          />
+        </ModalErrorBoundary>
       )}
     </div>
   );
