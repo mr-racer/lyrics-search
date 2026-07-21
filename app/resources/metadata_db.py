@@ -4233,22 +4233,23 @@ class MetadataDB:
 
     @classmethod
     def get_tracks_slim(cls, collection_name: str) -> list[dict]:
-        """Slim rows for every track of the collection.
+        """Slim rows for every track of the collection (producer included).
 
-        Same shape as :meth:`get_produced_tracks` minus the producer column —
-        used by ``track_credits_service.resolve_sample_refs`` to match
-        "Artist — Title" sample references against the whole library.
+        Same shape as :meth:`get_produced_tracks` without the producer filter —
+        used by ``track_credits_service`` both to match "Artist — Title" sample
+        references and to build the effective producer view (tag column merged
+        with the ``songs`` extraction).
         """
         conn = cls._connect()
         rows = conn.execute(
             """SELECT track_id, title, artist, album, year, duration,
-                      cover_art_path
+                      cover_art_path, producer
                FROM track_metadata
                WHERE collection_name = ?""",
             (collection_name,),
         ).fetchall()
         cols = ["track_id", "title", "artist", "album", "year", "duration",
-                "cover_art_path"]
+                "cover_art_path", "producer"]
         return [dict(zip(cols, r)) for r in rows]
 
     @classmethod

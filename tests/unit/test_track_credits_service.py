@@ -19,6 +19,8 @@ from app.services.track_credits_service import (
 @pytest.fixture
 def temp_db(tmp_path, monkeypatch):
     """Repoint MetadataDB at a fresh temp SQLite file for the test."""
+    import app.services.track_credits_service as tcs
+
     monkeypatch.setattr(mod, "DB_PATH", tmp_path / "meta.db")
     MetadataDB._instance = None
     orig_connect = MetadataDB._connect
@@ -30,7 +32,10 @@ def temp_db(tmp_path, monkeypatch):
 
     monkeypatch.setattr(MetadataDB, "_connect", classmethod(_connect))
     MetadataDB.init()
+    # Fresh DB per test but the effective-producer view caches module-wide.
+    tcs.clear_credited_cache()
     yield
+    tcs.clear_credited_cache()
     MetadataDB._instance = None
     MetadataDB._connect = orig_connect
 
@@ -154,6 +159,43 @@ class TestResolveProducers:
         )
         got = resolve_producers("c", "t1")
         assert got[0].image is None
+
+    def test_extraction_only_track_resolves(self, temp_db):
+        # The Lady-Gaga prod bug: no producer TAG on the track, credits only in
+        # the songs extraction — pills rendered from the overlay, but resolve
+        # read the tag column alone and returned [] (all pills muted).
+        from app.services.song_facts_service import get_song_facts_key
+        _upsert("g1", title="Bad Romance", artist="Lady Gaga",
+                artist_slugs=["lady-gaga"])  # no producer tag
+        MetadataDB.set_song_genius_credits(
+            slug=get_song_facts_key("Lady Gaga", "Bad Romance"),
+            producers=["RedOne", "Lady Gaga"], label=None,
+            collection_name="c", artist_name="Lady Gaga",
+            title="Bad Romance", artist_slug="lady-gaga",
+        )
+        got = {p.name: p for p in resolve_producers("c", "g1")}
+        assert set(got) == {"RedOne", "Lady Gaga"}
+        assert got["Lady Gaga"].artist_slug == "lady-gaga"
+
+    def test_counts_and_lists_merge_tag_and_extraction_sources(self, temp_db):
+        # RedOne produces t1 via the TAG column and g1 via the extraction —
+        # counts and the popover list must see both.
+        from app.services.song_facts_service import get_song_facts_key
+        _upsert("t1", title="Poker Face", artist="Lady Gaga",
+                artist_slugs=["lady-gaga"], producer="RedOne")
+        _upsert("g1", title="Bad Romance", artist="Lady Gaga",
+                artist_slugs=["lady-gaga"])  # extraction-only
+        MetadataDB.set_song_genius_credits(
+            slug=get_song_facts_key("Lady Gaga", "Bad Romance"),
+            producers=["RedOne"], label=None,
+            collection_name="c", artist_name="Lady Gaga",
+            title="Bad Romance", artist_slug="lady-gaga",
+        )
+        got = {p.name: p for p in resolve_producers("c", "t1")}
+        assert got["RedOne"].produced_count == 1  # g1 counted via extraction
+
+        listed = tracks_produced_by("c", "RedOne")
+        assert {t.track_id for t in listed} == {"t1", "g1"}
 
 
 # --------------------------------------------------------------------------- #

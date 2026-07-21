@@ -12444,8 +12444,8 @@ function ProducerTracksPop({ credit, anchorRect, isDark, lang, onClose, onPlayTr
               </div>
             )}
             {groups.map(g => (
-              <div key={g.album} style={{ minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 6px 4px' }}>
+              <div key={g.album} className="producer-pop__group">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '2px 2px 6px' }}>
                   <AlbumCover title={g.album} artist={g.artist} size={44}
                     isDark={isDark} coverPath={g.cover} radius={8} />
                   <span style={{ minWidth: 0 }}>
@@ -12454,19 +12454,23 @@ function ProducerTracksPop({ credit, anchorRect, isDark, lang, onClose, onPlayTr
                       overflow: 'hidden', textOverflow: 'ellipsis',
                       color: isDark ? '#e8e6f2' : '#1d1a28',
                     }}>{g.album}</span>
-                    <span style={{ display: 'block', fontSize: 11, color: muted }}>{g.year || '—'}</span>
+                    <span style={{ display: 'block', fontSize: 11, color: muted }}>
+                      {g.year || '—'}{g.rows.length > 1 ? ` · ${g.rows.length}` : ''}
+                    </span>
                   </span>
                 </div>
-                {g.rows.map((t, i) => trackRow(t, i, false))}
+                <div className="producer-pop__group-rows">
+                  {g.rows.map((t, i) => trackRow(t, i, false))}
+                </div>
               </div>
             ))}
             {loose.length > 0 && (
-              <div style={{ minWidth: 0 }}>
+              <div className="producer-pop__group">
                 {groups.length > 0 && (
                   <div className="mono" style={{
                     ...monoStyle, fontSize: 9,
                     color: isDark ? 'rgba(255,255,255,0.4)' : 'rgba(22,22,32,0.4)',
-                    margin: '8px 6px 2px',
+                    margin: '2px 2px 6px',
                   }}>{lang === 'ru' ? 'Отдельные треки' : 'Singles'}</div>
                 )}
                 {loose.map((t, i) => trackRow(t, i, true))}
@@ -12713,14 +12717,19 @@ function ProducersReveal({ open, track, isDark, lang, navigateToArtist, onPlayTr
   const [resolved, setResolved] = useState(null); // null = pending
   const [popFor, setPopFor] = useState(null);     // {credit, anchorRect}
 
+  // Prefetch the resolve as soon as the track is current — NOT on drawer
+  // open. The pills must show their real state (artist ✦ / «· N» counter /
+  // muted) the moment the drawer unfolds; resolving lazily meant the first
+  // open always flashed the muted fallback. Cached module-wide, so this
+  // costs one request per track.
   useEffect(() => {
     setResolved(null);
     setPopFor(null);
-    if (!open || !names.length) return;
+    if (!names.length) return;
     let alive = true;
     resolveTrackProducers(track?.track_id).then(list => { if (alive) setResolved(list); });
     return () => { alive = false; };
-  }, [open, track?.track_id, names.length]);
+  }, [track?.track_id, names.length]);
 
   if (!names.length) return null;
 
@@ -18557,14 +18566,17 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     // player UI (lyrics back-face, info pills, chat context, queue genre-pill)
     // reads directly off currentTrack and queue items. Enrich the ENTIRE queue
     // in one batch /metadata/tracks?ids= call so switching to any queue item
-    // doesn't show partial metadata. Slim items are detected by undefined file_path
-    // (Search/Recommend hits arrive with file_path populated and are skipped).
+    // doesn't show partial metadata. Slim items are detected by a FALSY
+    // file_path: undefined on list shapes, and "" on AIPlaylistTrack — the
+    // AI-built playlist serializes file_path as "" and used to slip past an
+    // `=== undefined` check, so its queue never got producers/samples/lyrics.
+    // (Search/Recommend hits arrive with a real file_path and are skipped.)
     const slimIds = new Set();
     for (const h of queue) {
       const t = (h && h.track) ? h.track : h;
-      if (t && t.track_id && t.file_path === undefined) slimIds.add(t.track_id);
+      if (t && t.track_id && !t.file_path) slimIds.add(t.track_id);
     }
-    if (flatTrack?.track_id && flatTrack.file_path === undefined) slimIds.add(flatTrack.track_id);
+    if (flatTrack?.track_id && !flatTrack.file_path) slimIds.add(flatTrack.track_id);
     if (slimIds.size === 0) return;
     const ids = Array.from(slimIds);
     apiFetch(

@@ -28,7 +28,13 @@ def clean_metadata_db(tmp_path, monkeypatch):
         return cls._instance
     MetadataDB._connect = _patched_connect
     MetadataDB.init()
+    # The effective-producer view is cached module-wide (TTL) — a fresh DB per
+    # test with reused collection names would otherwise read the previous
+    # test's cached rows.
+    from app.services import track_credits_service
+    track_credits_service.clear_credited_cache()
     yield
+    track_credits_service.clear_credited_cache()
     MetadataDB.close()
     mod.DB_PATH = original_path
     MetadataDB._connect = original_connect

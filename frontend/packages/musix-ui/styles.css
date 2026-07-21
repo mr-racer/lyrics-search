@@ -2144,6 +2144,32 @@
       .hint-sheet--closing, .hint-sheet-scrim--closing { animation: none; }
     }
 
+    /* One album group inside the producer popover: a quiet card per album so
+       the eye instantly sees which tracks belong to which record — a flat
+       list of headers+rows read as one soup. Track rows sit behind a hairline
+       accent rail aligned under the album title. */
+    .producer-pop__group {
+      min-width: 0;
+      margin-top: 8px;
+      padding: 8px 8px 6px;
+      border-radius: 12px;
+      background: rgba(255,255,255,0.045);
+      border: 1px solid rgba(255,255,255,0.07);
+    }
+    .producer-pop__group:first-of-type { margin-top: 4px; }
+    .producer-pop__group-rows {
+      margin-left: 21px;               /* half the 44px cover — rail under the title */
+      padding-left: 8px;
+      border-left: 2px solid rgba(255,255,255,0.10);
+    }
+    body[data-theme="light"] .producer-pop__group {
+      background: rgba(22,22,32,0.035);
+      border-color: rgba(22,22,32,0.08);
+    }
+    body[data-theme="light"] .producer-pop__group-rows {
+      border-left-color: rgba(22,22,32,0.12);
+    }
+
     /* «Открыть профиль →» under the producer-artist's name in the popover. */
     .producer-pop__profile {
       appearance: none; background: none; border: none; padding: 0;

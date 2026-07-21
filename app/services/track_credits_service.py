@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Iterable, Optional
 
 from ..domain.models import ProducerCredit, ProducerTrack
@@ -29,6 +30,10 @@ from .artist_split import artist_refs_for_track, display_title_for_track, artist
 # fold + feat-stripped title keys, substring-tolerant artist equality. Shared
 # on purpose — a second local copy would silently drift (cf. the two _slugify).
 from .playlist_agent.resolver import _artist_matches, _title_key
+# The song-facts slug is the key the GLiNER2+Genius extraction is stored under
+# (songs.producers / producers_genius) — needed to merge those credits into
+# the producer view below.
+from .song_facts_service import get_song_facts_key
 
 logger = logging.getLogger(__name__)
 
@@ -119,28 +124,87 @@ def _artist_thumb(collection_name: str, slug: Optional[str]) -> Optional[str]:
     return ad.get("thumb_path") or None
 
 
+# ── Effective producer view (tag column ∪ songs extraction) ──────────────────
+# The player's pills show producers from the read-time overlay
+# (``apply_song_relations``): the tag column when the import filled it, else
+# the Genius+GLiNER merge in ``songs``. Resolve/counts/track-lists must see
+# the SAME view — reading only the tag column left every extraction-only
+# track (≈1/4 of a real library: pills present, resolve empty) with dead
+# muted pills. Cached briefly per collection: resolve is prefetched on every
+# track change and the merge walks the whole library.
+_CREDITED_TTL_SEC = 60.0
+_credited_cache: dict[str, tuple[float, list[dict]]] = {}
+
+
+def clear_credited_cache() -> None:
+    """Drop the effective-producer cache (tests / after bulk writes)."""
+    _credited_cache.clear()
+
+
+def _credited_rows(collection_name: str) -> list[dict]:
+    """Slim rows of every track that carries an EFFECTIVE producer credit.
+
+    Each returned row's ``producer`` holds the effective string: the
+    ``track_metadata.producer`` tag when present, else the merged extraction
+    from ``songs`` (same merge order as the player overlay — Genius first).
+    """
+    now = time.monotonic()
+    hit = _credited_cache.get(collection_name)
+    if hit and now - hit[0] < _CREDITED_TTL_SEC:
+        return hit[1]
+
+    rows = MetadataDB.get_tracks_slim(collection_name)
+    keyed: dict[str, list[dict]] = {}
+    for r in rows:
+        if (r.get("producer") or "").strip():
+            continue
+        if not (r.get("artist") and r.get("title")):
+            continue
+        keyed.setdefault(get_song_facts_key(r["artist"], r["title"]), []).append(r)
+    if keyed:
+        try:
+            rels = MetadataDB.get_song_relations_bulk(list(keyed.keys()))
+        except Exception:
+            logger.warning("[credits] relations merge failed (tag-only view)", exc_info=True)
+            rels = {}
+        for slug, rel in rels.items():
+            prod = (rel or {}).get("producer")
+            if not prod:
+                continue
+            for r in keyed.get(slug, []):
+                r["producer"] = prod
+
+    credited = [r for r in rows if (r.get("producer") or "").strip()]
+    _credited_cache[collection_name] = (now, credited)
+    return credited
+
+
 def resolve_producers(collection_name: str, track_id: str) -> list[ProducerCredit]:
     """Resolve a track's producer names against the user's library.
 
-    For every name in the track's producer tag: is the producer also a library
-    artist (→ ``artist_slug`` + their photo in ``image``), and how many OTHER
-    tracks in the collection credit them as producer (→ ``produced_count``).
-    Degrades to ``[]`` on any error — the player's drawer falls back to plain
-    client-split pills.
+    For every name in the track's effective producer credit (tag column or
+    the ``songs`` extraction — the same view the player's pills render): is
+    the producer also a library artist (→ ``artist_slug`` + their photo in
+    ``image``), and how many OTHER tracks in the collection credit them as
+    producer (→ ``produced_count``). Degrades to ``[]`` on any error — the
+    player's drawer falls back to plain client-split pills.
     """
     try:
-        raw = MetadataDB.get_track_producer(collection_name, track_id)
+        rows = _credited_rows(collection_name)
+        current_id = canonical_track_id(track_id)
+        raw = next(
+            (r["producer"] for r in rows if r["track_id"] == current_id), None,
+        )
         names = split_credit_names(raw)
         if not names:
             return []
 
         wanted = {_name_key(n) for n in names}
         counts: dict[str, int] = {}
-        current_id = canonical_track_id(track_id)
-        for row in MetadataDB.get_produced_tracks(collection_name):
+        for row in rows:
             if row["track_id"] == current_id:
                 continue
-            # Per-row set: a name repeated inside one tag counts once.
+            # Per-row set: a name repeated inside one credit counts once.
             for key in {_name_key(n) for n in split_credit_names(row["producer"])}:
                 if key in wanted:
                     counts[key] = counts.get(key, 0) + 1
@@ -179,16 +243,18 @@ def _producer_track(row: dict) -> ProducerTrack:
 
 
 def tracks_produced_by(collection_name: str, name: str) -> list[ProducerTrack]:
-    """All tracks in the collection whose producer tag credits ``name``.
+    """All tracks whose effective producer credit names ``name``.
 
-    Sorted by artist, then title. Degrades to ``[]`` on any error.
+    Reads the same tag∪extraction view as ``resolve_producers``, so the
+    popover list agrees with the pill counts. Sorted by artist, then title.
+    Degrades to ``[]`` on any error.
     """
     key = _name_key(name)
     if not key:
         return []
     try:
         out: list[ProducerTrack] = []
-        for row in MetadataDB.get_produced_tracks(collection_name):
+        for row in _credited_rows(collection_name):
             keys = {_name_key(n) for n in split_credit_names(row["producer"])}
             if key not in keys:
                 continue
