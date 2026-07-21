@@ -2155,6 +2155,20 @@
       background: color-mix(in srgb, var(--player-accent, #7C5BFF) 8%, transparent);
     }
 
+    /* ── Track chips strip — samples pill + lyric gems on ONE line ────────
+       Every row in the player's meta zone is subtracted from the album cover
+       by the sizing effect, so these two never get a line each. The pill leads
+       (larger, accent-tinted), the gems wrap around it as quiet companions;
+       the size gap is the hierarchy. :empty collapses the strip — including
+       its margin — for tracks with neither, so nothing pays for absent data. */
+    .player-chips-row {
+      display: flex; flex-wrap: wrap;
+      align-items: center; justify-content: center;
+      gap: 6px; margin-top: 8px;
+      animation: vibeSlideIn 240ms cubic-bezier(0.22, 0.9, 0.3, 1);
+    }
+    .player-chips-row:empty { display: none; }
+
     /* ── Producers drawer (player) — chevron next to the artist name opens an
        inline panel of producer pills. Height animates via grid-template-rows
        (0fr→1fr), so no JS measuring; visibility keeps the closed panel out of
@@ -2402,6 +2416,13 @@
       border-color: rgba(255,255,255,0.22);
     }
     .player-side-btn:active:not(:disabled) { transform: scale(0.96); }
+    /* Narrow desktop: the cover is width-bound there (column width minus the
+       two flanking buttons and their gaps), so 12px off each button is 24px
+       straight into the album art. The sizing effect measures the button, so
+       this needs no JS counterpart. Still ≥44px — the touch-target floor. */
+    @media (max-width: 1100px) {
+      .player-side-btn:not(.player-side-btn--flank) { width: 44px; height: 44px; }
+    }
     .player-side-btn:disabled { cursor: default; opacity: 0.16; }
     body[data-theme="light"] .player-side-btn {
       border-color: rgba(22,22,32,0.10);

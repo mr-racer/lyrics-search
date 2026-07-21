@@ -12028,8 +12028,14 @@ function VibeLine({ trackId, lang, isDark }) {
     .replace(/^[\s"'«“„❝‘]+/, '')
     .replace(/[\s"'»”❞’]+$/, '');
   const tint = isDark ? 'rgba(216,204,255,.82)' : 'oklch(44% 0.09 295)';
+  // Wings give up their width FIRST. Flex distributes shrink by
+  // (shrink-factor × basis), and the phrase's basis is its full one-line width
+  // (~700px) against the wings' 34 — with equal factors the text collapsed into
+  // a narrow column while two decorative hairlines held their ground. A shrink
+  // factor of 100 inverts that: the rules fade to nothing before the phrase
+  // takes a second line.
   const wing = {
-    flex: '0 1 34px', height: 1, marginTop: 1,
+    flex: '0 100 40px', minWidth: 0, height: 1, marginTop: 1,
     background: isDark
       ? 'linear-gradient(90deg, transparent, rgba(216,204,255,.45))'
       : 'linear-gradient(90deg, transparent, oklch(44% 0.09 295 / .4))',
@@ -12039,8 +12045,10 @@ function VibeLine({ trackId, lang, isDark }) {
     <div
       key={clean}
       style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12,
-        maxWidth: 460,
+        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
+        // Runs the full meta width, capped at 640px — past that an italic serif
+        // line stops being a caption and starts being a paragraph.
+        width: '100%', maxWidth: 640,
         margin: '8px auto 0',
         animation: 'vibeSlideIn 240ms cubic-bezier(0.22, 0.9, 0.3, 1)',
       }}
@@ -12676,7 +12684,9 @@ function ProducersReveal({ open, track, isDark, lang, navigateToArtist, onPlayTr
 
 // The one credit left in the player meta zone: an accent samples pill.
 // Renders nothing when the track has no sample links.
-function SamplesAccentChip({ track, isDark, lang }) {
+// `bare` drops the own row wrapper so the pill can join the shared chips strip
+// alongside the lyric gems — see .player-chips-row.
+function SamplesAccentChip({ track, isDark, lang, bare }) {
   const sampleCount = (track?.samples?.length || 0) + (track?.sampled_by?.length || 0);
   const [open, setOpen] = useState(false);
   const [anchorRect, setAnchorRect] = useState(null);
@@ -12684,11 +12694,8 @@ function SamplesAccentChip({ track, isDark, lang }) {
 
   if (sampleCount === 0) return null;
 
-  return (
-    <div style={{
-      display: 'flex', justifyContent: 'center', marginTop: 8,
-      animation: 'vibeSlideIn 240ms cubic-bezier(0.22, 0.9, 0.3, 1)',
-    }}>
+  const body = (
+    <>
       <button
         type="button"
         className="credit-chip credit-chip--link credit-chip--samples"
@@ -12709,6 +12716,16 @@ function SamplesAccentChip({ track, isDark, lang }) {
           onClose={() => setOpen(false)}
         />
       )}
+    </>
+  );
+
+  if (bare) return body;
+  return (
+    <div style={{
+      display: 'flex', justifyContent: 'center', marginTop: 8,
+      animation: 'vibeSlideIn 240ms cubic-bezier(0.22, 0.9, 0.3, 1)',
+    }}>
+      {body}
     </div>
   );
 }
@@ -12879,7 +12896,9 @@ function GemTracksPop({ gem, currentTrackId, anchorRect, isDark, lang, onClose, 
 // when the track has no gems — the meta zone must not jump. A namedrop chip
 // whose artist is in the library navigates straight to the artist page;
 // every other chip opens the quote + where-else popover.
-function GemsChips({ track, isDark, lang, navigateToArtist, onPlayTrack }) {
+// `bare` drops the own row wrapper so the gems share one strip with the samples
+// pill instead of stacking a second centred row under it — see .player-chips-row.
+function GemsChips({ track, isDark, lang, navigateToArtist, onPlayTrack, bare }) {
   const [gems, setGems] = useState(null);
   const [popFor, setPopFor] = useState(null); // {gem, anchorRect}
 
@@ -12894,11 +12913,8 @@ function GemsChips({ track, isDark, lang, navigateToArtist, onPlayTrack }) {
 
   if (!gems || gems.length === 0) return null;
 
-  return (
-    <div style={{
-      display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 6, marginTop: 8,
-      animation: 'vibeSlideIn 240ms cubic-bezier(0.22, 0.9, 0.3, 1)',
-    }}>
+  const body = (
+    <>
       {gems.slice(0, 4).map((g) => {
         const accent = GEM_ACCENTS[g.kind] || '#a78bfa';
         const slug = g.kind === 'namedrop' && g.detail ? g.detail.artist_slug : null;
@@ -12932,6 +12948,16 @@ function GemsChips({ track, isDark, lang, navigateToArtist, onPlayTrack }) {
           onPlayTrack={onPlayTrack}
         />
       )}
+    </>
+  );
+
+  if (bare) return body;
+  return (
+    <div style={{
+      display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 6, marginTop: 8,
+      animation: 'vibeSlideIn 240ms cubic-bezier(0.22, 0.9, 0.3, 1)',
+    }}>
+      {body}
     </div>
   );
 }
@@ -14834,7 +14860,11 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
       const drawerH = producersWrapRef.current ? producersWrapRef.current.offsetHeight : 0;
       const winH = window.innerHeight || colH;
       const capPx = Math.min(760, Math.max(220, 0.72 * winH));  // height cap (raised for a larger cover)
-      const reserve = 0.07 * colH;                               // ≥7% free space (logo is shorter now)
+      // Free space below the meta block. Was a flat 7% of the column, which on
+      // a tall window handed 50+px of nothing to a gap that already has the
+      // section's own bottom padding under it. Capped at 20px — the cover is
+      // the hero, the slack isn't.
+      const reserve = Math.min(0.07 * colH, 20);
       // Baseline: the drawer's height is excluded — this is the cover size the
       // player keeps whenever the open drawer still fits into the free space.
       const availBase = colH - padY - gap * nGaps - reserve - hintH - (metaH - drawerH);
@@ -14845,8 +14875,20 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
       // Horizontal guard: the cover is square + sized only by height, so on a
       // tall-but-narrow viewport it could exceed the column width and clip
       // (col has overflow:hidden). Cap by width minus room for the flanking
-      // prev/next buttons + their gaps (~150px).
-      const availW = colW - 150;
+      // prev/next buttons + their gaps — MEASURED, not the old flat 150, so the
+      // narrow-window button shrink (56→44px in CSS) actually reaches the cover.
+      // Phones keep the flat reserve: their arrows overlay the gutters rather
+      // than sitting in flow, so there is nothing to measure.
+      let sideRoom = 150;
+      if (!isMobile) {
+        const row = col.querySelector('.player-cover-row');
+        const btn = row && row.querySelector('.player-side-btn');
+        if (row && btn) {
+          const rcs = getComputedStyle(row);
+          sideRoom = 2 * (btn.offsetWidth + (parseFloat(rcs.columnGap) || 0));
+        }
+      }
+      const availW = colW - sideRoom;
       const px = Math.round(Math.max(140, Math.min(capPx, availBase, availOpen, availW)));
       const basePx = Math.round(Math.max(140, Math.min(capPx, availBase, availW)));
       setCoverPx(prev => (prev !== null && Math.abs(prev - px) < 2) ? prev : px);
@@ -14858,7 +14900,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
     if (playerMetaRef.current) ro.observe(playerMetaRef.current);
     window.addEventListener('resize', measure);
     return () => { ro.disconnect(); window.removeEventListener('resize', measure); };
-  }, [visible, currentTrack?.track_id, lyricsMode]);
+  }, [visible, currentTrack?.track_id, lyricsMode, isMobile]);
 
   // Vinyl-stack transition: snapshot of outgoing track + direction, plus a
   // nonce that bumps on every track change to re-trigger the CSS entry
@@ -15453,7 +15495,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
 
       {/* Main content area — top padding gives the cover breathing room from
           the (now collapsed) section header bar. */}
-      <div style={{ flex:1, display:'flex', flexDirection: isMobile ? 'column' : 'row', overflow: isMobile ? 'auto' : 'hidden', padding: isMobile ? '10px 12px 24px' : 'clamp(24px, 5vh, 56px) 32px 24px', gap: isMobile ? 14 : 28, position:'relative' }}>
+      <div style={{ flex:1, display:'flex', flexDirection: isMobile ? 'column' : 'row', overflow: isMobile ? 'auto' : 'hidden', padding: isMobile ? '10px 12px 24px' : 'clamp(20px, 4vh, 48px) 24px 12px', gap: isMobile ? 14 : 28, position:'relative' }}>
 
         {/* ════════════════ LEFT: Player ════════════════
             justifyContent:center keeps the cover+controls visually centered
@@ -15464,8 +15506,9 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
           flex: isMobile ? '0 0 auto' : 1, minWidth:0,
           display:'flex', flexDirection:'column',
           alignItems:'center', justifyContent: isMobile ? 'flex-start' : 'center',
-          gap:'clamp(14px, 2vh, 24px)', position:'relative', zIndex:1,
-          overflow: isMobile ? 'visible' : 'hidden', padding:'clamp(8px, 2vh, 24px) 0',
+          gap:'clamp(10px, 1.6vh, 18px)', position:'relative', zIndex:1,
+          overflow: isMobile ? 'visible' : 'hidden',
+          padding:'clamp(6px, 1.6vh, 18px) 0 clamp(2px, 0.8vh, 10px)',
         }}>
 
           {/* First-3-clicks hint above the cover row. Stays in the DOM so the
@@ -15492,7 +15535,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
           <div className="player-cover-row" style={{
             position:'relative',
             display:'flex', alignItems:'center', justifyContent:'center',
-            gap:'clamp(12px, 2.5vw, 36px)', width:'100%', flexShrink:0,
+            gap:'clamp(10px, 1.6vw, 36px)', width:'100%', flexShrink:0,
           }}>
             {/* No spectrum on phones: the analyser is never wired there
                 (_IS_MOBILE), but the mounted components still burned a rAF
@@ -15762,20 +15805,29 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                     onPlayTrack={onPlayTrack}
                   />
                 </div>
-                <SamplesAccentChip
-                  key={`samples-${currentTrack.track_id}`}
-                  track={currentTrack}
-                  isDark={isDark}
-                  lang={lang}
-                />
-                <GemsChips
-                  key={`gems-${currentTrack.track_id}`}
-                  track={currentTrack}
-                  isDark={isDark}
-                  lang={lang}
-                  navigateToArtist={navigateToArtist}
-                  onPlayTrack={onPlayTrack}
-                />
+                {/* One strip for everything found inside the track: the accent
+                    samples pill leads, the quieter lyric gems wrap around it.
+                    Two separate centred rows cost a full line each — and every
+                    line here is subtracted from the cover by the sizing effect.
+                    Collapses via :empty when the track has neither. */}
+                <div className="player-chips-row">
+                  <SamplesAccentChip
+                    key={`samples-${currentTrack.track_id}`}
+                    track={currentTrack}
+                    isDark={isDark}
+                    lang={lang}
+                    bare
+                  />
+                  <GemsChips
+                    key={`gems-${currentTrack.track_id}`}
+                    track={currentTrack}
+                    isDark={isDark}
+                    lang={lang}
+                    navigateToArtist={navigateToArtist}
+                    onPlayTrack={onPlayTrack}
+                    bare
+                  />
+                </div>
                 <VibeLine
                   trackId={currentTrack?.track_id}
                   lang={lang}
