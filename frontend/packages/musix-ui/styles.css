@@ -2526,6 +2526,11 @@
       border-radius: 8px;
     }
     .lyric-line--on { cursor: pointer; }
+    /* The sparkle is a hover affordance, not decoration: on pointer devices it
+       rides in with the row highlight and is invisible otherwise, so the lyric
+       column reads as clean text. Touch has no hover, so there it stays dimly
+       visible — it's the only cue that lines are tappable once the one-time
+       hint banner has been dismissed. */
     .lyric-line__spark {
       flex: none;
       font-size: 13px;
@@ -2537,6 +2542,7 @@
     .lyric-line--open .lyric-line__spark { opacity: 1; }
     body[data-theme="light"] .lyric-line--open { background: rgba(124,91,255,0.08); }
     @media (hover: hover) {
+      .lyric-line__spark { opacity: 0; }
       .lyric-line--on:hover { background: rgba(124,91,255,0.10); }
       .lyric-line--on:hover .lyric-line__spark { opacity: 0.9; }
       body[data-theme="light"] .lyric-line--on:hover { background: rgba(124,91,255,0.08); }

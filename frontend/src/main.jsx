@@ -13810,10 +13810,11 @@ function AIChatDrawer({ isOpen, onClose, track, lang, isDark, showToast }) {
 }
 
 // ─── InlineLyricExplain — per-line draw-under explanation panel ──────────────
-// Genius-style interaction: the WHOLE line is the tap target (a hover-only ✨
-// was undiscoverable — hover doesn't exist on touch, and the bare icon carried
-// no meaning). The sparkle is now a persistent, dimmed indicator at the line's
-// edge; hover/expanded states light it up. Row toggles on click/Enter/Space.
+// Genius-style interaction: the WHOLE line is the tap target — the sparkle is
+// only an affordance, never the hit area. On pointer devices it fades in with
+// the row highlight (hidden at rest so the lyric column stays clean); on touch,
+// where hover doesn't exist, it stays dimly visible as the sole "tappable" cue.
+// See .lyric-line__spark in styles.css. Row toggles on click/Enter/Space.
 function InlineLyricExplain({
   line, lineIdx, expandedLines, explainStates,
   onToggle, isDark, aiActive, lang,
@@ -15574,20 +15575,23 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
             )}
 
             {/* Album art: flip card + vinyl-stack transition. Clicking toggles
-                play and flashes the glassy feedback indicator. */}
+                play and flashes the glassy feedback indicator — but NOT while
+                flipped to the lyrics face: the lyric rows stopPropagation, so
+                only the gaps between them reached this handler and pausing on
+                a stray tap while reading was pure surprise. */}
             <div
               ref={artWrapRef}
               className="player-art-wrap"
               onMouseMove={lyricsMode || outgoingTrack ? undefined : handleArtMouseMove}
               onMouseEnter={lyricsMode ? undefined : handleArtMouseEnter}
               onMouseLeave={handleArtMouseLeave}
-              onClick={currentTrack ? handleCoverClick : undefined}
+              onClick={currentTrack && !lyricsMode ? handleCoverClick : undefined}
               onTouchStart={isMobile ? handleArtTouchStart : undefined}
               onTouchMove={isMobile ? handleArtTouchMove : undefined}
               onTouchEnd={isMobile ? handleArtTouchEnd : undefined}
               onTouchCancel={isMobile ? (e) => handleArtTouchEnd(e, true) : undefined}
               style={{
-                cursor: currentTrack ? 'pointer' : 'default',
+                cursor: currentTrack && !lyricsMode ? 'pointer' : 'default',
                 ...(coverPx ? { width: `${coverPx}px`, maxWidth: `${coverPx}px` } : null),
               }}
             >
