@@ -12121,10 +12121,100 @@ function fetchLabelAlbums(label) {
   return p;
 }
 
+// track_id → Promise<(match|null)[]> aligned with [...samples, ...sampled_by].
+// POST /library/samples/resolve does exact-only matching server-side — a null
+// keeps that row informational, never a wrong «есть у вас» claim.
+const _sampleMatchesCache = new Map();
+function fetchSampleMatches(trackId, items) {
+  if (!trackId || !items.length) return Promise.resolve([]);
+  if (_sampleMatchesCache.has(trackId)) return _sampleMatchesCache.get(trackId);
+  const p = apiFetch('/library/samples/resolve', {
+    method: 'POST',
+    body: JSON.stringify({ items: items.slice(0, 50) }),
+  })
+    .then(res => (res && Array.isArray(res.matches)) ? res.matches : [])
+    .catch(() => { _sampleMatchesCache.delete(trackId); return []; });
+  _sampleMatchesCache.set(trackId, p);
+  return p;
+}
+
+// ─── Shared anchored-popover shell ───────────────────────────────────────────
+// One shell for every credits popover (samples / producer / label / gems):
+// desktop — glass card portal-fixed near the anchor chip, flipping below when
+// the chip sits too high; mobile — the hint-sheet bottom sheet. Owns Esc /
+// outside-click dismissal AND the exit animation: `close()` first stamps the
+// --closing class (reverse fade/slide in CSS), the real onClose fires ~200ms
+// later — pops no longer vanish abruptly. `children` may be a function: it
+// receives `close`, so row buttons dismiss with the same animation too.
+function AnchorPop({ anchorRect, ariaLabel, onClose, width = 380, children }) {
+  const isMobile = useIsMobile();
+  const [closing, setClosing] = useState(false);
+  const closingRef = useRef(false);
+  const closeTimer = useRef(null);
+
+  const close = useCallback(() => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    setClosing(true);
+    closeTimer.current = setTimeout(onClose, 200);
+  }, [onClose]);
+  useEffect(() => () => clearTimeout(closeTimer.current), []);
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') close(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [close]);
+
+  const body = typeof children === 'function' ? children(close) : children;
+
+  if (isMobile) {
+    return createPortal(
+      <div className={`hint-sheet-scrim${closing ? ' hint-sheet-scrim--closing' : ''}`}
+        onClick={(e) => { e.stopPropagation(); close(); }}>
+        <div className={`hint-sheet${closing ? ' hint-sheet--closing' : ''}`}
+          role="dialog" aria-modal="true" aria-label={ariaLabel}
+          onClick={(e) => e.stopPropagation()}>
+          <span className="hint-sheet__grip" aria-hidden="true" />
+          <div style={{ maxHeight: '55vh', overflowY: 'auto', paddingBottom: 4 }}>{body}</div>
+        </div>
+      </div>,
+      document.body
+    );
+  }
+
+  // Desktop placement: prefer above the chip; flip below when cramped.
+  const W = width;
+  const vw = window.innerWidth;
+  const left = anchorRect
+    ? Math.max(12, Math.min(anchorRect.left + anchorRect.width / 2 - W / 2, vw - W - 12))
+    : vw / 2 - W / 2;
+  const openUp = anchorRect ? anchorRect.top > 300 : true;
+  const pos = anchorRect
+    ? (openUp
+        ? { bottom: window.innerHeight - anchorRect.top + 10 }
+        : { top: anchorRect.bottom + 10 })
+    : { top: '30%' };
+
+  return createPortal(
+    <>
+      {/* invisible click-catcher — the page stays visible, any outside click closes */}
+      <div style={{ position: 'fixed', inset: 0, zIndex: 8990 }} onClick={close} />
+      <div
+        className={`samples-pop${openUp ? '' : ' samples-pop--down'}${closing ? ' samples-pop--closing' : ''}`}
+        role="dialog" aria-label={ariaLabel}
+        style={{ position: 'fixed', left, width: W, zIndex: 8991, ...pos }}
+      >{body}</div>
+    </>,
+    document.body
+  );
+}
+
 // One sample row: "Artist — Title" strings (MB enrichment format) split into a
 // muted artist + regular title; anything else renders as-is. Purely
-// informational — sample sources are almost never in the library, so the row
-// must NOT pretend to be clickable.
+// informational — most sample sources are not in the library, so the row
+// must NOT pretend to be clickable. The ones that ARE render as
+// SampleRowMatched instead (see /library/samples/resolve).
 function SampleRow({ text, index, isDark }) {
   const parts = String(text || '').split(/\s+[—–]\s+/);
   const artist = parts.length >= 2 ? parts[0] : null;
@@ -12145,10 +12235,56 @@ function SampleRow({ text, index, isDark }) {
   );
 }
 
-function SamplesPopBody({ track, isDark, lang }) {
+// A sample reference that IS in the library: playable row with a mini cover
+// and an accent «У ВАС» tick. Splits the display text exactly like SampleRow
+// so matched/unmatched rows stay visually aligned.
+function SampleRowMatched({ text, match, isDark, lang, onPlay }) {
+  const parts = String(text || '').split(/\s+[—–]\s+/);
+  const artist = parts.length >= 2 ? parts[0] : (match.artist || null);
+  const title = parts.length >= 2 ? parts.slice(1).join(' — ') : String(text || '');
+  return (
+    <button type="button" className="producer-track-row" style={{ alignItems: 'center', padding: '4px 6px' }}
+      onClick={onPlay} title={lang === 'ru' ? 'Слушать' : 'Play'}>
+      <AlbumCover title={match.album || title} artist={match.artist} size={28}
+        isDark={isDark} coverPath={match.cover_art_path} radius={6} />
+      <span style={{ minWidth: 0, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span style={{ color: isDark ? '#e8e6f2' : '#1d1a28', fontWeight: 500 }}>{title}</span>
+        {artist && (
+          <span style={{ color: isDark ? 'rgba(255,255,255,0.45)' : 'rgba(22,22,32,0.5)' }}>{'  ·  '}{artist}</span>
+        )}
+      </span>
+      <span className="mono" aria-hidden="true" style={{
+        fontSize: 8.5, letterSpacing: '0.16em', flexShrink: 0,
+        color: isDark ? '#bba8ff' : '#4a32b8',
+      }}>{lang === 'ru' ? 'У ВАС' : 'IN LIBRARY'}</span>
+    </button>
+  );
+}
+
+function SamplesPopBody({ track, isDark, lang, onPlayTrack, close }) {
   const samples = track?.samples || [];
   const sampledBy = track?.sampled_by || [];
-  const section = (label, accent, items) => items.length > 0 && (
+  // Aligned with [...samples, ...sampledBy]; null while the resolve request
+  // is in flight — rows render informational first, then «оживают».
+  const [matches, setMatches] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    fetchSampleMatches(track?.track_id, [...samples, ...sampledBy])
+      .then(list => { if (alive) setMatches(list); });
+    return () => { alive = false; };
+  }, [track?.track_id]);
+
+  const playable = (matches || []).filter(Boolean);
+  const playRow = (t) => {
+    if (onPlayTrack && t?.track_id) {
+      // Queue = every matched sample track in the popover, samples first.
+      onPlayTrack({ track: t }, playable.map(tt => ({ track: tt })));
+    }
+    if (close) close();
+  };
+
+  const section = (label, accent, items, offset) => items.length > 0 && (
     <div style={{ minWidth: 0 }}>
       <div className="mono" style={{
         display: 'flex', alignItems: 'center', gap: 7,
@@ -12159,178 +12295,187 @@ function SamplesPopBody({ track, isDark, lang }) {
         <span aria-hidden="true" style={{ width: 6, height: 6, borderRadius: '50%', background: accent, boxShadow: `0 0 8px ${accent}` }} />
         {label}
       </div>
-      {items.map((s, i) => <SampleRow key={i} text={s} index={i} isDark={isDark} />)}
+      {items.map((s, i) => {
+        const m = matches ? matches[offset + i] : null;
+        return m
+          ? <SampleRowMatched key={i} text={s} match={m} isDark={isDark} lang={lang} onPlay={() => playRow(m)} />
+          : <SampleRow key={i} text={s} index={i} isDark={isDark} />;
+      })}
     </div>
   );
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      {section(lang === 'ru' ? 'СЭМПЛИРУЕТ' : 'SAMPLES', '#a78bfa', samples)}
-      {section(lang === 'ru' ? 'ЕЁ СЭМПЛИРОВАЛИ' : 'SAMPLED BY', '#f472b6', sampledBy)}
+      {section(lang === 'ru' ? 'СЭМПЛИРУЕТ' : 'SAMPLES', '#a78bfa', samples, 0)}
+      {section(lang === 'ru' ? 'ЕЁ СЭМПЛИРОВАЛИ' : 'SAMPLED BY', '#f472b6', sampledBy, samples.length)}
     </div>
   );
 }
 
-// Anchored glass popover (desktop) / bottom sheet (mobile) listing what this
-// track samples and who sampled it. Desktop: portal fixed near the chip,
-// flipping below when the chip sits too high; Esc / outside click / scroll away
-// closes. Mobile reuses the hint-sheet scrim+panel (portal too).
-function SamplesPopover({ track, anchorRect, isDark, lang, onClose }) {
-  const isMobile = useIsMobile();
-  const popRef = useRef(null);
-
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
+// Samples popover: what this track samples and who sampled it, in the shared
+// AnchorPop shell. Rows resolved to library tracks are playable (see
+// SamplesPopBody); the rest stay informational.
+function SamplesPopover({ track, anchorRect, isDark, lang, onClose, onPlayTrack }) {
   const a11yTitle = lang === 'ru' ? 'Сэмплы трека' : 'Track samples';
-
-  if (isMobile) {
-    return createPortal(
-      <div className="hint-sheet-scrim" onClick={(e) => { e.stopPropagation(); onClose(); }}>
-        <div className="hint-sheet" role="dialog" aria-modal="true" aria-label={a11yTitle}
-          onClick={(e) => e.stopPropagation()}>
-          <span className="hint-sheet__grip" aria-hidden="true" />
-          <div style={{ maxHeight: '55vh', overflowY: 'auto', paddingBottom: 4 }}>
-            <SamplesPopBody track={track} isDark={isDark} lang={lang} />
-          </div>
-        </div>
-      </div>,
-      document.body
-    );
-  }
-
-  // Desktop placement: prefer above the chip; flip below when cramped.
-  const W = 380;
-  const vw = window.innerWidth;
-  const left = anchorRect
-    ? Math.max(12, Math.min(anchorRect.left + anchorRect.width / 2 - W / 2, vw - W - 12))
-    : vw / 2 - W / 2;
-  const openUp = anchorRect ? anchorRect.top > 300 : true;
-  const pos = anchorRect
-    ? (openUp
-        ? { bottom: window.innerHeight - anchorRect.top + 10 }
-        : { top: anchorRect.bottom + 10 })
-    : { top: '30%' };
-
-  return createPortal(
-    <>
-      {/* invisible click-catcher — the page stays visible, any outside click closes */}
-      <div style={{ position: 'fixed', inset: 0, zIndex: 8990 }} onClick={onClose} />
-      <div
-        ref={popRef}
-        className={`samples-pop${openUp ? '' : ' samples-pop--down'}`}
-        role="dialog" aria-label={a11yTitle}
-        style={{ position: 'fixed', left, width: W, zIndex: 8991, ...pos }}
-      >
-        <SamplesPopBody track={track} isDark={isDark} lang={lang} />
-      </div>
-    </>,
-    document.body
+  return (
+    <AnchorPop anchorRect={anchorRect} ariaLabel={a11yTitle} onClose={onClose}>
+      {(close) => (
+        <SamplesPopBody track={track} isDark={isDark} lang={lang}
+          onPlayTrack={onPlayTrack} close={close} />
+      )}
+    </AnchorPop>
   );
 }
 
-// Anchored popover (desktop) / bottom sheet (mobile) listing what a producer
-// made in the user's library. Reuses the samples-pop / hint-sheet shells.
-// Rows are real buttons: click replaces the queue with the producer's tracks.
-function ProducerTracksPop({ name, anchorRect, isDark, lang, onClose, onPlayTrack }) {
-  const isMobile = useIsMobile();
+// Group a producer's tracks into albums for the popover: newest album first
+// (a producer's catalog reads like a discography), tracks without an album
+// pooled into a trailing «Отдельные треки» list. The artist stays on the
+// track rows, not the album header — compilations with mixed artists would
+// lie in a header.
+function groupProducerTracks(tracks) {
+  const byAlbum = new Map();
+  const loose = [];
+  (tracks || []).forEach(t => {
+    const key = String(t.album || '').trim().toLowerCase();
+    if (!key) { loose.push(t); return; }
+    if (!byAlbum.has(key)) {
+      byAlbum.set(key, { album: t.album, year: t.year || null, cover: t.cover_art_path || null, artist: t.artist, rows: [] });
+    }
+    const g = byAlbum.get(key);
+    if (!g.cover && t.cover_art_path) g.cover = t.cover_art_path;
+    if (!g.year && t.year) g.year = t.year;
+    g.rows.push(t);
+  });
+  const groups = Array.from(byAlbum.values()).sort((a, b) => (b.year || 0) - (a.year || 0));
+  return { groups, loose };
+}
+
+// Popover for a producer pill (shared AnchorPop shell). The track list is
+// grouped by album — cover 44px + title + year, newest first; albumless
+// tracks trail with their own mini covers. When the producer is ALSO a
+// library artist (credit.artist_slug), a portrait header tops the popover:
+// real photo (thumb, never the cutout — AlbumCover falls back to a monogram),
+// name, «Открыть профиль», and the list is explicitly captioned «В РОЛИ
+// ПРОДЮСЕРА» so their production work can't be read as their own discography.
+// Row click replaces the queue with every track of the popover, display order.
+function ProducerTracksPop({ credit, anchorRect, isDark, lang, onClose, onPlayTrack, navigateToArtist }) {
   const [tracks, setTracks] = useState(null); // null = loading
 
   useEffect(() => {
     let alive = true;
-    fetchProducerTracks(name).then(list => { if (alive) setTracks(list); });
+    fetchProducerTracks(credit.name).then(list => { if (alive) setTracks(list); });
     return () => { alive = false; };
-  }, [name]);
+  }, [credit.name]);
 
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  const { groups, loose } = useMemo(() => groupProducerTracks(tracks), [tracks]);
+  const flat = useMemo(() => [...groups.flatMap(g => g.rows), ...loose], [groups, loose]);
 
-  const playRow = (t) => {
-    if (onPlayTrack && t?.track_id) {
-      onPlayTrack({ track: t }, (tracks || []).map(tt => ({ track: tt })));
-    }
-    onClose();
+  const muted = isDark ? 'rgba(255,255,255,0.45)' : 'rgba(22,22,32,0.5)';
+  const monoStyle = {
+    fontSize: 9.5, letterSpacing: '0.2em', textTransform: 'uppercase',
+    color: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(22,22,32,0.55)',
   };
+  const a11yTitle = lang === 'ru' ? `Треки продюсера ${credit.name}` : `Tracks produced by ${credit.name}`;
 
-  const body = (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
-      <div className="mono" style={{
-        fontSize: 9.5, letterSpacing: '0.2em',
-        color: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(22,22,32,0.55)',
-        margin: '2px 0 4px', textTransform: 'uppercase',
-      }}>
-        {lang === 'ru' ? `Спродюсировано: ${name}` : `Produced by ${name}`}
-      </div>
-      {tracks === null && (
-        <div style={{ fontSize: 12.5, opacity: 0.55, padding: '4px 0' }}>
-          {lang === 'ru' ? 'Ищем треки…' : 'Looking for tracks…'}
-        </div>
-      )}
-      {Array.isArray(tracks) && tracks.length === 0 && (
-        <div style={{ fontSize: 12.5, opacity: 0.55, padding: '4px 0' }}>
-          {lang === 'ru' ? 'В библиотеке ничего не нашлось' : 'Nothing found in your library'}
-        </div>
-      )}
-      {Array.isArray(tracks) && tracks.map((t, i) => (
-        <button key={t.track_id || i} type="button" className="producer-track-row"
-          onClick={() => playRow(t)}
-          title={lang === 'ru' ? 'Слушать' : 'Play'}>
-          <span className="mono" aria-hidden="true" style={{
-            fontSize: 9.5, flexShrink: 0, width: 16, textAlign: 'right',
-            color: isDark ? 'rgba(255,255,255,0.28)' : 'rgba(22,22,32,0.32)',
-          }}>{String(i + 1).padStart(2, '0')}</span>
-          <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            <span style={{ fontWeight: 500 }}>{trackTitle(t)}</span>
-            <span style={{ color: isDark ? 'rgba(255,255,255,0.45)' : 'rgba(22,22,32,0.5)' }}>{'  ·  '}{t.artist}</span>
-          </span>
-        </button>
-      ))}
-    </div>
-  );
+  return (
+    <AnchorPop anchorRect={anchorRect} ariaLabel={a11yTitle} onClose={onClose}>
+      {(close) => {
+        const playRow = (t) => {
+          if (onPlayTrack && t?.track_id) {
+            onPlayTrack({ track: t }, flat.map(tt => ({ track: tt })));
+          }
+          close();
+        };
+        const trackRow = (t, i, withCover) => (
+          <button key={t.track_id || i} type="button" className="producer-track-row"
+            style={withCover ? { alignItems: 'center', padding: '4px 6px' } : undefined}
+            onClick={() => playRow(t)}
+            title={lang === 'ru' ? 'Слушать' : 'Play'}>
+            {withCover ? (
+              <AlbumCover title={trackTitle(t)} artist={t.artist} size={28}
+                isDark={isDark} coverPath={t.cover_art_path} radius={6} />
+            ) : (
+              <span className="mono" aria-hidden="true" style={{
+                fontSize: 9.5, flexShrink: 0, width: 16, textAlign: 'right',
+                color: isDark ? 'rgba(255,255,255,0.28)' : 'rgba(22,22,32,0.32)',
+              }}>{String(i + 1).padStart(2, '0')}</span>
+            )}
+            <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <span style={{ fontWeight: 500 }}>{trackTitle(t)}</span>
+              <span style={{ color: muted }}>{'  ·  '}{t.artist}</span>
+            </span>
+          </button>
+        );
 
-  const a11yTitle = lang === 'ru' ? `Треки продюсера ${name}` : `Tracks produced by ${name}`;
-
-  if (isMobile) {
-    return createPortal(
-      <div className="hint-sheet-scrim" onClick={(e) => { e.stopPropagation(); onClose(); }}>
-        <div className="hint-sheet" role="dialog" aria-modal="true" aria-label={a11yTitle}
-          onClick={(e) => e.stopPropagation()}>
-          <span className="hint-sheet__grip" aria-hidden="true" />
-          <div style={{ maxHeight: '55vh', overflowY: 'auto', paddingBottom: 4 }}>{body}</div>
-        </div>
-      </div>,
-      document.body
-    );
-  }
-
-  // Desktop placement mirrors SamplesPopover: above the pill, flip when cramped.
-  const W = 380;
-  const vw = window.innerWidth;
-  const left = anchorRect
-    ? Math.max(12, Math.min(anchorRect.left + anchorRect.width / 2 - W / 2, vw - W - 12))
-    : vw / 2 - W / 2;
-  const openUp = anchorRect ? anchorRect.top > 300 : true;
-  const pos = anchorRect
-    ? (openUp
-        ? { bottom: window.innerHeight - anchorRect.top + 10 }
-        : { top: anchorRect.bottom + 10 })
-    : { top: '30%' };
-
-  return createPortal(
-    <>
-      <div style={{ position: 'fixed', inset: 0, zIndex: 8990 }} onClick={onClose} />
-      <div
-        className={`samples-pop${openUp ? '' : ' samples-pop--down'}`}
-        role="dialog" aria-label={a11yTitle}
-        style={{ position: 'fixed', left, width: W, zIndex: 8991, ...pos }}
-      >{body}</div>
-    </>,
-    document.body
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+            {credit.artist_slug && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 12, padding: '2px 0 10px',
+                borderBottom: `1px solid ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(22,22,32,0.08)'}`,
+                marginBottom: 6,
+              }}>
+                <AlbumCover title={credit.name} artist={credit.name} size={56}
+                  isDark={isDark} coverPath={credit.image} radius={14} />
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{
+                    fontSize: 15.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden',
+                    textOverflow: 'ellipsis', color: isDark ? '#ece9f4' : '#1d1a28',
+                  }}>{credit.name}</div>
+                  <button type="button" className="producer-pop__profile"
+                    onClick={() => { close(); if (navigateToArtist) navigateToArtist(credit.artist_slug); }}>
+                    {lang === 'ru' ? 'Открыть профиль' : 'Open artist page'} →
+                  </button>
+                </div>
+              </div>
+            )}
+            <div className="mono" style={{ ...monoStyle, margin: '2px 0 4px' }}>
+              {credit.artist_slug
+                ? `${lang === 'ru' ? 'В роли продюсера' : 'As a producer'}${Array.isArray(tracks) ? ` · ${flat.length}` : ''}`
+                : (lang === 'ru' ? `Спродюсировано: ${credit.name}` : `Produced by ${credit.name}`)}
+            </div>
+            {tracks === null && (
+              <div style={{ fontSize: 12.5, opacity: 0.55, padding: '4px 0' }}>
+                {lang === 'ru' ? 'Ищем треки…' : 'Looking for tracks…'}
+              </div>
+            )}
+            {Array.isArray(tracks) && flat.length === 0 && (
+              <div style={{ fontSize: 12.5, opacity: 0.55, padding: '4px 0' }}>
+                {lang === 'ru' ? 'В библиотеке ничего не нашлось' : 'Nothing found in your library'}
+              </div>
+            )}
+            {groups.map(g => (
+              <div key={g.album} style={{ minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 6px 4px' }}>
+                  <AlbumCover title={g.album} artist={g.artist} size={44}
+                    isDark={isDark} coverPath={g.cover} radius={8} />
+                  <span style={{ minWidth: 0 }}>
+                    <span style={{
+                      display: 'block', fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap',
+                      overflow: 'hidden', textOverflow: 'ellipsis',
+                      color: isDark ? '#e8e6f2' : '#1d1a28',
+                    }}>{g.album}</span>
+                    <span style={{ display: 'block', fontSize: 11, color: muted }}>{g.year || '—'}</span>
+                  </span>
+                </div>
+                {g.rows.map((t, i) => trackRow(t, i, false))}
+              </div>
+            ))}
+            {loose.length > 0 && (
+              <div style={{ minWidth: 0 }}>
+                {groups.length > 0 && (
+                  <div className="mono" style={{
+                    ...monoStyle, fontSize: 9,
+                    color: isDark ? 'rgba(255,255,255,0.4)' : 'rgba(22,22,32,0.4)',
+                    margin: '8px 6px 2px',
+                  }}>{lang === 'ru' ? 'Отдельные треки' : 'Singles'}</div>
+                )}
+                {loose.map((t, i) => trackRow(t, i, true))}
+              </div>
+            )}
+          </div>
+        );
+      }}
+    </AnchorPop>
   );
 }
 
@@ -12347,7 +12492,6 @@ const _albumKey = (s) => String(s || '').trim().toLowerCase();
 // artist is on the label. Caps at 10 rows — «См. все» hands off to the
 // full-screen LabelAlbumsModal via onSeeAll.
 function LabelAlbumsPop({ label, anchorRect, excludeAlbumTitle, excludeArtist, isDark, lang, onOpenAlbum, onSeeAll, onClose }) {
-  const isMobile = useIsMobile();
   const [albums, setAlbums] = useState(null); // null = loading
   const POP_LIMIT = 10;
 
@@ -12357,12 +12501,6 @@ function LabelAlbumsPop({ label, anchorRect, excludeAlbumTitle, excludeArtist, i
     return () => { alive = false; };
   }, [label]);
 
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
   const excludeKey = _albumKey(excludeAlbumTitle);
   const artistKey = _albumKey(excludeArtist);
   const all = (albums || []).filter(a => _albumKey(a.album_title) !== excludeKey);
@@ -12371,101 +12509,63 @@ function LabelAlbumsPop({ label, anchorRect, excludeAlbumTitle, excludeArtist, i
   const rows = pool.slice(0, POP_LIMIT);
   const hiddenCount = all.length - rows.length;
 
-  const pick = (a) => {
-    onClose();
-    if (onOpenAlbum) onOpenAlbum(a);
-  };
-
   const tracksWordFor = (n) => lang === 'ru'
     ? ruTracksWord(n)
     : (n === 1 ? 'track' : 'tracks');
 
-  const body = (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
-      <div className="mono" style={{
-        fontSize: 9.5, letterSpacing: '0.2em',
-        color: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(22,22,32,0.55)',
-        margin: '2px 0 4px', textTransform: 'uppercase',
-      }}>
-        {(lang === 'ru' ? `На этом лейбле` : `On this label`)}
-        {albums !== null ? ` · ${all.length}` : ''}
-      </div>
-      {albums === null && (
-        <div style={{ fontSize: 12.5, opacity: 0.55, padding: '4px 0' }}>
-          {lang === 'ru' ? 'Смотрим каталог…' : 'Checking the catalog…'}
-        </div>
-      )}
-      {albums !== null && rows.length === 0 && (
-        <div style={{ fontSize: 12.5, opacity: 0.55, padding: '4px 0' }}>
-          {lang === 'ru' ? 'Других альбомов этого лейбла у вас нет' : 'No other albums on this label here'}
-        </div>
-      )}
-      {rows.map(a => (
-        <button key={`${a.album_title}-${a.year || a.year_range || ''}`} type="button"
-          className="label-album-row" onClick={() => pick(a)}
-          title={lang === 'ru' ? 'Открыть альбом' : 'Open album'}>
-          <div style={{ width: 44, height: 44, flexShrink: 0, borderRadius: 8, overflow: 'hidden' }}>
-            <AlbumCover title={a.album_title} artist={a.primary_artist} size={44}
-              isDark={isDark} coverPath={a.cover_art_path} radius={8} />
-          </div>
-          <span style={{ minWidth: 0, flex: 1 }}>
-            <span style={{ display: 'block', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              {a.album_title}
-            </span>
-            <span style={{ display: 'block', fontSize: 11.5, color: isDark ? 'rgba(255,255,255,0.45)' : 'rgba(22,22,32,0.5)' }}>
-              {a.primary_artist} · {String(a.year_range || a.year || '—')} · {a.track_count} {tracksWordFor(a.track_count)}
-            </span>
-          </span>
-        </button>
-      ))}
-      {albums !== null && hiddenCount > 0 && onSeeAll && (
-        <button type="button" className="label-album-row"
-          onClick={() => { onClose(); onSeeAll(label); }}
-          style={{ justifyContent: 'center', fontWeight: 500, color: isDark ? '#bba8ff' : '#4a32b8' }}
-          title={lang === 'ru' ? 'Все альбомы этого лейбла у вас' : 'All albums on this label here'}>
-          {lang === 'ru' ? `См. все · ${all.length}` : `See all · ${all.length}`}
-        </button>
-      )}
-    </div>
-  );
-
   const a11yTitle = lang === 'ru' ? `Альбомы лейбла ${label}` : `Albums on ${label}`;
 
-  if (isMobile) {
-    return createPortal(
-      <div className="hint-sheet-scrim" onClick={(e) => { e.stopPropagation(); onClose(); }}>
-        <div className="hint-sheet" role="dialog" aria-modal="true" aria-label={a11yTitle}
-          onClick={(e) => e.stopPropagation()}>
-          <span className="hint-sheet__grip" aria-hidden="true" />
-          <div style={{ maxHeight: '55vh', overflowY: 'auto', paddingBottom: 4 }}>{body}</div>
+  return (
+    <AnchorPop anchorRect={anchorRect} ariaLabel={a11yTitle} onClose={onClose}>
+      {(close) => (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+          <div className="mono" style={{
+            fontSize: 9.5, letterSpacing: '0.2em',
+            color: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(22,22,32,0.55)',
+            margin: '2px 0 4px', textTransform: 'uppercase',
+          }}>
+            {(lang === 'ru' ? `На этом лейбле` : `On this label`)}
+            {albums !== null ? ` · ${all.length}` : ''}
+          </div>
+          {albums === null && (
+            <div style={{ fontSize: 12.5, opacity: 0.55, padding: '4px 0' }}>
+              {lang === 'ru' ? 'Смотрим каталог…' : 'Checking the catalog…'}
+            </div>
+          )}
+          {albums !== null && rows.length === 0 && (
+            <div style={{ fontSize: 12.5, opacity: 0.55, padding: '4px 0' }}>
+              {lang === 'ru' ? 'Других альбомов этого лейбла у вас нет' : 'No other albums on this label here'}
+            </div>
+          )}
+          {rows.map(a => (
+            <button key={`${a.album_title}-${a.year || a.year_range || ''}`} type="button"
+              className="label-album-row" onClick={() => { close(); if (onOpenAlbum) onOpenAlbum(a); }}
+              title={lang === 'ru' ? 'Открыть альбом' : 'Open album'}>
+              <div style={{ width: 44, height: 44, flexShrink: 0, borderRadius: 8, overflow: 'hidden' }}>
+                <AlbumCover title={a.album_title} artist={a.primary_artist} size={44}
+                  isDark={isDark} coverPath={a.cover_art_path} radius={8} />
+              </div>
+              <span style={{ minWidth: 0, flex: 1 }}>
+                <span style={{ display: 'block', fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {a.album_title}
+                </span>
+                <span style={{ display: 'block', fontSize: 11.5, color: isDark ? 'rgba(255,255,255,0.45)' : 'rgba(22,22,32,0.5)' }}>
+                  {a.primary_artist} · {String(a.year_range || a.year || '—')} · {a.track_count} {tracksWordFor(a.track_count)}
+                </span>
+              </span>
+            </button>
+          ))}
+          {albums !== null && hiddenCount > 0 && onSeeAll && (
+            <button type="button" className="label-album-row"
+              onClick={() => { close(); onSeeAll(label); }}
+              style={{ justifyContent: 'center', fontWeight: 500, color: isDark ? '#bba8ff' : '#4a32b8' }}
+              title={lang === 'ru' ? 'Все альбомы этого лейбла у вас' : 'All albums on this label here'}>
+              {lang === 'ru' ? `См. все · ${all.length}` : `See all · ${all.length}`}
+            </button>
+          )}
         </div>
-      </div>,
-      document.body
-    );
-  }
-
-  const W = 380;
-  const vw = window.innerWidth;
-  const left = anchorRect
-    ? Math.max(12, Math.min(anchorRect.left + anchorRect.width / 2 - W / 2, vw - W - 12))
-    : vw / 2 - W / 2;
-  const openUp = anchorRect ? anchorRect.top > 300 : true;
-  const pos = anchorRect
-    ? (openUp
-        ? { bottom: window.innerHeight - anchorRect.top + 10 }
-        : { top: anchorRect.bottom + 10 })
-    : { top: '30%' };
-
-  return createPortal(
-    <>
-      <div style={{ position: 'fixed', inset: 0, zIndex: 8990 }} onClick={onClose} />
-      <div
-        className={`samples-pop${openUp ? '' : ' samples-pop--down'}`}
-        role="dialog" aria-label={a11yTitle}
-        style={{ position: 'fixed', left, width: W, zIndex: 8991, ...pos }}
-      >{body}</div>
-    </>,
-    document.body
+      )}
+    </AnchorPop>
   );
 }
 
@@ -12603,13 +12703,15 @@ function LabelAlbumsModal({ label, currentAlbumTitle, currentArtist, isDark, lan
 }
 
 // The producers drawer: an inline panel below «Альбом · Год», opened by the
-// chevron next to the artist name. Hidden until asked for. Three pill states:
-// producer-as-library-artist → their artist page; producer with other tracks
-// here → ProducerTracksPop; anyone else → muted info pill (no fake affordance).
+// chevron next to the artist name. Hidden until asked for. Two pill states:
+// producer known here (library artist OR credited on other tracks) →
+// ProducerTracksPop (the artist case gets the portrait header inside — it no
+// longer jumps straight to the artist page); anyone else → muted info pill
+// (no fake affordance).
 function ProducersReveal({ open, track, isDark, lang, navigateToArtist, onPlayTrack }) {
   const names = useMemo(() => splitCredits(track?.producer), [track?.producer]);
   const [resolved, setResolved] = useState(null); // null = pending
-  const [popFor, setPopFor] = useState(null);     // {name, anchorRect}
+  const [popFor, setPopFor] = useState(null);     // {credit, anchorRect}
 
   useEffect(() => {
     setResolved(null);
@@ -12626,7 +12728,7 @@ function ProducersReveal({ open, track, isDark, lang, navigateToArtist, onPlayTr
   // to muted pills from the client-side split so the panel never sits empty.
   const pills = (resolved && resolved.length)
     ? resolved
-    : names.map(n => ({ name: n, artist_slug: null, produced_count: 0 }));
+    : names.map(n => ({ name: n, artist_slug: null, image: null, produced_count: 0 }));
 
   return (
     <div className={`credits-reveal${open ? ' credits-reveal--open' : ''}`}>
@@ -12639,29 +12741,22 @@ function ProducersReveal({ open, track, isDark, lang, navigateToArtist, onPlayTr
           }}>{lang === 'ru' ? 'ПРОДЮСЕРЫ' : 'PRODUCERS'}</div>
           <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'center', gap: 6 }}>
             {pills.map((p) => {
-              if (p.artist_slug && navigateToArtist) {
+              if (p.artist_slug || p.produced_count > 0) {
                 return (
                   <button key={p.name} type="button" className="credit-chip credit-chip--link"
-                    onClick={() => navigateToArtist(p.artist_slug)}
-                    title={lang === 'ru' ? 'Открыть страницу артиста' : 'Open artist page'}>
-                    <span className="credit-chip__pre" aria-hidden="true">✦</span>
-                    {p.name}
-                  </button>
-                );
-              }
-              if (p.produced_count > 0) {
-                return (
-                  <button key={p.name} type="button" className="credit-chip credit-chip--link"
-                    aria-expanded={popFor?.name === p.name}
+                    aria-expanded={popFor?.credit?.name === p.name}
                     onClick={(e) => {
                       // Same trap as the label chips: currentTarget is null inside
                       // a deferred updater — grab the rect before setState.
                       const rect = e.currentTarget.getBoundingClientRect();
-                      setPopFor(prev => prev?.name === p.name ? null : { name: p.name, anchorRect: rect });
+                      setPopFor(prev => prev?.credit?.name === p.name ? null : { credit: p, anchorRect: rect });
                     }}
-                    title={lang === 'ru' ? 'Ещё треки этого продюсера у вас' : 'More tracks by this producer here'}>
+                    title={p.artist_slug
+                      ? (lang === 'ru' ? 'Об этом продюсере' : 'About this producer')
+                      : (lang === 'ru' ? 'Ещё треки этого продюсера у вас' : 'More tracks by this producer here')}>
+                    {p.artist_slug && <span className="credit-chip__pre" aria-hidden="true">✦</span>}
                     {p.name}
-                    <span className="credit-chip__count">· {p.produced_count}</span>
+                    {p.produced_count > 0 && <span className="credit-chip__count">· {p.produced_count}</span>}
                   </button>
                 );
               }
@@ -12672,10 +12767,11 @@ function ProducersReveal({ open, track, isDark, lang, navigateToArtist, onPlayTr
       </div>
       {popFor && (
         <ProducerTracksPop
-          name={popFor.name} anchorRect={popFor.anchorRect}
+          credit={popFor.credit} anchorRect={popFor.anchorRect}
           isDark={isDark} lang={lang}
           onClose={() => setPopFor(null)}
           onPlayTrack={onPlayTrack}
+          navigateToArtist={navigateToArtist}
         />
       )}
     </div>
@@ -12686,7 +12782,7 @@ function ProducersReveal({ open, track, isDark, lang, navigateToArtist, onPlayTr
 // Renders nothing when the track has no sample links.
 // `bare` drops the own row wrapper so the pill can join the shared chips strip
 // alongside the lyric gems — see .player-chips-row.
-function SamplesAccentChip({ track, isDark, lang, bare }) {
+function SamplesAccentChip({ track, isDark, lang, bare, onPlayTrack }) {
   const sampleCount = (track?.samples?.length || 0) + (track?.sampled_by?.length || 0);
   const [open, setOpen] = useState(false);
   const [anchorRect, setAnchorRect] = useState(null);
@@ -12714,6 +12810,7 @@ function SamplesAccentChip({ track, isDark, lang, bare }) {
           track={track} anchorRect={anchorRect}
           isDark={isDark} lang={lang}
           onClose={() => setOpen(false)}
+          onPlayTrack={onPlayTrack}
         />
       )}
     </>
@@ -12774,7 +12871,6 @@ const GEM_POP_LABELS = {
 // (that's the wow), then every other library track carrying the same entity.
 // Twin of ProducerTracksPop — same shells, same play-row mechanics.
 function GemTracksPop({ gem, currentTrackId, anchorRect, isDark, lang, onClose, onPlayTrack }) {
-  const isMobile = useIsMobile();
   const [tracks, setTracks] = useState(null); // null = loading
 
   useEffect(() => {
@@ -12783,112 +12879,74 @@ function GemTracksPop({ gem, currentTrackId, anchorRect, isDark, lang, onClose, 
     return () => { alive = false; };
   }, [gem.kind, gem.canonical]);
 
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
   const rows = (tracks || []).filter(t => t.track_id !== currentTrackId);
-  const playRow = (t) => {
-    if (onPlayTrack && t?.track_id) {
-      onPlayTrack({ track: t }, rows.map(tt => ({ track: tt })));
-    }
-    onClose();
-  };
-
   const labels = GEM_POP_LABELS[lang === 'ru' ? 'ru' : 'en'];
-  const body = (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
-      <div className="mono" style={{
-        display: 'flex', alignItems: 'center', gap: 7,
-        fontSize: 9.5, letterSpacing: '0.2em', textTransform: 'uppercase',
-        color: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(22,22,32,0.55)',
-        margin: '2px 0 4px',
-      }}>
-        <span aria-hidden="true" style={{
-          width: 6, height: 6, borderRadius: '50%',
-          background: GEM_ACCENTS[gem.kind], boxShadow: `0 0 8px ${GEM_ACCENTS[gem.kind]}`,
-        }} />
-        {labels[gem.kind]} · {gem.display}
-      </div>
-      {gem.quote && (
-        <div style={{
-          fontSize: 12.5, lineHeight: 1.5, fontStyle: 'italic', padding: '2px 0 6px',
-          color: isDark ? 'rgba(255,255,255,0.72)' : 'rgba(22,22,32,0.72)',
-        }}>«{gem.quote}»</div>
-      )}
-      {tracks === null && (
-        <div style={{ fontSize: 12.5, opacity: 0.55, padding: '4px 0' }}>
-          {lang === 'ru' ? 'Ищем треки…' : 'Looking for tracks…'}
-        </div>
-      )}
-      {tracks !== null && rows.length === 0 && (
-        <div style={{ fontSize: 12.5, opacity: 0.55, padding: '4px 0' }}>
-          {lang === 'ru' ? 'Больше нигде в библиотеке не встречается' : 'Nowhere else in your library'}
-        </div>
-      )}
-      {rows.length > 0 && (
-        <div className="mono" style={{
-          fontSize: 9.5, letterSpacing: '0.2em',
-          color: isDark ? 'rgba(255,255,255,0.4)' : 'rgba(22,22,32,0.4)',
-          margin: '2px 0 2px',
-        }}>{lang === 'ru' ? 'ГДЕ ЕЩЁ' : 'ALSO IN'}</div>
-      )}
-      {rows.map((t, i) => (
-        <button key={t.track_id || i} type="button" className="producer-track-row"
-          onClick={() => playRow(t)}
-          title={lang === 'ru' ? 'Слушать' : 'Play'}>
-          <span className="mono" aria-hidden="true" style={{
-            fontSize: 9.5, flexShrink: 0, width: 16, textAlign: 'right',
-            color: isDark ? 'rgba(255,255,255,0.28)' : 'rgba(22,22,32,0.32)',
-          }}>{String(i + 1).padStart(2, '0')}</span>
-          <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            <span style={{ fontWeight: 500 }}>{trackTitle(t)}</span>
-            <span style={{ color: isDark ? 'rgba(255,255,255,0.45)' : 'rgba(22,22,32,0.5)' }}>{'  ·  '}{t.artist}</span>
-          </span>
-        </button>
-      ))}
-    </div>
-  );
-
   const a11yTitle = `${labels[gem.kind]}: ${gem.display}`;
 
-  if (isMobile) {
-    return createPortal(
-      <div className="hint-sheet-scrim" onClick={(e) => { e.stopPropagation(); onClose(); }}>
-        <div className="hint-sheet" role="dialog" aria-modal="true" aria-label={a11yTitle}
-          onClick={(e) => e.stopPropagation()}>
-          <span className="hint-sheet__grip" aria-hidden="true" />
-          <div style={{ maxHeight: '55vh', overflowY: 'auto', paddingBottom: 4 }}>{body}</div>
-        </div>
-      </div>,
-      document.body
-    );
-  }
-
-  const W = 380;
-  const vw = window.innerWidth;
-  const left = anchorRect
-    ? Math.max(12, Math.min(anchorRect.left + anchorRect.width / 2 - W / 2, vw - W - 12))
-    : vw / 2 - W / 2;
-  const openUp = anchorRect ? anchorRect.top > 300 : true;
-  const pos = anchorRect
-    ? (openUp
-        ? { bottom: window.innerHeight - anchorRect.top + 10 }
-        : { top: anchorRect.bottom + 10 })
-    : { top: '30%' };
-
-  return createPortal(
-    <>
-      <div style={{ position: 'fixed', inset: 0, zIndex: 8990 }} onClick={onClose} />
-      <div
-        className={`samples-pop${openUp ? '' : ' samples-pop--down'}`}
-        role="dialog" aria-label={a11yTitle}
-        style={{ position: 'fixed', left, width: W, zIndex: 8991, ...pos }}
-      >{body}</div>
-    </>,
-    document.body
+  return (
+    <AnchorPop anchorRect={anchorRect} ariaLabel={a11yTitle} onClose={onClose}>
+      {(close) => {
+        const playRow = (t) => {
+          if (onPlayTrack && t?.track_id) {
+            onPlayTrack({ track: t }, rows.map(tt => ({ track: tt })));
+          }
+          close();
+        };
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+            <div className="mono" style={{
+              display: 'flex', alignItems: 'center', gap: 7,
+              fontSize: 9.5, letterSpacing: '0.2em', textTransform: 'uppercase',
+              color: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(22,22,32,0.55)',
+              margin: '2px 0 4px',
+            }}>
+              <span aria-hidden="true" style={{
+                width: 6, height: 6, borderRadius: '50%',
+                background: GEM_ACCENTS[gem.kind], boxShadow: `0 0 8px ${GEM_ACCENTS[gem.kind]}`,
+              }} />
+              {labels[gem.kind]} · {gem.display}
+            </div>
+            {gem.quote && (
+              <div style={{
+                fontSize: 12.5, lineHeight: 1.5, fontStyle: 'italic', padding: '2px 0 6px',
+                color: isDark ? 'rgba(255,255,255,0.72)' : 'rgba(22,22,32,0.72)',
+              }}>«{gem.quote}»</div>
+            )}
+            {tracks === null && (
+              <div style={{ fontSize: 12.5, opacity: 0.55, padding: '4px 0' }}>
+                {lang === 'ru' ? 'Ищем треки…' : 'Looking for tracks…'}
+              </div>
+            )}
+            {tracks !== null && rows.length === 0 && (
+              <div style={{ fontSize: 12.5, opacity: 0.55, padding: '4px 0' }}>
+                {lang === 'ru' ? 'Больше нигде в библиотеке не встречается' : 'Nowhere else in your library'}
+              </div>
+            )}
+            {rows.length > 0 && (
+              <div className="mono" style={{
+                fontSize: 9.5, letterSpacing: '0.2em',
+                color: isDark ? 'rgba(255,255,255,0.4)' : 'rgba(22,22,32,0.4)',
+                margin: '2px 0 2px',
+              }}>{lang === 'ru' ? 'ГДЕ ЕЩЁ' : 'ALSO IN'}</div>
+            )}
+            {rows.map((t, i) => (
+              <button key={t.track_id || i} type="button" className="producer-track-row"
+                onClick={() => playRow(t)}
+                title={lang === 'ru' ? 'Слушать' : 'Play'}>
+                <span className="mono" aria-hidden="true" style={{
+                  fontSize: 9.5, flexShrink: 0, width: 16, textAlign: 'right',
+                  color: isDark ? 'rgba(255,255,255,0.28)' : 'rgba(22,22,32,0.32)',
+                }}>{String(i + 1).padStart(2, '0')}</span>
+                <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <span style={{ fontWeight: 500 }}>{trackTitle(t)}</span>
+                  <span style={{ color: isDark ? 'rgba(255,255,255,0.45)' : 'rgba(22,22,32,0.5)' }}>{'  ·  '}{t.artist}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        );
+      }}
+    </AnchorPop>
   );
 }
 
@@ -15820,6 +15878,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                     track={currentTrack}
                     isDark={isDark}
                     lang={lang}
+                    onPlayTrack={onPlayTrack}
                     bare
                   />
                   <GemsChips

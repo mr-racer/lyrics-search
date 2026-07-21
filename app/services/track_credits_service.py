@@ -8,7 +8,8 @@ Producer names come from the free-text ``producer`` tag ("Dr. Dre, Mel-Man" /
 "A; B" / "A & B"); ``split_credit_names`` is the single source of truth for
 splitting it (the player keeps a client-side copy only as a display fallback
 while the resolve request is in flight). Label strings may carry several
-labels ("GOOD Music, Def Jam") and are split by ``split_labels``.
+labels ("GOOD Music, Def Jam" / "Columbia Records & ARXOXO LLC") and are
+split by ``split_labels``.
 
 Label names are matched with ``label_key`` (lowercase + collapsed whitespace).
 Deliberately NOT ``artist_facts_service._slugify`` — labels are not artist
@@ -24,6 +25,10 @@ from typing import Iterable, Optional
 from ..domain.models import ProducerCredit, ProducerTrack
 from ..resources.metadata_db import MetadataDB, canonical_track_id
 from .artist_split import artist_refs_for_track, display_title_for_track, artist_slugs
+# Same normalization rules the playlist resolver matches web tracklists with:
+# fold + feat-stripped title keys, substring-tolerant artist equality. Shared
+# on purpose — a second local copy would silently drift (cf. the two _slugify).
+from .playlist_agent.resolver import _artist_matches, _title_key
 
 logger = logging.getLogger(__name__)
 
@@ -32,9 +37,12 @@ logger = logging.getLogger(__name__)
 # matches the dot ("." and " " are both non-word, so no boundary sits between
 # them) and left a ". Name" remainder.
 _CREDIT_SPLIT_RE = re.compile(r"\s*(?:[,;/]|&|\bfeat\b\.?)\s*", re.IGNORECASE)
-# Labels only split on , and ; — "/" and "&" appear inside real label names
-# ("Kobalt Music Group", "A&M Records").
-_LABEL_SPLIT_RE = re.compile(r"\s*[,;]\s*")
+# Labels split on , ; and a whitespace-flanked & — Genius renders its list of
+# release entities as "A, B & C", so " & " glues together things like
+# "Columbia Records & ARXOXO LLC" (major label + the artist's own LLC).
+# "&" WITHOUT spaces stays inside real label names ("A&M Records"); "/" is
+# never a separator here.
+_LABEL_SPLIT_RE = re.compile(r"\s*[,;]\s*|\s+&\s+")
 
 # The player shows at most 3 producers; counting honors the same cap so the
 # drawer's "· N" badges agree with what a visitor sees on the other tracks.
@@ -95,13 +103,30 @@ def _library_artist_slug(collection_name: str, name: str) -> Optional[str]:
     return None
 
 
+def _artist_thumb(collection_name: str, slug: Optional[str]) -> Optional[str]:
+    """Real photo (thumb) for a library artist, or None.
+
+    Deliberately NOT the cutout: the producer popup shows a portrait card,
+    and a transparent floating-head PNG reads wrong there. No thumb → the
+    player falls back to a monogram avatar.
+    """
+    if not slug:
+        return None
+    try:
+        ad = MetadataDB.get_artist_audiodb(slug, collection_name) or {}
+    except Exception:
+        return None
+    return ad.get("thumb_path") or None
+
+
 def resolve_producers(collection_name: str, track_id: str) -> list[ProducerCredit]:
     """Resolve a track's producer names against the user's library.
 
     For every name in the track's producer tag: is the producer also a library
-    artist (→ ``artist_slug``), and how many OTHER tracks in the collection
-    credit them as producer (→ ``produced_count``). Degrades to ``[]`` on any
-    error — the player's drawer falls back to plain client-split pills.
+    artist (→ ``artist_slug`` + their photo in ``image``), and how many OTHER
+    tracks in the collection credit them as producer (→ ``produced_count``).
+    Degrades to ``[]`` on any error — the player's drawer falls back to plain
+    client-split pills.
     """
     try:
         raw = MetadataDB.get_track_producer(collection_name, track_id)
@@ -120,20 +145,37 @@ def resolve_producers(collection_name: str, track_id: str) -> list[ProducerCredi
                 if key in wanted:
                     counts[key] = counts.get(key, 0) + 1
 
-        return [
-            ProducerCredit(
+        out: list[ProducerCredit] = []
+        for name in names:
+            slug = _library_artist_slug(collection_name, name)
+            out.append(ProducerCredit(
                 name=name,
-                artist_slug=_library_artist_slug(collection_name, name),
+                artist_slug=slug,
+                image=_artist_thumb(collection_name, slug),
                 produced_count=counts.get(_name_key(name), 0),
-            )
-            for name in names
-        ]
+            ))
+        return out
     except Exception:
         logger.exception(
             "[credits] resolve_producers failed (collection=%s, track=%s)",
             collection_name, track_id,
         )
         return []
+
+
+def _producer_track(row: dict) -> ProducerTrack:
+    """A slim ``track_metadata`` row → the playable shape the popovers render."""
+    return ProducerTrack(
+        track_id=row["track_id"],
+        title=row["title"] or "—",
+        title_display=display_title_for_track(row),
+        artist=row["artist"] or "—",
+        album=row.get("album"),
+        year=row.get("year"),
+        duration=row.get("duration"),
+        cover_art_path=row.get("cover_art_path"),
+        artist_refs=artist_refs_for_track(row),
+    )
 
 
 def tracks_produced_by(collection_name: str, name: str) -> list[ProducerTrack]:
@@ -150,17 +192,7 @@ def tracks_produced_by(collection_name: str, name: str) -> list[ProducerTrack]:
             keys = {_name_key(n) for n in split_credit_names(row["producer"])}
             if key not in keys:
                 continue
-            out.append(ProducerTrack(
-                track_id=row["track_id"],
-                title=row["title"] or "—",
-                title_display=display_title_for_track(row),
-                artist=row["artist"] or "—",
-                album=row["album"],
-                year=row["year"],
-                duration=row["duration"],
-                cover_art_path=row["cover_art_path"],
-                artist_refs=artist_refs_for_track(row),
-            ))
+            out.append(_producer_track(row))
         out.sort(key=lambda t: (t.artist.lower(), t.title.lower()))
         return out
     except Exception:
@@ -169,3 +201,56 @@ def tracks_produced_by(collection_name: str, name: str) -> list[ProducerTrack]:
             collection_name, name,
         )
         return []
+
+
+# "Artist — Title" (em/en dash with spaces) — the exact format the relations
+# pipeline writes (``_fmt_sample_entry``) and the player's SampleRow splits.
+_SAMPLE_REF_RE = re.compile(r"\s+[—–]\s+")
+
+
+def resolve_sample_refs(
+    collection_name: str, items: list[str],
+) -> list[Optional[ProducerTrack]]:
+    """Match sample-reference strings against the user's library.
+
+    Exact-only matching (feat-stripped, fold-normalized title + substring-
+    tolerant artist): a wrong «you have this» claim on a playable row is worse
+    than a miss, so there is no fuzzy stage. A string without the dash is
+    matched as a bare title and accepted only when the library has exactly one
+    candidate. Returns a list aligned with ``items``; unmatched → None.
+    """
+    if not items:
+        return []
+    try:
+        by_title: dict[str, list[dict]] = {}
+        for row in MetadataDB.get_tracks_slim(collection_name):
+            tkey = _title_key(row.get("title"))
+            if tkey:
+                by_title.setdefault(tkey, []).append(row)
+
+        out: list[Optional[ProducerTrack]] = []
+        for raw in items:
+            text = str(raw or "").strip()
+            parts = _SAMPLE_REF_RE.split(text, maxsplit=1)
+            q_artist, q_title = (
+                (parts[0].strip(), parts[1].strip()) if len(parts) == 2
+                else (None, text)
+            )
+            picked = None
+            candidates = by_title.get(_title_key(q_title), []) if q_title else []
+            if q_artist:
+                picked = next(
+                    (c for c in candidates if _artist_matches(q_artist, c.get("artist"))),
+                    None,
+                )
+            elif len(candidates) == 1:
+                # No artist to disambiguate with — only a unique hit is safe.
+                picked = candidates[0]
+            out.append(_producer_track(picked) if picked else None)
+        return out
+    except Exception:
+        logger.exception(
+            "[credits] resolve_sample_refs failed (collection=%s, n=%d)",
+            collection_name, len(items),
+        )
+        return [None] * len(items)

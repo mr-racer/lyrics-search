@@ -2128,9 +2128,36 @@
     }
     @keyframes samplesPopUp   { from { opacity: 0; transform: translateY(6px) scale(.97); } }
     @keyframes samplesPopDown { from { opacity: 0; transform: translateY(-6px) scale(.97); } }
+    /* Exit: AnchorPop stamps --closing and unmounts ~200ms later, so the pop
+       (and the mobile sheet below) leaves the way it came instead of blinking
+       out. `forwards` holds the last frame until the unmount. */
+    .samples-pop--closing { animation: samplesPopOut .18s ease forwards; }
+    .samples-pop--down.samples-pop--closing { animation-name: samplesPopOutDown; }
+    @keyframes samplesPopOut     { to { opacity: 0; transform: translateY(5px) scale(.97); } }
+    @keyframes samplesPopOutDown { to { opacity: 0; transform: translateY(-5px) scale(.97); } }
+    .hint-sheet-scrim--closing { animation: hintScrimOut .2s ease forwards; }
+    .hint-sheet--closing { animation: hintSheetDown .2s cubic-bezier(.55,0,.8,.5) forwards; }
+    @keyframes hintScrimOut  { to { opacity: 0; } }
+    @keyframes hintSheetDown { to { transform: translateY(36px); opacity: 0; } }
     @media (prefers-reduced-motion: reduce) {
-      .samples-pop { animation: none; }
+      .samples-pop, .samples-pop--closing,
+      .hint-sheet--closing, .hint-sheet-scrim--closing { animation: none; }
     }
+
+    /* «Открыть профиль →» under the producer-artist's name in the popover. */
+    .producer-pop__profile {
+      appearance: none; background: none; border: none; padding: 0;
+      margin-top: 2px; cursor: pointer; font-size: 12px;
+      font-family: 'Geist', 'Inter', system-ui, sans-serif;
+      color: #bba8ff; transition: color .15s ease;
+    }
+    .producer-pop__profile:hover, .producer-pop__profile:focus-visible {
+      color: #d9cdff; outline: none; text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+    body[data-theme="light"] .producer-pop__profile { color: #4a32b8; }
+    body[data-theme="light"] .producer-pop__profile:hover,
+    body[data-theme="light"] .producer-pop__profile:focus-visible { color: #6a4fe0; }
 
     /* ── Samples accent chip — the ONE credit left in the player meta zone.
        Bigger than a quiet credit-chip and tinted with the cover accent, so

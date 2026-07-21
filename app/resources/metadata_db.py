@@ -4232,6 +4232,26 @@ class MetadataDB:
         return [dict(zip(cols, r)) for r in rows]
 
     @classmethod
+    def get_tracks_slim(cls, collection_name: str) -> list[dict]:
+        """Slim rows for every track of the collection.
+
+        Same shape as :meth:`get_produced_tracks` minus the producer column —
+        used by ``track_credits_service.resolve_sample_refs`` to match
+        "Artist — Title" sample references against the whole library.
+        """
+        conn = cls._connect()
+        rows = conn.execute(
+            """SELECT track_id, title, artist, album, year, duration,
+                      cover_art_path
+               FROM track_metadata
+               WHERE collection_name = ?""",
+            (collection_name,),
+        ).fetchall()
+        cols = ["track_id", "title", "artist", "album", "year", "duration",
+                "cover_art_path"]
+        return [dict(zip(cols, r)) for r in rows]
+
+    @classmethod
     def has_artist_slug(cls, collection_name: str, artist_slug: str) -> bool:
         """True when the collection has any track credited to this artist slug."""
         if not artist_slug:

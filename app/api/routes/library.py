@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-from app.domain.models import ArtistAggregate, IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RhythmResponse, WeeklyPulseResponse, EngagementResponse, TasteMapResponse, RediscoverResponse, User, ProducerResolveResponse, ProducerTracksResponse
+from app.domain.models import ArtistAggregate, IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RhythmResponse, WeeklyPulseResponse, EngagementResponse, TasteMapResponse, RediscoverResponse, User, ProducerResolveResponse, ProducerTracksResponse, SamplesResolveRequest, SamplesResolveResponse
 from app.api.dependencies import get_current_user, require_mode
 from app.api.helpers import derive_collection_for_user, member_index_root, path_within_root
 from app.services.library_service import LibraryService
@@ -479,6 +479,26 @@ def get_producer_tracks(
     return ProducerTracksResponse(
         producer=name,
         tracks=track_credits_service.tracks_produced_by(derived, name),
+        collection_name=derived,
+    )
+
+
+# ── Sample references (samples popover) ───────────────────────────────────────
+
+@router.post("/samples/resolve", response_model=SamplesResolveResponse)
+def resolve_sample_references(
+    req: SamplesResolveRequest,
+    current_user: User = Depends(get_current_user),
+) -> SamplesResolveResponse:
+    """Match «Artist — Title» sample strings against the user's library.
+
+    POST because the strings are free text from track relations, not ids.
+    Exact-only matching (see ``resolve_sample_refs``) — the player upgrades
+    matched rows to playable ones. SQLite-only.
+    """
+    derived = derive_collection_for_user(current_user)
+    return SamplesResolveResponse(
+        matches=track_credits_service.resolve_sample_refs(derived, req.items),
         collection_name=derived,
     )
 

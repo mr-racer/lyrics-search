@@ -9,6 +9,7 @@ from app.services.track_credits_service import (
     aggregate_labels,
     label_key,
     resolve_producers,
+    resolve_sample_refs,
     split_credit_names,
     split_labels,
     tracks_produced_by,
@@ -61,10 +62,17 @@ class TestSplitCreditNames:
 
 
 class TestLabels:
-    def test_split_labels_on_comma_and_semicolon_only(self):
+    def test_split_labels_on_comma_and_semicolon(self):
         assert split_labels("GOOD Music, Def Jam") == ["GOOD Music", "Def Jam"]
         assert split_labels("Roc-A-Fella; Def Jam") == ["Roc-A-Fella", "Def Jam"]
-        # "&" and "/" stay inside label names.
+
+    def test_split_labels_on_spaced_ampersand_only(self):
+        # Genius joins its release-entity list with " & " — that's a separator…
+        assert split_labels("Columbia Records & ARXOXO LLC") == [
+            "Columbia Records", "ARXOXO LLC"]
+        assert split_labels("GOOD Music, Def Jam & Roc Nation") == [
+            "GOOD Music", "Def Jam", "Roc Nation"]
+        # …but a tight "&" (and "/") stays inside real label names.
         assert split_labels("A&M Records") == ["A&M Records"]
 
     def test_label_key_normalizes_case_and_whitespace(self):
@@ -121,6 +129,32 @@ class TestResolveProducers:
         assert len(got) == 1
         assert got[0].produced_count == 0
 
+    def test_artist_producer_photo_is_thumb_never_cutout(self, temp_db):
+        _upsert("t1", title="Runaway", artist="Kanye West",
+                artist_slugs=["kanye-west"], producer="Kanye West")
+        MetadataDB.upsert_artist_audiodb(
+            slug="kanye-west", collection_name="c",
+            audiodb_bio=None, mood=None, country_code=None, country=None,
+            label=None, cutout_path="/img/kanye-cutout.png",
+            thumb_path="/img/kanye-thumb.jpg", audiodb_mbid=None,
+        )
+        got = resolve_producers("c", "t1")
+        assert got[0].image == "/img/kanye-thumb.jpg"
+
+    def test_artist_producer_with_only_cutout_has_no_image(self, temp_db):
+        # The popup renders a portrait card — a floating-head cutout is worse
+        # than the monogram fallback, so cutout-only artists get image=None.
+        _upsert("t1", title="Runaway", artist="Kanye West",
+                artist_slugs=["kanye-west"], producer="Kanye West")
+        MetadataDB.upsert_artist_audiodb(
+            slug="kanye-west", collection_name="c",
+            audiodb_bio=None, mood=None, country_code=None, country=None,
+            label=None, cutout_path="/img/kanye-cutout.png",
+            thumb_path=None, audiodb_mbid=None,
+        )
+        got = resolve_producers("c", "t1")
+        assert got[0].image is None
+
 
 # --------------------------------------------------------------------------- #
 # tracks_produced_by
@@ -140,3 +174,44 @@ class TestTracksProducedBy:
         _upsert("t1", title="Beta", artist="Zeta", producer="Emile")
         assert tracks_produced_by("c", "") == []
         assert tracks_produced_by("c", "Nobody") == []
+
+
+# --------------------------------------------------------------------------- #
+# resolve_sample_refs
+# --------------------------------------------------------------------------- #
+class TestResolveSampleRefs:
+    def test_exact_match_alignment_and_dash_variants(self, temp_db):
+        _upsert("t1", title="Funky Drummer", artist="James Brown")
+        got = resolve_sample_refs("c", [
+            "James Brown — Funky Drummer",   # em dash
+            "James Brown – Funky Drummer",   # en dash
+            "Nobody — Nothing",
+        ])
+        assert [t.track_id if t else None for t in got] == ["t1", "t1", None]
+
+    def test_feat_tail_is_stripped_on_the_library_side(self, temp_db):
+        _upsert("t1", title="Hurricane (feat. Lil Baby)", artist="Kanye West")
+        got = resolve_sample_refs("c", ["Kanye West — Hurricane"])
+        assert got[0] is not None and got[0].track_id == "t1"
+
+    def test_artist_mismatch_is_a_miss_not_a_fuzzy_hit(self, temp_db):
+        _upsert("t1", title="Hurricane", artist="Kanye West")
+        assert resolve_sample_refs(
+            "c", ["Thirty Seconds to Mars — Hurricane"]) == [None]
+
+    def test_bare_title_accepted_only_when_unique(self, temp_db):
+        _upsert("t1", title="Amen Brother", artist="The Winstons")
+        got = resolve_sample_refs("c", ["Amen Brother"])
+        assert got[0] is not None and got[0].track_id == "t1"
+        _upsert("t2", title="Amen Brother", artist="Someone Else")
+        assert resolve_sample_refs("c", ["Amen Brother"]) == [None]
+
+    def test_no_cross_collection_leak(self, temp_db):
+        MetadataDB.upsert_track_metadata(
+            "other_collection", "t9",
+            {"title": "Funky Drummer", "artist": "James Brown"},
+        )
+        assert resolve_sample_refs("c", ["James Brown — Funky Drummer"]) == [None]
+
+    def test_empty_items(self, temp_db):
+        assert resolve_sample_refs("c", []) == []
