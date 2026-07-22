@@ -958,13 +958,10 @@ engines:
     engine: genius
     shortcut: gen
     # Участвует и в general-поиске: для запросов "artist hits" / "soundtrack"
-    # Genius отдаёт реальные названия песен. weight сильно <1, чтобы genius не
-    # забивал топ выдачи: эмпирически при 0.7 под бёрстом плейлист-агента (6
-    # запросов подряд) genius всё равно владел топ-5 и вытеснял Billboard/
-    # Wikipedia/MusicBrainz. Код-ранкер (rank_playlist_results) — основной фикс;
-    # это второй слой защиты на уровне фьюжена.
+    # Genius отдаёт реальные названия песен. weight<1, чтобы не забивал
+    # обычные веб-результаты.
     categories: [general, music]
-    weight: 0.3
+    weight: 0.7
 
   # ── Кастомные музыкальные движки (MusicBrainz / Discogs) ──────────────────
   # MusicBrainz: открытое API без ключа, лимит ~1 rps. Релизы находят альбомы
