@@ -276,20 +276,30 @@ def search_ddg(query: str, max_results: int = 5) -> list[dict]:
 # 2. FETCH FULL CONTENT
 # ─────────────────────────────────────────
 
-def _http_get_text(url: str, timeout: float = 8.0) -> str:
-    """GET страницы: curl_cffi первым (его TLS-отпечаток проходит Genius и
-    прочие Cloudflare-сайты — тот же приём, что в genius_service, без
-    impersonate=), httpx — фоллбэк, если curl_cffi недоступен."""
+def _http_get_text(url: str, timeout: float = 12.0) -> str:
+    """GET страницы: curl_cffi первым с impersonate="chrome124" (полный
+    браузерный TLS+заголовки), httpx — фоллбэк, если curl_cffi недоступен.
+
+    impersonate обязателен: без него Wikipedia и Fandom отдают 403 (их защита
+    режет «не-браузерный» отпечаток), а это прайм-источники треклистов и
+    дискографий. "chrome124" открывает и Wikipedia, и Fandom (простой "chrome"
+    Fandom не берёт); Genius читается при любом варианте."""
     try:
         from curl_cffi import requests as curl_requests
     except ImportError:
         curl_requests = None
     if curl_requests is not None:
-        kwargs: dict = {"timeout": timeout, "allow_redirects": True}
+        kwargs: dict = {"timeout": timeout, "allow_redirects": True,
+                        "impersonate": "chrome124"}
         proxies = get_proxy()
         if proxies:
             kwargs["proxies"] = proxies
-        resp = curl_requests.get(url, **kwargs)
+        try:
+            resp = curl_requests.get(url, **kwargs)
+        except Exception:
+            # Older curl_cffi may not know this impersonation target — retry plain.
+            kwargs.pop("impersonate", None)
+            resp = curl_requests.get(url, **kwargs)
         resp.raise_for_status()
         return resp.text
     headers = {
