@@ -73,24 +73,27 @@ _PLAYLIST_JUNK_URL = re.compile(
     """
 )
 
-# Domains that host real ranked lists / tracklists / discographies. The authority
-# weight dominates the original SearXNG position, so a Billboard hit at position
-# 20 beats a random blog at position 1; position only breaks ties within a tier.
+# Domains that host real ranked lists. The authority weight dominates the
+# original SearXNG position, so a Billboard hit at position 20 beats a random
+# blog at position 1; position only breaks ties within a tier. READABLE editorial
+# lists rank highest — their body actually contains the ranked songs and survives
+# a plain fetch. Structured-but-JS-walled sources (MusicBrainz release pages)
+# score low: they confirm an album exists, but their body is a browser challenge,
+# useless to read, and they flood the pool with near-duplicates.
 _PLAYLIST_AUTHORITY = {
-    "wikipedia.org": 3.0,       # incl. "<artist> singles discography" (dated!)
-    "musicbrainz.org": 2.6,     # release pages = full tracklist, fetch target
-    "billboard.com": 2.6,
-    "rollingstone.com": 2.3,
-    "pitchfork.com": 2.1,
-    "discogs.com": 2.0,
-    "udiscovermusic.com": 1.9,
-    "open.spotify.com": 1.8,
-    "albumoftheyear.org": 1.7,
-    "classicpopmag.com": 1.7,
+    "billboard.com": 2.8,
+    "rollingstone.com": 2.6,
+    "pitchfork.com": 2.4,
+    "udiscovermusic.com": 2.2,
+    "nme.com": 2.1,
+    "complex.com": 2.0,
+    "classicpopmag.com": 2.0,
+    "top40weekly.com": 1.9,
+    "albumoftheyear.org": 1.8,
+    "open.spotify.com": 1.6,
     "last.fm": 1.6,
-    "top40weekly.com": 1.6,
-    "nme.com": 1.6,
-    "complex.com": 1.5,
+    "discogs.com": 1.5,
+    "musicbrainz.org": 1.3,     # structured but JS-walled + duplicative
 }
 
 
@@ -107,11 +110,16 @@ def _playlist_authority_weight(url: str) -> float:
     """How authoritative is this URL as a source of a real song LIST? 0.0 = a
     plain result (kept as backfill), higher = float to the top."""
     low = url.lower()
-    if "genius.com/albums/" in low:      # genuine tracklists (e.g. Watch Dogs OST)
-        return 2.2
+    if "genius.com/albums/" in low:      # genuine tracklists, readable via curl_cffi
+        return 2.6
     host = (urlparse(url).netloc or "").lower()
     if host.endswith(".fandom.com") or host == "fandom.com":
-        return 2.0                       # film/game soundtrack wikis
+        return 2.3                       # film/game soundtrack wikis (readable)
+    if host.endswith("wikipedia.org"):
+        # English Wikipedia (incl. "<artist> singles discography", dated) is a
+        # prime source; other-language wikis are far less useful for these
+        # mostly-English-catalog queries.
+        return 3.0 if host in ("en.wikipedia.org", "en.m.wikipedia.org") else 1.5
     for domain, weight in _PLAYLIST_AUTHORITY.items():
         if host == domain or host.endswith("." + domain):
             return weight
@@ -140,7 +148,17 @@ def rank_playlist_results(results: list[dict], query: str = "") -> list[dict]:
         # Everything was junk (rare) — never blank out; return the original head.
         return results
     scored.sort(key=lambda t: t[0], reverse=True)
-    return [r for _, r in scored]
+    # Cap to 2 results per host so a source with many near-duplicate hits
+    # (MusicBrainz releases especially) can't crowd out the diversity of lists.
+    out: list[dict] = []
+    per_host: dict[str, int] = {}
+    for _, r in scored:
+        host = (urlparse(r.get("url") or "").netloc or "").lower()
+        if per_host.get(host, 0) >= 2:
+            continue
+        per_host[host] = per_host.get(host, 0) + 1
+        out.append(r)
+    return out
 
 try:
     from bs4 import BeautifulSoup
@@ -312,6 +330,18 @@ def fetch_full_content(url: str, max_chars: int = 4000) -> str:
 # 3. УМНЫЙ TOOL — сам решает нужен ли fetch
 # ─────────────────────────────────────────
 
+def _is_readable_content(content: str) -> bool:
+    """Did fetch_full_content return a real article body — not a 403/timeout, a
+    bot/JS challenge, or a near-empty stub? A ranked list has substance."""
+    if not content or content.startswith("Error:"):
+        return False
+    low = content.lower()
+    if ("javascript is required" in low or "verifying your browser" in low
+            or "enable javascript" in low or "captcha" in low):
+        return False
+    return len(content) >= 400
+
+
 def smart_web_search(
     query: str,
     fetch_content: bool = False,
@@ -324,42 +354,55 @@ def smart_web_search(
 
     rank="playlist" → тянем глубокий пул и переранжируем в коде
     (``rank_playlist_results``): выкидываем genius-мусор списочных запросов,
-    поднимаем авторитетные домены-списки, и ВСЕГДА читаем контент топ-1
-    авторитетной страницы (реальный треклист/чарт лежит в теле, не в сниппете).
-    Без ``rank`` поведение прежнее — bio-агент не затронут.
+    поднимаем читаемые домены-списки, и ЧИТАЕМ тело лучшей страницы. Читаем
+    УСТОЙЧИВО: идём вниз по ранжированному списку, пропуская 403/JS-стены, пока не
+    наберём нужное число реально читаемых страниц (список песен есть только в
+    теле, не в сниппете). Без ``rank`` поведение прежнее — bio-агент не затронут.
     """
     logger.info("[web_search] query=%r fetch_content=%s rank=%s", query, fetch_content, rank)
 
     if rank == "playlist":
         pool = search_searxng(query, max_results=RANK_POOL_SIZE)
         results = rank_playlist_results(pool, query)[:max_results]
-        # Read the page body of the top authoritative result even when the model
-        # asked for snippets — the list itself is never in the snippet. A model
-        # request for fetch_content bumps this to the top 2.
-        n_fetch = 2 if fetch_content else 1
-        if results:
-            logger.info("[web_search] playlist re-rank: pool=%d → kept %d: %s",
-                        len(pool), len(results), _describe_results(results))
-    else:
-        results = search_searxng(query, max_results)
-        n_fetch = max_results if fetch_content else 0
+        if not results:
+            logger.warning("[web_search] no results for query=%r", query)
+            return "No results found"
+        logger.info("[web_search] playlist re-rank: pool=%d → kept %d: %s",
+                    len(pool), len(results), _describe_results(results))
+        want_full = 2 if fetch_content else 1  # how many readable bodies to read
+        max_fetch_tries = 4                     # bound latency when pages wall us
+        output, full_got, tries = [], 0, 0
+        for r in results:
+            url = r.get("url", "")
+            title = r.get("title", "")
+            snippet = r.get("content", "") or ""
+            if url and full_got < want_full and tries < max_fetch_tries:
+                tries += 1
+                content = fetch_full_content(url)
+                if _is_readable_content(content):
+                    output.append(f"### {title}\nURL: {url}\n\n{content}")
+                    full_got += 1
+                    continue
+                logger.info("[web_search] top source unreadable, keep looking (%.60s): %.50s",
+                            url, content.replace("\n", " "))
+            output.append(f"### {title}\nURL: {url}\nSnippet: {snippet}")
+        return "\n\n---\n\n".join(output)
 
+    # Non-playlist profile (bio agent) — unchanged behaviour.
+    results = search_searxng(query, max_results)
     if not results:
         logger.warning("[web_search] no results for query=%r", query)
         return "No results found"
-
     output = []
-    for i, r in enumerate(results):
+    for r in results:
         url = r.get("url", "")
         title = r.get("title", "")
         snippet = r.get("content", "")
-
-        if url and i < n_fetch:
+        if fetch_content and url:
             content = fetch_full_content(url)
             output.append(f"### {title}\nURL: {url}\n\n{content}")
         else:
             output.append(f"### {title}\nURL: {url}\nSnippet: {snippet}")
-
     return "\n\n---\n\n".join(output)
 
 
