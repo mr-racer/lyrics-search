@@ -20,6 +20,7 @@ from app.resources.metadata_db import MetadataDB
 from app.resources.qdrant_utils import PAYLOAD_EXCLUDE_LYRICS
 from app.services._payload_coerce import coerce_float
 from app.services.artist_split import artist_refs_for_track, display_title_for_track
+from app.services.song_facts_service import apply_song_relations
 
 
 def _point_to_track(pt) -> TrackMetadata:
@@ -35,6 +36,10 @@ def _point_to_track(pt) -> TrackMetadata:
         file_path=p.get("file_path") or "",
         duration_sec=p.get("duration_sec") or 0.0,
         genre=p.get("genre"),
+        producer=p.get("producer"),
+        label=p.get("label"),
+        samples=p.get("samples"),
+        sampled_by=p.get("sampled_by"),
         artist_refs=artist_refs_for_track(p),
     )
 
@@ -199,6 +204,11 @@ def next_queue(
         dislikes=dislikes,
         limit=limit,
     )
+
+    # Overlay the GLiNER2/Genius credits (SQLite) the same way the stream
+    # and /metadata/tracks endpoints do — without it, tracks that autoplay
+    # off-player show an empty producers drawer / samples pill.
+    apply_song_relations(out)
 
     return AutoplayQueueResponse(
         seed_track_id=seed_track_id,

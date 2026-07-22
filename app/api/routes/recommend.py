@@ -42,6 +42,7 @@ from app.services import autoplay_service, recsys_ai_service, stream_service
 from app.services._payload_coerce import coerce_float, coerce_year
 from app.services.artist_split import artist_refs_for_track, display_title_for_track
 from app.services.settings_service import settings_service
+from app.services.song_facts_service import apply_song_relations
 
 logger = logging.getLogger(__name__)
 
@@ -90,12 +91,33 @@ def _candidate_to_stream_track(c: "stream_service.StreamCandidate") -> StreamTra
         duration_sec=coerce_float(p.get("duration")) or 0.0,
         file_path=p.get("file_path") or "",
         cover_art_path=p.get("cover_art_path"),
+        # Credits from the ID3 tag (payload). The richer GLiNER2/Genius
+        # extraction is overlaid on top by _stream_tracks() via
+        # apply_song_relations — same as /metadata/tracks does.
+        producer=p.get("producer"),
+        label=p.get("label"),
+        samples=p.get("samples"),
+        sampled_by=p.get("sampled_by"),
         pool=c.pool,
         anchor_track_id=c.anchor_track_id,
         axis_match=c.axis_match,
         score=round(c.score, 4) if c.score is not None else None,
         artist_refs=artist_refs_for_track(p),
     )
+
+
+def _stream_tracks(candidates) -> list[StreamTrack]:
+    """Build StreamTracks and overlay producer/label/samples/sampled_by.
+
+    The stream/similar/axis endpoints previously returned tracks straight
+    from the Qdrant payload, so the credits UI (producers drawer, samples
+    pill) sat empty in the wave — those fields live in SQLite, not the
+    payload. This mirrors what /metadata/tracks already does for manual
+    plays and playlists, so the wave surfaces the same credits.
+    """
+    tracks = [_candidate_to_stream_track(c) for c in candidates]
+    apply_song_relations(tracks)
+    return tracks
 
 
 @router.get("/stream/next", response_model=StreamNextResponse)
@@ -140,7 +162,7 @@ def stream_next(
     )
     return StreamNextResponse(
         session_id=session_id,
-        tracks=[_candidate_to_stream_track(c) for c in result["tracks"]],
+        tracks=_stream_tracks(result["tracks"]),
         diagnostics=result["diagnostics"],
         session_adaptation=result.get("session_adaptation"),
     )
@@ -568,7 +590,7 @@ def axis_playlist(
         limit=body.limit,
     )
     return AxisPlaylistResponse(
-        tracks=[_candidate_to_stream_track(c) for c in result["tracks"]],
+        tracks=_stream_tracks(result["tracks"]),
         diagnostics=result["diagnostics"],
     )
 
@@ -603,7 +625,7 @@ def similar(
     )
     return SimilarTracksResponse(
         seed_track_id=result["seed_track_id"],
-        tracks=[_candidate_to_stream_track(c) for c in result["tracks"]],
+        tracks=_stream_tracks(result["tracks"]),
     )
 
 
