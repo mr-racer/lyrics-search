@@ -35,7 +35,12 @@ from typing import Optional
 
 from pydantic import BaseModel
 from pydantic_ai import Agent
-from pydantic_ai.exceptions import UsageLimitExceeded
+from pydantic_ai.exceptions import (
+    IncompleteToolCall,
+    ModelHTTPError,
+    UnexpectedModelBehavior,
+    UsageLimitExceeded,
+)
 from pydantic_ai.usage import UsageLimits
 
 from app.domain.models import PlaylistDraft
@@ -233,20 +238,24 @@ async def run_playlist_agent(prompt, lang, deps, catalog, state,
             usage_limits=UsageLimits(request_limit=_MAX_LLM_REQUESTS),
         )
         draft = result.output
-    except UsageLimitExceeded as exc:
-        # Модель зациклилась и сожгла бюджет запросов. Всё, что get_songs уже
-        # успел сматчить, лежит в state["resolved"] — отдаём частичный плейлист
-        # вместо 500 на весь стрим.
+    except (UsageLimitExceeded, ModelHTTPError, UnexpectedModelBehavior,
+            IncompleteToolCall) as exc:
+        # Агент не довёл структурный вывод до конца. Либо зациклился и сжёг бюджет
+        # запросов (UsageLimitExceeded), либо модель сорвалась на финальном
+        # PlaylistDraft — частая беда слабых/сильно-квантованных моделей: сервинг
+        # возвращает 500 «output does not match grammar» (ModelHTTPError) или
+        # невалидный/обрезанный tool-call. Всё, что get_songs уже сматчил, лежит в
+        # state["resolved"] — отдаём частичный плейлист вместо падения всего стрима.
         logger.warning(
-            "[playlist_agent] usage limit hit (%s) — returning partial draft "
-            "with %d resolved tracks", exc, len(state["resolved"]),
+            "[playlist_agent] agent aborted (%s: %s) — returning partial draft "
+            "with %d resolved tracks", type(exc).__name__, exc, len(state["resolved"]),
         )
         ru = str(lang).lower().startswith("ru")
         draft = PlaylistDraft(
             title=(prompt or "").strip()[:60] or ("Плейлист" if ru else "Playlist"),
             track_ids=list(state["resolved"].keys()),
-            comment=("Поиск оборвался на полпути — вот что успел найти." if ru
-                     else "Search ran out of budget — here is what was found so far."),
+            comment=("Не удалось довести подбор до конца — вот что уже нашлось." if ru
+                     else "Couldn't finish building the playlist — here is what was found so far."),
             missing=list(state["missing"]),
         )
     logger.info(
