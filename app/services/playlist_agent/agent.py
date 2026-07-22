@@ -59,7 +59,7 @@ _INSTRUCTIONS = """You build a music playlist from the user's request by finding
 
 2) FILM / GAME SOUNDTRACK ("саундтрек к <фильм/игра>"):
    - FIRST call web_search once (snippets) to confirm the EXACT official title of the film/game in the right language (titles are often localized or abbreviated).
-   - Then call web_search with fetch_content=true for "<exact title> soundtrack" / "<exact title> soundtrack tracklist".
+   - Then call web_search with fetch_content=true for the tracklist. Phrase it "<exact title> soundtrack tracklist" or "<exact title> licensed music songs" — do NOT use the bare abbreviation "OST", it surfaces game-rip playlists and score cues instead of the licensed songs.
    - Then call get_songs with the song titles + artists extracted from the page text.
 
 3) THEME / ERA / CHARTS ("популярные клубные песни 90-х", "летние хиты 2010-х", "top eurodance"):
@@ -154,8 +154,13 @@ def create_playlist_agent(model, deps, catalog, state):
         try:
             # Полные страницы длинные — при fetch_content берём 3 результата
             # вместо 5, чтобы не раздувать контекст модели (~4k знаков каждая).
+            # rank="playlist": глубокая выборка + переранжирование в коде
+            # (убирает genius-мусор списочных запросов) + авто-чтение топ-1
+            # авторитетного источника, даже если модель просила только сниппеты.
             n = 3 if fetch_content else 5
-            res = await asyncio.to_thread(smart_web_search, query, fetch_content, n) or "(no web results)"
+            res = await asyncio.to_thread(
+                smart_web_search, query, fetch_content, n, "playlist"
+            ) or "(no web results)"
         except Exception as exc:
             logger.warning("[playlist_agent] web_search failed: %s", exc)
             return "(web search unavailable)"

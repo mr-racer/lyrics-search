@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from urllib.parse import urlparse
 
 import httpx
@@ -39,6 +40,107 @@ SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://searxng:8080").rstrip("/")
 # searxng/settings.yml are the single tuning knob; hardcoding engines here made
 # that file a no-op (and bing+ddg alone are the two most captcha-prone engines).
 SEARXNG_ENGINES = os.environ.get("SEARXNG_ENGINES", "").strip()
+
+# ── Playlist search result ranking ───────────────────────────────────────────
+# The playlist agent asks "list" questions ("<artist> greatest hits", "<film>
+# soundtrack tracklist"). SearXNG's `genius` engine answers those by matching the
+# query words against its ARTIST/ALBUM NAME index and returns bogus same-name
+# entities ("Television's Greatest Hits Band", lyric annotations, even "Ulysses
+# by James Joyce") that its fusion scores to the very TOP — burying the real
+# chart/tracklist pages (Billboard, Wikipedia, MusicBrainz). Under the agent's
+# 6-query burst the good engines rate-limit and genius owns the whole top-5, so
+# the model gets pure noise and silently falls back to building the playlist from
+# its own memory. Fix: for the playlist profile pull a DEEP pool and re-rank in
+# code — drop the junk paths, float authoritative "list" domains up, KEEP genius
+# ALBUM tracklists (those are genuine). What SearXNG's engine/weight knobs cannot
+# do is tell a good genius /albums/ page from a junk /artists/ one — same engine,
+# same weight — so this has to live in code.
+RANK_POOL_SIZE = 30
+
+# Hard junk for LIST queries: individual-song / lyric / annotation / artist
+# landing pages and non-editorial noise. genius.com/albums/… is deliberately NOT
+# matched here — real tracklists live there.
+_PLAYLIST_JUNK_URL = re.compile(
+    r"""(?ix)
+      genius\.com/artists/            # artist landing pages (no tracklist)
+    | genius\.com/[^/]+-annotated     # lyric annotations
+    | genius\.com/[^/?#]+-lyrics\b    # single-song lyric pages
+    | //(?:www\.)?instagram\.com
+    | //(?:www\.)?facebook\.com
+    | ticketmaster\.
+    | (?:www\.|music\.)?youtube\.com/(?:channel|@|watch|playlist)
+    | /tickets?\b
+    """
+)
+
+# Domains that host real ranked lists / tracklists / discographies. The authority
+# weight dominates the original SearXNG position, so a Billboard hit at position
+# 20 beats a random blog at position 1; position only breaks ties within a tier.
+_PLAYLIST_AUTHORITY = {
+    "wikipedia.org": 3.0,       # incl. "<artist> singles discography" (dated!)
+    "musicbrainz.org": 2.6,     # release pages = full tracklist, fetch target
+    "billboard.com": 2.6,
+    "rollingstone.com": 2.3,
+    "pitchfork.com": 2.1,
+    "discogs.com": 2.0,
+    "udiscovermusic.com": 1.9,
+    "open.spotify.com": 1.8,
+    "albumoftheyear.org": 1.7,
+    "classicpopmag.com": 1.7,
+    "last.fm": 1.6,
+    "top40weekly.com": 1.6,
+    "nme.com": 1.6,
+    "complex.com": 1.5,
+}
+
+
+# A small nudge for URLs whose PATH itself promises a ranked list / dated
+# discography / tracklist, so the right page (e.g. "…_singles_discography") is
+# read before a generic artist landing page of the same authority tier.
+_PLAYLIST_LIST_PATH = re.compile(
+    r"(?i)(discograph|tracklist|singles|greatest|best[-_]?songs|top[-_]?\d|"
+    r"list[-_]?of|/albums/|soundtrack)"
+)
+
+
+def _playlist_authority_weight(url: str) -> float:
+    """How authoritative is this URL as a source of a real song LIST? 0.0 = a
+    plain result (kept as backfill), higher = float to the top."""
+    low = url.lower()
+    if "genius.com/albums/" in low:      # genuine tracklists (e.g. Watch Dogs OST)
+        return 2.2
+    host = (urlparse(url).netloc or "").lower()
+    if host.endswith(".fandom.com") or host == "fandom.com":
+        return 2.0                       # film/game soundtrack wikis
+    for domain, weight in _PLAYLIST_AUTHORITY.items():
+        if host == domain or host.endswith("." + domain):
+            return weight
+    return 0.0
+
+
+def rank_playlist_results(results: list[dict], query: str = "") -> list[dict]:
+    """Re-rank raw SearXNG results for the playlist agent: drop list-query junk,
+    float authoritative list/tracklist domains to the top, keep everything else
+    as backfill. Pure function — see the module note above for the why."""
+    if not results:
+        return results
+    scored = []
+    for idx, r in enumerate(results):
+        url = r.get("url") or ""
+        if not url or _PLAYLIST_JUNK_URL.search(url):
+            continue
+        authority = _playlist_authority_weight(url)
+        list_bonus = 0.4 if _PLAYLIST_LIST_PATH.search(url) else 0.0
+        # Original SearXNG position is only a FINE tiebreak (scaled down so it
+        # never outweighs authority or the list-path bonus — a Billboard hit at
+        # position 20 must still beat a blog at position 1).
+        position_decay = 0.1 / (1.0 + idx)
+        scored.append((authority + list_bonus + position_decay, r))
+    if not scored:
+        # Everything was junk (rare) — never blank out; return the original head.
+        return results
+    scored.sort(key=lambda t: t[0], reverse=True)
+    return [r for _, r in scored]
 
 try:
     from bs4 import BeautifulSoup
@@ -214,25 +316,45 @@ def smart_web_search(
     query: str,
     fetch_content: bool = False,
     max_results: int = 3,
+    rank: str | None = None,
 ) -> str:
     """
     fetch_content=False → быстро, только сниппеты
     fetch_content=True  → медленнее, но полный текст страниц
+
+    rank="playlist" → тянем глубокий пул и переранжируем в коде
+    (``rank_playlist_results``): выкидываем genius-мусор списочных запросов,
+    поднимаем авторитетные домены-списки, и ВСЕГДА читаем контент топ-1
+    авторитетной страницы (реальный треклист/чарт лежит в теле, не в сниппете).
+    Без ``rank`` поведение прежнее — bio-агент не затронут.
     """
-    logger.info("[web_search] query=%r fetch_content=%s", query, fetch_content)
-    results = search_searxng(query, max_results)
+    logger.info("[web_search] query=%r fetch_content=%s rank=%s", query, fetch_content, rank)
+
+    if rank == "playlist":
+        pool = search_searxng(query, max_results=RANK_POOL_SIZE)
+        results = rank_playlist_results(pool, query)[:max_results]
+        # Read the page body of the top authoritative result even when the model
+        # asked for snippets — the list itself is never in the snippet. A model
+        # request for fetch_content bumps this to the top 2.
+        n_fetch = 2 if fetch_content else 1
+        if results:
+            logger.info("[web_search] playlist re-rank: pool=%d → kept %d: %s",
+                        len(pool), len(results), _describe_results(results))
+    else:
+        results = search_searxng(query, max_results)
+        n_fetch = max_results if fetch_content else 0
 
     if not results:
         logger.warning("[web_search] no results for query=%r", query)
         return "No results found"
 
     output = []
-    for r in results:
+    for i, r in enumerate(results):
         url = r.get("url", "")
         title = r.get("title", "")
         snippet = r.get("content", "")
 
-        if fetch_content and url:
+        if url and i < n_fetch:
             content = fetch_full_content(url)
             output.append(f"### {title}\nURL: {url}\n\n{content}")
         else:

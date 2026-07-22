@@ -141,8 +141,9 @@ async def test_web_search_capped_at_six(monkeypatch):
 
 @pytest.mark.unit
 async def test_web_search_fetch_content_passthrough(monkeypatch):
-    """fetch_content=true from the model reaches smart_web_search and trims
-    max_results to 3 (full pages are ~4k chars each)."""
+    """fetch_content=true from the model reaches smart_web_search, trims
+    max_results to 3 (full pages are ~4k chars each), and passes the
+    rank="playlist" profile so the code re-ranker + top-page read kick in."""
     from pydantic_ai.messages import ModelResponse, ToolCallPart
     from pydantic_ai.models.function import FunctionModel
 
@@ -151,7 +152,7 @@ async def test_web_search_fetch_content_passthrough(monkeypatch):
     seen = []
     monkeypatch.setattr(
         "app.services.playlist_agent.agent.smart_web_search",
-        lambda q, fetch, n: seen.append((q, fetch, n)) or "tracklist text",
+        lambda q, fetch, n, rank: seen.append((q, fetch, n, rank)) or "tracklist text",
     )
 
     calls = {"n": 0}
@@ -170,7 +171,7 @@ async def test_web_search_fetch_content_passthrough(monkeypatch):
     agent = create_playlist_agent(FunctionModel(scripted), FakeDeps(), FakeCatalog(), state)
     await agent.run("[lang=ru] саундтрек watch dogs")
 
-    assert seen == [("watch dogs soundtrack tracklist", True, 3)]
+    assert seen == [("watch dogs soundtrack tracklist", True, 3, "playlist")]
 
 
 @pytest.mark.unit
