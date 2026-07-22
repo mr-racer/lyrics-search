@@ -63,7 +63,8 @@ _INSTRUCTIONS = """You build a music playlist from the user's request by finding
    - Then call get_songs with the song titles + artists extracted from the page text.
 
 3) THEME / ERA / CHARTS ("популярные клубные песни 90-х", "летние хиты 2010-х", "top eurodance"):
-   - Call web_search 1-2 times for ranked lists ("best 90s club anthems", "top eurodance songs of the 90s") — such lists live on full pages, so use fetch_content=true when snippets only name the lists themselves.
+   - A genre/era wish with NO country or language named means the INTERNATIONALLY popular songs of that era — e.g. "хиты поп музыки 00-х" → global 2000s pop (Britney Spears, Beyoncé, Rihanna, Lady Gaga, Justin Timberlake…), NOT your own country's domestic pop. Never invent a nationality the user did not give, and never spend searches re-asking the same wish in another language.
+   - Search in ENGLISH for the ranked list ("best pop songs of the 2000s", "top eurodance songs of the 90s") — such lists live on full pages, so use fetch_content=true. One or two good lists usually suffice.
    - Collect song titles WITH their artists from those lists, then call get_songs.
 
 Any other shape: same principle — web_search for real song titles that answer the request, then get_songs.
