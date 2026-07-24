@@ -140,6 +140,45 @@ async def test_web_search_capped_at_six(monkeypatch):
 
 
 @pytest.mark.unit
+async def test_web_search_repeated_query_deduped(monkeypatch):
+    """A looping model re-asking the same query must not burn the search
+    budget: the repeat is answered with a marker, without hitting the web."""
+    from pydantic_ai.messages import ModelResponse, ToolCallPart, ToolReturnPart
+    from pydantic_ai.models.function import FunctionModel
+
+    from app.services.playlist_agent.agent import create_playlist_agent
+
+    hits = {"n": 0}
+    monkeypatch.setattr(
+        "app.services.playlist_agent.agent.smart_web_search",
+        lambda q, fetch, n, rank: hits.__setitem__("n", hits["n"] + 1) or "some titles",
+    )
+
+    calls = {"n": 0}
+
+    def scripted(messages, info):
+        calls["n"] += 1
+        if calls["n"] <= 3:
+            # same query three times (case/space variations must not matter)
+            q = ["gta 5 soundtrack", "GTA 5  soundtrack", "gta 5 soundtrack"][calls["n"] - 1]
+            return ModelResponse(parts=[ToolCallPart("web_search", {"query": q})])
+        return ModelResponse(parts=[ToolCallPart("final_result", {
+            "title": "t", "track_ids": [], "comment": "", "missing": [],
+        })])
+
+    state = {"web": 0, "resolved": {}, "missing": [], "on_status": None}
+    agent = create_playlist_agent(FunctionModel(scripted), FakeDeps(), FakeCatalog(), state)
+    result = await agent.run("[lang=ru] песни из gta 5")
+
+    assert hits["n"] == 1          # the web was hit exactly once
+    assert state["web"] == 1       # budget consumed once
+    returns = [p for m in result.all_messages() for p in getattr(m, "parts", [])
+               if isinstance(p, ToolReturnPart) and p.tool_name == "web_search"]
+    assert "already searched" in str(returns[1].content)
+    assert "already searched" in str(returns[2].content)
+
+
+@pytest.mark.unit
 async def test_web_search_fetch_content_passthrough(monkeypatch):
     """fetch_content=true from the model reaches smart_web_search, trims
     max_results to 3 (full pages are ~4k chars each), and passes the

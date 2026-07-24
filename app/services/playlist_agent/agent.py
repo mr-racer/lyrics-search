@@ -62,9 +62,11 @@ _INSTRUCTIONS = """You build a music playlist from the user's request by finding
    - Then ALWAYS call web_search 1-2 times, phrased for what was asked: hits → "<artist> greatest hits / most popular songs"; recent releases → "<artist> new songs <current year>" / "<artist> latest album tracklist".
    - Then call get_songs with those {title, artist} pairs.
 
-2) FILM / GAME SOUNDTRACK ("саундтрек к <фильм/игра>"):
+2) FILM / GAME SOUNDTRACK ("саундтрек к <фильм/игра>", "песни из <игра>"):
    - FIRST call web_search once (snippets) to confirm the EXACT official title of the film/game in the right language (titles are often localized or abbreviated).
    - Then call web_search with fetch_content=true for the tracklist. Phrase it "<exact title> soundtrack tracklist" or "<exact title> licensed music songs" — do NOT use the bare abbreviation "OST", it surfaces game-rip playlists and score cues instead of the licensed songs.
+   - The user wants songs FROM the title — the tracklist itself, NOT a popularity ranking. Never phrase these searches as "famous / popular / best known songs from X": that surfaces listicles instead of the soundtrack. Take the tracklist as-is; get_songs decides what the library has.
+   - Games with radio stations (GTA, Watch Dogs…) keep their song lists on fan wikis, one page per station or one combined page — "<game> radio stations song list" reaches them.
    - Then call get_songs with the song titles + artists extracted from the page text.
 
 3) THEME / ERA / CHARTS ("популярные клубные песни 90-х", "летние хиты 2010-х", "top eurodance"):
@@ -84,6 +86,7 @@ Rules:
 - If fewer than 3 tracks were found in the library, say so honestly in the comment; still return whatever was found.
 - List songs you wanted but that were NOT in the library (match "none") in the "missing" field, as "Title — Artist".
 - web_search is limited; don't waste calls. Do not call get_songs before you have real song titles.
+- Never run two searches with near-identical wording — a rephrase of the same question returns the same pages. If two consecutive searches produced no NEW song titles, STOP searching: call get_songs with what you have, or finish the draft honestly.
 - Write the playlist "title" and "comment" in the user's language (given as [lang=..] at the start of the prompt).
 - Output strictly the PlaylistDraft structure."""
 
@@ -153,6 +156,17 @@ def create_playlist_agent(model, deps, catalog, state):
                 f"(web search limit reached — {_MAX_WEB_SEARCHES} searches already used. "
                 "Build the playlist from the titles you already have.)"
             )
+        # Looping models re-ask the same query with cosmetic variations; a
+        # repeat returns the same pages, so refuse it without burning budget.
+        norm = " ".join(query.lower().split())
+        seen = state.setdefault("seen_queries", set())
+        if norm in seen:
+            logger.info("[playlist_agent] web_search repeat refused: %r", query)
+            return (
+                "(already searched exactly this — the results are above in the "
+                "conversation. Use them, or search a genuinely DIFFERENT angle.)"
+            )
+        seen.add(norm)
         state["web"] += 1
         _emit("web_search", query=query)
         logger.info("[playlist_agent] web_search #%d query=%r fetch_content=%s",
