@@ -620,12 +620,15 @@ def smart_web_search(
     if rank == "playlist":
         pool = search_searxng(query, max_results=RANK_POOL_SIZE,
                               engines=SEARXNG_PLAYLIST_ENGINES)
-        results = rank_playlist_results(pool, query)[:max_results]
+        # ВЕСЬ ранжированный пул — кандидаты на чтение: страница-треклист может
+        # стоять на любой позиции (не только в топ-3, который видит модель как
+        # сниппеты). Глубину обхода ограничивает max_fetch_tries, а не срез.
+        results = rank_playlist_results(pool, query)
         if not results:
             logger.warning("[web_search] no results for query=%r", query)
             return "No results found"
         logger.info("[web_search] playlist re-rank: pool=%d → kept %d: %s",
-                    len(pool), len(results), _describe_results(results))
+                    len(pool), len(results), _describe_results(results[:8]))
         # Больше страниц-списков за поиск: библиотечное пересечение делает код
         # (модель видит лишь капнутые сэмплы), поэтому третья страница — это
         # покрытие остальных радиостанций/томов, а не лишний контекст.
@@ -677,6 +680,9 @@ def smart_web_search(
                 logger.info("[web_search] top source unreadable, keep looking (%.60s): %.50s",
                             url, content.replace("\n", " "))
             rows.append(("snippet", title, url, "", snippet))
+        # Сборка ответа модели: все страницы-списки + проза на свободные слоты;
+        # сниппеты — только до max_results записей суммарно (кандидатов на
+        # чтение было до RANK_POOL_SIZE, но выдача остаётся компактной).
         prose_slots = want_full - full_got
         output = []
         for kind, title, url, body, snippet in rows:
@@ -685,7 +691,7 @@ def smart_web_search(
             elif kind == "prose" and prose_slots > 0:
                 prose_slots -= 1
                 output.append(f"### {title}\nURL: {url}\n\n{body[:4000]}")
-            else:
+            elif len(output) < max_results:
                 output.append(f"### {title}\nURL: {url}\nSnippet: {snippet}")
         return "\n\n---\n\n".join(output)
 

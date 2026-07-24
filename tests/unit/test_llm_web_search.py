@@ -289,3 +289,28 @@ def test_tracklines_dedupes_repeated_junk_below_threshold():
     junk = "\n".join(["The Cinematographic Score — GTA"] * 8
                      + ["Franz Kafka — The Castle"] * 3)
     assert _extract_tracklines(junk) == ""
+
+
+def test_playlist_fetch_walks_past_max_results_to_find_tracklist(monkeypatch):
+    """The tracklist page may rank anywhere in the pool — position 5 with
+    max_results=3 must still be fetched and inlined; the model-visible output
+    stays compact (snippets capped at max_results entries)."""
+    from app.services import llm_web_search as m
+
+    tracklist_body = "\n".join(f"Artist {i} — Song {i} (2005)" for i in range(20))
+    results = [
+        {"title": f"prose{i}", "url": f"https://site{i}.example/a", "content": f"sn{i}"}
+        for i in range(4)
+    ] + [{"title": "fandom", "url": "https://gta-songs.fandom.com/wiki/R", "content": "sn"}]
+
+    monkeypatch.setattr(m, "search_searxng", lambda q, max_results=5, engines=None: results)
+    monkeypatch.setattr(m, "fetch_full_content",
+                        lambda url, max_chars=4000:
+                        tracklist_body if "fandom" in url else _PROSE)
+    monkeypatch.setattr(m, "rank_playlist_results", lambda pool, q="": pool)
+
+    lines: list = []
+    out = m.smart_web_search("gta 5 songs", fetch_content=True, max_results=3,
+                             rank="playlist", tracklines_out=lines)
+    assert "Artist 7 — Song 7 (2005)" in out    # position-5 tracklist inlined
+    assert len(lines) == 20                      # and collected for auto-match
