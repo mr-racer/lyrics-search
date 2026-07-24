@@ -280,3 +280,12 @@ def test_playlist_fetch_collects_tracklines_for_automatch(monkeypatch):
     assert len(lines) == 300                      # full list collected
     assert "Artist 299 — Song 299 (2005)" in lines[-1]
     assert len(out) < 6000                        # model-visible text stays compact
+
+
+def test_tracklines_dedupes_repeated_junk_below_threshold():
+    """Wikipedia nav/reference junk repeats one pseudo-track line many times;
+    after dedupe the page falls below the tracklist threshold and goes the
+    prose-fallback route instead of wasting a full-read slot."""
+    junk = "\n".join(["The Cinematographic Score — GTA"] * 8
+                     + ["Franz Kafka — The Castle"] * 3)
+    assert _extract_tracklines(junk) == ""

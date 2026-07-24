@@ -182,13 +182,23 @@ def _tracklines_list(text: str | None) -> list[str]:
             i += 1
         merged.append(line)
 
-    # Pass 2: keep short lines with an artist/title separator.
+    # Pass 2: keep short lines with an artist/title separator. Dedupe while
+    # preserving order: Wikipedia nav/reference sections yield the same junk
+    # line many times over ("The Cinematographic Score — GTA" ×8), which both
+    # sneaks a non-tracklist page past the _MIN_TRACK_LINES threshold and
+    # primes weak local models into repetition loops.
     kept: list[str] = []
+    seen: set[str] = set()
     for ln in merged:
         if len(ln) > _TRACK_LINE_MAX_LEN:
             continue
-        if _TRACK_SEP_RE.search(_NUM_PREFIX_RE.sub("", ln)):
-            kept.append(ln)
+        if not _TRACK_SEP_RE.search(_NUM_PREFIX_RE.sub("", ln)):
+            continue
+        key = ln.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(ln)
     return kept
 
 
@@ -616,8 +626,11 @@ def smart_web_search(
             return "No results found"
         logger.info("[web_search] playlist re-rank: pool=%d → kept %d: %s",
                     len(pool), len(results), _describe_results(results))
-        want_full = 2 if fetch_content else 1  # how many list/full bodies to read
-        max_fetch_tries = 5                     # bound latency when pages wall us
+        # Больше страниц-списков за поиск: библиотечное пересечение делает код
+        # (модель видит лишь капнутые сэмплы), поэтому третья страница — это
+        # покрытие остальных радиостанций/томов, а не лишний контекст.
+        want_full = 3 if fetch_content else 1  # how many list/full bodies to read
+        max_fetch_tries = 6                     # bound latency when pages wall us
         # A page counts against want_full only when tracklist extraction fires:
         # a "readable" Wikipedia series article is prose, and two of those used
         # to exhaust the budget while the actual tracklist stayed a snippet.
