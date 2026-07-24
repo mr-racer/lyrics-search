@@ -314,3 +314,23 @@ def test_playlist_fetch_walks_past_max_results_to_find_tracklist(monkeypatch):
                              rank="playlist", tracklines_out=lines)
     assert "Artist 7 — Song 7 (2005)" in out    # position-5 tracklist inlined
     assert len(lines) == 20                      # and collected for auto-match
+
+
+def test_playlist_fetch_big_list_shows_stub_not_dump(monkeypatch):
+    """A big tracklist page must reach the model as a counter stub + tiny
+    sample: everything the model SEES it may copy-paste into a giant tool
+    call (observed: 90 lines into get_songs → generation degrades → 500)."""
+    from app.services import llm_web_search as m
+
+    tracklist_body = "\n".join(f"Artist {i} — Song {i} (2005)" for i in range(300))
+    results = [{"title": "fandom", "url": "https://gta-songs.fandom.com/wiki/R",
+                "content": "sn"}]
+
+    monkeypatch.setattr(m, "search_searxng", lambda q, max_results=5, engines=None: results)
+    monkeypatch.setattr(m, "fetch_full_content", lambda url, max_chars=4000: tracklist_body)
+    monkeypatch.setattr(m, "rank_playlist_results", lambda pool, q="": pool)
+
+    out = m.smart_web_search("gta 5 songs", fetch_content=True, max_results=3,
+                             rank="playlist", tracklines_out=[])
+    assert "300 track lines" in out            # awareness of scale
+    assert out.count("Artist ") <= 30          # but no copy-paste source

@@ -87,7 +87,7 @@ Rules:
 - If the request constrains an era or years ("хиты 80-х", "2000s hits"), keep only songs whose ORIGINAL release year (per the web results) fits; a covers/remaster year in the library does not disqualify a song, but a song originally from another era must be dropped.
 - If fewer than 3 tracks were found in the library, say so honestly in the comment; still return whatever was found.
 - "missing": ALWAYS output an empty list []. Songs that were not in the library are tracked automatically — never echo them back.
-- web_search is limited; don't waste calls. Do not call get_songs before you have real song titles.
+- web_search is limited; don't waste calls. Do not call get_songs before you have real song titles, and never pass more than 30 items per get_songs call.
 - Never run two searches with near-identical wording — a rephrase of the same question returns the same pages. If two consecutive searches produced no NEW song titles, STOP searching: call get_songs with what you have, or finish the draft honestly.
 - Write the playlist "title" and "comment" in the user's language (given as [lang=..] at the start of the prompt).
 - Output strictly the PlaylistDraft structure."""
@@ -212,9 +212,10 @@ def create_playlist_agent(model, deps, catalog, state):
                         by_tid[tid] = key
                     state["resolved"][tid] = {
                         "title": m["title"], "artist": m["artist"],
-                        "match": m["match"],
+                        "match": m["match"], "year": m.get("year"),
                     }
-                    section.append(f"{key}. {m['artist']} — {m['title']}")
+                    yr = f" ({m['year']})" if m.get("year") else ""
+                    section.append(f"{key}. {m['artist']} — {m['title']}{yr}")
                 _emit("auto_matched", query=query, found=len(matches))
                 logger.info("[playlist_agent] auto-matched %d/%d tracklist lines: %s",
                             len(matches), len(lines_out),
@@ -257,6 +258,17 @@ def create_playlist_agent(model, deps, catalog, state):
             return (
                 "(refused: call web_search first to get REAL song titles from "
                 "the internet, then call get_songs with those titles.)"
+            )
+        if len(items) > 30:
+            # Копипаст целого треклиста в один tool-call — то, на чём слабые
+            # модели деградируют к хвосту генерации (наблюдалось: 90 позиций →
+            # питон-грамматика сервинга падает 500-кой). Треклисты со страниц
+            # сверяются автоматически — модели незачем их пересылать.
+            logger.info("[playlist_agent] get_songs refused (%d items > 30)", len(items))
+            return (
+                "(refused: too many items — at most 30 per call. Songs from "
+                "tracklist pages are checked automatically (see LIBRARY "
+                "MATCHES); do not re-send them.)"
             )
         _emit("matching", count=len(items))
         logger.info("[playlist_agent] get_songs items=%s",
@@ -316,10 +328,12 @@ async def run_playlist_agent(prompt, lang, deps, catalog, state,
             logger.warning("[playlist_agent] seed search failed", exc_info=True)
         automap = state.get("automatch") or {}
         if automap:
+            def _fmt(tid):
+                r = state["resolved"].get(tid, {})
+                yr = f" ({r['year']})" if r.get("year") else ""
+                return f"{r.get('artist')} — {r.get('title')}{yr}"
             found = "; ".join(
-                f"{key}. {state['resolved'][tid].get('artist')} — "
-                f"{state['resolved'][tid].get('title')}"
-                for key, tid in list(automap.items())[:40]
+                f"{key}. {_fmt(tid)}" for key, tid in list(automap.items())[:40]
             )
             seed_note = (
                 "\n\n(A web search for this wish already ran. LIBRARY MATCHES so "

@@ -413,3 +413,40 @@ async def test_seed_search_runs_before_model(monkeypatch):
     # the model saw the seed's matches and could finish without searching
     assert "LIBRARY MATCHES" in prompts[0]
     assert draft.track_ids == ["1"]
+
+
+@pytest.mark.unit
+async def test_get_songs_refuses_oversized_batches(monkeypatch):
+    """Copy-typing a whole tracklist into one get_songs call is the observed
+    generation-degradation trigger — >30 items are refused with guidance."""
+    from pydantic_ai.messages import ModelResponse, ToolCallPart, ToolReturnPart
+    from pydantic_ai.models.function import FunctionModel
+
+    from app.services.playlist_agent.agent import create_playlist_agent
+
+    monkeypatch.setattr(
+        "app.services.playlist_agent.agent.smart_web_search",
+        lambda q, fetch, n, rank, lines_out=None: "titles",
+    )
+
+    calls = {"n": 0}
+
+    def scripted(messages, info):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ModelResponse(parts=[ToolCallPart("web_search", {"query": "q"})])
+        if calls["n"] == 2:
+            return ModelResponse(parts=[ToolCallPart("get_songs", {
+                "items": [{"title": f"S{i}", "artist": f"A{i}"} for i in range(90)]})])
+        return ModelResponse(parts=[ToolCallPart("final_result", {
+            "title": "t", "track_ids": [], "comment": "", "missing": [],
+        })])
+
+    state = {"web": 0, "resolved": {}, "missing": [], "on_status": None}
+    agent = create_playlist_agent(FunctionModel(scripted), FakeDeps(), FakeCatalog(), state)
+    result = await agent.run("[lang=ru] песни из gta 5")
+
+    returns = [p for m in result.all_messages() for p in getattr(m, "parts", [])
+               if isinstance(p, ToolReturnPart) and p.tool_name == "get_songs"]
+    assert "too many items" in str(returns[0].content)
+    assert state["resolved"] == {}

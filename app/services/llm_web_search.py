@@ -671,12 +671,21 @@ def smart_web_search(
                     if len(lines) >= _MIN_TRACK_LINES:
                         if tracklines_out is not None:
                             tracklines_out.extend(lines[:_TRACKLINES_OUT_CAP])
-                        # Первая страница-список получает полный кап видимого
-                        # моделью текста, последующие — урезанный: полная
-                        # библиотечная сверка идёт кодом по tracklines_out, а
-                        # большие дампы перегружают слабые локальные модели.
-                        tracks = _sample_tracklines(
-                            lines, 4000 if full_got == 0 else 2000)
+                        # Модели — только заглушка со счётчиком и крошечный
+                        # сэмпл. Всё, что модель ВИДИТ, она может скопипастить
+                        # в гигантский tool-call (наблюдалось: 90 строк в
+                        # get_songs → деградация генерации → peg-500), а
+                        # инструкции «не копируй» слабые модели игнорируют.
+                        # Полная сверка с библиотекой идёт кодом по
+                        # tracklines_out — модели данные не нужны.
+                        sample = _sample_tracklines(lines, 700)
+                        tracks = (
+                            f"(tracklist page: {len(lines)} track lines were "
+                            "extracted and are being auto-checked against the "
+                            "user's library — results appear under LIBRARY "
+                            "MATCHES. Do NOT copy lines into get_songs. "
+                            "A small sample for orientation only:)\n" + sample
+                        )
                         logger.info(
                             "[web_search] tracklist page (%.60s): %d chars → %d lines, %d shown",
                             url, len(content), len(lines), len(tracks))

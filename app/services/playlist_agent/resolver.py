@@ -213,6 +213,11 @@ def resolve_tracklines(lines, catalog, max_fuzzy=120):
         if key in seen or (key[1], key[0]) in seen:
             continue
         seen.add(key)
+        # Год из исходной строки (год ОРИГИНАЛЬНОГО релиза со страницы, не из
+        # тега библиотеки) — модель фильтрует эпоху по компактному списку
+        # матчей, не видя самой страницы.
+        ym = re.search(r"\((\d{4})\)", ln)
+        p["year"] = ym.group(1) if ym else None
         parsed.append(p)
     if not parsed:
         return []
@@ -251,7 +256,8 @@ def resolve_tracklines(lines, catalog, max_fuzzy=120):
             continue
         out_ids.add(tid)
         out.append({"track_id": tid, "title": picked.get("title"),
-                    "artist": picked.get("artist"), "match": mode})
+                    "artist": picked.get("artist"), "match": mode,
+                    "year": p.get("year")})
     return out
 
 

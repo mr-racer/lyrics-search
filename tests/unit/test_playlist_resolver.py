@@ -275,3 +275,11 @@ def test_resolve_tracklines_fuzzy_keeps_extended_version():
     # containment direction is fine: query ⊂ candidate (Extended Version)
     out = resolve_tracklines(["Kendrick Lamar — Swimming Pools (Drank)"], RockCatalog())
     assert [m["track_id"] for m in out] == ["k1"]
+
+
+@pytest.mark.unit
+def test_resolve_tracklines_carries_source_year():
+    # год из строки страницы (оригинальный релиз) — модель фильтрует эпоху
+    # по компактным LIBRARY MATCHES, не видя самой страницы
+    out = resolve_tracklines(['Queen — "Radio Ga Ga" (1984)'], RockCatalog())
+    assert out[0]["year"] == "1984"
