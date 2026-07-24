@@ -86,7 +86,7 @@ Rules:
 - If get_songs matched FEWER than 8 library tracks and you still have web searches left, dig deeper: run MORE web_search calls with different angles (deep cuts, "full album tracklist", the other language, other soundtrack volumes/parts), then call get_songs again with the NEW titles. Stop digging once ~15 library tracks are matched or the search budget runs out.
 - If the request constrains an era or years ("хиты 80-х", "2000s hits"), keep only songs whose ORIGINAL release year (per the web results) fits; a covers/remaster year in the library does not disqualify a song, but a song originally from another era must be dropped.
 - If fewer than 3 tracks were found in the library, say so honestly in the comment; still return whatever was found.
-- "missing": AT MOST 10 entries ("Title — Artist") — only the most notable songs you wanted that were NOT in the library. NEVER copy a whole tracklist into missing; a long missing list is worse than an empty one. When LIBRARY MATCHES were provided, an empty missing is fine.
+- "missing": ALWAYS output an empty list []. Songs that were not in the library are tracked automatically — never echo them back.
 - web_search is limited; don't waste calls. Do not call get_songs before you have real song titles.
 - Never run two searches with near-identical wording — a rephrase of the same question returns the same pages. If two consecutive searches produced no NEW song titles, STOP searching: call get_songs with what you have, or finish the draft honestly.
 - Write the playlist "title" and "comment" in the user's language (given as [lang=..] at the start of the prompt).
@@ -345,11 +345,11 @@ async def run_playlist_agent(prompt, lang, deps, catalog, state,
         automap = state.get("automatch") or {}
         if automap:
             draft.track_ids = [automap.get(t, t) for t in draft.track_ids]
-        # Модельному echo нельзя доверять размер: гемма, следуя старой
-        # инструкции, вываливала в missing весь треклист (80+ строк) — такой
-        # длинный структурный вывод и есть триггер её грамматических 500-ок.
-        if draft.missing and len(draft.missing) > 12:
-            draft.missing = draft.missing[:12]
+        # missing собирает КОД (get_songs пишет промахи в state["missing"]),
+        # модель его не перепечатывает: гемма, следуя старой инструкции,
+        # вываливала в missing весь треклист (80+ строк) — длинный структурный
+        # вывод и был триггером её грамматических 500-ок и ухода в thinking.
+        draft.missing = list(dict.fromkeys(state["missing"]))[:12]
     except (UsageLimitExceeded, ModelAPIError, ModelHTTPError,
             UnexpectedModelBehavior, IncompleteToolCall) as exc:
         # Агент не довёл структурный вывод до конца. Либо зациклился и сжёг бюджет
@@ -370,7 +370,7 @@ async def run_playlist_agent(prompt, lang, deps, catalog, state,
             track_ids=list(state["resolved"].keys()),
             comment=("Не удалось довести подбор до конца — вот что уже нашлось." if ru
                      else "Couldn't finish building the playlist — here is what was found so far."),
-            missing=list(state["missing"]),
+            missing=list(dict.fromkeys(state["missing"]))[:12],
         )
     logger.info(
         "[playlist_agent] done title=%r draft_track_ids=%s (resolved_in_library=%d, "
