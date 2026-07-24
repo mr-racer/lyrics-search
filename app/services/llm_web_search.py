@@ -151,11 +151,12 @@ def _playlist_authority_weight(url: str) -> float:
 # Billboard prose lists keep working exactly as before).
 
 _TRACK_SEP_RE = re.compile(r"\s[—–\-|]\s")            # "Artist — Title" separators
+_LETTER_RE = re.compile(r"[^\W\d_]")                  # any unicode letter
 _CELL_DASH_EOL_RE = re.compile(r"[—–\-|]\s*$")        # artist cell ending in a dash
 _YEAR_LINE_RE = re.compile(r"^\(\d{4}\)$")            # standalone "(2012)" cell
 _NUM_PREFIX_RE = re.compile(r"^\d{1,3}[.)]\s+")       # "12. Artist – Title"
 
-_MIN_TRACK_LINES = 8          # fewer → "not a tracklist page", fall back
+_MIN_TRACK_LINES = 10         # fewer → "not a tracklist page", fall back
 _TRACK_LINE_MAX_LEN = 200     # prose sentences with stray dashes run longer
 _PLAYLIST_FETCH_CHARS = 60000  # raw fetch budget before extraction
 _TRACKLINES_OUT_CAP = 800     # per-page cap on lines handed to code-side matching
@@ -192,7 +193,14 @@ def _tracklines_list(text: str | None) -> list[str]:
     for ln in merged:
         if len(ln) > _TRACK_LINE_MAX_LEN:
             continue
-        if not _TRACK_SEP_RE.search(_NUM_PREFIX_RE.sub("", ln)):
+        core = _NUM_PREFIX_RE.sub("", ln)
+        m = _TRACK_SEP_RE.search(core)
+        if not m:
+            continue
+        # Обе стороны разделителя должны содержать буквы: чартовые таблицы
+        # («US Billboard Hot 100 — 3», «Australia (ARIA) — 34») — не треки.
+        left, right = core[:m.start()], core[m.end():]
+        if not _LETTER_RE.search(left) or not _LETTER_RE.search(right):
             continue
         key = ln.casefold()
         if key in seen:

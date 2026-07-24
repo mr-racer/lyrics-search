@@ -151,14 +151,7 @@ def create_playlist_agent(model, deps, catalog, state):
               best=scored[0]["artist"] if scored else None)
         return scored
 
-    @agent.tool_plain
-    async def web_search(query: str, fetch_content: bool = False) -> str:
-        """Search the web for real song titles (artist hits, soundtrack tracklists).
-
-        fetch_content=true downloads the full text of the top pages (use for
-        soundtrack tracklists — snippets don't contain them); false returns
-        snippets only (fast, enough for artist hits).
-        """
+    async def _do_web_search(query: str, fetch_content: bool = False) -> str:
         if state["web"] >= _MAX_WEB_SEARCHES:
             return (
                 f"(web search limit reached — {_MAX_WEB_SEARCHES} searches already used. "
@@ -236,6 +229,20 @@ def create_playlist_agent(model, deps, catalog, state):
                     state["web"], len(res), res.replace("\n", " · "))
         return res
 
+    # Доступ для seed-поиска (run_playlist_agent): тот же путь, что и у
+    # инструмента — бюджет, дедуп, авто-матчинг, события.
+    state["_do_web_search"] = _do_web_search
+
+    @agent.tool_plain
+    async def web_search(query: str, fetch_content: bool = False) -> str:
+        """Search the web for real song titles (artist hits, soundtrack tracklists).
+
+        fetch_content=true downloads the full text of the top pages (use for
+        soundtrack tracklists — snippets don't contain them); false returns
+        snippets only (fast, enough for artist hits).
+        """
+        return await _do_web_search(query, fetch_content)
+
     @agent.tool_plain
     async def get_songs(items: list[SongQuery]) -> list | str:
         """Match proposed {title, artist} songs against the user's library.
@@ -294,9 +301,41 @@ async def run_playlist_agent(prompt, lang, deps, catalog, state,
                 prompt, lang, llm_model or "(default)", llm_base_url or "(default)")
     model = _create_pydantic_model(llm_base_url, llm_model)
     agent = create_playlist_agent(model, deps, catalog, state)
+
+    # Seed-поиск: первый веб-поиск запускает КОД с дословным текстом желания,
+    # до старта модели. Формулировка первого запроса — то, на чём слабые
+    # модели проваливают весь прогон («popular songs…» вместо треклиста);
+    # поисковики же прекрасно понимают сырое желание на любом языке. Модель
+    # стартует, уже имея LIBRARY MATCHES, и ищет только недостающее.
+    seed_note = ""
+    seed_fn = state.get("_do_web_search")
+    if seed_fn is not None:
+        try:
+            await seed_fn((prompt or "").strip(), True)
+        except Exception:
+            logger.warning("[playlist_agent] seed search failed", exc_info=True)
+        automap = state.get("automatch") or {}
+        if automap:
+            found = "; ".join(
+                f"{key}. {state['resolved'][tid].get('artist')} — "
+                f"{state['resolved'][tid].get('title')}"
+                for key, tid in list(automap.items())[:40]
+            )
+            seed_note = (
+                "\n\n(A web search for this wish already ran. LIBRARY MATCHES so "
+                f"far — put these keys into track_ids: {found}. Search further "
+                "only for what is still missing.)"
+            )
+        else:
+            seed_note = (
+                "\n\n(A web search for the raw wish text already ran and matched "
+                "nothing in the library yet — phrase your own searches "
+                "differently, don't repeat the wish verbatim.)"
+            )
+
     try:
         result = await agent.run(
-            f"[lang={lang}] {prompt}",
+            f"[lang={lang}] {prompt}{seed_note}",
             usage_limits=UsageLimits(request_limit=_MAX_LLM_REQUESTS),
         )
         draft = result.output

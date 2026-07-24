@@ -369,3 +369,47 @@ async def test_web_search_automatch_and_mkey_translation(monkeypatch):
     assert draft.track_ids == ["1"]
     assert state["resolved"]["1"]["title"] == "Stronger"
     assert state["automatch"] == {"M1": "1"}
+
+
+@pytest.mark.unit
+async def test_seed_search_runs_before_model(monkeypatch):
+    """The first web search is issued by CODE with the raw wish text before the
+    model starts: weak models phrase the opening query badly ("popular songs…")
+    and sink the whole run. The model must start already holding the seed's
+    LIBRARY MATCHES."""
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+    from pydantic_ai.models.function import FunctionModel
+
+    from app.services.playlist_agent import agent as agent_mod
+
+    searched = []
+
+    def fake_search(q, fetch, n, rank, lines_out=None):
+        searched.append((q, fetch))
+        if lines_out is not None:
+            lines_out.append("Kanye West — Stronger")
+        return "### page"
+
+    monkeypatch.setattr(agent_mod, "smart_web_search", fake_search)
+
+    prompts = []
+
+    def scripted(messages, info):
+        prompts.append(str(messages))
+        return ModelResponse(parts=[ToolCallPart("final_result", {
+            "title": "t", "track_ids": ["M1"], "comment": "", "missing": [],
+        })])
+
+    monkeypatch.setattr(agent_mod, "_create_pydantic_model",
+                        lambda base, name: FunctionModel(scripted))
+
+    state = {}
+    draft = await agent_mod.run_playlist_agent(
+        "песни из gta 5", "ru", FakeDeps(), FakeCatalog(), state)
+
+    # seed ran with the raw wish, full-content, before the model's first call
+    assert searched[0] == ("песни из gta 5", True)
+    assert state["web"] == 1
+    # the model saw the seed's matches and could finish without searching
+    assert "LIBRARY MATCHES" in prompts[0]
+    assert draft.track_ids == ["1"]
