@@ -8,7 +8,10 @@ tracklists. See the module note in ``llm_web_search.py``.
 
 import pytest
 
-from app.services.llm_web_search import rank_playlist_results
+from app.services.llm_web_search import (
+    _extract_tracklines,
+    rank_playlist_results,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -73,3 +76,142 @@ def test_all_junk_returns_original_head_never_blank():
 
 def test_empty_in_empty_out():
     assert rank_playlist_results([]) == []
+
+
+# ── _extract_tracklines ──────────────────────────────────────────────────────
+# Fandom wikitables come out of readability as one line PER CELL: the artist
+# line ends with a dash, the title is the next line, the year "(2012)" the one
+# after. The extractor must re-join those before filtering, so a 26-station
+# soundtrack page survives as compact "Artist — Title (year)" lines instead of
+# being cut off by the flat 4000-char prefix cap.
+
+_FANDOM_STYLE = "\n".join(
+    line
+    for i in range(12)
+    for line in (f"Artist Number{i} feat. Guest —", f"Song Title {i}", f"(201{i % 10})")
+)
+
+_FLAT_STYLE = "\n".join(f"Artist {i} - Song {i}" for i in range(15))
+
+_PROSE = (
+    "Grand Theft Auto V is an action-adventure game played from either a "
+    "third-person or first-person perspective. Players complete missions to "
+    "progress the story.\n"
+    "The game is set within the fictional state of San Andreas, based on "
+    "Southern California. Criminal activities may gain a wanted level for "
+    "the player character.\n"
+) * 6
+
+
+def test_tracklines_merges_fandom_table_cells():
+    out = _extract_tracklines(_FANDOM_STYLE)
+    assert "Artist Number3 feat. Guest — Song Title 3 (2013)" in out
+    # every one of the 12 entries survives on its own line
+    assert sum(1 for ln in out.splitlines() if "—" in ln) == 12
+
+
+def test_tracklines_keeps_flat_single_dash_lists():
+    out = _extract_tracklines(_FLAT_STYLE)
+    assert "Artist 7 - Song 7" in out
+    assert len(out.splitlines()) == 15
+
+
+def test_tracklines_rejects_prose_pages():
+    # a page with no track-like lines must return "" so the caller falls back
+    # to the old prefix behaviour instead of feeding the model filtered noise
+    assert _extract_tracklines(_PROSE) == ""
+
+
+def test_tracklines_below_threshold_returns_empty():
+    # 3 track-like lines in a sea of prose is not a tracklist page
+    text = _PROSE + "\nA - B\nC - D\nE - F\n"
+    assert _extract_tracklines(text) == ""
+
+
+def test_tracklines_caps_output_at_line_boundary():
+    huge = "\n".join(f"Artist {i} — Song number {i} (2010)" for i in range(1000))
+    out = _extract_tracklines(huge, max_chars=2000)
+    assert len(out) <= 2100
+    # cut on a line boundary — no half-line garbage before the ellipsis
+    body = out.rstrip("…").rstrip()
+    assert body.splitlines()[-1].startswith("Artist ")
+
+
+def test_tracklines_mixed_page_keeps_only_tracks():
+    text = _PROSE + "\n" + _FLAT_STYLE + "\n" + _PROSE
+    out = _extract_tracklines(text)
+    assert "Artist 3 - Song 3" in out
+    assert "wanted level" not in out
+
+
+# ── engines fan-out for the playlist path ────────────────────────────────────
+
+
+def test_search_searxng_passes_explicit_engines(monkeypatch):
+    from app.services import llm_web_search as m
+
+    captured = {}
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"results": [{"title": "t", "url": "https://x.example/", "content": "s"}]}
+
+    def fake_get(url, params=None, **kw):
+        captured.update(params or {})
+        return _Resp()
+
+    monkeypatch.setattr(m, "_WEB_SEARCH_AVAILABLE", True)
+    monkeypatch.setattr(m.httpx, "get", fake_get)
+    m.search_searxng("q", max_results=5, engines="brave,presearch")
+    assert captured.get("engines") == "brave,presearch"
+
+
+def test_playlist_rank_uses_redundant_engine_set(monkeypatch):
+    from app.services import llm_web_search as m
+
+    seen = {}
+
+    def fake_search(query, max_results=5, engines=None):
+        seen["engines"] = engines
+        return []
+
+    monkeypatch.setattr(m, "search_searxng", fake_search)
+    m.smart_web_search("gta 5 songs", fetch_content=False, max_results=3, rank="playlist")
+    assert seen["engines"] == m.SEARXNG_PLAYLIST_ENGINES
+    assert "presearch" in seen["engines"] and "brave" in seen["engines"]
+
+
+def test_playlist_fetch_prefers_tracklist_page_over_readable_prose(monkeypatch):
+    """Two readable prose pages must NOT exhaust the full-read budget: the
+    tracklist page further down the ranking is the one worth inlining."""
+    from app.services import llm_web_search as m
+
+    tracklist_body = "\n".join(f"Artist {i} — Song {i} (2005)" for i in range(20))
+    prose_body = _PROSE
+
+    results = [
+        {"title": "wiki EN", "url": "https://en.wikipedia.org/wiki/GTA", "content": "sn1"},
+        {"title": "wiki DE", "url": "https://de.wikipedia.org/wiki/GTA", "content": "sn2"},
+        {"title": "fandom", "url": "https://gta-songs.fandom.com/wiki/Radio", "content": "sn3"},
+    ]
+
+    def fake_search(query, max_results=5, engines=None):
+        return results
+
+    def fake_fetch(url, max_chars=4000):
+        if "fandom" in url:
+            return tracklist_body
+        return prose_body
+
+    monkeypatch.setattr(m, "search_searxng", fake_search)
+    monkeypatch.setattr(m, "fetch_full_content", fake_fetch)
+    monkeypatch.setattr(m, "rank_playlist_results", lambda pool, q="": pool)
+
+    out = m.smart_web_search("gta 5 songs", fetch_content=True, max_results=3, rank="playlist")
+    # the fandom tracklist is inlined in extracted form
+    assert "Artist 7 — Song 7 (2005)" in out
+    # prose pages appear, but the tracklist page was not crowded out
+    assert "fandom" in out
