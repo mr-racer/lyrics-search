@@ -327,6 +327,7 @@ def _pair_entities(text: str, songs: list[str], artists: list[str],
     song_hits = sorted(
         (p, s) for s in set(songs) for p in _positions(s)
     )
+    year_re = re.compile(r"\((19|20)\d{2}\)|\b(19|20)\d{2}\b")
     for spos, song in song_hits:
         best = min(artist_pos, key=lambda t: abs(t[0] - spos))
         if abs(best[0] - spos) > max_gap:
@@ -335,7 +336,12 @@ def _pair_entities(text: str, songs: list[str], artists: list[str],
         if key in seen:
             continue
         seen.add(key)
-        pairs.append(f"{best[1]} — {song}")
+        # Год из окна вокруг песни (листиклы пишут его рядом) — иначе матчи
+        # без года не поддаются кодовому фильтру эпохи («после 2020»).
+        window = text[max(0, spos - 30):spos + len(song) + 90]
+        ym = year_re.search(window)
+        yr = f" ({ym.group(0).strip('()')})" if ym else ""
+        pairs.append(f"{best[1]} — {song}{yr}")
     return pairs
 
 

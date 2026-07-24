@@ -48,7 +48,11 @@ from app.domain.models import PlaylistDraft
 from app.services.agents import _create_pydantic_model
 from app.services.llm_web_search import smart_web_search
 from app.services.name_match import score_names
-from app.services.playlist_agent.resolver import resolve_songs, resolve_tracklines
+from app.services.playlist_agent.resolver import (
+    extract_year_range,
+    resolve_songs,
+    resolve_tracklines,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -120,8 +124,10 @@ def create_playlist_agent(model, deps, catalog, state):
     # локальная модель (gemma повторяет одно и то же) упирается в потолок за
     # секунды вместо минут — обрезанный вывод даёт структурную ошибку, и
     # run_playlist_agent отдаёт частичный плейлист штатным фоллбэком.
+    # output_retries=3: финальный PlaylistDraft — самое частое место срыва
+    # квантованных моделей; одна повторная попытка (дефолт) мало.
     agent = Agent(model, output_type=PlaylistDraft, instructions=_INSTRUCTIONS,
-                  model_settings={"max_tokens": 3000})
+                  model_settings={"max_tokens": 3000}, output_retries=3)
 
     def _emit(stage: str, **info) -> None:
         cb = state.get("on_status")
@@ -199,6 +205,18 @@ def create_playlist_agent(model, deps, catalog, state):
             except Exception:
                 logger.warning("[playlist_agent] auto-match failed", exc_info=True)
                 matches = []
+            # Явный годовой констрейнт желания применяет КОД: страницы-листиклы
+            # «best of» приносят всю карьеру артиста, и если модель умирает на
+            # финальном выводе, фоллбэк без этого фильтра уносит её в плейлист.
+            yr_range = state.get("year_range")
+            if yr_range and matches:
+                lo, hi = yr_range
+                before = len(matches)
+                matches = [m for m in matches
+                           if not m.get("year") or lo <= int(m["year"]) <= hi]
+                if before != len(matches):
+                    logger.info("[playlist_agent] era filter %s dropped %d/%d matches",
+                                yr_range, before - len(matches), before)
             if matches:
                 automap = state.setdefault("automatch", {})   # "M1" -> track_id
                 by_tid = {tid: key for key, tid in automap.items()}
@@ -213,6 +231,7 @@ def create_playlist_agent(model, deps, catalog, state):
                     state["resolved"][tid] = {
                         "title": m["title"], "artist": m["artist"],
                         "match": m["match"], "year": m.get("year"),
+                        "src": "auto",
                     }
                     yr = f" ({m['year']})" if m.get("year") else ""
                     section.append(f"{key}. {m['artist']} — {m['title']}{yr}")
@@ -286,7 +305,8 @@ def create_playlist_agent(model, deps, catalog, state):
         for r in resolved:
             if r["match"] != "none" and r.get("track_id"):
                 state["resolved"][r["track_id"]] = {
-                    "title": r.get("title"), "artist": r.get("artist"), "match": r["match"],
+                    "title": r.get("title"), "artist": r.get("artist"),
+                    "match": r["match"], "src": "songs",
                 }
             elif r["match"] == "none" and r.get("query_title"):
                 state["missing"].append(r["query_title"])
@@ -308,6 +328,9 @@ async def run_playlist_agent(prompt, lang, deps, catalog, state,
     state.setdefault("resolved", {})
     state.setdefault("missing", [])
     state["on_status"] = on_status
+    state["year_range"] = extract_year_range(prompt)
+    if state["year_range"]:
+        logger.info("[playlist_agent] era constraint from wish: %s", state["year_range"])
 
     logger.info("[playlist_agent] start prompt=%r lang=%s model=%s base_url=%s",
                 prompt, lang, llm_model or "(default)", llm_base_url or "(default)")
@@ -379,9 +402,17 @@ async def run_playlist_agent(prompt, lang, deps, catalog, state,
             "with %d resolved tracks", type(exc).__name__, exc, len(state["resolved"]),
         )
         ru = str(lang).lower().startswith("ru")
+        # Порядок фоллбэка — по силе сигнала: сначала треки, которые модель
+        # явно запросила через get_songs (курировала сама), затем авто-матчи.
+        # Иначе первые позиции достаются самой РАННЕЙ прочитанной странице —
+        # часто это листикл «best of» всей карьеры вне констрейнта желания.
+        ordered = sorted(
+            state["resolved"].items(),
+            key=lambda kv: 0 if kv[1].get("src") == "songs" else 1,
+        )
         draft = PlaylistDraft(
             title=(prompt or "").strip()[:60] or ("Плейлист" if ru else "Playlist"),
-            track_ids=list(state["resolved"].keys()),
+            track_ids=[tid for tid, _ in ordered],
             comment=("Не удалось довести подбор до конца — вот что уже нашлось." if ru
                      else "Couldn't finish building the playlist — here is what was found so far."),
             missing=list(dict.fromkeys(state["missing"]))[:12],

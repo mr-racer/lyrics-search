@@ -178,6 +178,36 @@ def parse_track_line(line):
     return {"artist": left, "title": right}
 
 
+def extract_year_range(wish):
+    """Явный годовой констрейнт из текста желания → (min_year, max_year) | None.
+
+    Общие формы: «после/after/since 2020», «до/before 2000», «2010-2015»,
+    декады «00-х», «90s», «'80s», «нулевых». Голый год без предлога намеренно
+    игнорируется («gta 5», названия с числами). Фильтр применяется кодом к
+    авто-матчам: модель, умирая на финальном выводе, не успевает отфильтровать
+    эпоху сама, и фоллбэк без этого уносит в плейлист всю карьеру артиста."""
+    if not wish:
+        return None
+    low = wish.lower()
+    m = re.search(r"(?:после|after|since|начиная с)\s+((?:19|20)\d{2})", low)
+    if m:
+        return (int(m.group(1)) + (0 if "начиная" in m.group(0) or "since" in m.group(0) else 1), 3000)
+    m = re.search(r"(?:до|before)\s+((?:19|20)\d{2})", low)
+    if m:
+        return (1900, int(m.group(1)) - 1)
+    m = re.search(r"\b((?:19|20)\d{2})\s*[-–—]\s*((?:19|20)\d{2})\b", low)
+    if m:
+        return (int(m.group(1)), int(m.group(2)))
+    m = re.search(r"(?:^|\s)['’]?(\d0)(?:-?х|s|х)(?:\s|$|[,.!?])", low)
+    if m:
+        dec = int(m.group(1))
+        base = 1900 + dec if dec >= 30 else 2000 + dec
+        return (base, base + 9)
+    if re.search(r"нулев", low):
+        return (2000, 2009)
+    return None
+
+
 def _fuzzy_acceptable_strict(qtitle, qartist, hit):
     """Гейт для МАССОВОГО авто-пересечения (сотни строк — ложняки стреляют
     чаще, а модель их не ревьюит). Отличие легитимного нечёткого хита от

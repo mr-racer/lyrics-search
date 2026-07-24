@@ -450,3 +450,55 @@ async def test_get_songs_refuses_oversized_batches(monkeypatch):
                if isinstance(p, ToolReturnPart) and p.tool_name == "get_songs"]
     assert "too many items" in str(returns[0].content)
     assert state["resolved"] == {}
+
+
+@pytest.mark.unit
+async def test_automatch_era_filter_and_fallback_order(monkeypatch):
+    """«после 2020»: авто-матчи с известным годом вне диапазона отбрасываются
+    кодом, а частичный фоллбэк ставит get_songs-курированные треки первыми."""
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+    from pydantic_ai.models.function import FunctionModel
+
+    from app.services.playlist_agent import agent as agent_mod
+
+    class TwoTrackCatalog:
+        def iter_songs(self):
+            return [
+                {"track_id": "old", "title": "Stronger", "artist": "Kanye West"},
+                {"track_id": "new", "title": "Burn", "artist": "Kanye West"},
+                {"track_id": "cur", "title": "Hurricane", "artist": "Kanye West"},
+            ]
+
+        def search_tracks_fuzzy(self, q, limit=3):
+            return []
+
+    def fake_search(q, fetch, n, rank, lines_out=None):
+        if lines_out is not None:
+            lines_out.extend([
+                "Kanye West — Stronger (2007)",   # вне диапазона — дропнуть
+                "Kanye West — Burn (2024)",        # в диапазоне — оставить
+            ])
+        return "### page"
+
+    monkeypatch.setattr(agent_mod, "smart_web_search", fake_search)
+
+    calls = {"n": 0}
+
+    def scripted(messages, info):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ModelResponse(parts=[ToolCallPart(
+                "get_songs", {"items": [{"title": "Hurricane", "artist": "Kanye West"}]})])
+        # финальный вывод срывается — работает фоллбэк
+        raise agent_mod.UnexpectedModelBehavior("broken final output")
+
+    monkeypatch.setattr(agent_mod, "_create_pydantic_model",
+                        lambda base, name: FunctionModel(scripted))
+
+    state = {}
+    draft = await agent_mod.run_playlist_agent(
+        "хиты канье после 2020", "ru", FakeDeps(), TwoTrackCatalog(), state)
+
+    assert "old" not in draft.track_ids           # 2007 отфильтрован кодом
+    assert draft.track_ids[0] == "cur"            # get_songs-матч первый
+    assert "new" in draft.track_ids               # 2024 остался

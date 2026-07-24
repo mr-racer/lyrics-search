@@ -283,3 +283,28 @@ def test_resolve_tracklines_carries_source_year():
     # по компактным LIBRARY MATCHES, не видя самой страницы
     out = resolve_tracklines(['Queen — "Radio Ga Ga" (1984)'], RockCatalog())
     assert out[0]["year"] == "1984"
+
+
+# ─── extract_year_range ──────────────────────────────────────────────────────
+
+from app.services.playlist_agent.resolver import extract_year_range
+
+
+@pytest.mark.unit
+def test_year_range_after():
+    assert extract_year_range("хиты канье после 2020") == (2021, 3000)
+    assert extract_year_range("kanye hits after 2020") == (2021, 3000)
+
+
+@pytest.mark.unit
+def test_year_range_decades():
+    assert extract_year_range("клубные хиты 00-х") == (2000, 2009)
+    assert extract_year_range("best eurodance of the 90s") == (1990, 1999)
+    assert extract_year_range("хиты нулевых") == (2000, 2009)
+
+
+@pytest.mark.unit
+def test_year_range_explicit_span_and_none():
+    assert extract_year_range("хиты 2010-2015") == (2010, 2015)
+    assert extract_year_range("песни из gta 5") is None      # голое число ≠ год
+    assert extract_year_range("саундтрек watch dogs") is None
