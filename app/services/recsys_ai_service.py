@@ -722,6 +722,14 @@ async def _web_hits_playlist(
         elif stage == "web_search":
             steps.append({"tool": "web_search", "query": event.get("query") or "",
                           "found": 0})
+        elif stage == "auto_matched":
+            # Код сам пересёк найденный треклист с библиотекой — показать
+            # находку на шаге поиска, который её принёс.
+            q = event.get("query") or ""
+            for s in reversed(steps):
+                if s["tool"] == "web_search" and s["query"] == q:
+                    s["found"] = int(event.get("found") or 0)
+                    break
         elif stage == "matching_done":
             steps.append({"tool": "get_songs", "query": "",
                           "found": int(event.get("found") or 0)})

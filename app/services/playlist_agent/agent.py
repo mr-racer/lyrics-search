@@ -48,7 +48,7 @@ from app.domain.models import PlaylistDraft
 from app.services.agents import _create_pydantic_model
 from app.services.llm_web_search import smart_web_search
 from app.services.name_match import score_names
-from app.services.playlist_agent.resolver import resolve_songs
+from app.services.playlist_agent.resolver import resolve_songs, resolve_tracklines
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +79,7 @@ Any other shape: same principle — web_search for real song titles that answer 
 
 Rules:
 - fetch_content=true downloads the full text of the top pages; use it whenever you need a LIST from a page (tracklist, chart, "best of" ranking) — snippets almost never contain the actual songs. Snippets (fetch_content=false) are enough for confirming names and facts.
+- When a web_search response contains a "LIBRARY MATCHES" section, those songs were ALREADY verified to be in the user's library. Put their keys (e.g. "M3") directly into the final track_ids — do NOT re-check them with get_songs, and prefer them over anything you would propose from memory. If LIBRARY MATCHES already cover ~15 songs, skip further searching and finish.
 - Album/OST/compilation names ("Original Soundtrack", "OST Vol. 2", "Now That's What I Call Music") are NOT songs — never pass them to get_songs.
 - Song titles MUST come from web_search results — never from your own memory, and never by reinterpreting the user's request text as a song title or a vibe/mood to search for. get_songs refuses to run until web_search has been called.
 - Only put a track into the playlist if get_songs returned it with match "exact" or "fuzzy" (never "none"). Use the track_id from get_songs verbatim.
@@ -120,7 +121,7 @@ def create_playlist_agent(model, deps, catalog, state):
     # секунды вместо минут — обрезанный вывод даёт структурную ошибку, и
     # run_playlist_agent отдаёт частичный плейлист штатным фоллбэком.
     agent = Agent(model, output_type=PlaylistDraft, instructions=_INSTRUCTIONS,
-                  model_settings={"max_tokens": 2048})
+                  model_settings={"max_tokens": 3000})
 
     def _emit(stage: str, **info) -> None:
         cb = state.get("on_status")
@@ -184,13 +185,53 @@ def create_playlist_agent(model, deps, catalog, state):
             # rank="playlist": глубокая выборка + переранжирование в коде
             # (убирает genius-мусор списочных запросов) + авто-чтение топ-1
             # авторитетного источника, даже если модель просила только сниппеты.
+            # lines_out собирает ПОЛНЫЙ извлечённый треклист (не сэмпл) —
+            # библиотечное пересечение делает код ниже, не модель.
             n = 3 if fetch_content else 5
+            lines_out: list = []
             res = await asyncio.to_thread(
-                smart_web_search, query, fetch_content, n, "playlist"
+                smart_web_search, query, fetch_content, n, "playlist", lines_out
             ) or "(no web results)"
         except Exception as exc:
             logger.warning("[playlist_agent] web_search failed: %s", exc)
             return "(web search unavailable)"
+
+        # Auto-matching: пересечь весь извлечённый треклист с библиотекой.
+        # 500-песенный саундтрек не «перепечатать» через маленькую модель —
+        # она сэмплирует пару десятков строк и пересечение выходит пустым.
+        if lines_out:
+            try:
+                matches = await asyncio.to_thread(
+                    resolve_tracklines, lines_out, catalog)
+            except Exception:
+                logger.warning("[playlist_agent] auto-match failed", exc_info=True)
+                matches = []
+            if matches:
+                automap = state.setdefault("automatch", {})   # "M1" -> track_id
+                by_tid = {tid: key for key, tid in automap.items()}
+                section = []
+                for m in matches:
+                    tid = m["track_id"]
+                    key = by_tid.get(tid)
+                    if key is None:
+                        key = f"M{len(automap) + 1}"
+                        automap[key] = tid
+                        by_tid[tid] = key
+                    state["resolved"][tid] = {
+                        "title": m["title"], "artist": m["artist"],
+                        "match": m["match"],
+                    }
+                    section.append(f"{key}. {m['artist']} — {m['title']}")
+                _emit("auto_matched", query=query, found=len(matches))
+                logger.info("[playlist_agent] auto-matched %d/%d tracklist lines: %s",
+                            len(matches), len(lines_out),
+                            "; ".join(section[:40]))
+                res += (
+                    "\n\nLIBRARY MATCHES — every line of the found tracklists was "
+                    "auto-checked against the user's library; THESE songs are in it. "
+                    "Put the keys (e.g. \"M3\") straight into track_ids — no need to "
+                    "call get_songs for them:\n" + "\n".join(section[:40])
+                )
         logger.info("[playlist_agent] web_search #%d -> %d chars: %.300s",
                     state["web"], len(res), res.replace("\n", " · "))
         return res
@@ -259,6 +300,12 @@ async def run_playlist_agent(prompt, lang, deps, catalog, state,
             usage_limits=UsageLimits(request_limit=_MAX_LLM_REQUESTS),
         )
         draft = result.output
+        # Короткие M-ключи авто-матчинга ("M3") → реальные track_id. Модель
+        # оперирует ключами, потому что копирование длинных UUID — то, на чём
+        # слабые модели ошибаются.
+        automap = state.get("automatch") or {}
+        if automap:
+            draft.track_ids = [automap.get(t, t) for t in draft.track_ids]
     except (UsageLimitExceeded, ModelAPIError, ModelHTTPError,
             UnexpectedModelBehavior, IncompleteToolCall) as exc:
         # Агент не довёл структурный вывод до конца. Либо зациклился и сжёг бюджет

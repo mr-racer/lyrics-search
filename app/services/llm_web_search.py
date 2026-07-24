@@ -158,16 +158,13 @@ _NUM_PREFIX_RE = re.compile(r"^\d{1,3}[.)]\s+")       # "12. Artist – Title"
 _MIN_TRACK_LINES = 8          # fewer → "not a tracklist page", fall back
 _TRACK_LINE_MAX_LEN = 200     # prose sentences with stray dashes run longer
 _PLAYLIST_FETCH_CHARS = 60000  # raw fetch budget before extraction
+_TRACKLINES_OUT_CAP = 800     # per-page cap on lines handed to code-side matching
 
 
-def _extract_tracklines(text: str | None, max_chars: int = 7000) -> str:
-    """Filter a fetched page body down to compact "Artist — Title" lines.
-
-    Returns "" when the page does not look like a tracklist, so callers can
-    fall back to the untouched prefix instead of feeding the model noise.
-    """
+def _tracklines_list(text: str | None) -> list[str]:
+    """All track-like lines of a fetched page body (merged, filtered, uncapped)."""
     if not text:
-        return ""
+        return []
     raw_lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
 
     # Pass 1: re-join wikitable cells that readability split one-per-line.
@@ -192,16 +189,17 @@ def _extract_tracklines(text: str | None, max_chars: int = 7000) -> str:
             continue
         if _TRACK_SEP_RE.search(_NUM_PREFIX_RE.sub("", ln)):
             kept.append(ln)
+    return kept
 
-    if len(kept) < _MIN_TRACK_LINES:
-        return ""
+
+def _sample_tracklines(kept: list[str], max_chars: int) -> str:
+    """Render track lines within ``max_chars``, sampling EVENLY when over
+    budget. Soundtrack pages group songs by radio station/section — a prefix
+    cut feeds the model only the first station (GTA V: rap) and silently drops
+    the rock/pop stations where the library's actual hits live."""
     out = "\n".join(kept)
     if len(out) <= max_chars:
         return out
-    # Over budget: sample EVENLY across the whole list instead of cutting a
-    # prefix. Soundtrack pages group songs by radio station/section — a prefix
-    # cut feeds the model only the first station (GTA V: rap) and silently
-    # drops the rock/pop stations where the library's actual hits live.
     avg_line = max(1, len(out) // len(kept))
     budget = max(_MIN_TRACK_LINES, (max_chars - 120) // avg_line)  # 120 ≈ header
     if budget >= len(kept):
@@ -214,6 +212,145 @@ def _extract_tracklines(text: str | None, max_chars: int = 7000) -> str:
     out = header + "\n" + "\n".join(sampled)
     if len(out) > max_chars:
         out = out[:max_chars].rsplit("\n", 1)[0] + "\n…"
+    return out
+
+
+def _extract_tracklines(text: str | None, max_chars: int = 7000) -> str:
+    """Filter a fetched page body down to compact "Artist — Title" lines.
+
+    Returns "" when the page does not look like a tracklist, so callers can
+    fall back to the untouched prefix instead of feeding the model noise.
+    """
+    kept = _tracklines_list(text)
+    if len(kept) < _MIN_TRACK_LINES:
+        return ""
+    return _sample_tracklines(kept, max_chars)
+
+
+# ── GLiNER2 salvage for structure-less tracklist pages ───────────────────────
+# Some pages carry the songs in prose or in tables whose separators readability
+# eats ("...features Radio Ga Ga by Queen and Photograph performed by Def
+# Leppard"). The dash-regex finds nothing there, but the shared GLiNER2 model
+# (fact_relations' encoder — no extra weights) extracts song/artist entities
+# reliably. Entities come back WITHOUT positions, so pairing is done by
+# occurrence distance in the source text. CPU-only and ~0.5 s per chunk — used
+# strictly as a fallback, chunk-capped, one page per search call.
+
+_GLINER_CHUNK_CHARS = 1100
+_GLINER_MAX_CHUNKS = 12
+_GLINER_MIN_CONF = 0.7
+
+_gliner_track_schema = None
+_gliner_schema_lock = None
+
+
+def _gliner_extract_entities(chunk: str) -> dict:
+    """One GLiNER2 pass over ``chunk`` → {"songs": [...], "artists": [...]}."""
+    global _gliner_track_schema, _gliner_schema_lock
+    import threading
+
+    from app.services.fact_relations.extractor import get_model
+
+    model = get_model()
+    if _gliner_schema_lock is None:
+        _gliner_schema_lock = threading.Lock()
+    if _gliner_track_schema is None:
+        with _gliner_schema_lock:
+            if _gliner_track_schema is None:
+                s = model.create_schema()
+                s.entities({
+                    "song_title": "title of a song in a tracklist or soundtrack",
+                    "artist_name": "name of the artist or band performing a song",
+                })
+                _gliner_track_schema = s
+    out = model.extract(chunk, _gliner_track_schema, include_confidence=True)
+    ents = (out or {}).get("entities", {})
+
+    def _texts(key):
+        vals = []
+        for e in ents.get(key, []) or []:
+            if isinstance(e, dict):
+                if float(e.get("confidence", 0.0)) >= _GLINER_MIN_CONF:
+                    t = (e.get("text") or "").strip()
+                    if t:
+                        vals.append(t)
+            elif isinstance(e, str) and e.strip():
+                vals.append(e.strip())
+        return vals
+
+    return {"songs": _texts("song_title"), "artists": _texts("artist_name")}
+
+
+def _pair_entities(text: str, songs: list[str], artists: list[str],
+                   max_gap: int = 150) -> list[str]:
+    """Pair songs with their nearest artist occurrence in ``text``.
+
+    Works for both "Title by Artist" (artist follows) and "Artist – Title"
+    (artist precedes): nearest-by-distance either side within ``max_gap``.
+    Returns "Artist — Title" lines, deduped, in text order of the songs.
+    """
+    low = text.lower()
+
+    def _positions(needle: str) -> list[int]:
+        pos, out = 0, []
+        n = needle.lower()
+        while True:
+            i = low.find(n, pos)
+            if i < 0:
+                break
+            out.append(i)
+            pos = i + 1
+        return out
+
+    artist_pos = [(p, a) for a in set(artists) for p in _positions(a)]
+    if not artist_pos:
+        return []
+    pairs, seen = [], set()
+    song_hits = sorted(
+        (p, s) for s in set(songs) for p in _positions(s)
+    )
+    for spos, song in song_hits:
+        best = min(artist_pos, key=lambda t: abs(t[0] - spos))
+        if abs(best[0] - spos) > max_gap:
+            continue
+        key = (best[1].lower(), song.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        pairs.append(f"{best[1]} — {song}")
+    return pairs
+
+
+def _gliner_tracklines(text: str, max_chunks: int = _GLINER_MAX_CHUNKS) -> list[str]:
+    """Salvage "Artist — Title" lines from a structure-less page via GLiNER2."""
+    if not text:
+        return []
+    # Chunk on line boundaries.
+    chunks, cur = [], ""
+    for ln in text.splitlines():
+        if len(cur) + len(ln) + 1 > _GLINER_CHUNK_CHARS and cur:
+            chunks.append(cur)
+            cur = ""
+        cur += ln + "\n"
+    if cur.strip():
+        chunks.append(cur)
+    lines: list[str] = []
+    for chunk in chunks[:max_chunks]:
+        try:
+            ents = _gliner_extract_entities(chunk)
+        except Exception:
+            logger.warning("[web_search] GLiNER2 salvage failed on a chunk",
+                           exc_info=True)
+            continue
+        if ents["songs"] and ents["artists"]:
+            lines.extend(_pair_entities(chunk, ents["songs"], ents["artists"]))
+    # dedupe across chunks, keep order
+    seen, out = set(), []
+    for ln in lines:
+        k = ln.lower()
+        if k not in seen:
+            seen.add(k)
+            out.append(ln)
     return out
 
 
@@ -455,6 +592,7 @@ def smart_web_search(
     fetch_content: bool = False,
     max_results: int = 3,
     rank: str | None = None,
+    tracklines_out: list | None = None,
 ) -> str:
     """
     fetch_content=False → быстро, только сниппеты
@@ -486,6 +624,7 @@ def smart_web_search(
         # Prose pages are held as fallback and only inlined (old prefix
         # behaviour) for slots no tracklist page claimed.
         rows, full_got, tries = [], 0, 0  # rows: (kind, title, url, body, snippet)
+        gliner_budget = 1  # CPU-инференс дорог: максимум одна спасённая страница за вызов
         for r in results:
             url = r.get("url", "")
             title = r.get("title", "")
@@ -494,17 +633,29 @@ def smart_web_search(
                 tries += 1
                 content = fetch_full_content(url, max_chars=_PLAYLIST_FETCH_CHARS)
                 if _is_readable_content(content):
-                    # Первая страница-список получает полный кап, последующие —
-                    # урезанный: два полных листа (≈14k знаков) перегружают
-                    # контекст слабых локальных моделей и провоцируют циклы
-                    # генерации; второй источник нужен для ПОКРЫТИЯ (другие
-                    # радиостанции/тома), не для объёма.
-                    tracks = _extract_tracklines(
-                        content, max_chars=7000 if full_got == 0 else 3000)
-                    if tracks:
+                    lines = _tracklines_list(content)
+                    if len(lines) < _MIN_TRACK_LINES and gliner_budget > 0:
+                        # Страница без «Artist — Title»-структуры (проза или
+                        # таблица, съеденная readability) — GLiNER2-спасение.
+                        gliner_budget -= 1
+                        salvaged = _gliner_tracklines(content)
+                        if len(salvaged) >= _MIN_TRACK_LINES:
+                            logger.info(
+                                "[web_search] GLiNER2 salvaged %d track lines (%.60s)",
+                                len(salvaged), url)
+                            lines = salvaged
+                    if len(lines) >= _MIN_TRACK_LINES:
+                        if tracklines_out is not None:
+                            tracklines_out.extend(lines[:_TRACKLINES_OUT_CAP])
+                        # Первая страница-список получает полный кап видимого
+                        # моделью текста, последующие — урезанный: полная
+                        # библиотечная сверка идёт кодом по tracklines_out, а
+                        # большие дампы перегружают слабые локальные модели.
+                        tracks = _sample_tracklines(
+                            lines, 4000 if full_got == 0 else 2000)
                         logger.info(
-                            "[web_search] tracklist page (%.60s): %d chars → %d after extraction",
-                            url, len(content), len(tracks))
+                            "[web_search] tracklist page (%.60s): %d chars → %d lines, %d shown",
+                            url, len(content), len(lines), len(tracks))
                         rows.append(("list", title, url, tracks, snippet))
                         full_got += 1
                         continue

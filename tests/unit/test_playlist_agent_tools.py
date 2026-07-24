@@ -151,7 +151,8 @@ async def test_web_search_repeated_query_deduped(monkeypatch):
     hits = {"n": 0}
     monkeypatch.setattr(
         "app.services.playlist_agent.agent.smart_web_search",
-        lambda q, fetch, n, rank: hits.__setitem__("n", hits["n"] + 1) or "some titles",
+        lambda q, fetch, n, rank, lines_out=None:
+            hits.__setitem__("n", hits["n"] + 1) or "some titles",
     )
 
     calls = {"n": 0}
@@ -191,7 +192,8 @@ async def test_web_search_fetch_content_passthrough(monkeypatch):
     seen = []
     monkeypatch.setattr(
         "app.services.playlist_agent.agent.smart_web_search",
-        lambda q, fetch, n, rank: seen.append((q, fetch, n, rank)) or "tracklist text",
+        lambda q, fetch, n, rank, lines_out=None:
+            seen.append((q, fetch, n, rank)) or "tracklist text",
     )
 
     calls = {"n": 0}
@@ -326,3 +328,44 @@ async def test_model_failure_returns_partial_draft(monkeypatch):
     # Did not crash; salvaged the one resolved track.
     assert draft.track_ids == ["1"]
     assert "1" in state["resolved"]
+
+
+@pytest.mark.unit
+async def test_web_search_automatch_and_mkey_translation(monkeypatch):
+    """web_search collects the full tracklist, code intersects it with the
+    library, the model gets short M-keys, and the final draft's M-keys are
+    translated back to real track_ids."""
+    from pydantic_ai.messages import ModelResponse, ToolCallPart, ToolReturnPart
+    from pydantic_ai.models.function import FunctionModel
+
+    from app.services.playlist_agent import agent as agent_mod
+
+    def fake_search(q, fetch, n, rank, lines_out=None):
+        if lines_out is not None:
+            lines_out.extend(["Kanye West — Stronger", "Nobody — Ghost Song"])
+        return "### page\nsampled lines"
+
+    monkeypatch.setattr(agent_mod, "smart_web_search", fake_search)
+
+    calls = {"n": 0}
+
+    def scripted(messages, info):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ModelResponse(parts=[ToolCallPart(
+                "web_search", {"query": "gta 5 tracklist", "fetch_content": True})])
+        return ModelResponse(parts=[ToolCallPart("final_result", {
+            "title": "t", "track_ids": ["M1"], "comment": "", "missing": [],
+        })])
+
+    monkeypatch.setattr(agent_mod, "_create_pydantic_model",
+                        lambda base, name: FunctionModel(scripted))
+
+    state = {}
+    draft = await agent_mod.run_playlist_agent(
+        "песни из gta 5", "ru", FakeDeps(), FakeCatalog(), state)
+
+    # library intersection done in code; M-key resolved to the real id
+    assert draft.track_ids == ["1"]
+    assert state["resolved"]["1"]["title"] == "Stronger"
+    assert state["automatch"] == {"M1": "1"}

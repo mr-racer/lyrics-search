@@ -174,3 +174,77 @@ def test_fuzzy_picks_valid_candidate_from_top3():
 
     res = resolve_songs([{"title": "Runaway", "artist": "Kanye West"}], MixedCatalog())
     assert res[0]["match"] == "fuzzy" and res[0]["track_id"] == "good"
+
+
+# ─── tracklist auto-matching (code-side library intersection) ────────────────
+# A 500-song soundtrack can't be "copy-typed" through a small LLM: the model
+# samples a couple dozen lines and the library intersection comes out empty.
+# parse_track_line / resolve_tracklines intersect the FULL extracted tracklist
+# with the library deterministically; the model only curates the result.
+
+from app.services.playlist_agent.resolver import parse_track_line, resolve_tracklines
+
+
+@pytest.mark.unit
+def test_parse_fandom_line_with_quotes_and_year():
+    p = parse_track_line('Vybz Kartel – "Addi Truth" (2014)')
+    assert p == {"artist": "Vybz Kartel", "title": "Addi Truth"}
+
+
+@pytest.mark.unit
+def test_parse_flat_dash_line():
+    assert parse_track_line("Def Leppard - Photograph") == {
+        "artist": "Def Leppard", "title": "Photograph"}
+
+
+@pytest.mark.unit
+def test_parse_numbered_and_em_dash():
+    assert parse_track_line("12. Queen — Radio Ga Ga") == {
+        "artist": "Queen", "title": "Radio Ga Ga"}
+
+
+@pytest.mark.unit
+def test_parse_rejects_junk():
+    assert parse_track_line("Related articles") is None
+    assert parse_track_line("") is None
+    # a sampling header from the extractor must not become a "song"
+    assert parse_track_line("(showing 57 of 500 track lines, sampled evenly)") is None
+
+
+class RockCatalog:
+    def iter_songs(self):
+        return [
+            {"track_id": "q1", "title": "Radio Ga Ga", "artist": "Queen"},
+            {"track_id": "p1", "title": "Photograph", "artist": "Def Leppard"},
+            {"track_id": "k1", "title": "Swimming Pools (Drank) [Extended Version]",
+             "artist": "Kendrick Lamar"},
+        ]
+
+    def search_tracks_fuzzy(self, q, limit=3):
+        if "swimming pools" in q.lower():
+            return [{"track_id": "k1", "title": "Swimming Pools (Drank) [Extended Version]",
+                     "artist": "Kendrick Lamar", "score": 5.0}]
+        return []
+
+
+@pytest.mark.unit
+def test_resolve_tracklines_exact_both_orientations():
+    lines = [
+        'Queen — "Radio Ga Ga" (1984)',       # Artist — Title
+        "Photograph - Def Leppard",            # Title - Artist (reversed)
+    ]
+    out = resolve_tracklines(lines, RockCatalog())
+    ids = {m["track_id"] for m in out}
+    assert ids == {"q1", "p1"}
+
+
+@pytest.mark.unit
+def test_resolve_tracklines_fuzzy_and_dedupe():
+    lines = [
+        "Kendrick Lamar — Swimming Pools (Drank)",   # fuzzy (library has Extended)
+        "Kendrick Lamar — Swimming Pools (Drank)",   # duplicate — one result
+        "Nobody — Unknown Song",                      # no match — dropped
+    ]
+    out = resolve_tracklines(lines, RockCatalog())
+    assert [m["track_id"] for m in out] == ["k1"]
+    assert out[0]["match"] == "fuzzy"

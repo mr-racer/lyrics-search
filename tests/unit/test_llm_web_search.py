@@ -229,3 +229,54 @@ def test_playlist_fetch_prefers_tracklist_page_over_readable_prose(monkeypatch):
     assert "Artist 7 — Song 7 (2005)" in out
     # prose pages appear, but the tracklist page was not crowded out
     assert "fandom" in out
+
+
+# ── GLiNER2 salvage pairing (pure logic; the model itself is not loaded) ─────
+
+from app.services.llm_web_search import _gliner_tracklines, _pair_entities
+
+
+def test_pair_entities_handles_both_orientations():
+    text = ("The station features Radio Ga Ga by Queen and also plays\n"
+            "M83 - Midnight City every night.")
+    out = _pair_entities(text, ["Radio Ga Ga", "Midnight City"], ["Queen", "M83"])
+    assert "Queen — Radio Ga Ga" in out
+    assert "M83 — Midnight City" in out
+
+
+def test_pair_entities_respects_distance_gap():
+    text = "Radio Ga Ga is a great song." + (" filler" * 60) + " Queen formed in 1970."
+    assert _pair_entities(text, ["Radio Ga Ga"], ["Queen"]) == []
+
+
+def test_gliner_tracklines_chunks_and_dedupes(monkeypatch):
+    from app.services import llm_web_search as m
+
+    def fake_extract(chunk):
+        return {"songs": ["Radio Ga Ga"], "artists": ["Queen"]}
+
+    monkeypatch.setattr(m, "_gliner_extract_entities", fake_extract)
+    text = "Queen plays Radio Ga Ga tonight.\n" * 200   # many chunks, same pair
+    out = m._gliner_tracklines(text)
+    assert out == ["Queen — Radio Ga Ga"]
+
+
+def test_playlist_fetch_collects_tracklines_for_automatch(monkeypatch):
+    """The FULL extracted tracklist (not the sampled excerpt) must reach the
+    caller via tracklines_out — code-side library intersection needs it all."""
+    from app.services import llm_web_search as m
+
+    tracklist_body = "\n".join(f"Artist {i} — Song {i} (2005)" for i in range(300))
+    results = [{"title": "fandom", "url": "https://gta-songs.fandom.com/wiki/R",
+                "content": "sn"}]
+
+    monkeypatch.setattr(m, "search_searxng", lambda q, max_results=5, engines=None: results)
+    monkeypatch.setattr(m, "fetch_full_content", lambda url, max_chars=4000: tracklist_body)
+    monkeypatch.setattr(m, "rank_playlist_results", lambda pool, q="": pool)
+
+    lines: list = []
+    out = m.smart_web_search("gta 5 songs", fetch_content=True, max_results=3,
+                             rank="playlist", tracklines_out=lines)
+    assert len(lines) == 300                      # full list collected
+    assert "Artist 299 — Song 299 (2005)" in lines[-1]
+    assert len(out) < 6000                        # model-visible text stays compact
