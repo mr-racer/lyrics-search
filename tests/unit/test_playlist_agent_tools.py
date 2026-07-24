@@ -253,6 +253,42 @@ async def test_usage_limit_returns_partial_draft(monkeypatch):
 
 
 @pytest.mark.unit
+async def test_llm_backend_down_returns_partial_draft(monkeypatch):
+    """The LLM serving layer dying mid-run (gemma looping until the server
+    drops connections → ModelAPIError 'Connection error.') must degrade to a
+    partial draft exactly like a structural failure — not crash the stream."""
+    from pydantic_ai.exceptions import ModelAPIError
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+    from pydantic_ai.models.function import FunctionModel
+
+    from app.services.playlist_agent import agent as agent_mod
+
+    monkeypatch.setattr(agent_mod, "smart_web_search",
+                        lambda q, fetch, n, rank: "Kanye West hits: Stronger")
+
+    calls = {"n": 0}
+
+    def scripted(messages, info):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ModelResponse(parts=[ToolCallPart("web_search", {"query": "kanye hits"})])
+        if calls["n"] == 2:
+            return ModelResponse(parts=[ToolCallPart(
+                "get_songs", {"items": [{"title": "Stronger", "artist": "Kanye West"}]})])
+        raise ModelAPIError(model_name="gemma-12b", message="Connection error.")
+
+    monkeypatch.setattr(agent_mod, "_create_pydantic_model",
+                        lambda base, name: FunctionModel(scripted))
+
+    state = {}
+    draft = await agent_mod.run_playlist_agent(
+        "песни из gta 5", "ru", FakeDeps(), FakeCatalog(), state)
+
+    assert draft.track_ids == ["1"]
+    assert "1" in state["resolved"]
+
+
+@pytest.mark.unit
 async def test_model_failure_returns_partial_draft(monkeypatch):
     """A model that errors on the final structured output (e.g. a quantized
     model whose serving layer returns 500 'output does not match grammar' →

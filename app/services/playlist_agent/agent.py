@@ -37,6 +37,7 @@ from pydantic import BaseModel
 from pydantic_ai import Agent
 from pydantic_ai.exceptions import (
     IncompleteToolCall,
+    ModelAPIError,
     ModelHTTPError,
     UnexpectedModelBehavior,
     UsageLimitExceeded,
@@ -113,7 +114,13 @@ def create_playlist_agent(model, deps, catalog, state):
     ``{"stage": str, ...}`` with human-relevant details (the query a tool ran
     with, how many songs matched) so the UI can render a progress chain.
     """
-    agent = Agent(model, output_type=PlaylistDraft, instructions=_INSTRUCTIONS)
+    # max_tokens: потолок одной генерации. Здоровые ответы агента (tool-call
+    # или финальный PlaylistDraft на ~15 треков) много меньше; зациклившаяся
+    # локальная модель (gemma повторяет одно и то же) упирается в потолок за
+    # секунды вместо минут — обрезанный вывод даёт структурную ошибку, и
+    # run_playlist_agent отдаёт частичный плейлист штатным фоллбэком.
+    agent = Agent(model, output_type=PlaylistDraft, instructions=_INSTRUCTIONS,
+                  model_settings={"max_tokens": 2048})
 
     def _emit(stage: str, **info) -> None:
         cb = state.get("on_status")
@@ -252,13 +259,15 @@ async def run_playlist_agent(prompt, lang, deps, catalog, state,
             usage_limits=UsageLimits(request_limit=_MAX_LLM_REQUESTS),
         )
         draft = result.output
-    except (UsageLimitExceeded, ModelHTTPError, UnexpectedModelBehavior,
-            IncompleteToolCall) as exc:
+    except (UsageLimitExceeded, ModelAPIError, ModelHTTPError,
+            UnexpectedModelBehavior, IncompleteToolCall) as exc:
         # Агент не довёл структурный вывод до конца. Либо зациклился и сжёг бюджет
         # запросов (UsageLimitExceeded), либо модель сорвалась на финальном
         # PlaylistDraft — частая беда слабых/сильно-квантованных моделей: сервинг
         # возвращает 500 «output does not match grammar» (ModelHTTPError) или
-        # невалидный/обрезанный tool-call. Всё, что get_songs уже сматчил, лежит в
+        # невалидный/обрезанный tool-call. ModelAPIError — сам LLM-бэкенд умер
+        # посреди прогона (gemma в цикле генерации кладёт сервинг → connection
+        # refused на следующем запросе). Всё, что get_songs уже сматчил, лежит в
         # state["resolved"] — отдаём частичный плейлист вместо падения всего стрима.
         logger.warning(
             "[playlist_agent] agent aborted (%s: %s) — returning partial draft "

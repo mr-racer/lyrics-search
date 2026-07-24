@@ -478,7 +478,13 @@ def smart_web_search(
                 tries += 1
                 content = fetch_full_content(url, max_chars=_PLAYLIST_FETCH_CHARS)
                 if _is_readable_content(content):
-                    tracks = _extract_tracklines(content)
+                    # Первая страница-список получает полный кап, последующие —
+                    # урезанный: два полных листа (≈14k знаков) перегружают
+                    # контекст слабых локальных моделей и провоцируют циклы
+                    # генерации; второй источник нужен для ПОКРЫТИЯ (другие
+                    # радиостанции/тома), не для объёма.
+                    tracks = _extract_tracklines(
+                        content, max_chars=7000 if full_got == 0 else 3000)
                     if tracks:
                         logger.info(
                             "[web_search] tracklist page (%.60s): %d chars → %d after extraction",
