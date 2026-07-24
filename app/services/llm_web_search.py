@@ -196,6 +196,22 @@ def _extract_tracklines(text: str | None, max_chars: int = 7000) -> str:
     if len(kept) < _MIN_TRACK_LINES:
         return ""
     out = "\n".join(kept)
+    if len(out) <= max_chars:
+        return out
+    # Over budget: sample EVENLY across the whole list instead of cutting a
+    # prefix. Soundtrack pages group songs by radio station/section — a prefix
+    # cut feeds the model only the first station (GTA V: rap) and silently
+    # drops the rock/pop stations where the library's actual hits live.
+    avg_line = max(1, len(out) // len(kept))
+    budget = max(_MIN_TRACK_LINES, (max_chars - 120) // avg_line)  # 120 ≈ header
+    if budget >= len(kept):
+        sampled = kept
+    else:
+        step = (len(kept) - 1) / (budget - 1)
+        sampled = [kept[round(i * step)] for i in range(budget)]
+    header = (f"(showing {len(sampled)} of {len(kept)} track lines, sampled "
+              "evenly across the page — search another source for the rest)")
+    out = header + "\n" + "\n".join(sampled)
     if len(out) > max_chars:
         out = out[:max_chars].rsplit("\n", 1)[0] + "\n…"
     return out

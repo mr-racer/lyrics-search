@@ -132,9 +132,23 @@ def test_tracklines_caps_output_at_line_boundary():
     huge = "\n".join(f"Artist {i} — Song number {i} (2010)" for i in range(1000))
     out = _extract_tracklines(huge, max_chars=2000)
     assert len(out) <= 2100
-    # cut on a line boundary — no half-line garbage before the ellipsis
+    # cut on a line boundary — no half-line garbage
     body = out.rstrip("…").rstrip()
     assert body.splitlines()[-1].startswith("Artist ")
+
+
+def test_tracklines_over_budget_samples_across_whole_page():
+    """Soundtrack pages group songs by radio station; a prefix cut silently
+    drops every station after the first. Over-budget extraction must sample
+    evenly across the WHOLE page — head, middle and tail all represented."""
+    huge = "\n".join(f"Artist {i} — Song number {i} (2010)" for i in range(1000))
+    out = _extract_tracklines(huge, max_chars=2000)
+    nums = [int(ln.split(" ")[1]) for ln in out.splitlines() if ln.startswith("Artist ")]
+    assert min(nums) < 100          # head present
+    assert any(400 < n < 600 for n in nums)   # middle present
+    assert max(nums) > 900          # tail present
+    # and the model is told it sees a sample, not the full list
+    assert "of 1000" in out
 
 
 def test_tracklines_mixed_page_keeps_only_tracks():
