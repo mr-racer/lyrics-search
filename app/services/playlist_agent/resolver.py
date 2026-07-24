@@ -285,9 +285,16 @@ def resolve_tracklines(lines, catalog, max_fuzzy=120):
         if tid in out_ids:
             continue
         out_ids.add(tid)
+        # Год: приоритетно из строки страницы (оригинальный релиз), иначе из
+        # тега библиотеки — матч без года прозрачен для кодового фильтра эпохи
+        # и протаскивает всю карьеру артиста мимо «после 2020».
+        year = p.get("year")
+        if not year and picked.get("year"):
+            ly = str(picked["year"]).strip()[:4]
+            year = ly if ly.isdigit() else None
         out.append({"track_id": tid, "title": picked.get("title"),
                     "artist": picked.get("artist"), "match": mode,
-                    "year": p.get("year")})
+                    "year": year})
     return out
 
 
@@ -308,7 +315,8 @@ class CatalogAdapter:
         return [
             {"track_id": d.meta.get("track_id"),
              "title": d.meta.get("title"),
-             "artist": d.meta.get("artist", "")}
+             "artist": d.meta.get("artist", ""),
+             "year": d.meta.get("year")}
             for d in index.songs.docs
         ]
 

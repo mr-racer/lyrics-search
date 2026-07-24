@@ -308,3 +308,20 @@ def test_year_range_explicit_span_and_none():
     assert extract_year_range("хиты 2010-2015") == (2010, 2015)
     assert extract_year_range("песни из gta 5") is None      # голое число ≠ год
     assert extract_year_range("саундтрек watch dogs") is None
+
+
+class YearTagCatalog:
+    def iter_songs(self):
+        return [{"track_id": "d1", "title": "Hurricane", "artist": "Kanye West",
+                 "year": 2021}]
+
+    def search_tracks_fuzzy(self, q, limit=3):
+        return []
+
+
+@pytest.mark.unit
+def test_resolve_tracklines_falls_back_to_library_year():
+    # строка страницы без года → год берётся из тега библиотеки, чтобы матч
+    # не был прозрачен для кодового фильтра эпохи
+    out = resolve_tracklines(["Kanye West — Hurricane"], YearTagCatalog())
+    assert out[0]["year"] == "2021"
