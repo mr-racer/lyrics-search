@@ -178,6 +178,23 @@ def parse_track_line(line):
     return {"artist": left, "title": right}
 
 
+def _fuzzy_acceptable_strict(qtitle, qartist, hit):
+    """Гейт для МАССОВОГО авто-пересечения (сотни строк — ложняки стреляют
+    чаще, а модель их не ревьюит). Отличие легитимного нечёткого хита от
+    ложного — направление вложенности: запрос содержится в названии кандидата
+    («Swimming Pools (Drank)» ⊂ «…[Extended Version]»), а у ложняка кандидат
+    короче запроса («Dangerous» при запросе «Dangerous Tonight»)."""
+    qk, hk = _title_key(qtitle), _title_key(hit.get("title"))
+    title_ok = (bool(qk) and bool(hk) and qk in hk) \
+        or _similar(qtitle, hit.get("title")) >= 0.75
+    if not title_ok:
+        return False
+    if qartist:
+        return (_artist_matches(qartist, hit.get("artist"))
+                or _similar(qartist, hit.get("artist")) >= 0.75)
+    return True
+
+
 def resolve_tracklines(lines, catalog, max_fuzzy=120):
     """Intersect extracted tracklist ``lines`` with the library, deterministically.
 
@@ -221,7 +238,8 @@ def resolve_tracklines(lines, catalog, max_fuzzy=120):
             fuzzy_left -= 1
             hits = catalog.search_tracks_fuzzy(_title_key(p["title"]), limit=3)
             picked = next(
-                (h for h in hits if _fuzzy_acceptable(p["title"], p["artist"], h)),
+                (h for h in hits
+                 if _fuzzy_acceptable_strict(p["title"], p["artist"], h)),
                 None,
             )
             if picked is not None:

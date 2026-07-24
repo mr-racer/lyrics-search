@@ -248,3 +248,30 @@ def test_resolve_tracklines_fuzzy_and_dedupe():
     out = resolve_tracklines(lines, RockCatalog())
     assert [m["track_id"] for m in out] == ["k1"]
     assert out[0]["match"] == "fuzzy"
+
+
+class TrapCatalog:
+    """Library has a SHORTER same-word title by a different artist — the
+    classic mass-intersection false positive."""
+
+    def iter_songs(self):
+        return [{"track_id": "mj", "title": "Dangerous", "artist": "Michael Jackson"}]
+
+    def search_tracks_fuzzy(self, q, limit=3):
+        return [{"track_id": "mj", "title": "Dangerous", "artist": "Michael Jackson",
+                 "score": 5.0}]
+
+
+@pytest.mark.unit
+def test_resolve_tracklines_fuzzy_rejects_shorter_title_other_artist():
+    # "Mickey — Dangerous Tonight" must NOT match MJ's "Dangerous":
+    # candidate title is shorter than the query and the artists differ.
+    out = resolve_tracklines(["Mickey — Dangerous Tonight"], TrapCatalog())
+    assert out == []
+
+
+@pytest.mark.unit
+def test_resolve_tracklines_fuzzy_keeps_extended_version():
+    # containment direction is fine: query ⊂ candidate (Extended Version)
+    out = resolve_tracklines(["Kendrick Lamar — Swimming Pools (Drank)"], RockCatalog())
+    assert [m["track_id"] for m in out] == ["k1"]
