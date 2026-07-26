@@ -61,6 +61,7 @@ RULES:
 - Do NOT wrap the JSON in markdown code blocks (no ```json or ``` markers).
 - Output the "short_fact" values in {lang}.
 - Any person or artist name in a fact (the subject, a producer, a featured guest, a sampled artist, a band member) must stay EXACTLY as given in the source fact — character for character. NEVER translate, transliterate, localize, or grammatically decline a name into {lang}.
+- This applies to EVERY proper name: people, family members, brands, shows, places. A name spelled in Latin letters in the source must appear in your output in the SAME Latin letters — writing it in Cyrillic is an error.{artist_line}
 
 PROCEED WITH THIS FACTS:
 {facts}
@@ -105,7 +106,7 @@ DROP (keep=false):
 For every keep=true write "fact" in {lang}:
 - ALWAYS include the lyric quote in «...» (may be shortened to 3-6 words);
 - explain any realia so that a listener who knows no English and no context understands it;
-- keep names of people, bands, works in LATIN exactly as in the source; never translate, transliterate or decline them;
+- keep names of people, bands, works in LATIN exactly as in the source; never translate, transliterate or decline them — the artist's original spelling is "{artist}", copy it and every other Latin-spelled name character for character, never in Cyrillic;
 - 1-2 sentences, keep every essential detail, invent NOTHING beyond the source;
 - "confirmed": false if the note hedges (possibly, probably, could, may, might, PROPOSED SUGGESTION), else true.
 
@@ -155,6 +156,23 @@ def _latin_tokens(text: str) -> set[str]:
         for tok in _LATIN_TOKEN_RE.findall(text or "")
         if tok.strip(_TOKEN_STRIP)
     }
+
+
+_LETTER_RUN_RE = re.compile(r"[A-Za-zА-Яа-яЁё]+")
+_CYR_RE = re.compile(r"[А-Яа-яЁё]")
+_LAT_RE = re.compile(r"[A-Za-z]")
+
+
+def _has_garbled_script(text: str) -> bool:
+    """True when any single letter-run mixes Latin and Cyrillic («анаointment»).
+
+    Hyphenated legit mixes ("Grammy-номинация") survive: the hyphen splits the
+    runs, and each side is single-script.
+    """
+    for run in _LETTER_RUN_RE.findall(text or ""):
+        if _CYR_RE.search(run) and _LAT_RE.search(run):
+            return True
+    return False
 
 
 def _entities_ok(fact_text: str, source_text: str) -> bool:
@@ -260,7 +278,7 @@ def _parse_llm_response(raw: str) -> list[dict[str, Any]]:
 
 async def _refine_editorial_batches(
     *, facts: list[str], lang: str, subject_clause: str, subject_hint: str,
-    scope: str, scope_key: str,
+    scope: str, scope_key: str, artist_line: str = "",
     llm_base_url: str | None = None, llm_model: str | None = None,
 ) -> tuple[list[dict], int]:
     """Run editorial facts through the classic refine prompt, batch by batch.
@@ -281,8 +299,13 @@ async def _refine_editorial_batches(
         facts_to_prompt = "".join(f"- {fact}\n" for fact in batch)
         user = _FACTS_REFINE_PROMPT.format(
             facts=facts_to_prompt, lang=lang, subject_clause=subject_clause,
+            artist_line=artist_line,
         )
         src_text = " ".join(batch) + " " + subject_hint
+
+        def _is_bad(t: str) -> bool:
+            return not _entities_ok(t, src_text) or _has_garbled_script(t)
+
         try:
             for attempt in (0, 1):
                 raw = await ask_llm(
@@ -293,7 +316,7 @@ async def _refine_editorial_batches(
                 )
                 parsed = _parse_llm_response(raw or "")
                 texts = [item["refined_text"] for item in parsed]
-                bad = [t for t in texts if not _entities_ok(t, src_text)]
+                bad = [t for t in texts if _is_bad(t)]
                 if not bad and attempt == 0:
                     break
                 if attempt == 0:
@@ -301,10 +324,10 @@ async def _refine_editorial_batches(
                 if bad:
                     logger.warning(
                         "[refined_facts] %s %s: dropped %d fact(s) with names "
-                        "absent from source after retry",
+                        "absent from source or garbled script after retry",
                         scope, scope_key, len(bad),
                     )
-                texts = [t for t in texts if _entities_ok(t, src_text)]
+                texts = [t for t in texts if not _is_bad(t)]
             kept.extend(
                 {"text": t, "confirmed": True, "src": "editorial"} for t in texts
             )
@@ -359,7 +382,11 @@ async def _refine_annotations(
                     continue
                 src = f"{quote} {note} {artist} {title}"
                 quote_ok = ("«" in it["fact"]) if quote else True
-                if quote_ok and _entities_ok(it["fact"], src):
+                if (
+                    quote_ok
+                    and _entities_ok(it["fact"], src)
+                    and not _has_garbled_script(it["fact"])
+                ):
                     good.append({
                         "text": it["fact"],
                         "confirmed": it["confirmed"],
@@ -427,6 +454,10 @@ async def _process_one_scope(
         facts=facts, lang=lang, subject_clause=subject_clause,
         subject_hint=(subject_title or "") + " " + scope_key.replace("-", " "),
         scope=scope, scope_key=scope_key,
+        artist_line=(
+            f'\n- The subject\'s original name is "{subject_title}" — use this exact spelling.'
+            if subject_title else ""
+        ),
         llm_base_url=llm_base_url, llm_model=llm_model,
     )
     kept = _dedupe_refined(kept)
@@ -471,6 +502,12 @@ async def _process_song_scope(
         facts=editorial, lang=lang, subject_clause=subject_clause,
         subject_hint=f"{artist} {title}",
         scope="song", scope_key=scope_key,
+        artist_line=(
+            f'\n- The artist\'s original name is "{artist}" and the song is '
+            f'"{title}" — use these exact Latin spellings for them and for '
+            "any related names."
+            if artist else ""
+        ),
         llm_base_url=llm_base_url, llm_model=llm_model,
     )
     kept_annotations, fail_a = await _refine_annotations(

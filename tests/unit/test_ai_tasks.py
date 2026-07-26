@@ -307,6 +307,14 @@ class TestRefinedFacts:
             "Big Apple is New York's nickname",
         )
 
+    def test_garbled_script_detection(self):
+        assert refined_facts._has_garbled_script("получил анаointment от церкви")
+        assert refined_facts._has_garbled_script("West'а зовут Сент Вестom")
+        # legit hyphen mix and pure-script texts are fine
+        assert not refined_facts._has_garbled_script("Grammy-номинация за трек")
+        assert not refined_facts._has_garbled_script("Produced by Rick Rubin")
+        assert not refined_facts._has_garbled_script("Записан за одну ночь")
+
     # ── v2: dedup ────────────────────────────────────────────────────────────
 
     def test_dedupe_keeps_longer_of_near_duplicates(self):
@@ -466,6 +474,17 @@ class TestSonicVibe:
         assert not sonic_vibe._line_ok('Note on the line "x": y', "en")
         # ru line with no cyrillic at all → wrong script leak
         assert not sonic_vibe._line_ok("Recorded overnight in a hotel", "ru")
+        # garbled script inside one word («анаointment») → reject
+        assert not sonic_vibe._line_ok("Получил анаointment от Kirk Franklin", "ru")
+
+    def test_user_prompt_anchors_artist_spelling(self):
+        user_msg = sonic_vibe._build_user_prompt(
+            tags=[], payload={"artist": "Kanye West", "title": "FATHER"},
+            window=[], lang="ru",
+        )
+        assert "Artist (original spelling" in user_msg
+        assert "Kanye West" in user_msg
+        assert "Track: FATHER" in user_msg
 
     def test_validate_phrase_strips_quotes_and_caps_length(self):
         short = sonic_vibe._validate('"a clean phrase."')

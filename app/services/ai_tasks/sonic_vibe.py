@@ -35,7 +35,7 @@ from app.services.llm_client import ask_llm
 from app.services.song_facts_service import get_song_facts_key
 # Shared v2 helpers: junk gate, annotation parser, anti-hallucination check.
 from app.services.ai_tasks.refined_facts import (
-    _entities_ok, _junk_reason, _parse_annotation,
+    _entities_ok, _has_garbled_script, _junk_reason, _parse_annotation,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ YOUR ONLY TWO OPTIONS:
 
    A. CREATION STORY — the non-obvious path the track took to exist: made in one night / hours before a flight, sat unreleased for years, was meant for a different album, started as something else (e.g. AI-written lines later rewritten), an accident or constraint that shaped it. These are the most interesting — a fan would retell them. Prefer these above all.
    T. TITLE STORY — where the song's TITLE comes from or what it really refers to (a real product, a person, an event, a hidden meaning), when a fact explains it.
-   B. CONCRETE PRODUCTION FACT — who produced it, a notable guest, an unusual instrument or recording method (only if the fact states it). NEVER build the line on a MUSICAL sample or interpolation — the player already shows sample credits separately; if the only production fact is "this samples X", treat it as unusable and look for another fact (or SKIP). Referencing another song's LYRICS or quoting a line is fine.
+   B. CONCRETE PRODUCTION FACT — who produced it, a notable guest, an unusual instrument or recording method (only if the fact states it). NEVER build the line on a MUSICAL sample or interpolation (a borrowed melody, beat, or instrumental) — the player already shows sample credits separately; if the only production fact is "this samples X's song", treat it as unusable and look for another fact (or SKIP). SPOKEN-WORD samples are fine and often great facts: a movie dialogue, an interview, a speech or a TV monologue used in the track. Referencing another song's LYRICS or quoting a line is also fine.
    C. EXTERNAL RESULT / CONTEXT — chart milestone, award, its role on the album, real-world reaction or controversy.
 
    → Write ONE line from the single highest-priority fact you have. Don't cram two.
@@ -78,6 +78,7 @@ STYLE (when you do write a line):
 - One line, max ~120 characters. No emoji, no quotation marks around the whole line.
 - NAMES: you may name a producer, featured guest, or album — those are the interesting facts. Do NOT repeat the main artist's name or the track title; the UI already shows them right next to your line.
 - Any name you DO write (producer, guest, album) must appear EXACTLY as given in the chosen fact — character for character. NEVER translate, transliterate, localize, or grammatically decline a name into {lang_name}.
+- This applies to EVERY proper name: people, family members, brands, shows, places. If a name is spelled in Latin letters in the fact (or in the Artist/Track lines of the task), it must appear in your line in the SAME Latin letters. Writing any such name in Cyrillic is an error.
 
 RESPONSE FORMAT — strict JSON, no markdown, no text around it:
 {{"best": "M4", "category": "A", "line": "..."}}
@@ -152,7 +153,18 @@ def _build_user_prompt(
 ) -> str:
     year = payload.get("year")
     era = f"{(year // 10) * 10}s" if isinstance(year, int) and year > 0 else None
-    lines = ["FACTS (pick the single best by key, or reply {\"best\": null}):"]
+    artist = (payload.get("artist") or "").strip()
+    title = (payload.get("title") or "").strip()
+    lines = []
+    # Original Latin spelling as an explicit anchor: the model must copy names
+    # as-is and never transliterate them into the target language.
+    if artist:
+        lines.append(f"Artist (original spelling — copy names AS IS, never transliterate): {artist}")
+    if title:
+        lines.append(f"Track: {title}")
+    if lines:
+        lines.append("")
+    lines.append("FACTS (pick the single best by key, or reply {\"best\": null}):")
     for item in window:
         lines.append(f"{item['key']} {item['tag']} {item['text']}")
     lines.append("")
@@ -208,10 +220,12 @@ def _validate(phrase: str) -> str:
 
 
 def _line_ok(line: str, lang: str) -> bool:
-    """Reject raw-scaffold leakage and wrong-script lines (spec 2.3)."""
+    """Reject raw-scaffold leakage, wrong-script and garbled-script lines."""
     if any(marker.lower() in line.lower() for marker in _FORBIDDEN_IN_LINE):
         return False
     if lang == "ru" and not _CYRILLIC_RE.search(line):
+        return False
+    if _has_garbled_script(line):
         return False
     return True
 
