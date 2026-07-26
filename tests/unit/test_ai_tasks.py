@@ -259,25 +259,213 @@ class TestRefinedFacts:
             collection_name="c", lang="en",
         ) is not None
 
+    # ── v2: annotation parsing / junk gate ──────────────────────────────────
+
+    def test_parse_annotation_extracts_quote_and_note(self):
+        q, n = refined_facts._parse_annotation(
+            "Lyrics string: hell freezes over. Fact: A play on a common idiom.",
+        )
+        assert q == "hell freezes over"
+        assert n == "A play on a common idiom."
+
+    def test_parse_annotation_section_marker_clears_quote(self):
+        q, n = refined_facts._parse_annotation(
+            "Lyrics string: [Chorus: Mark Lanegan]. Fact: Homme wanted the world to hear Lanegan again.",
+        )
+        assert q == ""
+        assert "Lanegan" in n
+
+    def test_parse_annotation_rejects_malformed(self):
+        assert refined_facts._parse_annotation("just an editorial fact") is None
+
+    def test_junk_reason_gates_empty_and_short(self):
+        assert refined_facts._junk_reason("?") == "junk_empty"
+        assert refined_facts._junk_reason("  ") == "junk_empty"
+        assert refined_facts._junk_reason("too short") == "junk_short"
+        assert refined_facts._junk_reason(
+            "A perfectly reasonable full-length fact about the song",
+        ) is None
+
+    # ── v2: entity check ─────────────────────────────────────────────────────
+
+    def test_entities_ok_accepts_names_present_in_source(self):
+        assert refined_facts._entities_ok(
+            "Produced by Rick Rubin at his home studio.",
+            "The album was produced by Rick Rubin in Malibu.",
+        )
+
+    def test_entities_ok_rejects_invented_name(self):
+        assert not refined_facts._entities_ok(
+            "Produced by Quincy Jones.",
+            "The album was produced by Rick Rubin.",
+        )
+
+    def test_entities_ok_strips_trailing_punctuation(self):
+        # "York." must not glue the sentence period onto the token
+        assert refined_facts._entities_ok(
+            "Big Apple is a nickname of New York.",
+            "Big Apple is New York's nickname",
+        )
+
+    # ── v2: dedup ────────────────────────────────────────────────────────────
+
+    def test_dedupe_keeps_longer_of_near_duplicates(self):
+        a = {"text": "The chorus references Andy Warhol's fifteen minutes of fame."}
+        b = {"text": "The chorus references Andy Warhol's fifteen minutes of fame, comparing reality TV to a disease."}
+        out = refined_facts._dedupe_refined([a, b])
+        assert out == [b]
+
+    def test_dedupe_absorbs_entity_subset(self):
+        # Dedup runs on refined texts in the target language (ru), where the
+        # Latin tokens are genuinely names — the entity-subset rule collapses
+        # the songfacts and genius versions of the same reference.
+        a = {"text": "Упоминает песню Dum Maro Dum 1971 года."}
+        b = {"text": "Отсылка к Dum Maro Dum — хиту 1971 года из фильма Hare "
+                     "Krishna Hare Ram в исполнении Asha Bhosle."}
+        out = refined_facts._dedupe_refined([a, b])
+        assert out == [b]
+
+    def test_dedupe_keeps_distinct_facts(self):
+        a = {"text": "Written after a boat nearly sank at a festival in Canada."}
+        b = {"text": "The drum part was recorded on a leather chair in the studio."}
+        assert refined_facts._dedupe_refined([a, b]) == [a, b]
+
+    # ── v2: annotation classifier response parsing ──────────────────────────
+
+    def test_parse_annotation_response_valid(self):
+        raw = json.dumps({"items": [
+            {"id": "M1", "keep": True, "confirmed": False, "fact": "«цитата» — факт"},
+            {"id": "M2", "keep": False},
+            {"id": "M9", "keep": True, "fact": "unknown id ignored"},
+        ]})
+        out = refined_facts._parse_annotation_response(raw, {"M1", "M2"})
+        assert out["M1"]["keep"] is True
+        assert out["M1"]["confirmed"] is False
+        assert out["M2"]["keep"] is False
+        assert "M9" not in out
+
+    def test_parse_annotation_response_rejects_garbage(self):
+        with pytest.raises(ValueError):
+            refined_facts._parse_annotation_response("not json", {"M1"})
+        with pytest.raises(ValueError):
+            refined_facts._parse_annotation_response(
+                json.dumps({"wrong": []}), {"M1"},
+            )
+
+    # ── v2: song-scope split pipeline ────────────────────────────────────────
+
+    @pytest.mark.asyncio
+    async def test_song_scope_splits_streams_and_stores_meta(self):
+        """Editorial facts go through the refine prompt, annotations through
+        the classifier; the stored refined row carries confirmed/src and
+        get_refined_facts_meta surfaces the confirmed flag."""
+        from app.services.song_facts_service import get_song_facts_key
+
+        slug = get_song_facts_key("Bar", "Foo")
+        MetadataDB.add_song_facts_batch(
+            slug, "c",
+            ["Recorded in one single night at a hotel in Berlin, Germany"],
+            source="songfacts.com",
+        )
+        MetadataDB.add_song_facts_batch(
+            slug, "c",
+            ["Lyrics string: feeling froggish, leap. Fact: Possibly a shot at "
+             "Canibus and his freestyle for DJ Clue, per fan interpretation."],
+            source="genius.com", category="genius_annotation",
+        )
+        points = [FakePoint("p1", {"artist": "Bar", "title": "Foo"})]
+
+        editorial_json = json.dumps({"selected_facts": [
+            {"reasoning": "creation", "short_fact": "Записана за одну ночь в отеле в Berlin."},
+        ]})
+        annotation_json = json.dumps({"items": [
+            {"id": "M1", "keep": True, "confirmed": False,
+             "fact": "Строчка «feeling froggish, leap» — выпад в сторону Canibus и его фристайла для DJ Clue."},
+        ]})
+
+        async def _fake_llm(user, **kwargs):
+            return annotation_json if "NOTES:" in user else editorial_json
+
+        with patch("app.services.ai_tasks.refined_facts.ask_llm",
+                   side_effect=_fake_llm):
+            await refined_facts.run(
+                _make_job(collection="c", lang="ru"), FakeDb(points), None,
+            )
+
+        meta = MetadataDB.get_refined_facts_meta(
+            scope="song", scope_key=slug, collection_name="c", lang="ru",
+        )
+        assert meta is not None and len(meta) == 2
+        by_conf = {m["confirmed"]: m["text"] for m in meta}
+        assert "Canibus" in by_conf[False]      # annotation, hedged → unconfirmed
+        assert "Berlin" in by_conf[True]        # editorial → confirmed
+
 
 class TestSonicVibe:
     """Tests for the Sonic Vibe AI task."""
 
     def test_build_user_prompt_includes_tags(self):
+        window = sonic_vibe._build_fact_window(
+            [{"fact": "From the cold-wave revival era of the early 80s", "category": None}],
+        )
         user_msg = sonic_vibe._build_user_prompt(
             tags=["dreamy", "synth", "melancholy"],
             payload={"title": "Foo", "artist": "Bar", "year": 1985},
-            facts=["From the cold-wave revival era"],
+            window=window,
             lang="ru",
         )
         assert "dreamy" in user_msg
         assert "synth" in user_msg
+        assert "M1 [EDITORIAL]" in user_msg
 
     def test_build_user_prompt_includes_decade_when_year_present(self):
         user_msg = sonic_vibe._build_user_prompt(
-            tags=["a"], payload={"year": 1985}, facts=[], lang="en",
+            tags=["a"], payload={"year": 1985}, window=[], lang="en",
         )
         assert "1980s" in user_msg
+
+    def test_build_fact_window_prioritizes_editorial_and_reformats_notes(self):
+        meta = [
+            {"fact": "Lyrics string: hell freezes over. Fact: A play on a common idiom about impossible events happening.",
+             "category": "genius_annotation"},
+            {"fact": "Written and recorded in a single night at a hotel in Berlin",
+             "category": None},
+            {"fact": "Lyrics string: x. Fact: ?", "category": "genius_annotation"},
+            {"fact": "The song opens the band's fourth album with a slow build",
+             "category": "genius_description"},
+            {"fact": "short", "category": None},
+        ]
+        window = sonic_vibe._build_fact_window(meta)
+        # junk ("Fact: ?" and <30 chars) dropped; editorial+description first
+        assert [it["tag"] for it in window] == [
+            "[EDITORIAL]", "[DESCRIPTION]", "[LINE NOTE]",
+        ]
+        assert [it["key"] for it in window] == ["M1", "M2", "M3"]
+        assert window[2]["text"].startswith('Note on the line "hell freezes over":')
+
+    def test_parse_vibe_response_variants(self):
+        valid = {"M1", "M2"}
+        assert sonic_vibe._parse_vibe_response(
+            '{"best": "M1", "category": "A", "line": "ok line"}', valid,
+        ) == ("M1", "ok line")
+        assert sonic_vibe._parse_vibe_response('{"best": null}', valid) == (None, "")
+        # legacy bare SKIP is tolerated
+        assert sonic_vibe._parse_vibe_response("SKIP", valid) == (None, "")
+        with pytest.raises(ValueError):
+            sonic_vibe._parse_vibe_response(
+                '{"best": "M9", "line": "x"}', valid,
+            )
+        with pytest.raises(ValueError):
+            sonic_vibe._parse_vibe_response("no json here at all", valid)
+        with pytest.raises(ValueError):
+            sonic_vibe._parse_vibe_response('{"best": "M1"}', valid)  # no line
+
+    def test_line_ok_rejects_scaffold_and_wrong_script(self):
+        assert sonic_vibe._line_ok("Записан за одну ночь в отеле", "ru")
+        assert not sonic_vibe._line_ok("Lyrics string: something. Fact: x", "ru")
+        assert not sonic_vibe._line_ok('Note on the line "x": y', "en")
+        # ru line with no cyrillic at all → wrong script leak
+        assert not sonic_vibe._line_ok("Recorded overnight in a hotel", "ru")
 
     def test_validate_phrase_strips_quotes_and_caps_length(self):
         short = sonic_vibe._validate('"a clean phrase."')
@@ -335,13 +523,49 @@ class TestSonicVibe:
         with patch(
             "app.services.ai_tasks.sonic_vibe.ask_llm",
             new_callable=AsyncMock,
-            return_value="Recorded in one night, hours before a flight.",
+            return_value=json.dumps({
+                "best": "M1", "category": "A",
+                "line": "Recorded in one night, hours before a flight.",
+            }),
         ):
             asyncio.run(sonic_vibe.run(job, db_client, llm=None))
 
         cached = MetadataDB.get_sonic_vibe("t1", "music", "en")
         assert cached is not None
         assert "one night" in cached["phrase"]
+
+    def test_vibe_entity_check_rejects_invented_name_then_skips(self):
+        """A line naming someone absent from the winning fact → retry → SKIP."""
+        from app.services.song_facts_service import get_song_facts_key
+
+        MetadataDB.add_song_facts_batch(
+            get_song_facts_key("B", "A"), "music",
+            ["Recorded in one night in a hotel room before a flight"], source="test",
+        )
+        job = JobState(
+            job_id="job-1", task_type="sonic_vibe", collection_name="music",
+            lang="en", n_total=1,
+        )
+        qdrant = MagicMock()
+        pt = MagicMock()
+        pt.id = "t1"
+        pt.payload = {"track_id": "t1", "title": "A", "artist": "B"}
+        qdrant.scroll.return_value = ([pt], None)
+        db_client = MagicMock()
+        db_client.qdrant = qdrant
+
+        bad = json.dumps({
+            "best": "M1", "category": "B",
+            "line": "Produced by Quincy Jones in one night.",
+        })
+        with patch(
+            "app.services.ai_tasks.sonic_vibe.ask_llm",
+            new_callable=AsyncMock, return_value=bad,
+        ) as mock_llm:
+            asyncio.run(sonic_vibe.run(job, db_client, llm=None))
+            assert mock_llm.call_count == 2  # one validation retry
+
+        assert MetadataDB.get_sonic_vibe("t1", "music", "en") is None
 
     def test_skip_track_already_cached(self):
         """If a vibe is already cached for (track, collection, lang), don't re-call LLM."""
@@ -376,7 +600,7 @@ class TestSonicVibe:
 
         MetadataDB.add_song_facts_batch(
             get_song_facts_key("B", "A"), "music",
-            ["The song is about heartbreak"], source="test",
+            ["The song is about heartbreak and long lonely evenings"], source="test",
         )
 
         job = JobState(
@@ -393,7 +617,7 @@ class TestSonicVibe:
 
         with patch(
             "app.services.ai_tasks.sonic_vibe.ask_llm",
-            new_callable=AsyncMock, return_value="SKIP",
+            new_callable=AsyncMock, return_value='{"best": null}',
         ) as mock_llm:
             asyncio.run(sonic_vibe.run(job, db_client, llm=None))
             mock_llm.assert_called_once()  # facts existed → the model was consulted

@@ -413,11 +413,17 @@ def get_track_gems_endpoint(
 # ── Track-level facts (landing player) ───────────────────────────────────────
 
 class TrackFacts(BaseModel):
-    """Merged facts for a single track."""
+    """Merged facts for a single track.
+
+    ``song_facts_meta`` mirrors ``song_facts`` with per-item metadata
+    (``{"text", "confirmed"}``) so the UI can mark fan-theory facts; the
+    plain list stays for older frontends and non-refined fallbacks.
+    """
     artist_name: str
     title: str
     song_facts: List[str]
     artist_facts: List[str]
+    song_facts_meta: Optional[List[dict]] = None
 
 
 @router.get("/metadata/tracks/{track_id}/facts")
@@ -467,17 +473,19 @@ def get_track_facts(
     # `is not None` is critical — an explicit [] from refined must short-circuit.
     # Refined facts are keyed by song_slug (not track_id) for consistency
     # with search_service caching.
-    refined_song = MetadataDB.get_refined_facts(
+    refined_song = MetadataDB.get_refined_facts_meta(
         scope="song", scope_key=song_key, collection_name=derived, lang=lang,
     )
     refined_artist = MetadataDB.get_refined_facts(
         scope="artist", scope_key=artist_slug, collection_name=derived, lang=lang,
     )
 
-    song_facts = (
-        refined_song if refined_song is not None
-        else MetadataDB.get_song_facts(song_key, derived)
-    )
+    if refined_song is not None:
+        song_facts = [item["text"] for item in refined_song]
+        song_facts_meta = refined_song
+    else:
+        song_facts = MetadataDB.get_song_facts(song_key, derived)
+        song_facts_meta = None
     artist_facts = (
         refined_artist if refined_artist is not None
         else MetadataDB.get_artist_facts(artist_slug, derived)
@@ -486,6 +494,7 @@ def get_track_facts(
     return TrackFacts(
         artist_name=artist, title=title,
         song_facts=song_facts, artist_facts=artist_facts,
+        song_facts_meta=song_facts_meta,
     )
 
 

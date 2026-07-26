@@ -904,7 +904,7 @@ class TestRandomFacts(_IsolatedDB):
             scope="artist", scope_key="radiohead", collection_name="c",
             lang="ru", refined=["Отшлифованный факт"])
         out = MetadataDB.get_random_facts("c", limit=1, lang="ru")
-        assert out == [{"fact": "Отшлифованный факт",
+        assert out == [{"fact": "Отшлифованный факт", "confirmed": True,
                         "context": "Radiohead", "type": "artist",
                         "artist": "Radiohead", "artist_slug": "radiohead",
                         "title": None}]
@@ -935,7 +935,7 @@ class TestRandomFacts(_IsolatedDB):
             scope="song", scope_key="radiohead-creep", collection_name="c",
             lang="ru", refined=["Факт о песне"])
         out = MetadataDB.get_random_facts("c", limit=1, lang="ru")
-        assert out == [{"fact": "Факт о песне",
+        assert out == [{"fact": "Факт о песне", "confirmed": True,
                         "context": "Radiohead — Creep", "type": "song",
                         "artist": "Radiohead", "artist_slug": "radiohead",
                         "title": "Creep"}]

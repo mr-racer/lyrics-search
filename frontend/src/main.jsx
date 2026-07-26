@@ -1276,9 +1276,13 @@ function FactsRail({ trackId, isDark, lang, accent, variant = "landing" }) {
     apiFetch(`/metadata/tracks/${encodeURIComponent(trackId)}/facts?lang=${encodeURIComponent(lang)}`)
       .then(res => {
         if (cancelled) return;
-        const songs = res.song_facts || [];
+        // song_facts_meta (v2 server) carries per-fact confirmed flags for
+        // the «фан-версия» marker; plain song_facts is the legacy fallback.
+        const songs = Array.isArray(res.song_facts_meta)
+          ? res.song_facts_meta.map(m => ({ text: m.text || '', unconfirmed: m.confirmed === false }))
+          : (res.song_facts || []).map(f => ({ text: f, unconfirmed: false }));
         const artists = res.artist_facts || [];
-        setSongFacts(songs);
+        setSongFacts(songs.filter(s => s.text));
         setArtistFactsAll(artists);
         setArtistFactsSampled(sampleN(artists, ARTIST_SAMPLE_SIZE));
 
@@ -1329,13 +1333,13 @@ function FactsRail({ trackId, isDark, lang, accent, variant = "landing" }) {
   let items;
   if (isPlayer) {
     items = effectiveScope === 'song'
-      ? songFacts.map(f => ({ text: f, type: 'song'   }))
+      ? songFacts.map(f => ({ text: f.text, unconfirmed: f.unconfirmed, type: 'song' }))
       : artistFactsSampled.map(f => ({ text: f, type: 'artist' }));
   } else if (fallbackItems.length) {
     items = fallbackItems;
   } else {
     items = [
-      ...songFacts.map(f => ({ text: f, type: 'song'   })),
+      ...songFacts.map(f => ({ text: f.text, unconfirmed: f.unconfirmed, type: 'song' })),
       ...artistFactsAll.map(f => ({ text: f, type: 'artist' })),
     ];
   }
@@ -1441,6 +1445,15 @@ function FactsRail({ trackId, isDark, lang, accent, variant = "landing" }) {
             fontSize:factFontSize, lineHeight:1.55, color:c.text, letterSpacing:'-0.005em',
             fontWeight:400,
           }}><MarkdownText text={cur.text} /></div>
+          {/* Fan-theory marker: refined facts the AI flagged as unconfirmed
+              (hedged fan annotations). Quiet label, no tech jargon. */}
+          {cur.unconfirmed && (
+            <span style={{
+              alignSelf:'flex-start', fontSize:9.5, letterSpacing:'0.14em',
+              textTransform:'uppercase', color:c.textSubtle,
+              border:`1px solid ${c.border}`, borderRadius:99, padding:'2px 8px',
+            }}>{lang==='ru' ? 'фан-версия' : 'fan theory'}</span>
+          )}
         </div>
 
         {/* Dot indicator — landing variant only (player dots are in header) */}
@@ -2880,7 +2893,9 @@ function HomeDailyExtras({ isDark, lang }) {
     // facts are shown in full, so we pick the 3 shortest of a larger batch.
     // v4: DB-side attribution repair (slug-derived titles/artists fixed) —
     // the bump discards day-caches holding the garbled pre-repair strings.
-    const cacheKey = 'musix_daily_facts_v4';
+    // v5: adds per-fact `confirmed` (fan-theory marker) — discard v4 caches
+    // that lack the field.
+    const cacheKey = 'musix_daily_facts_v5';
     let cached = null;
     try { cached = JSON.parse(localStorage.getItem(cacheKey) || 'null'); } catch {}
     // Shape guard: a day-cache filled from a pre-attribution server (facts
@@ -2968,7 +2983,7 @@ function HomeDailyExtras({ isDark, lang }) {
           who-line and the fact from blending. */}
       <div style={{ display:'flex', gap:'clamp(22px,3vw,44px)', flex:'1 1 auto', minWidth:0, alignItems:'stretch' }}>
         {hasFacts && facts.slice(0, 3).map((f, i) => (
-          <HomeFactCard key={i} f={f} isDark={isDark} c={c} who={factWho(f)} sub={factSub(f)} />
+          <HomeFactCard key={i} f={f} isDark={isDark} c={c} who={factWho(f)} sub={factSub(f)} lang={lang} />
         ))}
       </div>
       {/* Right: the week's rhythm — gradient serif hours + 7 Mon..Sun mini
@@ -3035,7 +3050,7 @@ function HomeDailyExtras({ isDark, lang }) {
 // promise; the batch is pre-filtered to the shortest ones instead). The
 // stretch row + bottom-pinned text keeps the trio's tops and bottoms aligned
 // even when texts differ by a line (classes in musix-ui/styles.css).
-function HomeFactCard({ f, isDark, c, who, sub }) {
+function HomeFactCard({ f, isDark, c, who, sub, lang }) {
   const isArtist = f.type === 'artist';
   const img = homeCoverUrl(f.image);
   return (
@@ -3065,6 +3080,15 @@ function HomeFactCard({ f, isDark, c, who, sub }) {
       </div>
       <div style={{ fontSize:14.5, color:c.textMuted, lineHeight:1.5, marginTop:'auto' }}>
         {f.fact}
+        {/* Fan-theory marker for unconfirmed (hedged) refined facts. */}
+        {f.confirmed === false && (
+          <span className="mono" style={{ marginLeft:8, fontSize:9, letterSpacing:'.12em',
+            textTransform:'uppercase', color:c.textSubtle, whiteSpace:'nowrap',
+            border:`1px solid ${isDark ? 'rgba(255,255,255,.14)' : 'rgba(0,0,0,.12)'}`,
+            borderRadius:99, padding:'1.5px 7px', verticalAlign:'2px' }}>
+            {lang==='ru' ? 'фан-версия' : 'fan theory'}
+          </span>
+        )}
       </div>
     </div>
   );

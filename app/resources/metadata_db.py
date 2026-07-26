@@ -1301,6 +1301,30 @@ class MetadataDB:
         return [r[0] for r in rows]
 
     @classmethod
+    def get_song_facts_with_meta(
+        cls, slug: str, collection_name: str,
+    ) -> List[Dict[str, Optional[str]]]:
+        """Like :meth:`get_song_facts` but keeps the ``category`` column.
+
+        The refine/vibe v2 pipelines split processing by fact origin
+        (``genius_annotation`` vs editorial), so they need the category that
+        plain ``get_song_facts`` discards. Returns
+        ``[{"fact": str, "category": str|None}, ...]`` in insertion order.
+        """
+        conn = cls._connect()
+        rows = conn.execute(
+            """SELECT sf.fact, sf.category FROM song_facts sf
+               WHERE sf.song_slug = ? AND sf.lang = 'en' AND EXISTS (
+                   SELECT 1 FROM fact_visibility fv
+                   WHERE fv.kind = 'song' AND fv.slug = sf.song_slug
+                     AND fv.collection_name = ?
+               )
+               ORDER BY sf.id""",
+            (slug, collection_name),
+        ).fetchall()
+        return [{"fact": r[0], "category": r[1]} for r in rows]
+
+    @classmethod
     def get_all_song_facts_by_collection(cls, collection_name: str) -> Dict[str, str]:
         """Return ``{song_slug: joined_facts_text}`` for a collection."""
         conn = cls._connect()
@@ -1559,13 +1583,16 @@ class MetadataDB:
                     continue
                 try:
                     texts = [
-                        (item.get("text") or "").strip()
+                        {
+                            "text": (item.get("text") or "").strip(),
+                            "confirmed": bool(item.get("confirmed", True)),
+                        }
                         for item in _json.loads(refined_json)
                         if isinstance(item, dict)
                     ]
                 except Exception:
                     texts = []
-                texts = [t for t in texts if t]
+                texts = [t for t in texts if t["text"]]
                 if not texts:
                     # Explicit [] — AI ran and kept nothing for this entity.
                     # Mark it consumed so the raw top-up below can't resurface
@@ -1573,8 +1600,10 @@ class MetadataDB:
                     # get_track_facts honouring an explicit empty refined list).
                     seen.add(key)
                     continue
+                chosen = _random.choice(texts)
                 out.append({
-                    "fact": _random.choice(texts),
+                    "fact": chosen["text"],
+                    "confirmed": chosen["confirmed"],
                     "context": context,
                     "type": ftype,
                     "artist": artist,
@@ -1626,7 +1655,8 @@ class MetadataDB:
                 if key in seen:
                     continue
                 out.append({
-                    "fact": fact, "context": context, "type": ftype,
+                    "fact": fact, "confirmed": True,
+                    "context": context, "type": ftype,
                     "artist": artist, "artist_slug": artist_slug, "title": title,
                 })
                 seen.add(key)
@@ -2911,14 +2941,64 @@ class MetadataDB:
             return []
 
     @classmethod
+    def get_refined_facts_meta(
+        cls, *, scope: str, scope_key: str, collection_name: str, lang: str,
+    ) -> Optional[list[dict]]:
+        """Like :meth:`get_refined_facts` but keeps per-item metadata.
+
+        Returns ``[{"text": str, "confirmed": bool}, ...]`` (``confirmed``
+        defaults to True for legacy ``{"text"}``-only rows), or None when no
+        refined row exists. The explicit-[] semantics match get_refined_facts.
+        """
+        import json as _json
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT refined_json FROM refined_facts "
+            "WHERE scope = ? AND scope_key = ? AND lang = ?",
+            (scope, scope_key, lang),
+        ).fetchone()
+        if not row:
+            return None
+        try:
+            arr = _json.loads(row[0])
+            return [
+                {
+                    "text": item.get("text", ""),
+                    "confirmed": bool(item.get("confirmed", True)),
+                }
+                for item in arr if isinstance(item, dict)
+            ]
+        except Exception:
+            return []
+
+    @classmethod
     def set_refined_facts(
         cls, *, scope: str, scope_key: str, collection_name: str,
-        lang: str, refined: list[str],
+        lang: str, refined: list,
     ) -> None:
         """Upsert a refined-facts row. Empty `refined=[]` is explicit and
-        signals 'AI judged nothing interesting' — not 'no AI run yet'."""
+        signals 'AI judged nothing interesting' — not 'no AI run yet'.
+
+        ``refined`` items are either plain strings (legacy callers) or dicts
+        ``{"text": str, "confirmed": bool, "src": "annotation"|"editorial"}``
+        from the v2 pipeline; both normalize to the same JSON shape. To keep
+        rows compact, ``confirmed`` is stored only when False and ``src`` only
+        when present — readers default missing ``confirmed`` to True.
+        """
         import json as _json
-        payload = _json.dumps([{"text": t} for t in refined], ensure_ascii=False)
+        items = []
+        for t in refined:
+            if isinstance(t, dict):
+                item = {"text": (t.get("text") or "").strip()}
+                if t.get("confirmed") is False:
+                    item["confirmed"] = False
+                if t.get("src"):
+                    item["src"] = t["src"]
+            else:
+                item = {"text": str(t)}
+            if item["text"]:
+                items.append(item)
+        payload = _json.dumps(items, ensure_ascii=False)
         conn = cls._connect()
         # Key is (scope, scope_key, lang); collection_name is stored as provenance
         # (last writer) and updated on conflict so the cache-reset-by-collection
