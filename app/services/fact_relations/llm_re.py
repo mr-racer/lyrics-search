@@ -168,24 +168,39 @@ def _link_key(link):
     )
 
 
+# A song has many facts, and several may describe the SAME pair differently.
+# The sound claim is the specific one and wins: a track that samples another
+# is usually also referenced in its lyrics, so "lyrical_reference" arriving
+# first must not bury a later "sample". This is not hypothetical — Bound 2's
+# real source, Ponderosa Twins Plus One's "Bound", was lost exactly this way
+# even though one fact says "built around a sample of 'Bound'".
+_RELATION_RANK = {"sample": 2, "interpolation": 2}
+
+
+def _rank(link):
+    return _RELATION_RANK.get(link.get("relation"), 0)
+
+
 def _merge_links(a_list, b_list):
     """Union of two link lists, keyed on (song, artist, direction).
 
-    The first occurrence wins. That ordering matters: callers pass the AS_IS
-    (explicit-wording) links first, so a claim already backed by "sampled" /
-    "interpolated" in the text is never downgraded by a later model guess on
-    the same pair.
+    Ties keep the earlier entry — callers pass AS_IS (explicit-wording) links
+    first — but a stronger relation always replaces a weaker one.
     """
     result = []
-    seen = set()
+    index = {}
     for it in [*(a_list or []), *(b_list or [])]:
         if not isinstance(it, dict):
             continue
         key = _link_key(it)
-        if (key[0], key[1]) == ("", "") or key in seen:
+        if (key[0], key[1]) == ("", ""):
             continue
-        seen.add(key)
-        result.append(dict(it))
+        pos = index.get(key)
+        if pos is None:
+            index[key] = len(result)
+            result.append(dict(it))
+        elif _rank(it) > _rank(result[pos]):
+            result[pos] = dict(it)
     return result
 
 

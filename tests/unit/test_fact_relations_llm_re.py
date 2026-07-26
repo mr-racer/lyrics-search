@@ -163,6 +163,29 @@ def test_merge_results_dedupes_links_and_keeps_as_is_first():
 
 
 @pytest.mark.unit
+def test_sound_relation_beats_a_weaker_one_on_the_same_pair():
+    """Bound 2's real source was lost this way: one fact called the pair a
+    lyrical reference and, being first, buried the fact that says
+    "built around a sample of 'Bound'"."""
+    weak = {"producers": [], "links": [
+        _link("Bound", "Ponderosa Twins Plus One", relation="lyrical_reference")]}
+    strong = {"producers": [], "links": [
+        _link("Bound", "Ponderosa Twins Plus One", relation="sample")]}
+    assert merge_results(weak, strong)["links"] == [
+        _link("Bound", "Ponderosa Twins Plus One", relation="sample")]
+    # …and the reverse order gives the same answer.
+    assert merge_results(strong, weak)["links"] == [
+        _link("Bound", "Ponderosa Twins Plus One", relation="sample")]
+
+
+@pytest.mark.unit
+def test_equal_strength_keeps_the_earlier_entry():
+    a = {"producers": [], "links": [_link("X", "Y", relation="sample")]}
+    b = {"producers": [], "links": [_link("X", "Y", relation="interpolation")]}
+    assert merge_results(a, b)["links"] == [_link("X", "Y", relation="sample")]
+
+
+@pytest.mark.unit
 def test_merge_results_same_pair_both_directions_is_not_a_dup():
     a = {"producers": [], "links": [_link("X", "Y", direction="source")]}
     b = {"producers": [], "links": [_link("X", "Y", direction="usage")]}
