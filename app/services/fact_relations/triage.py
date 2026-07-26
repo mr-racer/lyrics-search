@@ -111,7 +111,11 @@ def triage_samples(fact, gliner_out, subject_title, subject_artist):
     source, seen = [], set()
     for t in samples_tails:
         tname = get_text(t)
-        if not looks_like_name(tname) or norm(tname) in seen or overlap(tname, my_title):
+        # Exact title equality, NOT substring: "Bound 2" genuinely samples
+        # "Bound" by Ponderosa Twins Plus One, and an `overlap` check threw
+        # that away because one title contains the other. A song sampling
+        # itself is caught by equality here and again by the `self-title` gate.
+        if not looks_like_name(tname) or norm(tname) in seen or norm(tname) == norm(my_title):
             continue
         seen.add(norm(tname))
         ent_ok = any(overlap(tname, e) for e in ent_titles)
@@ -123,10 +127,12 @@ def triage_samples(fact, gliner_out, subject_title, subject_artist):
         bucket = "AS_IS" if (ent_ok and get_conf(t) >= 0.7 and norm(tname) not in conflict
                              and SOURCE_CUE.search(fact)) else "LLM"
         source.append((bucket, tname, st_artist))
-    for e in ent_titles:
-        if norm(e) not in seen and looks_like_name(e) and not overlap(e, my_title):
-            seen.add(norm(e))
-            source.append(("LLM", e, ""))
+    # NOTE: there used to be a sweep here that pushed EVERY leftover
+    # ``sampled_song`` entity into the LLM bucket — no cue, no confidence
+    # floor. It is what made SOURCE_CUE decorative: any title GLiNER noticed
+    # anywhere in the fact became a candidate, and a 12B model confirmed
+    # enough of them to fill the DB with lyrical references. A candidate must
+    # now come from a relation or structure output, like every other one.
 
     source_keys = {norm(x[1]) for x in source} | {norm(x[2]) for x in source if x[2]}
     usage, useen = [], set()
@@ -140,7 +146,9 @@ def triage_samples(fact, gliner_out, subject_title, subject_artist):
         useen.add(key)
         rel_ok = any(overlap(artist_v, get_text(t)) or overlap(song_v, get_text(t)) for t in sampledby_tails)
         cue_ok = bool(USAGE_CUE.search(fact))
-        not_self = (not overlap(song_v, my_title)) and (not overlap(artist_v, my_artist)) \
+        # Same asymmetry as the source branch: titles compare exactly, artists
+        # stay substring-tolerant (that is the self-artist heuristic).
+        not_self = (norm(song_v) != norm(my_title)) and (not overlap(artist_v, my_artist)) \
             and (not overlap(artist_v, my_title))
         not_source_echo = norm(song_v) not in source_keys and norm(artist_v) not in source_keys
         if rel_ok and cue_ok and not_self and not_source_echo \

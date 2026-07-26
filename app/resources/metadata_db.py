@@ -386,6 +386,32 @@ _SCHEMA_SQL: Tuple[str, ...] = (
         source       TEXT NOT NULL DEFAULT 'llm',
         PRIMARY KEY (artist_slug, alias)
     )""",
+    # ── Sample links: one row per extracted "this song took sound from that
+    #    one" claim. Only the direction the fact actually stated is stored;
+    #    the other side is DERIVED at read time (see get_sample_links), so a
+    #    mirror copy can never drift out of sync with its original. The
+    #    primary key makes a re-run idempotent instead of duplicating.
+    #    `songs.samples_json` is kept as a read cache built from this table. ──
+    """CREATE TABLE IF NOT EXISTS sample_links (
+        collection_name  TEXT NOT NULL,
+        src_slug         TEXT NOT NULL,
+        direction        TEXT NOT NULL,          -- 'source' | 'usage'
+        dst_key          TEXT NOT NULL,          -- normalized "artist|title"
+        dst_title        TEXT,
+        dst_artist       TEXT,
+        dst_slug         TEXT,                   -- songs.slug when in library
+        relation         TEXT NOT NULL,          -- 'sample' | 'interpolation'
+        src_year         INTEGER,
+        dst_year         INTEGER,
+        evidence         TEXT,
+        confidence       REAL,
+        created_at       TEXT DEFAULT (datetime('now')),
+        PRIMARY KEY (collection_name, src_slug, direction, dst_key)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_sample_links_dst "
+    "ON sample_links (collection_name, dst_slug)",
+    "CREATE INDEX IF NOT EXISTS idx_sample_links_src "
+    "ON sample_links (collection_name, src_slug)",
 )
 
 
@@ -1380,6 +1406,190 @@ class MetadataDB:
             (producers_json, samples_json, slug),
         )
         conn.commit()
+
+    @classmethod
+    def get_songs_for_collection(cls, collection_name: str) -> List[dict]:
+        """``[{slug, title, artist_slug}]`` for every song visible to a
+        collection — the slug side of the sample-link library index."""
+        conn = cls._connect()
+        rows = conn.execute(
+            """SELECT DISTINCT s.slug, s.title, s.artist_slug
+               FROM songs s
+               JOIN fact_visibility fv ON fv.kind = 'song' AND fv.slug = s.slug
+               WHERE fv.collection_name = ?""",
+            (collection_name,),
+        ).fetchall()
+        return [{"slug": r[0], "title": r[1], "artist_slug": r[2]} for r in rows]
+
+    # ── Sample links (normalized, direction-aware; see the table comment) ──
+
+    @classmethod
+    def replace_sample_links(
+        cls, collection_name: str, src_slug: str, links: List[dict],
+    ) -> None:
+        """Replace every stored link of ``src_slug`` with ``links``.
+
+        Delete-then-insert rather than upsert: a re-extraction that now
+        *rejects* a link must make it disappear, and an upsert would leave the
+        stale row behind forever.
+        """
+        conn = cls._connect()
+        conn.execute(
+            "DELETE FROM sample_links WHERE collection_name = ? AND src_slug = ?",
+            (collection_name, src_slug),
+        )
+        for ln in links or []:
+            conn.execute(
+                "INSERT OR REPLACE INTO sample_links "
+                "(collection_name, src_slug, direction, dst_key, dst_title, "
+                " dst_artist, dst_slug, relation, src_year, dst_year, evidence, "
+                " confidence) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    collection_name, src_slug, ln["direction"], ln["dst_key"],
+                    ln.get("dst_title"), ln.get("dst_artist"), ln.get("dst_slug"),
+                    ln["relation"], ln.get("src_year"), ln.get("dst_year"),
+                    ln.get("evidence"), ln.get("confidence"),
+                ),
+            )
+        conn.commit()
+
+    @classmethod
+    def get_sample_links(cls, collection_name: str, src_slug: str) -> dict:
+        """``{"samples": [...], "sampled_by": [...]}`` for one song.
+
+        Both directions come from the same rows: what this song took is what
+        it stored as ``direction='source'``, and what took from it is its own
+        ``'usage'`` rows PLUS every other song whose ``'source'`` row resolved
+        to this slug. That union is why a mirror copy is unnecessary — and why
+        the two sides can never disagree.
+        """
+        conn = cls._connect()
+        own = conn.execute(
+            "SELECT direction, dst_title, dst_artist, dst_slug, relation, evidence "
+            "FROM sample_links WHERE collection_name = ? AND src_slug = ?",
+            (collection_name, src_slug),
+        ).fetchall()
+        back = conn.execute(
+            "SELECT s.title, s.artist_slug, s.slug, l.relation, l.evidence "
+            "FROM sample_links l JOIN songs s ON s.slug = l.src_slug "
+            "WHERE l.collection_name = ? AND l.dst_slug = ? AND l.direction = 'source'",
+            (collection_name, src_slug),
+        ).fetchall()
+
+        samples, sampled_by = [], []
+        for direction, title, artist, dst_slug, relation, evidence in own:
+            entry = {
+                "song": title or None, "artist": artist or None,
+                "slug": dst_slug or None, "relation": relation,
+                "evidence": evidence or None,
+            }
+            (samples if direction == "source" else sampled_by).append(entry)
+        seen = {(e["song"] or "", e["artist"] or "") for e in sampled_by}
+        for title, artist_slug, slug, relation, evidence in back:
+            artist = (artist_slug or "").replace("-", " ") or None
+            if (title or "", artist or "") in seen:
+                continue
+            sampled_by.append({
+                "song": title or None, "artist": artist, "slug": slug,
+                "relation": relation, "evidence": evidence or None,
+            })
+        return {"samples": samples, "sampled_by": sampled_by}
+
+    @classmethod
+    def get_sample_link_sources(cls, collection_name: str) -> List[dict]:
+        """Every ``direction='source'`` row of a collection (for cache rebuild)."""
+        conn = cls._connect()
+        rows = conn.execute(
+            "SELECT src_slug, dst_title, dst_artist, dst_slug, relation, evidence "
+            "FROM sample_links WHERE collection_name = ? AND direction = 'source'",
+            (collection_name,),
+        ).fetchall()
+        return [
+            {"src_slug": r[0], "dst_title": r[1], "dst_artist": r[2],
+             "dst_slug": r[3], "relation": r[4], "evidence": r[5]}
+            for r in rows
+        ]
+
+    @classmethod
+    def rebuild_samples_cache(cls, collection_name: str) -> int:
+        """Refill ``songs.samples_json`` for a collection from ``sample_links``.
+
+        This is where the second direction appears. A link is stored once, on
+        the song whose fact stated it; every song it points AT gets the mirror
+        entry here, derived — never stored twice, so the two sides cannot
+        drift. Before this existed only 32 of 274 in-library links had a
+        reverse (12%), which is why tapping through to a sampled track showed
+        an empty "Sampled by".
+
+        Rewrites every visible song, including the ones with no links left, so
+        a re-extraction that rejected a link actually clears it from the UI.
+        Returns the number of songs written.
+        """
+        conn = cls._connect()
+        visible = conn.execute(
+            """SELECT s.slug, s.title, s.artist_slug FROM songs s
+               JOIN fact_visibility fv ON fv.kind = 'song' AND fv.slug = s.slug
+               WHERE fv.collection_name = ?""",
+            (collection_name,),
+        ).fetchall()
+        meta = {r[0]: (r[1], r[2]) for r in visible}
+
+        rows = conn.execute(
+            "SELECT src_slug, direction, dst_title, dst_artist, dst_slug "
+            "FROM sample_links WHERE collection_name = ?",
+            (collection_name,),
+        ).fetchall()
+
+        per_song: Dict[str, Dict[str, list]] = {
+            slug: {"samples": [], "sampled_by": []} for slug in meta
+        }
+        for src_slug, direction, dst_title, dst_artist, dst_slug in rows:
+            bucket = per_song.setdefault(src_slug, {"samples": [], "sampled_by": []})
+            entry = {"song": dst_title, "artist": dst_artist}
+            if direction != "source":
+                bucket["sampled_by"].append(entry)
+                continue
+            bucket["samples"].append(entry)
+            if dst_slug and dst_slug in per_song:
+                src_title, src_artist = meta.get(src_slug, (None, None))
+                if src_title:
+                    per_song[dst_slug]["sampled_by"].append({
+                        "song": src_title,
+                        "artist": (src_artist or "").replace("-", " ") or None,
+                    })
+
+        def _dedup(items):
+            seen, out = set(), []
+            for it in items:
+                key = (_name_dedup_key(it.get("song") or ""),
+                       _name_dedup_key(it.get("artist") or ""))
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(it)
+            return out
+
+        written = 0
+        for slug in meta:
+            rel = per_song.get(slug) or {"samples": [], "sampled_by": []}
+            conn.execute(
+                "UPDATE songs SET samples_json = ? WHERE slug = ?",
+                (json.dumps({"samples": _dedup(rel["samples"]),
+                             "sampled_by": _dedup(rel["sampled_by"])}), slug),
+            )
+            written += 1
+        conn.commit()
+        return written
+
+    @classmethod
+    def clear_sample_links(cls, collection_name: str) -> int:
+        """Drop every link of a collection. Returns the number of rows removed."""
+        conn = cls._connect()
+        cur = conn.execute(
+            "DELETE FROM sample_links WHERE collection_name = ?", (collection_name,),
+        )
+        conn.commit()
+        return cur.rowcount or 0
 
     @classmethod
     def set_song_genius_credits(
@@ -2806,15 +3016,22 @@ class MetadataDB:
     def get_gem_tracks(
         cls, collection_name: str, kind: str, canonical: str, limit: int = 200,
     ) -> List[dict]:
-        """Tracks of a collection carrying a given gem entity."""
+        """Tracks of a collection carrying a given gem entity.
+
+        ``detail`` comes back too: for a namedrop it holds the ``artist_slug``
+        the popover needs to offer a link to that artist's page.
+        """
         conn = cls._connect()
         rows = conn.execute(
-            "SELECT track_id, display, quote FROM track_gems "
+            "SELECT track_id, display, quote, detail FROM track_gems "
             "WHERE collection_name = ? AND kind = ? AND canonical = ? "
             "ORDER BY score DESC LIMIT ?",
             (collection_name, kind, canonical, limit),
         ).fetchall()
-        return [{"track_id": r[0], "display": r[1], "quote": r[2]} for r in rows]
+        return [
+            {"track_id": r[0], "display": r[1], "quote": r[2], "detail": r[3]}
+            for r in rows
+        ]
 
     @classmethod
     def get_random_gems(cls, collection_name: str, limit: int = 10) -> List[dict]:
@@ -2875,12 +3092,35 @@ class MetadataDB:
         )
         conn.commit()
 
+    # Band members are stored in the same table under this source so they can
+    # be told apart from real aliases. An alias may stand in for the artist in
+    # the matching index; a member must NOT — "Eminem" resolving to the display
+    # name "Bad Meets Evil" would be a wrong answer, not a looser one.
+    MEMBER_ALIAS_SOURCE = "member"
+
     @classmethod
     def get_artist_aliases_map(cls) -> Dict[str, str]:
         """All known aliases as {alias_lower: artist_slug} (empty markers excluded)."""
         conn = cls._connect()
         rows = conn.execute(
-            "SELECT alias, artist_slug FROM artist_aliases WHERE alias != ''",
+            "SELECT alias, artist_slug FROM artist_aliases "
+            "WHERE alias != '' AND COALESCE(source, '') != ?",
+            (cls.MEMBER_ALIAS_SOURCE,),
+        ).fetchall()
+        return {r[0].lower(): r[1] for r in rows}
+
+    @classmethod
+    def get_artist_members_map(cls) -> Dict[str, str]:
+        """Band members as {member_name_lower: group_slug}.
+
+        Used to widen a track's own-artist identity: a Bad Meets Evil track
+        name-dropping "Eminem" is the performer talking about himself.
+        """
+        conn = cls._connect()
+        rows = conn.execute(
+            "SELECT alias, artist_slug FROM artist_aliases "
+            "WHERE alias != '' AND source = ?",
+            (cls.MEMBER_ALIAS_SOURCE,),
         ).fetchall()
         return {r[0].lower(): r[1] for r in rows}
 

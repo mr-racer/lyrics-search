@@ -634,6 +634,12 @@ class GemTracksResponse(BaseModel):
     kind: str
     canonical: str
     tracks: list[GemTrackRef]
+    # Namedrop only: the library artist the chip refers to. The popover shows
+    # a link to their page here instead of the chip navigating there directly
+    # — the other tracks that mention them are the point of tapping it.
+    artist_slug: str | None = None
+    artist_name: str | None = None
+    artist_image: str | None = None
 
 
 @router.get("/gems/tracks", response_model=GemTracksResponse)
@@ -645,14 +651,39 @@ def get_gem_tracks(
     """All tracks of the library carrying a given lyric-gem entity — the
     mini-playlist behind a tapped gem chip. Track metadata is hydrated by the
     client via the existing GET /metadata/tracks?ids=... batch endpoint."""
+    import json as _json
+
     from app.resources.metadata_db import MetadataDB
 
     derived = derive_collection_for_user(current_user)
     rows = MetadataDB.get_gem_tracks(derived, kind, canonical)
+
+    artist_slug = None
+    if kind == "namedrop":
+        for r in rows:
+            try:
+                artist_slug = (_json.loads(r.get("detail") or "{}") or {}).get("artist_slug")
+            except (TypeError, ValueError):
+                artist_slug = None
+            if artist_slug:
+                break
+
+    artist_image = None
+    if artist_slug:
+        try:
+            artist_image = (MetadataDB.get_artist_audiodb(artist_slug, derived) or {}).get(
+                "thumb_path",
+            )
+        except Exception:
+            artist_image = None
+
     return GemTracksResponse(
         kind=kind,
         canonical=canonical,
         tracks=[GemTrackRef(track_id=r["track_id"], quote=r["quote"] or "") for r in rows],
+        artist_slug=artist_slug,
+        artist_name=canonical if artist_slug else None,
+        artist_image=artist_image,
     )
 
 

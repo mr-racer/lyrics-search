@@ -13,6 +13,8 @@ import time
 import requests
 import syncedlyrics
 
+from .lyrics_sanitizer import sanitize_lyrics
+
 logger = logging.getLogger(__name__)
 
 PROVIDERS = ["Musixmatch", "Lrclib", "NetEase", "Megalobiz"]
@@ -41,10 +43,13 @@ def fetch_lyrics_ovh(artist: str, title: str) -> str | None:
 
 
 def get_lyrics(title: str, artist: str, better_lyrics_quality: bool) -> str | None:
+    """Lyrics for a track, sanitized. The single online entry point — every
+    provider's output leaves through here, so this is where the artifact
+    stripping belongs (see :mod:`app.indexing.lyrics_sanitizer`)."""
     # Primary: try lyrics.ovh
     lyrics = fetch_lyrics_ovh(artist, title)
     if lyrics:
-        return lyrics
+        return sanitize_lyrics(lyrics)
 
     # Fallback: syncedlyrics
     if better_lyrics_quality:
@@ -69,4 +74,4 @@ def get_lyrics(title: str, artist: str, better_lyrics_quality: bool) -> str | No
     except Exception:
         return None
 
-    return lyrics
+    return sanitize_lyrics(lyrics)

@@ -12875,21 +12875,26 @@ function fetchTrackGems(trackId, lang) {
   return p;
 }
 
-// Gem entity → hydrated library tracks: ids from /library/gems/tracks, full
-// playable shapes from the existing /metadata/tracks?ids= batch endpoint.
+// Gem entity → { tracks, artist }: ids from /library/gems/tracks, full playable
+// shapes from the existing /metadata/tracks?ids= batch endpoint. `artist` is
+// filled for namedrops only — it backs the "open artist page" row inside the
+// popover, so the chip itself no longer has to navigate anywhere.
 const _gemTracksCache = new Map();
 function fetchGemTracks(kind, canonical) {
   const key = `${kind}|${String(canonical || '').toLowerCase()}`;
   if (_gemTracksCache.has(key)) return _gemTracksCache.get(key);
   const p = apiFetch(`/library/gems/tracks?kind=${encodeURIComponent(kind)}&canonical=${encodeURIComponent(canonical)}`)
     .then(res => {
+      const artist = res && res.artist_slug
+        ? { slug: res.artist_slug, name: res.artist_name || canonical, image: res.artist_image || null }
+        : null;
       const ids = ((res && res.tracks) || []).map(t => t.track_id).filter(Boolean);
-      if (!ids.length) return [];
+      if (!ids.length) return { tracks: [], artist };
       return apiFetch(`/metadata/tracks?ids=${encodeURIComponent(ids.join(','))}`)
-        .then(list => Array.isArray(list) ? list : [])
-        .catch(() => []);
+        .then(list => ({ tracks: Array.isArray(list) ? list : [], artist }))
+        .catch(() => ({ tracks: [], artist }));
     })
-    .catch(() => { _gemTracksCache.delete(key); return []; });
+    .catch(() => { _gemTracksCache.delete(key); return { tracks: [], artist: null }; });
   _gemTracksCache.set(key, p);
   return p;
 }
@@ -12902,13 +12907,21 @@ const GEM_POP_LABELS = {
 
 // Anchored popover / bottom sheet for a tapped gem chip: the quote line first
 // (that's the wow), then every other library track carrying the same entity.
-// Twin of ProducerTracksPop — same shells, same play-row mechanics.
-function GemTracksPop({ gem, currentTrackId, anchorRect, isDark, lang, onClose, onPlayTrack }) {
+// Twin of ProducerTracksPop — same shells, same play-row mechanics, and for a
+// namedrop the same portrait header with a link to the artist's page.
+function GemTracksPop({ gem, currentTrackId, anchorRect, isDark, lang, onClose, onPlayTrack, navigateToArtist }) {
   const [tracks, setTracks] = useState(null); // null = loading
+  const [artist, setArtist] = useState(null);
 
   useEffect(() => {
     let alive = true;
-    fetchGemTracks(gem.kind, gem.canonical).then(list => { if (alive) setTracks(list); });
+    setTracks(null);
+    setArtist(null);
+    fetchGemTracks(gem.kind, gem.canonical).then(res => {
+      if (!alive) return;
+      setTracks(res.tracks || []);
+      setArtist(res.artist || null);
+    });
     return () => { alive = false; };
   }, [gem.kind, gem.canonical]);
 
@@ -12944,6 +12957,26 @@ function GemTracksPop({ gem, currentTrackId, anchorRect, isDark, lang, onClose, 
                 fontSize: 12.5, lineHeight: 1.5, fontStyle: 'italic', padding: '2px 0 6px',
                 color: isDark ? 'rgba(255,255,255,0.72)' : 'rgba(22,22,32,0.72)',
               }}>«{gem.quote}»</div>
+            )}
+            {artist && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 12, padding: '4px 0 10px',
+                borderBottom: `1px solid ${isDark ? 'rgba(255,255,255,0.08)' : 'rgba(22,22,32,0.08)'}`,
+                marginBottom: 6,
+              }}>
+                <AlbumCover title={artist.name} artist={artist.name} size={44}
+                  isDark={isDark} coverPath={artist.image} radius={12} />
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{
+                    fontSize: 14.5, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden',
+                    textOverflow: 'ellipsis', color: isDark ? '#ece9f4' : '#1d1a28',
+                  }}>{artist.name}</div>
+                  <button type="button" className="producer-pop__profile"
+                    onClick={() => { close(); if (navigateToArtist) navigateToArtist(artist.slug); }}>
+                    {lang === 'ru' ? 'Открыть профиль' : 'Open artist page'} →
+                  </button>
+                </div>
+              </div>
             )}
             {tracks === null && (
               <div style={{ fontSize: 12.5, opacity: 0.55, padding: '4px 0' }}>
@@ -12984,9 +13017,10 @@ function GemTracksPop({ gem, currentTrackId, anchorRect, isDark, lang, onClose, 
 }
 
 // The gem chips row under the samples pill. Renders nothing while loading or
-// when the track has no gems — the meta zone must not jump. A namedrop chip
-// whose artist is in the library navigates straight to the artist page;
-// every other chip opens the quote + where-else popover.
+// when the track has no gems — the meta zone must not jump. EVERY chip opens
+// the quote + where-else popover, namedrops included: the other tracks that
+// mention this artist are the interesting part, and the artist's page is one
+// tap further in, from the portrait header inside the popover.
 // `bare` drops the own row wrapper so the gems share one strip with the samples
 // pill instead of stacking a second centred row under it — see .player-chips-row.
 function GemsChips({ track, isDark, lang, navigateToArtist, onPlayTrack, bare }) {
@@ -13008,14 +13042,14 @@ function GemsChips({ track, isDark, lang, navigateToArtist, onPlayTrack, bare })
     <>
       {gems.slice(0, 4).map((g) => {
         const accent = GEM_ACCENTS[g.kind] || '#a78bfa';
-        const slug = g.kind === 'namedrop' && g.detail ? g.detail.artist_slug : null;
         const labels = GEM_POP_LABELS[lang === 'ru' ? 'ru' : 'en'];
         return (
           <button key={`${g.kind}-${g.canonical}`} type="button"
             className="credit-chip credit-chip--link"
             title={labels[g.kind]}
             onClick={(e) => {
-              if (slug && navigateToArtist) { navigateToArtist(slug); return; }
+              // rect BEFORE setState: React nulls currentTarget inside the
+              // updater from the second click on.
               const rect = e.currentTarget.getBoundingClientRect();
               setPopFor(prev => (prev && prev.gem.kind === g.kind && prev.gem.canonical === g.canonical)
                 ? null
@@ -13037,6 +13071,7 @@ function GemsChips({ track, isDark, lang, navigateToArtist, onPlayTrack, bare })
           isDark={isDark} lang={lang}
           onClose={() => setPopFor(null)}
           onPlayTrack={onPlayTrack}
+          navigateToArtist={navigateToArtist}
         />
       )}
     </>

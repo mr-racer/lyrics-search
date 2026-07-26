@@ -15,6 +15,8 @@ from mutagen.mp4 import MP4
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3NoHeaderError
 
+from .lyrics_sanitizer import sanitize_lyrics
+
 logger = logging.getLogger(__name__)
 
 _CURRENT_YEAR = datetime.datetime.now().year
@@ -225,8 +227,9 @@ def read_embedded_lyrics(filepath: Path) -> str | None:
             return None
     except Exception:
         return None
-    text = (text or "").strip()
-    return text or None
+    # Embedded text is the dirtiest source of all — the Yandex downloader
+    # writes whatever the provider returned, credit headers and all.
+    return sanitize_lyrics((text or "").strip())
 
 
 def get_metadata(filepath: Path) -> dict | None:
