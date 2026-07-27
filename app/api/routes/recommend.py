@@ -463,41 +463,9 @@ async def ai_playlist_route(
     return _build_ai_playlist_response(result)
 
 
-def _build_ai_playlist_response(result: dict) -> AIPlaylistResponse:
-    """Shape the ai_playlist service dict into the API contract (shared by the
-    plain and the streaming route).
-
-    The recsys candidate dicts carry Qdrant-payload fields only, and the
-    credits live in SQLite — hence the same ``apply_song_relations`` overlay
-    the wave and /metadata/tracks do. Without it the player showed no
-    producers chevron and no samples pill for AI playlists: these tracks come
-    with a real ``file_path``, so the client's slim-shape enrichment
-    (triggered by a FALSY file_path) never rescued them either.
-    """
-    tracks = [
-        AIPlaylistTrack(
-            track_id=t["track_id"],
-            title=t["title"],
-            title_display=display_title_for_track(t),
-            artist=t["artist"],
-            album=t.get("album"),
-            year=coerce_year(t.get("year")),
-            genre=t.get("genre"),
-            duration_sec=coerce_float(t.get("duration")) or 0.0,
-            file_path=t.get("file_path") or "",
-            cover_art_path=t.get("cover_art_path"),
-            reason=t.get("reason"),
-            source_tool=t.get("tool"),
-            artist_refs=artist_refs_for_track(t),
-        )
-        for t in result["tracks"]
-    ]
-    apply_song_relations(tracks)
-    return AIPlaylistResponse(
-        title=result["title"],
-        steps=[AIPlaylistStep(**s) for s in result["steps"]],
-        tracks=tracks,
-    )
+# The shaping itself lives in the service layer so the assistant facade can
+# reuse it without importing a route module.
+_build_ai_playlist_response = recsys_ai_service.build_playlist_response
 
 
 @router.post("/ai-playlist/stream")

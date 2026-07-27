@@ -32,7 +32,9 @@ def test_chat_ignores_supplied_collection():
     svc = MagicMock(spec=SearchService)
     svc.search = fake_search
 
-    import app.api.routes.chat as chat_module
+    # ask_llm is resolved in the engine module's globals — patch it there,
+    # not on the route module that merely re-exports the core.
+    import app.services.chat_search_service as chat_module
 
     orig_ask_llm = chat_module.ask_llm
 
@@ -158,7 +160,9 @@ def test_chat_stream_emits_steps_and_matches_nonstream():
     svc = MagicMock(spec=SearchService)
     svc.search = fake_search
 
-    import app.api.routes.chat as chat_module
+    # ask_llm is resolved in the engine module's globals — patch it there,
+    # not on the route module that merely re-exports the core.
+    import app.services.chat_search_service as chat_module
 
     orig_ask_llm = chat_module.ask_llm
 

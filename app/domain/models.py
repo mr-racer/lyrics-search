@@ -1082,3 +1082,129 @@ class DeleteAccountRequest(BaseModel):
     target's email — a defense-in-depth guard so a UI bug can't wipe the wrong
     account on a bare path id."""
     confirm_email: str
+
+
+# ── Unified AI assistant ──────────────────────────────────────────────────────
+# Facade over the three existing AI stacks (lyrics/audio search, playlist
+# building, artist/song facts). Intent routing is done by GLiNER2 in
+# app/services/assistant/router.py — never by the LLM — so the closed label set
+# below is authoritative: the model picks from it, it cannot invent a fourth.
+
+AssistantIntent = Literal["search", "playlist", "facts"]
+
+
+class AssistantSlots(BaseModel):
+    """Conversation state carried by the CLIENT across turns.
+
+    The backend is stateless (every request rebuilds what it needs), so the
+    server returns these in each terminal frame and the client echoes them back
+    on the next message. Merge rule is unconditional: slots always carry
+    forward, freshly extracted entities overwrite. That removes any need to
+    decide "is this a follow-up?" — «ещё у этого артиста» simply finds no
+    artist entity and falls back to ``last_artist``.
+    """
+    last_intent: Optional[AssistantIntent] = None
+    last_artist: Optional[str] = None
+    last_song: Optional[str] = None
+    last_track_id: Optional[str] = None
+    last_playlist_ids: List[str] = Field(default_factory=list)
+    last_filters: Optional[SearchFilters] = None
+
+
+class AssistantRequest(BaseModel):
+    """Body for POST /assistant and /assistant/stream."""
+    message: str = Field(min_length=1, max_length=1000)
+    history: List[ChatMessage] = Field(default_factory=list)
+    slots: AssistantSlots = Field(default_factory=AssistantSlots)
+
+    # Set by the client when the user picked an option from a `clarify` frame:
+    # routing is skipped entirely and this intent is used verbatim.
+    intent: Optional[AssistantIntent] = None
+    # Set when the user picked a card from a `disambiguate` frame.
+    subject_track_id: Optional[str] = None
+    subject_artist_slug: Optional[str] = None
+    # What the player is on right now — lets "расскажи про этот трек" resolve
+    # with no entity in the message at all.
+    now_playing_track_id: Optional[str] = None
+
+    limit: int = Field(15, ge=1, le=40)
+    lang: str = "en"
+    llm_base_url: Optional[str] = None
+    llm_model: Optional[str] = None
+
+
+class AssistantRoute(BaseModel):
+    """Outcome of the GLiNER2 routing pass."""
+    intent: Optional[AssistantIntent] = None   # None → needs clarification
+    confidence: float = 0.0
+    margin: float = 0.0                        # top1 - top2, drives clarify
+    source: Literal["gliner", "explicit", "sticky", "count_override", "unclear"] = "gliner"
+    artist: Optional[str] = None
+    song: Optional[str] = None
+    count: Optional[int] = None
+    era: Optional[str] = None
+
+
+class AssistantClarifyOption(BaseModel):
+    intent: AssistantIntent
+    label: str
+
+
+class AssistantSubjectOption(BaseModel):
+    """One candidate subject for the facts intent (a `disambiguate` frame)."""
+    kind: Literal["artist", "album", "song"]
+    title: str
+    subtitle: Optional[str] = None
+    track_id: Optional[str] = None
+    artist_slug: Optional[str] = None
+    cover_art_path: Optional[str] = None
+
+
+class AssistantFactItem(BaseModel):
+    """One numbered item of the grounding pack, echoed to the UI as a chip.
+
+    ``n`` matches the [n] index the LLM cites in ``used`` — the frontend
+    highlights exactly the facts the answer leaned on.
+    """
+    n: int
+    text: str
+    source: Literal["facts", "bio", "credits", "gems", "lyrics", "catalog", "web"] = "facts"
+    used: bool = False
+
+
+class AssistantFactsPayload(BaseModel):
+    """Result payload for intent="facts"."""
+    subject_kind: Literal["artist", "album", "song"]
+    subject_title: str
+    subject_subtitle: Optional[str] = None
+    artist_slug: Optional[str] = None
+    track_id: Optional[str] = None
+    image_path: Optional[str] = None
+    answer: str
+    # False when the LLM answer failed code verification and the deterministic
+    # "here's what is known" fact rendering was served instead.
+    grounded: bool = True
+    web_search_used: bool = False
+    items: List[AssistantFactItem] = Field(default_factory=list)
+    related_tracks: List[TrackMetadata] = Field(default_factory=list)
+
+
+class AssistantResponse(BaseModel):
+    """Terminal payload — the non-streaming twin of the final NDJSON frame.
+
+    Exactly one of ``search``/``playlist``/``facts`` is set, matching ``intent``.
+    Deliberately NOT a merged union: the three results render as three different
+    card types, and flattening them is what makes the UX muddy.
+    """
+    intent: Optional[AssistantIntent] = None
+    human: str = ""
+    slots: AssistantSlots = Field(default_factory=AssistantSlots)
+
+    search: Optional[Dict] = None                      # shape of _run_chat_core
+    playlist: Optional[AIPlaylistResponse] = None
+    facts: Optional[AssistantFactsPayload] = None
+
+    # Set instead of a payload when routing was inconclusive.
+    clarify: Optional[List[AssistantClarifyOption]] = None
+    # Set instead of a payload when the facts subject was ambiguous.
+    disambiguate: Optional[List[AssistantSubjectOption]] = None

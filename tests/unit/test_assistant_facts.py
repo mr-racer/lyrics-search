@@ -1,0 +1,134 @@
+"""The citation gate of the facts executor.
+
+``_verify`` is the single point that makes an ungrounded answer impossible: no
+matter what a 12b model emits, an answer that doesn't cite real fact numbers is
+thrown away and the deterministic fact rendering is served instead.
+"""
+from __future__ import annotations
+
+import pytest
+
+from app.services.assistant import facts_executor as F
+
+
+# ── the gate ─────────────────────────────────────────────────────────────────
+
+
+def test_valid_answer_passes():
+    assert F._verify({"answer": "It samples an old soul record.", "used": [1, 3]}, 4) \
+        == ("It samples an old soul record.", [1, 3])
+
+
+@pytest.mark.parametrize("raw", [
+    None,
+    "just a string",
+    {},
+    {"answer": "", "used": [1]},              # empty answer
+    {"answer": "   ", "used": [1]},           # whitespace only
+    {"answer": "Something.", "used": []},     # cites nothing
+    {"answer": "Something.", "used": "1"},    # not a list
+    {"answer": "Something."},                 # no used at all
+    {"answer": "Something.", "used": [9, 12]},  # all out of range
+    {"answer": "Something.", "used": [0]},    # 1-indexed, 0 is invalid
+])
+def test_ungrounded_shapes_are_rejected(raw):
+    assert F._verify(raw, 4) is None
+
+
+def test_out_of_range_numbers_are_dropped_but_valid_ones_keep_it():
+    assert F._verify({"answer": "A.", "used": [2, 99, 2]}, 3) == ("A.", [2])
+
+
+def test_non_numeric_citations_are_ignored():
+    assert F._verify({"answer": "A.", "used": ["2", "x", None]}, 3) == ("A.", [2])
+
+
+# ── the deterministic fallback ───────────────────────────────────────────────
+
+
+def test_fallback_lists_the_real_facts():
+    subject = {"title": "Runaway"}
+    items = [{"text": "Produced by Kanye West", "source": "credits"},
+             {"text": "Released in 2010", "source": "facts"}]
+    out = F._deterministic_answer(subject, items, "ru")
+    assert "Runaway" in out
+    assert "Produced by Kanye West" in out
+    assert "Released in 2010" in out
+
+
+def test_fallback_with_no_facts_admits_it():
+    out = F._deterministic_answer({"title": "Nobody"}, [], "en")
+    assert "don't have reliable information" in out
+
+
+def test_fallback_language_follows_lang():
+    ru = F._deterministic_answer({"title": "X"}, [{"text": "f", "source": "facts"}], "ru")
+    en = F._deterministic_answer({"title": "X"}, [{"text": "f", "source": "facts"}], "en")
+    assert "известно" in ru
+    assert "known about" in en
+
+
+# ── pack helpers ─────────────────────────────────────────────────────────────
+
+
+def test_pack_is_numbered_from_one():
+    items = [{"text": "alpha"}, {"text": "beta"}]
+    assert F._render_pack(items, "en") == "[1] alpha\n[2] beta"
+
+
+def test_clean_collapses_whitespace_and_truncates():
+    assert F._clean("  a\n\n b  ") == "a b"
+    long = "x" * (F.MAX_FACT_CHARS + 50)
+    out = F._clean(long)
+    assert len(out) <= F.MAX_FACT_CHARS + 1 and out.endswith("…")
+
+
+def test_web_query_is_built_from_the_subject_not_the_message():
+    """The user's message may be conversational Russian; the web query must be
+    a clean English lookup built from what we resolved."""
+    artist = F._web_query({"kind": "artist", "title": "Björk", "artist": "Björk"},
+                          "а расскажи чё там у неё вообще")
+    assert artist == "Björk musician biography"
+    song = F._web_query({"kind": "song", "title": "Runaway", "artist": "Kanye West"}, "?")
+    assert "Kanye West" in song and "Runaway" in song
+
+
+def test_snippets_need_substance():
+    """Short fragments are noise — a numbered pack item must be worth citing."""
+    raw = "tiny\n\n" + ("a real paragraph with enough substance to matter " * 2)
+    out = F._snippets_from_web(raw)
+    assert len(out) == 1
+    assert out[0]["source"] == "web"
+
+
+def test_subject_from_hit_maps_each_kind():
+    artist = F._subject_from_hit({"type": "artist", "artist": "Queen",
+                                  "artist_slug": "queen", "image": "/a.jpg"})
+    assert (artist["kind"], artist["title"], artist["image_path"]) == \
+        ("artist", "Queen", "/a.jpg")
+
+    song = F._subject_from_hit({"type": "song", "title": "Runaway",
+                                "artist": "Kanye West", "track_id": "t1"})
+    assert (song["kind"], song["track_id"], song["subtitle"]) == \
+        ("song", "t1", "Kanye West")
+
+    album = F._subject_from_hit({"type": "album", "album": "MBDTF",
+                                 "artist": "Kanye West", "artist_slug": "kanye-west"})
+    assert (album["kind"], album["title"], album["artist_slug"]) == \
+        ("album", "MBDTF", "kanye-west")
+
+
+def test_subject_query_prefers_extracted_spans():
+    class Route:
+        artist = "Kanye West"
+        song = "Runaway"
+
+    assert F._subject_query(Route(), "ignored") == "Runaway Kanye West"
+
+
+def test_subject_query_falls_back_to_the_message():
+    class Route:
+        artist = None
+        song = None
+
+    assert F._subject_query(Route(), "что за трек такой") == "что за трек такой"
