@@ -23,6 +23,8 @@ POINTS = [
     _point("t2", "Expensive Shit", "Fela Kuti", "fela-kuti"),
     _point("t3", "Bound 2", "Kanye West", "kanye-west"),
     _point("t4", "Blue", "Mono", "mono"),
+    _point("t5", "Grey", "Mono", "mono"),
+    _point("t6", "White", "Mono", "mono"),
 ]
 
 
@@ -45,10 +47,12 @@ def _clear_cache():
 
 @pytest.fixture
 def stub_db(monkeypatch):
-    state = {"links": [], "relations": {}, "bios": []}
+    state = {"links": [], "raw": {}, "relations": {}, "bios": []}
 
     monkeypatch.setattr(ds.MetadataDB, "get_in_library_sample_links",
                         classmethod(lambda cls, c: state["links"]))
+    monkeypatch.setattr(ds.MetadataDB, "get_song_relations_raw",
+                        classmethod(lambda cls, slugs: state["raw"]))
     monkeypatch.setattr(ds.MetadataDB, "get_song_relations_bulk",
                         classmethod(lambda cls, slugs: state["relations"]))
     monkeypatch.setattr(ds.MetadataDB, "get_artist_slugs_with_bio",
@@ -101,6 +105,22 @@ def test_relation_card_sends_a_facts_turn(stub_db):
     assert "Runaway" in card["prompt"]
 
 
+def test_relation_pairs_come_from_the_samples_json_cache_too(stub_db):
+    # The production library predates the normalized table: its links live only
+    # in songs.samples_json, entries as {song, artist}.
+    stub_db["raw"] = {
+        get_song_facts_key("Kanye West", "Runaway"): {
+            "samples": [{"song": "Expensive Shit", "artist": "Fela Kuti"},
+                        {"song": "Some 70s Funk", "artist": "Nobody Here"},
+                        {"song": "A hawk chases a dove", "artist": None}],
+            "sampled_by": [],
+        },
+    }
+    cards = _cards("relation")
+    assert len(cards) == 1                      # only the pair that resolves
+    assert cards[0]["items"][1]["track_id"] == "t2"
+
+
 def test_producer_needs_the_threshold(stub_db):
     slugs = [get_song_facts_key(p[1]["artist"], p[1]["title"]) for p in POINTS]
     stub_db["relations"] = {
@@ -116,12 +136,20 @@ def test_producer_needs_the_threshold(stub_db):
     assert "Mike Dean" in cards[0]["prompt"]
 
 
-def test_artist_card_only_for_artists_present_in_the_library(stub_db):
-    stub_db["bios"] = ["kanye-west", "someone-not-here"]
+def test_self_credited_performer_is_not_a_producer_finding(stub_db):
+    slugs = [get_song_facts_key(p[1]["artist"], p[1]["title"]) for p in POINTS]
+    # Every Mono track credits Mono — a real prod case («Lorde — 21 трек»).
+    stub_db["relations"] = {s: {"producer": "Mono"} for s in slugs[3:]}
+    assert _cards("producer") == []
+
+
+def test_artist_card_needs_a_real_presence(stub_db):
+    stub_db["bios"] = ["kanye-west", "mono", "someone-not-here"]
     cards = _cards("artist")
-    assert [c["headline"] for c in cards] == ["Kanye West"]
-    assert cards[0]["count"] == 2
-    assert cards[0]["artist_slug"] == "kanye-west"
+    # Kanye has 2 tracks here, Mono 3 — only Mono clears MIN_ARTIST_TRACKS.
+    assert [c["headline"] for c in cards] == ["Mono"]
+    assert cards[0]["count"] == 3
+    assert cards[0]["artist_slug"] == "mono"
 
 
 def test_empty_library_yields_no_cards(stub_db, monkeypatch):

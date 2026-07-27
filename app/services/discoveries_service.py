@@ -30,6 +30,7 @@ import time
 from app.resources.metadata_db import MetadataDB
 from app.services.assistant.humanize import is_ru, plural_ru
 from app.services.song_facts_service import get_song_facts_key
+from app.services.text_normalize import fold
 from app.services.track_credits_service import split_credit_names
 
 logger = logging.getLogger(__name__)
@@ -39,9 +40,17 @@ MAX_CARDS = 12
 # A producer has to recur before "12 треков у тебя" is a finding rather than a
 # credit — two tracks is a coincidence, three is a pattern worth a playlist.
 MIN_PRODUCER_TRACKS = 3
-# The three link kinds that state something unambiguous. The rest of the closed
-# list fact_relations extracts ("lyrical_reference", "inspiration", "other") is
-# exactly where its quality wobbles, so it never reaches the rail.
+# Same bar for "tell me about X": one track in the library is not an artist the
+# listener would recognise as theirs.
+MIN_ARTIST_TRACKS = 3
+# Cards are shuffled per day for variety, but only inside the strongest N of
+# each kind — shuffling the whole list is what put "Breakbot · 1 track" ahead
+# of "Limp Bizkit · 42 tracks" on the first prod run.
+TOP_POOL = 10
+# The link kinds that state something unambiguous. Note that
+# ``fact_relations.gates.ACCEPTED_RELATIONS`` already narrows the extraction to
+# sample/interpolation *before* anything is stored, so this is a second fence
+# for the normalized table, not the only one.
 ALLOWED_RELATIONS = ("sample", "interpolation", "cover")
 
 _RELATION_RU = {"sample": "сэмплирует", "interpolation": "переигрывает мотив",
@@ -88,22 +97,49 @@ def _index(points: list) -> dict:
 # ── card builders ────────────────────────────────────────────────────────────
 
 
-def _relation_cards(collection_name: str, idx: dict, ru: bool) -> list[dict]:
-    try:
-        links = MetadataDB.get_in_library_sample_links(collection_name)
-    except Exception:
-        logger.exception("[discoveries] sample links unavailable")
-        return []
+def _relation_pairs(collection_name: str, by_slug: dict) -> list[tuple]:
+    """``(src_slug, dst_slug, relation)`` for links whose both sides are here.
 
+    Two sources, because deployments differ: the normalized ``sample_links``
+    table (which already carries a resolved ``dst_slug``) and the older
+    ``songs.samples_json`` read cache, which is all a library indexed before
+    that table existed has — 1500 songs' worth on the production instance.
+    The cache stores no relation kind, but it does not need to: the extraction
+    gate writes ONLY sample/interpolation links into it.
+    """
+    pairs: list[tuple] = []
+    try:
+        for link in MetadataDB.get_in_library_sample_links(collection_name):
+            relation = (link.get("relation") or "").strip().lower()
+            if relation in ALLOWED_RELATIONS:
+                pairs.append((link["src_slug"], link["dst_slug"], relation))
+    except Exception:
+        logger.exception("[discoveries] sample_links unavailable")
+
+    try:
+        cached = MetadataDB.get_song_relations_raw(list(by_slug.keys()))
+    except Exception:
+        logger.exception("[discoveries] samples_json unavailable")
+        cached = {}
+    for slug, rel in cached.items():
+        for entry in rel.get("samples") or []:
+            song, artist = entry.get("song"), entry.get("artist")
+            # No artist means the fact named a title only — nothing to resolve
+            # against, and guessing which "A hawk chases a dove" it is would be
+            # exactly the invention this rail exists to avoid.
+            if not song or not artist:
+                continue
+            pairs.append((slug, get_song_facts_key(artist, song), "sample"))
+    return pairs
+
+
+def _relation_cards(collection_name: str, idx: dict, ru: bool) -> list[dict]:
     by_slug = idx["by_slug"]
     seen: set = set()
     cards: list[dict] = []
-    for link in links:
-        relation = (link.get("relation") or "").strip().lower()
-        if relation not in ALLOWED_RELATIONS:
-            continue
-        src = by_slug.get(link["src_slug"])
-        dst = by_slug.get(link["dst_slug"])
+    for src_slug, dst_slug, relation in _relation_pairs(collection_name, by_slug):
+        src = by_slug.get(src_slug)
+        dst = by_slug.get(dst_slug)
         if not src or not dst or src["track_id"] == dst["track_id"]:
             continue
         # One finding per pair regardless of which side the extraction stored.
@@ -144,9 +180,16 @@ def _producer_cards(collection_name: str, idx: dict, ru: bool) -> list[dict]:
         track = by_slug.get(slug)
         if not track:
             continue
+        performer = fold(track.get("artist") or "")
         for name in split_credit_names(rel.get("producer")):
             key = " ".join(name.lower().split())
             if not key:
+                continue
+            # A performer credited on their own track is not a finding: the
+            # prod run offered "Lorde produced 21 of your tracks", all of them
+            # Lorde's. Self-credits are dropped, other people's are counted.
+            folded = fold(name)
+            if folded and performer and (folded == performer or folded in performer):
                 continue
             counts[key] = counts.get(key, 0) + 1
             display.setdefault(key, name)
@@ -186,7 +229,7 @@ def _artist_cards(collection_name: str, idx: dict, ru: bool, lang: str) -> list[
     # catalogue means a fuller grounding pack behind the answer.
     for slug in sorted(slugs, key=lambda s: -len(by_artist.get(s, []))):
         artist_tracks = by_artist.get(slug) or []
-        if not artist_tracks:
+        if len(artist_tracks) < MIN_ARTIST_TRACKS:
             continue
         name = artist_tracks[0]["artist"]
         count = len(artist_tracks)
@@ -253,9 +296,13 @@ def build_discoveries(qdrant, collection_name: str, *, lang: str = "en",
     ]
     # Shuffled per day, not per request: a rail that reshuffles on every visit
     # reads as broken, one frozen forever stops being a reason to come back.
+    # Only the strongest TOP_POOL of each kind take part — the groups arrive
+    # ranked, and shuffling all of them throws that ranking away.
     seed = random.Random(f"{collection_name}:{time.strftime('%Y-%m-%d')}")
-    for group in groups:
-        seed.shuffle(group)
+    for i, group in enumerate(groups):
+        pool = group[:TOP_POOL]
+        seed.shuffle(pool)
+        groups[i] = pool
 
     cards = _interleave(groups, MAX_CARDS)
     with _LOCK:

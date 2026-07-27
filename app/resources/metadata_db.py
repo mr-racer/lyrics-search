@@ -1540,6 +1540,41 @@ class MetadataDB:
         ]
 
     @classmethod
+    def get_song_relations_raw(cls, slugs: List[str]) -> Dict[str, dict]:
+        """``{slug: {"samples": [{"song","artist"}, …], "sampled_by": [...]}}``.
+
+        Unlike :meth:`get_song_relations_bulk` this keeps the entries as stored
+        instead of flattening them to "Artist — Song" display strings — the
+        caller needs the two halves separately to resolve the other side
+        against the library. Every entry here is a sample or an interpolation:
+        ``fact_relations.gates.ACCEPTED_RELATIONS`` rejects the other link
+        kinds before anything is written.
+        """
+        if not slugs:
+            return {}
+        conn = cls._connect()
+        uniq = list(dict.fromkeys(s for s in slugs if s))
+        out: Dict[str, dict] = {}
+        for i in range(0, len(uniq), 400):
+            chunk = uniq[i:i + 400]
+            placeholders = ",".join("?" * len(chunk))
+            rows = conn.execute(
+                f"""SELECT slug, samples_json FROM songs
+                    WHERE slug IN ({placeholders}) AND samples_json IS NOT NULL""",
+                chunk,
+            ).fetchall()
+            for slug, samples_json in rows:
+                try:
+                    rel = json.loads(samples_json) or {}
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                samples = [e for e in (rel.get("samples") or []) if isinstance(e, dict)]
+                sampled_by = [e for e in (rel.get("sampled_by") or []) if isinstance(e, dict)]
+                if samples or sampled_by:
+                    out[slug] = {"samples": samples, "sampled_by": sampled_by}
+        return out
+
+    @classmethod
     def get_artist_slugs_with_bio(cls, collection_name: str, lang: str) -> List[str]:
         """Artist slugs that already have a generated biography for this
         account and language — the ones a "tell me about X" card can promise
