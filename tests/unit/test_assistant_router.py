@@ -238,3 +238,39 @@ def test_structure_field_unwraps_nested_shapes():
     assert R._structure_field({"count": {"text": "5"}}, "count") == "5"
     assert R._structure_field([{"count": "7"}], "count") == "7"
     assert R._structure_field({"count": ""}, "count") is None
+
+
+# ── the followup label ───────────────────────────────────────────────────────
+
+
+async def test_followup_label_resolves_to_the_previous_intent(fake_gliner):
+    """«а побыстрее?» is not a search — it is "the last thing, but different"."""
+    fake_gliner["scores"] = {R.FOLLOWUP: 0.7, "search": 0.2, "playlist": 0.1}
+    route = await R.route("а побыстрее?", AssistantSlots(last_intent="playlist"))
+    assert route.intent == "playlist"
+    assert route.source == "sticky"
+
+
+async def test_followup_with_nothing_to_refine_asks(fake_gliner):
+    """First message of a conversation: there is no previous turn to tweak."""
+    fake_gliner["scores"] = {R.FOLLOWUP: 0.7, "search": 0.2, "playlist": 0.1}
+    route = await R.route("а побыстрее?", AssistantSlots())
+    assert route.intent is None
+
+
+async def test_followup_never_becomes_an_executor(fake_gliner):
+    """FOLLOWUP is a routing signal, not a branch — it must never leak out as an
+    intent the service would then try to dispatch."""
+    fake_gliner["scores"] = {R.FOLLOWUP: 0.9, "search": 0.1}
+    for slots in (AssistantSlots(), AssistantSlots(last_intent="facts")):
+        route = await R.route("ещё такого же", slots)
+        assert route.intent in (None, "search", "playlist", "facts")
+
+
+async def test_a_confident_real_request_still_wins_over_stickiness(fake_gliner):
+    """«собери хиты Канье» is short, but it is a genuine playlist request —
+    the previous intent must not swallow it."""
+    fake_gliner["scores"] = {"playlist": 0.8, R.FOLLOWUP: 0.1, "search": 0.1}
+    route = await R.route("собери хиты Канье", AssistantSlots(last_intent="facts"))
+    assert route.intent == "playlist"
+    assert route.source == "gliner"

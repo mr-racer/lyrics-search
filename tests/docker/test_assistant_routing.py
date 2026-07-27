@@ -56,6 +56,18 @@ CASES = [
     ("расскажи историю создания Bohemian Rhapsody", "facts"),
 ]
 
+# Short remarks that only mean anything as a tweak to the previous turn. The
+# router must resolve them against ``last_intent`` — routing them on their own
+# content sends «а побыстрее?» into a lyric search for the word "fast".
+FOLLOWUP_CASES = [
+    "а побыстрее?",
+    "ещё такого же",
+    "а погромче",
+    "покороче давай",
+    "more like that",
+    "а что-нибудь поспокойнее",
+]
+
 # Measured on this exact fixture (2026-07-27, fastino/gliner2-multi-v1): the
 # ensemble routes 22/27 correctly with ZERO wrong branches, the remaining 5
 # asking. The floor sits just under that so normal model/threshold drift shows
@@ -146,3 +158,35 @@ def test_count_override_survives_the_real_model():
     route = asyncio.run(R.route("найди 20 треков под бег", AssistantSlots()))
     assert route.intent == "playlist"
     assert route.count == 20
+
+
+def test_followups_resolve_against_the_previous_turn():
+    """The multi-turn promise: «а побыстрее?» after a playlist must stay a
+    playlist. Before the ``followup`` label these were classified as CONFIDENT
+    searches and ran a nonsense lyric lookup."""
+    import asyncio
+
+    prev = AssistantSlots(last_intent="playlist")
+    routed = [(m, asyncio.run(R.route(m, prev))) for m in FOLLOWUP_CASES]
+    wrong = [f"{m!r}: got {r.intent} (source={r.source}, share={r.confidence})"
+             for m, r in routed if r.intent != "playlist"]
+    assert not wrong, ("follow-ups that did not stick to the previous intent:\n"
+                       + "\n".join(wrong))
+
+
+def test_a_followup_with_no_previous_turn_asks():
+    """Nothing to refine on the first message — asking beats guessing."""
+    import asyncio
+
+    route = asyncio.run(R.route("а побыстрее?", AssistantSlots()))
+    assert route.intent is None
+
+
+def test_a_short_real_request_is_not_swallowed_by_stickiness():
+    """«собери хиты Канье» is as short as a follow-up but is a real playlist
+    request — the followup label must not eat it."""
+    import asyncio
+
+    prev = AssistantSlots(last_intent="facts")
+    route = asyncio.run(R.route("собери хиты Канье", prev))
+    assert route.intent == "playlist"

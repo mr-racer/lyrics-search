@@ -59,3 +59,28 @@ def test_route_without_intent_does_not_clear_the_last_one():
     slots = AssistantSlots(last_intent="playlist")
     merged = merge_slots(slots, AssistantRoute(intent=None))
     assert merged.last_intent == "playlist"
+
+
+def test_song_span_is_ignored_on_a_playlist_turn():
+    """GLiNER labels the wish itself ("спокойного джаза на вечер") as a song on
+    playlist turns. Recording that would make a later "расскажи про эту песню"
+    resolve to nonsense."""
+    slots = AssistantSlots(last_song="Runaway")
+    route = AssistantRoute(intent="playlist", song="спокойного джаза на вечер")
+    merged = merge_slots(slots, route)
+    assert merged.last_song == "Runaway"
+
+
+def test_song_span_is_kept_on_search_and_facts_turns():
+    for intent in ("search", "facts"):
+        merged = merge_slots(AssistantSlots(),
+                             AssistantRoute(intent=intent, song="Runaway"))
+        assert merged.last_song == "Runaway"
+
+
+def test_artist_span_is_kept_on_a_playlist_turn():
+    """Unlike a title, an artist named in a playlist wish is real and useful for
+    the next turn («ещё у этого артиста»)."""
+    merged = merge_slots(AssistantSlots(),
+                         AssistantRoute(intent="playlist", artist="Kanye West"))
+    assert merged.last_artist == "Kanye West"
