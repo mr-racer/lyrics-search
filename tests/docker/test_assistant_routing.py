@@ -57,8 +57,9 @@ CASES = [
 ]
 
 # Short remarks that only mean anything as a tweak to the previous turn. The
-# router must resolve them against ``last_intent`` — routing them on their own
-# content sends «а побыстрее?» into a lyric search for the word "fast".
+# router resolves them in CODE (short + names nothing → reuse last_intent),
+# because the classifier reads them as CONFIDENT lyric searches — see the two
+# rejected model-side attempts in the router docstring.
 FOLLOWUP_CASES = [
     "а побыстрее?",
     "ещё такого же",
@@ -162,8 +163,8 @@ def test_count_override_survives_the_real_model():
 
 def test_followups_resolve_against_the_previous_turn():
     """The multi-turn promise: «а побыстрее?» after a playlist must stay a
-    playlist. Before the ``followup`` label these were classified as CONFIDENT
-    searches and ran a nonsense lyric lookup."""
+    playlist. Measured before the fix: these routed to search at share 0.51-0.63
+    and ran a nonsense lyric lookup for the word "fast"."""
     import asyncio
 
     prev = AssistantSlots(last_intent="playlist")
@@ -174,12 +175,22 @@ def test_followups_resolve_against_the_previous_turn():
                        + "\n".join(wrong))
 
 
-def test_a_followup_with_no_previous_turn_asks():
-    """Nothing to refine on the first message — asking beats guessing."""
+def test_a_followup_with_no_previous_turn_does_not_stick():
+    """On the FIRST message there is nothing to refine, so the sticky rule must
+    not fire and the classifier's own call stands.
+
+    Known limitation, accepted deliberately: «а побыстрее?» as an opening
+    message routes to search (share ~0.63) and returns something irrelevant.
+    Sending it to clarify instead would mean treating every short entity-less
+    opener that way — including legitimate wishes like «что-нибудь бодрое» —
+    and GLiNER cannot tell the two apart (see the router docstring for the two
+    measured attempts). One odd answer to a meaningless opener beats a clarify
+    prompt on every terse wish."""
     import asyncio
 
     route = asyncio.run(R.route("а побыстрее?", AssistantSlots()))
-    assert route.intent is None
+    assert route.source != "sticky"
+    assert route.intent in (None, "search", "playlist", "facts")
 
 
 def test_a_short_real_request_is_not_swallowed_by_stickiness():
