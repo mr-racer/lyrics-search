@@ -103,10 +103,8 @@ def test_asking_stays_the_exception(routed):
     asked = [m for m, _, r in routed if r.intent is None]
     rate = len(asked) / len(routed)
     assert rate <= MAX_ASK_RATE, (
-        f"router asked on {rate:.0%} of cases (max {MAX_ASK_RATE:.0%}):
-"
-        + "
-".join(repr(m) for m in asked)
+        f"router asked on {rate:.0%} of cases (max {MAX_ASK_RATE:.0%}):\n"
+        + "\n".join(repr(m) for m in asked)
     )
 
 
