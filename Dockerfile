@@ -53,7 +53,7 @@ COPY app/ ./app/
 # (src/, node_modules/) never reaches the runtime image. covers/ is a volume.
 COPY --from=frontend-build /build/dist ./frontend/dist
 COPY scripts/ ./scripts/
-COPY logging.conf __init__.py ./
+COPY logging.conf ./
 
 EXPOSE 8000
 
