@@ -17,6 +17,8 @@ approximately, or not at all — the LLM decides whether to trust a fuzzy hit.
 protocol so it can be unit-tested with a fake; ``CatalogAdapter`` binds it to
 the real ``catalog_search_service`` for one (qdrant, collection).
 """
+import re
+
 from app.services.name_match import score_names
 from app.services.text_normalize import fold
 
@@ -138,6 +140,164 @@ def resolve_songs(items, catalog, artist_filter=None):
     return results
 
 
+# ─── Tracklist auto-matching ─────────────────────────────────────────────────
+# A 500-song soundtrack cannot be "copy-typed" through a small LLM: the model
+# reads a sampled excerpt, proposes a couple dozen titles, and the library
+# intersection comes out nearly empty (observed: GTA V — 0-1 matches per pass).
+# Instead the FULL extracted tracklist is intersected with the library in code;
+# the model only curates the verified result.
+
+# "Artist — Title", "Artist - Title", "Title | Artist", with optional leading
+# numbering and trailing "(2014)" year.
+_LINE_SPLIT_RE = re.compile(r"\s(?:—|–|\||-)\s")
+_LINE_NUM_RE = re.compile(r"^\d{1,3}[.)]\s+")
+_LINE_YEAR_RE = re.compile(r"\s*\(\d{4}\)\s*$")
+_QUOTES = "\"'«»“”‘’„"
+
+
+def parse_track_line(line):
+    """Parse one track-like line into ``{"artist", "title"}`` or ``None``.
+
+    The left/right orientation is NOT decided here — sites disagree
+    ("Artist — Title" vs "Title - Artist"); ``resolve_tracklines`` tries both.
+    By convention the left side is returned as "artist".
+    """
+    if not line:
+        return None
+    s = _LINE_NUM_RE.sub("", line.strip())
+    s = _LINE_YEAR_RE.sub("", s)
+    parts = _LINE_SPLIT_RE.split(s, maxsplit=1)
+    if len(parts) != 2:
+        return None
+    left, right = (p.strip().strip(_QUOTES).strip() for p in parts)
+    if not left or not right:
+        return None
+    # Both sides must look like names, not sentence fragments.
+    if len(left) > 80 or len(right) > 120:
+        return None
+    return {"artist": left, "title": right}
+
+
+def extract_year_range(wish):
+    """Явный годовой констрейнт из текста желания → (min_year, max_year) | None.
+
+    Общие формы: «после/after/since 2020», «до/before 2000», «2010-2015»,
+    декады «00-х», «90s», «'80s», «нулевых». Голый год без предлога намеренно
+    игнорируется («gta 5», названия с числами). Фильтр применяется кодом к
+    авто-матчам: модель, умирая на финальном выводе, не успевает отфильтровать
+    эпоху сама, и фоллбэк без этого уносит в плейлист всю карьеру артиста."""
+    if not wish:
+        return None
+    low = wish.lower()
+    m = re.search(r"(?:после|after|since|начиная с)\s+((?:19|20)\d{2})", low)
+    if m:
+        return (int(m.group(1)) + (0 if "начиная" in m.group(0) or "since" in m.group(0) else 1), 3000)
+    m = re.search(r"(?:до|before)\s+((?:19|20)\d{2})", low)
+    if m:
+        return (1900, int(m.group(1)) - 1)
+    m = re.search(r"\b((?:19|20)\d{2})\s*[-–—]\s*((?:19|20)\d{2})\b", low)
+    if m:
+        return (int(m.group(1)), int(m.group(2)))
+    m = re.search(r"(?:^|\s)['’]?(\d0)(?:-?х|s|х)(?:\s|$|[,.!?])", low)
+    if m:
+        dec = int(m.group(1))
+        base = 1900 + dec if dec >= 30 else 2000 + dec
+        return (base, base + 9)
+    if re.search(r"нулев", low):
+        return (2000, 2009)
+    return None
+
+
+def _fuzzy_acceptable_strict(qtitle, qartist, hit):
+    """Гейт для МАССОВОГО авто-пересечения (сотни строк — ложняки стреляют
+    чаще, а модель их не ревьюит). Отличие легитимного нечёткого хита от
+    ложного — направление вложенности: запрос содержится в названии кандидата
+    («Swimming Pools (Drank)» ⊂ «…[Extended Version]»), а у ложняка кандидат
+    короче запроса («Dangerous» при запросе «Dangerous Tonight»)."""
+    qk, hk = _title_key(qtitle), _title_key(hit.get("title"))
+    title_ok = (bool(qk) and bool(hk) and qk in hk) \
+        or _similar(qtitle, hit.get("title")) >= 0.75
+    if not title_ok:
+        return False
+    if qartist:
+        return (_artist_matches(qartist, hit.get("artist"))
+                or _similar(qartist, hit.get("artist")) >= 0.75)
+    return True
+
+
+def resolve_tracklines(lines, catalog, max_fuzzy=120):
+    """Intersect extracted tracklist ``lines`` with the library, deterministically.
+
+    Exact matching (both orientations) over every parsed line; the fuzzy
+    BM25F fallback is capped at ``max_fuzzy`` misses to bound latency on
+    huge soundtracks. Returns ONLY the matches:
+    ``[{"track_id", "title", "artist", "match"}]``, input order, deduped.
+    """
+    parsed = []
+    seen = set()
+    for ln in lines:
+        p = parse_track_line(ln)
+        if p is None:
+            continue
+        key = (fold(p["artist"]), fold(p["title"]))
+        if key in seen or (key[1], key[0]) in seen:
+            continue
+        seen.add(key)
+        # Год из исходной строки (год ОРИГИНАЛЬНОГО релиза со страницы, не из
+        # тега библиотеки) — модель фильтрует эпоху по компактному списку
+        # матчей, не видя самой страницы.
+        ym = re.search(r"\((\d{4})\)", ln)
+        p["year"] = ym.group(1) if ym else None
+        parsed.append(p)
+    if not parsed:
+        return []
+
+    by_title = {}
+    for s in catalog.iter_songs():
+        by_title.setdefault(_title_key(s.get("title")), []).append(s)
+
+    out, out_ids, fuzzy_left = [], set(), max_fuzzy
+    for p in parsed:
+        picked = None
+        mode = "none"
+        for artist, title in ((p["artist"], p["title"]), (p["title"], p["artist"])):
+            candidates = by_title.get(_title_key(title), [])
+            picked = next(
+                (c for c in candidates if _artist_matches(artist, c.get("artist"))),
+                None,
+            )
+            if picked is not None:
+                mode = "exact"
+                break
+        if picked is None and fuzzy_left > 0:
+            fuzzy_left -= 1
+            hits = catalog.search_tracks_fuzzy(_title_key(p["title"]), limit=3)
+            picked = next(
+                (h for h in hits
+                 if _fuzzy_acceptable_strict(p["title"], p["artist"], h)),
+                None,
+            )
+            if picked is not None:
+                mode = "fuzzy"
+        if picked is None:
+            continue
+        tid = picked.get("track_id")
+        if tid in out_ids:
+            continue
+        out_ids.add(tid)
+        # Год: приоритетно из строки страницы (оригинальный релиз), иначе из
+        # тега библиотеки — матч без года прозрачен для кодового фильтра эпохи
+        # и протаскивает всю карьеру артиста мимо «после 2020».
+        year = p.get("year")
+        if not year and picked.get("year"):
+            ly = str(picked["year"]).strip()[:4]
+            year = ly if ly.isdigit() else None
+        out.append({"track_id": tid, "title": picked.get("title"),
+                    "artist": picked.get("artist"), "match": mode,
+                    "year": year})
+    return out
+
+
 class CatalogAdapter:
     """Bind ``resolve_songs``'s duck-typed protocol to the real
     ``catalog_search_service`` for one ``(qdrant, collection_name)``."""
@@ -155,7 +315,8 @@ class CatalogAdapter:
         return [
             {"track_id": d.meta.get("track_id"),
              "title": d.meta.get("title"),
-             "artist": d.meta.get("artist", "")}
+             "artist": d.meta.get("artist", ""),
+             "year": d.meta.get("year")}
             for d in index.songs.docs
         ]
 

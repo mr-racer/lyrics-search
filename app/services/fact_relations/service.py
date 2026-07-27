@@ -1,30 +1,47 @@
-"""Pipeline entry point: raw facts -> GLiNER2 -> triage -> LLM -> DB write.
+"""Pipeline entry point: raw facts -> GLiNER2 -> LLM classifier -> gates -> DB.
 
-For each fact of a song: run the (lazy, injectable) GLiNER2 extractor, triage
-its output (Task 2) into AS_IS / LLM buckets, resolve the LLM bucket with one
-LLM call per fact (Task 3's mark/build/parse), merge AS_IS + LLM per fact, and
-accumulate the merged result across all facts of the song. The final
-producers/samples/sampled_by dict is written to ``songs.producers`` /
-``songs.samples_json`` via ``db.set_song_relations`` and returned.
+Four stages, in order of how much they cost:
+
+1. **Lexical prefilter** (:mod:`gates`). A fact is read for samples only if it
+   says in words that sound was taken. On the 2026-07-26 snapshot this alone
+   removes the whole Adele/"Hello" family — *"the first line matches the
+   melody of Lionel Richie's…"* — before any triage runs. It guards the sample
+   leg only: producers are a separate feature and keep their old behaviour.
+2. **GLiNER2 + triage** find candidate spans and split them into AS_IS
+   (explicit wording) and LLM (needs a decision).
+3. **The LLM classifies, it does not confirm.** It answers *what kind of link
+   is this* from a closed list — sample, interpolation, cover, remix,
+   lyrical_reference, inspiration, other. Asking a 12B model "should this be
+   included?" was the old design and it drowned; asking "what is it?" is a
+   question with a checkable answer.
+4. **Code gates** (:func:`gates.apply_gates`) drop what is decidable without a
+   model: self-references, same-album links, impossible release order,
+   contradictory directions, duplicates, and anything past the per-song cap.
+
+Claims accumulate across ALL of a song's facts and are gated once at the end —
+the cap and the both-directions check are only meaningful over the whole set.
 
 Both GLiNER2 and the LLM are optional in practice: a per-fact extractor
-failure is logged and that fact is skipped (its AS_IS/LLM contribution is
-just empty); a failing/unavailable LLM (``ask_llm_fn`` raises, or returns
-None/unparsable output) degrades to AS_IS-only for that fact. Nothing here
-raises out to the caller -- see the try/except hook in
-``song_facts_service.py`` for the outermost safety net during indexing.
+failure is logged and that fact is skipped; a failing/unavailable LLM degrades
+to AS_IS-only for that fact. Nothing here raises out to the caller.
 """
 import asyncio
 import json
 import logging
 
 from .extractor import get_extractor
+from .gates import (
+    SongContext,
+    apply_gates,
+    fact_mentions_sampling,
+    links_to_relations,
+)
 from .llm_re import build_llm_messages, mark_fact, merge_results, parse_llm_re
 from .triage import triage_producer, triage_samples
 
 logger = logging.getLogger(__name__)
 
-_EMPTY = {"producers": [], "samples": [], "sampled_by": []}
+_EMPTY = {"producers": [], "links": []}
 
 
 def _clean(v):
@@ -32,12 +49,23 @@ def _clean(v):
 
 
 def _as_is_dict(producer_hits, source_hits, usage_hits):
+    """Triage's confident hits in the classifier's own shape.
+
+    AS_IS means the fact used explicit sampling wording (``SOURCE_CUE`` /
+    ``USAGE_CUE``), so the relation is already known — the LLM is not needed
+    to label these, only to label the rest.
+    """
     producers = [name for bucket, name in producer_hits if bucket == "AS_IS"]
-    samples = [{"song": _clean(song), "artist": _clean(artist)}
-               for bucket, song, artist in source_hits if bucket == "AS_IS"]
-    sampled_by = [{"song": _clean(song), "artist": _clean(artist)}
-                  for bucket, song, artist in usage_hits if bucket == "AS_IS"]
-    return {"producers": producers, "samples": samples, "sampled_by": sampled_by}
+    links = []
+    for bucket, song, artist in source_hits:
+        if bucket == "AS_IS":
+            links.append({"song": _clean(song), "artist": _clean(artist),
+                          "relation": "sample", "direction": "source"})
+    for bucket, song, artist in usage_hits:
+        if bucket == "AS_IS":
+            links.append({"song": _clean(song), "artist": _clean(artist),
+                          "relation": "sample", "direction": "usage"})
+    return {"producers": producers, "links": links}
 
 
 def _llm_candidates(producer_hits, source_hits, usage_hits):
@@ -58,9 +86,9 @@ def _llm_candidates(producer_hits, source_hits, usage_hits):
 def _resolve_llm(fact, candidates, title, artist, ask_llm_fn):
     """Run the LLM leg for one fact's LLM-bucket candidates.
 
-    Returns a parsed dict (Task 3 shape) or ``None`` -- never raises, so an
-    unreachable/misbehaving LLM just means this fact's LLM bucket contributes
-    nothing (AS_IS results still get written).
+    Returns a parsed dict (classifier shape) or ``None`` -- never raises, so
+    an unreachable/misbehaving LLM just means this fact's LLM bucket
+    contributes nothing (AS_IS results still get written).
     """
     marked = mark_fact(fact, candidates)
     messages = build_llm_messages(title, artist, marked)
@@ -78,26 +106,12 @@ def _resolve_llm(fact, candidates, title, artist, ask_llm_fn):
         return None
 
 
-def process_song_facts(slug, facts, title, artist, db, ask_llm_fn, extractor=None):
-    """Extract producers/samples from ``facts`` and persist them for ``slug``.
+def collect_claims(facts, title, artist, ask_llm_fn, extractor=None):
+    """Every producer name and candidate link a song's facts yield, ungated.
 
-    Parameters
-    ----------
-    slug        : song slug (``songs.slug``).
-    facts       : raw fact strings for this song (English).
-    title       : subject song title (for triage/LLM subject matching).
-    artist      : subject artist name or slug (LLM normalizes dashes).
-    db          : object exposing ``set_song_relations(slug, producers_json,
-                  samples_json)`` -- production passes the ``MetadataDB`` class.
-    ask_llm_fn  : callable(messages) -> dict|str|None. Called once per fact
-                  that has any LLM-bucket candidate. May raise or return None;
-                  both degrade gracefully to AS_IS-only for that fact.
-    extractor   : object exposing ``extract(fact) -> dict`` (GLiNER2 output
-                  shape). Defaults to the lazy ``get_extractor()`` singleton;
-                  tests inject a fake to avoid loading torch/gliner2.
-
-    Returns the merged ``{"producers": [...], "samples": [...],
-    "sampled_by": [...]}`` dict that was written to the DB.
+    Split out from :func:`process_song_facts` so the dry-run script can see
+    what the model produced *before* the gates ran — that is the "было ->
+    стало" column of its report.
     """
     extractor = extractor or get_extractor()
     final = dict(_EMPTY)
@@ -106,11 +120,17 @@ def process_song_facts(slug, facts, title, artist, db, ask_llm_fn, extractor=Non
         try:
             gliner_out = extractor.extract(fact)
         except Exception as e:
-            logger.warning("[fact_relations] slug=%s extraction failed on a fact: %s", slug, e)
+            logger.warning("[fact_relations] extraction failed on a fact: %s", e)
             continue
 
+        # The prefilter deliberately guards the SAMPLE leg only. Producers are
+        # a separate feature with its own consumers (the credits drawer), and
+        # silently changing what they see is not this change's business.
         producer_hits = triage_producer(fact, gliner_out, title)
-        source_hits, usage_hits = triage_samples(fact, gliner_out, title, artist)
+        source_hits, usage_hits = (
+            triage_samples(fact, gliner_out, title, artist)
+            if fact_mentions_sampling(fact) else ([], [])
+        )
 
         as_is = _as_is_dict(producer_hits, source_hits, usage_hits)
         candidates = _llm_candidates(producer_hits, source_hits, usage_hits)
@@ -120,8 +140,54 @@ def process_song_facts(slug, facts, title, artist, db, ask_llm_fn, extractor=Non
             llm_result = _resolve_llm(fact, candidates, title, artist, ask_llm_fn)
 
         merged = merge_results(as_is, llm_result)
+        for link in merged["links"]:
+            link.setdefault("evidence", fact)
         final = merge_results(final, merged)
 
+    return final
+
+
+def process_song_facts(
+    slug, facts, title, artist, db, ask_llm_fn, extractor=None, ctx=None,
+):
+    """Extract producers/samples from ``facts`` and persist them for ``slug``.
+
+    Parameters
+    ----------
+    slug        : song slug (``songs.slug``).
+    facts       : raw fact strings for this song (English).
+    title       : subject song title (for triage/LLM subject matching).
+    artist      : subject artist name or slug (LLM normalizes dashes).
+    db          : object exposing ``set_song_relations`` and, when ``ctx``
+                  carries a collection, ``replace_sample_links``.
+    ask_llm_fn  : callable(messages) -> dict|str|None. Called once per fact
+                  that has any LLM-bucket candidate. May raise or return None;
+                  both degrade gracefully to AS_IS-only for that fact.
+    extractor   : object exposing ``extract(fact) -> dict`` (GLiNER2 output
+                  shape). Defaults to the lazy ``get_extractor()`` singleton;
+                  tests inject a fake to avoid loading torch/gliner2.
+    ctx         : :class:`gates.SongContext` with the album/year/library data
+                  the gates check against. Without it only the model-free
+                  gates (relation kind, missing artist, self-title) can fire.
+
+    Returns the gated ``{"producers": [...], "samples": [...],
+    "sampled_by": [...]}`` dict that was written to the DB.
+    """
+    ctx = ctx or SongContext(slug=slug, title=title, artist=artist)
+    claims = collect_claims(facts, title, artist, ask_llm_fn, extractor)
+    links, rejected = apply_gates(claims["links"], ctx)
+    if rejected:
+        logger.info(
+            "[fact_relations] slug=%s: %d link(s) kept, %d rejected (%s)",
+            slug, len(links), len(rejected),
+            ", ".join(sorted({r for _c, r in rejected})),
+        )
+
+    if ctx.collection_name and hasattr(db, "replace_sample_links"):
+        db.replace_sample_links(ctx.collection_name, slug, links)
+
+    relations = links_to_relations(links)
+    final = {"producers": claims["producers"], **relations}
     db.set_song_relations(
         slug,
         json.dumps(final["producers"]),
@@ -130,7 +196,9 @@ def process_song_facts(slug, facts, title, artist, db, ask_llm_fn, extractor=Non
     return final
 
 
-async def process_song_facts_async(slug, facts, title, artist, db, extractor=None):
+async def process_song_facts_async(
+    slug, facts, title, artist, db, extractor=None, ctx=None,
+):
     """Async wrapper around :func:`process_song_facts` for event-loop callers.
 
     The pipeline is synchronous and CPU-bound (GLiNER2), so it runs in
@@ -138,8 +206,7 @@ async def process_song_facts_async(slug, facts, title, artist, db, extractor=Non
     ``llm_client.ask_llm`` back onto the running loop via
     ``run_coroutine_threadsafe`` rather than spinning up a second event loop --
     that keeps ``llm_client``'s process-global async HTTP client on the single
-    loop it was created on. Shared by the inline indexing hook
-    (``song_facts_service``) and the ``fact_relations`` backfill ai_task.
+    loop it was created on.
     """
     from app.services.llm_client import ask_llm
 
@@ -153,5 +220,5 @@ async def process_song_facts_async(slug, facts, title, artist, db, extractor=Non
         ).result()
 
     return await asyncio.to_thread(
-        process_song_facts, slug, facts, title, artist, db, _ask, extractor,
+        process_song_facts, slug, facts, title, artist, db, _ask, extractor, ctx,
     )

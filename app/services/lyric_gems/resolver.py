@@ -50,12 +50,17 @@ Rules:
    {"verdict":"yes"|"no","canonical":"<proper name or empty>","why":"<one short sentence>"}
    If verdict is "no", canonical MUST be ""."""
 
-_ALIAS_SYSTEM = """List widely known aliases of the music artist named by the user:
-nicknames, real name, former stage names. Only aliases that are commonly used
-to refer to THIS artist and are verifiable common knowledge. If you are not
-sure the artist has well-known aliases, return an empty list. Never invent,
-never include other artists, never include the name itself.
-Reply with STRICT JSON and nothing else: {"aliases":["...","..."]}"""
+_ALIAS_SYSTEM = """You describe the identity of ONE music artist named by the user.
+
+"aliases": other names for the SAME act — nicknames, real name, former stage
+names. Only names commonly used to refer to THIS artist.
+"members": if the artist is a group, duo or collective, the stage names of its
+members. Empty list for a solo artist. Featured guests are NOT members.
+
+Only verifiable common knowledge. If you are not sure, return empty lists.
+Never invent, never include the artist's own name in either list.
+Reply with STRICT JSON and nothing else:
+{"aliases":["...","..."],"members":["...","..."]}"""
 
 
 def parse_strict_json(raw: str) -> Optional[dict]:
@@ -162,16 +167,33 @@ async def verify_candidate(
         return _no(f"agent error: {e}")
 
 
+def _clean_name_list(raw, artist_name: str, cap: int = 10) -> List[str]:
+    """Strip, dedup and cap a model-returned list of artist names."""
+    out: List[str] = []
+    seen = set()
+    for a in raw if isinstance(raw, list) else []:
+        if not isinstance(a, str):
+            continue
+        a = a.strip()
+        key = a.lower()
+        # the model sometimes echoes the artist's own name — drop it
+        if not a or key == artist_name.lower() or key in seen or len(a) < 2:
+            continue
+        seen.add(key)
+        out.append(a)
+    return out[:cap]
+
+
 async def fetch_artist_aliases(
     artist_name: str,
     base_url: Optional[str] = None,
     model_name: Optional[str] = None,
-) -> Optional[List[str]]:
-    """Well-known aliases of ``artist_name``.
+) -> Optional[dict]:
+    """``{"aliases": [...], "members": [...]}`` for ``artist_name``.
 
-    Returns ``[]`` for a genuine "no known aliases" (the caller may cache the
-    marker forever) but ``None`` when the LLM call itself failed — so a down
-    LLM never permanently buries an artist's aliases behind the marker."""
+    Returns both lists empty for a genuine "nothing known" (the caller may
+    cache the marker forever) but ``None`` when the LLM call itself failed —
+    so a down LLM never permanently buries an artist behind the marker."""
     try:
         from app.services.llm_client import ask_llm
 
@@ -184,23 +206,11 @@ async def fetch_artist_aliases(
         )
         parsed = parse_strict_json(raw or "")
         if not parsed:
-            return []
-        aliases = parsed.get("aliases")
-        if not isinstance(aliases, list):
-            return []
-        out = []
-        seen = set()
-        for a in aliases:
-            if not isinstance(a, str):
-                continue
-            a = a.strip()
-            key = a.lower()
-            # the model sometimes echoes the artist's own name — drop it
-            if not a or key == artist_name.lower() or key in seen or len(a) < 2:
-                continue
-            seen.add(key)
-            out.append(a)
-        return out[:10]
+            return {"aliases": [], "members": []}
+        return {
+            "aliases": _clean_name_list(parsed.get("aliases"), artist_name),
+            "members": _clean_name_list(parsed.get("members"), artist_name),
+        }
     except Exception as e:
         logger.warning("[gems-aliases] LLM error for %r: %s", artist_name, e)
         return None

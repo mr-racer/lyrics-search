@@ -338,6 +338,44 @@ class TestProducerCredits:
             assert got["Kanye West"]["artist_slug"] is None
 
 
+class TestSampleResolve:
+    def test_resolve_matches_and_keeps_alignment(self):
+        app = create_app()
+        _login_credits(app, "alice")
+        _seed_credit_tracks("acct_alice")
+        with TestClient(app) as c:
+            resp = c.post("/api/v1/library/samples/resolve", json={
+                "items": [
+                    "Kanye West — Runaway",       # in the library → match
+                    "James Brown — Funky Drummer",  # not here → null
+                ],
+            })
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["collection_name"] == "acct_alice"
+            assert body["matches"][0]["track_id"] == "t1"
+            assert body["matches"][0]["cover_art_path"] is None
+            assert body["matches"][1] is None
+
+    def test_no_cross_account_leak(self):
+        app = create_app()
+        _login_credits(app, "bob")
+        _seed_credit_tracks("acct_alice")
+        with TestClient(app) as c:
+            resp = c.post("/api/v1/library/samples/resolve",
+                          json={"items": ["Kanye West — Runaway"]})
+            assert resp.status_code == 200
+            assert resp.json()["matches"] == [None]
+
+    def test_empty_items(self):
+        app = create_app()
+        _login_credits(app, "alice")
+        with TestClient(app) as c:
+            resp = c.post("/api/v1/library/samples/resolve", json={"items": []})
+            assert resp.status_code == 200
+            assert resp.json()["matches"] == []
+
+
 class TestAlbumLabelFilter:
     def test_albums_carry_labels_and_label_param_filters(self):
         app = create_app()

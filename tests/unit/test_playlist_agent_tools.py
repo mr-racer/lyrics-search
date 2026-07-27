@@ -140,9 +140,50 @@ async def test_web_search_capped_at_six(monkeypatch):
 
 
 @pytest.mark.unit
+async def test_web_search_repeated_query_deduped(monkeypatch):
+    """A looping model re-asking the same query must not burn the search
+    budget: the repeat is answered with a marker, without hitting the web."""
+    from pydantic_ai.messages import ModelResponse, ToolCallPart, ToolReturnPart
+    from pydantic_ai.models.function import FunctionModel
+
+    from app.services.playlist_agent.agent import create_playlist_agent
+
+    hits = {"n": 0}
+    monkeypatch.setattr(
+        "app.services.playlist_agent.agent.smart_web_search",
+        lambda q, fetch, n, rank, lines_out=None:
+            hits.__setitem__("n", hits["n"] + 1) or "some titles",
+    )
+
+    calls = {"n": 0}
+
+    def scripted(messages, info):
+        calls["n"] += 1
+        if calls["n"] <= 3:
+            # same query three times (case/space variations must not matter)
+            q = ["gta 5 soundtrack", "GTA 5  soundtrack", "gta 5 soundtrack"][calls["n"] - 1]
+            return ModelResponse(parts=[ToolCallPart("web_search", {"query": q})])
+        return ModelResponse(parts=[ToolCallPart("final_result", {
+            "title": "t", "track_ids": [], "comment": "", "missing": [],
+        })])
+
+    state = {"web": 0, "resolved": {}, "missing": [], "on_status": None}
+    agent = create_playlist_agent(FunctionModel(scripted), FakeDeps(), FakeCatalog(), state)
+    result = await agent.run("[lang=ru] песни из gta 5")
+
+    assert hits["n"] == 1          # the web was hit exactly once
+    assert state["web"] == 1       # budget consumed once
+    returns = [p for m in result.all_messages() for p in getattr(m, "parts", [])
+               if isinstance(p, ToolReturnPart) and p.tool_name == "web_search"]
+    assert "already searched" in str(returns[1].content)
+    assert "already searched" in str(returns[2].content)
+
+
+@pytest.mark.unit
 async def test_web_search_fetch_content_passthrough(monkeypatch):
-    """fetch_content=true from the model reaches smart_web_search and trims
-    max_results to 3 (full pages are ~4k chars each)."""
+    """fetch_content=true from the model reaches smart_web_search, trims
+    max_results to 3 (full pages are ~4k chars each), and passes the
+    rank="playlist" profile so the code re-ranker + top-page read kick in."""
     from pydantic_ai.messages import ModelResponse, ToolCallPart
     from pydantic_ai.models.function import FunctionModel
 
@@ -151,7 +192,8 @@ async def test_web_search_fetch_content_passthrough(monkeypatch):
     seen = []
     monkeypatch.setattr(
         "app.services.playlist_agent.agent.smart_web_search",
-        lambda q, fetch, n: seen.append((q, fetch, n)) or "tracklist text",
+        lambda q, fetch, n, rank, lines_out=None:
+            seen.append((q, fetch, n, rank)) or "tracklist text",
     )
 
     calls = {"n": 0}
@@ -170,7 +212,7 @@ async def test_web_search_fetch_content_passthrough(monkeypatch):
     agent = create_playlist_agent(FunctionModel(scripted), FakeDeps(), FakeCatalog(), state)
     await agent.run("[lang=ru] саундтрек watch dogs")
 
-    assert seen == [("watch dogs soundtrack tracklist", True, 3)]
+    assert seen == [("watch dogs soundtrack tracklist", True, 3, "playlist")]
 
 
 @pytest.mark.unit
@@ -183,7 +225,7 @@ async def test_usage_limit_returns_partial_draft(monkeypatch):
     from app.services.playlist_agent import agent as agent_mod
 
     monkeypatch.setattr(agent_mod, "smart_web_search",
-                        lambda q, fetch, n: "Kanye West hits: Stronger")
+                        lambda q, fetch, n, rank: "Kanye West hits: Stronger")
 
     calls = {"n": 0}
 
@@ -209,4 +251,254 @@ async def test_usage_limit_returns_partial_draft(monkeypatch):
 
     assert draft.track_ids == ["1"]
     assert "1" in state["resolved"]
-    assert "оборвался" in draft.comment
+    assert "нашлось" in draft.comment
+
+
+@pytest.mark.unit
+async def test_llm_backend_down_returns_partial_draft(monkeypatch):
+    """The LLM serving layer dying mid-run (gemma looping until the server
+    drops connections → ModelAPIError 'Connection error.') must degrade to a
+    partial draft exactly like a structural failure — not crash the stream."""
+    from pydantic_ai.exceptions import ModelAPIError
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+    from pydantic_ai.models.function import FunctionModel
+
+    from app.services.playlist_agent import agent as agent_mod
+
+    monkeypatch.setattr(agent_mod, "smart_web_search",
+                        lambda q, fetch, n, rank: "Kanye West hits: Stronger")
+
+    calls = {"n": 0}
+
+    def scripted(messages, info):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ModelResponse(parts=[ToolCallPart("web_search", {"query": "kanye hits"})])
+        if calls["n"] == 2:
+            return ModelResponse(parts=[ToolCallPart(
+                "get_songs", {"items": [{"title": "Stronger", "artist": "Kanye West"}]})])
+        raise ModelAPIError(model_name="gemma-12b", message="Connection error.")
+
+    monkeypatch.setattr(agent_mod, "_create_pydantic_model",
+                        lambda base, name: FunctionModel(scripted))
+
+    state = {}
+    draft = await agent_mod.run_playlist_agent(
+        "песни из gta 5", "ru", FakeDeps(), FakeCatalog(), state)
+
+    assert draft.track_ids == ["1"]
+    assert "1" in state["resolved"]
+
+
+@pytest.mark.unit
+async def test_model_failure_returns_partial_draft(monkeypatch):
+    """A model that errors on the final structured output (e.g. a quantized
+    model whose serving layer returns 500 'output does not match grammar' →
+    ModelHTTPError, or an invalid tool call → UnexpectedModelBehavior) must
+    still yield a partial draft from what get_songs already matched — not crash
+    the whole stream route."""
+    from pydantic_ai.exceptions import UnexpectedModelBehavior
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+    from pydantic_ai.models.function import FunctionModel
+
+    from app.services.playlist_agent import agent as agent_mod
+
+    monkeypatch.setattr(agent_mod, "smart_web_search",
+                        lambda q, fetch, n, rank: "Kanye West hits: Stronger")
+
+    calls = {"n": 0}
+
+    def scripted(messages, info):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ModelResponse(parts=[ToolCallPart("web_search", {"query": "kanye hits"})])
+        if calls["n"] == 2:
+            return ModelResponse(parts=[ToolCallPart(
+                "get_songs", {"items": [{"title": "Stronger", "artist": "Kanye West"}]})])
+        # Model breaks on the final structured output.
+        raise UnexpectedModelBehavior("model produced output that does not match grammar")
+
+    monkeypatch.setattr(agent_mod, "_create_pydantic_model",
+                        lambda base, name: FunctionModel(scripted))
+
+    state = {}
+    draft = await agent_mod.run_playlist_agent(
+        "саундтрек watch dogs", "ru", FakeDeps(), FakeCatalog(), state)
+
+    # Did not crash; salvaged the one resolved track.
+    assert draft.track_ids == ["1"]
+    assert "1" in state["resolved"]
+
+
+@pytest.mark.unit
+async def test_web_search_automatch_and_mkey_translation(monkeypatch):
+    """web_search collects the full tracklist, code intersects it with the
+    library, the model gets short M-keys, and the final draft's M-keys are
+    translated back to real track_ids."""
+    from pydantic_ai.messages import ModelResponse, ToolCallPart, ToolReturnPart
+    from pydantic_ai.models.function import FunctionModel
+
+    from app.services.playlist_agent import agent as agent_mod
+
+    def fake_search(q, fetch, n, rank, lines_out=None):
+        if lines_out is not None:
+            lines_out.extend(["Kanye West — Stronger", "Nobody — Ghost Song"])
+        return "### page\nsampled lines"
+
+    monkeypatch.setattr(agent_mod, "smart_web_search", fake_search)
+
+    calls = {"n": 0}
+
+    def scripted(messages, info):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ModelResponse(parts=[ToolCallPart(
+                "web_search", {"query": "gta 5 tracklist", "fetch_content": True})])
+        return ModelResponse(parts=[ToolCallPart("final_result", {
+            "title": "t", "track_ids": ["M1"], "comment": "", "missing": [],
+        })])
+
+    monkeypatch.setattr(agent_mod, "_create_pydantic_model",
+                        lambda base, name: FunctionModel(scripted))
+
+    state = {}
+    draft = await agent_mod.run_playlist_agent(
+        "песни из gta 5", "ru", FakeDeps(), FakeCatalog(), state)
+
+    # library intersection done in code; M-key resolved to the real id
+    assert draft.track_ids == ["1"]
+    assert state["resolved"]["1"]["title"] == "Stronger"
+    assert state["automatch"] == {"M1": "1"}
+
+
+@pytest.mark.unit
+async def test_seed_search_runs_before_model(monkeypatch):
+    """The first web search is issued by CODE with the raw wish text before the
+    model starts: weak models phrase the opening query badly ("popular songs…")
+    and sink the whole run. The model must start already holding the seed's
+    LIBRARY MATCHES."""
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+    from pydantic_ai.models.function import FunctionModel
+
+    from app.services.playlist_agent import agent as agent_mod
+
+    searched = []
+
+    def fake_search(q, fetch, n, rank, lines_out=None):
+        searched.append((q, fetch))
+        if lines_out is not None:
+            lines_out.append("Kanye West — Stronger")
+        return "### page"
+
+    monkeypatch.setattr(agent_mod, "smart_web_search", fake_search)
+
+    prompts = []
+
+    def scripted(messages, info):
+        prompts.append(str(messages))
+        return ModelResponse(parts=[ToolCallPart("final_result", {
+            "title": "t", "track_ids": ["M1"], "comment": "", "missing": [],
+        })])
+
+    monkeypatch.setattr(agent_mod, "_create_pydantic_model",
+                        lambda base, name: FunctionModel(scripted))
+
+    state = {}
+    draft = await agent_mod.run_playlist_agent(
+        "песни из gta 5", "ru", FakeDeps(), FakeCatalog(), state)
+
+    # seed ran with the raw wish, full-content, before the model's first call
+    assert searched[0] == ("песни из gta 5", True)
+    assert state["web"] == 1
+    # the model saw the seed's matches and could finish without searching
+    assert "LIBRARY MATCHES" in prompts[0]
+    assert draft.track_ids == ["1"]
+
+
+@pytest.mark.unit
+async def test_get_songs_refuses_oversized_batches(monkeypatch):
+    """Copy-typing a whole tracklist into one get_songs call is the observed
+    generation-degradation trigger — >30 items are refused with guidance."""
+    from pydantic_ai.messages import ModelResponse, ToolCallPart, ToolReturnPart
+    from pydantic_ai.models.function import FunctionModel
+
+    from app.services.playlist_agent.agent import create_playlist_agent
+
+    monkeypatch.setattr(
+        "app.services.playlist_agent.agent.smart_web_search",
+        lambda q, fetch, n, rank, lines_out=None: "titles",
+    )
+
+    calls = {"n": 0}
+
+    def scripted(messages, info):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ModelResponse(parts=[ToolCallPart("web_search", {"query": "q"})])
+        if calls["n"] == 2:
+            return ModelResponse(parts=[ToolCallPart("get_songs", {
+                "items": [{"title": f"S{i}", "artist": f"A{i}"} for i in range(90)]})])
+        return ModelResponse(parts=[ToolCallPart("final_result", {
+            "title": "t", "track_ids": [], "comment": "", "missing": [],
+        })])
+
+    state = {"web": 0, "resolved": {}, "missing": [], "on_status": None}
+    agent = create_playlist_agent(FunctionModel(scripted), FakeDeps(), FakeCatalog(), state)
+    result = await agent.run("[lang=ru] песни из gta 5")
+
+    returns = [p for m in result.all_messages() for p in getattr(m, "parts", [])
+               if isinstance(p, ToolReturnPart) and p.tool_name == "get_songs"]
+    assert "too many items" in str(returns[0].content)
+    assert state["resolved"] == {}
+
+
+@pytest.mark.unit
+async def test_automatch_era_filter_and_fallback_order(monkeypatch):
+    """«после 2020»: авто-матчи с известным годом вне диапазона отбрасываются
+    кодом, а частичный фоллбэк ставит get_songs-курированные треки первыми."""
+    from pydantic_ai.messages import ModelResponse, ToolCallPart
+    from pydantic_ai.models.function import FunctionModel
+
+    from app.services.playlist_agent import agent as agent_mod
+
+    class TwoTrackCatalog:
+        def iter_songs(self):
+            return [
+                {"track_id": "old", "title": "Stronger", "artist": "Kanye West"},
+                {"track_id": "new", "title": "Burn", "artist": "Kanye West"},
+                {"track_id": "cur", "title": "Hurricane", "artist": "Kanye West"},
+            ]
+
+        def search_tracks_fuzzy(self, q, limit=3):
+            return []
+
+    def fake_search(q, fetch, n, rank, lines_out=None):
+        if lines_out is not None:
+            lines_out.extend([
+                "Kanye West — Stronger (2007)",   # вне диапазона — дропнуть
+                "Kanye West — Burn (2024)",        # в диапазоне — оставить
+            ])
+        return "### page"
+
+    monkeypatch.setattr(agent_mod, "smart_web_search", fake_search)
+
+    calls = {"n": 0}
+
+    def scripted(messages, info):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return ModelResponse(parts=[ToolCallPart(
+                "get_songs", {"items": [{"title": "Hurricane", "artist": "Kanye West"}]})])
+        # финальный вывод срывается — работает фоллбэк
+        raise agent_mod.UnexpectedModelBehavior("broken final output")
+
+    monkeypatch.setattr(agent_mod, "_create_pydantic_model",
+                        lambda base, name: FunctionModel(scripted))
+
+    state = {}
+    draft = await agent_mod.run_playlist_agent(
+        "хиты канье после 2020", "ru", FakeDeps(), TwoTrackCatalog(), state)
+
+    assert "old" not in draft.track_ids           # 2007 отфильтрован кодом
+    assert draft.track_ids[0] == "cur"            # get_songs-матч первый
+    assert "new" in draft.track_ids               # 2024 остался

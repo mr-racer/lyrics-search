@@ -106,9 +106,16 @@ async def _scroll_tracks(qdrant, collection_name: str) -> list[dict]:
     return await asyncio.to_thread(_scroll_sync)
 
 
-def _collect_library_artists(tracks: list[dict]) -> dict[str, str]:
-    """{slug: display_name} over the collection (payload slugs preferred)."""
+def _collect_library_artists(tracks: list[dict]) -> tuple[dict[str, str], dict[str, int]]:
+    """``({slug: display_name}, {slug: track_count})`` over the collection.
+
+    The counts feed ``matching.RARE_ARTIST_TRACKS``: a one-word name belonging
+    to an artist with almost no tracks here ("Kobe") is far more likely to be
+    someone else entirely in another artist's lyrics, so it goes to the LLM
+    verifier rather than straight into the gems.
+    """
     artists: dict[str, str] = {}
+    counts: dict[str, int] = {}
     for tr in tracks:
         names = list(tr["artists"]) or ([tr["artist"]] if tr["artist"] else [])
         slugs = list(tr["artist_slugs"])
@@ -118,7 +125,23 @@ def _collect_library_artists(tracks: list[dict]) -> dict[str, str]:
                 continue
             slug = slugs[i] if i < len(slugs) else _slugify(name)
             artists.setdefault(slug, name)
-    return artists
+            counts[slug] = counts.get(slug, 0) + 1
+    return artists, counts
+
+
+def _own_slugs(track: dict, kin: dict[str, frozenset[str]]) -> frozenset[str]:
+    """Every artist slug the track itself counts as.
+
+    Namedrop identity is compared on slugs, not display names — an alias that
+    resolves to the performer ("Marshall Mathers" on an Eminem track) has to
+    lose here, and the alias cache is exactly what makes the display-name
+    comparison miss it. ``kin`` widens the set across group/member lines.
+    """
+    slugs = {s for s in (track.get("artist_slugs") or []) if s}
+    for name in [track.get("artist") or "", *(track.get("artists") or [])]:
+        if name.strip():
+            slugs.add(_slugify(name))
+    return frozenset(slugs | {k for s in slugs for k in kin.get(s, ())})
 
 
 async def _ensure_aliases(artists: dict[str, str], job) -> None:
@@ -133,14 +156,37 @@ async def _ensure_aliases(artists: dict[str, str], job) -> None:
             return
         if MetadataDB.has_artist_aliases(slug):
             continue
-        aliases = await fetch_artist_aliases(
+        found = await fetch_artist_aliases(
             display, base_url=job.llm_base_url, model_name=job.llm_model,
         )
-        if aliases is None:
+        if found is None:
             logger.info("[lyric_gems] alias fetch failed for %r — skipping alias stage", display)
             return  # LLM unreachable: don't burn the rest of the budget
-        MetadataDB.set_artist_aliases(slug, aliases)
+        MetadataDB.set_artist_aliases(slug, found["aliases"])
+        if found["members"]:
+            MetadataDB.set_artist_aliases(
+                slug, found["members"], source=MetadataDB.MEMBER_ALIAS_SOURCE,
+            )
         fetched += 1
+
+
+def _kin_slugs(
+    artist_index: dict[str, tuple[str, str]], members_map: dict[str, str],
+) -> dict[str, frozenset[str]]:
+    """{slug: slugs of the same act} — a group and its members, both ways.
+
+    Bad Meets Evil IS Eminem and Royce, so neither side name-dropping the
+    other is a discovery. Only members the library also knows as artists in
+    their own right can appear here; the rest have no slug to link to.
+    """
+    kin: dict[str, set[str]] = {}
+    for member_name, group_slug in members_map.items():
+        hit = artist_index.get(matching.norm_name(member_name))
+        if hit is None or hit[0] == group_slug:
+            continue
+        kin.setdefault(group_slug, set()).add(hit[0])
+        kin.setdefault(hit[0], set()).add(group_slug)
+    return {k: frozenset(v) for k, v in kin.items()}
 
 
 async def _verify_with_cache(*, kind, candidate, quote, track, target=None, context_key="", job) -> dict:
@@ -170,10 +216,14 @@ async def run(job, db_client, llm) -> None:
     qdrant = db_client.qdrant
     tracks = await _scroll_tracks(qdrant, job.collection_name)
 
-    artists = _collect_library_artists(tracks)
+    artists, artist_counts = _collect_library_artists(tracks)
     await _ensure_aliases(artists, job)
     artist_index = matching.build_artist_index(artists, MetadataDB.get_artist_aliases_map())
     song_catalog = matching.build_song_catalog(tracks)
+    rare_slugs = frozenset(
+        slug for slug, n in artist_counts.items() if n < matching.RARE_ARTIST_TRACKS
+    )
+    kin = _kin_slugs(artist_index, MetadataDB.get_artist_members_map())
     logger.info(
         "[lyric_gems] %s: %d tracks, %d artists in index, %d catalog titles",
         job.collection_name, len(tracks), len(artist_index), len(song_catalog),
@@ -209,8 +259,12 @@ async def run(job, db_client, llm) -> None:
 
             gems: list[dict] = []
             seen: set[tuple[str, str]] = set()
+            # One lyric line yields one pop-culture gem: "Batman brought his
+            # own Robin" is a Batman reference, not two separate finds.
+            pop_quotes: dict[str, dict] = {}
             llm_budget = MAX_LLM_VERIFICATIONS_PER_TRACK
             own_keys = matching.own_name_keys(track["artist"], track["artists"], track["title"])
+            own_slugs = _own_slugs(track, kin)
 
             def _add(gem: dict) -> None:
                 key = (gem["kind"], gem["canonical"])
@@ -219,9 +273,18 @@ async def run(job, db_client, llm) -> None:
                 if not gem.get("quote"):
                     gem["quote"] = preprocess.find_quote(gem.get("surface") or gem["canonical"], lyrics)
                 gem.pop("surface", None)
-                if gem["quote"]:
-                    seen.add(key)
-                    gems.append(gem)
+                if not gem["quote"]:
+                    return
+                if gem["kind"] == "popculture":
+                    rival = pop_quotes.get(gem["quote"])
+                    if rival is not None:
+                        if (gem.get("score") or 0) <= (rival.get("score") or 0):
+                            return
+                        seen.discard((rival["kind"], rival["canonical"]))
+                        gems.remove(rival)
+                    pop_quotes[gem["quote"]] = gem
+                seen.add(key)
+                gems.append(gem)
 
             for gem in capsule_hits(cleaned, lyrics, track["title"]):
                 _add(gem)
@@ -232,6 +295,7 @@ async def run(job, db_client, llm) -> None:
                 if label == "celebrity":
                     gem, needs_llm = matching.match_namedrop(
                         text, score, artist_index, own_keys, track["title"],
+                        own_slugs=own_slugs, rare_slugs=rare_slugs,
                     )
                     if gem is None:
                         continue
@@ -252,8 +316,14 @@ async def run(job, db_client, llm) -> None:
                             continue
                     _add(gem)
                 elif label == "song_or_album":
+                    # The quote is a gate input here, not just decoration: a
+                    # title only counts when the line presents it as a work.
+                    quote = preprocess.find_quote(text, lyrics)
+                    if not quote:
+                        continue
                     gem = matching.match_songref(
                         text, score, song_catalog, track["title"], track["album"],
+                        quote=quote,
                     )
                     if gem is not None:
                         gem["surface"] = text

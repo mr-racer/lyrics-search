@@ -36,6 +36,58 @@ class TestCleanLyrics:
         assert preprocess.clean_lyrics(raw) == raw
 
 
+class TestMarkupStripping:
+    """Structure that used to survive into gems. Cases are verbatim from the
+    2026-07-26 production snapshot (40 of 585 gems were built on these)."""
+
+    @pytest.mark.parametrize("line", [
+        "[Verse 1: Dr. Dre, Eminem, & (Eddie)]",     # nested brackets
+        "[Chorus: Jay-Z & (Kanye West)]",
+        "[Verse 2: Memphis Bleek (Beanie Sigel)]",
+        "'''Charlie Wilson and Brenda Lee:'''",      # wiki bold
+        "'''Daft Punk:'''",
+        "Verse Two: Foxy Brown",                     # speaker / role labels
+        "Lead Vocals : Freddie Mercury",
+        "Artist : Rihanna feat. DrakeTitle : Work",  # provider metadata header
+        "*Instrumental for What's the Difference by Dr. Dre plays in the background*",
+        "作词 : Kevin Parker",                        # CJK provider credit header
+        "作曲 : Curtis Jackson & Khari Cain",
+    ])
+    def test_structural_lines_detected(self, line):
+        assert preprocess.is_structural_line(line)
+
+    @pytest.mark.parametrize("line,expected", [
+        # A real Jay-Z line with a colon — lowercase words, so not a label.
+        ("My portfolio reads: leads to Don Corleone, nigga please",
+         "My portfolio reads: leads to Don Corleone, nigga please"),
+        # Personal speaker label: peeled, the sung words stay.
+        ("Raekwon: Yo, Meth, hold up, hold up", "Yo, Meth, hold up, hold up"),
+        ("[01:28.29][02:47.78]Romeo and Juliet they never felt this way I bet",
+         "Romeo and Juliet they never felt this way I bet"),
+    ])
+    def test_sung_lines_kept(self, line, expected):
+        assert not preprocess.is_structural_line(line)
+        assert preprocess.strip_line_markup(line).strip() == expected
+
+    def test_speaker_name_cannot_be_quoted(self):
+        assert preprocess.find_quote("Raekwon", "Raekwon: Yo, Meth, hold up") is None
+        assert preprocess.find_quote("Dr. Dre", "[Verse 1: Dr. Dre, Eminem, & (Eddie)]") is None
+
+
+class TestNewlineNormalization:
+    def test_carriage_returns_split_into_lines(self):
+        lyr = "Wake up\rGonna wake up to nothing\rBreak up\rThe break up is coming"
+        assert preprocess.find_quote("Wake Up", lyr) == "Wake up"
+
+    def test_blob_longer_than_a_line_is_not_a_quote(self):
+        blob = "If you ain't got no money take your broke ass home " * 4 + "Ludacris"
+        assert preprocess.find_quote("Ludacris", blob) is None
+
+    def test_whole_word_only(self):
+        assert preprocess.find_quote("Wee", "Caught between the moon") is None
+        assert preprocess.find_quote("Wee", "Sampled from Wee tonight") is not None
+
+
 class TestCyrRatio:
     def test_english(self):
         assert preprocess.cyr_ratio("hello world") == 0.0
@@ -186,6 +238,136 @@ class TestSongrefMatching:
     def test_own_album_excluded(self):
         cat = self._catalog()
         assert matching.match_songref("The Blueprint", 0.9, cat, "Song", "The Blueprint") is None
+
+    def test_single_word_title_rejected(self):
+        cat = matching.build_song_catalog([
+            {"album": "Relapse", "title": "Beautiful", "artist": "Eminem"},
+        ])
+        assert matching.match_songref("Relapse", 0.99, cat, "X", "Y") is None
+
+    def test_score_bar_is_higher_than_other_kinds(self):
+        cat = self._catalog()
+        assert matching.match_songref("The Blueprint", 0.7, cat, "Off That", "Z") is None
+
+    def test_ambiguous_title_rejected(self):
+        cat = matching.build_song_catalog([
+            {"album": "A", "title": "Hey Mama", "artist": "Kanye West"},
+            {"album": "Elephunk", "title": "Hey Mama", "artist": "The Black Eyed Peas"},
+        ])
+        assert cat[matching.norm_name("Hey Mama")]["ambiguous"] is True
+        assert matching.match_songref("Hey Mama", 0.99, cat, "X", "Y") is None
+
+
+class TestCitationMarker:
+    """The gate that separates a named work from a coincidental phrase.
+
+    Cases are verbatim from the 2026-07-26 production snapshot.
+    """
+
+    @pytest.mark.parametrize("span,quote", [
+        ("Jesus Walks", 'I made "Jesus Walks," I\'m never going to hell'),
+        ("Guilty Conscience", 'Throw on "Guilty Conscience" at concerts'),
+        ("Guilty Conscience", 'The song Guilty Conscience has gotten such rotten responses"'),
+        ("Friend Or Foe", 'I know you heard "Friend or Foe," this ain\'t different from that'),
+        ("State of the Art", "Since 'State of the Art' we've stayed in the yard"),
+        ("Promiscuous", 'love my ass and my abs in the video of "Promiscuous"'),
+        ("Jesus of Suburbia", 'This next song\'s called "Jesus of Suburbia"'),
+    ])
+    def test_accepts_cited_titles(self, span, quote):
+        assert matching.has_citation_marker(span, quote)
+
+    @pytest.mark.parametrize("span,quote", [
+        ("Wake Up", "Wake up"),                                   # The Black Keys — Sister
+        ("i love you", "'cos I love you"),                        # Phil Collins
+        ("Pump It", "Juke it (mo') Pump it (mo')"),               # Kanye West
+        ("Don't Forget Me", "Don't forget me"),                   # Lana Del Rey
+        ("Relapse", "Encore, I was on drugs; Relapse, I was flushin' 'em out"),
+    ])
+    def test_rejects_bare_phrases(self, span, quote):
+        assert not matching.has_citation_marker(span, quote)
+
+    def test_absent_span_is_not_a_citation(self):
+        assert not matching.has_citation_marker("Renegade", 'I made "Jesus Walks"')
+
+
+class TestSongrefProductionRegressions:
+    """Every one of these produced a bogus gem on prod before 2026-07-26."""
+
+    def _cat(self, rows):
+        return matching.build_song_catalog(rows)
+
+    @pytest.mark.parametrize("own_title,ref,quote", [
+        # Bracketed tail hid the self-reference: catalog key was stripped,
+        # own-title key was not.
+        ("Las Palabras de Amor (The Words of Love)", "Las Palabras de Amor", "Las palabras de amor"),
+        ("The Lost Chord (ft. Leee John)", "The Lost Chord", "The lost chord"),
+        ("Where'd You Go (feat. Holly Brook)", "Where'd You Go", "Where'd you go? I miss you so"),
+        ("All Around The World (Feat. LaToiya Williams)", "All Around The World", "All around the world (Oh)"),
+        # Contained in the track's own title.
+        ("Give Me Novacaine (Live at Irving Plaza)", "Novacaine", 'This next song\'s called "Novacaine"'),
+    ])
+    def test_self_reference_rejected(self, own_title, ref, quote):
+        cat = self._cat([{"album": "Album", "title": own_title, "artist": "A"}])
+        assert matching.match_songref(ref, 0.99, cat, own_title, "Album", quote=quote) is None
+
+    def test_wake_up_phrase_rejected(self):
+        cat = self._cat([{"album": "The Dutchess", "title": "Wake Up", "artist": "Fergie"}])
+        gem = matching.match_songref("Wake Up", 0.99, cat, "Sister", "El Camino", quote="Wake up")
+        assert gem is None
+
+    def test_real_reference_survives(self):
+        cat = self._cat([{"album": "The College Dropout", "title": "Jesus Walks", "artist": "Kanye West"}])
+        gem = matching.match_songref(
+            "Jesus Walks", 0.88, cat, "Otis", "Watch the Throne",
+            quote='I made "Jesus Walks," I\'m never going to hell',
+        )
+        assert gem is not None and gem["canonical"] == "Jesus Walks"
+
+
+class TestNamedropSelfReference:
+    """Aliases resolve to the performer — production cases that leaked."""
+
+    def _idx(self):
+        return matching.build_artist_index(
+            {"eminem": "Eminem", "kanye-west": "Kanye West", "kobe": "Kobe",
+             "bad-meets-evil": "Bad Meets Evil", "dr-dre": "Dr. Dre"},
+            {"marshall mathers": "eminem", "pablo": "kanye-west"},
+        )
+
+    def test_alias_of_own_artist_rejected_by_slug(self):
+        idx = self._idx()
+        own = matching.own_name_keys("Eminem", ["Eminem"], "If I Had")
+        gem, _ = matching.match_namedrop(
+            "Marshall Mathers", 0.9, idx, own, "If I Had",
+            own_slugs=frozenset({"eminem"}),
+        )
+        assert gem is None
+
+    def test_group_member_rejected_via_kin_slugs(self):
+        idx = self._idx()
+        own = matching.own_name_keys("Bad Meets Evil", ["Bad Meets Evil"], "Fast Lane")
+        # kin widening happens in the task; here it arrives as own_slugs
+        gem, _ = matching.match_namedrop(
+            "Eminem", 0.96, idx, own, "Fast Lane",
+            own_slugs=frozenset({"bad-meets-evil", "eminem"}),
+        )
+        assert gem is None
+
+    def test_rare_one_word_artist_goes_to_llm(self):
+        idx = self._idx()
+        own = matching.own_name_keys("Jay-Z", ["Jay-Z"], "Venus Vs. Mars")
+        gem, needs_llm = matching.match_namedrop(
+            "Kobe", 0.88, idx, own, "Venus Vs. Mars", rare_slugs=frozenset({"kobe"}),
+        )
+        assert gem is not None and needs_llm is True
+
+    def test_well_stocked_artist_still_auto_accepts(self):
+        idx = self._idx()
+        own = matching.own_name_keys("Jay-Z", ["Jay-Z"], "Hola Hovito")
+        gem, needs_llm = matching.match_namedrop(
+            "Dr. Dre", 0.9, idx, own, "Hola Hovito", rare_slugs=frozenset({"kobe"}),
+        )
+        assert gem is not None and needs_llm is False
 
 
 class TestPopcultureMatching:

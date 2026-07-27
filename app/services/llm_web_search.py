@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from urllib.parse import urlparse
 
 import httpx
@@ -39,6 +40,377 @@ SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://searxng:8080").rstrip("/")
 # searxng/settings.yml are the single tuning knob; hardcoding engines here made
 # that file a no-op (and bing+ddg alone are the two most captcha-prone engines).
 SEARXNG_ENGINES = os.environ.get("SEARXNG_ENGINES", "").strip()
+
+# Redundant engine set for PLAYLIST list-queries only. The default fan-out has a
+# single healthy general-web engine (brave) on this instance — duckduckgo and
+# startpage sit in CAPTCHA suspension — and under the agent's burst of searches
+# brave itself gets a 180 s "too many requests" suspension, collapsing the pool
+# to store pages and same-name genius junk (observed: the GTA 5 run returned 1
+# track). `engines=` bypasses the disabled flag in settings.yml, so presearch
+# (disabled by default, but reliably surfacing fan-wiki tracklist pages) rides
+# along as redundancy. The bio path keeps the settings.yml-tuned default pool.
+SEARXNG_PLAYLIST_ENGINES = os.environ.get(
+    "SEARXNG_PLAYLIST_ENGINES",
+    "brave,presearch,bing,duckduckgo,wikipedia,genius",
+).strip()
+
+# ── Playlist search result ranking ───────────────────────────────────────────
+# The playlist agent asks "list" questions ("<artist> greatest hits", "<film>
+# soundtrack tracklist"). SearXNG's `genius` engine answers those by matching the
+# query words against its ARTIST/ALBUM NAME index and returns bogus same-name
+# entities ("Television's Greatest Hits Band", lyric annotations, even "Ulysses
+# by James Joyce") that its fusion scores to the very TOP — burying the real
+# chart/tracklist pages (Billboard, Wikipedia, MusicBrainz). Under the agent's
+# 6-query burst the good engines rate-limit and genius owns the whole top-5, so
+# the model gets pure noise and silently falls back to building the playlist from
+# its own memory. Fix: for the playlist profile pull a DEEP pool and re-rank in
+# code — drop the junk paths, float authoritative "list" domains up, KEEP genius
+# ALBUM tracklists (those are genuine). What SearXNG's engine/weight knobs cannot
+# do is tell a good genius /albums/ page from a junk /artists/ one — same engine,
+# same weight — so this has to live in code.
+RANK_POOL_SIZE = 30
+
+# Hard junk for LIST queries: individual-song / lyric / annotation / artist
+# landing pages and non-editorial noise. genius.com/albums/… is deliberately NOT
+# matched here — real tracklists live there.
+_PLAYLIST_JUNK_URL = re.compile(
+    r"""(?ix)
+      genius\.com/artists/            # artist landing pages (no tracklist)
+    | genius\.com/[^/]+-annotated     # lyric annotations
+    | genius\.com/[^/?#]+-lyrics\b    # single-song lyric pages
+    | //(?:www\.)?instagram\.com
+    | //(?:www\.)?facebook\.com
+    | ticketmaster\.
+    | (?:www\.|music\.)?youtube\.com/(?:channel|@|watch|playlist)
+    | /tickets?\b
+    """
+)
+
+# Domains that host real ranked lists. The authority weight dominates the
+# original SearXNG position, so a Billboard hit at position 20 beats a random
+# blog at position 1; position only breaks ties within a tier. READABLE editorial
+# lists rank highest — their body actually contains the ranked songs and survives
+# a plain fetch. Structured-but-JS-walled sources (MusicBrainz release pages)
+# score low: they confirm an album exists, but their body is a browser challenge,
+# useless to read, and they flood the pool with near-duplicates.
+_PLAYLIST_AUTHORITY = {
+    "billboard.com": 2.8,
+    "rollingstone.com": 2.6,
+    "pitchfork.com": 2.4,
+    "udiscovermusic.com": 2.2,
+    "nme.com": 2.1,
+    "complex.com": 2.0,
+    "classicpopmag.com": 2.0,
+    "top40weekly.com": 1.9,
+    "albumoftheyear.org": 1.8,
+    "open.spotify.com": 1.6,
+    "last.fm": 1.6,
+    "discogs.com": 1.5,
+    "musicbrainz.org": 1.3,     # structured but JS-walled + duplicative
+}
+
+
+# A small nudge for URLs whose PATH itself promises a ranked list / dated
+# discography / tracklist, so the right page (e.g. "…_singles_discography") is
+# read before a generic artist landing page of the same authority tier.
+_PLAYLIST_LIST_PATH = re.compile(
+    r"(?i)(discograph|tracklist|singles|greatest|best[-_]?songs|top[-_]?\d|"
+    r"list[-_]?of|/albums/|soundtrack)"
+)
+
+
+def _playlist_authority_weight(url: str) -> float:
+    """How authoritative is this URL as a source of a real song LIST? 0.0 = a
+    plain result (kept as backfill), higher = float to the top."""
+    low = url.lower()
+    if "genius.com/albums/" in low:      # genuine tracklists, readable via curl_cffi
+        return 2.6
+    host = (urlparse(url).netloc or "").lower()
+    if host.endswith(".fandom.com") or host == "fandom.com":
+        return 2.3                       # film/game soundtrack wikis (readable)
+    if host.endswith("wikipedia.org"):
+        # English Wikipedia (incl. "<artist> singles discography", dated) is a
+        # prime source; other-language wikis are far less useful for these
+        # mostly-English-catalog queries.
+        return 3.0 if host in ("en.wikipedia.org", "en.m.wikipedia.org") else 1.5
+    for domain, weight in _PLAYLIST_AUTHORITY.items():
+        if host == domain or host.endswith("." + domain):
+            return weight
+    return 0.0
+
+
+# ── Selective tracklist extraction ───────────────────────────────────────────
+# Full soundtrack pages (GTA V: 26 radio stations, 500+ songs) are far longer
+# than the flat 4000-char prefix cap of fetch_full_content, so the model used to
+# see one and a half stations of a page it had already paid to download. Instead
+# the playlist path fetches a much larger body and keeps only track-like lines.
+# Fandom wikitables arrive from readability as one line PER CELL ("Artist —" /
+# "Title" / "(2012)") — those are re-joined first, then filtered. A page where
+# extraction finds fewer than _MIN_TRACK_LINES lines is NOT a tracklist page:
+# the caller falls back to the old prefix behaviour (Wikipedia discographies and
+# Billboard prose lists keep working exactly as before).
+
+_TRACK_SEP_RE = re.compile(r"\s[—–\-|]\s")            # "Artist — Title" separators
+_LETTER_RE = re.compile(r"[^\W\d_]")                  # any unicode letter
+_CELL_DASH_EOL_RE = re.compile(r"[—–\-|]\s*$")        # artist cell ending in a dash
+_YEAR_LINE_RE = re.compile(r"^\(\d{4}\)$")            # standalone "(2012)" cell
+_NUM_PREFIX_RE = re.compile(r"^\d{1,3}[.)]\s+")       # "12. Artist – Title"
+
+_MIN_TRACK_LINES = 10         # fewer → "not a tracklist page", fall back
+_TRACK_LINE_MAX_LEN = 200     # prose sentences with stray dashes run longer
+_PLAYLIST_FETCH_CHARS = 60000  # raw fetch budget before extraction
+_TRACKLINES_OUT_CAP = 800     # per-page cap on lines handed to code-side matching
+
+
+def _tracklines_list(text: str | None) -> list[str]:
+    """All track-like lines of a fetched page body (merged, filtered, uncapped)."""
+    if not text:
+        return []
+    raw_lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+    # Pass 1: re-join wikitable cells that readability split one-per-line.
+    merged: list[str] = []
+    i = 0
+    while i < len(raw_lines):
+        line = raw_lines[i]
+        if _CELL_DASH_EOL_RE.search(line) and i + 1 < len(raw_lines):
+            line = f"{line} {raw_lines[i + 1]}"
+            i += 2
+            if i < len(raw_lines) and _YEAR_LINE_RE.match(raw_lines[i]):
+                line = f"{line} {raw_lines[i]}"
+                i += 1
+        else:
+            i += 1
+        merged.append(line)
+
+    # Pass 2: keep short lines with an artist/title separator. Dedupe while
+    # preserving order: Wikipedia nav/reference sections yield the same junk
+    # line many times over ("The Cinematographic Score — GTA" ×8), which both
+    # sneaks a non-tracklist page past the _MIN_TRACK_LINES threshold and
+    # primes weak local models into repetition loops.
+    kept: list[str] = []
+    seen: set[str] = set()
+    for ln in merged:
+        if len(ln) > _TRACK_LINE_MAX_LEN:
+            continue
+        core = _NUM_PREFIX_RE.sub("", ln)
+        m = _TRACK_SEP_RE.search(core)
+        if not m:
+            continue
+        # Обе стороны разделителя должны содержать буквы: чартовые таблицы
+        # («US Billboard Hot 100 — 3», «Australia (ARIA) — 34») — не треки.
+        left, right = core[:m.start()], core[m.end():]
+        if not _LETTER_RE.search(left) or not _LETTER_RE.search(right):
+            continue
+        key = ln.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(ln)
+    return kept
+
+
+def _sample_tracklines(kept: list[str], max_chars: int) -> str:
+    """Render track lines within ``max_chars``, sampling EVENLY when over
+    budget. Soundtrack pages group songs by radio station/section — a prefix
+    cut feeds the model only the first station (GTA V: rap) and silently drops
+    the rock/pop stations where the library's actual hits live."""
+    out = "\n".join(kept)
+    if len(out) <= max_chars:
+        return out
+    avg_line = max(1, len(out) // len(kept))
+    budget = max(_MIN_TRACK_LINES, (max_chars - 120) // avg_line)  # 120 ≈ header
+    if budget >= len(kept):
+        sampled = kept
+    else:
+        step = (len(kept) - 1) / (budget - 1)
+        sampled = [kept[round(i * step)] for i in range(budget)]
+    header = (f"(showing {len(sampled)} of {len(kept)} track lines, sampled "
+              "evenly across the page — search another source for the rest)")
+    out = header + "\n" + "\n".join(sampled)
+    if len(out) > max_chars:
+        out = out[:max_chars].rsplit("\n", 1)[0] + "\n…"
+    return out
+
+
+def _extract_tracklines(text: str | None, max_chars: int = 7000) -> str:
+    """Filter a fetched page body down to compact "Artist — Title" lines.
+
+    Returns "" when the page does not look like a tracklist, so callers can
+    fall back to the untouched prefix instead of feeding the model noise.
+    """
+    kept = _tracklines_list(text)
+    if len(kept) < _MIN_TRACK_LINES:
+        return ""
+    return _sample_tracklines(kept, max_chars)
+
+
+# ── GLiNER2 salvage for structure-less tracklist pages ───────────────────────
+# Some pages carry the songs in prose or in tables whose separators readability
+# eats ("...features Radio Ga Ga by Queen and Photograph performed by Def
+# Leppard"). The dash-regex finds nothing there, but the shared GLiNER2 model
+# (fact_relations' encoder — no extra weights) extracts song/artist entities
+# reliably. Entities come back WITHOUT positions, so pairing is done by
+# occurrence distance in the source text. CPU-only and ~0.5 s per chunk — used
+# strictly as a fallback, chunk-capped, one page per search call.
+
+_GLINER_CHUNK_CHARS = 1100
+_GLINER_MAX_CHUNKS = 12
+_GLINER_MIN_CONF = 0.7
+
+_gliner_track_schema = None
+_gliner_schema_lock = None
+
+
+def _gliner_extract_entities(chunk: str) -> dict:
+    """One GLiNER2 pass over ``chunk`` → {"songs": [...], "artists": [...]}."""
+    global _gliner_track_schema, _gliner_schema_lock
+    import threading
+
+    from app.services.fact_relations.extractor import get_model
+
+    model = get_model()
+    if _gliner_schema_lock is None:
+        _gliner_schema_lock = threading.Lock()
+    if _gliner_track_schema is None:
+        with _gliner_schema_lock:
+            if _gliner_track_schema is None:
+                s = model.create_schema()
+                s.entities({
+                    "song_title": "title of a song in a tracklist or soundtrack",
+                    "artist_name": "name of the artist or band performing a song",
+                })
+                _gliner_track_schema = s
+    out = model.extract(chunk, _gliner_track_schema, include_confidence=True)
+    ents = (out or {}).get("entities", {})
+
+    def _texts(key):
+        vals = []
+        for e in ents.get(key, []) or []:
+            if isinstance(e, dict):
+                if float(e.get("confidence", 0.0)) >= _GLINER_MIN_CONF:
+                    t = (e.get("text") or "").strip()
+                    if t:
+                        vals.append(t)
+            elif isinstance(e, str) and e.strip():
+                vals.append(e.strip())
+        return vals
+
+    return {"songs": _texts("song_title"), "artists": _texts("artist_name")}
+
+
+def _pair_entities(text: str, songs: list[str], artists: list[str],
+                   max_gap: int = 150) -> list[str]:
+    """Pair songs with their nearest artist occurrence in ``text``.
+
+    Works for both "Title by Artist" (artist follows) and "Artist – Title"
+    (artist precedes): nearest-by-distance either side within ``max_gap``.
+    Returns "Artist — Title" lines, deduped, in text order of the songs.
+    """
+    low = text.lower()
+
+    def _positions(needle: str) -> list[int]:
+        pos, out = 0, []
+        n = needle.lower()
+        while True:
+            i = low.find(n, pos)
+            if i < 0:
+                break
+            out.append(i)
+            pos = i + 1
+        return out
+
+    artist_pos = [(p, a) for a in set(artists) for p in _positions(a)]
+    if not artist_pos:
+        return []
+    pairs, seen = [], set()
+    song_hits = sorted(
+        (p, s) for s in set(songs) for p in _positions(s)
+    )
+    year_re = re.compile(r"\((19|20)\d{2}\)|\b(19|20)\d{2}\b")
+    for spos, song in song_hits:
+        best = min(artist_pos, key=lambda t: abs(t[0] - spos))
+        if abs(best[0] - spos) > max_gap:
+            continue
+        key = (best[1].lower(), song.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        # Год из окна вокруг песни (листиклы пишут его рядом) — иначе матчи
+        # без года не поддаются кодовому фильтру эпохи («после 2020»).
+        window = text[max(0, spos - 30):spos + len(song) + 90]
+        ym = year_re.search(window)
+        yr = f" ({ym.group(0).strip('()')})" if ym else ""
+        pairs.append(f"{best[1]} — {song}{yr}")
+    return pairs
+
+
+def _gliner_tracklines(text: str, max_chunks: int = _GLINER_MAX_CHUNKS) -> list[str]:
+    """Salvage "Artist — Title" lines from a structure-less page via GLiNER2."""
+    if not text:
+        return []
+    # Chunk on line boundaries.
+    chunks, cur = [], ""
+    for ln in text.splitlines():
+        if len(cur) + len(ln) + 1 > _GLINER_CHUNK_CHARS and cur:
+            chunks.append(cur)
+            cur = ""
+        cur += ln + "\n"
+    if cur.strip():
+        chunks.append(cur)
+    lines: list[str] = []
+    for chunk in chunks[:max_chunks]:
+        try:
+            ents = _gliner_extract_entities(chunk)
+        except Exception:
+            logger.warning("[web_search] GLiNER2 salvage failed on a chunk",
+                           exc_info=True)
+            continue
+        if ents["songs"] and ents["artists"]:
+            lines.extend(_pair_entities(chunk, ents["songs"], ents["artists"]))
+    # dedupe across chunks, keep order
+    seen, out = set(), []
+    for ln in lines:
+        k = ln.lower()
+        if k not in seen:
+            seen.add(k)
+            out.append(ln)
+    return out
+
+
+def rank_playlist_results(results: list[dict], query: str = "") -> list[dict]:
+    """Re-rank raw SearXNG results for the playlist agent: drop list-query junk,
+    float authoritative list/tracklist domains to the top, keep everything else
+    as backfill. Pure function — see the module note above for the why."""
+    if not results:
+        return results
+    scored = []
+    for idx, r in enumerate(results):
+        url = r.get("url") or ""
+        if not url or _PLAYLIST_JUNK_URL.search(url):
+            continue
+        authority = _playlist_authority_weight(url)
+        list_bonus = 0.4 if _PLAYLIST_LIST_PATH.search(url) else 0.0
+        # Original SearXNG position is only a FINE tiebreak (scaled down so it
+        # never outweighs authority or the list-path bonus — a Billboard hit at
+        # position 20 must still beat a blog at position 1).
+        position_decay = 0.1 / (1.0 + idx)
+        scored.append((authority + list_bonus + position_decay, r))
+    if not scored:
+        # Everything was junk (rare) — never blank out; return the original head.
+        return results
+    scored.sort(key=lambda t: t[0], reverse=True)
+    # Cap to 2 results per host so a source with many near-duplicate hits
+    # (MusicBrainz releases especially) can't crowd out the diversity of lists.
+    out: list[dict] = []
+    per_host: dict[str, int] = {}
+    for _, r in scored:
+        host = (urlparse(r.get("url") or "").netloc or "").lower()
+        if per_host.get(host, 0) >= 2:
+            continue
+        per_host[host] = per_host.get(host, 0) + 1
+        out.append(r)
+    return out
 
 try:
     from bs4 import BeautifulSoup
@@ -72,8 +444,14 @@ def _describe_results(results: list[dict]) -> str:
     return "; ".join(parts)
 
 
-def search_searxng(query: str, max_results: int = 5) -> list[dict]:
-    """Поиск через локальный SearXNG."""
+def search_searxng(query: str, max_results: int = 5,
+                   engines: str | None = None) -> list[dict]:
+    """Поиск через локальный SearXNG.
+
+    ``engines`` — explicit comma-separated engine list for THIS call (the
+    playlist path passes its redundant set); ``None`` keeps the global
+    SEARXNG_ENGINES/env behaviour.
+    """
     if not _WEB_SEARCH_AVAILABLE:
         return []
     params = {
@@ -83,8 +461,9 @@ def search_searxng(query: str, max_results: int = 5) -> list[dict]:
         # а жёсткий en-US душит выдачу по ним.
         "language": "all",
     }
-    if SEARXNG_ENGINES:
-        params["engines"] = SEARXNG_ENGINES
+    eng = engines if engines is not None else SEARXNG_ENGINES
+    if eng:
+        params["engines"] = eng
     try:
         resp = httpx.get(
             f"{SEARXNG_URL}/search",
@@ -156,20 +535,30 @@ def search_ddg(query: str, max_results: int = 5) -> list[dict]:
 # 2. FETCH FULL CONTENT
 # ─────────────────────────────────────────
 
-def _http_get_text(url: str, timeout: float = 8.0) -> str:
-    """GET страницы: curl_cffi первым (его TLS-отпечаток проходит Genius и
-    прочие Cloudflare-сайты — тот же приём, что в genius_service, без
-    impersonate=), httpx — фоллбэк, если curl_cffi недоступен."""
+def _http_get_text(url: str, timeout: float = 12.0) -> str:
+    """GET страницы: curl_cffi первым с impersonate="chrome124" (полный
+    браузерный TLS+заголовки), httpx — фоллбэк, если curl_cffi недоступен.
+
+    impersonate обязателен: без него Wikipedia и Fandom отдают 403 (их защита
+    режет «не-браузерный» отпечаток), а это прайм-источники треклистов и
+    дискографий. "chrome124" открывает и Wikipedia, и Fandom (простой "chrome"
+    Fandom не берёт); Genius читается при любом варианте."""
     try:
         from curl_cffi import requests as curl_requests
     except ImportError:
         curl_requests = None
     if curl_requests is not None:
-        kwargs: dict = {"timeout": timeout, "allow_redirects": True}
+        kwargs: dict = {"timeout": timeout, "allow_redirects": True,
+                        "impersonate": "chrome124"}
         proxies = get_proxy()
         if proxies:
             kwargs["proxies"] = proxies
-        resp = curl_requests.get(url, **kwargs)
+        try:
+            resp = curl_requests.get(url, **kwargs)
+        except Exception:
+            # Older curl_cffi may not know this impersonation target — retry plain.
+            kwargs.pop("impersonate", None)
+            resp = curl_requests.get(url, **kwargs)
         resp.raise_for_status()
         return resp.text
     headers = {
@@ -210,34 +599,140 @@ def fetch_full_content(url: str, max_chars: int = 4000) -> str:
 # 3. УМНЫЙ TOOL — сам решает нужен ли fetch
 # ─────────────────────────────────────────
 
+def _is_readable_content(content: str) -> bool:
+    """Did fetch_full_content return a real article body — not a 403/timeout, a
+    bot/JS challenge, or a near-empty stub? A ranked list has substance."""
+    if not content or content.startswith("Error:"):
+        return False
+    low = content.lower()
+    if ("javascript is required" in low or "verifying your browser" in low
+            or "enable javascript" in low or "captcha" in low):
+        return False
+    return len(content) >= 400
+
+
 def smart_web_search(
     query: str,
     fetch_content: bool = False,
     max_results: int = 3,
+    rank: str | None = None,
+    tracklines_out: list | None = None,
 ) -> str:
     """
     fetch_content=False → быстро, только сниппеты
     fetch_content=True  → медленнее, но полный текст страниц
-    """
-    logger.info("[web_search] query=%r fetch_content=%s", query, fetch_content)
-    results = search_searxng(query, max_results)
 
+    rank="playlist" → тянем глубокий пул и переранжируем в коде
+    (``rank_playlist_results``): выкидываем genius-мусор списочных запросов,
+    поднимаем читаемые домены-списки, и ЧИТАЕМ тело лучшей страницы. Читаем
+    УСТОЙЧИВО: идём вниз по ранжированному списку, пропуская 403/JS-стены, пока не
+    наберём нужное число реально читаемых страниц (список песен есть только в
+    теле, не в сниппете). Без ``rank`` поведение прежнее — bio-агент не затронут.
+    """
+    logger.info("[web_search] query=%r fetch_content=%s rank=%s", query, fetch_content, rank)
+
+    if rank == "playlist":
+        pool = search_searxng(query, max_results=RANK_POOL_SIZE,
+                              engines=SEARXNG_PLAYLIST_ENGINES)
+        # ВЕСЬ ранжированный пул — кандидаты на чтение: страница-треклист может
+        # стоять на любой позиции (не только в топ-3, который видит модель как
+        # сниппеты). Глубину обхода ограничивает max_fetch_tries, а не срез.
+        results = rank_playlist_results(pool, query)
+        if not results:
+            logger.warning("[web_search] no results for query=%r", query)
+            return "No results found"
+        logger.info("[web_search] playlist re-rank: pool=%d → kept %d: %s",
+                    len(pool), len(results), _describe_results(results[:8]))
+        # Больше страниц-списков за поиск: библиотечное пересечение делает код
+        # (модель видит лишь капнутые сэмплы), поэтому третья страница — это
+        # покрытие остальных радиостанций/томов, а не лишний контекст.
+        want_full = 3 if fetch_content else 1  # how many list/full bodies to read
+        max_fetch_tries = 6                     # bound latency when pages wall us
+        # A page counts against want_full only when tracklist extraction fires:
+        # a "readable" Wikipedia series article is prose, and two of those used
+        # to exhaust the budget while the actual tracklist stayed a snippet.
+        # Prose pages are held as fallback and only inlined (old prefix
+        # behaviour) for slots no tracklist page claimed.
+        rows, full_got, tries = [], 0, 0  # rows: (kind, title, url, body, snippet)
+        gliner_budget = 1  # CPU-инференс дорог: максимум одна спасённая страница за вызов
+        for r in results:
+            url = r.get("url", "")
+            title = r.get("title", "")
+            snippet = r.get("content", "") or ""
+            if url and full_got < want_full and tries < max_fetch_tries:
+                tries += 1
+                content = fetch_full_content(url, max_chars=_PLAYLIST_FETCH_CHARS)
+                if _is_readable_content(content):
+                    lines = _tracklines_list(content)
+                    if len(lines) < _MIN_TRACK_LINES and gliner_budget > 0:
+                        # Страница без «Artist — Title»-структуры (проза или
+                        # таблица, съеденная readability) — GLiNER2-спасение.
+                        gliner_budget -= 1
+                        salvaged = _gliner_tracklines(content)
+                        if len(salvaged) >= _MIN_TRACK_LINES:
+                            logger.info(
+                                "[web_search] GLiNER2 salvaged %d track lines (%.60s)",
+                                len(salvaged), url)
+                            lines = salvaged
+                    if len(lines) >= _MIN_TRACK_LINES:
+                        if tracklines_out is not None:
+                            tracklines_out.extend(lines[:_TRACKLINES_OUT_CAP])
+                        # Модели — только заглушка со счётчиком и крошечный
+                        # сэмпл. Всё, что модель ВИДИТ, она может скопипастить
+                        # в гигантский tool-call (наблюдалось: 90 строк в
+                        # get_songs → деградация генерации → peg-500), а
+                        # инструкции «не копируй» слабые модели игнорируют.
+                        # Полная сверка с библиотекой идёт кодом по
+                        # tracklines_out — модели данные не нужны.
+                        sample = _sample_tracklines(lines, 700)
+                        tracks = (
+                            f"(tracklist page: {len(lines)} track lines were "
+                            "extracted and are being auto-checked against the "
+                            "user's library — results appear under LIBRARY "
+                            "MATCHES. Do NOT copy lines into get_songs. "
+                            "A small sample for orientation only:)\n" + sample
+                        )
+                        logger.info(
+                            "[web_search] tracklist page (%.60s): %d chars → %d lines, %d shown",
+                            url, len(content), len(lines), len(tracks))
+                        rows.append(("list", title, url, tracks, snippet))
+                        full_got += 1
+                        continue
+                    rows.append(("prose", title, url, content, snippet))
+                    continue
+                logger.info("[web_search] top source unreadable, keep looking (%.60s): %.50s",
+                            url, content.replace("\n", " "))
+            rows.append(("snippet", title, url, "", snippet))
+        # Сборка ответа модели: все страницы-списки + проза на свободные слоты;
+        # сниппеты — только до max_results записей суммарно (кандидатов на
+        # чтение было до RANK_POOL_SIZE, но выдача остаётся компактной).
+        prose_slots = want_full - full_got
+        output = []
+        for kind, title, url, body, snippet in rows:
+            if kind == "list":
+                output.append(f"### {title}\nURL: {url}\n\n{body}")
+            elif kind == "prose" and prose_slots > 0:
+                prose_slots -= 1
+                output.append(f"### {title}\nURL: {url}\n\n{body[:4000]}")
+            elif len(output) < max_results:
+                output.append(f"### {title}\nURL: {url}\nSnippet: {snippet}")
+        return "\n\n---\n\n".join(output)
+
+    # Non-playlist profile (bio agent) — unchanged behaviour.
+    results = search_searxng(query, max_results)
     if not results:
         logger.warning("[web_search] no results for query=%r", query)
         return "No results found"
-
     output = []
     for r in results:
         url = r.get("url", "")
         title = r.get("title", "")
         snippet = r.get("content", "")
-
         if fetch_content and url:
             content = fetch_full_content(url)
             output.append(f"### {title}\nURL: {url}\n\n{content}")
         else:
             output.append(f"### {title}\nURL: {url}\nSnippet: {snippet}")
-
     return "\n\n---\n\n".join(output)
 
 

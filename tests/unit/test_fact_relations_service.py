@@ -40,6 +40,20 @@ class WriterRiskExtractor:
                 "sample_source": [], "sample_usage": []}
 
 
+class SampleExtractor:
+    """A sample candidate in the LLM bucket (no SOURCE_CUE match on its own)."""
+
+    def extract(self, fact):
+        return {
+            "entities": {"producer": [], "sampled_song": [{"text": "Bound", "confidence": 0.9}]},
+            "relation_extraction": {"samples": [
+                {"head": {"text": "the track", "confidence": 0.9},
+                 "tail": {"text": "Bound", "confidence": 0.6}}]},
+            "sample_source": [{"song": "Bound", "artist": "Ponderosa Twins Plus One"}],
+            "sample_usage": [],
+        }
+
+
 class Boom(Exception):
     pass
 
@@ -73,10 +87,8 @@ class TestProcessSongFacts(_IsolatedDB):
         def fake_llm(messages):
             calls.append(messages)
             # Confirm the LLM leg does NOT think Sia Furler is a producer here
-            # (she's a writer per the fact) -- exercise the merge path with an
-            # empty LLM producers list plus a distinct LLM-only sample.
-            return {"producers": [], "samples": [{"song": "Other Song", "artist": "Someone"}],
-                    "sampled_by": []}
+            # (she's a writer per the fact).
+            return {"producers": [], "links": []}
 
         res = process_song_facts(
             "x-y", [fact], "x y", "some-artist", MetadataDB, ask_llm_fn=fake_llm,
@@ -87,7 +99,51 @@ class TestProcessSongFacts(_IsolatedDB):
         # Triage alone never confirms her as producer (writer-risk); the LLM
         # leg also says no producers -> final producers list stays empty.
         assert res["producers"] == []
-        assert {"song": "Other Song", "artist": "Someone"} in res["samples"]
+
+    @pytest.mark.unit
+    def test_classified_sample_lands_and_reference_does_not(self):
+        """The same fact shape, two classifier verdicts, two outcomes."""
+        fact = 'The track samples "Bound" by Ponderosa Twins Plus One.'
+
+        def llm(relation):
+            def _call(messages):
+                return {"producers": [], "links": [{
+                    "song": "Bound", "artist": "Ponderosa Twins Plus One",
+                    "direction": "source", "relation": relation,
+                }]}
+            return _call
+
+        kept = process_song_facts(
+            "s-1", [fact], "Bound 2", "kanye-west", MetadataDB,
+            ask_llm_fn=llm("sample"), extractor=SampleExtractor(),
+        )
+        assert {"song": "Bound", "artist": "Ponderosa Twins Plus One"} in kept["samples"]
+
+        dropped = process_song_facts(
+            "s-2", [fact], "Bound 2", "kanye-west", MetadataDB,
+            ask_llm_fn=llm("lyrical_reference"), extractor=SampleExtractor(),
+        )
+        assert dropped["samples"] == []
+
+    @pytest.mark.unit
+    def test_fact_without_sampling_words_never_yields_a_link(self):
+        """Adele/"Hello": the fact talks about a melody, not a sample."""
+        fact = ("The song's first line matches the melody of Lionel Richie's "
+                'iconic 1983 line from his own "Hello".')
+
+        def eager_llm(messages):
+            # Even a model that hallucinates a sample cannot get one in: the
+            # fact never reaches the sample leg.
+            return {"producers": [], "links": [{
+                "song": "Hello", "artist": "Lionel Richie",
+                "direction": "source", "relation": "sample",
+            }]}
+
+        res = process_song_facts(
+            "adele-hello", [fact], "Hello", "adele", MetadataDB,
+            ask_llm_fn=eager_llm, extractor=SampleExtractor(),
+        )
+        assert res["samples"] == []
 
     @pytest.mark.unit
     def test_llm_unavailable_still_writes_as_is(self):
@@ -105,6 +161,65 @@ class TestProcessSongFacts(_IsolatedDB):
         )
         # AS_IS producer must still land even though ask_llm_fn always raises.
         assert res["producers"] == ["Rick Rubin"]
+
+    @pytest.mark.unit
+    def test_reverse_link_is_derived_not_stored(self):
+        """The half of the feature that was missing entirely.
+
+        A link is written once, on the song whose fact stated it. Before this,
+        only 32 of 274 in-library links had a reverse entry (12%) — tapping
+        through to the sampled track showed an empty "Sampled by".
+        """
+        MetadataDB.add_song_facts_batch(
+            "kanye-west-bound-2", "acct_test", ["f"], title="Bound 2",
+            artist_slug="kanye-west", source="test",
+        )
+        MetadataDB.add_song_facts_batch(
+            "ponderosa-bound", "acct_test", ["f"], title="Bound",
+            artist_slug="ponderosa-twins-plus-one", source="test",
+        )
+        MetadataDB.replace_sample_links("acct_test", "kanye-west-bound-2", [{
+            "direction": "source", "dst_key": "ponderosa|bound",
+            "dst_title": "Bound", "dst_artist": "Ponderosa Twins Plus One",
+            "dst_slug": "ponderosa-bound", "relation": "sample",
+            "src_year": 2013, "dst_year": 1971, "evidence": "…", "confidence": 0.9,
+        }])
+
+        forward = MetadataDB.get_sample_links("acct_test", "kanye-west-bound-2")
+        assert [e["song"] for e in forward["samples"]] == ["Bound"]
+        assert forward["sampled_by"] == []
+
+        backward = MetadataDB.get_sample_links("acct_test", "ponderosa-bound")
+        assert backward["samples"] == []
+        assert [e["song"] for e in backward["sampled_by"]] == ["Bound 2"]
+
+        # …and the read cache the player uses carries the same two sides.
+        MetadataDB.rebuild_samples_cache("acct_test")
+        conn = MetadataDB._connect()
+        cached = json.loads(conn.execute(
+            "SELECT samples_json FROM songs WHERE slug = ?", ("ponderosa-bound",),
+        ).fetchone()[0])
+        assert cached["sampled_by"] == [{"song": "Bound 2", "artist": "kanye west"}]
+
+    @pytest.mark.unit
+    def test_rebuild_clears_links_that_no_longer_exist(self):
+        """A re-extraction that rejects a link must make it disappear."""
+        MetadataDB.add_song_facts_batch(
+            "a-song", "acct_test", ["f"], title="A", artist_slug="a", source="test",
+        )
+        MetadataDB.replace_sample_links("acct_test", "a-song", [{
+            "direction": "source", "dst_key": "x|y", "dst_title": "Y",
+            "dst_artist": "X", "dst_slug": None, "relation": "sample",
+        }])
+        MetadataDB.rebuild_samples_cache("acct_test")
+
+        MetadataDB.replace_sample_links("acct_test", "a-song", [])
+        MetadataDB.rebuild_samples_cache("acct_test")
+        conn = MetadataDB._connect()
+        cached = json.loads(conn.execute(
+            "SELECT samples_json FROM songs WHERE slug = ?", ("a-song",),
+        ).fetchone()[0])
+        assert cached == {"samples": [], "sampled_by": []}
 
     @pytest.mark.unit
     def test_extractor_failure_on_one_fact_does_not_abort_others(self):

@@ -73,48 +73,71 @@ def test_build_llm_messages_shape_and_content():
     assert msgs[1]["content"].rstrip().endswith("JSON:")
 
 
+def _link(song, artist, relation="sample", direction="source"):
+    return {"song": song, "artist": artist, "relation": relation, "direction": direction}
+
+
 @pytest.mark.unit
 def test_parse_llm_re_accepts_dict_passthrough():
-    parsed = parse_llm_re({"producers": ["Rick Rubin"], "samples": [], "sampled_by": []})
-    assert parsed == {"producers": ["Rick Rubin"], "samples": [], "sampled_by": []}
+    parsed = parse_llm_re({"producers": ["Rick Rubin"], "links": []})
+    assert parsed == {"producers": ["Rick Rubin"], "links": []}
 
 
 @pytest.mark.unit
 def test_parse_llm_re_strips_code_fence_and_prose():
     raw = "Sure, here you go:\n```json\n" \
-          '{"producers": ["Dr. Dre"], "samples": [{"song": "Amen Brother", "artist": "The Winstons"}], "sampled_by": []}' \
+          '{"producers": ["Dr. Dre"], "links": [{"song": "Amen Brother", ' \
+          '"artist": "The Winstons", "relation": "sample", "direction": "source"}]}' \
           "\n```"
     parsed = parse_llm_re(raw)
     assert parsed == {
         "producers": ["Dr. Dre"],
-        "samples": [{"song": "Amen Brother", "artist": "The Winstons"}],
-        "sampled_by": [],
+        "links": [_link("Amen Brother", "The Winstons")],
     }
 
 
 @pytest.mark.unit
-def test_parse_llm_re_normalizes_null_fields_and_drops_empty_relations():
+def test_parse_llm_re_normalizes_null_fields_and_drops_empty_links():
     raw = json.dumps({
         "producers": [],
-        "samples": [
-            {"song": None, "artist": "James Brown"},   # voice-sample trap: song stays null
-            {"song": None, "artist": None},             # empty relation, must be dropped
-            {"song": "  ", "artist": "  "},              # blank strings normalize to None -> dropped
+        "links": [
+            # voice-sample trap: song stays null
+            {"song": None, "artist": "James Brown", "relation": "sample", "direction": "source"},
+            {"song": None, "artist": None, "relation": "sample"},      # empty -> dropped
+            {"song": "  ", "artist": "  ", "relation": "sample"},       # blank -> dropped
         ],
-        "sampled_by": [],
     })
     parsed = parse_llm_re(raw)
-    assert parsed == {
-        "producers": [],
-        "samples": [{"song": None, "artist": "James Brown"}],
-        "sampled_by": [],
-    }
+    assert parsed == {"producers": [], "links": [_link(None, "James Brown")]}
 
 
 @pytest.mark.unit
-def test_parse_llm_re_rejects_non_dict_relation_items():
-    assert parse_llm_re('{"producers": [], "samples": ["oops"], "sampled_by": []}') is None
-    assert parse_llm_re('{"producers": [], "samples": [], "sampled_by": "oops"}') is None
+def test_parse_llm_re_keeps_every_relation_label():
+    """The classifier's job is to label, not to filter — gates do the dropping."""
+    raw = json.dumps({"producers": [], "links": [
+        {"song": "Hello", "artist": "Lionel Richie",
+         "relation": "inspiration", "direction": "source"},
+        {"song": "Milkshake", "artist": "Kelis",
+         "relation": "lyrical_reference", "direction": "source"},
+    ]})
+    parsed = parse_llm_re(raw)
+    assert [ln["relation"] for ln in parsed["links"]] == ["inspiration", "lyrical_reference"]
+
+
+@pytest.mark.unit
+def test_parse_llm_re_falls_back_on_invented_labels():
+    """A 12B model inventing a label still tells us it is not a sample."""
+    raw = json.dumps({"producers": [], "links": [
+        {"song": "X", "artist": "Y", "relation": "homage", "direction": "sideways"},
+    ]})
+    parsed = parse_llm_re(raw)
+    assert parsed["links"] == [_link("X", "Y", relation="other", direction="source")]
+
+
+@pytest.mark.unit
+def test_parse_llm_re_rejects_non_dict_link_items():
+    assert parse_llm_re('{"producers": [], "links": ["oops"]}') is None
+    assert parse_llm_re('{"producers": [], "links": "oops"}') is None
 
 
 @pytest.mark.unit
@@ -124,30 +147,53 @@ def test_parse_llm_re_rejects_top_level_non_dict():
 
 
 @pytest.mark.unit
-def test_merge_results_dedupes_relations_and_keeps_as_is_first():
-    as_is = {
-        "producers": [],
-        "samples": [{"song": "Amen Brother", "artist": "The Winstons"}],
-        "sampled_by": [],
-    }
-    llm = {
-        "producers": [],
-        "samples": [
-            {"song": "amen brother", "artist": "the winstons"},  # dup, dropped
-            {"song": "Funky Drummer", "artist": "James Brown"},   # new, kept
-        ],
-        "sampled_by": [{"song": None, "artist": "N.W.A"}],
-    }
+def test_merge_results_dedupes_links_and_keeps_as_is_first():
+    as_is = {"producers": [], "links": [_link("Amen Brother", "The Winstons")]}
+    llm = {"producers": [], "links": [
+        _link("amen brother", "the winstons"),                     # dup, dropped
+        _link("Funky Drummer", "James Brown"),                     # new, kept
+        _link(None, "N.W.A", direction="usage"),                   # other direction, kept
+    ]}
     out = merge_results(as_is, llm)
-    assert out["samples"] == [
-        {"song": "Amen Brother", "artist": "The Winstons"},
-        {"song": "Funky Drummer", "artist": "James Brown"},
+    assert out["links"] == [
+        _link("Amen Brother", "The Winstons"),
+        _link("Funky Drummer", "James Brown"),
+        _link(None, "N.W.A", direction="usage"),
     ]
-    assert out["sampled_by"] == [{"song": None, "artist": "N.W.A"}]
+
+
+@pytest.mark.unit
+def test_sound_relation_beats_a_weaker_one_on_the_same_pair():
+    """Bound 2's real source was lost this way: one fact called the pair a
+    lyrical reference and, being first, buried the fact that says
+    "built around a sample of 'Bound'"."""
+    weak = {"producers": [], "links": [
+        _link("Bound", "Ponderosa Twins Plus One", relation="lyrical_reference")]}
+    strong = {"producers": [], "links": [
+        _link("Bound", "Ponderosa Twins Plus One", relation="sample")]}
+    assert merge_results(weak, strong)["links"] == [
+        _link("Bound", "Ponderosa Twins Plus One", relation="sample")]
+    # …and the reverse order gives the same answer.
+    assert merge_results(strong, weak)["links"] == [
+        _link("Bound", "Ponderosa Twins Plus One", relation="sample")]
+
+
+@pytest.mark.unit
+def test_equal_strength_keeps_the_earlier_entry():
+    a = {"producers": [], "links": [_link("X", "Y", relation="sample")]}
+    b = {"producers": [], "links": [_link("X", "Y", relation="interpolation")]}
+    assert merge_results(a, b)["links"] == [_link("X", "Y", relation="sample")]
+
+
+@pytest.mark.unit
+def test_merge_results_same_pair_both_directions_is_not_a_dup():
+    a = {"producers": [], "links": [_link("X", "Y", direction="source")]}
+    b = {"producers": [], "links": [_link("X", "Y", direction="usage")]}
+    assert len(merge_results(a, b)["links"]) == 2
 
 
 @pytest.mark.unit
 def test_merge_results_handles_none_llm():
-    as_is = {"producers": ["Rick Rubin"], "samples": [], "sampled_by": []}
+    as_is = {"producers": ["Rick Rubin"], "links": []}
     out = merge_results(as_is, None)
-    assert out == {"producers": ["Rick Rubin"], "samples": [], "sampled_by": []}
+    assert out == {"producers": ["Rick Rubin"], "links": []}

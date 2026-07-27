@@ -474,6 +474,9 @@ class ProducerCredit(BaseModel):
     name: str
     # Set when the library has this producer as an artist (canonical slug).
     artist_slug: Optional[str] = None
+    # The artist's photo (thumb_path only — never the cutout: the producer
+    # popup renders a portrait card). None → monogram fallback client-side.
+    image: Optional[str] = None
     # How many OTHER tracks in the library credit them as producer.
     produced_count: int = 0
 
@@ -498,6 +501,17 @@ class ProducerTrack(BaseModel):
 class ProducerTracksResponse(BaseModel):
     producer: str
     tracks: list[ProducerTrack]
+    collection_name: Optional[str] = None
+
+
+class SamplesResolveRequest(BaseModel):
+    """Sample-reference strings ("Artist — Title") to match against the library."""
+    items: list[str] = Field(default_factory=list, max_length=50)
+
+
+class SamplesResolveResponse(BaseModel):
+    # Aligned with the request's ``items``; None → not in the library.
+    matches: list[Optional[ProducerTrack]]
     collection_name: Optional[str] = None
 
 

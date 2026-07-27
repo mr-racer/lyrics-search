@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-from app.domain.models import ArtistAggregate, IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RhythmResponse, WeeklyPulseResponse, EngagementResponse, TasteMapResponse, RediscoverResponse, User, ProducerResolveResponse, ProducerTracksResponse
+from app.domain.models import ArtistAggregate, IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RhythmResponse, WeeklyPulseResponse, EngagementResponse, TasteMapResponse, RediscoverResponse, User, ProducerResolveResponse, ProducerTracksResponse, SamplesResolveRequest, SamplesResolveResponse
 from app.api.dependencies import get_current_user, require_mode
 from app.api.helpers import derive_collection_for_user, member_index_root, path_within_root
 from app.services.library_service import LibraryService
@@ -483,6 +483,26 @@ def get_producer_tracks(
     )
 
 
+# ── Sample references (samples popover) ───────────────────────────────────────
+
+@router.post("/samples/resolve", response_model=SamplesResolveResponse)
+def resolve_sample_references(
+    req: SamplesResolveRequest,
+    current_user: User = Depends(get_current_user),
+) -> SamplesResolveResponse:
+    """Match «Artist — Title» sample strings against the user's library.
+
+    POST because the strings are free text from track relations, not ids.
+    Exact-only matching (see ``resolve_sample_refs``) — the player upgrades
+    matched rows to playable ones. SQLite-only.
+    """
+    derived = derive_collection_for_user(current_user)
+    return SamplesResolveResponse(
+        matches=track_credits_service.resolve_sample_refs(derived, req.items),
+        collection_name=derived,
+    )
+
+
 # ── Liked songs ───────────────────────────────────────────────────────────────
 
 @router.get("/liked-songs", response_model=LikedSongsResponse)
@@ -614,6 +634,12 @@ class GemTracksResponse(BaseModel):
     kind: str
     canonical: str
     tracks: list[GemTrackRef]
+    # Namedrop only: the library artist the chip refers to. The popover shows
+    # a link to their page here instead of the chip navigating there directly
+    # — the other tracks that mention them are the point of tapping it.
+    artist_slug: str | None = None
+    artist_name: str | None = None
+    artist_image: str | None = None
 
 
 @router.get("/gems/tracks", response_model=GemTracksResponse)
@@ -625,14 +651,39 @@ def get_gem_tracks(
     """All tracks of the library carrying a given lyric-gem entity — the
     mini-playlist behind a tapped gem chip. Track metadata is hydrated by the
     client via the existing GET /metadata/tracks?ids=... batch endpoint."""
+    import json as _json
+
     from app.resources.metadata_db import MetadataDB
 
     derived = derive_collection_for_user(current_user)
     rows = MetadataDB.get_gem_tracks(derived, kind, canonical)
+
+    artist_slug = None
+    if kind == "namedrop":
+        for r in rows:
+            try:
+                artist_slug = (_json.loads(r.get("detail") or "{}") or {}).get("artist_slug")
+            except (TypeError, ValueError):
+                artist_slug = None
+            if artist_slug:
+                break
+
+    artist_image = None
+    if artist_slug:
+        try:
+            artist_image = (MetadataDB.get_artist_audiodb(artist_slug, derived) or {}).get(
+                "thumb_path",
+            )
+        except Exception:
+            artist_image = None
+
     return GemTracksResponse(
         kind=kind,
         canonical=canonical,
         tracks=[GemTrackRef(track_id=r["track_id"], quote=r["quote"] or "") for r in rows],
+        artist_slug=artist_slug,
+        artist_name=canonical if artist_slug else None,
+        artist_image=artist_image,
     )
 
 
