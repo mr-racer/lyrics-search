@@ -67,22 +67,27 @@ _LABELS_A = {
     "search": "find one specific song by its lyrics, words or sound",
     "playlist": "build a playlist or a collection of many songs",
     "facts": "learn facts, history or biography about an artist or a song",
-    "followup": "adjust or refine the previous request instead of starting a new one",
 }
 _LABELS_B = {
     "search": "the user is trying to identify one particular track they have in mind",
     "playlist": "the user wants a set of several tracks assembled for them",
     "facts": "the user is asking a question and wants an explanation or information",
-    "followup": "a short remark that only makes sense as a tweak to what was just asked",
 }
 
-# Not a branch of its own: "followup" means "whatever we were doing, again but
-# different". Measured need — «а побыстрее?» after a playlist turn was
-# classified as a CONFIDENT search (share 0.5+) and ran a nonsense lyric
-# lookup, because a three-word modifier carries no signal for the other three
-# labels to compete over. Routing it by label rather than by message length
-# keeps «собери хиты Канье» (also short, but a real playlist request) intact.
-FOLLOWUP = "followup"
+# A follow-up modifier is detected in CODE, not by the model. Both model-side
+# attempts were measured and rejected on 2026-07-27: a 4th "refine the previous
+# request" label diluted the 3-way ensemble into two new confident wrong routes,
+# and a dedicated binary "standalone vs modifier" pass showed no usable
+# separation at any threshold (min follow-up score 0.68 vs max standalone 0.86).
+# GLiNER simply has no concept of conversational reference.
+#
+# What it CAN see is that a message names nothing at all. «а побыстрее?»,
+# «ещё такого же», «покороче давай» carry no artist, no song and no count —
+# there is nothing in them to search FOR, so they can only mean "the last thing,
+# but different". Every genuinely short request in the fixture does name
+# something («собери хиты Канье», «лучшее у Queen», «биография Radiohead»), so
+# the entity check is what keeps them out.
+FOLLOWUP_MAX_WORDS = 3
 
 _lock = threading.Lock()
 _schemas = None
@@ -329,12 +334,15 @@ async def route(
     if count is not None and count >= 2:
         return AssistantRoute(intent="playlist", source="count_override", **base)
 
-    # "Refine what we just did" — resolve it against the previous turn. With no
-    # previous turn there is nothing to refine, so fall through and ask.
-    if top_intent == FOLLOWUP and share >= MIN_SHARE:
-        if last_intent:
-            return AssistantRoute(intent=last_intent, source="sticky", **base)
-        return AssistantRoute(intent=None, source="unclear", **base)
+    # A very short message that names nothing can only be a tweak to the previous
+    # turn. This is checked BEFORE the share gate on purpose: the classifier is
+    # confidently WRONG on these (it read «а побыстрее?» as a lyric search for
+    # "fast" at share 0.57), so leaving it as a below-threshold fallback never
+    # fired. Without a previous turn there is nothing to refine — fall through.
+    names_nothing = not (artist or song or count)
+    if (last_intent and names_nothing
+            and len(text.split()) <= FOLLOWUP_MAX_WORDS):
+        return AssistantRoute(intent=last_intent, source="sticky", **base)
 
     if top_intent and share >= MIN_SHARE:
         return AssistantRoute(intent=top_intent, source="gliner", **base)

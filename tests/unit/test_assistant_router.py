@@ -240,37 +240,65 @@ def test_structure_field_unwraps_nested_shapes():
     assert R._structure_field({"count": ""}, "count") is None
 
 
-# ── the followup label ───────────────────────────────────────────────────────
+# ── follow-up modifiers («а побыстрее?») ─────────────────────────────────────
+# Detected in code from "short AND names nothing", because the classifier is
+# CONFIDENTLY wrong on these — it reads them as lyric searches.
 
 
-async def test_followup_label_resolves_to_the_previous_intent(fake_gliner):
+async def test_short_message_naming_nothing_sticks(fake_gliner):
     """«а побыстрее?» is not a search — it is "the last thing, but different"."""
-    fake_gliner["scores"] = {R.FOLLOWUP: 0.7, "search": 0.2, "playlist": 0.1}
+    fake_gliner["scores"] = {"search": 0.6, "playlist": 0.3, "facts": 0.1}
     route = await R.route("а побыстрее?", AssistantSlots(last_intent="playlist"))
     assert route.intent == "playlist"
     assert route.source == "sticky"
 
 
-async def test_followup_with_nothing_to_refine_asks(fake_gliner):
-    """First message of a conversation: there is no previous turn to tweak."""
-    fake_gliner["scores"] = {R.FOLLOWUP: 0.7, "search": 0.2, "playlist": 0.1}
-    route = await R.route("а побыстрее?", AssistantSlots())
-    assert route.intent is None
+async def test_stickiness_beats_a_confident_but_wrong_classification(fake_gliner):
+    """The rule runs BEFORE the share gate on purpose: as a below-threshold
+    fallback it never fired, because the model was sure it was a search."""
+    fake_gliner["scores"] = {"search": 0.95, "playlist": 0.05}
+    route = await R.route("ещё такого же", AssistantSlots(last_intent="facts"))
+    assert route.intent == "facts"
+    assert route.source == "sticky"
 
 
-async def test_followup_never_becomes_an_executor(fake_gliner):
-    """FOLLOWUP is a routing signal, not a branch — it must never leak out as an
-    intent the service would then try to dispatch."""
-    fake_gliner["scores"] = {R.FOLLOWUP: 0.9, "search": 0.1}
-    for slots in (AssistantSlots(), AssistantSlots(last_intent="facts")):
-        route = await R.route("ещё такого же", slots)
-        assert route.intent in (None, "search", "playlist", "facts")
-
-
-async def test_a_confident_real_request_still_wins_over_stickiness(fake_gliner):
-    """«собери хиты Канье» is short, but it is a genuine playlist request —
-    the previous intent must not swallow it."""
-    fake_gliner["scores"] = {"playlist": 0.8, R.FOLLOWUP: 0.1, "search": 0.1}
+async def test_a_short_message_that_names_an_artist_is_a_real_request(fake_gliner):
+    """«собери хиты Канье» is just as short, but it names someone — the previous
+    intent must not swallow it."""
+    fake_gliner["scores"] = {"playlist": 0.8, "search": 0.15, "facts": 0.05}
+    fake_gliner["ents"] = _ents(artist="Канье")
     route = await R.route("собери хиты Канье", AssistantSlots(last_intent="facts"))
+    assert route.intent == "playlist"
+    assert route.source == "gliner"
+
+
+async def test_a_short_message_naming_a_song_is_a_real_request(fake_gliner):
+    fake_gliner["scores"] = {"facts": 0.8, "search": 0.2}
+    fake_gliner["ents"] = _ents(song="Runaway")
+    route = await R.route("про Runaway", AssistantSlots(last_intent="playlist"))
+    assert route.intent == "facts"
+
+
+async def test_a_short_message_with_a_count_is_a_real_request(fake_gliner):
+    fake_gliner["scores"] = {"search": 0.9, "playlist": 0.1}
+    fake_gliner["ents"] = _ents(count="10")
+    route = await R.route("давай 10 штук", AssistantSlots(last_intent="facts"))
+    assert route.intent == "playlist"
+    assert route.source == "count_override"
+
+
+async def test_no_previous_turn_means_nothing_to_refine(fake_gliner):
+    """First message of a conversation — the classifier's call stands."""
+    fake_gliner["scores"] = {"search": 0.8, "playlist": 0.2}
+    route = await R.route("а побыстрее?", AssistantSlots())
+    assert route.source == "gliner"
+
+
+async def test_a_longer_message_is_never_treated_as_a_modifier(fake_gliner):
+    """«сделай подборку под пробежку» names nothing either, but at 4 words it is
+    a real request — length is what separates the two."""
+    fake_gliner["scores"] = {"playlist": 0.75, "search": 0.2, "facts": 0.05}
+    route = await R.route("сделай подборку под пробежку",
+                          AssistantSlots(last_intent="search"))
     assert route.intent == "playlist"
     assert route.source == "gliner"
