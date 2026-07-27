@@ -465,7 +465,15 @@ async def ai_playlist_route(
 
 def _build_ai_playlist_response(result: dict) -> AIPlaylistResponse:
     """Shape the ai_playlist service dict into the API contract (shared by the
-    plain and the streaming route)."""
+    plain and the streaming route).
+
+    The recsys candidate dicts carry Qdrant-payload fields only, and the
+    credits live in SQLite — hence the same ``apply_song_relations`` overlay
+    the wave and /metadata/tracks do. Without it the player showed no
+    producers chevron and no samples pill for AI playlists: these tracks come
+    with a real ``file_path``, so the client's slim-shape enrichment
+    (triggered by a FALSY file_path) never rescued them either.
+    """
     tracks = [
         AIPlaylistTrack(
             track_id=t["track_id"],
@@ -484,6 +492,7 @@ def _build_ai_playlist_response(result: dict) -> AIPlaylistResponse:
         )
         for t in result["tracks"]
     ]
+    apply_song_relations(tracks)
     return AIPlaylistResponse(
         title=result["title"],
         steps=[AIPlaylistStep(**s) for s in result["steps"]],

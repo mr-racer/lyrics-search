@@ -12119,6 +12119,27 @@ function resolveTrackProducers(trackId) {
   return p;
 }
 
+// track_id → Promise<{producer,label,samples,sampled_by}>: the credits slice of
+// /metadata/tracks/{id}. Safety net for queue shapes that arrive WITHOUT the
+// server-side relations overlay (a list endpoint that forgot it, a shape with a
+// real file_path so handlePlayTrack's slim-enrichment skipped it). Cached
+// module-wide — one request per track, and only for tracks that came in bare.
+const _trackCreditsCache = new Map();
+function fetchTrackCredits(trackId) {
+  if (!trackId) return Promise.resolve(null);
+  if (_trackCreditsCache.has(trackId)) return _trackCreditsCache.get(trackId);
+  const p = apiFetch(`/metadata/tracks/${encodeURIComponent(trackId)}`)
+    .then(t => (t ? {
+      producer: t.producer || null,
+      label: t.label || null,
+      samples: t.samples || null,
+      sampled_by: t.sampled_by || null,
+    } : null))
+    .catch(() => { _trackCreditsCache.delete(trackId); return null; });
+  _trackCreditsCache.set(trackId, p);
+  return p;
+}
+
 // producer name (lowercased) → Promise<tracks[]> from /library/producers/tracks.
 const _producerTracksCache = new Map();
 function fetchProducerTracks(name) {
@@ -15076,6 +15097,43 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
     [currentTrack, fetchedLyrics]
   );
 
+  // On-demand credits, same contract as the lyrics fallback above: producers /
+  // samples live in SQLite and are overlaid server-side, but a queue item can
+  // still reach the player bare (an endpoint that skipped the overlay, or a
+  // full shape whose real file_path made handlePlayTrack's slim-enrichment
+  // skip it — that's how AI playlists lost their credits). Fetching by
+  // track_id makes the chevron and the samples pill source-independent.
+  const [fetchedCredits, setFetchedCredits] = useState(null);
+  useEffect(() => {
+    setFetchedCredits(null);
+    const id = currentTrack?.track_id;
+    if (!id) return;
+    const hasCredits = !!(currentTrack.producer
+      || (currentTrack.samples && currentTrack.samples.length)
+      || (currentTrack.sampled_by && currentTrack.sampled_by.length));
+    if (hasCredits) return;
+    let alive = true;
+    fetchTrackCredits(id).then(c => { if (alive) setFetchedCredits(c); });
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentTrack?.track_id]);
+
+  // What the credits UI (chevron + producers drawer + samples pill) renders:
+  // currentTrack, with anything the fallback found layered on top. Never
+  // clobbers a value the track already carried.
+  const creditsTrack = useMemo(() => {
+    if (!currentTrack || !fetchedCredits) return currentTrack;
+    return {
+      ...currentTrack,
+      producer: currentTrack.producer || fetchedCredits.producer || null,
+      label: currentTrack.label || fetchedCredits.label || null,
+      samples: (currentTrack.samples && currentTrack.samples.length)
+        ? currentTrack.samples : fetchedCredits.samples,
+      sampled_by: (currentTrack.sampled_by && currentTrack.sampled_by.length)
+        ? currentTrack.sampled_by : fetchedCredits.sampled_by,
+    };
+  }, [currentTrack, fetchedCredits]);
+
   // Reset when track changes — different lyrics, different state
   useEffect(() => {
     setExpandedLines(new Set());
@@ -15902,7 +15960,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                   }}
                 >
                   <ArtistCredit track={currentTrack} navigateToArtist={navigateToArtist} lang={lang} color={pTextMuted} />
-                  {splitCredits(currentTrack.producer).length > 0 && (
+                  {splitCredits(creditsTrack.producer).length > 0 && (
                     <button
                       type="button"
                       className={`credits-toggle${creditsOpen ? ' credits-toggle--open' : ''}`}
@@ -15928,7 +15986,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                   <ProducersReveal
                     key={currentTrack.track_id}
                     open={creditsOpen}
-                    track={currentTrack}
+                    track={creditsTrack}
                     isDark={isDark}
                     lang={lang}
                     navigateToArtist={navigateToArtist}
@@ -15943,7 +16001,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                 <div className="player-chips-row">
                   <SamplesAccentChip
                     key={`samples-${currentTrack.track_id}`}
-                    track={currentTrack}
+                    track={creditsTrack}
                     isDark={isDark}
                     lang={lang}
                     onPlayTrack={onPlayTrack}
@@ -18626,10 +18684,11 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     // reads directly off currentTrack and queue items. Enrich the ENTIRE queue
     // in one batch /metadata/tracks?ids= call so switching to any queue item
     // doesn't show partial metadata. Slim items are detected by a FALSY
-    // file_path: undefined on list shapes, and "" on AIPlaylistTrack — the
-    // AI-built playlist serializes file_path as "" and used to slip past an
-    // `=== undefined` check, so its queue never got producers/samples/lyrics.
-    // (Search/Recommend hits arrive with a real file_path and are skipped.)
+    // file_path: undefined on list shapes, "" on a shape whose payload had none.
+    // (Search/Recommend/AI-playlist hits arrive with a real file_path and are
+    // skipped — those endpoints must overlay credits server-side themselves;
+    // PlayerSection's fetchTrackCredits fallback covers the current track if
+    // one ever doesn't.)
     const slimIds = new Set();
     for (const h of queue) {
       const t = (h && h.track) ? h.track : h;
