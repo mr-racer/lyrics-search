@@ -99,7 +99,8 @@ async def assistant_stream(
         try:
             while True:
                 try:
-                    item = await asyncio.wait_for(sink.queue.get(), timeout=15.0)
+                    item = await asyncio.wait_for(sink.queue.get(),
+                                          timeout=assistant_service.HEARTBEAT_SEC)
                 except asyncio.TimeoutError:
                     # Keepalive: an LLM call can be silent for a minute and the
                     # reverse proxy will drop a connection that quiet.

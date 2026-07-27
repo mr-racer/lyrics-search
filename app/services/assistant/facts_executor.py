@@ -54,6 +54,12 @@ def _lang_name(lang: str | None) -> str:
     return _LANG_NAMES.get((lang or "en").strip().lower(), "English")
 
 
+def _is_ru(lang: str | None) -> bool:
+    """Tolerates "RU" / "ru-RU" — a bare ``lang == "ru"`` silently emitted
+    English captions inside an otherwise Russian answer."""
+    return (lang or "").strip().lower().startswith("ru")
+
+
 _SYSTEM = """You answer a listener's question about a specific artist or song, using ONLY the numbered facts provided.
 
 Write the answer in {lang_name}.
@@ -237,6 +243,7 @@ def _build_song_pack(subject: dict, collection_name: str, lang: str, payload: di
     from app.services.song_facts_service import get_song_facts_key
 
     items: list[dict] = []
+    ru = _is_ru(lang)
     artist = subject.get("artist") or payload.get("artist") or ""
     title = subject.get("title") or payload.get("title") or ""
     slug = get_song_facts_key(artist, title) if (artist and title) else ""
@@ -257,16 +264,16 @@ def _build_song_pack(subject: dict, collection_name: str, lang: str, payload: di
     if slug:
         rel = (MetadataDB.get_song_relations_bulk([slug]) or {}).get(slug) or {}
         if rel.get("producer"):
-            items.append({"text": f"Продюсер: {rel['producer']}" if lang == "ru"
+            items.append({"text": f"Продюсер: {rel['producer']}" if ru
                                   else f"Produced by {rel['producer']}", "source": "credits"})
         if rel.get("label"):
-            items.append({"text": f"Лейбл: {rel['label']}" if lang == "ru"
+            items.append({"text": f"Лейбл: {rel['label']}" if ru
                                   else f"Label: {rel['label']}", "source": "credits"})
         for s in (rel.get("samples") or [])[:4]:
-            items.append({"text": (f"Содержит сэмпл: {s}" if lang == "ru"
+            items.append({"text": (f"Содержит сэмпл: {s}" if ru
                                    else f"Contains a sample of {s}"), "source": "credits"})
         for s in (rel.get("sampled_by") or [])[:4]:
-            items.append({"text": (f"Был засэмплирован в: {s}" if lang == "ru"
+            items.append({"text": (f"Был засэмплирован в: {s}" if ru
                                    else f"Sampled by {s}"), "source": "credits"})
 
     if subject.get("track_id"):
@@ -275,7 +282,7 @@ def _build_song_pack(subject: dict, collection_name: str, lang: str, payload: di
             quote = gem.get("quote")
             if not display:
                 continue
-            text = (f"В тексте упоминается {display}" if lang == "ru"
+            text = (f"В тексте упоминается {display}" if ru
                     else f"The lyrics reference {display}")
             if quote:
                 text += f" — «{quote}»"
@@ -356,16 +363,22 @@ def _related_tracks_sync(qdrant, collection_name: str, subject: dict) -> list:
 # ── Step 5: web fill-in (a CODE decision) ────────────────────────────────────
 
 
-def _web_query(subject: dict, message: str) -> str:
-    """A web query built from the resolved subject, not from the raw message —
-    the message may be in Russian and phrased conversationally."""
+def _web_queries(subject: dict, message: str) -> list[str]:
+    """Web queries built from the RESOLVED subject, not the raw message.
+
+    The message is often conversational Russian ("а расскажи чё там у неё") —
+    useless as a search query. Ordered best-angle-first; the caller stops at the
+    first one that returns anything.
+    """
     title = subject.get("title") or ""
     artist = subject.get("artist") or ""
-    if subject.get("kind") == "artist":
-        return f"{title} musician biography"
-    if subject.get("kind") == "album":
-        return f"{title} {artist} album"
-    return f"{artist} {title} song meaning background"
+    kind = subject.get("kind")
+    if kind == "artist":
+        return [f"{title} musician biography", f"{title} band history"]
+    if kind == "album":
+        return [f"{title} {artist} album", f"{title} {artist} album review"]
+    return [f"{artist} {title} song meaning background",
+            f"{artist} {title} song facts"]
 
 
 def _web_search_sync(query: str) -> str:
@@ -402,7 +415,7 @@ def _deterministic_answer(subject: dict, items: list[dict], lang: str) -> str:
 
     Not an error message — a real, useful reply built only from stored facts.
     """
-    ru = (lang or "en").startswith("ru")
+    ru = _is_ru(lang)
     name = subject.get("title") or ""
     if not items:
         return (f"Про «{name}» у меня пока нет достоверных сведений."
@@ -444,7 +457,7 @@ def _verify(raw: object, n_items: int) -> tuple[str, list[int]] | None:
 # ── Orchestration ────────────────────────────────────────────────────────────
 
 
-async def run(*, qdrant, collection_name: str, search_service, message: str, route, slots,
+async def run(*, qdrant, collection_name: str, message: str, route, slots,
               lang: str = "en", subject_track_id=None, subject_artist_slug=None,
               now_playing_track_id=None, llm_base_url=None, llm_model=None, emit=None):
     """Run the facts branch. Returns ``(payload_dict | None, options list)``.
@@ -497,17 +510,18 @@ async def run(*, qdrant, collection_name: str, search_service, message: str, rou
     await _say("collecting", found=len(items))
 
     # ── web fill-in: code decides, not the model ──
+    # A second angle only when the first one came back empty — the budget is
+    # spent by code on a measured shortfall, never on the model's hunch.
     web_used = False
     if len(items) < MIN_PACK_ITEMS:
-        query = _web_query(subject, message)
-        for _ in range(min(1, MAX_WEB_SEARCHES)):
+        for query in _web_queries(subject, message)[:MAX_WEB_SEARCHES]:
             await _say("web_search", query=query)
             raw_web = await asyncio.to_thread(_web_search_sync, query)
             snippets = _snippets_from_web(raw_web)
             if snippets:
                 items += snippets
                 web_used = True
-            break
+                break
 
     items = items[:MAX_PACK_ITEMS]
 

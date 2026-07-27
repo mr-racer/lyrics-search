@@ -83,14 +83,24 @@ def test_clean_collapses_whitespace_and_truncates():
     assert len(out) <= F.MAX_FACT_CHARS + 1 and out.endswith("…")
 
 
-def test_web_query_is_built_from_the_subject_not_the_message():
+def test_web_queries_are_built_from_the_subject_not_the_message():
     """The user's message may be conversational Russian; the web query must be
     a clean English lookup built from what we resolved."""
-    artist = F._web_query({"kind": "artist", "title": "Björk", "artist": "Björk"},
-                          "а расскажи чё там у неё вообще")
-    assert artist == "Björk musician biography"
-    song = F._web_query({"kind": "song", "title": "Runaway", "artist": "Kanye West"}, "?")
-    assert "Kanye West" in song and "Runaway" in song
+    artist = F._web_queries({"kind": "artist", "title": "Björk", "artist": "Björk"},
+                            "а расскажи чё там у неё вообще")
+    assert artist[0] == "Björk musician biography"
+    song = F._web_queries({"kind": "song", "title": "Runaway",
+                           "artist": "Kanye West"}, "?")
+    assert all("Kanye West" in q and "Runaway" in q for q in song)
+
+
+def test_web_queries_offer_a_second_angle():
+    """The fallback query exists so a dry first search doesn't end the branch —
+    the budget is spent by code, on a measured shortfall."""
+    for kind in ("artist", "album", "song"):
+        qs = F._web_queries({"kind": kind, "title": "X", "artist": "Y"}, "?")
+        assert len(qs) == 2 and qs[0] != qs[1]
+        assert len(qs) <= F.MAX_WEB_SEARCHES
 
 
 def test_snippets_need_substance():

@@ -131,7 +131,7 @@ async def run_assistant(req, *, search_service, qdrant, collection_name: str,
     if route.intent == "playlist":
         return await _run_playlist(req, route, merged, search_service, qdrant,
                                    collection_name, sink, lang)
-    return await _run_facts(req, route, merged, search_service, qdrant,
+    return await _run_facts(req, route, merged, qdrant,
                             collection_name, sink, lang)
 
 
@@ -202,13 +202,12 @@ async def _run_playlist(req, route, slots, search_service, qdrant,
     }
 
 
-async def _run_facts(req, route, slots, search_service, qdrant,
+async def _run_facts(req, route, slots, qdrant,
                      collection_name, sink, lang) -> dict:
     """Run the grounded facts branch; may end in a ``disambiguate`` frame."""
     payload, options = await facts_executor.run(
         qdrant=qdrant,
         collection_name=collection_name,
-        search_service=search_service,
         message=req.message,
         route=route,
         slots=slots,
@@ -244,7 +243,7 @@ async def _run_facts(req, route, slots, search_service, qdrant,
         }
 
     if payload is None:
-        ru = (lang or "en").startswith("ru")
+        ru = (lang or "en").lower().startswith("ru")
         return {
             "intent": "facts",
             "human": human("answer", lang),
