@@ -23,7 +23,11 @@ from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel as OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from app.domain.models import BaseQueryItem, ScoreResult, SearchPlan, ValidatorResult
+from pydantic import ValidationError
+
+from app.domain.models import (
+    BaseQueryItem, ScoreResult, SearchFilters, SearchPlan, ValidatorResult,
+)
 from app.services.agent_deps import SearchDeps
 from app.services.llm_client import _get_client, resolve_model
 
@@ -150,24 +154,85 @@ def _create_pydantic_model(
 # ---------------------------------------------------------------------------
 
 
+def _coerce_plan(raw: object) -> SearchPlan:
+    """Build a SearchPlan out of whatever the model actually returned.
+
+    Every field is defended: a small model routinely omits keys, returns null
+    for a Literal, or wraps queries as bare strings. A malformed plan degrades
+    to "search with no queries", which the caller already handles by falling
+    through to its own loop — it must never raise.
+    """
+    if not isinstance(raw, dict):
+        return SearchPlan(action="search", query_type="hybrid")
+
+    action = raw.get("action")
+    if action not in ("request_filter", "search"):
+        action = "search"
+    query_type = raw.get("query_type")
+    if query_type not in ("text", "audio", "hybrid"):
+        query_type = "hybrid"
+    search_mode = raw.get("search_mode")
+    if search_mode not in ("CONSERVATIVE", "AGGRESSIVE"):
+        search_mode = "CONSERVATIVE"
+
+    filters = None
+    raw_filters = raw.get("filters")
+    if isinstance(raw_filters, dict) and any(raw_filters.values()):
+        try:
+            # SearchFilters is extra="ignore", so legacy/invented keys are dropped.
+            filters = SearchFilters(**{k: v for k, v in raw_filters.items()
+                                       if v not in (None, "", [], {})})
+        except ValidationError:
+            filters = None
+
+    filter_lookup = None
+    raw_lookup = raw.get("filter_lookup")
+    if isinstance(raw_lookup, dict):
+        cleaned = {k: v for k, v in raw_lookup.items() if isinstance(v, str) and v.strip()}
+        filter_lookup = cleaned or None
+
+    queries: list[BaseQueryItem] = []
+    for q in (raw.get("queries") or []):
+        text = q.get("query") if isinstance(q, dict) else q
+        if isinstance(text, str) and text.strip():
+            queries.append(BaseQueryItem(query=text.strip()))
+
+    return SearchPlan(action=action, query_type=query_type, filters=filters,
+                      filter_lookup=filter_lookup, queries=queries,
+                      search_mode=search_mode)
+
+
 def create_planner_agent(deps: SearchDeps):
     """Return async callable: (query, filled_prompt) -> SearchPlan.
 
-    Creates a fresh Agent per call so the formatted system_prompt is injected
-    correctly — same pattern as create_scorer_agent and create_validator_agent.
-    Agent.run() no longer accepts system_prompt (renamed to instructions in
-    PydanticAI 1.x), so we pass it through the Agent constructor instead.
+    Uses ask_llm + parse_json rather than a PydanticAI ``Agent`` with
+    ``output_type``, for the same reason create_scorer_agent and
+    create_validator_agent do — and then some. Measured on the deployment
+    (gemma-4-12b-it-qat-q4_0, 2026-07-27): a plain JSON call answers in ~1 s,
+    while the structured-output Agent on the identical prompt never returned at
+    all (hard 300 s timeout, no partial output). The chat page ships
+    ``planner_enabled: true``, so that hang was reaching real users.
+
+    PLANNER_PROMPT already spells out the exact JSON shape, so nothing about the
+    prompt changes; :func:`_coerce_plan` does in code what output_type did.
 
     Usage::
         planner = create_planner_agent(deps)
         plan: SearchPlan = await planner(query, filled_prompt)
     """
-    model = _create_pydantic_model(deps.llm_base_url, deps.llm_model)
-
     async def run_planner(query: str, filled_prompt: str) -> SearchPlan:
-        agent = Agent(model, output_type=SearchPlan, system_prompt=filled_prompt)
-        result = await agent.run(query)
-        return result.output
+        from app.services.llm_client import ask_llm
+
+        raw = await ask_llm(
+            query,
+            system_prompt=filled_prompt,
+            parse_json=True,
+            base_url=deps.llm_base_url,
+            model=deps.llm_model,
+            extra_body={"enable_thinking": False},
+            temperature=0.3,
+        )
+        return _coerce_plan(raw)
 
     return run_planner
 
