@@ -84,6 +84,14 @@ STYLE:
 Output ONLY minified JSON, no prose, no fences:
 {{"answer": "...", "used": [1, 3]}}"""
 
+# Appended to the prompt for the single retry after an uncitable first answer.
+_RETRY_SUFFIX = (
+    'Your previous reply was not usable. Output the JSON object and NOTHING else: '
+    'no sentence before it, no sentence after it, no code fence. '
+    'The object must have exactly two keys, "answer" and "used", and "used" must '
+    'list the numbers of the facts your answer relies on.'
+)
+
 
 # ── Step 1: subject resolution ───────────────────────────────────────────────
 
@@ -664,6 +672,20 @@ async def run(*, qdrant, collection_name: str, message: str, route, slots,
             extra_body={"enable_thinking": False},
         )
         verified = _verify(_parse_json_object(raw_text), len(items))
+        if verified is None:
+            # The model answers well but wraps it inconsistently: the same
+            # question returns prose+JSON one run and bare prose the next, and
+            # bare prose has no citations to check, so it must be thrown away.
+            # One stricter retry recovers it; a second would just cost seconds.
+            logger.info("[assistant/facts] no citable answer — retrying once, strictly")
+            raw_text = await ask_llm(
+                user_prompt + "\n\n" + _RETRY_SUFFIX,
+                system_prompt=_SYSTEM.format(lang_name=_lang_name(lang)),
+                parse_json=False, temperature=0.0,
+                base_url=llm_base_url, model=llm_model,
+                extra_body={"enable_thinking": False},
+            )
+            verified = _verify(_parse_json_object(raw_text), len(items))
         if verified is None:
             logger.info("[assistant/facts] answer rejected by citation check — "
                         "serving the deterministic fact rendering instead")
