@@ -49,16 +49,25 @@ class EventSink:
         """Enqueue from the event loop thread."""
         self.queue.put_nowait(item)
 
-    async def emit(self, event: dict) -> None:
-        """Async callback for ``chat_search_service``.
+    def _frame(self, event: dict) -> dict:
+        """Normalise any producer's event into one ``status`` frame.
 
-        Its events are already ``{"type": <stage>, "human": ...}``; reshape them
-        into the assistant's ``status`` frames so the client sees one vocabulary.
+        Two vocabularies arrive here: ``chat_search_service`` names the stage in
+        ``type`` (``{"type": "search", "found": 3}``), while the playlist and
+        facts branches name it in ``stage``. Either may already carry a
+        ``human`` caption. Both keys are stripped before the remaining fields
+        are handed to :func:`human` — passing them through is what made a facts
+        event blow up with "human() got multiple values for argument 'stage'".
         """
-        stage = event.get("type") or "status"
-        payload = {k: v for k, v in event.items() if k != "type"}
-        payload.setdefault("human", human(stage, self.lang, **payload))
-        self.put({"type": "status", "stage": stage, **payload})
+        stage = event.get("stage") or event.get("type") or "status"
+        fields = {k: v for k, v in event.items()
+                  if k not in ("type", "stage", "human")}
+        caption = event.get("human") or human(stage, self.lang, **fields)
+        return {"type": "status", "stage": stage, "human": caption, **fields}
+
+    async def emit(self, event: dict) -> None:
+        """Async callback for ``chat_search_service`` and ``facts_executor``."""
+        self.put(self._frame(event))
 
     def on_status(self, event: dict) -> None:
         """Sync callback for ``ai_playlist`` / ``playlist_agent``.
@@ -67,10 +76,7 @@ class EventSink:
         hopped over with ``call_soon_threadsafe`` so ordering against the final
         ``result`` frame is preserved.
         """
-        stage = event.get("stage") or "status"
-        payload = {k: v for k, v in event.items() if k != "stage"}
-        item = {"type": "status", "stage": stage,
-                "human": human(stage, self.lang, **payload), **payload}
+        item = self._frame(event)
         try:
             running = asyncio.get_running_loop()
         except RuntimeError:
