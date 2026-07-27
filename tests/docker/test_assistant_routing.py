@@ -56,12 +56,18 @@ CASES = [
     ("расскажи историю создания Bohemian Rhapsody", "facts"),
 ]
 
-# Zero-shot floor. Below this the design premise (GLiNER instead of an LLM
-# classifier) does not hold and the thresholds in router.py need retuning.
+# Measured on this exact fixture (2026-07-27, fastino/gliner2-multi-v1): the
+# ensemble routes 22/27 correctly with ZERO wrong branches, the remaining 5
+# asking. The floor sits just under that so normal model/threshold drift shows
+# up as a failure rather than silently degrading the UX.
 MIN_ACCURACY = 0.75
-# Sending a request down the wrong pipeline is the expensive failure; asking is
-# cheap. So a miss is tolerated much more than a confident wrong branch.
-MAX_CONFIDENT_WRONG = 3
+# The failure that actually costs the user is a CONFIDENT wrong branch — a whole
+# wasted pipeline run. An unclear result just prompts a clarify tap, so it is
+# tolerated far more. The measured value is 0; 1 leaves room for drift.
+MAX_CONFIDENT_WRONG = 1
+# How often the router is allowed to fall back to asking. Above this the labels
+# or MIN_SHARE need work — the assistant stops feeling like it understands.
+MAX_ASK_RATE = 0.30
 
 
 @pytest.fixture(scope="module")
@@ -88,6 +94,19 @@ def test_routing_accuracy_meets_the_floor(routed):
     ]
     assert accuracy >= MIN_ACCURACY, (
         f"routing accuracy {accuracy:.0%} < {MIN_ACCURACY:.0%}\n" + "\n".join(misses)
+    )
+
+
+def test_asking_stays_the_exception(routed):
+    """Clarify is the safety net, not the default. If the router asks on a third
+    of ordinary phrasings, the "it just understands me" premise is gone."""
+    asked = [m for m, _, r in routed if r.intent is None]
+    rate = len(asked) / len(routed)
+    assert rate <= MAX_ASK_RATE, (
+        f"router asked on {rate:.0%} of cases (max {MAX_ASK_RATE:.0%}):
+"
+        + "
+".join(repr(m) for m in asked)
     )
 
 
