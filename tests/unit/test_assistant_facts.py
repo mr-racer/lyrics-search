@@ -142,3 +142,63 @@ def test_subject_query_falls_back_to_the_message():
         song = None
 
     assert F._subject_query(Route(), "что за трек такой") == "что за трек такой"
+
+
+# ── subject resolution: an exactly named subject must not be put to a vote ────
+# Every case below is a question from the production dry run that never reached
+# the LLM because BM25F rivals cleared DISAMBIGUATE_RATIO.
+
+
+class _Route:
+    intent = "facts"
+    artist = None
+    song = None
+
+
+def _hits(*names):
+    """Catalog hits, descending score, shaped like search_catalog output."""
+    return [{"type": "song", "title": n, "artist": "Someone", "track_id": f"t{i}",
+             "score": 1.0 - i * 0.05} for i, n in enumerate(names)]
+
+
+async def _resolve(hits, message):
+    import app.services.assistant.facts_executor as F
+    original = F._resolve_subject_sync
+    F._resolve_subject_sync = lambda *a, **kw: hits
+    try:
+        return await F.resolve_subject(None, "acct_1", route=_Route(), message=message,
+                                       slots=None)
+    finally:
+        F._resolve_subject_sync = original
+
+
+async def test_exact_title_beats_a_high_scoring_rival():
+    subject, options = await _resolve(_hits("Bohemian Rhapsody", "Bed Chem"),
+                                      "о чём песня Bohemian Rhapsody")
+    assert options == []
+    assert subject["title"] == "Bohemian Rhapsody"
+
+
+async def test_exact_album_name_beats_rivals():
+    hits = [{"type": "album", "album": "OK Computer", "artist": "Radiohead", "score": 1.0},
+            {"type": "song", "title": "Bed Chem", "artist": "Sabrina", "score": 0.95},
+            {"type": "song", "title": "OK Pal", "artist": "Someone", "score": 0.9}]
+    subject, options = await _resolve(hits, "чем интересен альбом OK Computer")
+    assert options == []
+    assert subject["title"] == "OK Computer"
+
+
+async def test_several_exact_matches_still_ask():
+    # Four different tracks really are called Runaway — that is real ambiguity.
+    subject, options = await _resolve(_hits("Runaway", "Runaway", "Runaway", "Runaway"),
+                                      "кто продюсировал Runaway")
+    assert subject is None
+    assert len(options) == 4
+
+
+async def test_partial_name_is_not_an_exact_match():
+    # "Hurting" must not claim a question about "Hurt"; nothing matches word for
+    # word, so the usual score-ratio path decides.
+    subject, options = await _resolve(_hits("Hurting", "Hurtin'"),
+                                      "что за история у трека Hurt")
+    assert subject is None and options      # ratio path → still a disambiguate

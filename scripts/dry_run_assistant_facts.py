@@ -133,7 +133,9 @@ async def main() -> None:
 
     if args.json:
         with open(args.json, "w", encoding="utf-8") as fh:
-            json.dump(results, fh, ensure_ascii=False, indent=2)
+            # related_tracks are pydantic models — default=str keeps the dump
+            # working without pulling model_dump through three nesting levels.
+            json.dump(results, fh, ensure_ascii=False, indent=2, default=str)
         print(f"raw results → {args.json}")
 
 

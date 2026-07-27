@@ -30,6 +30,7 @@ import logging
 import re
 
 from app.services.assistant.humanize import human
+from app.services.text_normalize import tokenize
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +137,32 @@ def _subject_query(route, message: str) -> str:
     return " ".join(parts) if parts else (message or "")
 
 
+def _hit_name(hit: dict) -> str:
+    """The one string a listener would have typed to mean this hit."""
+    kind = hit.get("type") or "song"
+    if kind == "artist":
+        return hit.get("artist") or ""
+    if kind == "album":
+        return hit.get("album") or ""
+    return hit.get("title") or ""
+
+
+def _named_in_query(hit: dict, query: str) -> bool:
+    """True when the hit's own name appears in the question word for word.
+
+    Token-contiguous rather than substring: "Hurt" must not claim a question
+    about "Hurting", and a one-word title must not match a random word of a
+    long sentence unless it stands there as itself.
+    """
+    name_tokens = tokenize(_hit_name(hit))
+    query_tokens = tokenize(query)
+    if not name_tokens or len(name_tokens) > len(query_tokens):
+        return False
+    span = len(name_tokens)
+    return any(query_tokens[i:i + span] == name_tokens
+               for i in range(len(query_tokens) - span + 1))
+
+
 async def resolve_subject(qdrant, collection_name: str, *, route, message: str, slots,
                           subject_track_id=None, subject_artist_slug=None,
                           now_playing_track_id=None):
@@ -165,6 +192,18 @@ async def resolve_subject(qdrant, collection_name: str, *, route, message: str, 
             if subject:
                 return subject, []
         return None, []
+
+    # A name the user typed in full outranks BM25F arithmetic. Measured on the
+    # production library: «о чём песня Bohemian Rhapsody» asked the listener to
+    # choose between "Bohemian Rhapsody" and "Bed Chem", and «чем интересен
+    # альбом OK Computer» offered four rivals — four questions out of eight
+    # never reached the LLM at all. Two or more exact matches (a library with
+    # four different tracks called "Runaway") is real ambiguity and still asks.
+    exact = [h for h in hits if _named_in_query(h, query)]
+    if len(exact) == 1:
+        return _subject_from_hit(exact[0]), []
+    if len(exact) > 1:
+        return None, [_subject_from_hit(h) for h in exact[:4]]
 
     top = hits[0]
     rivals = [
