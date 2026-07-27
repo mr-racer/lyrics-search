@@ -348,7 +348,12 @@ def _related_tracks_sync(qdrant, collection_name: str, subject: dict) -> list:
     """Library tracks to show under the answer — the artist's own, or the song itself."""
     from app.services import catalog_search_service
 
-    query = subject.get("artist") or subject.get("title") or ""
+    # For an album the record's own tracks are the relevant list; for an artist
+    # or a song it's the artist's catalogue.
+    if subject.get("kind") == "album":
+        query = subject.get("title") or subject.get("artist") or ""
+    else:
+        query = subject.get("artist") or subject.get("title") or ""
     if not query:
         return []
     try:
@@ -495,12 +500,13 @@ async def run(*, qdrant, collection_name: str, message: str, route, slots,
     def _pack_sync() -> list[dict]:
         if subject["kind"] == "artist":
             return _build_artist_pack(subject, collection_name, lang)
-        items = _build_song_pack(subject, collection_name, lang, payload)
-        # An album subject also gets its artist's facts — that's what the user
-        # is usually after when naming a record.
-        if subject["kind"] == "album" and subject.get("artist_slug"):
-            items += _build_artist_pack(subject, collection_name, lang)
-        return items
+        if subject["kind"] == "album":
+            # There is no per-album fact store, and running the SONG lookup on an
+            # album title would either find nothing or — worse — collide with a
+            # same-named track. The artist's own facts are what the question is
+            # actually about.
+            return _build_artist_pack(subject, collection_name, lang)
+        return _build_song_pack(subject, collection_name, lang, payload)
 
     try:
         items = await asyncio.to_thread(_pack_sync)
