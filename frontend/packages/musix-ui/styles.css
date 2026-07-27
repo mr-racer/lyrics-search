@@ -44,17 +44,33 @@
 
     /* Keyboard focus is a first-class state: one visible accent ring for every
        interactive element, in both themes. Mouse/touch clicks don't trigger it
-       (:focus-visible), and inline `outline:none` on inputs is overridden here
-       because this rule targets :focus-visible specifically. */
-    :where(a, button, input, select, textarea, summary,
-           [role="button"], [tabindex]):focus-visible {
+       (:focus-visible), and inline `outline:none` on controls is overridden here
+       because this rule targets :focus-visible specifically.
+
+       Text-entry fields (text/search/textarea/…) are deliberately EXCLUDED:
+       browsers match :focus-visible on them for plain mouse and touch focus
+       too, so the ring drew a blue rectangle inside every search pill and
+       composer. Their focus affordance is the caret plus each wrapper's own
+       :focus-within styling (.hero-bar, .rec2-rim, …). Only the non-text
+       controls below — where nothing else marks focus — keep the ring. */
+    :where(a, button, select, summary, [role="button"], [tabindex],
+           input:is([type="checkbox"], [type="radio"], [type="file"],
+                    [type="submit"], [type="button"], [type="reset"],
+                    [type="color"])):focus-visible {
       outline: 2px solid oklch(68% 0.17 275 / 0.9) !important;
       outline-offset: 2px;
     }
-    body[data-theme="light"] :where(a, button, input, select, textarea, summary,
-           [role="button"], [tabindex]):focus-visible {
+    body[data-theme="light"] :where(a, button, select, summary, [role="button"], [tabindex],
+           input:is([type="checkbox"], [type="radio"], [type="file"],
+                    [type="submit"], [type="button"], [type="reset"],
+                    [type="color"])):focus-visible {
       outline-color: oklch(46% 0.20 275 / 0.95) !important;
     }
+
+    /* Belt and braces: some UA stylesheets still paint a default ring on
+       text fields under :focus (not just :focus-visible). */
+    :where(input, textarea):focus,
+    :where(input, textarea):focus-visible { outline: none; }
 
     /* ── Landing player range inputs ──────────────────────────── */
     input[type=range] { -webkit-appearance:none; appearance:none; outline:none; cursor:pointer; background:transparent; }
