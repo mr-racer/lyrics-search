@@ -1208,3 +1208,34 @@ class AssistantResponse(BaseModel):
     clarify: Optional[List[AssistantClarifyOption]] = None
     # Set instead of a payload when the facts subject was ambiguous.
     disambiguate: Optional[List[AssistantSubjectOption]] = None
+
+
+class DiscoveryTrackRef(BaseModel):
+    """A track shown inside a discovery card (cover + caption, playable)."""
+    track_id: str
+    title: str
+    artist: str
+    cover_art_path: Optional[str] = None
+
+
+class DiscoveryCard(BaseModel):
+    """One hook card of the assistant page's rail.
+
+    ``prompt`` is the message the card sends when tapped — the card is a
+    pre-written turn, not a link. ``intent`` is passed alongside it so the
+    router is skipped: the card already knows which branch answers it.
+    """
+    kind: Literal["relation", "producer", "artist"]
+    intent: AssistantIntent
+    prompt: str
+    headline: str
+    subline: Optional[str] = None
+    badge: Optional[str] = None
+    items: List[DiscoveryTrackRef] = Field(default_factory=list)
+    track_id: Optional[str] = None
+    artist_slug: Optional[str] = None
+    count: Optional[int] = None
+
+
+class DiscoveriesResponse(BaseModel):
+    cards: List[DiscoveryCard] = Field(default_factory=list)

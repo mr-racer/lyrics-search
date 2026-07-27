@@ -536,7 +536,13 @@
     .aio-ph5{top:0;left:36%;font-size:12px;opacity:.24;animation:aioDrift2 16s ease-in-out infinite reverse;}
     .aio-hero:not(.aio-idle) .aio-ph{opacity:0;pointer-events:none;}
 
-    .aio-orbwrap{position:absolute;top:10px;left:50%;width:104px;height:104px;margin-left:-52px;
+    /* --aio-size drives the whole sphere: the assistant page shrinks it from
+       110 to 64 after the first turn without a second set of classes. */
+    .aio-orbwrap{position:absolute;top:10px;left:50%;
+      width:var(--aio-size,104px);height:var(--aio-size,104px);
+      margin-left:calc(var(--aio-size,104px) / -2);
+      transition:width .5s cubic-bezier(.2,.8,.2,1),height .5s cubic-bezier(.2,.8,.2,1),
+                 margin-left .5s cubic-bezier(.2,.8,.2,1);
       animation:aioBob 4.5s ease-in-out infinite;}
     .aio-ring{position:absolute;inset:-6px;border-radius:50%;filter:blur(4px);opacity:.55;
       background:conic-gradient(from 0deg,#7c5bff,#ff78c8,#e0b341,#7c5bff);
@@ -544,7 +550,9 @@
     .aio-orb{position:absolute;inset:0;border-radius:50%;overflow:hidden;background:#241f38;
       box-shadow:0 12px 30px -6px rgba(124,91,255,.55);transition:box-shadow .8s;}
     body[data-theme="light"] .aio-orb{background:#cfc8e8;}
-    .aio-blob{position:absolute;width:88px;height:88px;border-radius:50%;filter:blur(14px);transition:background .8s ease;}
+    .aio-blob{position:absolute;width:calc(var(--aio-size,104px) * .846);
+      height:calc(var(--aio-size,104px) * .846);border-radius:50%;filter:blur(14px);
+      transition:background .8s ease,width .5s ease,height .5s ease;}
     .aio-b1{background:#7c5bff;top:5px;left:2px;animation:aioBlobA 8s ease-in-out infinite;}
     .aio-b2{background:#ff78c8;top:11px;left:17px;animation:aioBlobB 10s ease-in-out infinite;}
     .aio-b3{background:#e0b341;top:17px;left:-7px;animation:aioBlobC 12s ease-in-out infinite;}
@@ -589,6 +597,35 @@
     .aio-fail .aio-ring{opacity:.4;animation-duration:11s;
       background:conic-gradient(from 0deg,#e0607e,#c04b6b,#f08a8a,#e0607e);}
 
+    /* Intent palettes (assistant page). The route frame lands ~200 ms in —
+       long before the first LLM token — so colour is the first thing that
+       says which branch is answering. Default work palette = search. */
+    .aio-work.aio-i-playlist .aio-b1{background:#ffb35c;}
+    .aio-work.aio-i-playlist .aio-b2{background:#ff6fae;}
+    .aio-work.aio-i-playlist .aio-b3{background:#ffd76a;}
+    .aio-work.aio-i-playlist .aio-b4{background:#c86bff;}
+    .aio-work.aio-i-playlist .aio-orb{box-shadow:0 12px 34px -6px rgba(255,150,80,.55);}
+    .aio-work.aio-i-playlist .aio-ring{
+      background:conic-gradient(from 0deg,#ffb35c,#ff6fae,#ffd76a,#ffb35c);}
+    .aio-work.aio-i-playlist .aio-dust{background:#ffcf94;
+      box-shadow:0 0 8px 2px rgba(255,182,110,.7);}
+    .aio-work.aio-i-facts .aio-b1{background:#3ec9d6;}
+    .aio-work.aio-i-facts .aio-b2{background:#5f7cff;}
+    .aio-work.aio-i-facts .aio-b3{background:#5ee6c8;}
+    .aio-work.aio-i-facts .aio-b4{background:#7b6bff;}
+    .aio-work.aio-i-facts .aio-orb{box-shadow:0 12px 34px -6px rgba(62,201,214,.55);}
+    .aio-work.aio-i-facts .aio-ring{
+      background:conic-gradient(from 0deg,#3ec9d6,#5f7cff,#5ee6c8,#3ec9d6);}
+    .aio-work.aio-i-facts .aio-dust{background:#8ef0e0;
+      box-shadow:0 0 8px 2px rgba(94,230,200,.7);}
+    /* Asleep: the LLM is unreachable, so the page says so instead of
+       pretending. One flat grey palette, no ring, no motion. */
+    .aio-sleep .aio-blob{background:#4a4a58;animation:none;}
+    body[data-theme="light"] .aio-sleep .aio-blob{background:#b9b6c6;}
+    .aio-sleep .aio-ring{opacity:.18;animation-duration:24s;
+      background:conic-gradient(from 0deg,#5a5a68,#3f3f4c,#5a5a68);}
+    .aio-sleep .aio-orb{box-shadow:0 10px 24px -8px rgba(0,0,0,.5);}
+
     /* caption under the orb */
     .aio-capt{position:absolute;top:132px;left:0;right:0;text-align:center;font-size:13.5px;min-height:40px;padding:0 14px;}
     .aio-idle-t{font-style:italic;color:#a49ec4;}
@@ -607,8 +644,9 @@
       .aio-hero{height:196px;margin-top:26px;}
       .aio-ph{font-size:11px!important;}
       .aio-capt{top:124px;}
-      .aio-orbwrap{width:92px;height:92px;margin-left:-46px;}
-      .aio-blob{width:78px;height:78px;}
+      /* A page that set --aio-size inline keeps its own size — this is only
+         the default for the pages that don't (Рекомендации). */
+      .aio-orbwrap{--aio-size:92px;}
     }
     /* Battery policy (пакет C): idle decoration freezes on phones — only the
        cheap bob survives; the work-state burst (short-lived) stays animated. */
@@ -619,6 +657,101 @@
       .aio-orbwrap,.aio-ring,.aio-blob,.aio-ph,.aio-dust,.aio-shimmer,
       .aio-done-t,.aio-fail-t{animation:none!important;}
       .aio-shimmer{color:inherit;background:none;-webkit-background-clip:initial;background-clip:initial;}
+    }
+
+    /* ── Assistant page (/assistant): the scene under the orb ──────────────
+       One turn at a time — the orb stays the hero and only shrinks, the
+       current turn's card sits below it and older turns collapse into pills.
+       Surfaces («Недавнее», «Связи в библиотеке») live under the fold. ── */
+    @keyframes asxIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+    @keyframes asxArrow{0%,100%{transform:translateX(0);opacity:.55}50%{transform:translateX(4px);opacity:1}}
+
+    .asx-hero{position:relative;max-width:680px;margin:40px auto 0;height:216px;
+      transition:height .45s cubic-bezier(.2,.8,.2,1),margin-top .45s cubic-bezier(.2,.8,.2,1);}
+    .asx-hero.asx-compact{height:126px;margin-top:20px;}
+    .asx-hero.asx-compact .aio-capt{top:80px;font-size:12.5px;min-height:26px;}
+    /* Each example wish carries the colour of the branch it will take —
+       the routing explains itself without a word of instruction. */
+    .asx-ph-dot{display:inline-block;width:5px;height:5px;border-radius:50%;
+      margin-right:7px;vertical-align:middle;opacity:0;transform:scale(.4);
+      transition:opacity .25s ease,transform .25s ease;}
+    .aio-ph:hover .asx-ph-dot{opacity:1;transform:scale(1);}
+    .aio-ph{transition:opacity .6s ease,transform .25s ease;}
+    .aio-ph:hover{transform:translateY(-2px);}
+
+    .asx-wrap{max-width:720px;margin:0 auto;width:100%;}
+    .asx-fade{animation:asxIn .38s ease both;}
+
+    .asx-pill{display:inline-flex;align-items:center;gap:7px;padding:6px 13px;border-radius:999px;
+      font-size:12.5px;cursor:pointer;border:1px solid rgba(255,255,255,.10);
+      background:rgba(255,255,255,.045);color:rgba(238,238,243,.72);
+      transition:transform .2s ease,background .2s ease,border-color .2s ease,color .2s ease;
+      white-space:nowrap;max-width:230px;overflow:hidden;text-overflow:ellipsis;}
+    .asx-pill:hover{transform:translateY(-2px);background:rgba(255,255,255,.085);
+      border-color:rgba(255,255,255,.20);color:#fff;}
+    .asx-pill.asx-on{background:rgba(124,91,255,.16);border-color:rgba(124,91,255,.42);color:#fff;}
+    .asx-pill:disabled{opacity:.55;cursor:default;transform:none;}
+    body[data-theme="light"] .asx-pill{border-color:rgba(22,22,32,.10);background:rgba(255,255,255,.62);
+      color:rgba(22,22,32,.66);}
+    body[data-theme="light"] .asx-pill:hover{background:#fff;color:#161620;border-color:rgba(22,22,32,.2);}
+
+    .asx-dot{width:7px;height:7px;border-radius:50%;flex:none;}
+    .asx-dot-search{background:#6ac8ff;box-shadow:0 0 7px rgba(106,200,255,.8);}
+    .asx-dot-playlist{background:#ffb35c;box-shadow:0 0 7px rgba(255,179,92,.8);}
+    .asx-dot-facts{background:#5ee6c8;box-shadow:0 0 7px rgba(94,230,200,.8);}
+
+    /* Glass card — the shared surface of turn results and both rails. */
+    .asx-card{position:relative;border-radius:16px;overflow:hidden;cursor:pointer;
+      border:1px solid rgba(255,255,255,.09);background:rgba(255,255,255,.045);
+      box-shadow:0 10px 26px -18px rgba(0,0,0,.9);
+      transition:transform .26s cubic-bezier(.2,.8,.2,1),box-shadow .26s ease,
+                 border-color .26s ease,background .26s ease;}
+    .asx-card::after{content:'';position:absolute;inset:0;pointer-events:none;border-radius:16px;
+      background:linear-gradient(150deg,rgba(255,255,255,.14),transparent 42%);
+      opacity:.5;transition:opacity .26s ease;}
+    .asx-card:hover{transform:translateY(-3px);border-color:rgba(255,255,255,.19);
+      background:rgba(255,255,255,.075);box-shadow:0 18px 34px -20px rgba(0,0,0,.95);}
+    .asx-card:hover::after{opacity:1;}
+    .asx-card:hover .asx-arrow{animation:asxArrow 1.1s ease-in-out infinite;}
+    body[data-theme="light"] .asx-card{border-color:rgba(22,22,32,.09);background:rgba(255,255,255,.72);
+      box-shadow:0 10px 26px -20px rgba(40,30,60,.5);}
+    body[data-theme="light"] .asx-card:hover{background:#fff;border-color:rgba(22,22,32,.16);}
+
+    /* Track row: a recessed groove that fills from the left on hover. */
+    .asx-row{position:relative;display:flex;align-items:center;gap:12px;padding:9px 12px;
+      border-radius:12px;cursor:pointer;transition:background .2s ease;}
+    .asx-row::before{content:'';position:absolute;left:0;top:6px;bottom:6px;width:2px;border-radius:2px;
+      background:linear-gradient(180deg,#7c5bff,#ff78c8);transform:scaleY(0);transform-origin:center;
+      transition:transform .24s ease;}
+    .asx-row:hover{background:rgba(255,255,255,.055);
+      box-shadow:inset 0 1px 2px rgba(0,0,0,.35),inset 0 -1px 0 rgba(255,255,255,.05);}
+    .asx-row:hover::before{transform:scaleY(1);}
+    .asx-row .asx-play{opacity:0;transform:scale(.8);transition:opacity .2s ease,transform .2s ease;}
+    .asx-row:hover .asx-play{opacity:1;transform:scale(1);}
+    body[data-theme="light"] .asx-row:hover{background:rgba(22,22,32,.045);
+      box-shadow:inset 0 1px 2px rgba(40,30,60,.10);}
+
+    .asx-rail{display:flex;gap:12px;overflow-x:auto;padding:2px 2px 10px;
+      scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch;}
+    .asx-rail>*{scroll-snap-align:start;flex:none;}
+    .asx-rail::-webkit-scrollbar{height:6px;}
+    .asx-rail::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:3px;}
+    .asx-rail::-webkit-scrollbar-track{background:transparent;}
+
+    @media (max-width: 640px){
+      .asx-hero{height:196px;margin-top:24px;}
+      .asx-hero.asx-compact{height:114px;}
+      .asx-hero.asx-compact .aio-capt{top:74px;}
+    }
+    @media (max-width: 768px), (hover: none) and (pointer: coarse){
+      .asx-card:hover{transform:none;}
+      .asx-pill:hover{transform:none;}
+      .aio-ph:hover{transform:none;}
+      .asx-row .asx-play{opacity:1;transform:none;}
+    }
+    @media (prefers-reduced-motion: reduce){
+      .asx-fade,.asx-card:hover .asx-arrow{animation:none!important;}
+      .asx-hero,.asx-card,.asx-pill,.asx-row::before{transition:none!important;}
     }
 
     /* Brushed metal panel for top decks */

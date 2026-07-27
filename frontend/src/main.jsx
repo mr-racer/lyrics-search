@@ -3129,8 +3129,8 @@ function FloatingIconNav({ section, onNav, isDark, lang, onSettings, currentTrac
       icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></svg> },
     { id:'recommend', label: lang==='ru'?'РЕК':'REC',
       icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2 15 8l6 1-4.5 4.5L18 20l-6-3-6 3 1.5-6.5L3 9l6-1z"/></svg> },
-    { id:'search',    label: lang==='ru'?'ТЕКСТ':'LYRICS',
-      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M4 5h16"/><path d="M4 9.5h16"/><path d="M4 14h5.5"/><path d="M4 18.5h4"/><circle cx="15.5" cy="15.5" r="3.8"/><path d="m18.4 18.4 2.6 2.6"/></svg> },
+    { id:'assistant', label: lang==='ru'?'ИИ':'AI',
+      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="7"/><path d="M8.6 13.4c1.6 1.1 3.4-.7 4.8.4"/><path d="M9.2 9.6c1.3.9 2.6-.4 3.9.2"/><path d="M19.6 5.2 20 4l.4 1.2 1.2.4-1.2.4-.4 1.2-.4-1.2-1.2-.4z"/></svg> },
   ];
 
   // Geometry shared by tabs and the sliding glass blob.
@@ -4897,6 +4897,29 @@ function orbStagePhrase(ev, lang) {
   }
 }
 
+// ─── AiOrb — the liquid-glass sphere shared by Рекомендации and Ассистент ────
+// Renders the sphere only; the STATE class (aio-idle/work/done/fail, plus
+// aio-i-<intent> on the assistant page) belongs to the hero wrapper, which is
+// what every palette rule in styles.css keys off. `size` sets --aio-size, so
+// the assistant page can shrink it after the first turn without new classes.
+function AiOrb({ state = 'idle', size }) {
+  return (
+    <div className="aio-orbwrap" style={size ? { '--aio-size': `${size}px` } : undefined}>
+      <div className="aio-ring" />
+      <div className="aio-orb">
+        <span className="aio-blob aio-b1" /><span className="aio-blob aio-b2" />
+        <span className="aio-blob aio-b3" /><span className="aio-blob aio-b4" />
+      </div>
+      <div className="aio-cap" />
+      {state === 'work' && <>
+        <span className="aio-dust aio-d1" /><span className="aio-dust aio-d2" />
+        <span className="aio-dust aio-d3" /><span className="aio-dust aio-d4" />
+        <span className="aio-dust aio-d5" /><span className="aio-dust aio-d6" />
+      </>}
+    </div>
+  );
+}
+
 // Русская форма «N треков» для подписи готовности у шара.
 function ruTracksWord(n) {
   const m10 = n % 10, m100 = n % 100;
@@ -5286,19 +5309,7 @@ function RecommendSection({ isDark, lang, onPlayTrack, onQueueNext, aiStatus, on
                   <span key={p} className={`aio-ph aio-ph${i+1}`}
                         onClick={() => { setAiPrompt(p); runAiPlaylist(p); }}>{p}</span>
                 ))}
-                <div className="aio-orbwrap">
-                  <div className="aio-ring" />
-                  <div className="aio-orb">
-                    <span className="aio-blob aio-b1" /><span className="aio-blob aio-b2" />
-                    <span className="aio-blob aio-b3" /><span className="aio-blob aio-b4" />
-                  </div>
-                  <div className="aio-cap" />
-                  {orbState === 'work' && <>
-                    <span className="aio-dust aio-d1" /><span className="aio-dust aio-d2" />
-                    <span className="aio-dust aio-d3" /><span className="aio-dust aio-d4" />
-                    <span className="aio-dust aio-d5" /><span className="aio-dust aio-d6" />
-                  </>}
-                </div>
+                <AiOrb state={orbState} />
                 <div className="aio-capt">
                   {orbState === 'idle' && <span className="serif aio-idle-t">{lang==='ru'?'что включить сегодня?':'what to play today?'}</span>}
                   {orbState === 'work' && (() => {
@@ -6557,6 +6568,760 @@ function CatalogResults({ hits, loading, onOpen, onQueueNext, isDark, lang }) {
             onClick={() => onOpen(h)} trailing={trailing} />
         );
       })}
+    </div>
+  );
+}
+
+// ═══ AssistantSection (/assistant) ═══════════════════════════════════════════
+// One page over POST /assistant/stream: the router (GLiNER2, no LLM) picks
+// search / playlist / facts, and the orb says which one by changing palette
+// ~200ms in — before the first LLM token. The scene shows ONE turn at a time;
+// older turns collapse into pills that restore both the result and the slots,
+// so a follow-up («а побыстрее?») works from anywhere in the history.
+
+const ASX_MAX_TURNS = 20;
+const ASX_REVEAL_MS = 750;   // stages arrive in bursts; pace them or they flash by
+
+const ASX_PHRASES = {
+  ru: [
+    { text: 'где-то там про дождь и такси', intent: 'search' },
+    { text: 'хиты Kanye West', intent: 'playlist' },
+    { text: 'расскажи про Radiohead', intent: 'facts' },
+    { text: 'песни из Watch Dogs', intent: 'playlist' },
+    { text: 'что-нибудь медленное на вечер', intent: 'playlist' },
+    { text: 'строчка про бетон и небо', intent: 'search' },
+  ],
+  en: [
+    { text: 'something about rain and a taxi', intent: 'search' },
+    { text: 'Kanye West hits', intent: 'playlist' },
+    { text: 'tell me about Radiohead', intent: 'facts' },
+    { text: 'songs from Watch Dogs', intent: 'playlist' },
+    { text: 'something slow for the evening', intent: 'playlist' },
+    { text: 'the line about concrete and sky', intent: 'search' },
+  ],
+};
+
+// Turns live in localStorage: the server is stateless by design and a second
+// backend entity for a secondary feature is not worth it.
+function useAssistantTurns(userId) {
+  const storageKey = `musix_assistant_${userId || 'default'}`;
+  const load = useCallback(() => {
+    try { const raw = localStorage.getItem(storageKey); return raw ? JSON.parse(raw) : []; }
+    catch { return []; }
+  }, [storageKey]);
+  const [turns, setTurns] = useState(load);
+  useEffect(() => { setTurns(load()); }, [storageKey, load]);
+
+  const saveTurn = useCallback((entry) => {
+    const id = Date.now();
+    setTurns(prev => {
+      const next = [{ id, ts: id, ...entry }, ...prev].slice(0, ASX_MAX_TURNS);
+      try { localStorage.setItem(storageKey, JSON.stringify(next)); } catch {}
+      return next;
+    });
+    return id;
+  }, [storageKey]);
+
+  const patchTurn = useCallback((id, patch) => {
+    setTurns(prev => {
+      const next = prev.map(t => (t.id === id ? { ...t, ...patch } : t));
+      try { localStorage.setItem(storageKey, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, [storageKey]);
+
+  const clearTurns = useCallback(() => {
+    setTurns([]);
+    try { localStorage.removeItem(storageKey); } catch {}
+  }, [storageKey]);
+
+  return { turns, saveTurn, patchTurn, clearTurns };
+}
+
+// A turn is "empty" when the branch ran but has nothing to show — the orb goes
+// red for that just as it does for a transport error.
+function asxTurnEmpty(p) {
+  if (!p) return true;
+  if ((p.clarify && p.clarify.length) || (p.disambiguate && p.disambiguate.length)) return false;
+  if (p.playlist) return !(p.playlist.tracks || []).length;
+  if (p.search) return !p.search.best_hit && !(p.search.hits || []).length;
+  if (p.facts) return !(p.facts.answer || '').trim();
+  return true;
+}
+
+function AsxLabel({ children, c, style }) {
+  return (
+    <div className="mono" style={{ fontSize: 10.5, letterSpacing: '.18em', color: c.textSubtle,
+      marginBottom: 10, ...style }}>{children}</div>
+  );
+}
+
+function AsxIntentDot({ intent }) {
+  return <span className={`asx-dot asx-dot-${intent || 'search'}`} />;
+}
+
+// One track row: recessed groove that fills on hover, ▶ fades in with it.
+function AsxTrackRow({ track, index, reason, c, isDark, lang, onPlay, onQueueNext, onAddToPlaylist }) {
+  return (
+    <div className="asx-row" onClick={onPlay}>
+      {index != null && (
+        <span className="mono num-tab" style={{ fontSize: 11, color: c.textSubtle, width: 18,
+          flex: 'none', textAlign: 'right' }}>{index}</span>
+      )}
+      <AlbumCover title={track.title || ''} artist={track.artist || ''} size={40}
+        isDark={isDark} coverPath={track.cover_art_path} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 600, color: c.text, whiteSpace: 'nowrap',
+          overflow: 'hidden', textOverflow: 'ellipsis' }}>{trackTitle(track) || '—'}</div>
+        <div style={{ fontSize: 12, color: c.textMuted, whiteSpace: 'nowrap', overflow: 'hidden',
+          textOverflow: 'ellipsis' }}>{track.artist || '—'}</div>
+        {/* Reason only where the curate step actually wrote one and the backend
+            gate cleared it; web_hits tracks simply have no second line. */}
+        {reason && (
+          <div style={{ fontSize: 11.5, color: c.textSubtle, marginTop: 2, fontStyle: 'italic',
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{reason}</div>
+        )}
+      </div>
+      {onQueueNext && (
+        <QueueNextBtn track={track} onQueueNext={onQueueNext} lang={lang} iconSize={13}
+          style={{ flex: 'none', width: 28, height: 28, borderRadius: '50%', display: 'grid',
+            placeItems: 'center', background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)',
+            border: 0, color: c.textMuted, cursor: 'pointer' }} />
+      )}
+      {onAddToPlaylist && (
+        <button onClick={e => { e.stopPropagation(); onAddToPlaylist(track.track_id); }}
+          title={lang === 'ru' ? 'В плейлист' : 'Add to playlist'}
+          style={{ flex: 'none', width: 28, height: 28, borderRadius: '50%', border: 0,
+            background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)', color: c.textMuted,
+            cursor: 'pointer', fontSize: 15, lineHeight: 1 }}>+</button>
+      )}
+      <span className="asx-play" style={{ flex: 'none', width: 28, height: 28, borderRadius: '50%',
+        display: 'grid', placeItems: 'center', fontSize: 10, color: '#fff',
+        background: 'linear-gradient(180deg, oklch(60% 0.21 270), oklch(48% 0.22 285))',
+        boxShadow: '0 2px 6px oklch(58% 0.21 270 / 0.35)' }}>▶</span>
+    </div>
+  );
+}
+
+// ── Turn cards. Three types, deliberately NOT merged: the payload is tagged by
+// intent for exactly this reason — three results that read as three things. ──
+
+function AsxPlaylistCard({ payload, c, isDark, lang, onPlayTrack, onQueueNext, onAddToPlaylist,
+                           onSave, saved, saving }) {
+  const tracks = payload.tracks || [];
+  const hits = tracks.map(t => ({ track: t, score: t.score || 0, matched_on: 'ai' }));
+  const ru = lang === 'ru';
+  return (
+    <div className="asx-fade" style={{ marginTop: 18 }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap',
+        marginBottom: 12 }}>
+        <div style={{ flex: 1, minWidth: 180 }}>
+          <AsxLabel c={c} style={{ marginBottom: 4 }}>{ru ? 'ПОДБОРКА' : 'PLAYLIST'}</AsxLabel>
+          <div className="serif" style={{ fontSize: 21, color: c.text, lineHeight: 1.2 }}>
+            {payload.title || (ru ? 'Подборка' : 'Playlist')}
+          </div>
+          <div style={{ fontSize: 12.5, color: c.textMuted, marginTop: 3 }}>
+            {tracks.length} {ru ? ruTracksWord(tracks.length) : (tracks.length === 1 ? 'track' : 'tracks')}
+          </div>
+        </div>
+        <button className="asx-pill" onClick={() => hits.length && onPlayTrack(hits[0], hits)}>
+          ▶ {ru ? 'Слушать все' : 'Play all'}
+        </button>
+        <button className="asx-pill" onClick={onSave} disabled={saving || saved}>
+          {saved ? (ru ? '✓ Сохранено' : '✓ Saved')
+                 : saving ? (ru ? 'Сохраняю…' : 'Saving…')
+                 : (ru ? 'Сохранить в плейлисты' : 'Save to playlists')}
+        </button>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        {tracks.map((t, i) => (
+          <AsxTrackRow key={t.track_id || i} track={t} index={i + 1} reason={t.reason}
+            c={c} isDark={isDark} lang={lang}
+            onPlay={() => onPlayTrack(hits[i], hits)}
+            onQueueNext={onQueueNext} onAddToPlaylist={onAddToPlaylist} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AsxSearchCard({ payload, query, c, isDark, lang, navigateToArtist,
+                         onPlayTrack, onQueueNext, onAddToPlaylist }) {
+  const best = payload.best_hit;
+  const hits = payload.hits || [];
+  const rest = best ? hits.filter(h => h.track?.track_id !== best.track?.track_id) : hits;
+  const allHits = best ? [best, ...rest] : hits;
+  const ru = lang === 'ru';
+  const snippetLyrics = best && (best.track?.lyrics || best.lyrics);
+  return (
+    <div className="asx-fade" style={{ marginTop: 18 }}>
+      {payload.message && (
+        <div style={{ fontSize: 14.5, lineHeight: 1.6, color: c.text, marginBottom: 14 }}>
+          {payload.message}
+        </div>
+      )}
+      {best && (
+        <div className="asx-card" style={{ padding: 14, marginBottom: 12 }}
+             onClick={() => onPlayTrack(best, allHits)}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, position: 'relative', zIndex: 1 }}>
+            <AlbumCover title={best.track?.title || ''} artist={best.track?.artist || ''} size={72}
+              isDark={isDark} coverPath={best.track?.cover_art_path} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 17, fontWeight: 700, color: c.text, letterSpacing: '-0.01em',
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {trackTitle(best.track) || '—'}
+              </div>
+              <div style={{ fontSize: 13.5, color: c.textMuted, marginTop: 2 }}>
+                <ArtistCredit track={best.track} navigateToArtist={navigateToArtist} lang={lang}
+                  color={c.textMuted} />
+              </div>
+            </div>
+            <div className="mono" style={{ padding: '4px 9px', borderRadius: 16, fontSize: 11.5,
+              fontWeight: 600, background: c.accentBg, color: c.accent, flexShrink: 0 }}>
+              {Math.round((best.score || 0) * 100)}%
+            </div>
+          </div>
+          {snippetLyrics && best.matched_on !== 'audio' && (
+            <div style={{ position: 'relative', zIndex: 1, marginTop: 11 }}>
+              <LyricSnippet lyrics={snippetLyrics} query={query} matchedLine={best.matched_line}
+                lang={lang} c={c} />
+            </div>
+          )}
+        </div>
+      )}
+      {rest.length > 0 && (
+        <>
+          <AsxLabel c={c}>{ru ? 'ЕЩЁ СОВПАДЕНИЯ' : 'MORE MATCHES'}</AsxLabel>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {rest.map((h, i) => (
+              <AsxTrackRow key={h.track?.track_id || i} track={h.track || {}} c={c} isDark={isDark}
+                lang={lang} onPlay={() => onPlayTrack(h, allHits)}
+                onQueueNext={onQueueNext} onAddToPlaylist={onAddToPlaylist} />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function AsxFactsCard({ payload, c, isDark, lang, navigateToArtist, onPlayTrack, onQueueNext,
+                        onAddToPlaylist }) {
+  const ru = lang === 'ru';
+  const used = (payload.items || []).filter(i => i.used);
+  const related = payload.related_tracks || [];
+  const hits = related.map(t => ({ track: t, score: 0, matched_on: 'facts' }));
+  const image = homeCoverUrl(payload.image_path);
+  return (
+    <div className="asx-fade" style={{ marginTop: 18 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 13 }}>
+        {image
+          ? <img src={image} alt="" style={{ width: 64, height: 64, borderRadius:
+              payload.subject_kind === 'artist' ? '50%' : 12, objectFit: 'cover', flex: 'none' }} />
+          : <AlbumCover title={payload.subject_title || ''} artist={payload.subject_subtitle || ''}
+              size={64} isDark={isDark} />}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <AsxLabel c={c} style={{ marginBottom: 3 }}>
+            {payload.subject_kind === 'artist' ? (ru ? 'АРТИСТ' : 'ARTIST')
+              : payload.subject_kind === 'album' ? (ru ? 'АЛЬБОМ' : 'ALBUM')
+              : (ru ? 'ТРЕК' : 'TRACK')}
+          </AsxLabel>
+          <div className="serif" style={{ fontSize: 21, color: c.text, lineHeight: 1.2 }}>
+            {payload.subject_title}
+          </div>
+          {payload.subject_subtitle && (
+            <div style={{ fontSize: 12.5, color: c.textMuted, marginTop: 2 }}>
+              {payload.subject_subtitle}
+            </div>
+          )}
+        </div>
+        {payload.artist_slug && navigateToArtist && (
+          <button className="asx-pill" onClick={() => navigateToArtist(payload.artist_slug)}>
+            {ru ? 'Страница артиста' : 'Artist page'}
+          </button>
+        )}
+      </div>
+
+      <div style={{ fontSize: 14.5, lineHeight: 1.65, color: c.text }}>
+        <MarkdownText text={payload.answer} />
+      </div>
+
+      {/* Honest provenance: the answer either passed the citation check or the
+          deterministic "here is what is known" rendering was served instead. */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+        {payload.web_search_used && (
+          <span className="asx-pill" style={{ cursor: 'default' }}>
+            {ru ? 'нашёл в интернете' : 'found on the web'}
+          </span>
+        )}
+        {payload.grounded === false && (
+          <span className="asx-pill" style={{ cursor: 'default' }}>
+            {ru ? 'только известные факты, без формулировки ИИ'
+                : 'known facts only, not written by the AI'}
+          </span>
+        )}
+      </div>
+
+      {used.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <AsxLabel c={c}>{ru ? 'НА ЧЁМ ОСНОВАН ОТВЕТ' : 'WHAT THE ANSWER LEANS ON'}</AsxLabel>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+            {used.map(item => (
+              <div key={item.n} style={{ display: 'flex', gap: 9, fontSize: 12.5,
+                lineHeight: 1.5, color: c.textMuted }}>
+                <span className="mono num-tab" style={{ color: c.textSubtle, flex: 'none' }}>
+                  {item.n}
+                </span>
+                <span>{item.text}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {related.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <AsxLabel c={c}>{ru ? 'ИЗ БИБЛИОТЕКИ' : 'FROM YOUR LIBRARY'}</AsxLabel>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {related.map((t, i) => (
+              <AsxTrackRow key={t.track_id || i} track={t} c={c} isDark={isDark} lang={lang}
+                onPlay={() => onPlayTrack(hits[i], hits)}
+                onQueueNext={onQueueNext} onAddToPlaylist={onAddToPlaylist} />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Under-the-fold surfaces ──────────────────────────────────────────────────
+
+function AsxRecentCard({ turn, c, isDark, lang, onOpen }) {
+  const p = turn.result || {};
+  const covers = (p.playlist?.tracks || p.facts?.related_tracks
+    || (p.search?.hits || []).map(h => h.track) || []).slice(0, 3);
+  const summary = p.playlist
+    ? `${(p.playlist.tracks || []).length} ${lang === 'ru'
+        ? ruTracksWord((p.playlist.tracks || []).length)
+        : ((p.playlist.tracks || []).length === 1 ? 'track' : 'tracks')}`
+    : p.facts ? (p.facts.subject_title || '')
+    : (trackTitle(p.search?.best_hit?.track) || '');
+  return (
+    <div className="asx-card" style={{ padding: 13, width: 232 }} onClick={onOpen}>
+      <div style={{ position: 'relative', zIndex: 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 8 }}>
+          <AsxIntentDot intent={turn.intent} />
+          {turn.saved_playlist_id && (
+            <span title={lang === 'ru' ? 'Сохранён в плейлисты' : 'Saved to playlists'}
+              style={{ fontSize: 11, color: c.green }}>♪</span>
+          )}
+          <span className="mono" style={{ fontSize: 10, letterSpacing: '.12em', color: c.textSubtle,
+            marginLeft: 'auto' }}>
+            {new Date(turn.ts).toLocaleDateString(lang === 'ru' ? 'ru' : 'en',
+              { day: 'numeric', month: 'short' })}
+          </span>
+        </div>
+        <div style={{ fontSize: 13.5, color: c.text, lineHeight: 1.35, minHeight: 36,
+          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+          overflow: 'hidden' }}>{turn.message}</div>
+        {summary && (
+          <div style={{ fontSize: 11.5, color: c.textMuted, marginTop: 5, whiteSpace: 'nowrap',
+            overflow: 'hidden', textOverflow: 'ellipsis' }}>{summary}</div>
+        )}
+        {covers.length > 0 && (
+          <div style={{ display: 'flex', gap: 5, marginTop: 9 }}>
+            {covers.map((t, i) => (
+              <AlbumCover key={t?.track_id || i} title={t?.title || ''} artist={t?.artist || ''}
+                size={34} isDark={isDark} coverPath={t?.cover_art_path} />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AsxDiscoveryCard({ card, c, isDark, onSend }) {
+  const twoSided = card.kind === 'relation' && (card.items || []).length >= 2;
+  return (
+    <div className="asx-card" style={{ padding: 13, width: 258 }} onClick={() => onSend(card)}>
+      <div style={{ position: 'relative', zIndex: 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 9 }}>
+          <AsxIntentDot intent={card.intent} />
+          <span className="mono" style={{ fontSize: 10, letterSpacing: '.14em', color: c.textSubtle }}>
+            {(card.badge || '').toUpperCase()}
+          </span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 9 }}>
+          {(card.items || []).slice(0, twoSided ? 1 : 3).map((t, i) => (
+            <AlbumCover key={t.track_id || i} title={t.title} artist={t.artist} size={40}
+              isDark={isDark} coverPath={t.cover_art_path} />
+          ))}
+          {twoSided && (
+            <>
+              <span className="asx-arrow" style={{ color: c.textSubtle, fontSize: 15 }}>→</span>
+              <AlbumCover title={card.items[1].title} artist={card.items[1].artist} size={40}
+                isDark={isDark} coverPath={card.items[1].cover_art_path} />
+            </>
+          )}
+        </div>
+        <div style={{ fontSize: 13, color: c.text, lineHeight: 1.35, minHeight: 35,
+          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+          overflow: 'hidden' }}>{card.headline}</div>
+        {card.subline && (
+          <div style={{ fontSize: 11.5, color: c.textMuted, marginTop: 4, whiteSpace: 'nowrap',
+            overflow: 'hidden', textOverflow: 'ellipsis' }}>{card.subline}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, onAddToPlaylist,
+                            navigateToArtist, playerTrack, playlistsListing, onNav, visible }) {
+  const c = useColors(isDark);
+  const aiOn = !!(aiStatus && aiStatus.aiActive);
+  const ru = lang === 'ru';
+  const userId = localStorage.getItem('musix_user_id');
+  const { turns, saveTurn, patchTurn } = useAssistantTurns(userId);
+
+  const [input, setInput] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [stage, setStage] = useState('');          // current progress line (server-worded)
+  const [intent, setIntent] = useState(null);      // drives the orb palette
+  const [turn, setTurn] = useState(null);          // current AssistantResponse
+  const [turnId, setTurnId] = useState(null);      // its row in the local history
+  const [query, setQuery] = useState('');          // message behind the current turn
+  const [failed, setFailed] = useState(false);
+  const [slots, setSlots] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [savedId, setSavedId] = useState(null);
+  const [cards, setCards] = useState([]);
+
+  const llmKw = () => ({
+    llm_base_url: localStorage.getItem('llm_base_url') || undefined,
+    llm_model: localStorage.getItem('llm_model') || undefined,
+  });
+
+  // ── Stage pacing ──
+  // The backend emits in bursts (route + classify + plan land together once the
+  // planner returns), so every line is held for ASX_REVEAL_MS before the next
+  // one replaces it. Without this the caption is an unreadable flicker.
+  const queueRef = useRef([]);
+  const timerRef = useRef(null);
+  const lastRef = useRef(0);
+  const pumpStages = useCallback(() => {
+    if (timerRef.current || !queueRef.current.length) return;
+    const wait = Math.max(0, lastRef.current + ASX_REVEAL_MS - Date.now());
+    timerRef.current = setTimeout(() => {
+      timerRef.current = null;
+      const next = queueRef.current.shift();
+      if (next) { lastRef.current = Date.now(); setStage(next); }
+      pumpStages();
+    }, wait);
+  }, []);
+  const resetStages = useCallback(() => {
+    queueRef.current = [];
+    if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; }
+    lastRef.current = 0;
+  }, []);
+  useEffect(() => resetStages, [resetStages]);
+
+  const orbState = !aiOn ? 'sleep'
+    : busy ? 'work'
+    : failed ? 'fail'
+    : turn ? (asxTurnEmpty(turn) ? 'fail' : 'done')
+    : 'idle';
+  const compact = orbState !== 'idle' && orbState !== 'sleep';
+
+  // ── One turn ──
+  const send = useCallback(async (message, opts = {}) => {
+    const text = String(message || '').trim();
+    if (!text || busy || !aiOn) return;
+    setBusy(true); setFailed(false); setTurn(null); setTurnId(null);
+    setSavedId(null); setStage(''); setQuery(text);
+    setIntent(opts.intent || null);
+    resetStages();
+
+    // Two most recent turns are enough context for the LLM executors; the
+    // structural state that actually drives follow-ups lives in `slots`.
+    const history = turns.slice(0, 2).reverse().flatMap(t => {
+      const answer = t.result?.facts?.answer || t.result?.search?.message
+        || t.result?.playlist?.title || '';
+      return answer ? [{ role: 'user', content: t.message },
+                       { role: 'assistant', content: String(answer).slice(0, 600) }] : [];
+    });
+
+    const body = {
+      message: text, history, slots,
+      intent: opts.intent || undefined,
+      subject_track_id: opts.subjectTrackId || undefined,
+      subject_artist_slug: opts.subjectArtistSlug || undefined,
+      now_playing_track_id: playerTrack?.track_id || undefined,
+      limit: 15, lang, ...llmKw(),
+    };
+
+    let payload = null;
+    try {
+      await apiStreamNdjson('/assistant/stream', body, (ev) => {
+        if (ev.type === 'route') {
+          setIntent(ev.intent || null);
+          if (ev.human) { queueRef.current.push(ev.human); pumpStages(); }
+        } else if (ev.type === 'status') {
+          if (ev.human) { queueRef.current.push(ev.human); pumpStages(); }
+        } else if (ev.type === 'result') {
+          payload = ev.payload;
+        } else if (ev.type === 'error') {
+          payload = null;
+        }
+        // `ping` and unknown frames are ignored on purpose (forward-compatible).
+      });
+    } catch {
+      // Stream could not open (older backend, buffering proxy) — same turn
+      // through the plain endpoint, just without the live progress.
+      try {
+        payload = await apiFetch('/assistant/', { method: 'POST', body: JSON.stringify(body) });
+      } catch { payload = null; }
+    }
+
+    resetStages(); setStage(''); setBusy(false);
+    if (!payload) { setFailed(true); setIntent(null); return; }
+    setTurn(payload);
+    setIntent(payload.intent || null);
+    if (payload.slots) setSlots(payload.slots);
+    if (!asxTurnEmpty(payload) && !payload.clarify && !payload.disambiguate) {
+      setTurnId(saveTurn({ message: text, intent: payload.intent, result: payload,
+                           slots: payload.slots || {} }));
+    }
+  }, [busy, aiOn, turns, slots, playerTrack, lang, resetStages, pumpStages, saveTurn]);
+
+  const submit = () => { const t = input.trim(); if (t) { send(t); setInput(''); } };
+
+  // Reopen a past turn: the result AND its slots come back, so «а побыстрее?»
+  // continues from wherever the user jumped to.
+  const openTurn = (t) => {
+    setTurn(t.result); setTurnId(t.id); setQuery(t.message);
+    setIntent(t.result?.intent || null);
+    setSlots(t.slots || {});
+    setSavedId(t.saved_playlist_id || null);
+    setFailed(false);
+  };
+
+  const savePlaylist = async () => {
+    const pl = turn?.playlist;
+    if (!pl || !playlistsListing || saving) return;
+    setSaving(true);
+    try {
+      const created = await playlistsListing.createPlaylist(
+        pl.title || (ru ? 'Подборка ИИ' : 'AI playlist'), query || null);
+      for (const t of pl.tracks || []) {
+        if (t.track_id) await playlistsListing.addTrack(created.id, t.track_id);
+      }
+      setSavedId(created.id);
+      if (turnId) patchTurn(turnId, { saved_playlist_id: created.id });
+    } catch { /* the pill stays actionable — nothing was created */ }
+    finally { setSaving(false); }
+  };
+
+  // ── Discoveries rail (silent on failure: an empty rail simply isn't drawn) ──
+  useEffect(() => {
+    if (!visible || !aiOn || cards.length) return;
+    let alive = true;
+    apiFetch(`/library/discoveries?lang=${lang}&limit=12`)
+      .then(r => { if (alive) setCards(r.cards || []); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [visible, aiOn, lang, cards.length]);
+
+  const phrases = ASX_PHRASES[ru ? 'ru' : 'en'];
+
+  const caption = () => {
+    if (orbState === 'sleep') {
+      return <span className="aio-fail-t">{ru ? 'ИИ сейчас недоступен' : 'The AI is unavailable'}</span>;
+    }
+    if (orbState === 'idle') {
+      return <span className="serif aio-idle-t">
+        {ru ? 'найти, собрать или рассказать?' : 'find, build, or explain?'}
+      </span>;
+    }
+    if (orbState === 'work') {
+      const line = stage || (ru ? 'думаю…' : 'thinking…');
+      return <span key={line} className="aio-shimmer">{line}</span>;
+    }
+    if (orbState === 'fail') {
+      return <span className="aio-fail-t">
+        {ru ? 'ничего не нашлось — спроси иначе' : 'nothing found — try asking differently'}
+      </span>;
+    }
+    const p = turn || {};
+    let text = '';
+    if (p.playlist) {
+      const n = (p.playlist.tracks || []).length;
+      text = `${n} ${ru ? ruTracksWord(n) : (n === 1 ? 'track' : 'tracks')}`;
+    } else if (p.facts) {
+      text = p.facts.subject_title || '';
+    } else if (p.search) {
+      text = trackTitle(p.search.best_hit?.track) || '';
+    }
+    return <span className="aio-done-t">{text}</span>;
+  };
+
+  return (
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden',
+      background: c.bg }}>
+      <div style={{ flex: 1, overflowY: 'auto', padding: '8px 24px 80px' }}>
+        <div className="asx-wrap">
+
+          {/* ── Hero: the orb is the assistant. Palette says which branch is
+                 answering ~200ms in, before any LLM token exists. ── */}
+          <div className={`aio-hero asx-hero aio-${orbState}${intent ? ` aio-i-${intent}` : ''}`
+                          + (compact ? ' asx-compact' : '')}>
+            {orbState === 'idle' && phrases.map((p, i) => (
+              <span key={p.text} className={`aio-ph aio-ph${i + 1}`}
+                    onClick={() => send(p.text)}>
+                <span className="asx-ph-dot" style={{ background:
+                  p.intent === 'playlist' ? '#ffb35c' : p.intent === 'facts' ? '#5ee6c8' : '#6ac8ff' }} />
+                {p.text}
+              </span>
+            ))}
+            <AiOrb state={orbState} size={compact ? 64 : 110} />
+            <div className="aio-capt">{caption()}</div>
+          </div>
+
+          {/* ── Composer ── */}
+          {aiOn ? (
+            <div className="rec2-rim">
+              <div className="rec2-wish" style={{ color: c.text }}
+                   onClick={e => { const i = e.currentTarget.querySelector('input'); if (i) i.focus(); }}>
+                <span className="rec2-spark">✨</span>
+                <input value={input}
+                       onChange={e => setInput(e.target.value)}
+                       onKeyDown={e => { if (e.key === 'Enter') submit(); }}
+                       placeholder={ru ? 'строчка из песни, желание или вопрос'
+                                       : 'a lyric, a wish, or a question'} />
+                {!input && <span className="rec2-caret" />}
+                <button className="rec2-go" onClick={submit} disabled={busy || !input.trim()}>
+                  {busy ? (ru ? 'ДУМАЮ…' : 'THINKING…') : (ru ? 'СПРОСИТЬ ▸' : 'ASK ▸')}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div style={{ textAlign: 'center', padding: '10px 0 4px' }}>
+              <div style={{ fontSize: 13.5, color: c.textMuted, marginBottom: 12 }}>
+                {ru ? 'Ассистенту нужен доступ к языковой модели.'
+                    : 'The assistant needs a language model to reach.'}
+              </div>
+              <button className="asx-pill" onClick={() => onNav && onNav('search')}>
+                {ru ? 'Открыть точный поиск' : 'Open exact search'}
+              </button>
+            </div>
+          )}
+
+          {/* ── Past turns of this session ── */}
+          {turns.length > 0 && (
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 14 }}>
+              {turns.slice(0, 5).map(t => (
+                <button key={t.id} className={`asx-pill${turnId === t.id ? ' asx-on' : ''}`}
+                        onClick={() => openTurn(t)}>
+                  <AsxIntentDot intent={t.intent} />{t.message}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* ── The current turn ── */}
+          {turn && turn.clarify && turn.clarify.length > 0 && (
+            <div className="asx-fade" style={{ marginTop: 18, textAlign: 'center' }}>
+              <div style={{ fontSize: 13.5, color: c.textMuted, marginBottom: 10 }}>
+                {ru ? 'Не уверен, что именно нужно' : 'Not sure what you need'}
+              </div>
+              <div style={{ display: 'flex', gap: 9, justifyContent: 'center', flexWrap: 'wrap' }}>
+                {turn.clarify.map(o => (
+                  <button key={o.intent} className="asx-pill"
+                          onClick={() => send(query, { intent: o.intent })}>
+                    <AsxIntentDot intent={o.intent} />{o.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {turn && turn.disambiguate && turn.disambiguate.length > 0 && (
+            <div className="asx-fade" style={{ marginTop: 18 }}>
+              <AsxLabel c={c}>{ru ? 'О КОМ РЕЧЬ?' : 'WHICH ONE?'}</AsxLabel>
+              <div className="asx-rail">
+                {turn.disambiguate.map((o, i) => (
+                  <div key={i} className="asx-card" style={{ padding: 12, width: 190 }}
+                       onClick={() => send(query, { intent: 'facts', subjectTrackId: o.track_id,
+                                                    subjectArtistSlug: o.artist_slug })}>
+                    <div style={{ position: 'relative', zIndex: 1, display: 'flex',
+                      alignItems: 'center', gap: 10 }}>
+                      <AlbumCover title={o.title} artist={o.subtitle || ''} size={40} isDark={isDark}
+                        coverPath={o.cover_art_path} />
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 13, color: c.text, whiteSpace: 'nowrap',
+                          overflow: 'hidden', textOverflow: 'ellipsis' }}>{o.title}</div>
+                        {o.subtitle && (
+                          <div style={{ fontSize: 11.5, color: c.textMuted, whiteSpace: 'nowrap',
+                            overflow: 'hidden', textOverflow: 'ellipsis' }}>{o.subtitle}</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {turn && turn.playlist && (
+            <AsxPlaylistCard payload={turn.playlist} c={c} isDark={isDark} lang={lang}
+              onPlayTrack={onPlayTrack} onQueueNext={onQueueNext} onAddToPlaylist={onAddToPlaylist}
+              onSave={savePlaylist} saved={!!savedId} saving={saving} />
+          )}
+          {turn && turn.search && (
+            <AsxSearchCard payload={turn.search} query={query} c={c} isDark={isDark} lang={lang}
+              navigateToArtist={navigateToArtist} onPlayTrack={onPlayTrack}
+              onQueueNext={onQueueNext} onAddToPlaylist={onAddToPlaylist} />
+          )}
+          {turn && turn.facts && (
+            <AsxFactsCard payload={turn.facts} c={c} isDark={isDark} lang={lang}
+              navigateToArtist={navigateToArtist} onPlayTrack={onPlayTrack}
+              onQueueNext={onQueueNext} onAddToPlaylist={onAddToPlaylist} />
+          )}
+
+          {/* ── Surfaces. Both are silent when empty: an empty rail promising
+                 content is worse than no rail. ── */}
+          {turns.length > 0 && (
+            <div style={{ marginTop: 34 }}>
+              <AsxLabel c={c}>{ru ? 'НЕДАВНЕЕ' : 'RECENT'}</AsxLabel>
+              <div className="asx-rail">
+                {turns.slice(0, 8).map(t => (
+                  <AsxRecentCard key={t.id} turn={t} c={c} isDark={isDark} lang={lang}
+                    onOpen={() => openTurn(t)} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {cards.length > 0 && (
+            <div style={{ marginTop: 28 }}>
+              <AsxLabel c={c}>{ru ? 'СВЯЗИ В БИБЛИОТЕКЕ' : 'LINKS IN YOUR LIBRARY'}</AsxLabel>
+              <div className="asx-rail">
+                {cards.map((card, i) => (
+                  <AsxDiscoveryCard key={`${card.kind}-${i}`} card={card} c={c} isDark={isDark}
+                    onSend={(cd) => send(cd.prompt, {
+                      intent: cd.intent,
+                      subjectTrackId: cd.intent === 'facts' ? cd.track_id : undefined,
+                      subjectArtistSlug: cd.intent === 'facts' ? cd.artist_slug : undefined,
+                    })} />
+                ))}
+              </div>
+            </div>
+          )}
+
+        </div>
+      </div>
     </div>
   );
 }
@@ -18191,8 +18956,8 @@ function BottomTabBar({ section, onNav, isDark, lang }) {
   const items = [
     { id:'home', label: lang==='ru'?'Главная':'Home',
       icon:(a)=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={a?2.1:1.8} strokeLinecap="round" strokeLinejoin="round"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v10h14V10"/></svg> },
-    { id:'search', label: lang==='ru'?'Текст':'Lyrics',
-      icon:(a)=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={a?2.1:1.8} strokeLinecap="round"><path d="M4 5h16"/><path d="M4 9.5h16"/><path d="M4 14h5.5"/><path d="M4 18.5h4"/><circle cx="15.5" cy="15.5" r="3.8"/><path d="m18.4 18.4 2.6 2.6"/></svg> },
+    { id:'assistant', label: lang==='ru'?'Ассистент':'Assistant',
+      icon:(a)=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={a?2.1:1.8} strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="7"/><path d="M8.6 13.4c1.6 1.1 3.4-.7 4.8.4"/><path d="M9.2 9.6c1.3.9 2.6-.4 3.9.2"/><path d="M19.6 5.2 20 4l.4 1.2 1.2.4-1.2.4-.4 1.2-.4-1.2-1.2-.4z"/></svg> },
     { id:'library', label: lang==='ru'?'Библиотека':'Library',
       icon:(a)=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={a?2.1:1.8} strokeLinecap="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></svg> },
     { id:'recommend', label: lang==='ru'?'Рекомендации':'For You',
@@ -18304,9 +19069,12 @@ function MiniPlayerBar({ track, audio, isDark, lang, onOpen, onPrev, onNext, onA
 // and per-section state survive navigation; a route-per-element router would
 // unmount them. FastAPI's SPA catch-all and the PWA navigateFallback already
 // serve index.html for these paths, so F5 and deep links work.
+// `/search` keeps parsing (and rendering the classic grid + filters) even though
+// no tab points at it any more — the assistant took that slot, and this is the
+// escape hatch when it is not what the user wants.
 const SECTION_PATHS = {
   home: '/', search: '/search', recommend: '/recommend',
-  library: '/library', player: '/player',
+  library: '/library', player: '/player', assistant: '/assistant',
 };
 
 function pathForSection(section, artistSlug) {
@@ -19131,6 +19899,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
 
   const sectionMap = {
     search:    SearchSection,
+    assistant: AssistantSection,
     recommend: RecommendSection,
     library:   LibrarySection,
     player:    PlayerSection,

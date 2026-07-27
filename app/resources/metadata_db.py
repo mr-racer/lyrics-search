@@ -1511,6 +1511,48 @@ class MetadataDB:
         ]
 
     @classmethod
+    def get_in_library_sample_links(cls, collection_name: str) -> List[dict]:
+        """Links whose BOTH sides are songs of this collection.
+
+        The discoveries rail only shows a link it can put two covers on, so
+        ``dst_slug`` must have resolved to a real song row — an unresolved
+        "samples some 70s funk record" is true but unshowable. Self-links are
+        dropped here rather than by the caller: they are always extraction
+        noise, never a finding.
+        """
+        conn = cls._connect()
+        rows = conn.execute(
+            """SELECT l.src_slug, src.title, src.artist_slug,
+                      l.dst_slug, dst.title, dst.artist_slug,
+                      l.relation, l.evidence
+               FROM sample_links l
+               JOIN songs src ON src.slug = l.src_slug
+               JOIN songs dst ON dst.slug = l.dst_slug
+               WHERE l.collection_name = ? AND l.direction = 'source'
+                 AND l.dst_slug IS NOT NULL AND l.dst_slug <> l.src_slug""",
+            (collection_name,),
+        ).fetchall()
+        return [
+            {"src_slug": r[0], "src_title": r[1], "src_artist_slug": r[2],
+             "dst_slug": r[3], "dst_title": r[4], "dst_artist_slug": r[5],
+             "relation": r[6], "evidence": r[7]}
+            for r in rows
+        ]
+
+    @classmethod
+    def get_artist_slugs_with_bio(cls, collection_name: str, lang: str) -> List[str]:
+        """Artist slugs that already have a generated biography for this
+        account and language — the ones a "tell me about X" card can promise
+        an answer for."""
+        conn = cls._connect()
+        rows = conn.execute(
+            "SELECT artist_slug FROM artist_bios "
+            "WHERE collection_name = ? AND lang = ? AND bio_text <> ''",
+            (collection_name, lang),
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    @classmethod
     def rebuild_samples_cache(cls, collection_name: str) -> int:
         """Refill ``songs.samples_json`` for a collection from ``sample_links``.
 

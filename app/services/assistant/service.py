@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from app.services.assistant import facts_executor, router as intent_router
+from app.services.assistant import facts_executor, reason_gate, router as intent_router
 from app.services.assistant.humanize import clarify_labels, human
 
 logger = logging.getLogger(__name__)
@@ -204,7 +204,9 @@ async def _run_playlist(req, route, slots, search_service, qdrant,
         "intent": "playlist",
         "human": human("select_done", lang, picked=len(ids)),
         "slots": slots.model_dump(),
-        "playlist": payload.model_dump(mode="json"),
+        # Filler reasons never reach the card — see reason_gate for why the
+        # check lives here and not in the (frozen) playlist pipeline.
+        "playlist": reason_gate.gate_playlist(payload.model_dump(mode="json")),
     }
 
 

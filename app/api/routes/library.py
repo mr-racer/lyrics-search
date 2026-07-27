@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-from app.domain.models import ArtistAggregate, IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RhythmResponse, WeeklyPulseResponse, EngagementResponse, TasteMapResponse, RediscoverResponse, User, ProducerResolveResponse, ProducerTracksResponse, SamplesResolveRequest, SamplesResolveResponse
+from app.domain.models import ArtistAggregate, IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RhythmResponse, WeeklyPulseResponse, EngagementResponse, TasteMapResponse, RediscoverResponse, User, ProducerResolveResponse, ProducerTracksResponse, SamplesResolveRequest, SamplesResolveResponse, DiscoveryCard, DiscoveriesResponse
 from app.api.dependencies import get_current_user, require_mode
 from app.api.helpers import derive_collection_for_user, member_index_root, path_within_root
 from app.services.library_service import LibraryService
@@ -702,6 +702,30 @@ def get_library_engagement(
         collection_name=derived,
         lang=lang,
     )
+
+
+# Sync def: the whole build is SQLite reads plus an in-memory join over the
+# cached light points, so Starlette's threadpool is the right place for it.
+@router.get("/discoveries", response_model=DiscoveriesResponse)
+def get_library_discoveries(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    lang: str = Query("en", pattern="^(en|ru)$"),
+    limit: int = Query(12, ge=1, le=24),
+) -> DiscoveriesResponse:
+    """Hook cards for the assistant page's rail — sample/cover links whose both
+    sides are in the library, recurring producers, and artists with a bio.
+    Empty list when there is nothing verifiable to show; the SPA then draws no
+    rail at all."""
+    from app.services import discoveries_service
+    derived = derive_collection_for_user(current_user)
+    db_client = request.app.state.db_client
+    if db_client is None or db_client.qdrant is None:
+        return DiscoveriesResponse()
+    cards = discoveries_service.build_discoveries(
+        db_client.qdrant, derived, lang=lang, limit=limit,
+    )
+    return DiscoveriesResponse(cards=[DiscoveryCard(**c) for c in cards])
 
 
 # Sync def (not async): PCA + k-means is CPU-bound, so let Starlette run it in a
