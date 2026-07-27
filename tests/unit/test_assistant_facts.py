@@ -202,3 +202,45 @@ async def test_partial_name_is_not_an_exact_match():
     subject, options = await _resolve(_hits("Hurting", "Hurtin'"),
                                       "что за история у трека Hurt")
     assert subject is None and options      # ratio path → still a disambiguate
+
+
+# ── the JSON the model actually returns ──────────────────────────────────────
+
+
+def test_parses_a_bare_object():
+    assert F._parse_json_object('{"answer": "A.", "used": [1]}') == {"answer": "A.", "used": [1]}
+
+
+def test_parses_through_fences_and_prose():
+    # Both shapes cost a whole answer on the prod dry run: ask_llm(parse_json)
+    # raised and the deterministic fallback took over.
+    assert F._parse_json_object('```json\n{"answer": "A.", "used": [2]}\n```') \
+        == {"answer": "A.", "used": [2]}
+    assert F._parse_json_object('Sure! Here it is:\n{"answer": "A.", "used": [2]} Hope it helps.') \
+        == {"answer": "A.", "used": [2]}
+
+
+@pytest.mark.parametrize("raw", ["", "no object here", None, 42, "{broken"])
+def test_unparseable_stays_unparseable(raw):
+    assert F._parse_json_object(raw) is None
+
+
+def test_album_pack_leads_with_items_naming_the_record():
+    items = [
+        {"text": "Radiohead is an English rock band", "source": "bio"},
+        {"text": "Selway got the nickname Mad Dog", "source": "facts"},
+        {"text": "OK Computer was recorded in a mansion near Bath", "source": "facts"},
+    ]
+    out = F._prefer_items_naming(items, "OK Computer")
+    assert out[0]["text"].startswith("OK Computer")
+    assert len(out) == 3           # nothing is dropped, only reordered
+
+
+def test_deterministic_answer_leads_with_facts_and_stays_short():
+    items = [{"text": "a very long biography blob", "source": "bio"}] + [
+        {"text": f"fact {i}", "source": "facts"} for i in range(1, 8)
+    ]
+    out = F._deterministic_answer({"title": "X"}, items, "ru")
+    lines = out.splitlines()
+    assert lines[1] == "- fact 1"          # the bio no longer opens it
+    assert len(lines) == 6                 # heading + 5 bullets

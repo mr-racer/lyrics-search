@@ -74,8 +74,11 @@ HARD RULES:
 
 STYLE:
 - Lead with the answer. No preamble, no "This artist is a fascinating figure…".
+- Lead with what is SPECIFIC to this subject — the recording, the story, the people, the numbers. A general description ("an English rock band formed in 1985", "one of the most influential artists of the century") is the least interesting thing you can say and must never open the answer. Use it only if the question is literally "who is this".
+- Prefer the concrete fact over the summarising one. Two vivid specifics beat five vague lines.
 - 2-5 sentences for a normal question. Match length to the question; most answers are short.
 - Sound like a well-read friend talking, not an encyclopedia entry. No bullet lists unless the facts genuinely split into separate threads.
+- Do not restate the question, and do not name the subject in the first three words unless the sentence needs it.
 - Say each thing once. No closing summary.
 
 Output ONLY minified JSON, no prose, no fences:
@@ -380,7 +383,27 @@ def _build_artist_pack(subject: dict, collection_name: str, lang: str) -> list[d
     if row.get("audiodb_bio") and not bio:
         items.append({"text": _clean(row["audiodb_bio"], 900), "source": "bio"})
 
+    # An album question gets the ARTIST's pack — there is no per-album fact
+    # store — so the handful of items that actually name the record must lead.
+    # Prod run: «чем интересен альбом OK Computer» handed the model seven
+    # Radiohead trivia items with the one about OK Computer buried at [4].
+    if subject.get("kind") == "album":
+        items = _prefer_items_naming(items, subject.get("title") or "")
+
     return items
+
+
+def _prefer_items_naming(items: list[dict], name: str) -> list[dict]:
+    """Stable-sort ``items`` so the ones naming ``name`` come first."""
+    tokens = tokenize(name)
+    if not tokens:
+        return items
+    needle = " ".join(tokens)
+
+    def _names_it(item: dict) -> bool:
+        return needle in " ".join(tokenize(item.get("text") or ""))
+
+    return [it for it in items if _names_it(it)] + [it for it in items if not _names_it(it)]
 
 
 def _related_tracks_sync(qdrant, collection_name: str, subject: dict) -> list:
@@ -466,8 +489,40 @@ def _deterministic_answer(subject: dict, items: list[dict], lang: str) -> str:
                 if ru else f"I don't have reliable information about “{name}” yet.")
     head = (f"Вот что известно про «{name}»:" if ru
             else f"Here's what is known about “{name}”:")
-    bullets = "\n".join(f"- {it['text']}" for it in items[:8])
+    # Facts first and only five of them: the fallback used to open with the
+    # 900-character biography blob and then list everything, which read as a
+    # database dump rather than an answer.
+    ranked = ([it for it in items if it.get("source") == "facts"]
+              + [it for it in items if it.get("source") != "facts"])
+    bullets = "\n".join(f"- {it['text']}" for it in ranked[:5])
     return f"{head}\n{bullets}"
+
+
+def _parse_json_object(text: object) -> object:
+    """Pull the answer object out of whatever the model wrapped it in.
+
+    Handles code fences and a leading/trailing sentence. Returns None when
+    there is no object to find — the citation check then rejects it like any
+    other malformed answer, which is the same safe outcome as before.
+    """
+    if isinstance(text, dict):
+        return text
+    if not isinstance(text, str):
+        return None
+    body = text.strip()
+    for fence in ("```json", "```"):
+        if body.startswith(fence):
+            body = body[len(fence):].lstrip()
+    if body.endswith("```"):
+        body = body[:-3].rstrip()
+    start, end = body.find("{"), body.rfind("}")
+    if start == -1 or end <= start:
+        return None
+    import json as _json
+    try:
+        return _json.loads(body[start:end + 1])
+    except ValueError:
+        return None
 
 
 def _verify(raw: object, n_items: int) -> tuple[str, list[int]] | None:
@@ -597,14 +652,18 @@ async def run(*, qdrant, collection_name: str, message: str, route, slots,
     )
     verified = None
     try:
-        raw = await ask_llm(
+        # parse_json=False on purpose: ``ask_llm``'s own parse raises on the
+        # slightest prose around the object, and a 12b model wrapping its JSON
+        # in one polite sentence cost a whole answer on the prod dry run.
+        # ``_parse_json_object`` digs the object out instead.
+        raw_text = await ask_llm(
             user_prompt,
             system_prompt=_SYSTEM.format(lang_name=_lang_name(lang)),
-            parse_json=True, temperature=0.3,
+            parse_json=False, temperature=0.3,
             base_url=llm_base_url, model=llm_model,
             extra_body={"enable_thinking": False},
         )
-        verified = _verify(raw, len(items))
+        verified = _verify(_parse_json_object(raw_text), len(items))
         if verified is None:
             logger.info("[assistant/facts] answer rejected by citation check — "
                         "serving the deterministic fact rendering instead")
