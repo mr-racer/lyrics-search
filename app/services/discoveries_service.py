@@ -5,7 +5,9 @@ one sends a turn, it does not navigate. Three kinds, all built from data the
 code can verify against the DB:
 
 1. ``relation`` — a sample / interpolation / cover where BOTH sides are songs
-   of this library (two covers and an arrow).
+   of this library (two covers and an arrow). This one carries a ``fact``: the
+   statement itself, echoed back as ``AssistantRequest.focus_fact`` so the
+   assistant explains the link rather than reciting the track's whole dossier.
 2. ``producer`` — a producer credited on N ≥ 3 tracks here.
 3. ``artist`` — an artist whose biography is already generated, so the facts
    branch has something to answer with.
@@ -148,11 +150,19 @@ def _relation_cards(collection_name: str, idx: dict, ru: bool) -> list[dict]:
             continue
         seen.add(pair)
         verb = (_RELATION_RU if ru else _RELATION_EN)[relation]
+        # The card states a fact, so tapping it must ask about THAT fact. The
+        # old prompt («расскажи про «X»») asked about the track instead, and the
+        # answer came back as a list of everything known about it with the
+        # sample link nowhere in it — the finding the card was built on was the
+        # one thing the answer left out.
+        fact = (f"«{src['title']}» ({src['artist']}) {verb} «{dst['title']}» ({dst['artist']})"
+                if ru else
+                f"“{src['title']}” by {src['artist']} {verb} “{dst['title']}” by {dst['artist']}")
         cards.append({
             "kind": "relation",
             "intent": "facts",
-            "prompt": (f"расскажи про «{src['title']}» {src['artist']}" if ru
-                       else f"tell me about “{src['title']}” by {src['artist']}"),
+            "prompt": (f"объясни: {fact}" if ru else f"explain this: {fact}"),
+            "fact": fact,
             "headline": f"{src['title']} {verb} {dst['title']}",
             "subline": (f"{src['artist']} · {dst['artist']} — оба у тебя есть" if ru
                         else f"{src['artist']} · {dst['artist']} — you have both"),

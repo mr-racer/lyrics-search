@@ -51,7 +51,10 @@ def _client(monkeypatch, **state):
 def _stub_route(monkeypatch, intent, **kw):
     from app.services.assistant import router as R
 
-    async def fake_route(message, slots=None, *, explicit_intent=None):
+    # ``**_kw`` keeps this stub honest about the router's real signature
+    # (last_message and the llm_* passthrough) without pinning it here —
+    # what this file tests is the HTTP layer, not the routing decision.
+    async def fake_route(message, slots=None, *, explicit_intent=None, **_kw):
         if explicit_intent:
             return AssistantRoute(intent=explicit_intent, source="explicit", confidence=1.0)
         return AssistantRoute(intent=intent, confidence=0.9, margin=0.5,
@@ -70,7 +73,10 @@ def _ndjson(resp):
 def test_unclear_intent_returns_clarify_options(monkeypatch):
     from app.services.assistant import router as R
 
-    async def fake_route(message, slots=None, *, explicit_intent=None):
+    # ``**_kw`` keeps this stub honest about the router's real signature
+    # (last_message and the llm_* passthrough) without pinning it here —
+    # what this file tests is the HTTP layer, not the routing decision.
+    async def fake_route(message, slots=None, *, explicit_intent=None, **_kw):
         return AssistantRoute(intent=None, source="unclear")
 
     monkeypatch.setattr(R, "route", fake_route)
@@ -155,6 +161,33 @@ def test_facts_intent_can_ask_which_subject(monkeypatch):
     assert body["facts"] is None
 
 
+def test_focus_fact_reaches_the_executor_and_comes_back_on_the_payload(monkeypatch):
+    """Tapping a fact asks about THAT fact: the statement has to survive the
+    round trip, and an unexplained one must not be dressed up as an answer."""
+    _stub_route(monkeypatch, "facts")
+    seen = {}
+
+    async def fake_facts_run(**kwargs):
+        seen["focus_fact"] = kwargs.get("focus_fact")
+        return {
+            "subject_kind": "song", "subject_title": "Runaway", "answer": "…",
+            "grounded": False, "explained": False, "focus_fact": kwargs["focus_fact"],
+            "items": [], "related_tracks": [],
+        }, []
+
+    monkeypatch.setattr("app.services.assistant.facts_executor.run", fake_facts_run)
+
+    fact = "«Runaway» сэмплирует «Expo 83»"
+    with _client(monkeypatch) as c:
+        resp = c.post("/api/v1/assistant/",
+                      json={"message": f"объясни: {fact}", "focus_fact": fact})
+    body = resp.json()
+    assert seen["focus_fact"] == fact
+    assert body["facts"]["focus_fact"] == fact
+    assert body["facts"]["explained"] is False
+    assert body["facts"]["items"] == []      # no consolation list of other facts
+
+
 def test_explicit_intent_from_a_clarify_reply_is_obeyed(monkeypatch):
     """The second leg of a clarify: the client echoes the chosen intent and the
     router must not be consulted again."""
@@ -162,7 +195,10 @@ def test_explicit_intent_from_a_clarify_reply_is_obeyed(monkeypatch):
 
     calls = []
 
-    async def fake_route(message, slots=None, *, explicit_intent=None):
+    # ``**_kw`` keeps this stub honest about the router's real signature
+    # (last_message and the llm_* passthrough) without pinning it here —
+    # what this file tests is the HTTP layer, not the routing decision.
+    async def fake_route(message, slots=None, *, explicit_intent=None, **_kw):
         calls.append(explicit_intent)
         return AssistantRoute(intent=explicit_intent or None,
                               source="explicit" if explicit_intent else "unclear")

@@ -6806,9 +6806,14 @@ function AsxSearchCard({ payload, query, c, isDark, lang, navigateToArtist,
 }
 
 function AsxFactsCard({ payload, c, isDark, lang, navigateToArtist, onPlayTrack, onQueueNext,
-                        onAddToPlaylist }) {
+                        onAddToPlaylist, onExplainFact }) {
   const ru = lang === 'ru';
   const used = (payload.items || []).filter(i => i.used);
+  // Explain mode: the turn was "what does THIS line mean", so the line itself is
+  // the header of the answer and `explained === false` is an honest outcome, not
+  // an error — the backend refuses to invent a reason it could not find.
+  const focus = payload.focus_fact;
+  const unexplained = focus && payload.explained === false;
   const related = payload.related_tracks || [];
   const hits = related.map(t => ({ track: t, score: 0, matched_on: 'facts' }));
   const image = homeCoverUrl(payload.image_path);
@@ -6842,19 +6847,33 @@ function AsxFactsCard({ payload, c, isDark, lang, navigateToArtist, onPlayTrack,
         )}
       </div>
 
-      <div style={{ fontSize: 14.5, lineHeight: 1.65, color: c.text }}>
+      {/* The statement being explained leads the card: without it on screen an
+          explanation reads as a non-sequitur. */}
+      {focus && (
+        <div className="asx-focus" style={{ marginBottom: 12 }}>
+          <AsxLabel c={c} style={{ marginBottom: 5 }}>
+            {ru ? 'ОБЪЯСНЯЮ ФАКТ' : 'EXPLAINING THIS'}
+          </AsxLabel>
+          <div style={{ fontSize: 13.5, lineHeight: 1.5, color: c.text }}>{focus}</div>
+        </div>
+      )}
+
+      <div style={{ fontSize: 14.5, lineHeight: 1.65,
+        color: unexplained ? c.textMuted : c.text }}>
         <MarkdownText text={payload.answer} />
       </div>
 
       {/* Honest provenance: the answer either passed the citation check or the
-          deterministic "here is what is known" rendering was served instead. */}
+          deterministic "here is what is known" rendering was served instead.
+          In explain mode `grounded: false` just means "nothing to write", and
+          the answer already says so — a second badge would be noise. */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
         {payload.web_search_used && (
           <span className="asx-pill" style={{ cursor: 'default' }}>
             {ru ? 'нашёл в интернете' : 'found on the web'}
           </span>
         )}
-        {payload.grounded === false && (
+        {!focus && payload.grounded === false && (
           <span className="asx-pill" style={{ cursor: 'default' }}>
             {ru ? 'только известные факты, без формулировки ИИ'
                 : 'known facts only, not written by the AI'}
@@ -6866,14 +6885,21 @@ function AsxFactsCard({ payload, c, isDark, lang, navigateToArtist, onPlayTrack,
         <div style={{ marginTop: 16 }}>
           <AsxLabel c={c}>{ru ? 'НА ЧЁМ ОСНОВАН ОТВЕТ' : 'WHAT THE ANSWER LEANS ON'}</AsxLabel>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+            {/* Every cited line is itself a question: tapping one asks the
+                assistant to explain THAT line — the same focused turn a
+                discovery card sends, not another dossier about the subject. */}
             {used.map(item => (
-              <div key={item.n} style={{ display: 'flex', gap: 9, fontSize: 12.5,
-                lineHeight: 1.5, color: c.textMuted }}>
+              <button key={item.n} className="asx-fact" type="button"
+                onClick={() => onExplainFact && onExplainFact(item.text)}
+                title={ru ? 'Объяснить этот факт' : 'Explain this fact'}
+                style={{ display: 'flex', gap: 9, fontSize: 12.5, lineHeight: 1.5,
+                  color: c.textMuted, textAlign: 'left', background: 'none', border: 0,
+                  padding: 0, cursor: onExplainFact ? 'pointer' : 'default', font: 'inherit' }}>
                 <span className="mono num-tab" style={{ color: c.textSubtle, flex: 'none' }}>
                   {item.n}
                 </span>
                 <span>{item.text}</span>
-              </div>
+              </button>
             ))}
           </div>
         </div>
@@ -7058,6 +7084,10 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
       intent: opts.intent || undefined,
       subject_track_id: opts.subjectTrackId || undefined,
       subject_artist_slug: opts.subjectArtistSlug || undefined,
+      // "explain THIS line" rather than "tell me about this subject": the
+      // backend narrows the pack to the statement and stays silent when it
+      // finds nothing that actually explains it.
+      focus_fact: opts.focusFact || undefined,
       now_playing_track_id: playerTrack?.track_id || undefined,
       limit: 15, lang, ...llmKw(),
     };
@@ -7097,6 +7127,19 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
   }, [busy, aiOn, turns, slots, playerTrack, lang, resetStages, pumpStages, saveTurn]);
 
   const submit = () => { const t = input.trim(); if (t) { send(t); setInput(''); } };
+
+  // Tapping a cited fact asks about that fact and keeps the subject pinned by
+  // id, so the answer can't drift onto a same-named track.
+  const explainFact = useCallback((fact) => {
+    const f = String(fact || '').trim();
+    if (!f) return;
+    const p = turn?.facts || {};
+    send(ru ? `объясни: ${f}` : `explain this: ${f}`, {
+      intent: 'facts', focusFact: f,
+      subjectTrackId: p.track_id || undefined,
+      subjectArtistSlug: p.track_id ? undefined : (p.artist_slug || undefined),
+    });
+  }, [turn, ru, send]);
 
   // Reopen a past turn: the result AND its slots come back, so «а побыстрее?»
   // continues from wherever the user jumped to.
@@ -7287,7 +7330,8 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
           {turn && turn.facts && (
             <AsxFactsCard payload={turn.facts} c={c} isDark={isDark} lang={lang}
               navigateToArtist={navigateToArtist} onPlayTrack={onPlayTrack}
-              onQueueNext={onQueueNext} onAddToPlaylist={onAddToPlaylist} />
+              onQueueNext={onQueueNext} onAddToPlaylist={onAddToPlaylist}
+              onExplainFact={explainFact} />
           )}
 
           {/* ── Surfaces. Both are silent when empty: an empty rail promising
@@ -7312,6 +7356,9 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
                   <AsxDiscoveryCard key={`${card.kind}-${i}`} card={card} c={c} isDark={isDark}
                     onSend={(cd) => send(cd.prompt, {
                       intent: cd.intent,
+                      // A card that states a fact ("A samples B") asks for THAT
+                      // fact to be explained, not for a dossier on the track.
+                      focusFact: cd.intent === 'facts' ? cd.fact : undefined,
                       subjectTrackId: cd.intent === 'facts' ? cd.track_id : undefined,
                       subjectArtistSlug: cd.intent === 'facts' ? cd.artist_slug : undefined,
                     })} />

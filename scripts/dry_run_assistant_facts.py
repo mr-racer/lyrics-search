@@ -12,6 +12,13 @@ can, and the pack is exactly what the prompt work has to react to.
 
 Compare two runs (before/after a prompt change) with the same --questions file
 and diff the JSON dumps.
+
+``--facts FILE`` measures the OTHER branch — explain mode, where each line is a
+statement the listener tapped rather than a question they typed. That branch is
+allowed to answer nothing, so read its summary differently: "explained 4/9" with
+five honest blanks is a better run than 9/9 of invented context. What to check
+in a blank is the WEB QUERIES line — a fact that went unexplained because the
+model typed a useless query is a prompt problem, not a missing-source problem.
 """
 from __future__ import annotations
 
@@ -58,18 +65,35 @@ class _Route:
     confidence = 1.0
 
 
-async def one(qdrant, collection: str, question: str, lang: str) -> dict:
+async def one(qdrant, collection: str, question: str, lang: str,
+              focus_fact: str | None = None) -> dict:
+    # The web queries are the thing to inspect when a fact goes unexplained, and
+    # they are otherwise only visible in the server log.
+    queries: list = []
+    emit = _query_recorder(queries)
     payload, options = await facts_executor.run(
         qdrant=qdrant, collection_name=collection, message=question,
         route=_Route(), slots=AssistantSlots(), lang=lang,
+        focus_fact=focus_fact, emit=emit,
     )
-    return {"question": question, "payload": payload,
+    return {"question": question, "focus_fact": focus_fact, "payload": payload,
+            "web_queries": queries,
             "options": [o.get("title") for o in (options or [])]}
+
+
+def _query_recorder(sink: list):
+    async def emit(event: dict) -> None:
+        if event.get("stage") == "web_search" and event.get("query"):
+            sink.append(event["query"])
+    return emit
 
 
 def render(result: dict, verbose: bool) -> None:
     print("\n" + "═" * 78)
-    print(f"Q: {result['question']}")
+    if result.get("focus_fact"):
+        print(f"FACT: {result['focus_fact']}")
+    else:
+        print(f"Q: {result['question']}")
     payload = result["payload"]
     if payload is None:
         if result["options"]:
@@ -83,7 +107,11 @@ def render(result: dict, verbose: bool) -> None:
     print(f"SUBJECT: {payload.get('subject_kind')} · {payload.get('subject_title')}"
           f"{' — ' + payload['subject_subtitle'] if payload.get('subject_subtitle') else ''}")
     print(f"PACK: {len(items)} items · used {sorted(used) or '—'}"
-          f" · grounded={payload.get('grounded')} · web={payload.get('web_search_used')}")
+          f" · grounded={payload.get('grounded')} · web={payload.get('web_search_used')}"
+          + (f" · explained={payload.get('explained')}"
+             if payload.get("focus_fact") else ""))
+    if result.get("web_queries"):
+        print("WEB QUERIES: " + " | ".join(result["web_queries"]))
     for item in items:
         mark = "*" if item.get("n") in used else " "
         text = item.get("text") or ""
@@ -98,11 +126,20 @@ async def main() -> None:
     ap.add_argument("--collection", default=os.environ.get("MUSIX_COLLECTION", "acct_1"))
     ap.add_argument("--lang", default="ru", choices=["ru", "en"])
     ap.add_argument("--questions", help="file with one question per line")
+    ap.add_argument("--facts", help="file with one STATEMENT per line — runs "
+                                    "explain mode instead of the question mode")
     ap.add_argument("--json", help="also dump raw results to this file")
     ap.add_argument("--verbose", action="store_true", help="print pack items in full")
     args = ap.parse_args()
 
-    if args.questions:
+    facts: list[str] = []
+    if args.facts:
+        with open(args.facts, encoding="utf-8") as fh:
+            facts = [ln.strip() for ln in fh if ln.strip()]
+        # The message a tapped card sends, built the same way the SPA builds it.
+        questions = [(f"объясни: {f}" if args.lang == "ru" else f"explain this: {f}")
+                     for f in facts]
+    elif args.questions:
         with open(args.questions, encoding="utf-8") as fh:
             questions = [ln.strip() for ln in fh if ln.strip()]
     else:
@@ -116,20 +153,29 @@ async def main() -> None:
         if db.qdrant is None:
             print("Qdrant unavailable — the facts branch needs it to resolve subjects.")
             return
-        for question in questions:
+        for i, question in enumerate(questions):
+            focus = facts[i] if facts else None
             try:
-                result = await one(db.qdrant, args.collection, question, args.lang)
+                result = await one(db.qdrant, args.collection, question, args.lang, focus)
             except Exception as exc:  # one bad question must not end the run
-                result = {"question": question, "payload": None, "options": [],
+                result = {"question": question, "focus_fact": focus, "payload": None,
+                          "options": [], "web_queries": [],
                           "error": f"{type(exc).__name__}: {exc}"}
             results.append(result)
             render(result, args.verbose)
 
-    answered = [r for r in results if r["payload"] and (r["payload"].get("answer") or "").strip()]
-    grounded = [r for r in answered if r["payload"].get("grounded")]
     print("\n" + "═" * 78)
-    print(f"{len(answered)}/{len(results)} answered · {len(grounded)} written by the LLM · "
-          f"{len(answered) - len(grounded)} fell back to the deterministic render")
+    if facts:
+        explained = [r for r in results if r["payload"] and r["payload"].get("explained")]
+        from_web = [r for r in explained if r["payload"].get("web_search_used")]
+        print(f"{len(explained)}/{len(results)} explained · {len(from_web)} of those "
+              f"needed the web · {len(results) - len(explained)} honestly blank")
+    else:
+        answered = [r for r in results
+                    if r["payload"] and (r["payload"].get("answer") or "").strip()]
+        grounded = [r for r in answered if r["payload"].get("grounded")]
+        print(f"{len(answered)}/{len(results)} answered · {len(grounded)} written by the LLM · "
+              f"{len(answered) - len(grounded)} fell back to the deterministic render")
 
     if args.json:
         with open(args.json, "w", encoding="utf-8") as fh:

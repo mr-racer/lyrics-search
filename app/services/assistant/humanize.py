@@ -180,6 +180,17 @@ def human(stage: str, lang: str | None = None, **kw) -> str:
                     if ru else f"Found {n} fact{'' if n == 1 else 's'} in the library")
         return ("В библиотеке фактов нет — иду в интернет"
                 if ru else "No facts stored — going to the web")
+    # ── explain mode: one tapped fact, not the whole subject ──
+    if stage == "explaining":
+        n = int(kw.get("found") or 0)
+        if n:
+            return (f"Разбираю факт — рядом {_facts_ru(n)}"
+                    if ru else f"Working out the fact — {n} related note{'' if n == 1 else 's'}")
+        return ("Разбираюсь, что значит этот факт"
+                if ru else "Working out what this fact means")
+    if stage == "no_explanation":
+        return ("Объяснения не нашлось — придумывать не буду"
+                if ru else "No explanation found — I won't invent one")
 
     if stage == "error":
         return "Ошибка" if ru else "Error"

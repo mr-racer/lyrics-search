@@ -109,9 +109,16 @@ async def run_assistant(req, *, search_service, qdrant, collection_name: str,
         if sink is not None:
             sink.put(item)
 
-    # ── route (GLiNER2, no LLM) ──
+    # ── route (LLM reads the sentence, GLiNER pulls the spans) ──
+    # The last user turn goes along so a modifier («а побыстрее?») is recognised
+    # as one; the structural state the executors need lives in `slots`.
+    last_message = next(
+        (m.content for m in reversed(req.history or []) if getattr(m, "role", "") == "user"),
+        None,
+    )
     route = await intent_router.route(
-        req.message, slots, explicit_intent=req.intent,
+        req.message, slots, explicit_intent=req.intent, last_message=last_message,
+        llm_base_url=req.llm_base_url, llm_model=req.llm_model,
     )
 
     if route.intent is None:
@@ -223,6 +230,7 @@ async def _run_facts(req, route, slots, qdrant,
         subject_track_id=req.subject_track_id,
         subject_artist_slug=req.subject_artist_slug,
         now_playing_track_id=req.now_playing_track_id,
+        focus_fact=req.focus_fact,
         llm_base_url=req.llm_base_url,
         llm_model=req.llm_model,
         emit=(sink.emit if sink is not None else None),
@@ -265,6 +273,8 @@ async def _run_facts(req, route, slots, qdrant,
                            "I couldn't find what you mean in your library. Try naming "
                            "the track or the artist."),
                 "grounded": False,
+                "focus_fact": req.focus_fact,
+                "explained": False if req.focus_fact else None,
                 "items": [],
                 "related_tracks": [],
             },

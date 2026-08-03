@@ -1,14 +1,23 @@
-"""Live-stack test: does the REAL GLiNER2 actually route these phrasings?
+"""Live-stack test: do the REAL models actually route these phrasings?
 
 This is the test that justifies the design decision. Everything else about the
-router is unit-tested against a stub; the open question — can a multilingual
-zero-shot classifier separate "find me this song", "build me a playlist" and
-"tell me about this artist" across Russian and English without a single
-maintained keyword list — can only be answered by the real model.
+router is unit-tested against stubs; the open question — can these two models
+separate "find me this song", "build me a playlist" and "tell me about this
+artist" across Russian and English without a single maintained keyword list —
+can only be answered by running them.
 
-It asserts an accuracy FLOOR, not per-phrase correctness: a zero-shot classifier
-is allowed to miss individual phrasings, and the router's clarify fallback
-covers those. What must not happen is broad confusion between the branches.
+Two fixtures, because the router has two rungs and both have to hold:
+
+* ``routed`` — the real stack (LLM decides, GLiNER supplies spans and covers
+  what the LLM cannot). This is what production does.
+* ``routed_gliner_only`` — the same fixture with the LLM forced off, which is
+  what happens whenever LM Studio is down, slow, or switched off with
+  ``ASSISTANT_LLM_ROUTING=0``. The floors below were measured on this rung
+  (2026-07-27) and it must not rot just because something better sits on top.
+
+Both assert an accuracy FLOOR, not per-phrase correctness: either model is
+allowed to miss individual phrasings, and the router's clarify fallback covers
+those. What must not happen is broad confusion between the branches.
 
 Run: ``scripts/run_docker_tests.sh -k assistant_routing``
 """
@@ -56,10 +65,12 @@ CASES = [
     ("расскажи историю создания Bohemian Rhapsody", "facts"),
 ]
 
-# Short remarks that only mean anything as a tweak to the previous turn. The
-# router resolves them in CODE (short + names nothing → reuse last_intent),
-# because the classifier reads them as CONFIDENT lyric searches — see the two
-# rejected model-side attempts in the router docstring.
+# Short remarks that only mean anything as a tweak to the previous turn. Two
+# paths reach the right answer: the LLM has a "followup" label and is given the
+# previous turn, and — when it is unavailable — the CODE rule (short + names
+# nothing → reuse last_intent). GLiNER itself has no concept of conversational
+# reference and reads these as CONFIDENT lyric searches; see the two rejected
+# model-side attempts in the router docstring.
 FOLLOWUP_CASES = [
     "а побыстрее?",
     "ещё такого же",
@@ -83,9 +94,7 @@ MAX_CONFIDENT_WRONG = 1
 MAX_ASK_RATE = 0.30
 
 
-@pytest.fixture(scope="module")
-def routed():
-    """Route every case once; the model loads on the first call."""
+def _route_all():
     import asyncio
 
     async def run():
@@ -96,6 +105,52 @@ def routed():
         return out
 
     return asyncio.run(run())
+
+
+@pytest.fixture(scope="module")
+def routed():
+    """The production stack: LLM decides, GLiNER supplies the spans."""
+    return _route_all()
+
+
+@pytest.fixture(scope="module")
+def routed_gliner_only():
+    """The fallback rung on its own — what runs when the LLM is unreachable."""
+    from app.services.assistant import intent_llm
+
+    original = intent_llm.classify
+
+    async def _off(*a, **kw):
+        return None
+
+    intent_llm.classify = _off
+    try:
+        return _route_all()
+    finally:
+        intent_llm.classify = original
+
+
+def test_the_fallback_rung_still_meets_its_floor(routed_gliner_only):
+    """GLiNER alone routed 22/27 here in July 2026. An LLM on top is not a
+    licence for that number to drift — it is what the user gets whenever their
+    local model is down."""
+    hits = [1 for _, e, r in routed_gliner_only if r.intent == e]
+    accuracy = len(hits) / len(routed_gliner_only)
+    misses = [f"{m!r}: expected {e}, got {r.intent} (share={r.confidence})"
+              for m, e, r in routed_gliner_only if r.intent != e]
+    assert accuracy >= MIN_ACCURACY, (
+        f"GLiNER-only accuracy {accuracy:.0%} < {MIN_ACCURACY:.0%}\n" + "\n".join(misses)
+    )
+
+
+def test_the_llm_is_actually_the_one_deciding(routed):
+    """A live stack whose LLM never answers would pass every other test in this
+    file on the fallback alone, and nobody would notice the regression."""
+    from_llm = [m for m, _, r in routed if r.source == "llm"]
+    assert len(from_llm) >= len(routed) * 0.5, (
+        f"only {len(from_llm)}/{len(routed)} routes came from the LLM — check "
+        "LLM_BASE_URL, the model name, and ASSISTANT_LLM_ROUTING"
+    )
 
 
 def test_routing_accuracy_meets_the_floor(routed):
@@ -125,9 +180,9 @@ def test_confident_wrong_answers_are_rare(routed):
     """A wrong branch chosen CONFIDENTLY is the failure that costs the user a
     whole wasted pipeline run — unclear results just prompt a clarify tap."""
     confident_wrong = [
-        f"{m!r}: expected {e}, got {r.intent} at conf={r.confidence}"
+        f"{m!r}: expected {e}, got {r.intent} at conf={r.confidence} ({r.source})"
         for m, e, r in routed
-        if r.intent is not None and r.intent != e and r.source == "gliner"
+        if r.intent is not None and r.intent != e and r.source in ("llm", "gliner")
     ]
     assert len(confident_wrong) <= MAX_CONFIDENT_WRONG, (
         f"{len(confident_wrong)} confidently wrong routes:\n" + "\n".join(confident_wrong)

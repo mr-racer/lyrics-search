@@ -1,21 +1,28 @@
-"""Intent routing for the unified assistant — GLiNER2, never the LLM.
+"""Intent routing for the unified assistant — an LLM decision, GLiNER spans.
 
-Runs the already-loaded GLiNER2 singleton
-(``fact_relations.extractor.get_model()``, ``fastino/gliner2-multi-v1``) over
-the user's message: two classification passes whose scores are ensembled, plus
-one pass for the artist/song spans and the requested count/era. ~0.5 s on CPU
-and zero LLM tokens, replacing the old ``CLASSIFICATION_SYSTEM_PROMPT``
-round-trip.
+Two models, each doing what it is actually good at:
 
-Why not regexes: they would need per-language phrase lists ("собери",
-"подборка", "hits", "best of", …) maintained forever. GLiNER classifies
-cross-lingually out of the box and — crucially — *cannot* return a label
-outside the list it is given, so there is nothing to hallucinate.
+* **The LLM picks the intent** (:mod:`app.services.assistant.intent_llm`). It
+  reads the sentence, so it separates the pairs that are only separable by
+  meaning: «поставь Creep» (search) from «поставь что-нибудь из Radiohead»
+  (playlist), «найди Runaway» (search) from «кто спродюсировал Runaway» (facts).
+* **GLiNER2 pulls the spans** — artist, song, requested count, era — from the
+  already-loaded singleton (``fact_relations.extractor.get_model()``,
+  ``fastino/gliner2-multi-v1``). ~200 ms on CPU, zero tokens, cross-lingual, and
+  physically unable to return anything outside the schema it is given.
 
-Why not the LLM: a 12b model confuses «найди песню про дождь» with «собери
-плейлист про дождь», and those are different pipelines with different UX.
+Both run concurrently, so routing costs one LLM round-trip, not two steps.
 
-Three design choices here were measured, not guessed — see
+**GLiNER is still the classifier of record when the LLM is not.** The ensemble
+below, its share gate and its calibration are untouched and run whenever the LLM
+is unreachable, slow, disabled (``ASSISTANT_LLM_ROUTING=0``) or answers off-list.
+That is not a degraded mode bolted on — it is the same 89%-argmax router this
+page shipped with, kept as the floor under a better ceiling.
+
+Why not regexes anywhere in here: they would need per-language phrase lists
+("собери", "подборка", "hits", "best of", …) maintained forever.
+
+Three design choices in the GLiNER ensemble were measured, not guessed — see
 ``tests/docker/test_assistant_routing.py`` for the fixture they were measured on:
 
 1. **Classification gets its own schema.** Adding the entity and structure
@@ -32,9 +39,11 @@ Three design choices here were measured, not guessed — see
    routes 22/27 correctly with **zero** wrong branches, the other 5 asking.
 
 Everything uncertain is resolved by CODE, not by prompting — see :func:`route`.
-When the model is genuinely unsure the router returns ``intent=None`` and the
+When the models are genuinely unsure the router returns ``intent=None`` and the
 caller asks the user; guessing badly costs a whole wasted pipeline run, a tap
-costs a second.
+costs a second. The LLM's own ``followup`` and ``unclear`` labels are answers to
+the router, never destinations: neither can reach an executor without the code
+below resolving it against the previous turn.
 """
 
 from __future__ import annotations
@@ -43,6 +52,8 @@ import asyncio
 import logging
 import re
 import threading
+
+from app.services.assistant import intent_llm
 
 logger = logging.getLogger(__name__)
 
@@ -265,11 +276,29 @@ def _extract_sync(message: str) -> tuple[dict[str, float], dict]:
 # ── Public API ───────────────────────────────────────────────────────────────
 
 
+async def _gliner_sync_or_empty(text: str) -> tuple[dict[str, float], dict, bool]:
+    """``(scores, entities, ok)`` — never raises.
+
+    ``ok=False`` means GLiNER itself is unavailable (model download failed, OOM),
+    which is a different situation from "GLiNER ran and was unsure": with no
+    spans there is nothing for the count override or the follow-up rule to read.
+    """
+    try:
+        scores, ents = await asyncio.to_thread(_extract_sync, text)
+        return scores, ents, True
+    except Exception as exc:
+        logger.warning("[assistant/router] GLiNER2 failed (%s) — spans unavailable", exc)
+        return {}, {}, False
+
+
 async def route(
     message: str,
     slots=None,
     *,
     explicit_intent: str | None = None,
+    last_message: str | None = None,
+    llm_base_url: str | None = None,
+    llm_model: str | None = None,
 ):
     """Decide which executor handles ``message``.
 
@@ -278,16 +307,21 @@ async def route(
 
     Decision table (all of it code, none of it prompting):
 
-    ================================  ==========================================
-    condition                          outcome
-    ================================  ==========================================
-    ``explicit_intent`` set            used verbatim, GLiNER not called at all
-                                       (this is the reply to a ``clarify`` frame)
-    count >= 2 recognised              hard override → ``playlist``
-    winner's share >= MIN_SHARE        the ensemble's pick
-    short message + known last_intent  sticky: reuse it (follow-ups)
-    otherwise                          ``None`` → clarify
-    ================================  ==========================================
+    ==================================  ========================================
+    condition                            outcome
+    ==================================  ========================================
+    ``explicit_intent`` set              used verbatim, no model is called at all
+                                         (this is the reply to a ``clarify`` frame)
+    LLM label is one of the three        that executor  → ``source="llm"``
+    LLM says ``followup`` + last_intent  sticky: reuse the previous intent
+    count >= 2 recognised                hard override → ``playlist``
+    winner's share >= MIN_SHARE          the GLiNER ensemble's pick
+    short message + known last_intent    sticky: reuse it (follow-ups)
+    otherwise                            ``None`` → clarify
+    ==================================  ========================================
+
+    The GLiNER rows are reached whenever the LLM gave no usable label — it is
+    unreachable, timed out, disabled, or answered ``unclear``.
     """
     from app.domain.models import AssistantRoute
 
@@ -301,12 +335,18 @@ async def route(
     if not text:
         return AssistantRoute(intent=last_intent, source="sticky" if last_intent else "unclear")
 
-    try:
-        scores, ents = await asyncio.to_thread(_extract_sync, text)
-    except Exception as exc:
-        # GLiNER unavailable (model download failed, OOM…) — degrade to the
-        # previous intent, else to search, which is the historical default.
-        logger.warning("[assistant/router] GLiNER2 failed (%s) — falling back", exc)
+    # Concurrent on purpose: the spans are needed on every path (slots, the
+    # count override, the follow-up rule), so waiting for the classification
+    # first would add GLiNER's ~200 ms to the LLM's round-trip for nothing.
+    label, (scores, ents, gliner_ok) = await asyncio.gather(
+        intent_llm.classify(text, last_intent=last_intent, last_message=last_message,
+                            base_url=llm_base_url, model=llm_model),
+        _gliner_sync_or_empty(text),
+    )
+
+    if not gliner_ok and label is None:
+        # Neither model answered — degrade to the previous intent, else to
+        # search, which is the historical default. Never a 500.
         return AssistantRoute(intent=last_intent or "search",
                               source="sticky" if last_intent else "unclear")
 
@@ -325,9 +365,22 @@ async def route(
                 artist=artist, song=song, count=count, era=era)
 
     logger.info(
-        "[assistant/router] msg=%r → %s share=%.2f margin=%.2f artist=%r song=%r count=%s",
-        text[:60], top_intent, share, margin, artist, song, count,
+        "[assistant/router] msg=%r → llm=%s gliner=%s share=%.2f margin=%.2f "
+        "artist=%r song=%r count=%s",
+        text[:60], label, top_intent, share, margin, artist, song, count,
     )
+
+    # ── the LLM's answer, once code has made sense of it ──
+    if label in intent_llm.INTENTS:
+        # It read the sentence; a digit it decided to ignore ("расскажи 3 факта
+        # про Radiohead") is a decision, not an oversight, so no count override
+        # here. The override still guards the GLiNER path below.
+        return AssistantRoute(intent=label, source="llm",
+                              **{**base, "confidence": 1.0, "margin": 1.0})
+    if label == "followup" and last_intent:
+        return AssistantRoute(intent=last_intent, source="sticky", **base)
+    # "followup" with nothing to refer back to, and "unclear", both fall
+    # through: GLiNER may still have a confident, usable read of the message.
 
     # A concrete number of tracks is a request for many songs, whatever the
     # model thought. Digit-based, so it holds across languages.

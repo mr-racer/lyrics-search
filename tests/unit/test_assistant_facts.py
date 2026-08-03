@@ -244,3 +244,181 @@ def test_deterministic_answer_leads_with_facts_and_stays_short():
     lines = out.splitlines()
     assert lines[1] == "- fact 1"          # the bio no longer opens it
     assert len(lines) == 6                 # heading + 5 bullets
+
+
+# ── explain mode: one tapped fact, not the whole dossier ─────────────────────
+# The bug this section pins: asked to explain "«A» сэмплирует «B»", the branch
+# handed the model all eighteen pack items and got back the release year, the
+# label and four unrelated trivia — everything except the link the listener
+# tapped. Narrowing the pack is the fix, and silence is a legal outcome.
+
+
+_FACT = "«Runaway» (Kanye West) сэмплирует «Expo 83» (Backyard Heavies)"
+_SUBJECT = {"kind": "song", "title": "Runaway", "artist": "Kanye West"}
+_SUBJECT_TOKENS = {"runaway", "kanye", "west"}
+
+
+def test_the_fact_itself_is_always_evidence_one():
+    out = F._fact_evidence([], _FACT, _SUBJECT_TOKENS)
+    assert out[0]["text"] == _FACT
+    assert len(out) == 1
+
+
+def test_only_items_about_the_fact_join_the_evidence():
+    items = [
+        {"text": "Содержит сэмпл: Expo 83 by Backyard Heavies", "source": "credits"},
+        {"text": "Runaway — Kanye West: album My Beautiful Dark Twisted Fantasy",
+         "source": "catalog"},
+        {"text": "Продюсер: Mike Dean", "source": "credits"},
+    ]
+    texts = [it["text"] for it in F._fact_evidence(items, _FACT, _SUBJECT_TOKENS)]
+    assert "Содержит сэмпл: Expo 83 by Backyard Heavies" in texts
+    assert not any("Mike Dean" in t for t in texts)
+    assert not any("Twisted Fantasy" in t for t in texts)
+
+
+def test_the_subjects_own_name_is_not_evidence_of_relevance():
+    """Every item in a song's pack names the song. Counting those tokens would
+    readmit the whole pack — which is the failure being fixed."""
+    items = [{"text": "Runaway by Kanye West was released in 2010", "source": "catalog"}]
+    assert len(F._fact_evidence(items, _FACT, _SUBJECT_TOKENS)) == 1
+
+
+def test_the_fact_is_not_repeated_when_the_pack_already_holds_it():
+    items = [{"text": _FACT, "source": "facts"}]
+    assert len(F._fact_evidence(items, _FACT, _SUBJECT_TOKENS)) == 1
+
+
+def test_evidence_is_capped():
+    items = [{"text": f"Expo 83 Backyard Heavies detail {i}", "source": "facts"}
+             for i in range(40)]
+    out = F._fact_evidence(items, _FACT, _SUBJECT_TOKENS)
+    assert len(out) == F.EXPLAIN_MAX_EVIDENCE
+
+
+def test_a_fact_made_only_of_the_subject_name_still_matches_on_it():
+    """Nothing distinctive left after removing the subject tokens — matching on
+    the name beats admitting the entire pack."""
+    items = [{"text": "Runaway by Kanye West runs nine minutes", "source": "facts"},
+             {"text": "Продюсер: Mike Dean", "source": "credits"}]
+    out = F._fact_evidence(items, "Runaway — Kanye West", _SUBJECT_TOKENS)
+    assert len(out) == 2
+    assert "nine minutes" in out[1]["text"]
+
+
+# ── the queries the model writes for the web ─────────────────────────────────
+
+
+def test_usable_queries_survive():
+    raw = ('{"queries":["Kanye West Runaway Expo 83 sample",'
+           '"Runaway Kanye West sample story",'
+           '"Backyard Heavies Expo 83 sampled"]}')
+    assert F._sane_queries(raw, _FACT, _SUBJECT) == [
+        "Kanye West Runaway Expo 83 sample",
+        "Runaway Kanye West sample story",
+        "Backyard Heavies Expo 83 sampled",
+    ]
+
+
+def test_a_query_naming_nothing_from_the_fact_is_dropped():
+    """The observed small-model failure: the listener's own sentence retyped
+    into the search box. Searching it burns one of three budgeted searches."""
+    raw = '{"queries":["а что это вообще значит","Kanye West Runaway sample"]}'
+    assert F._sane_queries(raw, _FACT, _SUBJECT) == ["Kanye West Runaway sample"]
+
+
+def test_quotes_and_operators_are_stripped():
+    raw = '{"queries":["\\"Runaway\\" Kanye West sample? site:genius.com"]}'
+    assert F._sane_queries(raw, _FACT, _SUBJECT) == ["Runaway Kanye West sample"]
+
+
+def test_too_short_and_too_long_queries_are_dropped():
+    raw = ('{"queries":["Runaway",'
+           '"' + " ".join(["Runaway"] * 20) + '",'
+           '"Kanye West Runaway sample"]}')
+    assert F._sane_queries(raw, _FACT, _SUBJECT) == ["Kanye West Runaway sample"]
+
+
+def test_rewordings_of_one_query_do_not_eat_the_budget():
+    raw = ('{"queries":["Kanye West Runaway sample","kanye west runaway sample",'
+           '"Kanye  West   Runaway  sample"]}')
+    assert F._sane_queries(raw, _FACT, _SUBJECT) == ["Kanye West Runaway sample"]
+
+
+def test_never_more_than_three_searches_are_offered():
+    raw = '{"queries":[%s]}' % ",".join(
+        f'"Kanye West Runaway sample {i}"' for i in range(9))
+    assert len(F._sane_queries(raw, _FACT, _SUBJECT)) == F.EXPLAIN_MAX_WEB_SEARCHES
+
+
+@pytest.mark.parametrize("raw", ["", "not json", '{"queries":[]}',
+                                 '{"nope":["a b c"]}', None])
+def test_unusable_generations_yield_nothing_to_search(raw):
+    assert F._sane_queries(raw, _FACT, _SUBJECT) == []
+
+
+def test_a_bare_string_is_accepted_as_one_query():
+    assert F._sane_queries('{"queries":"Kanye West Runaway sample"}', _FACT, _SUBJECT) \
+        == ["Kanye West Runaway sample"]
+
+
+def test_code_built_queries_cover_the_same_three_angles():
+    """An unreachable LLM still gets one honest attempt at the web."""
+    out = F._fallback_fact_queries(_SUBJECT, _FACT)
+    assert 1 <= len(out) <= F.EXPLAIN_MAX_WEB_SEARCHES
+    assert all("kanye" in q.lower() or "expo" in q.lower() or "heavies" in q.lower()
+               for q in out)
+
+
+def test_code_built_queries_for_an_artist_ask_about_the_band():
+    subject = {"kind": "artist", "title": "Radiohead", "artist": "Radiohead"}
+    out = F._fallback_fact_queries(subject, "Radiohead formed in Abingdon")
+    assert any("band history" in q for q in out)
+
+
+# ── the deliberate refusal ───────────────────────────────────────────────────
+
+
+def test_an_empty_answer_is_read_as_a_refusal_not_a_glitch():
+    """`{"answer":"","used":[]}` is what the prompt asks for when nothing
+    explains the fact. Retrying it is how a model gets talked into inventing."""
+    assert F._declined('{"answer":"","used":[]}') is True
+    assert F._declined('{"answer":"   ","used":[]}') is True
+
+
+@pytest.mark.parametrize("raw", [
+    "I think it means the song is about pride.",   # prose, no object → retry
+    '{"used":[1]}',                                # no answer key at all
+    "",
+    '{"answer":"It samples an old funk record.","used":[2]}',
+])
+def test_everything_else_is_not_a_refusal(raw):
+    assert F._declined(raw) is False
+
+
+def test_the_honest_empty_answer_promises_nothing():
+    ru = F._no_explanation("ru")
+    en = F._no_explanation("en")
+    assert "не нашёл" in ru and "придумывать" in ru
+    assert "couldn't find" in en and "invent" in en
+
+
+def test_a_lone_one_liner_goes_straight_to_the_web():
+    """Nothing in the library matched and the fact is one line: the only thing
+    the model could do with it is rephrase it, so don't ask."""
+    assert F._needs_the_web_first([{"text": _FACT}], _FACT) is True
+
+
+def test_a_long_stored_fact_is_read_before_searching():
+    """A fact that carries its own story is worth a look before three searches."""
+    long_fact = ("«Runaway» строится на сэмпле «Expo 83», который Канье нашёл на "
+                 "виниле в чикагском магазине; партия фортепиано в интро — это "
+                 "замедленный фрагмент той же записи, и именно из-за него трек "
+                 "пришлось перезаписывать вживую для альбомной версии.")
+    assert len(long_fact) >= F.EXPLAIN_SELF_CONTAINED_CHARS
+    assert F._needs_the_web_first([{"text": long_fact}], long_fact) is False
+
+
+def test_related_library_material_is_always_read_first():
+    evidence = [{"text": _FACT}, {"text": "Содержит сэмпл: Expo 83"}]
+    assert F._needs_the_web_first(evidence, _FACT) is False

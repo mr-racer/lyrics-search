@@ -1,20 +1,50 @@
-"""Unit tests for the GLiNER2 intent router.
+"""Unit tests for the intent router.
 
-GLiNER itself is stubbed here — these tests pin the CODE around it: the share
-gate, the sticky follow-up rule, the count override, the explicit-intent bypass,
-the ensembling arithmetic, and the defensive parsing of every output shape the
-library can return.
+Both models are stubbed here — these tests pin the CODE around them: which
+model's answer wins, the share gate, the sticky follow-up rule, the count
+override, the explicit-intent bypass, the ensembling arithmetic, and the
+defensive parsing of every output shape GLiNER2 can return.
 
-Whether the real model actually classifies Russian phrasing correctly is a
+The LLM is switched OFF for most of the file (see the ``no_llm`` autouse
+fixture) so the GLiNER rows of the decision table are tested as the fallback
+they are, on any machine, whether or not an LLM endpoint happens to be
+configured. The LLM rows have their own section at the bottom.
+
+Whether the real models actually classify Russian phrasing correctly is a
 live-model question, answered by ``tests/docker/test_assistant_routing.py`` —
 which is also where MIN_SHARE was calibrated.
 """
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from app.domain.models import AssistantSlots
 from app.services.assistant import router as R
+
+
+@pytest.fixture(autouse=True)
+def no_llm(monkeypatch):
+    """Default every test to the GLiNER path — a configured LLM_BASE_URL in the
+    developer's environment must not change what these tests exercise."""
+    async def _off(*a, **kw):
+        return None
+
+    monkeypatch.setattr(R.intent_llm, "classify", _off)
+
+
+@pytest.fixture
+def fake_llm(monkeypatch):
+    """Opt back in: tests set ``holder['label']`` to the model's answer."""
+    holder = {"label": None, "seen": []}
+
+    async def _classify(message, **kw):
+        holder["seen"].append((message, kw))
+        return holder["label"]
+
+    monkeypatch.setattr(R.intent_llm, "classify", _classify)
+    return holder
 
 
 def _ents(artist=None, song=None, count=None, era=None):
@@ -151,6 +181,122 @@ async def test_gliner_failure_degrades_instead_of_raising(monkeypatch):
     monkeypatch.setattr(R, "_extract_sync", boom)
     route = await R.route("что угодно", AssistantSlots())
     assert route.intent == "search"  # historical default, never a 500
+
+
+# ── the LLM path ─────────────────────────────────────────────────────────────
+# The LLM reads the sentence and GLiNER supplies the spans. Everything the model
+# says is still resolved in code: an off-list label cannot reach an executor,
+# and neither "followup" nor "unclear" is a destination.
+
+
+async def test_llm_label_beats_a_confident_gliner(fake_gliner, fake_llm):
+    """The whole point of the change: GLiNER scores surface similarity, the LLM
+    reads the sentence, and where they disagree the reading wins."""
+    fake_gliner["scores"] = {"search": 0.9, "playlist": 0.05, "facts": 0.05}
+    fake_llm["label"] = "facts"
+    route = await R.route("кто спродюсировал Runaway", AssistantSlots())
+    assert (route.intent, route.source) == ("facts", "llm")
+
+
+async def test_llm_still_gets_the_spans_from_gliner(fake_gliner, fake_llm):
+    """Slots and the executors need artist/song whichever model routed."""
+    fake_gliner["ents"] = _ents(artist="Kanye West", song="Runaway")
+    fake_llm["label"] = "facts"
+    route = await R.route("расскажи про Runaway", AssistantSlots())
+    assert (route.artist, route.song) == ("Kanye West", "Runaway")
+
+
+async def test_llm_sees_the_previous_turn(fake_gliner, fake_llm):
+    fake_llm["label"] = "playlist"
+    await R.route("а побыстрее?", AssistantSlots(last_intent="playlist"),
+                  last_message="хиты Kanye West")
+    _, kw = fake_llm["seen"][0]
+    assert kw["last_intent"] == "playlist"
+    assert kw["last_message"] == "хиты Kanye West"
+
+
+async def test_llm_followup_resolves_to_the_previous_intent(fake_gliner, fake_llm):
+    fake_gliner["scores"] = {"search": 0.95, "playlist": 0.05}
+    fake_llm["label"] = "followup"
+    route = await R.route("а побыстрее?", AssistantSlots(last_intent="playlist"))
+    assert (route.intent, route.source) == ("playlist", "sticky")
+
+
+async def test_llm_followup_without_a_previous_turn_falls_through(fake_gliner, fake_llm):
+    """Nothing to refine — GLiNER's own read is the next thing to try, not a 500
+    and not a silent "search"."""
+    fake_gliner["scores"] = {"playlist": 0.8, "search": 0.15, "facts": 0.05}
+    fake_llm["label"] = "followup"
+    route = await R.route("ещё такого же", AssistantSlots())
+    assert (route.intent, route.source) == ("playlist", "gliner")
+
+
+async def test_llm_unclear_hands_over_to_gliner(fake_gliner, fake_llm):
+    fake_gliner["scores"] = {"facts": 0.8, "search": 0.15, "playlist": 0.05}
+    fake_llm["label"] = "unclear"
+    route = await R.route("что там у Radiohead", AssistantSlots())
+    assert (route.intent, route.source) == ("facts", "gliner")
+
+
+async def test_llm_unclear_and_gliner_unsure_still_asks(fake_gliner, fake_llm):
+    fake_gliner["scores"] = {"search": 0.4, "playlist": 0.35, "facts": 0.25}
+    fake_llm["label"] = "unclear"
+    route = await R.route("ну это, как его, ты понял", AssistantSlots())
+    assert route.intent is None
+
+
+async def test_a_digit_does_not_override_the_llm(fake_gliner, fake_llm):
+    """«расскажи 3 факта про Radiohead» is a facts turn. The count override
+    exists to rescue a GLiNER misread; a model that read the sentence and still
+    said "facts" made a decision, not a mistake."""
+    fake_gliner["scores"] = {"search": 0.9, "playlist": 0.1}
+    fake_gliner["ents"] = _ents(count="3 факта")
+    fake_llm["label"] = "facts"
+    route = await R.route("расскажи 3 факта про Radiohead", AssistantSlots())
+    assert (route.intent, route.count) == ("facts", 3)
+
+
+async def test_a_digit_still_overrides_on_the_gliner_path(fake_gliner, fake_llm):
+    fake_gliner["scores"] = {"search": 0.95, "playlist": 0.05}
+    fake_gliner["ents"] = _ents(count="20 треков")
+    fake_llm["label"] = None                      # LLM unavailable
+    route = await R.route("найди 20 треков под бег", AssistantSlots())
+    assert route.source == "count_override"
+
+
+async def test_explicit_intent_skips_the_llm_too(fake_gliner, fake_llm):
+    route = await R.route("та же фраза", AssistantSlots(), explicit_intent="playlist")
+    assert (route.intent, route.source) == ("playlist", "explicit")
+    assert fake_llm["seen"] == []
+
+
+async def test_both_models_down_never_raises(monkeypatch, fake_llm):
+    def boom(_message):
+        raise RuntimeError("model not loaded")
+
+    monkeypatch.setattr(R, "_extract_sync", boom)
+    fake_llm["label"] = None
+    route = await R.route("что угодно", AssistantSlots(last_intent="facts"))
+    assert (route.intent, route.source) == ("facts", "sticky")
+
+
+async def test_the_two_models_run_concurrently(fake_gliner, fake_llm, monkeypatch):
+    """Routing must cost one round-trip, not GLiNER's ~200 ms plus the LLM's."""
+    async def _slow(message, **kw):
+        await asyncio.sleep(0.05)
+        return "facts"
+
+    def _also_slow(_message):
+        import time
+        time.sleep(0.05)
+        return fake_gliner["scores"], fake_gliner["ents"]
+
+    monkeypatch.setattr(R.intent_llm, "classify", _slow)
+    monkeypatch.setattr(R, "_extract_sync", _also_slow)
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    await R.route("расскажи про Radiohead", AssistantSlots())
+    assert loop.time() - started < 0.09  # sequential would be ≥ 0.10
 
 
 # ── the ensemble arithmetic ──────────────────────────────────────────────────

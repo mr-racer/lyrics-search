@@ -19,6 +19,22 @@ the LLM decides NOTHING except the wording. Five steps, four of them pure code:
    ``smart_web_search`` before step 3 and its snippets join the pack numbered.
    "Should I search?" is exactly the judgement small models fail at.
 
+**Explain mode** (``focus_fact`` set — the listener tapped one statement and
+asked what it means) is the same five steps with three differences, because the
+question is different: *this line*, not *this subject*.
+
+* The pack is **narrowed to the fact** before the model sees it. Handing over
+  all eighteen items is what produced the failure this mode exists to fix: asked
+  to explain "«A» сэмплирует «B»", the model dutifully recited the release year,
+  the label and four unrelated trivia, none of which explain anything.
+* **Silence is a valid answer.** The prompt tells the model to return an empty
+  answer when the evidence only restates the fact, and the citation gate turns
+  that into an honest "no explanation found" rather than a fallback fact dump.
+* **The web search is targeted and query-generated.** Up to three searches,
+  their queries written by the model under a spec with worked examples — a small
+  model left to invent a query types the listener's Russian sentence into a
+  search box and gets nothing back.
+
 ``track_chat_service`` is deliberately left alone: inside the player it already
 has the track in hand and works.
 """
@@ -30,7 +46,8 @@ import logging
 import re
 
 from app.services.assistant.humanize import human
-from app.services.text_normalize import tokenize
+from app.services.assistant.llm_json import parse_json_object as _parse_json_object
+from app.services.text_normalize import fold, tokenize
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +55,30 @@ logger = logging.getLogger(__name__)
 # earns a web lookup before the LLM ever sees it.
 MIN_PACK_ITEMS = 3
 MAX_WEB_SEARCHES = 2
+
+# ── explain mode ─────────────────────────────────────────────────────────────
+# The listener asked what ONE statement means, so the budget is spent on that
+# statement instead of on breadth.
+# Three searches, because the angles genuinely differ (the relationship, the
+# story behind it, the subject itself) and a fact that none of the three
+# explains is a fact the web does not explain.
+EXPLAIN_MAX_WEB_SEARCHES = 3
+# Enough snippets to stop early: past this another query buys context the 12b
+# will not read anyway.
+EXPLAIN_ENOUGH_SNIPPETS = 5
+# Ceiling on the narrowed pack. Deliberately far below MAX_PACK_ITEMS: the
+# failure mode being fixed here is precisely "too much unrelated material".
+EXPLAIN_MAX_EVIDENCE = 10
+# A library item joins the evidence when it shares this many content tokens with
+# the fact. One is noise ("the", "песня"); two means it is about the same thing.
+EXPLAIN_MIN_OVERLAP = 2
+# Below this length a fact standing alone cannot contain its own explanation —
+# "«A» сэмплирует «B»" states a thing, it does not account for it. Asking the
+# model to explain a lone one-liner buys a paraphrase and a wasted round-trip,
+# so the web is asked first instead. A longer stored fact often DOES carry the
+# story ("…, потому что продюсер записывал партию в подвале"), and that one is
+# worth reading before spending three searches on it.
+EXPLAIN_SELF_CONTAINED_CHARS = 180
 # Hard ceiling on what goes into the prompt — a 12b context filled with 60 facts
 # produces worse answers than one filled with the best 18.
 MAX_PACK_ITEMS = 18
@@ -91,6 +132,76 @@ _RETRY_SUFFIX = (
     'The object must have exactly two keys, "answer" and "used", and "used" must '
     'list the numbers of the facts your answer relies on.'
 )
+
+
+# ── explain mode prompts ─────────────────────────────────────────────────────
+
+# The one rule that matters here is the empty answer. Without it a small model
+# always produces *something*: asked what "«A» сэмплирует «B»" means, it lists
+# the release year, the label and three unrelated trivia, because every one of
+# those is a true sentence about the same track. An explanation it does not have
+# is exactly what the listener asked for, so "nothing" has to be a legal reply.
+_EXPLAIN_SYSTEM = """A listener tapped ONE statement in the app and asked what it means. Explain THAT statement — nothing else.
+
+Write the answer in {lang_name}.
+
+The statement is given under FACT. The numbered lines under EVIDENCE are the only material you may use.
+
+HARD RULES:
+- Explain the FACT itself: what it means, how it came about, what it changes for someone listening. Nothing else is being asked.
+- Every claim must come from a numbered evidence line. Never add a date, a number, a name, a chart position or a backstory that is not there.
+- Evidence about the same artist or song but NOT about this fact is not material. Ignore it completely. Do not list other facts, do not "add context" with them, do not close on a general remark about the artist.
+- If the evidence does not actually explain the FACT — if it only repeats it in other words, or only talks about other things — then answer with exactly {{"answer":"","used":[]}}. This is a correct outcome, not a failure. An honest nothing beats a plausible invention.
+- Copy any artist, song, album, producer or label name EXACTLY as it appears in the evidence — never translated, transliterated or declined.
+
+STYLE (when you do have an explanation):
+- 1-4 sentences. Open with the substance, not with a restatement of the fact.
+- No preamble, no "this is interesting because", no closing summary.
+- Sound like a well-read friend telling you the story, not an encyclopedia entry.
+
+Output ONLY minified JSON, no prose, no fences:
+{{"answer": "...", "used": [2, 4]}}"""
+
+# Small models are bad at this specific thing: asked for a search query they
+# retype the listener's conversational Russian ("а что это вообще значит") into
+# the box and get nothing. So the spec is concrete — a length, a shape, three
+# named angles — and every rule comes with a worked example.
+_WEB_QUERY_SYSTEM = """You turn ONE statement about music into web-search queries that would find a page explaining it. You output queries only. You never answer the question yourself, you never comment.
+
+Output ONLY minified JSON, no prose, no fences:
+{"queries": ["...", "...", "..."]}
+
+## What a usable query looks like
+- 3 to 8 words. No question words, no punctuation, no quotation marks, no operators (AND, OR, site:).
+- Worded the way a music journalist would TITLE the page you want — not the way a person asks a friend.
+- Contains at least one proper name taken from the statement: the artist, the song, the album, the producer, the label.
+- In English, unless a name is natively written in another script — then keep that name in its own script and put the rest of the query in English.
+- The three queries must attack from three different angles. Three rewordings of the same query waste all three searches.
+
+## The three angles, in this order
+1. THE RELATIONSHIP — the two named things plus the word that connects them: sample, interpolation, cover, remix, produced, wrote, featured.
+2. THE STORY — the thing that needs explaining plus a word that promises an account of it: meaning, story, behind, origin, interview, history, making of.
+3. THE SUBJECT — the song or artist alone plus the topic of the statement.
+
+## Never
+- Never conversational: not "why did Kanye sample this", not "what does it mean that".
+- Never the listener's own sentence, and never a query that names nothing.
+- Never invent a name, a year, an album or a label that is not in the statement.
+- Never add "lyrics", "mp3", "download", "listen", "official video".
+
+## Examples
+
+FACT: "Runaway" by Kanye West contains a sample of "Expo 83" by Backyard Heavies
+{"queries": ["Kanye West Runaway Expo 83 sample", "Runaway Kanye West sample story", "Backyard Heavies Expo 83 sampled"]}
+
+FACT: «Smells Like Teen Spirit» спродюсировал Butch Vig
+{"queries": ["Butch Vig Smells Like Teen Spirit production", "Smells Like Teen Spirit recording sessions story", "Nevermind Butch Vig production interview"]}
+
+FACT: The lyrics of "Hurt" reference a needle
+{"queries": ["Nine Inch Nails Hurt lyrics meaning", "Trent Reznor Hurt song origin interview", "Hurt Nine Inch Nails behind the song"]}
+
+FACT: «Кино» — «Группа крови» вышла в 1988 году на лейбле Мелодия
+{"queries": ["Кино Группа крови album 1988 Melodiya", "Группа крови album recording history", "Viktor Tsoi Gruppa krovi album story"]}"""
 
 
 # ── Step 1: subject resolution ───────────────────────────────────────────────
@@ -478,6 +589,124 @@ def _snippets_from_web(raw: str, limit: int = 5) -> list[dict]:
     return out
 
 
+# ── explain mode: narrowing the pack and building its queries ────────────────
+
+# Words that carry no topic. Kept deliberately short: this list only has to stop
+# a shared "песня"/"the" from counting as evidence that two texts are about the
+# same thing, and every word added here is a word the overlap can no longer see.
+_STOPWORDS = {
+    "и", "в", "во", "на", "с", "со", "у", "о", "об", "от", "до", "за", "по", "из",
+    "что", "это", "эта", "этот", "как", "для", "же", "а", "но", "не", "то", "тот",
+    "был", "была", "было", "были", "есть", "его", "её", "их", "там", "тут",
+    "песня", "песни", "песне", "трек", "треке", "трека", "альбом", "альбома",
+    "группа", "группы", "артист", "артиста", "исполнитель",
+    "the", "a", "an", "of", "in", "on", "at", "by", "for", "to", "and", "or",
+    "is", "was", "were", "are", "with", "from", "this", "that", "it", "its", "as",
+    "song", "songs", "track", "tracks", "album", "band", "artist",
+}
+
+# Stripped out of a generated query before it is sent: engine operators and the
+# punctuation a chatty model likes to decorate its queries with.
+_QUERY_NOISE = re.compile(r'(?i)\b(?:site|inurl|filetype|intitle):\S*|["“”«»?!,;:()\[\]]')
+
+
+def _content_tokens(text: str) -> list[str]:
+    """Topic-bearing tokens: folded, de-noised, short words dropped."""
+    return [t for t in tokenize(text) if len(t) > 2 and t not in _STOPWORDS]
+
+
+def _fact_evidence(items: list[dict], focus_fact: str,
+                   subject_tokens: set[str]) -> list[dict]:
+    """The fact first, then only the pack items that are about THAT fact.
+
+    ``subject_tokens`` (the artist and title) are removed from the needle on
+    purpose: every item in a song's pack names the song, so counting those
+    tokens would readmit the whole pack and rebuild the exact failure this
+    narrowing exists to prevent.
+    """
+    fact_text = _clean(focus_fact)
+    needle = set(_content_tokens(focus_fact)) - subject_tokens
+    if not needle:
+        # A fact made only of the subject's own name ("Runaway — Kanye West")
+        # has no distinctive words; fall back to matching on the name itself
+        # rather than admitting everything.
+        needle = set(_content_tokens(focus_fact))
+
+    fact_key = fold(fact_text)
+    scored: list[tuple[int, dict]] = []
+    for item in items:
+        text = item.get("text") or ""
+        if fold(text) == fact_key:
+            continue                      # the fact itself is already item [1]
+        overlap = len(needle & set(_content_tokens(text)))
+        if overlap >= EXPLAIN_MIN_OVERLAP:
+            scored.append((overlap, item))
+    scored.sort(key=lambda pair: -pair[0])
+    return ([{"text": fact_text, "source": "facts"}]
+            + [item for _, item in scored[:EXPLAIN_MAX_EVIDENCE - 1]])
+
+
+def _sane_queries(raw: object, focus_fact: str, subject: dict) -> list[str]:
+    """Model-written queries, filtered down to the ones worth a search.
+
+    The rejected shapes are the ones observed from small models: the listener's
+    own sentence retyped verbatim, a single word, a paragraph, and three
+    rewordings of the same query. A query naming nothing from the fact is
+    dropped outright — it would spend one of three searches on a guess.
+    """
+    obj = _parse_json_object(raw)
+    values = obj.get("queries") if isinstance(obj, dict) else None
+    if isinstance(values, str):
+        values = [values]
+    allowed = (set(_content_tokens(focus_fact))
+               | set(_content_tokens(subject.get("title") or ""))
+               | set(_content_tokens(subject.get("artist") or "")))
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values if isinstance(values, list) else []:
+        if not isinstance(value, str):
+            continue
+        query = " ".join(_QUERY_NOISE.sub(" ", value).split())
+        words = query.split()
+        if not (2 <= len(words) <= 12):
+            continue
+        if not (set(_content_tokens(query)) & allowed):
+            continue
+        key = fold(query)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(query)
+        if len(out) >= EXPLAIN_MAX_WEB_SEARCHES:
+            break
+    return out
+
+
+def _fallback_fact_queries(subject: dict, focus_fact: str) -> list[str]:
+    """Deterministic queries for when the model wrote none we could use.
+
+    Same three angles as the prompt asks for, assembled in code, so an
+    unreachable or unhelpful LLM still gets one honest attempt at the web.
+    """
+    artist = subject.get("artist") or ""
+    title = subject.get("title") or ""
+    head = " ".join(part for part in (artist, title) if part).strip()
+    head_tokens = set(_content_tokens(head))
+    distinctive = [t for t in _content_tokens(focus_fact) if t not in head_tokens][:4]
+    tail = " ".join(distinctive)
+
+    queries = []
+    if head and tail:
+        queries.append(f"{head} {tail}")
+    if head:
+        queries.append(f"{head} band history" if subject.get("kind") == "artist"
+                       else f"{head} song story meaning")
+    if tail:
+        queries.append(f"{tail} music history")
+    return [q for q in queries if q][:EXPLAIN_MAX_WEB_SEARCHES]
+
+
 # ── Step 3+4: the single LLM call and its verification ───────────────────────
 
 
@@ -504,33 +733,6 @@ def _deterministic_answer(subject: dict, items: list[dict], lang: str) -> str:
               + [it for it in items if it.get("source") != "facts"])
     bullets = "\n".join(f"- {it['text']}" for it in ranked[:5])
     return f"{head}\n{bullets}"
-
-
-def _parse_json_object(text: object) -> object:
-    """Pull the answer object out of whatever the model wrapped it in.
-
-    Handles code fences and a leading/trailing sentence. Returns None when
-    there is no object to find — the citation check then rejects it like any
-    other malformed answer, which is the same safe outcome as before.
-    """
-    if isinstance(text, dict):
-        return text
-    if not isinstance(text, str):
-        return None
-    body = text.strip()
-    for fence in ("```json", "```"):
-        if body.startswith(fence):
-            body = body[len(fence):].lstrip()
-    if body.endswith("```"):
-        body = body[:-3].rstrip()
-    start, end = body.find("{"), body.rfind("}")
-    if start == -1 or end <= start:
-        return None
-    import json as _json
-    try:
-        return _json.loads(body[start:end + 1])
-    except ValueError:
-        return None
 
 
 def _verify(raw: object, n_items: int) -> tuple[str, list[int]] | None:
@@ -561,16 +763,193 @@ def _verify(raw: object, n_items: int) -> tuple[str, list[int]] | None:
     return answer, used
 
 
+def _declined(raw: object) -> bool:
+    """Did the model deliberately answer "nothing here explains this"?
+
+    ``{"answer": "", "used": []}`` is the reply the explain prompt asks for when
+    the evidence does not explain the fact. It fails :func:`_verify` exactly like
+    a malformed answer does, and the difference matters: a malformed answer is
+    worth one stricter retry, a deliberate refusal is the correct outcome and
+    retrying it is how a small model gets talked into inventing one.
+    """
+    obj = _parse_json_object(raw)
+    return isinstance(obj, dict) and "answer" in obj and not str(obj["answer"] or "").strip()
+
+
+def _no_explanation(lang: str | None) -> str:
+    """The honest empty answer. Not an error — the requested outcome."""
+    if _is_ru(lang):
+        return ("Объяснения этому факту я не нашёл — ни в твоей библиотеке, ни в "
+                "интернете. Сам факт остаётся, а придумывать причину не буду.")
+    return ("I couldn't find an explanation for this — not in your library, not on "
+            "the web. The fact stands; I'm not going to invent a reason for it.")
+
+
+# ── Orchestration: explain one fact ──────────────────────────────────────────
+
+
+async def _ask_explain(evidence: list[dict], *, subject: dict, focus_fact: str,
+                       message: str, lang: str, llm_base_url, llm_model):
+    """One explain call. Returns ``(answer, used)``, or None for "no explanation".
+
+    None covers both "the model declined" (the correct, expected outcome when
+    nothing explains the fact) and "the model produced something uncitable" —
+    the second gets one stricter retry, the first does not.
+    """
+    from app.services.llm_client import ask_llm
+
+    subject_line = f"{subject['kind'].upper()}: {subject.get('title')}"
+    if subject.get("subtitle"):
+        subject_line += f" — {subject['subtitle']}"
+    prompt = (
+        f"{subject_line}\n\nFACT: {focus_fact}\n\n"
+        f"LISTENER ASKED: {(message or '').strip()[:200]}\n\n"
+        f"EVIDENCE:\n{_render_pack(evidence, lang)}"
+    )
+    system = _EXPLAIN_SYSTEM.format(lang_name=_lang_name(lang))
+
+    try:
+        raw = await ask_llm(prompt, system_prompt=system, parse_json=False,
+                            temperature=0.2, base_url=llm_base_url, model=llm_model,
+                            extra_body={"enable_thinking": False})
+        verified = _verify(_parse_json_object(raw), len(evidence))
+        if verified is not None:
+            return verified
+        if _declined(raw):
+            logger.info("[assistant/facts] model declined to explain — evidence is thin")
+            return None
+        # Uncitable but not a refusal: the same non-deterministic wrapping the
+        # main branch retries once, at temperature 0.
+        raw = await ask_llm(prompt + "\n\n" + _RETRY_SUFFIX, system_prompt=system,
+                            parse_json=False, temperature=0.0,
+                            base_url=llm_base_url, model=llm_model,
+                            extra_body={"enable_thinking": False})
+        return _verify(_parse_json_object(raw), len(evidence))
+    except Exception:
+        logger.exception("[assistant/facts] explain call failed")
+        return None
+
+
+async def _fact_web_queries(subject: dict, focus_fact: str, *,
+                            llm_base_url, llm_model) -> list[str]:
+    """Up to three search queries for this fact — model-written, code-filtered."""
+    from app.services.llm_client import ask_llm
+
+    try:
+        raw = await ask_llm(
+            f"FACT: {focus_fact}\n"
+            f"SUBJECT: {subject.get('title') or ''}"
+            + (f" — {subject.get('artist')}" if subject.get("artist") else ""),
+            system_prompt=_WEB_QUERY_SYSTEM, parse_json=False, temperature=0.0,
+            base_url=llm_base_url, model=llm_model,
+            extra_body={"enable_thinking": False},
+        )
+        queries = _sane_queries(raw, focus_fact, subject)
+    except Exception:
+        logger.warning("[assistant/facts] query generation failed", exc_info=True)
+        queries = []
+    if queries:
+        return queries
+    logger.info("[assistant/facts] no usable model queries — falling back to code-built ones")
+    return _fallback_fact_queries(subject, focus_fact)
+
+
+def _needs_the_web_first(evidence: list[dict], focus_fact: str) -> bool:
+    """True when the library provably has nothing to explain this fact with.
+
+    A code decision, like every other "should we search?" in this module: the
+    narrowing found no related item, and the fact is a one-liner, so the only
+    thing the model could do with it is rephrase it.
+    """
+    return len(evidence) <= 1 and len(focus_fact) < EXPLAIN_SELF_CONTAINED_CHARS
+
+
+async def _explain_fact(*, subject: dict, items: list[dict], focus_fact: str,
+                        message: str, qdrant, collection_name: str, lang: str,
+                        llm_base_url, llm_model, say) -> dict:
+    """The ``focus_fact`` branch: explain one statement, or say nothing.
+
+    The library is asked first because an explanation already stored beats three
+    web searches; the web is the fill-in, not the default.
+    """
+    subject_tokens = (set(_content_tokens(subject.get("title") or ""))
+                      | set(_content_tokens(subject.get("artist") or "")))
+    evidence = _fact_evidence(items, focus_fact, subject_tokens)
+
+    verified = None
+    if not _needs_the_web_first(evidence, focus_fact):
+        await say("explaining", found=max(0, len(evidence) - 1))
+        verified = await _ask_explain(evidence, subject=subject, focus_fact=focus_fact,
+                                      message=message, lang=lang,
+                                      llm_base_url=llm_base_url, llm_model=llm_model)
+
+    web_used = False
+    if verified is None:
+        # Nothing stored explains it. Three angles at the web, stopping as soon
+        # as there is enough to read — the budget is a ceiling, not a quota.
+        queries = await _fact_web_queries(subject, focus_fact,
+                                          llm_base_url=llm_base_url, llm_model=llm_model)
+        snippets: list[dict] = []
+        for query in queries[:EXPLAIN_MAX_WEB_SEARCHES]:
+            await say("web_search", query=query)
+            raw_web = await asyncio.to_thread(_web_search_sync, query)
+            snippets += _snippets_from_web(raw_web, 4)
+            if len(snippets) >= EXPLAIN_ENOUGH_SNIPPETS:
+                break
+        if snippets:
+            web_used = True
+            evidence = (evidence + snippets)[:MAX_PACK_ITEMS]
+            await say("explaining", found=max(0, len(evidence) - 1))
+            verified = await _ask_explain(evidence, subject=subject,
+                                          focus_fact=focus_fact, message=message,
+                                          lang=lang, llm_base_url=llm_base_url,
+                                          llm_model=llm_model)
+
+    related = await asyncio.to_thread(_related_tracks_sync, qdrant, collection_name, subject)
+    base = {
+        "subject_kind": subject["kind"],
+        "subject_title": subject.get("title") or "",
+        "subject_subtitle": subject.get("subtitle"),
+        "artist_slug": subject.get("artist_slug"),
+        "track_id": subject.get("track_id"),
+        "image_path": subject.get("image_path"),
+        "focus_fact": focus_fact,
+        "web_search_used": web_used,
+        "related_tracks": _as_track_models(related),
+    }
+
+    if verified is None:
+        await say("no_explanation")
+        # No items: the whole point of this branch is that an unexplained fact
+        # must NOT turn into a list of the other things we happen to know.
+        return {**base, "answer": _no_explanation(lang), "grounded": False,
+                "explained": False, "items": []}
+
+    answer, used = verified
+    used_set = set(used)
+    return {
+        **base, "answer": answer, "grounded": True, "explained": True,
+        "items": [{"n": i, "text": it["text"], "source": it["source"],
+                   "used": i in used_set}
+                  for i, it in enumerate(evidence, 1)],
+    }
+
+
 # ── Orchestration ────────────────────────────────────────────────────────────
 
 
 async def run(*, qdrant, collection_name: str, message: str, route, slots,
               lang: str = "en", subject_track_id=None, subject_artist_slug=None,
-              now_playing_track_id=None, llm_base_url=None, llm_model=None, emit=None):
+              now_playing_track_id=None, focus_fact=None,
+              llm_base_url=None, llm_model=None, emit=None):
     """Run the facts branch. Returns ``(payload_dict | None, options list)``.
 
     ``payload_dict`` matches :class:`~app.domain.models.AssistantFactsPayload`.
     A non-empty ``options`` list means the caller should emit ``disambiguate``.
+
+    ``focus_fact`` switches the branch to explain mode: the listener tapped one
+    statement and wants THAT explained, so the pack is narrowed to it and an
+    unexplained fact stays unexplained (see :func:`_explain_fact`).
     """
     from app.services.llm_client import ask_llm
 
@@ -616,6 +995,16 @@ async def run(*, qdrant, collection_name: str, message: str, route, slots,
         logger.exception("[assistant/facts] pack build failed")
         items = []
     await _say("collecting", found=len(items))
+
+    # ── explain mode: a different question, so a different pack and prompt ──
+    focus = (focus_fact or "").strip()
+    if focus:
+        payload = await _explain_fact(
+            subject=subject, items=items, focus_fact=focus, message=message,
+            qdrant=qdrant, collection_name=collection_name, lang=lang,
+            llm_base_url=llm_base_url, llm_model=llm_model, say=_say,
+        )
+        return payload, []
 
     # ── web fill-in: code decides, not the model ──
     # A second angle only when the first one came back empty — the budget is

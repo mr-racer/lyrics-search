@@ -1123,6 +1123,12 @@ class AssistantRequest(BaseModel):
     # Set when the user picked a card from a `disambiguate` frame.
     subject_track_id: Optional[str] = None
     subject_artist_slug: Optional[str] = None
+    # The exact statement the user tapped ("«Runaway» сэмплирует «Expo 83»") when
+    # they asked what it means. Switches the facts branch from "tell me about
+    # this subject" to "explain THIS line" — a different pack, a different
+    # prompt, and an honest silence when nothing explains it. See
+    # ``assistant/facts_executor.explain``.
+    focus_fact: Optional[str] = Field(None, max_length=600)
     # What the player is on right now — lets "расскажи про этот трек" resolve
     # with no entity in the message at all.
     now_playing_track_id: Optional[str] = None
@@ -1138,7 +1144,10 @@ class AssistantRoute(BaseModel):
     intent: Optional[AssistantIntent] = None   # None → needs clarification
     confidence: float = 0.0
     margin: float = 0.0                        # top1 - top2, drives clarify
-    source: Literal["gliner", "explicit", "sticky", "count_override", "unclear"] = "gliner"
+    # "llm" — the language model read the sentence; "gliner" — the zero-shot
+    # ensemble decided because the LLM could not.
+    source: Literal["llm", "gliner", "explicit", "sticky",
+                    "count_override", "unclear"] = "gliner"
     artist: Optional[str] = None
     song: Optional[str] = None
     count: Optional[int] = None
@@ -1185,6 +1194,12 @@ class AssistantFactsPayload(BaseModel):
     # "here's what is known" fact rendering was served instead.
     grounded: bool = True
     web_search_used: bool = False
+    # Set when the turn was "explain THIS statement" rather than "tell me about
+    # this subject": the statement itself, and whether anything actually
+    # explained it. ``explained=False`` means the honest empty answer was served
+    # — nothing was found and nothing was invented to fill the gap.
+    focus_fact: Optional[str] = None
+    explained: Optional[bool] = None
     items: List[AssistantFactItem] = Field(default_factory=list)
     related_tracks: List[TrackMetadata] = Field(default_factory=list)
 
@@ -1228,6 +1243,11 @@ class DiscoveryCard(BaseModel):
     kind: Literal["relation", "producer", "artist"]
     intent: AssistantIntent
     prompt: str
+    # The verifiable statement this card makes, when it makes one ("«A»
+    # сэмплирует «B»"). Sent back as ``AssistantRequest.focus_fact`` so tapping
+    # the card asks the assistant to explain THAT line rather than to recite
+    # everything it knows about the track.
+    fact: Optional[str] = None
     headline: str
     subline: Optional[str] = None
     badge: Optional[str] = None

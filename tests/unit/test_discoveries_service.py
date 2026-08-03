@@ -105,6 +105,20 @@ def test_relation_card_sends_a_facts_turn(stub_db):
     assert "Runaway" in card["prompt"]
 
 
+def test_relation_card_asks_about_its_own_finding(stub_db):
+    """The card states a link, so tapping it must ask about THAT link. The old
+    prompt («расскажи про «X»») asked about the track instead, and the answer
+    came back as a list of everything known about it — with the sample the card
+    was built on nowhere in it."""
+    stub_db["links"] = [_link(POINTS[0], POINTS[1], "sample")]
+    card = _cards("relation")[0]
+    fact = card["fact"]
+    assert "Runaway" in fact and "сэмплирует" in fact
+    assert card["items"][1]["title"] in fact       # both sides are named
+    assert card["prompt"] == f"объясни: {fact}"
+    assert card["track_id"] == "t1"                # subject pinned by id
+
+
 def test_relation_pairs_come_from_the_samples_json_cache_too(stub_db):
     # The production library predates the normalized table: its links live only
     # in songs.samples_json, entries as {song, artist}.
