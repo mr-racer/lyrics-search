@@ -39,7 +39,6 @@ from app.services.stream_service import (
     island_taste_weights,
     latest_per_track,
     reaction_contribution,
-    score_candidates,
 )
 
 pytestmark = pytest.mark.unit
@@ -218,29 +217,37 @@ class TestExploreWarmup:
         assert EXPLORE_SHARE < mid < WARMUP_EXPLORE_SHARE
 
 
-# ── Water penalty in scoring ────────────────────────────────────────────────
+# ── Water: its own clock + the hard mute window (2026-08-03 §3) ─────────────
 
-class TestWaterPenalty:
-    def test_watered_neighbor_demoted(self):
-        from app.resources.clap_features import AXIS_NAMES
-        hot = _cand("hot")
-        cool = _cand("cool")
-        score_candidates(
-            [hot, cool], p_final=None, confidence=0.0, play_counts={},
-            recency_hours={}, axis_stats=None, axis_names=AXIS_NAMES,
-            water_proximity={"cool": 1.0},
-        )
-        assert hot.score > cool.score
+class TestWaterDebuff:
+    def test_charge_halves_each_day(self):
+        assert ss.water_charge(0.0) == pytest.approx(1.0)
+        assert ss.water_charge(1.0) == pytest.approx(0.5)
+        assert ss.water_charge(2.0) == pytest.approx(0.25)
 
-    def test_no_water_map_is_noop(self):
-        from app.resources.clap_features import AXIS_NAMES
-        a = _cand("a")
-        score_candidates(
-            [a], p_final=None, confidence=0.0, play_counts={},
-            recency_hours={}, axis_stats=None, axis_names=AXIS_NAMES,
-        )
-        # pure novelty term, no penalty
-        assert a.score == pytest.approx(ss.SCORE_W_NOVELTY)
+    def test_charge_is_gone_past_the_tail(self):
+        assert ss.water_charge(ss.WATER_TAIL_DAYS) == 0.0
+        assert ss.water_charge(ss.WATER_TAIL_DAYS + 3) == 0.0
+
+    def test_watered_track_is_muted_for_two_days(self):
+        fresh = FireSignal("cool", "water", NOW - timedelta(hours=6))
+        assert ss.muted_track_ids([fresh], NOW) == {"cool"}
+
+    def test_mute_expires(self):
+        old = FireSignal("cool", "water", NOW - timedelta(days=ss.WATER_MUTE_DAYS + 0.1))
+        assert ss.muted_track_ids([old], NOW) == set()
+
+    def test_refired_track_is_not_muted(self):
+        # latest_per_track collapses the journal first — a re-fire clears the water.
+        water = FireSignal("t", "water", NOW - timedelta(hours=5))
+        fire = FireSignal("t", "fire", NOW - timedelta(hours=1))
+        assert ss.muted_track_ids(latest_per_track([water, fire]), NOW) == set()
+
+    def test_repulsion_beats_affinity_for_water(self):
+        from app.services.stream.session import Cluster
+        water = Cluster(kind="water", track_id="w", weight=1.0, members=["w"])
+        skip = Cluster(kind="skip", track_id="s", weight=1.0, members=["s"])
+        assert water.repel_k > skip.repel_k
 
 
 # ── latest-wins: one active reaction per track (cancel semantics) ────────────

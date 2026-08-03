@@ -2185,7 +2185,7 @@ function ForYouHero({ isDark, lang, onStartStream, streamActive, audio, navigate
                       </span>
                     </div>
                     <div className="mono" style={{ fontSize:10.5, letterSpacing:'.12em', color:c.textSubtle, textAlign:'center', marginTop:11 }}>
-                      {lang==='ru'?'ПО УМОЛЧАНИЮ — 70% РЕДКОГО · 30% ЛЮБИМОГО':'DEFAULT — 70% RARE · 30% LIKED'}
+                      {lang==='ru'?'РЕДКОЕ — НЕ ИГРАЛО МЕСЯЦ · ПО УМОЛЧАНИЮ 70/30':'RARE — UNPLAYED FOR A MONTH · DEFAULT 70/30'}
                     </div>
                   </div>
                 </div>

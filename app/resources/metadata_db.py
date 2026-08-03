@@ -608,10 +608,15 @@ class MetadataDB:
         # ai_enabled — AI Mode (Plan 6). axis_norm_stats + stream_liked_share —
         # Stream RecSys: per-collection sonic-axis mean/std (JSON, recomputed on
         # each indexing run) and the liked/new slider default.
+        # clap_calibration — the CLAP cosine → percentile quantile table
+        # (2026-08-03 session recsys): built lazily per collection, invalidated
+        # by track-count drift or TTL. Absolute cosine thresholds are library-
+        # dependent; the percentile table makes them comparable everywhere.
         cls._ensure_columns(conn, "collection_settings", {
             "ai_enabled": "INTEGER NOT NULL DEFAULT 1",
             "axis_norm_stats": "TEXT",
             "stream_liked_share": "REAL",
+            "clap_calibration": "TEXT",
         })
 
         # AI indexing — distinguish "processed" from "silently skipped" so the
@@ -2274,6 +2279,44 @@ class MetadataDB:
             (collection_name,),
         ).fetchone()
         return float(row[0]) if row and row[0] is not None else None
+
+    # ── Stream RecSys: CLAP cosine → percentile calibration ──
+
+    @classmethod
+    def set_clap_calibration(cls, collection_name: str, table: Dict) -> None:
+        """Persist the CLAP cosine quantile table as JSON.
+
+        ``table`` shape: ``{"version": int, "n_tracks": int, "n_sample": int,
+        "built_at": iso, "quantiles": [float × 101]}`` — see
+        ``app/services/stream/calibration.py`` for the builder and the
+        invalidation rules.
+        """
+        conn = cls._connect()
+        conn.execute(
+            """INSERT INTO collection_settings (collection_name, clap_calibration)
+               VALUES (?, ?)
+               ON CONFLICT(collection_name) DO UPDATE SET
+                 clap_calibration = excluded.clap_calibration""",
+            (collection_name, json.dumps(table)),
+        )
+        conn.commit()
+
+    @classmethod
+    def get_clap_calibration(cls, collection_name: str) -> Optional[Dict]:
+        """Return the stored quantile table, or None when absent/corrupt."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT clap_calibration FROM collection_settings WHERE collection_name = ?",
+            (collection_name,),
+        ).fetchone()
+        if not row or not row[0]:
+            return None
+        try:
+            return json.loads(row[0])
+        except (TypeError, ValueError):
+            logger.warning(
+                "[MetadataDB] corrupt clap_calibration for %s — ignoring", collection_name)
+            return None
 
     @classmethod
     def get_axis_norm_stats(cls, collection_name: str) -> Optional[Dict]:

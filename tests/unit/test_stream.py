@@ -38,13 +38,9 @@ from app.services.stream_service import (
     Anchor,
     H_IMPLICIT_DAYS,
     H_LIKE_DAYS,
-    IDLE_STREAK,
     LIKED_COOLDOWN_H,
     PlaybackSignal,
     ReactionSignal,
-    SCORE_W_ANCHOR,
-    SCORE_W_NOVELTY,
-    SESSION_ANCHOR_BOOST,
     SIMILAR_W_AXES,
     SIMILAR_W_CLAP,
     StreamCandidate,
@@ -56,7 +52,6 @@ from app.services.stream_service import (
     _anti_repeat_floor,
     aggregate_event_weights,
     aggregate_reaction_weights,
-    assemble_chunk,
     axis_match_score,
     axis_playlist,
     axis_preferences,
@@ -69,14 +64,9 @@ from app.services.stream_service import (
     long_term_profile,
     merge_anchors,
     negative_track_ids,
-    pool_anchor_candidates,
     sample_liked_tracks,
-    score_candidates,
     select_positive_anchors,
-    session_blend_weight,
     similar_tracks,
-    stratify_explore,
-    union_anchor_weights,
     weight_events,
     z_scores_for_axes,
 )
@@ -342,56 +332,6 @@ class TestAxisMatch:
         assert axis_match_score(z, dict(z), 0.0, AXIS_NAMES) == 0.0
 
 
-class TestPoolAnchor:
-    def test_dedup_keeps_best_cosine_and_its_anchor(self):
-        anchors = [
-            Anchor("a1", 3.0, vector=[1.0, 0.0]),
-            Anchor("a2", 2.0, vector=[2.0, 0.0]),
-        ]
-        fake = _FakeQdrantSearch({
-            1.0: [_Hit("t1", 0.7), _Hit("t2", 0.9)],
-            2.0: [_Hit("t1", 0.95)],
-        })
-        out = pool_anchor_candidates(fake, "col", anchors, excluded=set())
-        assert out["t1"].max_anchor_cos == pytest.approx(0.95)
-        assert out["t1"].anchor_track_id == "a2"
-        assert out["t2"].anchor_track_id == "a1"
-
-    def test_excluded_filtered(self):
-        anchors = [Anchor("a1", 1.0, vector=[1.0, 0.0])]
-        fake = _FakeQdrantSearch({1.0: [_Hit("bad", 0.99), _Hit("ok", 0.5)]})
-        out = pool_anchor_candidates(fake, "col", anchors, excluded={"bad"})
-        assert set(out) == {"ok"}
-
-    def test_anchor_without_vector_skipped(self):
-        out = pool_anchor_candidates(object(), "col", [Anchor("a", 1.0)], excluded=set())
-        assert out == {}
-
-
-class TestStratifyExplore:
-    def test_round_robin_across_bins(self):
-        def z(e, x):
-            d = {a: 0.0 for a in AXIS_NAMES}
-            d["energy"], d["experimental"] = e, x
-            return d
-        eligible = (
-            [(f"low{i}", z(-2.0, 0.0)) for i in range(5)]
-            + [(f"high{i}", z(2.0, 0.0)) for i in range(5)]
-        )
-        out = stratify_explore(eligible, pool_size=4, rng=RNG())
-        lows = sum(1 for t in out if t.startswith("low"))
-        highs = sum(1 for t in out if t.startswith("high"))
-        assert lows == 2 and highs == 2  # perfectly balanced across 2 bins
-
-    def test_tracks_without_axes_still_sampled(self):
-        eligible = [(f"t{i}", None) for i in range(3)]
-        assert len(stratify_explore(eligible, pool_size=2, rng=RNG())) == 2
-
-    def test_drains_when_pool_smaller_than_request(self):
-        eligible = [("only", None)]
-        assert stratify_explore(eligible, pool_size=10, rng=RNG()) == ["only"]
-
-
 class TestSampleLiked:
     def test_cooldown_respected_when_supply_allows(self):
         weights = {"fresh": 1.0, "cooling": 1.0}
@@ -425,117 +365,6 @@ class TestSampleLiked:
                                    cooldown_h=0.0)[0] == "never"
         )
         assert wins > 35  # ~10:1 odds with 0.9 anti-repeat factor
-
-
-class TestScoreCandidates:
-    def test_anchor_cos_dominates(self):
-        близкий = _cand("near", cos=0.9)
-        далёкий = _cand("far", cos=0.1)
-        score_candidates(
-            [близкий, далёкий], p_final=None, confidence=0.0,
-            play_counts={}, recency_hours={}, axis_stats=None, axis_names=AXIS_NAMES,
-        )
-        assert близкий.score > далёкий.score
-        assert близкий.score == pytest.approx(SCORE_W_ANCHOR * 0.9 + SCORE_W_NOVELTY)
-
-    def test_recent_play_penalised(self):
-        a = _cand("recent", cos=0.5)
-        b = _cand("stale", cos=0.5)
-        score_candidates(
-            [a, b], p_final=None, confidence=0.0,
-            play_counts={}, recency_hours={"recent": 0.5},
-            axis_stats=None, axis_names=AXIS_NAMES,
-        )
-        assert a.score < b.score
-
-    def test_novelty_boosts_unplayed(self):
-        a = _cand("unplayed", cos=0.5)
-        b = _cand("worn", cos=0.5)
-        score_candidates(
-            [a, b], p_final=None, confidence=0.0,
-            play_counts={"worn": 20}, recency_hours={},
-            axis_stats=None, axis_names=AXIS_NAMES,
-        )
-        assert a.score > b.score
-
-    def test_axis_match_term_applied(self):
-        axes_match = {a: 1.0 for a in AXIS_NAMES}
-        axes_off = {a: -3.0 for a in AXIS_NAMES}
-        p = {a: 1.0 for a in AXIS_NAMES}
-        близкий = _cand("fit", cos=0.5, axes=axes_match)
-        чужой = _cand("misfit", cos=0.5, axes=axes_off)
-        score_candidates(
-            [близкий, чужой], p_final=p, confidence=1.0,
-            play_counts={}, recency_hours={}, axis_stats=STATS, axis_names=AXIS_NAMES,
-        )
-        assert близкий.score > чужой.score
-        assert близкий.axis_match == pytest.approx(1.0)
-
-
-class TestAssembleChunk:
-    def test_liked_quota_honored(self):
-        main = [_cand(f"m{i}", artist=f"art{i}", cos=0.5) for i in range(5)]
-        liked = [_cand(f"l{i}", artist=f"lart{i}", pool="liked") for i in range(5)]
-        out = assemble_chunk(main, liked, n=3, liked_share=0.3, recent_artists=[])
-        assert sum(1 for c in out if c.pool == "liked") == 1  # round(3·0.3) = 1
-        assert len(out) == 3
-
-    def test_slider_zero_no_liked(self):
-        main = [_cand(f"m{i}", artist=f"a{i}", cos=0.5) for i in range(5)]
-        liked = [_cand("l0", pool="liked")]
-        out = assemble_chunk(main, liked, n=3, liked_share=0.0, recent_artists=[])
-        assert all(c.pool != "liked" for c in out)
-
-    def test_slider_full_all_liked(self):
-        main = [_cand(f"m{i}", artist=f"a{i}", cos=0.9) for i in range(5)]
-        liked = [_cand(f"l{i}", artist=f"la{i}", pool="liked") for i in range(5)]
-        out = assemble_chunk(main, liked, n=3, liked_share=1.0, recent_artists=[])
-        assert all(c.pool == "liked" for c in out)
-
-    def test_main_sorted_by_score(self):
-        c_low, c_hi = _cand("low", artist="a1", cos=0.1), _cand("hi", artist="a2", cos=0.9)
-        score_candidates([c_low, c_hi], p_final=None, confidence=0.0, play_counts={},
-                         recency_hours={}, axis_stats=None, axis_names=AXIS_NAMES)
-        out = assemble_chunk([c_low, c_hi], [], n=2, liked_share=0.0, recent_artists=[])
-        assert [c.track_id for c in out] == ["hi", "low"]
-
-    def test_no_three_consecutive_same_artist(self):
-        """Artist window seeds from session tail: two prior plays by 'X' block a third."""
-        main = [_cand("x1", artist="X", cos=0.99), _cand("y1", artist="Y", cos=0.5)]
-        out = assemble_chunk(main, [], n=2, liked_share=0.0,
-                             recent_artists=["x", "x"])
-        assert out[0].track_id == "y1"   # X demoted despite higher score
-
-    def test_artist_rule_bends_when_no_alternative(self):
-        main = [_cand(f"x{i}", artist="X", cos=0.9) for i in range(3)]
-        out = assemble_chunk(main, [], n=3, liked_share=0.0, recent_artists=["x", "x"])
-        assert len(out) == 3  # undersupply is worse — rule bent via topup pass
-
-    def test_liked_topup_when_main_dry(self):
-        liked = [_cand(f"l{i}", artist=f"a{i}", pool="liked") for i in range(5)]
-        out = assemble_chunk([], liked, n=3, liked_share=0.3, recent_artists=[])
-        assert len(out) == 3
-        assert all(c.pool == "liked" for c in out)
-
-    def test_slider_zero_strict_no_liked_topup(self):
-        """Slider at the «новое» extreme is a hard promise: a dry main pool
-        returns a short chunk instead of leaking liked tracks beyond quota.
-        In small libraries main dries constantly (liked + session-played are
-        excluded), so without this the slider's zero position is a no-op."""
-        liked = [_cand(f"l{i}", artist=f"a{i}", pool="liked") for i in range(5)]
-        out = assemble_chunk([], liked, n=3, liked_share=0.0, recent_artists=[])
-        assert out == []
-
-    def test_slider_zero_strict_partial_main(self):
-        """Same promise when main has SOME candidates: serve them, then stop."""
-        main = [_cand("m0", artist="a0", cos=0.5)]
-        liked = [_cand(f"l{i}", artist=f"la{i}", pool="liked") for i in range(5)]
-        out = assemble_chunk(main, liked, n=3, liked_share=0.0, recent_artists=[])
-        assert [c.pool for c in out] == ["anchor"]
-
-    def test_both_dry_returns_short_chunk(self):
-        out = assemble_chunk([], [], n=3, liked_share=0.5, recent_artists=[])
-        assert out == []
 
 
 class TestAntiRepeatFloor:
@@ -618,8 +447,11 @@ class TestLongTermProfile:
         ])
         out = long_term_profile(qdrant_client=fake, collection_name="acct_u", now=NOW)
 
-        # latest-wins collapses t1's two fires to one → 3 unique fires + 5 completions
-        assert out["n_signals"] == 8
+        # latest-wins collapses t1's two fires to one → 3 unique fires. The
+        # completions of t1/t2/t3 are superseded by those fires (2026-08-03
+        # §2.1 — the explicit gesture speaks, the listen no longer double-counts),
+        # so only t4/t5 contribute completions: 3 + 2.
+        assert out["n_signals"] == 5
         assert out["confidence"] > 0.0
         # Only the 3-track cluster survives: the t4+t5 pair is dropped
         # (islands start at 3 members).
@@ -797,88 +629,6 @@ class TestCurrentVibes:
         assert watered[0]["weight"] == pytest.approx(base - ss.VIBE_WATER_PENALTY)
 
 
-# ── Session wave: anchor rotation + pivot («резко сменить пластинку») ────────
-
-class TestSessionWave:
-    def test_wave_is_weighted_mean_of_positive_session_tracks(self):
-        vectors = {"a": np.array([1.0, 0.0]), "b": np.array([0.0, 1.0])}
-        wave = ss.session_wave_vector({"a": 1.0, "b": 3.0}, vectors)
-        # b dominates the mean → the wave leans toward b's direction
-        assert float(wave @ ss._unit(vectors["b"])) \
-            > float(wave @ ss._unit(vectors["a"]))
-        assert np.linalg.norm(wave) == pytest.approx(1.0)
-
-    def test_no_positive_tracks_means_no_wave(self):
-        vectors = {"a": np.array([1.0, 0.0])}
-        assert ss.session_wave_vector({"a": -0.6}, vectors) is None
-        assert ss.session_wave_vector({}, vectors) is None
-        assert ss.session_wave_vector({"missing": 1.0}, {}) is None
-
-
-class TestAnchorRotation:
-    def _anchors(self):
-        # heavy anchor orthogonal to the wave; light anchor aligned with it
-        heavy = Anchor("heavy", 10.0, vector=np.array([0.0, 1.0]))
-        light = Anchor("light", 1.0, vector=np.array([1.0, 0.0]))
-        return [heavy, light]
-
-    WAVE = np.array([1.0, 0.0])
-
-    def test_cold_session_keeps_pure_weight_order(self):
-        out = ss.rank_effective_anchors(self._anchors(), None, 0.5, top_k=2)
-        assert [a.track_id for a in out] == ["heavy", "light"]
-        out = ss.rank_effective_anchors(self._anchors(), self.WAVE, 0.0, top_k=2)
-        assert [a.track_id for a in out] == ["heavy", "light"]
-
-    def test_warm_session_pulls_wave_aligned_anchor_up(self):
-        # w_s=0.5: heavy = .5·1 + .5·0 = .50; light = .5·0.1 + .5·1 = .55
-        out = ss.rank_effective_anchors(self._anchors(), self.WAVE, 0.5, top_k=1)
-        assert [a.track_id for a in out] == ["light"]
-
-
-class TestPivot:
-    def _skip(self, minute):
-        return _vev("x", played=5.0, days_ago=-minute / (24 * 60.0))
-
-    def _full(self, minute):
-        return _vev("y", days_ago=-minute / (24 * 60.0))
-
-    def test_three_skips_in_last_five_events_trigger(self):
-        events = [self._full(m) for m in range(5)] \
-            + [self._skip(5), self._full(6), self._skip(7), self._skip(8)]
-        assert ss.detect_pivot(events, [], NOW) is True
-
-    def test_old_skips_buried_by_fresh_listens_do_not(self):
-        events = [self._skip(m) for m in range(3)] \
-            + [self._full(m) for m in range(3, 8)]
-        assert ss.detect_pivot(events, [], NOW) is False
-
-    def test_two_fresh_waters_trigger_one_does_not(self):
-        fresh = [_fire("w1", kind="water"), _fire("w2", kind="water")]
-        assert ss.detect_pivot([], fresh, NOW) is True
-        assert ss.detect_pivot([], fresh[:1], NOW) is False
-
-    def test_stale_waters_do_not_trigger(self):
-        stale = [_fire("w1", kind="water", days_ago=30 / (24 * 60.0)),
-                 _fire("w2", kind="water", days_ago=30 / (24 * 60.0))]
-        assert ss.detect_pivot([], stale, NOW) is False
-
-    def test_pivot_anchors_prefer_wave_dissimilar(self):
-        wave = np.array([1.0, 0.0])
-        a_hi = Anchor("hi", 10.0, vector=np.array([1.0, 0.0]))       # cos 1.0
-        a_mid = Anchor("mid", 9.0, vector=np.array([0.9, 0.4359]))  # cos 0.9
-        a_orth = Anchor("orth", 1.0, vector=np.array([0.0, 1.0]))   # cos 0.0
-        out = ss.pivot_anchors([a_hi, a_mid, a_orth], wave, top_k=2)
-        # only orth clears PIVOT_SIM_CEIL; the top-up takes the least similar rest
-        assert [a.track_id for a in out] == ["orth", "mid"]
-
-    def test_pivot_without_wave_falls_back_to_weight_order(self):
-        a1 = Anchor("a1", 2.0, vector=np.array([1.0, 0.0]))
-        a2 = Anchor("a2", 5.0, vector=np.array([0.0, 1.0]))
-        out = ss.pivot_anchors([a1, a2], None, top_k=2)
-        assert [a.track_id for a in out] == ["a2", "a1"]
-
-
 class TestSessionAdaptation:
     def test_uniform_listening_gives_no_badge(self):
         # Full listens only: every track contributes the same ~W_FULL — nothing
@@ -1039,13 +789,7 @@ class TestAnchors:
         assert len(merged) == 2
 
 
-class TestSessionBlend:
-    @pytest.mark.parametrize("n,expected", [(0, 0.0), (3, 0.3), (5, 0.5), (10, 0.5), (25, 0.5)])
-    def test_w_s_caps_at_half(self, n, expected):
-        """Session influence ramps 0.1/signal but never exceeds parity (0.5) —
-        long-term taste always keeps an equal vote (anti-trap guarantee)."""
-        assert session_blend_weight(n) == pytest.approx(expected)
-
+class TestSessionSignalCount:
     def test_count_ignores_zero_weight_events(self):
         """Neutral-zone listens carry no information — not signals."""
         events = [_ev("a"), _ev("b", played=60.0)]  # full + neutral
@@ -1054,17 +798,12 @@ class TestSessionBlend:
     def test_count_includes_reactions(self):
         assert count_session_signals([_ev("a")], [_like("x")]) == 2
 
-    def test_union_boosts_session_anchors(self):
-        long_w = {"a": 1.0, "b": 0.4}
-        sess_w = {"b": 0.4}
-        out = union_anchor_weights(long_w, sess_w, w_s=1.0)
-        assert out["a"] == 1.0
-        assert out["b"] == pytest.approx(0.4 * (1 + SESSION_ANCHOR_BOOST))  # ×3 at w_s=1
-
-    def test_union_takes_max_not_sum(self):
-        """Session events already sit inside long-term history — no double count."""
-        out = union_anchor_weights({"a": 5.0}, {"a": 0.4}, w_s=1.0)
-        assert out["a"] == 5.0
+    def test_reacted_listen_is_not_a_signal(self):
+        """An explicit reaction speaks for the listen — counting both would
+        double-count the same gesture (2026-08-03 §2.1)."""
+        events = [_ev("a")]
+        cutoffs = {"a": events[0].played_at}
+        assert count_session_signals(events, [], cutoffs=cutoffs) == 0
 
 
 class TestAxisPreferences:
@@ -1163,35 +902,42 @@ class TestReplay:
         assert weight_events(events)[1] == W_FULL
 
 
-class TestIdleRule:
-    def test_events_after_streak_get_zero(self):
-        events = [_ev_reward(track=f"t{i}", interacted=False, minute=i) for i in range(IDLE_STREAK + 2)]
-        w = weight_events(events)
-        assert w[:IDLE_STREAK] == [W_FULL] * IDLE_STREAK   # streak itself keeps weights
-        assert w[IDLE_STREAK] == 0.0
-        assert w[IDLE_STREAK + 1] == 0.0
+class TestIdleRuleRemoved:
+    """2026-08-03 §2.2: long passive streaks no longer zero the signal —
+    listening to a record straight through without touching anything is
+    listening, not absence."""
 
-    def test_action_resets_streak(self):
-        events = [_ev_reward(track=f"t{i}", interacted=False, minute=i) for i in range(IDLE_STREAK + 1)]
-        events.append(_ev_reward(track="t_act", interacted=True, minute=10))    # user acted
-        events.append(_ev_reward(track="t_after", interacted=False, minute=11))  # passive again — streak restarts
-        w = weight_events(events)
-        assert w[IDLE_STREAK] == 0.0          # zeroed during idle
-        assert w[IDLE_STREAK + 1] == W_FULL   # interacted event counts again
-        assert w[IDLE_STREAK + 2] == W_FULL   # 1st passive after reset — under streak
+    def test_long_passive_streak_keeps_full_weight(self):
+        events = [_ev_reward(track=f"t{i}", interacted=False, minute=i) for i in range(12)]
+        assert weight_events(events) == [W_FULL] * 12
 
-    def test_legacy_none_counts_as_interacted(self):
-        """Events predating the interacted column must keep moving the profile."""
-        events = [_ev_reward(track=f"t{i}", interacted=None, minute=i) for i in range(IDLE_STREAK + 3)]
-        assert all(w == W_FULL for w in weight_events(events))
-
-    def test_replay_in_idle_zone_is_zeroed(self):
-        """Loop-one background listening must not pump the profile via replays."""
-        events = [_ev_reward(track=f"t{i}", interacted=False, minute=i) for i in range(IDLE_STREAK)]
+    def test_replay_in_a_passive_streak_still_upgrades(self):
+        events = [_ev_reward(track=f"t{i}", interacted=False, minute=i) for i in range(5)]
         events.append(_ev_reward(track="loop", interacted=False, played=230.0, minute=20))
-        events.append(_ev_reward(track="loop", interacted=False, played=230.0, minute=24))  # instant replay
-        w = weight_events(events)
-        assert w[-1] == 0.0
+        events.append(_ev_reward(track="loop", interacted=False, played=230.0, minute=24))
+        assert weight_events(events)[-1] == W_REPLAY
+
+
+class TestReactionCutoff:
+    """2026-08-03 §2.1: an огонёк/вода supersedes the listen it happened on."""
+
+    def test_listen_before_the_reaction_is_zeroed(self):
+        ev = _ev_reward(track="t", minute=0)
+        assert weight_events([ev], cutoffs={"t": ev.played_at}) == [0.0]
+
+    def test_grace_window_covers_the_flush_after_the_press(self):
+        ev = _ev_reward(track="t", minute=0)
+        just_before = ev.played_at - timedelta(seconds=ss.REACTION_GRACE_SEC - 5)
+        assert weight_events([ev], cutoffs={"t": just_before}) == [0.0]
+
+    def test_a_later_play_counts_again(self):
+        ev = _ev_reward(track="t", minute=0)
+        long_before = ev.played_at - timedelta(hours=3)
+        assert weight_events([ev], cutoffs={"t": long_before}) == [W_FULL]
+
+    def test_other_tracks_untouched(self):
+        ev = _ev_reward(track="t", minute=0)
+        assert weight_events([ev], cutoffs={"other": ev.played_at}) == [W_FULL]
 
 
 class TestDecay:

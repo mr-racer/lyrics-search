@@ -230,8 +230,8 @@ class TestStreamNext:
         assert resp.status_code == 200
         body = resp.json()
         assert len(body["tracks"]) == 3
-        assert {t["pool"] for t in body["tracks"]} <= {"anchor", "explore", "liked"}
-        assert body["diagnostics"]["anchors"]
+        assert {t["pool"] for t in body["tracks"]} <= {"fresh", "familiar", "liked"}
+        assert body["diagnostics"]["clusters"]["positive"]
         # every track carries full metadata for the player
         for t in body["tracks"]:
             assert t["title"] and t["artist"] and t["file_path"]
@@ -289,19 +289,16 @@ class TestStreamNext:
             _like(client, coll, f"b{i+5}")
 
         resp = client.get("/api/v1/recommend/stream/next",
-                          params={"session_id": "live", "n": 3, "liked_share": 0.0})
+                          params={"session_id": "live", "n": 3, "liked_share": 0.5})
         body = resp.json()
-        # w_s ramps with session signals but caps at 0.5 — long-term always
-        # keeps an equal vote (anti-trap), so a wild session can't take over.
-        assert body["diagnostics"]["w_session"] == 0.5
-        # Session taste still leads the anchor set: the strongest anchor must
-        # be a session (B-cluster) track thanks to the ×(1+2·w_s) boost…
-        assert body["diagnostics"]["anchors"][0]["track_id"].startswith("b")
-        # …and unheard B-cluster tracks surface in the queue. Long-term (A)
-        # anchors legitimately remain — the design blends, never erases.
-        anchor_tracks = [t for t in body["tracks"] if t["pool"] == "anchor"]
-        assert anchor_tracks, "expected anchor-pool tracks"
-        assert any(t["track_id"].startswith("b") for t in anchor_tracks)
+        # 2026-08-03 §4.5: the session LEADS once it has signals — the long-term
+        # seed is down to its floor, not holding half the vote as it used to.
+        assert body["diagnostics"]["w_long"] == pytest.approx(0.15)
+        # The strongest pull cluster is built from this session's B-cluster
+        # listening, and unheard B tracks surface in the queue.
+        positive = body["diagnostics"]["clusters"]["positive"]
+        assert positive and positive[0]["track_id"].startswith("b")
+        assert any(t["track_id"].startswith("b") for t in body["tracks"])
 
     def test_disliked_track_never_served(self, client):
         """«Дизлайк исчезает немедленно» — жёсткий фильтр."""
@@ -339,16 +336,19 @@ class TestStreamNext:
 
     def test_liked_share_full_returns_only_liked(self, client):
         coll = _owner_collection(client)
-        for i in range(3):
-            _post_event(client, f"a{i}", session="old")
+        # Favorites are COMPUTED from deep listens; backdated past the 8h
+        # cooldown and the just-heard floor so they are eligible again.
         for tid in ("a3", "a4", "a5", "b1", "b2"):
-            _like(client, coll, tid)
+            _backdate_event(coll, tid, "old", hours_ago=20)
 
         resp = client.get("/api/v1/recommend/stream/next",
                           params={"session_id": "s9", "n": 3, "liked_share": 1.0})
         body = resp.json()
         assert len(body["tracks"]) == 3
-        assert all(t["pool"] == "liked" for t in body["tracks"])
+        # 2026-08-03 §6: the «ЛЮБИМОЕ» end is the not-fresh side — computed
+        # favorites plus already-heard neighbours, never an unheard track.
+        assert all(t["pool"] != "fresh" for t in body["tracks"])
+        assert any(t["pool"] == "liked" for t in body["tracks"])
 
     def test_small_collection_topup_still_fills_chunk(self, client):
         """Undersupply path: almost everything excluded → chunk still fills
@@ -372,7 +372,7 @@ class TestStreamNext:
                           params={"session_id": "fresh", "n": 3, "liked_share": 0.0})
         body = resp.json()
         assert len(body["tracks"]) == 3
-        assert all(t["pool"] == "explore" for t in body["tracks"])
+        assert all(t["pool"] == "fresh" for t in body["tracks"])
 
     def test_exclude_ids_respected(self, client):
         for i in range(3):
@@ -420,12 +420,28 @@ class TestStreamRoundReset:
         _backdate_event(coll, "a1", "S", hours_ago=0.1)
 
         resp = client.get("/api/v1/recommend/stream/next",
-                          params={"session_id": "S", "n": 3, "liked_share": 0.0})
+                          params={"session_id": "S", "n": 3, "liked_share": 0.5})
         body = resp.json()
         served = {t["track_id"] for t in body["tracks"]}
         assert len(served) == 3                    # filled from replay, not empty
         assert served.isdisjoint({"a0", "a1"})     # floor holds across the round
         assert body["diagnostics"]["relaxed"] is True
+
+    def test_rare_extreme_goes_short_rather_than_replay(self, client):
+        """2026-08-03 §6: at the «РЕДКОЕ» extreme freshness outranks непустота.
+        A library heard end to end five days ago has nothing unheard left, so
+        the chunk comes back short and says so — it does NOT quietly replay."""
+        coll = _owner_collection(client)
+        for cluster in ("a", "b"):
+            for i in range(N_PER_CLUSTER):
+                _backdate_event(coll, f"{cluster}{i}", "S2", hours_ago=120)
+
+        body = client.get("/api/v1/recommend/stream/next",
+                          params={"session_id": "S2", "n": 3,
+                                  "liked_share": 0.0}).json()
+        assert body["tracks"] == []
+        assert body["diagnostics"]["fresh_exhausted"] is True
+        assert body["diagnostics"]["relaxed"] is False
 
     def test_vibe_carried_into_replay(self, client):
         """Session blend (w_s) must survive into the relaxed round — the replay
@@ -435,9 +451,10 @@ class TestStreamRoundReset:
             for i in range(N_PER_CLUSTER):
                 _backdate_event(coll, f"{cluster}{i}", "S", hours_ago=120)
         resp = client.get("/api/v1/recommend/stream/next",
-                          params={"session_id": "S", "n": 3, "liked_share": 0.0})
-        # 24 session signals saturate w_s at its 0.5 ceiling — vibe is in force.
-        assert resp.json()["diagnostics"]["w_session"] == 0.5
+                          params={"session_id": "S", "n": 3, "liked_share": 0.5})
+        # 24 session signals push the long-term seed to its floor — the replay
+        # follows the mood the listener drifted into, not the all-time profile.
+        assert resp.json()["diagnostics"]["w_long"] == pytest.approx(0.15)
 
     def test_diagnostics_round_increments_after_a_full_cycle(self, client):
         """round = ceil(total session plays / library size): a 2nd lap reads as 2."""
@@ -475,15 +492,16 @@ class TestProfileAndAxisPlaylist:
         })
         for i in range(3):
             _post_event(client, f"a{i}")
-        # Islands feed on fires + ≥85% completions (hearts gone): 3 completions
-        # + 1 fire = 4 signals.
+        # Islands feed on fires + ≥85% completions (hearts gone). a0's fire
+        # supersedes a0's own completion (2026-08-03 §2.1), so it is 1 fire +
+        # the 2 remaining completions = 3 signals.
         MetadataDB.record_taste_signal(
             session_id="s1", collection_name=coll, track_id="a0", kind="fire")
 
         resp = client.get("/api/v1/recommend/profile")
         assert resp.status_code == 200
         body = resp.json()
-        assert body["n_signals"] == 4
+        assert body["n_signals"] == 3
         assert body["islands"], "expected at least one island"
         assert body["islands"][0]["tracks"][0]["title"]
         # Vibes (the fast mood layer) ship in the same response; the fresh
@@ -674,15 +692,28 @@ class TestTasteSignalRoute:
         # persisted in the per-account journal
         sigs = {(t, k) for t, k, _ in MetadataDB.get_taste_signals(coll, session_id="s1")}
         assert ("a0", "fire") in sigs
-        # and steers the wave: the fresh fire shows up as an active anchor
+        # and steers the wave: the fired track is pulled into a positive cluster
         body = client.get("/api/v1/recommend/stream/next",
                           params={"session_id": "s1", "n": 3}).json()
-        assert any(f["track_id"] == "a0" for f in body["diagnostics"]["fires"])
+        positive = body["diagnostics"]["clusters"]["positive"]
+        assert positive, "a fresh fire must produce at least one pull cluster"
 
     def test_water_recorded(self, client):
         r = client.post("/api/v1/recommend/taste-signal",
                         json={"session_id": "s1", "track_id": "a0", "kind": "water"})
         assert r.status_code == 200
+
+    def test_water_mutes_the_track_for_days(self, client):
+        """2026-08-03 §3: water is a real debuff — the track stops being served
+        outright for WATER_MUTE_DAYS, not just softly demoted for four hours."""
+        for i in range(3):
+            _post_event(client, f"a{i}", session="s2")
+        client.post("/api/v1/recommend/taste-signal",
+                    json={"session_id": "s2", "track_id": "a0", "kind": "water"})
+        body = client.get("/api/v1/recommend/stream/next",
+                          params={"session_id": "s2", "n": 5}).json()
+        assert body["diagnostics"]["n_muted"] >= 1
+        assert all(t["track_id"] != "a0" for t in body["tracks"])
 
     def test_invalid_kind_rejected(self, client):
         r = client.post("/api/v1/recommend/taste-signal",

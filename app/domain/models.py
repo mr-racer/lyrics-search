@@ -580,12 +580,19 @@ class StreamTrack(TrackMetadata):
     """One track in the personalized stream + per-track diagnostics.
 
     The diagnostics double as raw material for a future rationale chip
-    («почему этот трек») — design §7. ``pool="axis"`` marks tracks picked by
-    the axis-playlist knobs rather than the stream pools; ``pool="replay"`` marks
-    a track resurfaced by the round-reset last-resort pass (design 2026-06-14).
+    («почему этот трек») — design §7.
+
+    Pools: ``fresh`` (not played in the last 30 days — the slider's «РЕДКОЕ»
+    side) and ``familiar`` are the two the wave assembles from (2026-08-03
+    session recsys); ``liked`` marks a computed favorite drawn into the familiar
+    quota; ``replay`` a track resurfaced by the round-reset last-resort pass
+    (2026-06-14); ``axis`` a pick from the axis-playlist knobs; ``anchor``/
+    ``explore`` are the pre-2026-08-03 names, kept so old clients and the
+    similar-tracks surface keep validating.
     """
-    pool: Literal["anchor", "explore", "liked", "axis", "replay"]
-    anchor_track_id: Optional[str] = None   # closest anchor (pool=anchor only)
+    pool: Literal["fresh", "familiar", "liked", "replay",
+                  "anchor", "explore", "axis"]
+    anchor_track_id: Optional[str] = None   # closest cluster centroid, when known
     axis_match: Optional[float] = None
     score: Optional[float] = None
 
