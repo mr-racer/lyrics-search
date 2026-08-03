@@ -846,9 +846,12 @@ def next_chunk(
     if pools_mod.skip_burst(session_events, is_skip):
         stratified_share = max(stratified_share, pools_mod.SKIP_BURST_STRATIFIED_SHARE)
     n_stratified = int(round(fresh_quota * stratified_share)) if fresh_quota else 0
-    # A cold session with no clusters at all has nothing but the random slice.
+    # True cold start — no clusters at all, so «familiar» is an empty category
+    # by definition. The random slice has to carry the WHOLE chunk, including
+    # the slots the slider nominally owes to the liked side; otherwise a fresh
+    # account with the slider on «ЛЮБИМОЕ» gets an empty stream.
     if not profile.positive:
-        n_stratified = max(n_stratified, fresh_quota)
+        n_stratified = max(n_stratified, n)
     if n_stratified > 0:
         picks = pools_mod.stratified_fresh(
             qdrant_client, collection_name,
