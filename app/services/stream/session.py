@@ -73,13 +73,21 @@ H_REACTION_DAYS = 1.0
 
 # ── Clustering (§4.2) ──────────────────────────────────────────────────────
 # Percentiles of the collection's OWN cosine distribution, not raw cosines.
-CLUSTER_MERGE_PCT = 0.985
+# Calibrated on real libraries (2026-08-03 backfill): the hand-tuned raw 0.85
+# this replaces sits at p99.1 in a 5630-track library and p99.0 in a 665-track
+# one — that agreement across two very different collections is exactly what the
+# percentile mapping buys, so p99 is the level to keep.
+CLUSTER_MERGE_PCT = 0.99
 TOP_POSITIVE_CLUSTERS = 5
 TOP_NEGATIVE_CLUSTERS = 5
 CLUSTER_POOL_SIZE = 30      # candidates considered before merging
 
 # ── Skip forgiveness (§4.3) ────────────────────────────────────────────────
-FORGIVE_SIM_PCT = 0.97      # top 3% of similarity — «звучит как то, что ты любишь»
+# Same level as CLUSTER_MERGE_PCT, and that is the point: a skip is forgiven
+# exactly when it would have merged INTO the cluster had it been a positive.
+# Looser values (p97 ≈ the nearest 170 tracks of a 5630-track library) forgive
+# nearly every isolated skip, which defeats the rule.
+FORGIVE_SIM_PCT = 0.99
 
 # ── Carryover between sessions (§4.4) ──────────────────────────────────────
 CARRYOVER_W = 0.4

@@ -35,7 +35,9 @@ FRESH_WINDOW_DAYS = 30.0
 FRESH_FETCH_K = 150         # Qdrant neighbours per positive centroid
 NEG_FETCH_K = 200           # …per negative centroid
 FRESH_STRATIFIED_SHARE = 0.25   # floor share of fresh slots left to chance
-EXPLORE_NEG_PCT = 0.95      # a stratified pick this close to a negative is dropped
+# A stratified pick this close to a negative cluster is dropped. p97.5 is where
+# the raw 0.80 this replaces landed on real libraries (p98.1 / p96.6).
+EXPLORE_NEG_PCT = 0.975
 EXPLORE_BIN_EDGE = 0.5      # z-bins: < −0.5 | −0.5..0.5 | > 0.5
 STRATIFIED_SCROLL_CAP = 5000
 
