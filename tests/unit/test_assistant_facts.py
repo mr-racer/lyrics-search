@@ -376,10 +376,12 @@ class _FakeQdrant:
         return [_FakePoint(i, self._full[i]) for i in ids if i in self._full]
 
 
-def _patch_related(monkeypatch, links, points):
+def _patch_related(monkeypatch, links, points, raw=None):
     from app.resources.metadata_db import MetadataDB
     monkeypatch.setattr(MetadataDB, "get_sample_links",
                         classmethod(lambda cls, c, s: links))
+    monkeypatch.setattr(MetadataDB, "get_song_relations_raw",
+                        classmethod(lambda cls, slugs: raw or {}))
     monkeypatch.setattr("app.resources.qdrant_utils.light_points",
                         lambda client, collection: points)
 
@@ -406,6 +408,25 @@ def test_artists_and_albums_suggest_no_tracks(monkeypatch):
     assert F._sample_related_sync(_FakeQdrant({}), "acct_1",
                                   {"kind": "artist", "title": "Queen",
                                    "artist": "Queen"}) == []
+
+
+def test_related_tracks_come_from_the_samples_json_cache_too(monkeypatch):
+    # The production library keeps ALL its links in songs.samples_json — the
+    # normalized table is empty there. Reading only the table would render the
+    # «Сэмплы у вас в библиотеке» block permanently blank on prod.
+    from app.services.song_facts_service import get_song_facts_key
+    points = [("t1", {"title": "Runaway", "artist": "Kanye West"}),
+              ("t2", {"title": "Expo 83", "artist": "Backyard Heavies"})]
+    full = {"t2": {"title": "Expo 83", "artist": "Backyard Heavies",
+                   "file_path": "/x.mp3"}}
+    raw = {get_song_facts_key("Kanye West", "Runaway"): {
+        "samples": [{"song": "Expo 83", "artist": "Backyard Heavies"}],
+        "sampled_by": []}}
+    _patch_related(monkeypatch, {"samples": [], "sampled_by": []}, points, raw=raw)
+    subject = {"kind": "song", "title": "Runaway", "artist": "Kanye West",
+               "track_id": "t1"}
+    out = F._sample_related_sync(_FakeQdrant(full), "acct_1", subject)
+    assert [t["track_id"] for t in out] == ["t2"]
 
 
 def test_song_without_sample_links_suggests_nothing(monkeypatch):

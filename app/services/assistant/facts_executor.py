@@ -720,18 +720,30 @@ def _sample_related_sync(qdrant, collection_name: str, subject: dict) -> list:
     title = subject.get("title") or ""
     if not (artist and title):
         return []
+    subject_slug = get_song_facts_key(artist, title)
+    # Both storages, same as everywhere else sample links are read: the
+    # normalized table AND the older ``songs.samples_json`` cache — the
+    # production library predates the table and keeps ALL its links in the
+    # cache (measured: sample_links is empty there, samples_json is not).
+    entries: list[dict] = []
     try:
-        rel = MetadataDB.get_sample_links(collection_name,
-                                          get_song_facts_key(artist, title))
+        rel = MetadataDB.get_sample_links(collection_name, subject_slug)
+        entries += (rel.get("samples") or []) + (rel.get("sampled_by") or [])
     except Exception:
         logger.warning("[assistant/facts] sample links unavailable", exc_info=True)
-        return []
+    try:
+        raw = (MetadataDB.get_song_relations_raw([subject_slug]) or {}).get(subject_slug) or {}
+        entries += (raw.get("samples") or []) + (raw.get("sampled_by") or [])
+    except Exception:
+        logger.warning("[assistant/facts] samples_json unavailable", exc_info=True)
     want: list[str] = []
-    for entry in (rel.get("samples") or []) + (rel.get("sampled_by") or []):
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
         slug = entry.get("slug") or (
             get_song_facts_key(entry["artist"], entry["song"])
             if entry.get("artist") and entry.get("song") else None)
-        if slug and slug not in want:
+        if slug and slug != subject_slug and slug not in want:
             want.append(slug)
     if not want:
         return []
