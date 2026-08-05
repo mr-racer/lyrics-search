@@ -152,8 +152,12 @@ STYLE:
 - Sound like a well-read friend telling stories, not an encyclopedia entry.
 - Say each thing once. No closing summary.
 
+FOLLOW-UPS:
+- In "follow_ups", write 2 short questions in {lang_name} (each under 60 characters) that the listener would naturally ask NEXT — digging deeper into a thread you mentioned, or opening a strong fact you had no room for.
+- Each must be specific to THIS subject and answerable from the facts above. Generic ones ("расскажи ещё", "что дальше?") are useless — never write them.
+
 Output ONLY minified JSON, no prose, no fences. "answer" is a JSON string — use \\n for line breaks and **bold** for block headings:
-{{"answer": "...", "used": [1, 3]}}
+{{"answer": "...", "used": [1, 3], "follow_ups": ["...", "..."]}}
 
 ## Example (broad question)
 
@@ -189,7 +193,9 @@ _EXAMPLE_ANSWERS = {
            '\\n\\n**Судьба сингла**\\nЛейбл умолял урезать шесть минут, Elton John пророчил, '
            'что радио это не возьмёт — Меркьюри отказался [4]. Итог: девять недель на первом '
            'месте в Британии [5], а в 1992-м «Wayne\'s World» вернул песню в чарты США [6].",'
-           '"used":[1,2,3,4,5,6]}'),
+           '"used":[1,2,3,4,5,6],'
+           '"follow_ups":["Почему лейбл был против шести минут?",'
+           '"Как снимали то самое видео?"]}'),
     "en": ('{"answer":"**The recording**\\nThe song was built like an opera: about 180 vocal '
            'tracks were layered until the tape wore thin enough to see through [2], and Mercury '
            'kept walking in announcing \\"a few more \'Galileos\'\\" [3].\\n\\n**The words**\\n'
@@ -198,7 +204,9 @@ _EXAMPLE_ANSWERS = {
            '**The single\'s fate**\\nThe label begged to cut the six minutes and Elton John said '
            'radio would never play it — Mercury refused [4]. It sat at UK #1 for nine weeks [5], '
            'and in 1992 Wayne\'s World sent it back up the US charts [6].",'
-           '"used":[1,2,3,4,5,6]}'),
+           '"used":[1,2,3,4,5,6],'
+           '"follow_ups":["Why did the label fight the six minutes?",'
+           '"How was the famous video shot?"]}'),
 }
 
 
@@ -693,25 +701,96 @@ def _prefer_items_naming(items: list[dict], name: str) -> list[dict]:
     return [it for it in items if _names_it(it)] + [it for it in items if not _names_it(it)]
 
 
-def _related_tracks_sync(qdrant, collection_name: str, subject: dict) -> list:
-    """Library tracks to show under the answer — the artist's own, or the song itself."""
-    from app.services import catalog_search_service
+def _sample_related_sync(qdrant, collection_name: str, subject: dict) -> list:
+    """In-library counterparts of the subject's sample links — nothing else.
 
-    # For an album the record's own tracks are the relevant list; for an artist
-    # or a song it's the artist's catalogue.
-    if subject.get("kind") == "album":
-        query = subject.get("title") or subject.get("artist") or ""
-    else:
-        query = subject.get("artist") or subject.get("title") or ""
-    if not query:
+    The old behaviour (the artist's whole catalogue under every answer) read as
+    filler: tracks that had nothing to do with what was just said. A track
+    earns its place under a facts answer only when it is the OTHER SIDE of a
+    sample / interpolation / cover of this song and the listener actually has
+    it. Artists and albums get no track suggestions at all.
+    """
+    from app.resources.metadata_db import MetadataDB
+    from app.resources.qdrant_utils import light_points
+    from app.services.song_facts_service import get_song_facts_key
+
+    if subject.get("kind") != "song":
+        return []
+    artist = subject.get("artist") or ""
+    title = subject.get("title") or ""
+    if not (artist and title):
         return []
     try:
-        return catalog_search_service.search_catalog_tracks(
-            qdrant, collection_name, query, MAX_RELATED_TRACKS,
-        )
+        rel = MetadataDB.get_sample_links(collection_name,
+                                          get_song_facts_key(artist, title))
     except Exception:
-        logger.warning("[assistant/facts] related tracks failed", exc_info=True)
+        logger.warning("[assistant/facts] sample links unavailable", exc_info=True)
         return []
+    want: list[str] = []
+    for entry in (rel.get("samples") or []) + (rel.get("sampled_by") or []):
+        slug = entry.get("slug") or (
+            get_song_facts_key(entry["artist"], entry["song"])
+            if entry.get("artist") and entry.get("song") else None)
+        if slug and slug not in want:
+            want.append(slug)
+    if not want:
+        return []
+
+    try:
+        points = light_points(qdrant, collection_name)
+    except Exception:
+        return []
+    by_slug: dict = {}
+    for track_id, payload in points:
+        payload = payload or {}
+        t = (payload.get("title") or "").strip()
+        a = (payload.get("artist") or "").strip()
+        if t and a:
+            by_slug.setdefault(get_song_facts_key(a, t), track_id)
+    ids = [by_slug[s] for s in want
+           if s in by_slug and by_slug[s] != subject.get("track_id")]
+    if not ids:
+        return []
+    # Full payloads for the handful of matches: the light mirror strips
+    # file_path/duration, and a track row without them is not playable.
+    try:
+        pts = qdrant.retrieve(collection_name=collection_name,
+                              ids=ids[:MAX_RELATED_TRACKS],
+                              with_payload=True, with_vectors=False)
+    except Exception:
+        logger.warning("[assistant/facts] related retrieve failed", exc_info=True)
+        return []
+    return [{"track_id": str(p.id), **(p.payload or {})} for p in pts or []]
+
+
+def _sane_followups(raw: object, lang: str) -> list[str]:
+    """Model-written next questions, filtered to the ones worth a chip.
+
+    Code owns the caps (the LLM decides the wording, nothing else): ≤3 chips,
+    each a real question of sane length, no duplicates, no generic filler.
+    """
+    obj = _parse_json_object(raw) if not isinstance(raw, dict) else raw
+    values = obj.get("follow_ups") if isinstance(obj, dict) else None
+    if isinstance(values, str):
+        values = [values]
+    generic = {fold(g).rstrip("?") for g in
+               ("расскажи ещё", "что дальше", "tell me more", "what else")}
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values if isinstance(values, list) else []:
+        if not isinstance(value, str):
+            continue
+        q = " ".join(value.split()).strip()
+        if not (8 <= len(q) <= 90):
+            continue
+        key = fold(q).rstrip("?")
+        if not key or key in seen or key in generic:
+            continue
+        seen.add(key)
+        out.append(q)
+        if len(out) >= 3:
+            break
+    return out
 
 
 # ── Step 5: web fill-in (a CODE decision) ────────────────────────────────────
@@ -1074,7 +1153,7 @@ async def _explain_fact(*, subject: dict, items: list[dict], focus_fact: str,
                                           lang=lang, llm_base_url=llm_base_url,
                                           llm_model=llm_model)
 
-    related = await asyncio.to_thread(_related_tracks_sync, qdrant, collection_name, subject)
+    related = await asyncio.to_thread(_sample_related_sync, qdrant, collection_name, subject)
     base = {
         "subject_kind": subject["kind"],
         "subject_title": subject.get("title") or "",
@@ -1191,7 +1270,7 @@ async def run(*, qdrant, collection_name: str, message: str, route, slots,
 
     items = items[:MAX_PACK_ITEMS]
 
-    related = await asyncio.to_thread(_related_tracks_sync, qdrant, collection_name, subject)
+    related = await asyncio.to_thread(_sample_related_sync, qdrant, collection_name, subject)
 
     if not items:
         return {
@@ -1217,6 +1296,7 @@ async def run(*, qdrant, collection_name: str, message: str, route, slots,
         f"{subject_line}\n\nQUESTION: {message}\n\nFACTS:\n{_render_pack(items, lang)}"
     )
     verified = None
+    followups: list[str] = []
     try:
         # parse_json=False on purpose: ``ask_llm``'s own parse raises on the
         # slightest prose around the object, and a 12b model wrapping its JSON
@@ -1229,7 +1309,8 @@ async def run(*, qdrant, collection_name: str, message: str, route, slots,
             base_url=llm_base_url, model=llm_model,
             extra_body={"enable_thinking": False},
         )
-        verified = _verify(_parse_json_object(raw_text), len(items))
+        parsed = _parse_json_object(raw_text)
+        verified = _verify(parsed, len(items))
         if verified is None:
             # The model answers well but wraps it inconsistently: the same
             # question returns prose+JSON one run and bare prose the next, and
@@ -1243,10 +1324,15 @@ async def run(*, qdrant, collection_name: str, message: str, route, slots,
                 base_url=llm_base_url, model=llm_model,
                 extra_body={"enable_thinking": False},
             )
-            verified = _verify(_parse_json_object(raw_text), len(items))
+            parsed = _parse_json_object(raw_text)
+            verified = _verify(parsed, len(items))
         if verified is None:
             logger.info("[assistant/facts] answer rejected by citation check — "
                         "serving the deterministic fact rendering instead")
+        else:
+            # Follow-up chips ride the same call — no second round-trip. They
+            # only make sense next to a real answer, never under the fallback.
+            followups = _sane_followups(parsed, lang)
     except Exception:
         logger.exception("[assistant/facts] LLM call failed")
 
@@ -1267,6 +1353,7 @@ async def run(*, qdrant, collection_name: str, message: str, route, slots,
         "answer": answer,
         "grounded": grounded,
         "web_search_used": web_used,
+        "follow_ups": followups,
         "items": [
             {"n": i, "text": it["text"], "source": it["source"], "used": i in used_set}
             for i, it in enumerate(items, 1)

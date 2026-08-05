@@ -1208,6 +1208,11 @@ class AssistantFactsPayload(BaseModel):
     focus_fact: Optional[str] = None
     explained: Optional[bool] = None
     items: List[AssistantFactItem] = Field(default_factory=list)
+    # Model-written next questions (sanitized in code, ≤3). Empty when the
+    # answer came from the deterministic fallback or the model wrote none.
+    follow_ups: List[str] = Field(default_factory=list)
+    # In-library counterparts of the subject's sample/interpolation/cover
+    # links — the only track suggestions that belong under a facts answer.
     related_tracks: List[TrackMetadata] = Field(default_factory=list)
 
 

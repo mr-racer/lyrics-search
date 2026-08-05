@@ -333,7 +333,87 @@ def test_system_prompt_carries_the_few_shot_in_the_answer_language():
     assert "**The recording**" in en and "English" in en
     # The format pass resolved every placeholder and kept the JSON contract.
     assert "{lang_name}" not in ru and "{example_answer}" not in ru
-    assert '{"answer": "...", "used": [1, 3]}' in ru
+    assert '{"answer": "...", "used": [1, 3], "follow_ups": ["...", "..."]}' in ru
+
+
+# ── follow-up chips: model wording, code caps ────────────────────────────────
+
+
+def test_followups_survive_when_sane():
+    raw = '{"answer":"A.","used":[1],"follow_ups":["Почему лейбл был против?","Как снимали видео?"]}'
+    assert F._sane_followups(raw, "ru") == ["Почему лейбл был против?", "Как снимали видео?"]
+
+
+def test_followups_drop_generic_dupes_and_junk():
+    raw = ('{"follow_ups":["расскажи ещё","Почему лейбл был против?",'
+           '"почему лейбл был против","x","' + "щ" * 120 + '",42]}')
+    assert F._sane_followups(raw, "ru") == ["Почему лейбл был против?"]
+
+
+def test_followups_cap_at_three():
+    raw = '{"follow_ups":["Вопрос номер один?","Вопрос номер два?","Вопрос номер три?","Вопрос номер четыре?"]}'
+    assert len(F._sane_followups(raw, "ru")) == 3
+
+
+@pytest.mark.parametrize("raw", ["", None, "{}", '{"follow_ups":"short"}'])
+def test_followups_empty_when_nothing_usable(raw):
+    assert F._sane_followups(raw, "ru") in ([], ["short"])  # a lone string ≥8 chars would pass
+
+
+# ── related tracks: only the sample counterparts the listener actually has ───
+
+
+class _FakePoint:
+    def __init__(self, pid, payload):
+        self.id, self.payload = pid, payload
+
+
+class _FakeQdrant:
+    def __init__(self, full):
+        self._full = full
+
+    def retrieve(self, collection_name, ids, with_payload, with_vectors):
+        return [_FakePoint(i, self._full[i]) for i in ids if i in self._full]
+
+
+def _patch_related(monkeypatch, links, points):
+    from app.resources.metadata_db import MetadataDB
+    monkeypatch.setattr(MetadataDB, "get_sample_links",
+                        classmethod(lambda cls, c, s: links))
+    monkeypatch.setattr("app.resources.qdrant_utils.light_points",
+                        lambda client, collection: points)
+
+
+def test_related_tracks_are_sample_counterparts_only(monkeypatch):
+    points = [("t1", {"title": "Runaway", "artist": "Kanye West"}),
+              ("t2", {"title": "Expo 83", "artist": "Backyard Heavies"}),
+              ("t3", {"title": "Bound 2", "artist": "Kanye West"})]
+    full = {"t2": {"title": "Expo 83", "artist": "Backyard Heavies",
+                   "file_path": "/x.mp3", "duration": 200.0}}
+    _patch_related(monkeypatch, {"samples": [{"song": "Expo 83",
+                                              "artist": "Backyard Heavies"}],
+                                 "sampled_by": []}, points)
+    subject = {"kind": "song", "title": "Runaway", "artist": "Kanye West",
+               "track_id": "t1"}
+    out = F._sample_related_sync(_FakeQdrant(full), "acct_1", subject)
+    # The other side of the sample — and NOT the artist's other tracks.
+    assert [t["track_id"] for t in out] == ["t2"]
+    assert out[0]["file_path"] == "/x.mp3"
+
+
+def test_artists_and_albums_suggest_no_tracks(monkeypatch):
+    _patch_related(monkeypatch, {"samples": [], "sampled_by": []}, [])
+    assert F._sample_related_sync(_FakeQdrant({}), "acct_1",
+                                  {"kind": "artist", "title": "Queen",
+                                   "artist": "Queen"}) == []
+
+
+def test_song_without_sample_links_suggests_nothing(monkeypatch):
+    _patch_related(monkeypatch, {"samples": [], "sampled_by": []},
+                   [("t1", {"title": "Runaway", "artist": "Kanye West"})])
+    subject = {"kind": "song", "title": "Runaway", "artist": "Kanye West",
+               "track_id": "t1"}
+    assert F._sample_related_sync(_FakeQdrant({}), "acct_1", subject) == []
 
 
 # ── explain mode: one tapped fact, not the whole dossier ─────────────────────
