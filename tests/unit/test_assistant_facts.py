@@ -196,6 +196,30 @@ async def test_several_exact_matches_still_ask():
     assert len(options) == 4
 
 
+async def test_longest_exact_name_beats_its_own_substring():
+    # «кто спродюсировал 21 Questions» names both the song "21 Questions" and
+    # the album "21" — the shorter is contained in the longer, so it is not
+    # real ambiguity. Caught on the prod run: the question went to a vote
+    # against Adele's «21».
+    hits = [{"type": "album", "album": "21", "artist": "Adele", "score": 1.0},
+            {"type": "song", "title": "21 Questions", "artist": "50 Cent",
+             "track_id": "t9", "score": 0.9}]
+    subject, options = await _resolve(hits, "кто спродюсировал 21 Questions?")
+    assert options == []
+    assert subject["title"] == "21 Questions"
+
+
+def test_pack_is_thin_counts_stories_not_rows():
+    credits = [{"text": "Продюсер: X", "source": "credits"},
+               {"text": "Cannot Hide — a-ha: album Lifelines", "source": "catalog"},
+               {"text": "lyrics …", "source": "lyrics"}]
+    assert F._pack_is_thin(credits) is True                     # 3 rows, 0 stories
+    stories = credits + [{"text": "story one", "source": "facts"},
+                         {"text": "story two", "source": "facts"}]
+    assert F._pack_is_thin(stories) is False
+    assert F._pack_is_thin([{"text": "s", "source": "facts"}]) is True   # too few rows
+
+
 async def test_partial_name_is_not_an_exact_match():
     # "Hurting" must not claim a question about "Hurt"; nothing matches word for
     # word, so the usual score-ratio path decides.

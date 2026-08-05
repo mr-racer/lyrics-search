@@ -57,6 +57,11 @@ logger = logging.getLogger(__name__)
 # A pack thinner than this is treated as "we don't really know anything" and
 # earns a web lookup before the LLM ever sees it.
 MIN_PACK_ITEMS = 3
+# ...and a pack with fewer than this many STORY facts is thin no matter its
+# size: producer + album/genre + lyrics is three items and zero stories, and
+# the answer built from it («входит в альбом X, жанр Pop») is the dull recital
+# this branch exists to avoid. Measured on prod: «Cannot Hide» (a-ha).
+MIN_STORY_FACTS = 2
 MAX_WEB_SEARCHES = 2
 
 # ── explain mode ─────────────────────────────────────────────────────────────
@@ -412,6 +417,15 @@ async def resolve_subject(qdrant, collection_name: str, *, route, message: str, 
     # never reached the LLM at all. Two or more exact matches (a library with
     # four different tracks called "Runaway") is real ambiguity and still asks.
     exact = [h for h in hits if _named_in_query(h, query)]
+    if len(exact) > 1:
+        # The longest matched name wins ties: «кто спродюсировал 21 Questions»
+        # exactly names both the song "21 Questions" and the album "21" —
+        # because the shorter name is CONTAINED in the longer one. That is not
+        # real ambiguity; four different tracks all called "Runaway" (equal
+        # lengths) still is, and still asks.
+        lens = [len(tokenize(_hit_name(h))) for h in exact]
+        longest = max(lens)
+        exact = [h for h, n in zip(exact, lens) if n == longest]
     if len(exact) == 1:
         return _subject_from_hit(exact[0]), []
     if len(exact) > 1:
@@ -834,6 +848,18 @@ def _web_search_sync(query: str) -> str:
     except Exception:
         logger.warning("[assistant/facts] web search failed", exc_info=True)
         return ""
+
+
+def _pack_is_thin(items: list[dict]) -> bool:
+    """Does this pack earn a web lookup before the LLM sees it?
+
+    Thin = few items overall, OR almost no story facts among them — a pack of
+    credit lines and catalog bits has nothing an interesting answer could be
+    made of, however many rows it counts.
+    """
+    if len(items) < MIN_PACK_ITEMS:
+        return True
+    return sum(1 for it in items if it.get("source") == "facts") < MIN_STORY_FACTS
 
 
 def _snippets_from_web(raw: str, limit: int = 5) -> list[dict]:
@@ -1270,7 +1296,7 @@ async def run(*, qdrant, collection_name: str, message: str, route, slots,
     # A second angle only when the first one came back empty — the budget is
     # spent by code on a measured shortfall, never on the model's hunch.
     web_used = False
-    if len(items) < MIN_PACK_ITEMS:
+    if _pack_is_thin(items):
         for query in _web_queries(subject, message)[:MAX_WEB_SEARCHES]:
             await _say("web_search", query=query)
             raw_web = await asyncio.to_thread(_web_search_sync, query)
