@@ -56,9 +56,11 @@ class _FakeSearch:
     def __init__(self, hits_by_marker):
         self.hits_by_marker = hits_by_marker
         self.calls = 0
+        self.last_kwargs: dict = {}
 
     def query_points(self, collection_name, query, using, limit, with_payload):
         self.calls += 1
+        self.last_kwargs = {"limit": limit, "with_payload": with_payload}
         return SimpleNamespace(points=self.hits_by_marker.get(round(query[0], 3), []))
 
 
@@ -140,18 +142,24 @@ class TestClusterNeighbourhood:
         clusters = [_cluster("c1", 1.0, weight=1.0), _cluster("c2", 2.0, weight=1.0)]
         fake = _FakeSearch({1.0: [_Hit("t1", 0.7), _Hit("t2", 0.9)],
                             2.0: [_Hit("t1", 0.95)]})
-        vals, payloads, owner, sims = pools.cluster_neighbourhood(
+        vals, owner, sims = pools.cluster_neighbourhood(
             fake, "col", clusters, CALIB, limit=10)
         assert vals["t1"] == pytest.approx(0.95)
         assert owner["t1"] == "c2"
         assert owner["t2"] == "c1"
         assert sims["t1"] == pytest.approx(0.95)
-        assert set(payloads) == {"t1", "t2"}
+
+    def test_no_payload_is_ever_requested(self):
+        """Metadata comes from SQLite; a payload transfer here is the whole
+        reason a chunk used to take tens of seconds."""
+        fake = _FakeSearch({1.0: [_Hit("t1", 0.7)]})
+        pools.cluster_neighbourhood(fake, "col", [_cluster("c1", 1.0)], CALIB, limit=10)
+        assert fake.last_kwargs["with_payload"] is False
 
     def test_cluster_weight_scales_the_value(self):
         clusters = [_cluster("c1", 1.0, weight=0.5)]
         fake = _FakeSearch({1.0: [_Hit("t1", 0.8)]})
-        vals, _, _, sims = pools.cluster_neighbourhood(fake, "col", clusters, CALIB, limit=10)
+        vals, _, sims = pools.cluster_neighbourhood(fake, "col", clusters, CALIB, limit=10)
         assert vals["t1"] == pytest.approx(0.4)
         assert sims["t1"] == pytest.approx(0.8)   # the raw similarity is unscaled
 
@@ -159,15 +167,15 @@ class TestClusterNeighbourhood:
         water = [_cluster("w", 1.0, kind="water")]
         skip = [_cluster("s", 1.0, kind="skip")]
         fake = _FakeSearch({1.0: [_Hit("t", 0.8)]})
-        w_val, _, _, _ = pools.cluster_neighbourhood(fake, "col", water, CALIB,
-                                                     limit=10, use_k=True)
-        s_val, _, _, _ = pools.cluster_neighbourhood(fake, "col", skip, CALIB,
-                                                     limit=10, use_k=True)
+        w_val, _, _ = pools.cluster_neighbourhood(fake, "col", water, CALIB,
+                                                  limit=10, use_k=True)
+        s_val, _, _ = pools.cluster_neighbourhood(fake, "col", skip, CALIB,
+                                                  limit=10, use_k=True)
         assert w_val["t"] > s_val["t"]
 
     def test_excluded_ids_never_surface(self):
         fake = _FakeSearch({1.0: [_Hit("bad", 0.99), _Hit("ok", 0.5)]})
-        vals, _, _, _ = pools.cluster_neighbourhood(
+        vals, _, _ = pools.cluster_neighbourhood(
             fake, "col", [_cluster("c", 1.0)], CALIB, limit=10, excluded={"bad"})
         assert set(vals) == {"ok"}
 
@@ -175,7 +183,7 @@ class TestClusterNeighbourhood:
         class _Boom:
             def query_points(self, **kw):
                 raise RuntimeError("qdrant down")
-        vals, _, _, _ = pools.cluster_neighbourhood(
+        vals, _, _ = pools.cluster_neighbourhood(
             _Boom(), "col", [_cluster("c", 1.0)], CALIB, limit=10)
         assert vals == {}
 
@@ -204,6 +212,17 @@ class TestBuildCandidates:
         assert by_id["a"].anchor_track_id == "c1"
         assert by_id["a"].score > by_id["b"].score
 
+    def test_hits_missing_from_the_metadata_mirror_are_dropped(self):
+        """A CLAP hit with no SQLite row would render as an empty «—» card."""
+        out = pools.build_candidates(
+            affinity_by_id={"known": 0.9, "orphan": 0.9},
+            repulsion_by_id={},
+            payload_by_id={"known": {"artist": "x", "duration": 200.0}},
+            owner_by_id={}, axis_match_by_id={},
+            play_counts={}, recency_hours={}, pool_of=lambda t: "fresh",
+        )
+        assert [c.track_id for c in out] == ["known"]
+
 
 # ── stratified sampling ────────────────────────────────────────────────────
 
@@ -227,19 +246,15 @@ class TestStratify:
 
 
 class TestStratifiedFresh:
-    def _client(self, monkeypatch, points):
-        monkeypatch.setattr(pools, "light_points", lambda c, n, **kw: points)
-        return object()
+    def _meta(self):
+        # The SQLite-backed library mirror — no Qdrant involved on this path.
+        return {tid: {"artist": "a", "title": tid, "duration": 200.0,
+                      "sonic_axes": _axes(0.0)}
+                for tid in ("fresh1", "fresh2", "heard", "near_neg")}
 
-    def _pts(self):
-        return [(tid, {"artist": "a", "title": tid, "duration": 200.0,
-                       "sonic_axes": _axes(0.0)})
-                for tid in ("fresh1", "fresh2", "heard", "near_neg")]
-
-    def test_only_fresh_unexcluded_tracks_survive(self, monkeypatch):
-        client = self._client(monkeypatch, self._pts())
+    def test_only_fresh_unexcluded_tracks_survive(self):
         out = pools.stratified_fresh(
-            client, "col", excluded=set(), recency_hours={"heard": 2.0},
+            self._meta(), excluded=set(), recency_hours={"heard": 2.0},
             repulsion_by_id={}, neg_sim_by_id={},
             axis_stats=_stats(), axis_names=AXIS_NAMES,
             p_final=None, confidence=0.0, play_counts={}, pool_size=10, rng=RNG(),
@@ -247,20 +262,18 @@ class TestStratifiedFresh:
         assert "heard" not in {c.track_id for c in out}
         assert {"fresh1", "fresh2"} <= {c.track_id for c in out}
 
-    def test_picks_inside_a_negative_neighbourhood_are_dropped(self, monkeypatch):
-        client = self._client(monkeypatch, self._pts())
+    def test_picks_inside_a_negative_neighbourhood_are_dropped(self):
         out = pools.stratified_fresh(
-            client, "col", excluded=set(), recency_hours={},
+            self._meta(), excluded=set(), recency_hours={},
             repulsion_by_id={}, neg_sim_by_id={"near_neg": pools.EXPLORE_NEG_PCT + 0.01},
             axis_stats=_stats(), axis_names=AXIS_NAMES,
             p_final=None, confidence=0.0, play_counts={}, pool_size=10, rng=RNG(),
         )
         assert "near_neg" not in {c.track_id for c in out}
 
-    def test_everything_it_returns_is_labelled_fresh(self, monkeypatch):
-        client = self._client(monkeypatch, self._pts())
+    def test_everything_it_returns_is_labelled_fresh(self):
         out = pools.stratified_fresh(
-            client, "col", excluded=set(), recency_hours={},
+            self._meta(), excluded=set(), recency_hours={},
             repulsion_by_id={}, neg_sim_by_id={},
             axis_stats=_stats(), axis_names=AXIS_NAMES,
             p_final=None, confidence=0.0, play_counts={}, pool_size=10, rng=RNG(),

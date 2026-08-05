@@ -196,8 +196,13 @@ class _PointSimilar:
 
 
 class FakeQdrantSimilar:
-    """retrieve() returns the seed; query_points() returns canned hits
-    (modern qdrant-client interface — legacy .search() no longer exists)."""
+    """retrieve() returns the seed vector; query_points() returns canned hits
+    (modern qdrant-client interface — legacy .search() no longer exists).
+
+    scroll() backs ``light_points``: similar_tracks reads track metadata from
+    the library mirror, not from the search hits, so the fake has to expose the
+    same tracks there. With an empty SQLite mirror the mirror lookup falls back
+    to this scroll, which is exactly the pre-backfill production path."""
 
     def __init__(self, seed_point, hits):
         self.seed_point = seed_point
@@ -209,6 +214,17 @@ class FakeQdrantSimilar:
     def query_points(self, collection_name, query, using, limit, with_payload=True):
         from types import SimpleNamespace
         return SimpleNamespace(points=self.hits[:limit])
+
+    def scroll(self, collection_name, limit, with_payload=True, with_vectors=False,
+               offset=None):
+        pts = list(self.hits)
+        if self.seed_point is not None:
+            pts.append(self.seed_point)
+        return pts, None
+
+    def count(self, collection_name, exact=True):
+        from types import SimpleNamespace
+        return SimpleNamespace(count=len(self.hits) + (1 if self.seed_point else 0))
 
 
 # ── shared fixtures ──────────────────────────────────────────────────────────
@@ -1253,3 +1269,115 @@ class TestVibeAlbumSuggestions:
             qdrant_client=_FakeQdrantVibeAlbums([], {}),
             collection_name="col-empty", albums=self._albums())
         assert out["suggestions"] == []
+
+
+# ── the Qdrant access pattern itself (perf regression guard) ────────────────
+
+class _RecordingQdrant:
+    """Cosine-faithful fake that records HOW it was called.
+
+    The 2026-08-05 slowdown was not a logic bug: every search and retrieve
+    dragged the full payload along, and the payload carried a per-track list of
+    CLAP chunk vectors (~100 KB each). 150 hits came back as ~20 MB and a chunk
+    took tens of seconds. What must hold is the access pattern — Qdrant is
+    asked for vectors and ids, never for payloads.
+    """
+
+    def __init__(self, points):
+        self.points = {p.id: p for p in points}
+        self.retrieves: list[tuple[list, object]] = []
+        self.queries: list[object] = []
+        self.scrolls = 0
+
+    def retrieve(self, collection_name, ids, with_payload=True, with_vectors=False):
+        self.retrieves.append((list(ids), with_payload))
+        return [self.points[t] for t in ids if t in self.points]
+
+    def query_points(self, collection_name, query, using, limit, with_payload=True):
+        from types import SimpleNamespace
+        self.queries.append(with_payload)
+        q = np.asarray(query, dtype=np.float32)
+        q = q / (np.linalg.norm(q) or 1.0)
+        scored = []
+        for p in self.points.values():
+            v = np.asarray(p.vector["clap"], dtype=np.float32)
+            hit = _Point(p.id, list(v), p.payload)
+            hit.score = float(q @ (v / (np.linalg.norm(v) or 1.0)))
+            scored.append(hit)
+        scored.sort(key=lambda h: h.score, reverse=True)
+        return SimpleNamespace(points=scored[:limit])
+
+    def scroll(self, collection_name, limit, with_payload=True, with_vectors=False,
+               offset=None):
+        # with_vectors → the one-off calibration sample; anything else is a
+        # metadata scroll, which is what the SQLite mirror exists to avoid.
+        if not with_vectors:
+            self.scrolls += 1
+        return list(self.points.values()), None
+
+    def count(self, collection_name, exact=True):
+        from types import SimpleNamespace
+        return SimpleNamespace(count=len(self.points))
+
+
+class TestNextChunkQdrantAccess:
+    COLL = "acct_perf"
+
+    def _fake(self, n=120):
+        rng = random.Random(7)
+        pts = []
+        for i in range(n):
+            v = [rng.random() for _ in range(8)]
+            pts.append(_Point(f"t{i}", vector=v, payload={
+                "title": f"T{i}", "artist": f"A{i % 12}", "album": f"Alb{i % 20}",
+                "duration": 200.0, "file_path": f"/{i}.mp3",
+                "sonic_axes": _axes(0.0),
+            }))
+        return _RecordingQdrant(pts)
+
+    def _history(self, n=100):
+        """A long-term profile spanning `n` tracks — the case that used to make
+        the vector retrieve fetch thousands of ids."""
+        MetadataDB.set_axis_norm_stats(self.COLL, _stats())
+        for i in range(n):
+            MetadataDB.record_playback_event(
+                session_id="old", collection_name=self.COLL, track_id=f"t{i}",
+                played_sec=190.0, total_dur=200.0,
+            )
+
+    def test_qdrant_is_never_asked_for_payloads(self, _isolated_db):
+        self._history()
+        fake = self._fake()
+        ss.next_chunk(qdrant_client=fake, collection_name=self.COLL,
+                      session_id="s1", n=3, now=NOW)
+        assert fake.queries, "expected at least one CLAP search"
+        assert all(flag is False for flag in fake.queries)
+        assert all(flag is False for _ids, flag in fake.retrieves)
+
+    def test_vector_retrieve_is_bounded_by_the_cluster_pool(self, _isolated_db):
+        """`pull` holds every long-term island weight, but only its top
+        CLUSTER_POOL_SIZE are ever clustered — fetching the rest was pure waste."""
+        self._history()
+        fake = self._fake()
+        ss.next_chunk(qdrant_client=fake, collection_name=self.COLL,
+                      session_id="s1", n=3, now=NOW)
+        from app.services.stream.session import CLUSTER_POOL_SIZE
+        biggest = max((len(ids) for ids, _ in fake.retrieves), default=0)
+        assert 0 < biggest <= CLUSTER_POOL_SIZE * 2
+
+    def test_track_metadata_comes_from_the_mirror(self, _isolated_db):
+        """With the SQLite mirror populated the stream does no Qdrant scroll and
+        still renders full track cards."""
+        self._history()
+        fake = self._fake()
+        MetadataDB.upsert_track_metadata_bulk(
+            self.COLL, [(p.id, p.payload) for p in fake.points.values()])
+        from app.resources.qdrant_utils import invalidate_light_cache
+        invalidate_light_cache()
+
+        out = ss.next_chunk(qdrant_client=fake, collection_name=self.COLL,
+                            session_id="s1", n=3, now=NOW)
+        assert fake.scrolls == 0
+        assert out["tracks"]
+        assert all(c.payload.get("title") for c in out["tracks"])
+        assert out["diagnostics"]["meta_missing"] == 0

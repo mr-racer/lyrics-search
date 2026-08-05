@@ -9,10 +9,13 @@ Two pools replace the old anchor/explore/liked trio:
 * **familiar** — everything else: neighbours of the session's positive
   clusters plus the computed «favorites».
 
-Scoring never transfers CLAP vectors. Affinity comes from one Qdrant search per
-positive cluster centroid (the hit's own cosine), repulsion from one search per
-negative centroid — a candidate absent from every negative neighbourhood simply
-has zero repulsion, which is the correct answer anyway.
+Scoring never transfers CLAP vectors *or payloads*. Affinity comes from one
+Qdrant search per positive cluster centroid (the hit's own cosine), repulsion
+from one search per negative centroid — a candidate absent from every negative
+neighbourhood simply has zero repulsion, which is the correct answer anyway.
+Those searches ask for ids + scores only (``with_payload=False``); every piece
+of track metadata comes from the SQLite mirror (``qdrant_utils.light_map``),
+which the caller passes in as ``meta``.
 """
 
 from __future__ import annotations
@@ -20,7 +23,6 @@ from __future__ import annotations
 import logging
 import math
 
-from app.resources.qdrant_utils import PAYLOAD_EXCLUDE_LYRICS, light_points
 from app.services.stream.signals import (
     StreamCandidate,
     axis_match_score,
@@ -83,17 +85,18 @@ def cluster_neighbourhood(
     qdrant_client, collection_name: str, clusters, calibration, *,
     limit: int, excluded: set[str] | frozenset = frozenset(),
     use_k: bool = False,
-) -> tuple[dict[str, float], dict[str, dict], dict[str, str], dict[str, float]]:
+) -> tuple[dict[str, float], dict[str, str], dict[str, float]]:
     """Search around each cluster centroid; keep the best value per track.
 
-    Returns ``(value_by_id, payload_by_id, cluster_by_id, sim_by_id)`` where
-    value is ``ŵ · sim_pct(cos)`` (× the cluster's repel coefficient when
-    ``use_k``) and ``sim_by_id`` is the bare ``sim_pct`` — the stratified
-    sampler thresholds on raw similarity, not on the weighted value. Payloads
-    ride along so the caller needs no second retrieve.
+    Returns ``(value_by_id, cluster_by_id, sim_by_id)`` where value is
+    ``ŵ · sim_pct(cos)`` (× the cluster's repel coefficient when ``use_k``) and
+    ``sim_by_id`` is the bare ``sim_pct`` — the stratified sampler thresholds on
+    raw similarity, not on the weighted value.
+
+    Ids and scores only: ``with_payload=False``. Metadata is looked up in the
+    SQLite mirror by the caller.
     """
     values: dict[str, float] = {}
-    payloads: dict[str, dict] = {}
     owner: dict[str, str] = {}
     sims: dict[str, float] = {}
     for c in clusters:
@@ -105,7 +108,7 @@ def cluster_neighbourhood(
                 query=[float(x) for x in c.vec],
                 using="clap",
                 limit=limit,
-                with_payload=PAYLOAD_EXCLUDE_LYRICS,
+                with_payload=False,
             ).points
         except Exception:
             logger.exception("[stream] cluster search failed for %s", c.track_id)
@@ -122,8 +125,7 @@ def cluster_neighbourhood(
                 owner[tid] = c.track_id
             if sim > sims.get(tid, 0.0):
                 sims[tid] = sim
-            payloads.setdefault(tid, h.payload or {})
-    return values, payloads, owner, sims
+    return values, owner, sims
 
 
 # ── Scoring ────────────────────────────────────────────────────────────────
@@ -162,11 +164,15 @@ def build_candidates(
 
     ``pool_of(track_id) -> str`` labels each candidate (``fresh``/``familiar``)
     so assembly can honour the slider quota and the ≤2-in-a-row rule.
+
+    ``payload_by_id`` is the SQLite metadata mirror. A hit that is missing from
+    it is dropped rather than shipped with an empty payload — it would render
+    as a «—» card whose file path 404s.
     """
     out: list[StreamCandidate] = []
     for tid, aff in affinity_by_id.items():
-        payload = payload_by_id.get(tid) or {}
-        if not duration_ok(payload):
+        payload = payload_by_id.get(tid)
+        if payload is None or not duration_ok(payload):
             continue
         axis = axis_match_by_id.get(tid, 0.0)
         c = StreamCandidate(
@@ -229,7 +235,7 @@ def stratify(eligible: list[tuple[str, dict[str, float] | None]], pool_size: int
 
 
 def stratified_fresh(
-    qdrant_client, collection_name: str, *,
+    meta: dict[str, dict], *,
     excluded: set[str],
     recency_hours: dict[str, float],
     repulsion_by_id: dict[str, float],
@@ -248,12 +254,14 @@ def stratified_fresh(
     from collapsing onto the session's own footprint. Picks sitting inside a
     negative cluster's neighbourhood (``EXPLORE_NEG_PCT``) are dropped — random
     must not lead back where the listener just walked away from.
+
+    ``meta`` is the SQLite-backed ``{track_id: payload}`` mirror of the whole
+    collection — no Qdrant traffic happens here at all.
     """
-    points = light_points(qdrant_client, collection_name)[:STRATIFIED_SCROLL_CAP]
     payload_by_id: dict[str, dict] = {}
     z_by_id: dict[str, dict[str, float] | None] = {}
     eligible: list[tuple[str, dict[str, float] | None]] = []
-    for tid, payload in points:
+    for tid, payload in list(meta.items())[:STRATIFIED_SCROLL_CAP]:
         if tid in excluded or not is_fresh(tid, recency_hours):
             continue
         if neg_sim_by_id.get(tid, 0.0) >= EXPLORE_NEG_PCT:

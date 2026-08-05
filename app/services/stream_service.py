@@ -32,7 +32,7 @@ from datetime import datetime
 import numpy as np
 
 from app.resources.metadata_db import MetadataDB
-from app.resources.qdrant_utils import PAYLOAD_EXCLUDE_LYRICS, light_points
+from app.resources.qdrant_utils import light_map, light_points
 from app.services.stream import baseline as baseline_mod
 from app.services.stream import calibration as calib_mod
 from app.services.stream import pools as pools_mod
@@ -487,7 +487,8 @@ def current_vibes(
         [a.track_id for a in cands]
         + [s.track_id for s in skip_events]
         + [w.track_id for w in waters]))
-    vectors, payloads = _retrieve_track_data(qdrant_client, collection_name, fetch_ids)
+    vectors = _clap_vectors(qdrant_client, collection_name, fetch_ids)
+    payloads = _track_meta(qdrant_client, collection_name)
 
     merged = merge_anchors(cands, vectors, threshold=ISLAND_MERGE_THRESHOLD)
     merged = [a for a in merged if len(a.members) >= VIBE_MIN_MEMBERS]
@@ -588,29 +589,44 @@ def _fire_signals(rows: list) -> list[FireSignal]:
     return out
 
 
-def _retrieve_track_data(
+def _clap_vectors(
     qdrant_client, collection_name: str, track_ids: list[str],
-) -> tuple[dict[str, np.ndarray], dict[str, dict]]:
-    """Batch-fetch ``{id: clap_vector}`` + ``{id: payload}`` from Qdrant."""
+) -> dict[str, np.ndarray]:
+    """Batch-fetch ``{id: clap_vector}`` — the ONE thing this module still asks
+    Qdrant for on a per-request basis.
+
+    Explicitly ``with_payload=False``: track metadata comes from the SQLite
+    mirror (``_track_meta``). Dragging payloads along a vector retrieve is what
+    made a stream chunk take tens of seconds.
+    """
     if not track_ids:
-        return {}, {}
+        return {}
     try:
         pts = qdrant_client.retrieve(
             collection_name=collection_name, ids=track_ids,
-            with_payload=PAYLOAD_EXCLUDE_LYRICS, with_vectors=["clap"],
+            with_payload=False, with_vectors=["clap"],
         )
     except Exception:
-        logger.exception("[stream] track data retrieve failed")
-        return {}, {}
+        logger.exception("[stream] clap vector retrieve failed")
+        return {}
     vectors: dict[str, np.ndarray] = {}
-    payloads: dict[str, dict] = {}
     for p in pts:
-        tid = str(p.id)
-        payloads[tid] = p.payload or {}
         v = clap_vector(p)
         if v:
-            vectors[tid] = np.asarray(v, dtype=np.float32)
-    return vectors, payloads
+            vectors[str(p.id)] = np.asarray(v, dtype=np.float32)
+    return vectors
+
+
+def _track_meta(qdrant_client, collection_name: str) -> dict[str, dict]:
+    """``{track_id: payload}`` for the whole collection, from SQLite.
+
+    ``light_map`` reads the ``track_metadata`` mirror (card fields +
+    ``sonic_axes``) with a 90 s cache and only falls back to a fields-projected
+    Qdrant scroll when the mirror is empty. Everything the stream needs to
+    render a track — title/artist/album/year/genre/duration/paths/axes — is in
+    there, so no per-request payload transfer is required.
+    """
+    return light_map(qdrant_client, collection_name)
 
 
 def _anti_repeat_floor(
@@ -693,18 +709,17 @@ def next_chunk(
 
     # 2–3. Who this listener is, and what «similar» means in this library.
     listener = baseline_mod.compute(influencing, all_taste)
-    try:
-        total = qdrant_client.count(collection_name=collection_name).count
-    except Exception:
-        total = None
+    # The whole library's metadata, from SQLite (cached) — this is what every
+    # candidate is rendered from, and it doubles as the track count.
+    meta = _track_meta(qdrant_client, collection_name)
+    total = len(meta) or None
     calibration = calib_mod.load(qdrant_client, collection_name, n_tracks=total)
 
     # 4. Session profile: what we pull toward and push away from.
     long_weights = island_taste_weights(all_taste, influencing, now, cutoffs=cutoffs)
 
     def _fetch_vectors(ids):
-        vecs, _ = _retrieve_track_data(qdrant_client, collection_name, ids)
-        return vecs
+        return _clap_vectors(qdrant_client, collection_name, ids)
 
     profile = session_mod.build(
         signals=signals,
@@ -740,13 +755,12 @@ def next_chunk(
         MetadataDB.get_axis_norm_stats(collection_name),
         load_axis_norm_reference(),
     )
-    _, profile_payloads = _retrieve_track_data(
-        qdrant_client, collection_name,
-        list(dict.fromkeys(list(profile.positive_weights) + list(long_weights)))[:200],
-    )
+    profile_ids = list(dict.fromkeys(
+        list(profile.positive_weights) + list(long_weights)))[:200]
     z_by_track = {
-        tid: z for tid, pl in profile_payloads.items()
-        if (z := z_scores_for_axes(pl.get("sonic_axes"), axis_stats, AXIS_NAMES))
+        tid: z for tid in profile_ids
+        if (z := z_scores_for_axes(
+            (meta.get(tid) or {}).get("sonic_axes"), axis_stats, AXIS_NAMES))
     }
     p_long, conf_long = axis_preferences(long_weights, z_by_track, AXIS_NAMES)
     p_sess, conf_sess = axis_preferences(profile.positive_weights, z_by_track, AXIS_NAMES)
@@ -756,20 +770,21 @@ def next_chunk(
 
     # 6. Neighbourhood maps. One Qdrant search per cluster centroid; a candidate
     #    absent from every negative neighbourhood simply has zero repulsion.
-    repulsion, _neg_payloads, _neg_owner, neg_sim = pools_mod.cluster_neighbourhood(
+    repulsion, _neg_owner, neg_sim = pools_mod.cluster_neighbourhood(
         qdrant_client, collection_name, profile.negative, calibration,
         limit=pools_mod.NEG_FETCH_K, use_k=True,
     )
-    affinity, cand_payloads, cand_owner, _sim = pools_mod.cluster_neighbourhood(
+    affinity, cand_owner, _sim = pools_mod.cluster_neighbourhood(
         qdrant_client, collection_name, profile.positive, calibration,
         limit=pools_mod.FRESH_FETCH_K, excluded=fresh_excluded,
     )
 
     axis_match_by_id = {
         tid: axis_match_score(
-            z_scores_for_axes((pl or {}).get("sonic_axes"), axis_stats, AXIS_NAMES),
+            z_scores_for_axes((meta.get(tid) or {}).get("sonic_axes"),
+                              axis_stats, AXIS_NAMES),
             p_final, confidence, AXIS_NAMES)
-        for tid, pl in cand_payloads.items()
+        for tid in affinity
     }
 
     def _pool_of(tid: str) -> str:
@@ -805,12 +820,11 @@ def next_chunk(
             fav_top, recency_hours, liked_quota, rng,
             excluded=negatives | base_exclude | profile.muted | profile.session_played,
         )
-        _, liked_payloads = _retrieve_track_data(qdrant_client, collection_name, sampled)
-        # Drop favorites that no longer resolve in Qdrant: signals live in
+        # Drop favorites that no longer resolve in the library: signals live in
         # SQLite but re-indexing mints fresh point ids, orphaning old ones; an
         # unresolved id would ship as an empty-payload «—» track that 404s.
         for tid in sampled:
-            pl = liked_payloads.get(tid)
+            pl = meta.get(tid)
             if pl is None or not _duration_ok(pl):
                 continue
             liked_cands.append(StreamCandidate(
@@ -826,7 +840,7 @@ def next_chunk(
     scored = pools_mod.build_candidates(
         affinity_by_id={t: a for t, a in affinity.items() if t not in sampled_liked},
         repulsion_by_id=repulsion,
-        payload_by_id=cand_payloads,
+        payload_by_id=meta,
         owner_by_id=cand_owner,
         axis_match_by_id=axis_match_by_id,
         play_counts=play_counts,
@@ -854,7 +868,7 @@ def next_chunk(
         n_stratified = max(n_stratified, n)
     if n_stratified > 0:
         picks = pools_mod.stratified_fresh(
-            qdrant_client, collection_name,
+            meta,
             excluded=fresh_excluded | {c.track_id for c in fresh_cands},
             recency_hours=recency_hours,
             repulsion_by_id=repulsion, neg_sim_by_id=neg_sim,
@@ -869,8 +883,7 @@ def next_chunk(
         fresh_cands, familiar_cands,
         n=n, fresh_quota=fresh_quota,
         recent_artists=[
-            (cand_payloads.get(s.track_id) or profile_payloads.get(s.track_id) or {})
-            .get("artist", "").strip().lower()
+            (meta.get(s.track_id) or {}).get("artist", "").strip().lower()
             for s in session_events[-pools_mod.ARTIST_REPEAT_WINDOW:]
         ],
         fresh_is_hard=fresh_is_hard,
@@ -883,18 +896,19 @@ def next_chunk(
     fallback_used = False
     if len(chunk) < n and not fresh_is_hard:
         chosen = {c.track_id for c in chunk}
-        relaxed, relaxed_payloads, relaxed_owner, _ = pools_mod.cluster_neighbourhood(
+        relaxed, relaxed_owner, _ = pools_mod.cluster_neighbourhood(
             qdrant_client, collection_name, profile.positive, calibration,
             limit=pools_mod.FRESH_FETCH_K, excluded=hard_excluded | chosen,
         )
         relaxed_cands = pools_mod.build_candidates(
             affinity_by_id=relaxed, repulsion_by_id=repulsion,
-            payload_by_id=relaxed_payloads, owner_by_id=relaxed_owner,
+            payload_by_id=meta, owner_by_id=relaxed_owner,
             axis_match_by_id={
                 tid: axis_match_score(
-                    z_scores_for_axes((pl or {}).get("sonic_axes"), axis_stats, AXIS_NAMES),
+                    z_scores_for_axes((meta.get(tid) or {}).get("sonic_axes"),
+                                      axis_stats, AXIS_NAMES),
                     p_final, confidence, AXIS_NAMES)
-                for tid, pl in relaxed_payloads.items()
+                for tid in relaxed
             },
             play_counts=play_counts,
             recency_hours=recency_hours, pool_of=lambda _t: "familiar",
@@ -915,13 +929,12 @@ def next_chunk(
             and tid not in profile.muted and tid not in chosen
         ]
         need = n - len(chunk)
-        _, stale_payloads = _retrieve_track_data(
-            qdrant_client, collection_name, stale[:need])
         for tid in stale[:need]:
-            if tid in stale_payloads and _duration_ok(stale_payloads[tid]):
+            pl = meta.get(tid)
+            if pl is not None and _duration_ok(pl):
                 fallback_used = True
                 chunk.append(StreamCandidate(
-                    track_id=tid, payload=stale_payloads[tid], pool="replay"))
+                    track_id=tid, payload=pl, pool="replay"))
 
     # 8. Round number — cosmetic (display only, never gates selection).
     round_no = 1
@@ -946,6 +959,11 @@ def next_chunk(
         },
         "n_negatives": len(negatives),
         "n_muted": len(profile.muted),
+        # Candidates the CLAP search returned but the SQLite mirror doesn't
+        # know — they are dropped, so a non-zero value means the mirror needs a
+        # backfill (scripts/backfill_track_metadata.py).
+        "meta_missing": sum(1 for tid in affinity if tid not in meta),
+        "n_meta": len(meta),
         "profile_confidence": round(confidence, 3),
         "axis_stats_source": (axis_stats or {}).get("source"),
         "pool_sizes": {"fresh": len(fresh_cands), "familiar": len(familiar_cands)},
@@ -967,16 +985,14 @@ def next_chunk(
         session_play_times=sorted(s.played_at for s in session_events), now=now)
     adaptation = session_adaptation(session_events, fire_anchor_weights)
     if adaptation is not None:
-        _, adapt_payloads = _retrieve_track_data(
-            qdrant_client, collection_name, adaptation["track_ids"])
         adaptation = {
             "active": True,
             "tracks": [
                 {
                     "track_id": tid,
-                    "title": (adapt_payloads.get(tid) or {}).get("title") or "—",
-                    "artist": (adapt_payloads.get(tid) or {}).get("artist") or "—",
-                    "cover_art_path": (adapt_payloads.get(tid) or {}).get("cover_art_path"),
+                    "title": (meta.get(tid) or {}).get("title") or "—",
+                    "artist": (meta.get(tid) or {}).get("artist") or "—",
+                    "cover_art_path": (meta.get(tid) or {}).get("cover_art_path"),
                 }
                 for tid in adaptation["track_ids"]
             ],
@@ -1044,19 +1060,18 @@ def similar_tracks(
     excluded.add(seed_track_id)
 
     # 1. Seed vector + axes.
-    seed_vectors, seed_payloads = _retrieve_track_data(
-        qdrant_client, collection_name, [seed_track_id],
-    )
+    seed_vectors = _clap_vectors(qdrant_client, collection_name, [seed_track_id])
     seed_vec = seed_vectors.get(seed_track_id)
     if seed_vec is None:
         return {"seed_track_id": seed_track_id, "tracks": []}
+    meta = _track_meta(qdrant_client, collection_name)
 
     axis_stats = blend_axis_stats(
         MetadataDB.get_axis_norm_stats(collection_name),
         load_axis_norm_reference(),
     )
     seed_z = z_scores_for_axes(
-        (seed_payloads.get(seed_track_id) or {}).get("sonic_axes"),
+        (meta.get(seed_track_id) or {}).get("sonic_axes"),
         axis_stats, AXIS_NAMES,
     )
 
@@ -1069,7 +1084,7 @@ def similar_tracks(
             query=list(seed_vec),
             using="clap",
             limit=k,
-            with_payload=PAYLOAD_EXCLUDE_LYRICS,
+            with_payload=False,
         ).points
     except Exception:
         logger.exception("[similar] CLAP search failed for %s", seed_track_id)
@@ -1084,8 +1099,9 @@ def similar_tracks(
     out: list[StreamCandidate] = []
     for h in hits:
         tid = str(h.id)
-        payload = h.payload or {}
-        if tid in excluded or tid in dislikes or not _duration_ok(payload):
+        payload = meta.get(tid)
+        if (tid in excluded or tid in dislikes
+                or payload is None or not _duration_ok(payload)):
             continue
         cos = float(h.score or 0.0)
         cand_z = z_scores_for_axes(payload.get("sonic_axes"), axis_stats, AXIS_NAMES)
@@ -1148,7 +1164,8 @@ def long_term_profile(*, qdrant_client, collection_name: str, now: datetime | No
     # Anchors → islands (merge groups carry their member track ids).
     anchor_cands = select_positive_anchors(long_weights, top_m=ISLAND_POOL_SIZE)
     member_pool = [a.track_id for a in anchor_cands]
-    vectors, payloads = _retrieve_track_data(qdrant_client, collection_name, member_pool)
+    vectors = _clap_vectors(qdrant_client, collection_name, member_pool)
+    payloads = _track_meta(qdrant_client, collection_name)
     merged = merge_anchors(anchor_cands, vectors, threshold=ISLAND_MERGE_THRESHOLD)
     # An island is a *cluster* of taste, not a lone track or a chance pair:
     # keep only merge groups of ISLAND_MIN_MEMBERS+, so no «остров» is ever
@@ -1180,8 +1197,9 @@ def long_term_profile(*, qdrant_client, collection_name: str, now: datetime | No
         load_axis_norm_reference(),
     )
     z_by_track = {
-        tid: z for tid, pl in payloads.items()
-        if (z := z_scores_for_axes(pl.get("sonic_axes"), axis_stats, AXIS_NAMES))
+        tid: z for tid in long_weights
+        if (z := z_scores_for_axes(
+            (payloads.get(tid) or {}).get("sonic_axes"), axis_stats, AXIS_NAMES))
     }
     p_long, confidence = axis_preferences(long_weights, z_by_track, AXIS_NAMES)
     axes = (
@@ -1348,7 +1366,7 @@ def vibe_album_suggestions(
 
     for vibe in vibes:
         member_ids = [t["track_id"] for t in vibe["tracks"]]
-        vectors, _ = _retrieve_track_data(qdrant_client, collection_name, member_ids)
+        vectors = _clap_vectors(qdrant_client, collection_name, member_ids)
         centroid = _vibe_centroid(member_ids, vectors)
         if centroid is None:
             ranked_per_vibe.append([])
@@ -1394,7 +1412,7 @@ def vibe_album_suggestions(
             sample_by_key[k] = sample
             need_ids.extend(sample)
         if need_ids:
-            vecs, _ = _retrieve_track_data(qdrant_client, collection_name, need_ids)
+            vecs = _clap_vectors(qdrant_client, collection_name, need_ids)
             for k, sample in sample_by_key.items():
                 album_centroids[k] = _vibe_centroid(sample, vecs)
 

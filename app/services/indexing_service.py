@@ -243,11 +243,18 @@ class IndexingService:
         batch_size: int = 32,
         sonic_axes_map: Optional[dict] = None,
     ) -> None:
+        """Upsert points + mirror their payloads into SQLite.
+
+        ``clap_chunks_map`` is accepted (the pipeline still computes it) but no
+        longer persisted: the per-chunk vectors used to be written into the
+        payload as ``clap_chunks``, nothing ever read them back, and at ~100 KB
+        of JSON per track they dominated every payload transfer — a 150-hit
+        CLAP search returned ~20 MB. See qdrant_utils.PAYLOAD_EXCLUDE_HEAVY.
+        """
         client = self.engine.qdrant_client
         coll = self.collection_name
         vector_name, _ = self._vector_params()
         matched = 0
-        chunks_attached = 0
 
         for i in tqdm(range(0, len(data), batch_size)):
             batch = data[i: i + batch_size]
@@ -281,11 +288,6 @@ class IndexingService:
                     slug = _slugify(artist) + "-" + _slugify(title)
 
                 payload = _build_payload_for_upsert(song_info, slug=slug)
-                if clap_chunks_map:
-                    chunk_list = clap_chunks_map.get(key)
-                    if chunk_list:
-                        payload["clap_chunks"] = [c.tolist() for c in chunk_list]
-                        chunks_attached += 1
                 if sonic_axes_map:
                     axes = sonic_axes_map.get(key)
                     if axes:
@@ -314,9 +316,8 @@ class IndexingService:
 
         if clap_map:
             logger.info(
-                "[IndexingService] CLAP vectors attached to %d / %d points "
-                "(per-chunk lists attached to %d)",
-                matched, len(data), chunks_attached,
+                "[IndexingService] CLAP vectors attached to %d / %d points",
+                matched, len(data),
             )
 
     def fit(

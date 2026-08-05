@@ -2,10 +2,12 @@
 
 Flow:
   1. Resolve the seed track's CLAP vector from Qdrant.
-  2. Query Qdrant for top-K candidate neighbors (K = limit * 3, min 30).
-  3. Apply hard filters: drop seed, drop excluded ids, drop dislikes.
-  4. Apply soft diversity demotion (no >2 consecutive same-artist).
-  5. Return the trimmed list plus diagnostics.
+  2. Query Qdrant for top-K candidate neighbor IDS (K = limit * 3, min 30).
+  3. Attach metadata from the SQLite mirror — Qdrant is only asked for vectors
+     and ids, never payloads.
+  4. Apply hard filters: drop seed, drop excluded ids, drop dislikes.
+  5. Apply soft diversity demotion (no >2 consecutive same-artist).
+  6. Return the trimmed list plus diagnostics.
 
 The Qdrant client and reactions accessor are injected at call time so
 this module stays unit-testable without a live database.
@@ -13,14 +15,25 @@ this module stays unit-testable without a live database.
 
 from __future__ import annotations
 
-from typing import Iterable
+from typing import Iterable, NamedTuple
 
 from app.domain.models import AutoplayQueueDiagnostics, AutoplayQueueResponse, TrackMetadata
 from app.resources.metadata_db import MetadataDB
-from app.resources.qdrant_utils import PAYLOAD_EXCLUDE_LYRICS
+from app.resources.qdrant_utils import light_map
 from app.services._payload_coerce import coerce_float
 from app.services.artist_split import artist_refs_for_track, display_title_for_track
 from app.services.song_facts_service import apply_song_relations
+
+
+class _Candidate(NamedTuple):
+    """A Qdrant hit re-joined with its SQLite metadata row.
+
+    Same ``.id``/``.payload`` shape the raw Qdrant point had, so the filter
+    chain below (and its tests) work unchanged whichever source the metadata
+    came from.
+    """
+    id: str
+    payload: dict
 
 
 def _point_to_track(pt) -> TrackMetadata:
@@ -34,7 +47,9 @@ def _point_to_track(pt) -> TrackMetadata:
         year=p.get("year"),
         cover_art_path=p.get("cover_art_path"),
         file_path=p.get("file_path") or "",
-        duration_sec=p.get("duration_sec") or 0.0,
+        # The mirror (and the Qdrant payload) call it "duration"; older callers
+        # wrote "duration_sec". Accept both rather than shipping 0.0.
+        duration_sec=coerce_float(p.get("duration_sec") or p.get("duration")) or 0.0,
         genre=p.get("genre"),
         producer=p.get("producer"),
         label=p.get("label"),
@@ -183,16 +198,24 @@ def next_queue(
     # 2. Query top-K neighbors.
     # qdrant-client >= 1.10: query_points replaced the removed .search()
     k = max(limit * 3, 30)
-    candidates = qdrant_client.query_points(
+    hits = qdrant_client.query_points(
         collection_name=collection_name,
         query=seed_vec,
         using="clap",
         limit=k,
-        with_payload=PAYLOAD_EXCLUDE_LYRICS,
+        with_payload=False,
     ).points
 
+    # 2b. Metadata from the SQLite mirror. A hit the mirror doesn't know is
+    #     dropped — it would render as an empty card whose file path 404s.
+    meta = light_map(qdrant_client, collection_name)
+    candidates = [
+        _Candidate(id=str(h.id), payload=meta[str(h.id)])
+        for h in hits if str(h.id) in meta
+    ]
+
     # 3. Reactions lookup (single batched query).
-    candidate_ids = [str(c.id) for c in candidates]
+    candidate_ids = [c.id for c in candidates]
     reactions = MetadataDB.get_reactions_for_tracks(collection_name, candidate_ids)
     dislikes = {tid for tid, r in reactions.items() if r == "dislike"}
 

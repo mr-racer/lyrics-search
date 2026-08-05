@@ -553,9 +553,15 @@ def build(
     waters = water_weights(all_taste, now)
     waters = {t: w * baseline.m_react for t, w in waters.items()}
 
-    # 4. Vectors for everything that will be clustered.
+    # 4. Vectors for everything that will actually be clustered — and ONLY
+    #    that. ``pull`` carries every long-term island weight (thousands of
+    #    tracks on a mature library) but _cluster only ever looks at its top
+    #    CLUSTER_POOL_SIZE, so fetching all of it meant dragging thousands of
+    #    CLAP vectors over HTTP on every chunk.
     need = list(dict.fromkeys(
-        list(pull) + [s.track_id for s in skips] + list(waters)))
+        [a.track_id for a in select_positive_anchors(pull, top_m=CLUSTER_POOL_SIZE)]
+        + [s.track_id for s in skips]
+        + [a.track_id for a in select_positive_anchors(waters, top_m=CLUSTER_POOL_SIZE)]))
     vectors = fetch_vectors(need)
 
     # 5. Cluster, forgive, re-cluster the survivors.

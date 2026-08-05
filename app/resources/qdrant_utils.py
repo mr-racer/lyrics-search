@@ -7,17 +7,22 @@ batch comes back empty). It does not impose a page/count cap and propagates any
 client exception to the caller — callers that need a cap, an early break, or
 partial-result-on-error must keep their own loop.
 
-Two payload-projection helpers live here because the recommendation/home
+Three payload-projection helpers live here because the recommendation/home
 surfaces were transferring the **full** Qdrant payload — including each track's
-entire ``lyrics`` blob — for thousands of points on every request:
+entire ``lyrics`` blob and its per-chunk CLAP vectors — for thousands of points
+on every request:
 
-- ``PAYLOAD_EXCLUDE_LYRICS`` — a ``with_payload=`` selector that returns the
-  whole payload *except* lyrics. Use for bounded retrieves/queries where the
-  caller reads many small metadata fields but never the lyrics.
+- ``PAYLOAD_EXCLUDE_HEAVY`` — a ``with_payload=`` selector that returns the
+  whole payload *except* ``lyrics`` and ``clap_chunks``. Use for bounded
+  retrieves/queries where the caller reads many small metadata fields but
+  neither of those two. (``PAYLOAD_EXCLUDE_LYRICS`` is the old name for it.)
 - ``light_points`` — a per-collection cached, lyrics-free full-collection
-  scroll (card fields + ``sonic_axes`` only). Collapses the repeated
+  scroll (card fields + ``sonic_axes`` only), served from the SQLite
+  ``track_metadata`` mirror when it is populated. Collapses the repeated
   whole-library scans the home page + post-like stream refresh did on every
-  request into one shared scroll.
+  request into one shared read.
+- ``light_map`` — the same data as ``{track_id: payload}``, for callers that
+  look tracks up by id (the recsys does, dozens of times per request).
 
 The player still shows lyrics for the *playing* track: the frontend fetches
 them on demand via ``GET /search/tracks/{id}/lyrics`` whenever the inline field
@@ -35,9 +40,19 @@ from qdrant_client import models
 
 logger = logging.getLogger(__name__)
 
-# Return the whole payload EXCEPT the heavy lyrics blob. The single big field;
-# everything else (producer, label, samples, track/disc numbers, …) stays.
-PAYLOAD_EXCLUDE_LYRICS = models.PayloadSelectorExclude(exclude=["lyrics"])
+# Return the whole payload EXCEPT the two heavy blobs:
+#   lyrics      — the full lyric text
+#   clap_chunks — the per-chunk CLAP vectors the indexer used to write into the
+#                 payload (N × 512 floats ≈ 100 KB of JSON per track). NOTHING
+#                 reads them; left in place they turned every 150-hit search
+#                 into a ~20 MB response and made a stream chunk take tens of
+#                 seconds. The indexer no longer writes them, and
+#                 scripts/strip_clap_chunks.py removes them from old
+#                 collections — this exclusion covers whatever is still there.
+# Everything else (producer, label, samples, track/disc numbers, …) stays.
+PAYLOAD_EXCLUDE_HEAVY = models.PayloadSelectorExclude(exclude=["lyrics", "clap_chunks"])
+# Historic name, kept so existing call sites (and one-off scripts) keep working.
+PAYLOAD_EXCLUDE_LYRICS = PAYLOAD_EXCLUDE_HEAVY
 
 # Canonical "light" payload for recsys/home/library full-collection scans: card
 # fields for display + ``sonic_axes`` for scoring + the artist-split fields the
@@ -61,6 +76,9 @@ LIGHT_CACHE_TTL = 90.0  # seconds a cached scroll is trusted without re-checking
 # both are cleared together by invalidate_light_cache().
 _SQLITE_LIGHT_CACHE: dict[str, tuple[float, int, list[tuple[str, dict]]]] = {}
 _SQLITE_LIGHT_LOCK = threading.Lock()
+
+# {collection_name: (source_list, {id: payload})} — see light_map().
+_LIGHT_MAP_CACHE: dict[str, tuple[list, dict[str, dict]]] = {}
 
 
 def light_points(client, collection_name: str, *, batch_size: int = 512) -> list[tuple[str, dict]]:
@@ -105,6 +123,23 @@ def light_points(client, collection_name: str, *, batch_size: int = 512) -> list
             time.monotonic(), count if count is not None else len(fresh), fresh,
         )
     return fresh
+
+
+def light_map(client, collection_name: str) -> dict[str, dict]:
+    """``{track_id: light_payload}`` view over :func:`light_points`.
+
+    The recsys looks metadata up by id dozens of times per request, so it wants
+    a dict, not a list. The dict is memoised against the *identity* of the
+    cached list: while ``light_points`` keeps serving the same object (i.e. the
+    cache is warm) the mapping is built exactly once.
+    """
+    pts = light_points(client, collection_name)
+    entry = _LIGHT_MAP_CACHE.get(collection_name)
+    if entry is not None and entry[0] is pts:
+        return entry[1]
+    mapping = dict(pts)
+    _LIGHT_MAP_CACHE[collection_name] = (pts, mapping)
+    return mapping
 
 
 def _sqlite_light_points(collection_name: str) -> list[tuple[str, dict]]:
@@ -194,6 +229,10 @@ def invalidate_light_cache(collection_name: str | None = None) -> None:
             _SQLITE_LIGHT_CACHE.clear()
         else:
             _SQLITE_LIGHT_CACHE.pop(collection_name, None)
+    if collection_name is None:
+        _LIGHT_MAP_CACHE.clear()
+    else:
+        _LIGHT_MAP_CACHE.pop(collection_name, None)
 
 
 def scroll_all(client, collection_name: str, *, batch_size: int = 256, **scroll_kwargs) -> Iterator:
