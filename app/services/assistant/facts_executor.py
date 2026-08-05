@@ -6,9 +6,12 @@ the LLM decides NOTHING except the wording. Five steps, four of them pure code:
 1. **Resolve the subject** — ``catalog_search_service`` (entity mode) over the
    spans GLiNER already extracted. A thin margin between the top two candidates
    produces a ``disambiguate`` frame instead of a guess.
-2. **Build a numbered grounding pack** — refined facts → raw facts, credits,
-   gems, bio, AudioDB, lyrics. Zero LLM involvement. The ``[n]`` numbering is
-   the whole anti-hallucination mechanism.
+2. **Build a numbered grounding pack** — RAW source facts (songfacts.com
+   stories, Genius descriptions and line annotations — selected, deduped and
+   sentence-cropped in code), credits, gems, bio, AudioDB, lyrics. Zero LLM
+   involvement. The ``[n]`` numbering is the whole anti-hallucination
+   mechanism. The refined one-liners are a display store, not grounding: packs
+   built from them produced answers that recited the cleaned list back.
 3. **One ``ask_llm(parse_json=True)`` call** returning
    ``{"answer": ..., "used": [n, …]}``. Not pydantic-ai, not tool calling — the
    repo has been burned twice by small models mangling tool-call syntax.
@@ -83,6 +86,30 @@ EXPLAIN_SELF_CONTAINED_CHARS = 180
 # produces worse answers than one filled with the best 18.
 MAX_PACK_ITEMS = 18
 MAX_FACT_CHARS = 400
+# Raw source facts (songfacts.com stories, Genius descriptions/annotations) are
+# the material the answer is written FROM, so they get a bigger budget than the
+# 400-char cap used for credit lines — cropping a story mid-anecdote is exactly
+# the "уже кропнутые факты" failure this branch was rebuilt to avoid. Cut on a
+# sentence boundary, never mid-word.
+RAW_FACT_CHARS = 700
+# A fact-rich song carries 60-80 raw rows (measured on prod: Bohemian Rhapsody
+# 71, Monster 78). The pack takes the best few of each shape and leaves room
+# for credits, samples, gems, catalog bits and lyrics under MAX_PACK_ITEMS.
+MAX_RAW_STORIES = 7        # songfacts.com paragraphs + Genius descriptions
+MAX_RAW_ANNOTATIONS = 5    # Genius line annotations
+# Two sources retell the same anecdote often enough to matter; a near-duplicate
+# burns a pack slot AND makes the model cite the same story twice.
+DEDUPE_OVERLAP = 0.6
+# Below this a "story" is a stub, not a story — the prod Bowie pool opens with
+# the row "January 8, 1947 - January 10, 2016", which would burn a slot.
+MIN_RAW_CHARS = 60
+# When a pool overflows its cap, keep the first rows (the source's own lead —
+# songfacts puts the headline anecdotes first) and spread the rest evenly, so
+# an artist's chronological pool isn't all childhood and a song's annotations
+# aren't all the first verse. Measured on prod: Bowie's first seven rows were
+# birth, name, school; Bohemian Rhapsody's first five annotations never left
+# the intro.
+RAW_LEAD_KEEP = 3
 MAX_LYRICS_CHARS = 700
 MAX_RELATED_TRACKS = 8
 # Below this score ratio against the top hit, a runner-up is not a real rival
@@ -113,17 +140,72 @@ HARD RULES:
 - If the facts are too thin to answer the question, say so plainly in one sentence and put the numbers of whatever facts you did mention in "used".
 - Any artist, producer or song name must be copied EXACTLY as it appears in the facts — never translated, transliterated, localized, or grammatically declined, regardless of the answer language.
 
+HOW TO BUILD THE ANSWER — three steps, in this order:
+1. CONNECT. Several facts usually tell parts of ONE story: the same recording session, the same feud, the same sample, the same film. Find those threads first and merge each into a single narrative — never retell the facts one by one in list order.
+2. SELECT. Keep only the 2-4 most interesting threads. Interesting = a story with people acting (someone refused, found, hid, fought), a surprise, a vivid concrete detail. Boring = generic praise, awards lists, chart numbers without a story, encyclopedic summaries. Drop boring threads entirely and do not cite them.
+3. SHAPE.
+   - Broad question («расскажи про», "tell me about", «чем интересен») → 2-4 short thematic blocks. Each block: a bold mini-heading of 1-3 words in {lang_name} (**Запись**, **Слова**, **Клип** — name it after the thread, these are examples, not a fixed set), then 1-3 sentences weaving that thread's facts together. Blank line between blocks.
+   - Narrow question (who produced it, what year, what a line means) → 1-3 sentences, direct, no headings.
+
 STYLE:
-- Lead with the answer. No preamble, no "This artist is a fascinating figure…".
-- Lead with what is SPECIFIC to this subject — the recording, the story, the people, the numbers. A general description ("an English rock band formed in 1985", "one of the most influential artists of the century") is the least interesting thing you can say and must never open the answer. Use it only if the question is literally "who is this".
-- Prefer the concrete fact over the summarising one. Two vivid specifics beat five vague lines.
-- 2-5 sentences for a normal question. Match length to the question; most answers are short.
-- Sound like a well-read friend talking, not an encyclopedia entry. No bullet lists unless the facts genuinely split into separate threads.
-- Do not restate the question, and do not name the subject in the first three words unless the sentence needs it.
+- Lead with the substance. No preamble, and never open with a general description ("an English rock band formed in 1985" is the least interesting sentence you can write).
+- Sound like a well-read friend telling stories, not an encyclopedia entry.
 - Say each thing once. No closing summary.
 
-Output ONLY minified JSON, no prose, no fences:
-{{"answer": "...", "used": [1, 3]}}"""
+Output ONLY minified JSON, no prose, no fences. "answer" is a JSON string — use \\n for line breaks and **bold** for block headings:
+{{"answer": "...", "used": [1, 3]}}
+
+## Example (broad question)
+
+SONG: Bohemian Rhapsody — Queen
+QUESTION: расскажи про эту песню
+FACTS:
+[1] Freddie Mercury wrote the lyrics, and there has been a lot of speculation as to their meaning. Many of the words appear in the Qu'ran: "Bismillah" literally means "In the name of Allah". "Scaramouch" is a boastful coward, "Beelzebub" one of the names of the Devil. Mercury was always vague about the meaning, admitting only that it was "about relationships".
+[2] The backing track came together quickly, but Queen spent days overdubbing vocals on a 24-track machine: about 180 tracks were layered and bounced into sub-mixes. Brian May recalled being able to see through the tape, worn thin by overdubs.
+[3] Producer Roy Thomas Baker recalls Mercury coming into the studio proclaiming: "oh, I've got a few more 'Galileos' dear!"
+[4] Queen's manager played it to Elton John, who declared: "are you mad? You'll never get that on the radio!" The label pleaded to cut the six-minute single; Mercury refused.
+[5] In the UK it went to #1 on November 29, 1975 and stayed for nine weeks, a record at the time.
+[6] It got a whole new audience when it was used in Wayne's World (1992): re-released, it charted at #2 in the US.
+[7] The video was shot in three hours for £3,500 and started the UK trend of making videos instead of live TV appearances.
+[8] Queen fans, and also Brian May, colloquially refer to the song as "Bo Rhap".
+
+GOOD ANSWER (structure to imitate; write yours in {lang_name}):
+{example_answer}
+
+Why it is good: facts 2 and 3 merged into one recording thread; 4, 5 and 6 became one arc about the single's fate; 7 and 8 were left out as weaker — and are NOT in "used"."""
+
+# The few-shot answer in the listener's language: a 12b model imitates the
+# example's language as eagerly as its structure, so showing it a Russian
+# answer under an English instruction is how English replies to «расскажи про»
+# stop happening.
+# NB: single braces here on purpose — these strings are the VALUE substituted
+# into _SYSTEM.format(), not part of the format template itself.
+_EXAMPLE_ANSWERS = {
+    "ru": ('{"answer":"**Запись**\\nПесню собирали как оперу: около 180 вокальных дорожек '
+           'наложили друг на друга, и плёнка местами протёрлась насквозь [2]. Меркьюри всё '
+           'приходил в студию со словами: «у меня тут ещё пара „Галилео“» [3].\\n\\n'
+           '**Слова**\\nТекст полон загадок — Bismillah из Корана, Scaramouch, Beelzebub; '
+           'сам Меркьюри так и не объяснил смысл, отделываясь фразой «это про отношения» [1].'
+           '\\n\\n**Судьба сингла**\\nЛейбл умолял урезать шесть минут, Elton John пророчил, '
+           'что радио это не возьмёт — Меркьюри отказался [4]. Итог: девять недель на первом '
+           'месте в Британии [5], а в 1992-м «Wayne\'s World» вернул песню в чарты США [6].",'
+           '"used":[1,2,3,4,5,6]}'),
+    "en": ('{"answer":"**The recording**\\nThe song was built like an opera: about 180 vocal '
+           'tracks were layered until the tape wore thin enough to see through [2], and Mercury '
+           'kept walking in announcing \\"a few more \'Galileos\'\\" [3].\\n\\n**The words**\\n'
+           'The lyrics are a riddle — Bismillah from the Qu\'ran, Scaramouch, Beelzebub — and '
+           'Mercury never explained them beyond \\"it\'s about relationships\\" [1].\\n\\n'
+           '**The single\'s fate**\\nThe label begged to cut the six minutes and Elton John said '
+           'radio would never play it — Mercury refused [4]. It sat at UK #1 for nine weeks [5], '
+           'and in 1992 Wayne\'s World sent it back up the US charts [6].",'
+           '"used":[1,2,3,4,5,6]}'),
+}
+
+
+def _system_prompt(lang: str) -> str:
+    """The main-branch system prompt with the few-shot answer in the right language."""
+    key = "ru" if _is_ru(lang) else "en"
+    return _SYSTEM.format(lang_name=_lang_name(lang), example_answer=_EXAMPLE_ANSWERS[key])
 
 # Appended to the prompt for the single retry after an uncitable first answer.
 _RETRY_SUFFIX = (
@@ -398,6 +480,100 @@ def _clean(text: str, limit: int = MAX_FACT_CHARS) -> str:
     return text[:limit].rstrip() + "…" if len(text) > limit else text
 
 
+def _clean_story(text: str, limit: int = RAW_FACT_CHARS) -> str:
+    """Whitespace-collapse and cut on a sentence boundary.
+
+    A songfacts paragraph clipped mid-anecdote reads worse than a shorter but
+    complete one — and tempts the model to invent the ending. Falls back to the
+    hard cut only when no sentence end lands in the back 60% of the budget.
+    """
+    text = " ".join((text or "").split())
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    cut = max(head.rfind(". "), head.rfind("! "), head.rfind("? "), head.rfind(".»"))
+    if cut >= limit * 0.4:
+        return head[:cut + 1]
+    return head.rstrip() + "…"
+
+
+# Genius annotations arrive as "Lyrics string: <line>. Fact: <story>" — useful
+# structure, noisy wording. Rewritten to a compact "Line «…» — story" so the
+# pack spends its characters on the story, not on boilerplate.
+_ANNOTATION_RE = re.compile(r"^\s*Lyrics string:\s*(?P<line>.*?)\.?\s*Fact:\s*",
+                            re.DOTALL)
+
+
+def _strip_annotation_boilerplate(text: str) -> str:
+    m = _ANNOTATION_RE.match(text or "")
+    if not m:
+        return text or ""
+    line = " ".join((m.group("line") or "").split())
+    rest = (text or "")[m.end():]
+    return f"Line «{line}» — {rest}" if line else rest
+
+
+def _select_raw_facts(rows: list[dict]) -> list[dict]:
+    """Pick the raw source facts worth a pack slot. Pure code, deliberately:
+
+    * stories first (songfacts.com paragraphs, then Genius descriptions) — they
+      carry the anecdotes the answer is supposed to be built from;
+    * then Genius line annotations, capped harder (a fact-rich song has dozens);
+    * near-duplicates across the two sources collapse (Jaccard on content
+      tokens): the same story cited twice reads as padding, not grounding.
+    """
+    stories: list[str] = []
+    annotations: list[str] = []
+    for row in rows:
+        text = (row.get("fact") or "").strip()
+        if len(text) < MIN_RAW_CHARS:
+            continue
+        if (row.get("category") or "") == "genius_annotation":
+            annotations.append(_clean_story(_strip_annotation_boilerplate(text)))
+        else:
+            stories.append(_clean_story(text))
+    picked: list[dict] = []
+    seen_tokens: list[set[str]] = []
+
+    def _take(text: str, cap: int, taken: int) -> int:
+        if taken >= cap:
+            return taken
+        tokens = set(_content_tokens(text))
+        for prev in seen_tokens:
+            union = tokens | prev
+            if union and len(tokens & prev) / len(union) >= DEDUPE_OVERLAP:
+                return taken
+        seen_tokens.append(tokens)
+        picked.append({"text": text, "source": "facts"})
+        return taken + 1
+
+    # A couple of spread candidates beyond the cap, so a dedupe hit doesn't
+    # leave a slot empty.
+    taken = 0
+    for text in _lead_and_spread(stories, MAX_RAW_STORIES + 2):
+        taken = _take(text, MAX_RAW_STORIES, taken)
+    taken = 0
+    for text in _lead_and_spread(annotations, MAX_RAW_ANNOTATIONS + 2):
+        taken = _take(text, MAX_RAW_ANNOTATIONS, taken)
+    return picked
+
+
+def _lead_and_spread(texts: list[str], cap: int) -> list[str]:
+    """First RAW_LEAD_KEEP rows as-is, the rest sampled evenly to fill ``cap``.
+
+    Keeps the source's own lead (songfacts orders by editorial weight) while
+    still reaching the back of a long chronological pool. Deterministic — the
+    same subject always builds the same pack.
+    """
+    if len(texts) <= cap:
+        return texts
+    head = texts[:RAW_LEAD_KEEP]
+    rest = texts[RAW_LEAD_KEEP:]
+    want = cap - len(head)
+    step = len(rest) / want
+    return head + [rest[min(len(rest) - 1, int(i * step))] for i in range(want)]
+
+
 def _build_song_pack(subject: dict, collection_name: str, lang: str, payload: dict) -> list[dict]:
     """Facts, credits and gems for one song. Pure SQLite + the Qdrant payload."""
     from app.resources.metadata_db import MetadataDB
@@ -409,18 +585,13 @@ def _build_song_pack(subject: dict, collection_name: str, lang: str, payload: di
     title = subject.get("title") or payload.get("title") or ""
     slug = get_song_facts_key(artist, title) if (artist and title) else ""
 
-    # Refined facts first — the LLM-cleaned, categorised versions. An explicit
-    # empty list means "AI-indexed, judged nothing interesting", so it must NOT
-    # fall through to the raw facts; only a missing row (None) does.
-    facts: list[str] = []
+    # RAW source facts, not the refined one-liners. The refined store keeps the
+    # home strip readable, but as LLM grounding it produced answers that just
+    # recited the cleaned list back — the stories the answer should be built
+    # from (studio anecdotes, quotes, the why) only live in the originals.
     if slug:
-        refined = MetadataDB.get_refined_facts(
-            scope="song", scope_key=slug, collection_name=collection_name, lang=lang,
-        )
-        facts = refined if refined is not None else MetadataDB.get_song_facts(slug, collection_name)
-    for f in facts:
-        if f and f.strip():
-            items.append({"text": _clean(f), "source": "facts"})
+        items.extend(_select_raw_facts(
+            MetadataDB.get_song_facts_rich(slug, collection_name)))
 
     if slug:
         rel = (MetadataDB.get_song_relations_bulk([slug]) or {}).get(slug) or {}
@@ -480,13 +651,10 @@ def _build_artist_pack(subject: dict, collection_name: str, lang: str) -> list[d
     if bio and bio.strip():
         items.append({"text": _clean(bio, 900), "source": "bio"})
 
-    refined = MetadataDB.get_refined_facts(
-        scope="artist", scope_key=slug, collection_name=collection_name, lang=lang,
-    )
-    facts = refined if refined is not None else MetadataDB.get_artist_facts(slug, collection_name)
-    for f in facts:
-        if f and f.strip():
-            items.append({"text": _clean(f), "source": "facts"})
+    # RAW facts here too (see _build_song_pack) — the artist pool is
+    # songfacts.com biography episodes, full stories the refined pass shrank.
+    items.extend(_select_raw_facts(
+        MetadataDB.get_artist_facts_rich(slug, collection_name)))
 
     row = MetadataDB.get_artist_audiodb(slug, collection_name) or {}
     bits = []
@@ -731,7 +899,8 @@ def _deterministic_answer(subject: dict, items: list[dict], lang: str) -> str:
     # database dump rather than an answer.
     ranked = ([it for it in items if it.get("source") == "facts"]
               + [it for it in items if it.get("source") != "facts"])
-    bullets = "\n".join(f"- {it['text']}" for it in ranked[:5])
+    # Raw facts run to 700 chars now — as bullets they must stay skimmable.
+    bullets = "\n".join(f"- {_clean(it['text'], 300)}" for it in ranked[:5])
     return f"{head}\n{bullets}"
 
 
@@ -1055,7 +1224,7 @@ async def run(*, qdrant, collection_name: str, message: str, route, slots,
         # ``_parse_json_object`` digs the object out instead.
         raw_text = await ask_llm(
             user_prompt,
-            system_prompt=_SYSTEM.format(lang_name=_lang_name(lang)),
+            system_prompt=_system_prompt(lang),
             parse_json=False, temperature=0.3,
             base_url=llm_base_url, model=llm_model,
             extra_body={"enable_thinking": False},
@@ -1069,7 +1238,7 @@ async def run(*, qdrant, collection_name: str, message: str, route, slots,
             logger.info("[assistant/facts] no citable answer — retrying once, strictly")
             raw_text = await ask_llm(
                 user_prompt + "\n\n" + _RETRY_SUFFIX,
-                system_prompt=_SYSTEM.format(lang_name=_lang_name(lang)),
+                system_prompt=_system_prompt(lang),
                 parse_json=False, temperature=0.0,
                 base_url=llm_base_url, model=llm_model,
                 extra_body={"enable_thinking": False},

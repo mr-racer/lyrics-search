@@ -246,6 +246,96 @@ def test_deterministic_answer_leads_with_facts_and_stays_short():
     assert len(lines) == 6                 # heading + 5 bullets
 
 
+# ── raw-fact selection: stories in, boilerplate out, duplicates collapsed ────
+
+
+def test_clean_story_cuts_on_a_sentence_boundary():
+    story = ("The band spent days in the studio. " * 30).strip()
+    out = F._clean_story(story)
+    assert len(out) <= F.RAW_FACT_CHARS
+    assert out.endswith("studio.")          # a whole sentence, not "stu…"
+
+
+def test_clean_story_falls_back_to_a_hard_cut_without_sentences():
+    out = F._clean_story("x" * (F.RAW_FACT_CHARS + 200))
+    assert out.endswith("…")
+
+
+def test_annotation_boilerplate_is_rewritten():
+    raw = "Lyrics string: I shoot the lights out. Fact: Light is a motif in Kanye's work."
+    assert F._strip_annotation_boilerplate(raw) \
+        == "Line «I shoot the lights out» — Light is a motif in Kanye's work."
+    # Non-annotation texts pass through untouched.
+    assert F._strip_annotation_boilerplate("A plain story.") == "A plain story."
+
+
+def test_raw_selection_orders_stories_before_annotations_and_caps_both():
+    topics = ["recording sessions overdubs", "video shoot budget", "label single fight",
+              "wayne world revival", "opera harmonies phonebook", "gong ending live",
+              "muppets viral cover", "draft lyrics mongolian", "guitar solo one take",
+              "radio premiere everett"]
+    rows = ([{"fact": f"Songfacts tells a long detailed story about the {t} of this song",
+              "source": "songfacts.com", "category": ""} for t in topics]
+            + [{"fact": f"Lyrics string: line about {t}. Fact: a good annotation on {t} here",
+                "source": "genius.com", "category": "genius_annotation"} for t in topics])
+    out = F._select_raw_facts(rows)
+    assert len(out) == F.MAX_RAW_STORIES + F.MAX_RAW_ANNOTATIONS
+    assert out[0]["text"].startswith("Songfacts tells")
+    assert out[F.MAX_RAW_STORIES]["text"].startswith("Line «")
+    assert all(it["source"] == "facts" for it in out)
+
+
+def test_raw_selection_skips_stub_rows():
+    # The prod Bowie pool opens with a bare date range — not a story.
+    rows = [{"fact": "January 8, 1947 - January 10, 2016", "source": "songfacts.com",
+             "category": ""},
+            {"fact": "Bowie grew up fascinated by American culture and once wrote to "
+                     "the US embassy, who sent him a football uniform",
+             "source": "songfacts.com", "category": ""}]
+    out = F._select_raw_facts(rows)
+    assert len(out) == 1
+    assert "football uniform" in out[0]["text"]
+
+
+def test_overflowing_pool_keeps_the_lead_and_reaches_the_back():
+    texts = [f"item {i}" for i in range(30)]
+    out = F._lead_and_spread(texts, 7)
+    assert len(out) == 7
+    assert out[:3] == ["item 0", "item 1", "item 2"]     # the editorial lead
+    assert "item 29" not in out[:4]
+    assert any(int(t.split()[1]) > 20 for t in out[3:])  # the back is reached
+
+
+def test_small_pool_passes_through_untouched():
+    texts = [f"item {i}" for i in range(5)]
+    assert F._lead_and_spread(texts, 7) == texts
+
+
+def test_raw_selection_drops_near_duplicates_across_sources():
+    # songfacts and the Genius description retell the same anecdote — one slot.
+    rows = [
+        {"fact": "Freddie Mercury refused to cut the six minute single despite label pressure",
+         "source": "songfacts.com", "category": ""},
+        {"fact": "Mercury refused to cut the six minute single despite the label pressure",
+         "source": "genius.com", "category": "genius_description"},
+        {"fact": "The video was shot in three hours at the band rehearsal space",
+         "source": "genius.com", "category": "genius_description"},
+    ]
+    out = F._select_raw_facts(rows)
+    assert len(out) == 2
+    assert "video" in out[1]["text"]
+
+
+def test_system_prompt_carries_the_few_shot_in_the_answer_language():
+    ru = F._system_prompt("ru")
+    en = F._system_prompt("en")
+    assert "**Запись**" in ru and "Russian" in ru
+    assert "**The recording**" in en and "English" in en
+    # The format pass resolved every placeholder and kept the JSON contract.
+    assert "{lang_name}" not in ru and "{example_answer}" not in ru
+    assert '{"answer": "...", "used": [1, 3]}' in ru
+
+
 # ── explain mode: one tapped fact, not the whole dossier ─────────────────────
 # The bug this section pins: asked to explain "«A» сэмплирует «B»", the branch
 # handed the model all eighteen pack items and got back the release year, the

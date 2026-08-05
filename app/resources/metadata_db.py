@@ -1186,6 +1186,24 @@ class MetadataDB:
         return [r[0] for r in rows]
 
     @classmethod
+    def get_artist_facts_rich(cls, slug: str, collection_name: str) -> List[dict]:
+        """Like :meth:`get_artist_facts` but keeps source and category per fact
+        (see :meth:`get_song_facts_rich` for why the assistant needs them)."""
+        conn = cls._connect()
+        rows = conn.execute(
+            """SELECT af.fact, af.source, af.category FROM artist_facts af
+               WHERE af.artist_slug = ? AND af.lang = 'en' AND EXISTS (
+                   SELECT 1 FROM fact_visibility fv
+                   WHERE fv.kind = 'artist' AND fv.slug = af.artist_slug
+                     AND fv.collection_name = ?
+               )
+               ORDER BY af.id""",
+            (slug, collection_name),
+        ).fetchall()
+        return [{"fact": r[0], "source": r[1] or "", "category": r[2] or ""}
+                for r in rows]
+
+    @classmethod
     def get_artist_facts_any(cls, slug: str) -> List[str]:
         """Like :meth:`get_artist_facts` but WITHOUT the per-account visibility
         gate — reads the shared pool directly. For fetch skip-logic only
@@ -1330,6 +1348,29 @@ class MetadataDB:
             (slug, collection_name),
         ).fetchall()
         return [r[0] for r in rows]
+
+    @classmethod
+    def get_song_facts_rich(cls, slug: str, collection_name: str) -> List[dict]:
+        """Like :meth:`get_song_facts` but keeps source and category per fact.
+
+        The assistant's grounding pack needs to tell a songfacts.com story from
+        a Genius line annotation apart — the two are selected and capped
+        differently — while the plain string variant stays as-is for callers
+        that only render.
+        """
+        conn = cls._connect()
+        rows = conn.execute(
+            """SELECT sf.fact, sf.source, sf.category FROM song_facts sf
+               WHERE sf.song_slug = ? AND sf.lang = 'en' AND EXISTS (
+                   SELECT 1 FROM fact_visibility fv
+                   WHERE fv.kind = 'song' AND fv.slug = sf.song_slug
+                     AND fv.collection_name = ?
+               )
+               ORDER BY sf.id""",
+            (slug, collection_name),
+        ).fetchall()
+        return [{"fact": r[0], "source": r[1] or "", "category": r[2] or ""}
+                for r in rows]
 
     @classmethod
     def get_song_facts_with_meta(
