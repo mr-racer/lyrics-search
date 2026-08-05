@@ -1049,6 +1049,42 @@ def _verify(raw: object, n_items: int) -> tuple[str, list[int]] | None:
     return answer, used
 
 
+# Inline citation marks the model writes into the answer: "[2]", "[3, 5]".
+_CITE_RE = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
+
+
+def _renumber_citations(answer: str, items: list[dict]) -> tuple[str, list[dict]]:
+    """Rewrite the answer's [n] marks to a compact 1..K order of first
+    appearance and return the matching source list for the «Источники» spoiler.
+
+    Pure post-processing, code-owned: the model cites pack positions (which
+    depend on selection order and mean nothing to the reader); the reader gets
+    a clean 1, 2, 3… where [1] is simply the first thing the answer leaned on.
+    Marks pointing outside the pack are dropped from the text entirely.
+    """
+    mapping: dict[int, int] = {}
+
+    def _sub(m: re.Match) -> str:
+        renumbered: list[int] = []
+        for token in re.split(r"\s*,\s*", m.group(1)):
+            n = int(token)
+            if not (1 <= n <= len(items)):
+                continue
+            if n not in mapping:
+                mapping[n] = len(mapping) + 1
+            if mapping[n] not in renumbered:
+                renumbered.append(mapping[n])
+        return "[" + ", ".join(str(x) for x in renumbered) + "]" if renumbered else ""
+
+    text = _CITE_RE.sub(_sub, answer)
+    text = re.sub(r" +([.,;:!?])", r"\1", re.sub(r"[ \t]{2,}", " ", text))
+    sources = [
+        {"n": new, "text": items[old - 1]["text"], "source": items[old - 1]["source"]}
+        for old, new in sorted(mapping.items(), key=lambda kv: kv[1])
+    ]
+    return text, sources
+
+
 def _declined(raw: object) -> bool:
     """Did the model deliberately answer "nothing here explains this"?
 
@@ -1209,12 +1245,14 @@ async def _explain_fact(*, subject: dict, items: list[dict], focus_fact: str,
         # No items: the whole point of this branch is that an unexplained fact
         # must NOT turn into a list of the other things we happen to know.
         return {**base, "answer": _no_explanation(lang), "grounded": False,
-                "explained": False, "items": []}
+                "explained": False, "items": [], "sources": []}
 
     answer, used = verified
+    answer, sources = _renumber_citations(answer, evidence)
     used_set = set(used)
     return {
         **base, "answer": answer, "grounded": True, "explained": True,
+        "sources": [{**s, "used": True} for s in sources],
         "items": [{"n": i, "text": it["text"], "source": it["source"],
                    "used": i in used_set}
                   for i, it in enumerate(evidence, 1)],
@@ -1374,8 +1412,10 @@ async def run(*, qdrant, collection_name: str, message: str, route, slots,
     except Exception:
         logger.exception("[assistant/facts] LLM call failed")
 
+    sources: list[dict] = []
     if verified is not None:
         answer, used = verified
+        answer, sources = _renumber_citations(answer, items)
         grounded = True
     else:
         answer, used, grounded = _deterministic_answer(subject, items, lang), [], False
@@ -1392,6 +1432,7 @@ async def run(*, qdrant, collection_name: str, message: str, route, slots,
         "grounded": grounded,
         "web_search_used": web_used,
         "follow_ups": followups,
+        "sources": [{**s, "used": True} for s in sources],
         "items": [
             {"n": i, "text": it["text"], "source": it["source"], "used": i in used_set}
             for i, it in enumerate(items, 1)

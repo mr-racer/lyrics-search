@@ -6843,6 +6843,23 @@ function AsxSearchCard({ payload, query, c, isDark, lang, navigateToArtist,
   );
 }
 
+// Inline [n] marks → interactive superscript pills: hover shows the source
+// text (CSS tooltip off data-tip). The injected HTML rides through marked +
+// DOMPurify (data-* attributes survive its default allowlist).
+function asxEnrichCitations(answer, sources) {
+  const byN = {};
+  (sources || []).forEach(s => { byN[s.n] = s.text || ''; });
+  const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return String(answer || '').replace(/\[(\d+(?:\s*,\s*\d+)*)\]/g, (m, grp) => {
+    const sups = grp.split(/\s*,\s*/).filter(n => byN[n] != null).map(n => {
+      const tip = byN[n].length > 240 ? byN[n].slice(0, 239).trimEnd() + '…' : byN[n];
+      return `<sup class="asn-cite" data-tip="${esc(tip)}">${n}</sup>`;
+    });
+    return sups.length ? sups.join('') : '';
+  });
+}
+
 function AsxFactsCard({ payload, c, isDark, lang, navigateToArtist, onPlayTrack, onQueueNext,
                         onAddToPlaylist, onAsk }) {
   const ru = lang === 'ru';
@@ -6897,8 +6914,25 @@ function AsxFactsCard({ payload, c, isDark, lang, navigateToArtist, onPlayTrack,
 
       <div style={{ fontSize: 14.5, lineHeight: 1.65,
         color: unexplained ? c.textMuted : c.text }}>
-        <MarkdownText text={payload.answer} />
+        <MarkdownText text={asxEnrichCitations(payload.answer, payload.sources)} />
       </div>
+
+      {/* Sources under a spoiler: exactly the facts the inline marks point at,
+          renumbered server-side to 1..K by first appearance. */}
+      {(payload.sources || []).length > 0 && (
+        <details className="asn-src">
+          <summary>{ru ? `Источники · ${payload.sources.length}`
+                       : `Sources · ${payload.sources.length}`}</summary>
+          <div className="asn-src-list">
+            {payload.sources.map(s => (
+              <div key={s.n} className="asn-src-row">
+                <span className="asn-src-n num-tab">{s.n}</span>
+                <span>{s.text}</span>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
 
       {/* Honest provenance: the answer either passed the citation check or the
           deterministic "here is what is known" rendering was served instead.
@@ -7368,8 +7402,14 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
                   </span>
                   {ideas.map((f, i) => (
                     <AsxNebulaFact key={i} fact={f} lang={lang}
-                      onSend={(fx) => send((ru ? 'объясни: ' : 'explain this: ') + fx.fact,
-                                           { intent: 'facts', focusFact: fx.fact })} />
+                      onSend={(fx) => send((ru ? 'объясни: ' : 'explain this: ') + fx.fact, {
+                        intent: 'facts', focusFact: fx.fact,
+                        // The card knows its subject — pin it by id so the
+                        // assistant never re-guesses the song from the words.
+                        subjectTrackId: fx.track_id || undefined,
+                        subjectArtistSlug: fx.track_id ? undefined
+                          : (fx.artist_slug || undefined),
+                      })} />
                   ))}
                 </div>
               )}

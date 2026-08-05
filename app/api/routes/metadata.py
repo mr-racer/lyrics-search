@@ -92,6 +92,12 @@ class RandomFact(BaseModel):
     artist: str = ""
     title: Optional[str] = None
     image: Optional[str] = None
+    # Subject pins for the assistant handoff: the fact already knows which
+    # track/artist it is about. Without them the «объяснить» tap sent only the
+    # fact TEXT, the assistant re-resolved the subject from words and asked
+    # «о чём речь?» about a song it was literally just shown.
+    track_id: Optional[str] = None
+    artist_slug: Optional[str] = None
 
 
 # ── Artist facts ─────────────────────────────────────────────────────────────
@@ -212,19 +218,22 @@ def _artist_any_cover(request: Request, collection_name: str, artist: str) -> st
     return None
 
 
-def _song_cover(request: Request, collection_name: str, artist: str, title: str) -> str | None:
-    """cover_art_path of the track matching (artist, title) — one filtered scroll.
+def _song_cover_and_id(request: Request, collection_name: str, artist: str,
+                       title: str) -> tuple[str | None, str | None]:
+    """``(cover_art_path, track_id)`` of the track matching (artist, title).
 
     The SQLite fact row stores the PRIMARY artist's name, while the Qdrant
     ``artist`` payload keeps the raw tag ("Eminem, Nate Dogg") — so the match
     also accepts the per-participant ``artists`` list (element-wise match).
     Exact title match first; on a miss (SQLite titles can be normalized
     differently than the tag payload) fall back to a case-insensitive
-    comparison over the artist's tracks.
+    comparison over the artist's tracks. The id is returned even when the
+    track has no cover — it pins the assistant's subject on the «объяснить»
+    handoff, which needs no artwork.
     """
     db_client = getattr(request.app.state, "db_client", None) if request else None
     if db_client is None or not artist or not title:
-        return None
+        return None, None
     from qdrant_client import models as qmodels
     flt = qmodels.Filter(
         must=[qmodels.FieldCondition(key="title", match=qmodels.MatchValue(value=title))],
@@ -242,9 +251,9 @@ def _song_cover(request: Request, collection_name: str, artist: str, title: str)
             with_vectors=False,
         )
     except Exception:
-        return None
+        return None, None
     if points:
-        return (points[0].payload or {}).get("cover_art_path")
+        return (points[0].payload or {}).get("cover_art_path"), str(points[0].id)
     # Fallback: exact-title miss — compare case-insensitively across the
     # artist's tracks (covers "Back In Black" vs "Back in Black" mismatches).
     flt2 = qmodels.Filter(
@@ -262,13 +271,17 @@ def _song_cover(request: Request, collection_name: str, artist: str, title: str)
             with_vectors=False,
         )
     except Exception:
-        return None
+        return None, None
     want = title.casefold().strip()
+    first_id = None
     for p in points or []:
         payload = p.payload or {}
-        if (payload.get("title") or "").casefold().strip() == want and payload.get("cover_art_path"):
-            return payload.get("cover_art_path")
-    return None
+        if (payload.get("title") or "").casefold().strip() != want:
+            continue
+        if payload.get("cover_art_path"):
+            return payload.get("cover_art_path"), str(p.id)
+        first_id = first_id or str(p.id)
+    return None, first_id
 
 
 @router.get("/metadata/random-facts")
@@ -314,7 +327,7 @@ def get_random_facts(
             if not g_artist or not g_title:
                 continue
             g_image = (
-                _song_cover(request, derived, g_artist, g_title)
+                _song_cover_and_id(request, derived, g_artist, g_title)[0]
                 or _artist_photo(_slugify_artist(g_artist), derived)
                 or _artist_any_cover(request, derived, g_artist)
             )
@@ -322,6 +335,7 @@ def get_random_facts(
                 fact=_gem_fact_text(g, lang),
                 context=f"{g_artist} — {g_title}",
                 type="song", artist=g_artist, title=g_title, image=g_image,
+                track_id=str(g["track_id"]),
             ))
 
     raw = MetadataDB.get_random_facts(
@@ -331,8 +345,10 @@ def get_random_facts(
     for r in raw:
         artist_slug = r.pop("artist_slug", None)
         image = None
+        track_id = None
         if r.get("type") == "song":
-            image = _song_cover(request, derived, r.get("artist") or "", r.get("title") or "")
+            image, track_id = _song_cover_and_id(
+                request, derived, r.get("artist") or "", r.get("title") or "")
         if not image:
             image = _artist_photo(artist_slug, derived)
         if not image:
@@ -340,7 +356,9 @@ def get_random_facts(
         # Display-name guard: slug-shaped attribution ("the-weeknd") → Title Case.
         r["artist"] = _prettify_name(r.get("artist"))
         r["title"] = _prettify_name(r.get("title"))
-        out.append(RandomFact(**{k: v for k, v in r.items() if v is not None} | {"image": image}))
+        out.append(RandomFact(**{k: v for k, v in r.items() if v is not None}
+                              | {"image": image, "track_id": track_id,
+                                 "artist_slug": artist_slug}))
     _random.shuffle(out)  # gems were prepended — don't always lead the strip
     return out
 

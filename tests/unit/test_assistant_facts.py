@@ -360,6 +360,32 @@ def test_system_prompt_carries_the_few_shot_in_the_answer_language():
     assert '{"answer": "...", "used": [1, 3], "follow_ups": ["...", "..."]}' in ru
 
 
+# ── citation renumbering: the reader gets 1, 2, 3… by first appearance ──────
+
+
+_ITEMS9 = [{"text": f"fact {i}", "source": "facts"} for i in range(1, 10)]
+
+
+def test_citations_renumber_by_first_appearance():
+    answer = "First thread [7]. Second [2, 7], and a third [4]."
+    text, sources = F._renumber_citations(answer, _ITEMS9)
+    assert text == "First thread [1]. Second [2, 1], and a third [3]."
+    assert [(s["n"], s["text"]) for s in sources] == \
+        [(1, "fact 7"), (2, "fact 2"), (3, "fact 4")]
+
+
+def test_out_of_range_marks_vanish_from_the_text():
+    text, sources = F._renumber_citations("True [2]. Phantom [42].", _ITEMS9)
+    assert text == "True [1]. Phantom."
+    assert len(sources) == 1
+
+
+def test_answer_without_marks_has_no_sources():
+    text, sources = F._renumber_citations("Plain prose, no citations.", _ITEMS9)
+    assert text == "Plain prose, no citations."
+    assert sources == []
+
+
 # ── follow-up chips: model wording, code caps ────────────────────────────────
 
 

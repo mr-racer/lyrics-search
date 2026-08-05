@@ -1208,6 +1208,11 @@ class AssistantFactsPayload(BaseModel):
     focus_fact: Optional[str] = None
     explained: Optional[bool] = None
     items: List[AssistantFactItem] = Field(default_factory=list)
+    # The facts the answer's inline [n] marks actually point at, renumbered in
+    # code to 1..K by first appearance — the «Источники» spoiler renders these
+    # verbatim. Distinct from ``items`` (the whole pack) and from ``used``
+    # (the model's claim): only marks that survived in the TEXT count.
+    sources: List[AssistantFactItem] = Field(default_factory=list)
     # Model-written next questions (sanitized in code, ≤3). Empty when the
     # answer came from the deterministic fallback or the model wrote none.
     follow_ups: List[str] = Field(default_factory=list)
