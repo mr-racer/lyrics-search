@@ -6587,17 +6587,37 @@ const ASX_PHRASES = {
     { text: 'где-то там про дождь и такси', intent: 'search' },
     { text: 'хиты Kanye West', intent: 'playlist' },
     { text: 'расскажи про Radiohead', intent: 'facts' },
-    { text: 'песни из Watch Dogs', intent: 'playlist' },
     { text: 'что-нибудь медленное на вечер', intent: 'playlist' },
     { text: 'строчка про бетон и небо', intent: 'search' },
+    { text: 'какие сэмплы в «Stronger»?', intent: 'facts' },
   ],
   en: [
     { text: 'something about rain and a taxi', intent: 'search' },
     { text: 'Kanye West hits', intent: 'playlist' },
     { text: 'tell me about Radiohead', intent: 'facts' },
-    { text: 'songs from Watch Dogs', intent: 'playlist' },
     { text: 'something slow for the evening', intent: 'playlist' },
     { text: 'the line about concrete and sky', intent: 'search' },
+    { text: 'what samples are in “Stronger”?', intent: 'facts' },
+  ],
+};
+
+// Intent → glow colour for constellation stars and the history row. The same
+// three hues the orb palettes use — colour is the only «legend» the page has.
+const ASX_INTENT_COLOR = { search: '#6ac8ff', playlist: '#ffb35c', facts: '#5ee6c8' };
+
+// Prompt templates for the «Быстрые подборки» row — pre-written playlist turns.
+const ASX_TEMPLATES = {
+  ru: [
+    { label: 'под тренировку', prompt: 'собери плейлист под тренировку' },
+    { label: 'утренний кофе', prompt: 'собери спокойный плейлист на утро' },
+    { label: 'песни из игр', prompt: 'собери песни из видеоигр' },
+    { label: 'хиты нулевых', prompt: 'собери хиты нулевых' },
+  ],
+  en: [
+    { label: 'workout fuel', prompt: 'build a workout playlist' },
+    { label: 'morning coffee', prompt: 'build a calm morning playlist' },
+    { label: 'game soundtracks', prompt: 'build a playlist of video game songs' },
+    { label: '2000s hits', prompt: 'build a playlist of 2000s hits' },
   ],
 };
 
@@ -6706,34 +6726,52 @@ function AsxTrackRow({ track, index, reason, c, isDark, lang, onPlay, onQueueNex
 // ── Turn cards. Three types, deliberately NOT merged: the payload is tagged by
 // intent for exactly this reason — three results that read as three things. ──
 
-function AsxPlaylistCard({ payload, c, isDark, lang, onPlayTrack, onQueueNext, onAddToPlaylist,
-                           onSave, saved, saving }) {
+function AsxPlaylistCard({ payload, query, c, isDark, lang, onPlayTrack, onQueueNext,
+                           onAddToPlaylist, onSave, saved, saving }) {
   const tracks = payload.tracks || [];
   const hits = tracks.map(t => ({ track: t, score: t.score || 0, matched_on: 'ai' }));
   const ru = lang === 'ru';
+  // Collage backdrop: the tracks' own covers, blurred into a wash. Cells cycle
+  // when there are fewer than 8 covers; with none at all the plain violet
+  // cell colour carries the header on its own.
+  const covers = tracks.map(t => homeCoverUrl(t.cover_art_path)).filter(Boolean);
+  const cells = Array.from({ length: 8 }, (_, i) => (covers.length ? covers[i % covers.length] : null));
+  const nWord = ru ? ruTracksWord(tracks.length) : (tracks.length === 1 ? 'track' : 'tracks');
   return (
     <div className="asx-fade" style={{ marginTop: 18 }}>
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap',
-        marginBottom: 12 }}>
-        <div style={{ flex: 1, minWidth: 180 }}>
-          <AsxLabel c={c} style={{ marginBottom: 4 }}>{ru ? 'ПОДБОРКА' : 'PLAYLIST'}</AsxLabel>
-          <div className="serif" style={{ fontSize: 21, color: c.text, lineHeight: 1.2 }}>
-            {payload.title || (ru ? 'Подборка' : 'Playlist')}
-          </div>
-          <div style={{ fontSize: 12.5, color: c.textMuted, marginTop: 3 }}>
-            {tracks.length} {ru ? ruTracksWord(tracks.length) : (tracks.length === 1 ? 'track' : 'tracks')}
-          </div>
+      <div className="asn-pl">
+        <div className="asn-pl-mosaic" aria-hidden="true">
+          {cells.map((u, i) => (
+            <div key={i} className="asn-pl-cell"
+              style={u ? { backgroundImage: `url(${u})` } : undefined} />
+          ))}
         </div>
-        <button className="asx-pill" onClick={() => hits.length && onPlayTrack(hits[0], hits)}>
-          ▶ {ru ? 'Слушать все' : 'Play all'}
-        </button>
-        <button className="asx-pill" onClick={onSave} disabled={saving || saved}>
-          {saved ? (ru ? '✓ Сохранено' : '✓ Saved')
-                 : saving ? (ru ? 'Сохраняю…' : 'Saving…')
-                 : (ru ? 'Сохранить в плейлисты' : 'Save to playlists')}
-        </button>
+        <div className="asn-pl-veil" />
+        <div className="asn-pl-cap" />
+        <div className="asn-pl-covs">
+          {tracks.slice(0, 4).map((t, i) => (
+            <span key={t.track_id || i} style={{ width: 54, height: 54, display: 'block' }}>
+              <AlbumCover title={t.title || ''} artist={t.artist || ''} fluid radius={11}
+                isDark={isDark} coverPath={t.cover_art_path} />
+            </span>
+          ))}
+        </div>
+        <div className="asn-pl-title serif">{payload.title || (ru ? 'Подборка' : 'Playlist')}</div>
+        <div className="asn-pl-sub">
+          {tracks.length} {nWord}{query ? (ru ? ` · собрано по запросу «${query}»` : ` · built for “${query}”`) : ''}
+        </div>
+        <div className="asn-pl-btns">
+          <button className="asn-plbtn" onClick={() => hits.length && onPlayTrack(hits[0], hits)}>
+            ▶ {ru ? 'Слушать все' : 'Play all'}
+          </button>
+          <button className="asn-plbtn" onClick={onSave} disabled={saving || saved}>
+            {saved ? (ru ? '✓ Сохранено' : '✓ Saved')
+                   : saving ? (ru ? 'Сохраняю…' : 'Saving…')
+                   : (ru ? 'Сохранить' : 'Save')}
+          </button>
+        </div>
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 14 }}>
         {tracks.map((t, i) => (
           <AsxTrackRow key={t.track_id || i} track={t} index={i + 1} reason={t.reason}
             c={c} isDark={isDark} lang={lang}
@@ -6806,7 +6844,7 @@ function AsxSearchCard({ payload, query, c, isDark, lang, navigateToArtist,
 }
 
 function AsxFactsCard({ payload, c, isDark, lang, navigateToArtist, onPlayTrack, onQueueNext,
-                        onAddToPlaylist, onExplainFact }) {
+                        onAddToPlaylist, onExplainFact, onAsk }) {
   const ru = lang === 'ru';
   const used = (payload.items || []).filter(i => i.used);
   // Explain mode: the turn was "what does THIS line mean", so the line itself is
@@ -6881,27 +6919,35 @@ function AsxFactsCard({ payload, c, isDark, lang, navigateToArtist, onPlayTrack,
         )}
       </div>
 
-      {used.length > 0 && (
-        <div style={{ marginTop: 16 }}>
-          <AsxLabel c={c}>{ru ? 'НА ЧЁМ ОСНОВАН ОТВЕТ' : 'WHAT THE ANSWER LEANS ON'}</AsxLabel>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-            {/* Every cited line is itself a question: tapping one asks the
-                assistant to explain THAT line — the same focused turn a
-                discovery card sends, not another dossier about the subject. */}
-            {used.map(item => (
-              <button key={item.n} className="asx-fact" type="button"
+      {/* Follow-up chips instead of a source list (спека 2026-08-05): the
+          cited lines are gone from display, but the «объясни этот факт» path
+          they carried survives as up-to-two chips built from the shortest
+          cited lines. The chip label is a preview; the FULL fact text is what
+          gets sent. In explain mode the turn already is an explanation — no
+          second layer of «объясни» on top of it. */}
+      {!focus && (used.length > 0 || payload.subject_kind === 'artist') && (
+        <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap', marginTop: 16 }}>
+          {used.slice().sort((a, b) => (a.text || '').length - (b.text || '').length)
+            .slice(0, 2).map(item => (
+              <button key={item.n} className="asx-pill" type="button"
                 onClick={() => onExplainFact && onExplainFact(item.text)}
-                title={ru ? 'Объяснить этот факт' : 'Explain this fact'}
-                style={{ display: 'flex', gap: 9, fontSize: 12.5, lineHeight: 1.5,
-                  color: c.textMuted, textAlign: 'left', background: 'none', border: 0,
-                  padding: 0, cursor: onExplainFact ? 'pointer' : 'default', font: 'inherit' }}>
-                <span className="mono num-tab" style={{ color: c.textSubtle, flex: 'none' }}>
-                  {item.n}
-                </span>
-                <span>{item.text}</span>
+                title={ru ? 'Объяснить этот факт' : 'Explain this fact'}>
+                <AsxIntentDot intent="facts" />
+                {(ru ? 'объясни: ' : 'explain: ')
+                  + ((item.text || '').length > 58
+                      ? (item.text || '').slice(0, 57).trimEnd() + '…'
+                      : (item.text || ''))}
               </button>
-            ))}
-          </div>
+          ))}
+          {payload.subject_kind === 'artist' && payload.subject_title && onAsk && (
+            <button className="asx-pill" type="button"
+              onClick={() => onAsk(
+                ru ? `собери лучшее ${payload.subject_title}` : `build the best of ${payload.subject_title}`,
+                { intent: 'playlist' })}>
+              <AsxIntentDot intent="playlist" />
+              {ru ? `собери лучшее ${payload.subject_title}` : `best of ${payload.subject_title}`}
+            </button>
+          )}
         </div>
       )}
 
@@ -6921,86 +6967,38 @@ function AsxFactsCard({ payload, c, isDark, lang, navigateToArtist, onPlayTrack,
   );
 }
 
-// ── Under-the-fold surfaces ──────────────────────────────────────────────────
+// ── Idle entry points (спека 2026-08-05: «Туманность») ──────────────────────
+// No card frames: a fact is a text line with a round thumbnail, a sample hook
+// is a «double star» pill with a count badge. Both are pre-written turns.
 
-function AsxRecentCard({ turn, c, isDark, lang, onOpen }) {
-  const p = turn.result || {};
-  const covers = (p.playlist?.tracks || p.facts?.related_tracks
-    || (p.search?.hits || []).map(h => h.track) || []).slice(0, 3);
-  const summary = p.playlist
-    ? `${(p.playlist.tracks || []).length} ${lang === 'ru'
-        ? ruTracksWord((p.playlist.tracks || []).length)
-        : ((p.playlist.tracks || []).length === 1 ? 'track' : 'tracks')}`
-    : p.facts ? (p.facts.subject_title || '')
-    : (trackTitle(p.search?.best_hit?.track) || '');
+function AsxNebulaFact({ fact, lang, onSend }) {
+  const img = homeCoverUrl(fact.image);
   return (
-    <div className="asx-card" style={{ padding: 13, width: 232 }} onClick={onOpen}>
-      <div style={{ position: 'relative', zIndex: 1 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 8 }}>
-          <AsxIntentDot intent={turn.intent} />
-          {turn.saved_playlist_id && (
-            <span title={lang === 'ru' ? 'Сохранён в плейлисты' : 'Saved to playlists'}
-              style={{ fontSize: 11, color: c.green }}>♪</span>
-          )}
-          <span className="mono" style={{ fontSize: 10, letterSpacing: '.12em', color: c.textSubtle,
-            marginLeft: 'auto' }}>
-            {new Date(turn.ts).toLocaleDateString(lang === 'ru' ? 'ru' : 'en',
-              { day: 'numeric', month: 'short' })}
-          </span>
-        </div>
-        <div style={{ fontSize: 13.5, color: c.text, lineHeight: 1.35, minHeight: 36,
-          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
-          overflow: 'hidden' }}>{turn.message}</div>
-        {summary && (
-          <div style={{ fontSize: 11.5, color: c.textMuted, marginTop: 5, whiteSpace: 'nowrap',
-            overflow: 'hidden', textOverflow: 'ellipsis' }}>{summary}</div>
-        )}
-        {covers.length > 0 && (
-          <div style={{ display: 'flex', gap: 5, marginTop: 9 }}>
-            {covers.map((t, i) => (
-              <AlbumCover key={t?.track_id || i} title={t?.title || ''} artist={t?.artist || ''}
-                size={34} isDark={isDark} coverPath={t?.cover_art_path} />
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
+    <button className="asn-fact" type="button" onClick={() => onSend(fact)}>
+      {img
+        ? <img className="asn-fact-cov" src={img} alt="" loading="lazy" />
+        : <span className="asn-fact-cov" style={{ display: 'block',
+            background: 'linear-gradient(135deg,#31245e,#7c5bff)' }} />}
+      <p>{fact.fact}</p>
+      <span className="asn-fgo">{lang === 'ru' ? 'объяснить →' : 'explain →'}</span>
+    </button>
   );
 }
 
-function AsxDiscoveryCard({ card, c, isDark, onSend }) {
-  const twoSided = card.kind === 'relation' && (card.items || []).length >= 2;
+function AsxNebulaSample({ card, isDark, onSend }) {
+  const track = (card.items || [])[0] || {};
+  const img = homeCoverUrl(track.cover_art_path);
   return (
-    <div className="asx-card" style={{ padding: 13, width: 258 }} onClick={() => onSend(card)}>
-      <div style={{ position: 'relative', zIndex: 1 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 9 }}>
-          <AsxIntentDot intent={card.intent} />
-          <span className="mono" style={{ fontSize: 10, letterSpacing: '.14em', color: c.textSubtle }}>
-            {(card.badge || '').toUpperCase()}
-          </span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 9 }}>
-          {(card.items || []).slice(0, twoSided ? 1 : 3).map((t, i) => (
-            <AlbumCover key={t.track_id || i} title={t.title} artist={t.artist} size={40}
-              isDark={isDark} coverPath={t.cover_art_path} />
-          ))}
-          {twoSided && (
-            <>
-              <span className="asx-arrow" style={{ color: c.textSubtle, fontSize: 15 }}>→</span>
-              <AlbumCover title={card.items[1].title} artist={card.items[1].artist} size={40}
-                isDark={isDark} coverPath={card.items[1].cover_art_path} />
-            </>
-          )}
-        </div>
-        <div style={{ fontSize: 13, color: c.text, lineHeight: 1.35, minHeight: 35,
-          display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
-          overflow: 'hidden' }}>{card.headline}</div>
-        {card.subline && (
-          <div style={{ fontSize: 11.5, color: c.textMuted, marginTop: 4, whiteSpace: 'nowrap',
-            overflow: 'hidden', textOverflow: 'ellipsis' }}>{card.subline}</div>
-        )}
-      </div>
-    </div>
+    <button className="asn-smp" type="button" onClick={() => onSend(card)}>
+      {img
+        ? <img className="asn-smp-cov" src={img} alt="" loading="lazy" />
+        : <span className="asn-smp-cov" style={{ display: 'block',
+            background: 'linear-gradient(135deg,#3a3210,#e0b341)' }} />}
+      <span>
+        {card.prompt.charAt(0).toUpperCase() + card.prompt.slice(1)}
+      </span>
+      {card.badge && <span className="asn-n">{card.badge}</span>}
+    </button>
   );
 }
 
@@ -7023,7 +7021,8 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
   const [slots, setSlots] = useState({});
   const [saving, setSaving] = useState(false);
   const [savedId, setSavedId] = useState(null);
-  const [cards, setCards] = useState([]);
+  const [cards, setCards] = useState(null);   // «samples» hooks; null = not fetched yet
+  const [ideas, setIdeas] = useState(null);   // random facts strip; null = not fetched yet
 
   const llmKw = () => ({
     llm_base_url: localStorage.getItem('llm_base_url') || undefined,
@@ -7167,15 +7166,34 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
     finally { setSaving(false); }
   };
 
-  // ── Discoveries rail (silent on failure: an empty rail simply isn't drawn) ──
+  // ── Idle entry points (both silent on failure: an empty section isn't drawn).
+  // Discoveries deliver only the «samples» kind now — the artist/producer
+  // name-cards the rail used to show carried nothing to read (спека 2026-08-05).
   useEffect(() => {
-    if (!visible || !aiOn || cards.length) return;
+    if (!visible || !aiOn || cards) return;
     let alive = true;
-    apiFetch(`/library/discoveries?lang=${lang}&limit=12`)
-      .then(r => { if (alive) setCards(r.cards || []); })
+    apiFetch(`/library/discoveries?lang=${lang}&limit=16`)
+      .then(r => {
+        if (alive) setCards((r.cards || []).filter(cd => cd.kind === 'samples').slice(0, 4));
+      })
       .catch(() => {});
     return () => { alive = false; };
-  }, [visible, aiOn, lang, cards.length]);
+  }, [visible, aiOn, lang, cards]);
+
+  // Random facts with attribution images — the same pool the home strip
+  // draws from. Long facts are skipped, not clamped: length is held down by
+  // selection, never by an ellipsis.
+  useEffect(() => {
+    if (!visible || !aiOn || ideas) return;
+    let alive = true;
+    apiFetch(`/metadata/random-facts?limit=6&lang=${encodeURIComponent(lang)}`)
+      .then(r => {
+        if (alive) setIdeas((Array.isArray(r) ? r : [])
+          .filter(f => f.fact && f.fact.length <= 220).slice(0, 3));
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [visible, aiOn, lang, ideas]);
 
   const phrases = ASX_PHRASES[ru ? 'ru' : 'en'];
 
@@ -7213,38 +7231,47 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden',
       background: c.bg }}>
-      <div style={{ flex: 1, overflowY: 'auto', padding: '8px 24px 80px' }}>
-        <div className="asx-wrap">
+      <div style={{ flex: 1, overflowY: 'auto', padding: '8px 24px 80px', position: 'relative' }}>
+        {/* Muted aurora field behind the constellation (top screenful only —
+            it scrolls away with the content, keeping answers on calm ground). */}
+        <div className="asn-aurora" aria-hidden="true">
+          <span className="asn-a asn-a1" /><span className="asn-a asn-a2" />
+          <span className="asn-a asn-a3" />
+        </div>
+        <div className="asx-wrap" style={{ position: 'relative' }}>
 
-          {/* ── Hero: the orb is the assistant. Palette says which branch is
-                 answering ~200ms in, before any LLM token exists. ── */}
-          <div className={`aio-hero asx-hero aio-${orbState}${intent ? ` aio-i-${intent}` : ''}`
-                          + (compact ? ' asx-compact' : '')}>
-            {orbState === 'idle' && phrases.map((p, i) => (
-              <span key={p.text} className={`aio-ph aio-ph${i + 1}`}
-                    onClick={() => send(p.text)}>
-                <span className="asx-ph-dot" style={{ background:
-                  p.intent === 'playlist' ? '#ffb35c' : p.intent === 'facts' ? '#5ee6c8' : '#6ac8ff' }} />
+          {/* ── Hero: constellation around the orb. Palette says which branch
+                 is answering ~200ms in, before any LLM token exists. The
+                 sphere itself is AiOrb — every state/intent palette in
+                 styles.css keys off the aio-* classes on this wrapper. ── */}
+          <div className={`asn-hero aio-${orbState}${intent ? ` aio-i-${intent}` : ''}`
+                          + (compact ? ' asn-compact' : '')}
+               style={{ '--asn-os': compact ? '64px' : '118px' }}>
+            {phrases.map((p, i) => (
+              <button key={p.text} type="button" className={`asn-star asn-s${i + 1}`}
+                      tabIndex={orbState === 'idle' ? 0 : -1}
+                      onClick={() => send(p.text)}>
+                <span className={`asx-dot asx-dot-${p.intent}`} />
                 {p.text}
-              </span>
+              </button>
             ))}
-            <AiOrb state={orbState} size={compact ? 64 : 110} />
+            <div className="asn-glow" />
+            <AiOrb state={orbState} size={compact ? 64 : 118} />
             <div className="aio-capt">{caption()}</div>
           </div>
 
-          {/* ── Composer ── */}
+          {/* ── Composer: a line of light, not a field ── */}
           {aiOn ? (
-            <div className="rec2-rim">
-              <div className="rec2-wish" style={{ color: c.text }}
-                   onClick={e => { const i = e.currentTarget.querySelector('input'); if (i) i.focus(); }}>
-                <span className="rec2-spark">✨</span>
-                <input value={input}
-                       onChange={e => setInput(e.target.value)}
-                       onKeyDown={e => { if (e.key === 'Enter') submit(); }}
-                       placeholder={ru ? 'строчка из песни, желание или вопрос'
-                                       : 'a lyric, a wish, or a question'} />
-                {!input && <span className="rec2-caret" />}
-                <button className="rec2-go" onClick={submit} disabled={busy || !input.trim()}>
+            <div className="asn-line">
+              <input value={input}
+                     onChange={e => setInput(e.target.value)}
+                     onKeyDown={e => { if (e.key === 'Enter') submit(); }}
+                     placeholder={ru ? 'строчка из песни, желание или вопрос…'
+                                     : 'a lyric, a wish, or a question…'}
+                     aria-label={ru ? 'Запрос ассистенту' : 'Ask the assistant'} />
+              <div className="asn-underline" />
+              <div className="asn-ask">
+                <button className="asn-go" onClick={submit} disabled={busy || !input.trim()}>
                   {busy ? (ru ? 'ДУМАЮ…' : 'THINKING…') : (ru ? 'СПРОСИТЬ ▸' : 'ASK ▸')}
                 </button>
               </div>
@@ -7258,18 +7285,6 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
               <button className="asx-pill" onClick={() => onNav && onNav('search')}>
                 {ru ? 'Открыть точный поиск' : 'Open exact search'}
               </button>
-            </div>
-          )}
-
-          {/* ── Past turns of this session ── */}
-          {turns.length > 0 && (
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 14 }}>
-              {turns.slice(0, 5).map(t => (
-                <button key={t.id} className={`asx-pill${turnId === t.id ? ' asx-on' : ''}`}
-                        onClick={() => openTurn(t)}>
-                  <AsxIntentDot intent={t.intent} />{t.message}
-                </button>
-              ))}
             </div>
           )}
 
@@ -7318,7 +7333,7 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
           )}
 
           {turn && turn.playlist && (
-            <AsxPlaylistCard payload={turn.playlist} c={c} isDark={isDark} lang={lang}
+            <AsxPlaylistCard payload={turn.playlist} query={query} c={c} isDark={isDark} lang={lang}
               onPlayTrack={onPlayTrack} onQueueNext={onQueueNext} onAddToPlaylist={onAddToPlaylist}
               onSave={savePlaylist} saved={!!savedId} saving={saving} />
           )}
@@ -7331,37 +7346,71 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
             <AsxFactsCard payload={turn.facts} c={c} isDark={isDark} lang={lang}
               navigateToArtist={navigateToArtist} onPlayTrack={onPlayTrack}
               onQueueNext={onQueueNext} onAddToPlaylist={onAddToPlaylist}
-              onExplainFact={explainFact} />
+              onExplainFact={explainFact} onAsk={send} />
           )}
 
-          {/* ── Surfaces. Both are silent when empty: an empty rail promising
-                 content is worse than no rail. ── */}
-          {turns.length > 0 && (
-            <div style={{ marginTop: 34 }}>
-              <AsxLabel c={c}>{ru ? 'НЕДАВНЕЕ' : 'RECENT'}</AsxLabel>
-              <div className="asx-rail">
-                {turns.slice(0, 8).map(t => (
-                  <AsxRecentCard key={t.id} turn={t} c={c} isDark={isDark} lang={lang}
-                    onOpen={() => openTurn(t)} />
-                ))}
+          {/* ── Idle entry points. Every section is a pre-written turn, and
+                 every one is silent when empty: an empty promise is worse
+                 than no section. ── */}
+          {aiOn && orbState === 'idle' && (
+            <>
+              {ideas && ideas.length > 0 && (
+                <div className="asn-sec asx-fade">
+                  <span className="asn-lbl">
+                    {ru ? 'Интересное в вашей музыке' : 'In your music'}
+                  </span>
+                  {ideas.map((f, i) => (
+                    <AsxNebulaFact key={i} fact={f} lang={lang}
+                      onSend={(fx) => send((ru ? 'объясни: ' : 'explain this: ') + fx.fact,
+                                           { intent: 'facts', focusFact: fx.fact })} />
+                  ))}
+                </div>
+              )}
+              {cards && cards.length > 0 && (
+                <div className="asn-sec asx-fade">
+                  <span className="asn-lbl">
+                    {ru ? 'Что зашито в битах' : 'Built from samples'}
+                  </span>
+                  <div className="asn-smprow">
+                    {cards.map((card, i) => (
+                      <AsxNebulaSample key={card.track_id || i} card={card} isDark={isDark}
+                        onSend={(cd) => send(cd.prompt, {
+                          intent: cd.intent || 'facts',
+                          subjectTrackId: cd.track_id || undefined,
+                        })} />
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div className="asn-sec">
+                <span className="asn-lbl">{ru ? 'Быстрые подборки' : 'Quick playlists'}</span>
+                <div className="asn-tpl">
+                  {ASX_TEMPLATES[ru ? 'ru' : 'en'].map(t => (
+                    <button key={t.label} type="button" className="asn-tplx"
+                            onClick={() => send(t.prompt, { intent: 'playlist' })}>
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+            </>
           )}
 
-          {cards.length > 0 && (
-            <div style={{ marginTop: 28 }}>
-              <AsxLabel c={c}>{ru ? 'СВЯЗИ В БИБЛИОТЕКЕ' : 'LINKS IN YOUR LIBRARY'}</AsxLabel>
-              <div className="asx-rail">
-                {cards.map((card, i) => (
-                  <AsxDiscoveryCard key={`${card.kind}-${i}`} card={card} c={c} isDark={isDark}
-                    onSend={(cd) => send(cd.prompt, {
-                      intent: cd.intent,
-                      // A card that states a fact ("A samples B") asks for THAT
-                      // fact to be explained, not for a dossier on the track.
-                      focusFact: cd.intent === 'facts' ? cd.fact : undefined,
-                      subjectTrackId: cd.intent === 'facts' ? cd.track_id : undefined,
-                      subjectArtistSlug: cd.intent === 'facts' ? cd.artist_slug : undefined,
-                    })} />
+          {/* ── History: a row of dim stars, one per past turn. Hover names
+                 the query (glass tooltip); tap restores the whole turn with
+                 its slots, so «а побыстрее?» works from anywhere. ── */}
+          {turns.length > 0 && (
+            <div className="asn-hist">
+              <span className="asn-lbl">{ru ? 'Недавнее' : 'Recent'}</span>
+              <div className="asn-hrow">
+                {turns.slice(0, 8).map(t => (
+                  <button key={t.id} type="button"
+                          className={`asn-hstar${turnId === t.id ? ' asn-on' : ''}`}
+                          style={{ '--hc': ASX_INTENT_COLOR[t.intent] || '#6ac8ff' }}
+                          onClick={() => openTurn(t)}
+                          aria-label={t.message} title={t.message}>
+                    <em>{t.message}</em><i />
+                  </button>
                 ))}
               </div>
             </div>

@@ -1247,7 +1247,7 @@ class DiscoveryCard(BaseModel):
     pre-written turn, not a link. ``intent`` is passed alongside it so the
     router is skipped: the card already knows which branch answers it.
     """
-    kind: Literal["relation", "producer", "artist"]
+    kind: Literal["relation", "producer", "artist", "samples"]
     intent: AssistantIntent
     prompt: str
     # The verifiable statement this card makes, when it makes one ("«A»

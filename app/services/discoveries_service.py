@@ -1,9 +1,12 @@
 """Discovery cards for the assistant page — the "СВЯЗИ В БИБЛИОТЕКЕ" rail.
 
 Every card is a hook that already knows what it will ask the assistant: tapping
-one sends a turn, it does not navigate. Three kinds, all built from data the
+one sends a turn, it does not navigate. Four kinds, all built from data the
 code can verify against the DB:
 
+0. ``samples`` — a track built from ≥ 2 sampled records («какие сэмплы в X?»).
+   The other side does not have to be a library song: the count is a property
+   of the track, and the assistant's answer resolves the details anyway.
 1. ``relation`` — a sample / interpolation / cover where BOTH sides are songs
    of this library (two covers and an arrow). This one carries a ``fact``: the
    statement itself, echoed back as ``AssistantRequest.focus_fact`` so the
@@ -38,13 +41,16 @@ from app.services.track_credits_service import split_credit_names
 logger = logging.getLogger(__name__)
 
 CACHE_TTL = 600.0
-MAX_CARDS = 12
+MAX_CARDS = 16
 # A producer has to recur before "12 треков у тебя" is a finding rather than a
 # credit — two tracks is a coincidence, three is a pattern worth a playlist.
 MIN_PRODUCER_TRACKS = 3
 # Same bar for "tell me about X": one track in the library is not an artist the
 # listener would recognise as theirs.
 MIN_ARTIST_TRACKS = 3
+# "Какие сэмплы в X?" is only worth asking about a track that is actually built
+# from other records — one link answers itself, two start a story.
+MIN_SAMPLE_LINKS = 2
 # Cards are shuffled per day for variety, but only inside the strongest N of
 # each kind — shuffling the whole list is what put "Breakbot · 1 track" ahead
 # of "Limp Bizkit · 42 tracks" on the first prod run.
@@ -169,6 +175,76 @@ def _relation_cards(collection_name: str, idx: dict, ru: bool) -> list[dict]:
             "badge": verb,
             "items": [src, dst],
             "track_id": src["track_id"],
+        })
+    return cards
+
+
+def _sample_cards(collection_name: str, idx: dict, ru: bool) -> list[dict]:
+    """Tracks built from many samples — «какие сэмплы использованы в X?».
+
+    Counts merge both storages (the normalized ``sample_links`` table and the
+    older ``samples_json`` read cache) and DON'T require the other side to be a
+    library song: how many records a track is built from is a property of the
+    track itself. Unresolved entries still count; duplicates across the two
+    storages collapse on the destination key.
+    """
+    by_slug = idx["by_slug"]
+    if not by_slug:
+        return []
+    used: dict[str, set] = {}
+
+    def _dst_key(artist: str | None, song: str | None, slug: str | None) -> str | None:
+        if slug:
+            return slug
+        if song and artist:
+            return get_song_facts_key(artist, song)
+        if song:
+            return f"?:{song.strip().lower()}"
+        return None
+
+    try:
+        for link in MetadataDB.get_outgoing_sample_links(collection_name):
+            relation = (link.get("relation") or "").strip().lower()
+            if relation not in ("sample", "interpolation"):
+                continue
+            key = _dst_key(link.get("dst_artist"), link.get("dst_title"), link.get("dst_slug"))
+            if key and link["src_slug"] in by_slug:
+                used.setdefault(link["src_slug"], set()).add(key)
+    except Exception:
+        logger.exception("[discoveries] sample_links unavailable")
+
+    try:
+        cached = MetadataDB.get_song_relations_raw(list(by_slug.keys()))
+    except Exception:
+        logger.exception("[discoveries] samples_json unavailable")
+        cached = {}
+    for slug, rel in cached.items():
+        for entry in rel.get("samples") or []:
+            key = _dst_key(entry.get("artist"), entry.get("song"), entry.get("slug"))
+            if key:
+                used.setdefault(slug, set()).add(key)
+
+    cards = []
+    for slug, dsts in sorted(used.items(), key=lambda kv: -len(kv[1])):
+        count = len(dsts)
+        if count < MIN_SAMPLE_LINKS:
+            continue
+        track = by_slug.get(slug)
+        if not track:
+            continue
+        word = plural_ru(count, "сэмпл", "сэмпла", "сэмплов") if ru else (
+            "sample" if count == 1 else "samples")
+        cards.append({
+            "kind": "samples",
+            "intent": "facts",
+            "prompt": (f"какие сэмплы использованы в «{track['title']}»?" if ru
+                       else f"what samples are used in “{track['title']}”?"),
+            "headline": track["title"],
+            "subline": track["artist"],
+            "badge": f"{count} {word}",
+            "items": [track],
+            "track_id": track["track_id"],
+            "count": count,
         })
     return cards
 
@@ -300,6 +376,7 @@ def build_discoveries(qdrant, collection_name: str, *, lang: str = "en",
     idx = _index(points)
 
     groups = [
+        _sample_cards(collection_name, idx, ru),
         _relation_cards(collection_name, idx, ru),
         _producer_cards(collection_name, idx, ru),
         _artist_cards(collection_name, idx, ru, lang_key),

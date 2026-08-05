@@ -47,10 +47,12 @@ def _clear_cache():
 
 @pytest.fixture
 def stub_db(monkeypatch):
-    state = {"links": [], "raw": {}, "relations": {}, "bios": []}
+    state = {"links": [], "outgoing": [], "raw": {}, "relations": {}, "bios": []}
 
     monkeypatch.setattr(ds.MetadataDB, "get_in_library_sample_links",
                         classmethod(lambda cls, c: state["links"]))
+    monkeypatch.setattr(ds.MetadataDB, "get_outgoing_sample_links",
+                        classmethod(lambda cls, c: state["outgoing"]))
     monkeypatch.setattr(ds.MetadataDB, "get_song_relations_raw",
                         classmethod(lambda cls, slugs: state["raw"]))
     monkeypatch.setattr(ds.MetadataDB, "get_song_relations_bulk",
@@ -133,6 +135,58 @@ def test_relation_pairs_come_from_the_samples_json_cache_too(stub_db):
     cards = _cards("relation")
     assert len(cards) == 1                      # only the pair that resolves
     assert cards[0]["items"][1]["track_id"] == "t2"
+
+
+def _out_link(src, dst_title, dst_artist, relation="sample", dst_slug=None):
+    return {"src_slug": get_song_facts_key(src[1]["artist"], src[1]["title"]),
+            "dst_title": dst_title, "dst_artist": dst_artist,
+            "dst_slug": dst_slug, "relation": relation}
+
+
+def test_sample_card_needs_two_links_and_counts_unresolved(stub_db):
+    # Runaway is built from two records; one of them never resolved to a
+    # library song — it still counts, «сколько сэмплов» is about the track.
+    stub_db["outgoing"] = [
+        _out_link(POINTS[0], "Expensive Shit", "Fela Kuti"),
+        _out_link(POINTS[0], "Some 70s Funk", "Nobody Here"),
+        _out_link(POINTS[2], "Only One Link", "Someone"),
+    ]
+    cards = _cards("samples")
+    assert [c["headline"] for c in cards] == ["Runaway"]
+    card = cards[0]
+    assert card["count"] == 2
+    assert card["badge"] == "2 сэмпла"
+    assert card["intent"] == "facts"
+    assert card["track_id"] == "t1"
+    assert card["prompt"] == "какие сэмплы использованы в «Runaway»?"
+
+
+def test_sample_counts_merge_both_storages_without_double_counting(stub_db):
+    # The same Fela Kuti link lives in BOTH the normalized table and the old
+    # samples_json cache — it is one sample, not two. The cache adds a second,
+    # different record, which clears the threshold.
+    runaway = get_song_facts_key("Kanye West", "Runaway")
+    stub_db["outgoing"] = [
+        _out_link(POINTS[0], "Expensive Shit", "Fela Kuti",
+                  dst_slug=get_song_facts_key("Fela Kuti", "Expensive Shit")),
+    ]
+    stub_db["raw"] = {runaway: {
+        "samples": [{"song": "Expensive Shit", "artist": "Fela Kuti",
+                     "slug": get_song_facts_key("Fela Kuti", "Expensive Shit")},
+                    {"song": "Mind Playing Tricks", "artist": "Geto Boys"}],
+        "sampled_by": [],
+    }}
+    cards = _cards("samples")
+    assert len(cards) == 1
+    assert cards[0]["count"] == 2
+
+
+def test_sample_card_ignores_covers(stub_db):
+    stub_db["outgoing"] = [
+        _out_link(POINTS[0], "A", "B", relation="cover"),
+        _out_link(POINTS[0], "C", "D", relation="cover"),
+    ]
+    assert _cards("samples") == []
 
 
 def test_producer_needs_the_threshold(stub_db):

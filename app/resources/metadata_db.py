@@ -1545,6 +1545,30 @@ class MetadataDB:
         ]
 
     @classmethod
+    def get_outgoing_sample_links(cls, collection_name: str) -> List[dict]:
+        """All ``direction='source'`` rows of a collection, resolved or not.
+
+        Unlike :meth:`get_in_library_sample_links` this keeps links whose other
+        side is NOT a library song — "how many samples does this track use" is
+        a property of the track, and an unresolved "samples some 70s funk
+        record" still counts toward it even though it cannot be drawn as a
+        two-cover card.
+        """
+        conn = cls._connect()
+        rows = conn.execute(
+            """SELECT src_slug, dst_title, dst_artist, dst_slug, relation
+               FROM sample_links
+               WHERE collection_name = ? AND direction = 'source'
+                 AND (dst_slug IS NULL OR dst_slug <> src_slug)""",
+            (collection_name,),
+        ).fetchall()
+        return [
+            {"src_slug": r[0], "dst_title": r[1], "dst_artist": r[2],
+             "dst_slug": r[3], "relation": r[4]}
+            for r in rows
+        ]
+
+    @classmethod
     def get_song_relations_raw(cls, slugs: List[str]) -> Dict[str, dict]:
         """``{slug: {"samples": [{"song","artist"}, …], "sampled_by": [...]}}``.
 
