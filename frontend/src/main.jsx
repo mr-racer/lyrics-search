@@ -6844,9 +6844,8 @@ function AsxSearchCard({ payload, query, c, isDark, lang, navigateToArtist,
 }
 
 function AsxFactsCard({ payload, c, isDark, lang, navigateToArtist, onPlayTrack, onQueueNext,
-                        onAddToPlaylist, onExplainFact, onAsk }) {
+                        onAddToPlaylist, onAsk }) {
   const ru = lang === 'ru';
-  const used = (payload.items || []).filter(i => i.used);
   // Explain mode: the turn was "what does THIS line mean", so the line itself is
   // the header of the answer and `explained === false` is an honest outcome, not
   // an error — the backend refuses to invent a reason it could not find.
@@ -6919,27 +6918,25 @@ function AsxFactsCard({ payload, c, isDark, lang, navigateToArtist, onPlayTrack,
         )}
       </div>
 
-      {/* Follow-up chips instead of a source list (спека 2026-08-05): the
-          cited lines are gone from display, but the «объясни этот факт» path
-          they carried survives as up-to-two chips built from the shortest
-          cited lines. The chip label is a preview; the FULL fact text is what
-          gets sent. In explain mode the turn already is an explanation — no
-          second layer of «объясни» on top of it. */}
-      {!focus && (used.length > 0 || payload.subject_kind === 'artist') && (
+      {/* Follow-up chips: written by the model in the same answer call (its
+          own next-question ideas), sanitized server-side. Tapping one asks it
+          with the subject pinned by id so the answer can't drift onto a
+          same-named track. In explain mode the turn already is a follow-up. */}
+      {!focus && ((payload.follow_ups || []).length > 0
+                  || payload.subject_kind === 'artist') && onAsk && (
         <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap', marginTop: 16 }}>
-          {used.slice().sort((a, b) => (a.text || '').length - (b.text || '').length)
-            .slice(0, 2).map(item => (
-              <button key={item.n} className="asx-pill" type="button"
-                onClick={() => onExplainFact && onExplainFact(item.text)}
-                title={ru ? 'Объяснить этот факт' : 'Explain this fact'}>
-                <AsxIntentDot intent="facts" />
-                {(ru ? 'объясни: ' : 'explain: ')
-                  + ((item.text || '').length > 58
-                      ? (item.text || '').slice(0, 57).trimEnd() + '…'
-                      : (item.text || ''))}
-              </button>
+          {(payload.follow_ups || []).map(q => (
+            <button key={q} className="asx-pill" type="button"
+              onClick={() => onAsk(q, {
+                intent: 'facts',
+                subjectTrackId: payload.track_id || undefined,
+                subjectArtistSlug: payload.track_id ? undefined
+                  : (payload.artist_slug || undefined),
+              })}>
+              <AsxIntentDot intent="facts" />{q}
+            </button>
           ))}
-          {payload.subject_kind === 'artist' && payload.subject_title && onAsk && (
+          {payload.subject_kind === 'artist' && payload.subject_title && (
             <button className="asx-pill" type="button"
               onClick={() => onAsk(
                 ru ? `собери лучшее ${payload.subject_title}` : `build the best of ${payload.subject_title}`,
@@ -6953,7 +6950,9 @@ function AsxFactsCard({ payload, c, isDark, lang, navigateToArtist, onPlayTrack,
 
       {related.length > 0 && (
         <div style={{ marginTop: 16 }}>
-          <AsxLabel c={c}>{ru ? 'ИЗ БИБЛИОТЕКИ' : 'FROM YOUR LIBRARY'}</AsxLabel>
+          {/* Backend only fills this with the in-library sides of the track's
+              sample links now — never the artist's catalogue. */}
+          <AsxLabel c={c}>{ru ? 'СЭМПЛЫ У ВАС В БИБЛИОТЕКЕ' : 'SAMPLES IN YOUR LIBRARY'}</AsxLabel>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {related.map((t, i) => (
               <AsxTrackRow key={t.track_id || i} track={t} c={c} isDark={isDark} lang={lang}
@@ -7058,7 +7057,9 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
     : failed ? 'fail'
     : turn ? (asxTurnEmpty(turn) ? 'fail' : 'done')
     : 'idle';
-  const compact = orbState !== 'idle' && orbState !== 'sleep';
+  // The orb shrinks only once an ANSWER is on screen. While thinking it stays
+  // full-size — the breathing sphere and its caption ARE the progress UI.
+  const compact = orbState === 'done' || orbState === 'fail';
 
   // ── One turn ──
   const send = useCallback(async (message, opts = {}) => {
@@ -7127,18 +7128,13 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
 
   const submit = () => { const t = input.trim(); if (t) { send(t); setInput(''); } };
 
-  // Tapping a cited fact asks about that fact and keeps the subject pinned by
-  // id, so the answer can't drift onto a same-named track.
-  const explainFact = useCallback((fact) => {
-    const f = String(fact || '').trim();
-    if (!f) return;
-    const p = turn?.facts || {};
-    send(ru ? `объясни: ${f}` : `explain this: ${f}`, {
-      intent: 'facts', focusFact: f,
-      subjectTrackId: p.track_id || undefined,
-      subjectArtistSlug: p.track_id ? undefined : (p.artist_slug || undefined),
-    });
-  }, [turn, ru, send]);
+  // Back to the assistant's front page: the answer goes away, the constellation
+  // and the entry-point sections come back. Slots survive on purpose — «а
+  // побыстрее?» after a reset still means what it meant.
+  const resetTurn = () => {
+    setTurn(null); setTurnId(null); setFailed(false);
+    setIntent(null); setQuery(''); setStage('');
+  };
 
   // Reopen a past turn: the result AND its slots come back, so «а побыстрее?»
   // continues from wherever the user jumped to.
@@ -7246,7 +7242,7 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
                  styles.css keys off the aio-* classes on this wrapper. ── */}
           <div className={`asn-hero aio-${orbState}${intent ? ` aio-i-${intent}` : ''}`
                           + (compact ? ' asn-compact' : '')}
-               style={{ '--asn-os': compact ? '64px' : '118px' }}>
+               style={{ '--asn-os': compact ? '72px' : '136px' }}>
             {phrases.map((p, i) => (
               <button key={p.text} type="button" className={`asn-star asn-s${i + 1}`}
                       tabIndex={orbState === 'idle' ? 0 : -1}
@@ -7256,7 +7252,11 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
               </button>
             ))}
             <div className="asn-glow" />
-            <AiOrb state={orbState} size={compact ? 64 : 118} />
+            {/* In the answer state the orb itself is the way home. */}
+            <span onClick={compact ? resetTurn : undefined}
+                  title={compact ? (ru ? 'К началу' : 'Back to start') : undefined}>
+              <AiOrb state={orbState} size={compact ? 72 : 136} />
+            </span>
             <div className="aio-capt">{caption()}</div>
           </div>
 
@@ -7272,9 +7272,16 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
               <div className="asn-underline" />
               <div className="asn-ask">
                 <button className="asn-go" onClick={submit} disabled={busy || !input.trim()}>
-                  {busy ? (ru ? 'ДУМАЮ…' : 'THINKING…') : (ru ? 'СПРОСИТЬ ▸' : 'ASK ▸')}
+                  {busy ? (ru ? 'Думаю…' : 'Thinking…') : (ru ? 'Спросить ✦' : 'Ask ✦')}
                 </button>
               </div>
+              {(turn || failed) && !busy && (
+                <div className="asn-resetrow">
+                  <button className="asn-reset" type="button" onClick={resetTurn}>
+                    ✕ {ru ? 'Сбросить ответ' : 'Clear the answer'}
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
             <div style={{ textAlign: 'center', padding: '10px 0 4px' }}>
@@ -7346,7 +7353,7 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
             <AsxFactsCard payload={turn.facts} c={c} isDark={isDark} lang={lang}
               navigateToArtist={navigateToArtist} onPlayTrack={onPlayTrack}
               onQueueNext={onQueueNext} onAddToPlaylist={onAddToPlaylist}
-              onExplainFact={explainFact} onAsk={send} />
+              onAsk={send} />
           )}
 
           {/* ── Idle entry points. Every section is a pre-written turn, and

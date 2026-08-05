@@ -777,41 +777,56 @@
        сферы (aio-idle/work/done/fail + aio-i-*) переиспользуются как есть —
        новые классы только про компоновку и ореол. ── */
 
-    /* аврора: собственный слой страницы; blur умеренный — фон, не туман */
+    /* аврора: радиальные пятна без видимой кромки (сплошной эллипс под blur
+       всё равно показывал границу) + заметный медленный дрейф */
     .asn-aurora{position:absolute;inset:0;pointer-events:none;overflow:hidden;}
-    @keyframes asnAur1{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(5%,4%) scale(1.12)}}
-    @keyframes asnAur2{0%,100%{transform:translate(0,0) scale(1.08)}50%{transform:translate(-4%,-3%) scale(.96)}}
-    .asn-a{position:absolute;border-radius:50%;filter:blur(70px);opacity:.30;}
-    body[data-theme="light"] .asn-a{opacity:.18;}
-    .asn-a1{width:460px;height:380px;left:6%;top:-8%;background:#7c5bff;animation:asnAur1 19s ease-in-out infinite;}
-    .asn-a2{width:420px;height:360px;right:2%;top:0;background:#3a2f7d;animation:asnAur2 23s ease-in-out infinite;}
-    .asn-a3{width:380px;height:320px;left:38%;top:20%;background:#233a6b;animation:asnAur1 27s ease-in-out infinite reverse;}
+    @keyframes asnAur1{
+      0%,100%{transform:translate(0,0) scale(1);opacity:1}
+      33%{transform:translate(9%,6%) scale(1.18);opacity:.75}
+      66%{transform:translate(-5%,3%) scale(.94);opacity:.9}}
+    @keyframes asnAur2{
+      0%,100%{transform:translate(0,0) scale(1.06);opacity:.85}
+      40%{transform:translate(-8%,-5%) scale(.92);opacity:1}
+      75%{transform:translate(5%,4%) scale(1.14);opacity:.7}}
+    .asn-a{position:absolute;filter:blur(48px);}
+    .asn-a1{width:640px;height:520px;left:0;top:-14%;
+      background:radial-gradient(closest-side, rgba(124,91,255,.34), rgba(124,91,255,.10) 55%, transparent 76%);
+      animation:asnAur1 26s ease-in-out infinite;}
+    .asn-a2{width:580px;height:500px;right:-6%;top:-4%;
+      background:radial-gradient(closest-side, rgba(58,47,125,.42), rgba(58,47,125,.12) 55%, transparent 76%);
+      animation:asnAur2 31s ease-in-out infinite;}
+    .asn-a3{width:540px;height:440px;left:32%;top:16%;
+      background:radial-gradient(closest-side, rgba(35,58,107,.38), rgba(35,58,107,.10) 55%, transparent 76%);
+      animation:asnAur1 37s ease-in-out infinite reverse;}
+    body[data-theme="light"] .asn-a{filter:blur(54px);opacity:.5;}
 
-    /* герой-созвездие */
-    .asn-hero{position:relative;max-width:760px;height:322px;margin:18px auto 0;
-      transition:height .5s cubic-bezier(.2,.8,.2,1);}
-    .asn-hero.asn-compact{height:132px;}
-    .asn-hero .aio-orbwrap{top:38px;}
-    .asn-hero.asn-compact .aio-orbwrap{top:16px;}
+    /* герой-созвездие. Ниже по странице (просьба 2026-08: «на уровень
+       удобного использования»), орб крупнее, подпись читаемее. */
+    .asn-hero{position:relative;max-width:760px;height:352px;margin:52px auto 0;
+      transition:height .5s cubic-bezier(.2,.8,.2,1),margin-top .5s cubic-bezier(.2,.8,.2,1);}
+    .asn-hero.asn-compact{height:140px;margin-top:24px;}
+    .asn-hero .aio-orbwrap{top:44px;}
+    .asn-hero.asn-compact .aio-orbwrap{top:16px;cursor:pointer;}
     /* выразительная сфера: ярче кольцо, глубже тень, ореол-нимб позади */
     .asn-hero .aio-ring{opacity:.72;filter:blur(3px);}
     .asn-hero .aio-orb{box-shadow:0 16px 40px -8px rgba(124,91,255,.65);}
-    .asn-glow{position:absolute;left:50%;top:calc(38px + var(--asn-os,118px)/2);
+    .asn-glow{position:absolute;left:50%;top:calc(44px + var(--asn-os,136px)/2);
       width:calc(var(--asn-os,118px) * 2.3);height:calc(var(--asn-os,118px) * 2.3);
       transform:translate(-50%,-50%);border-radius:50%;pointer-events:none;
       background:radial-gradient(circle,
         color-mix(in oklab, var(--asn-g1,#7c5bff) 34%, transparent) 0%,
         color-mix(in oklab, var(--asn-g2,#ff78c8) 14%, transparent) 42%, transparent 70%);
       filter:blur(18px);transition:background .8s ease;}
-    .asn-hero.asn-compact .asn-glow{top:calc(16px + var(--asn-os,118px)/2);}
+    .asn-hero.asn-compact .asn-glow{top:calc(16px + var(--asn-os,136px)/2);}
     .asn-hero.aio-work{--asn-g1:#4d7dff;--asn-g2:#6ac8ff;}
     .asn-hero.aio-work.aio-i-playlist{--asn-g1:#ffb35c;--asn-g2:#ff6fae;}
     .asn-hero.aio-work.aio-i-facts{--asn-g1:#3ec9d6;--asn-g2:#5ee6c8;}
     .asn-hero.aio-done{--asn-g1:#3ecf8e;--asn-g2:#4dd6c2;}
     .asn-hero.aio-fail{--asn-g1:#e0607e;--asn-g2:#a04057;}
     .asn-hero.aio-sleep .asn-glow{opacity:.25;}
-    .asn-hero .aio-capt{top:calc(38px + var(--asn-os,118px) + 18px);}
-    .asn-hero.asn-compact .aio-capt{top:calc(16px + var(--asn-os,118px) + 12px);font-size:12.5px;min-height:24px;}
+    /* Подпись под шаром: крупнее, чтобы шиммер «думаю…» читался с расстояния. */
+    .asn-hero .aio-capt{top:calc(44px + var(--asn-os,136px) + 20px);font-size:15.5px;}
+    .asn-hero.asn-compact .aio-capt{top:calc(16px + var(--asn-os,136px) + 12px);font-size:13px;min-height:24px;}
 
     /* примеры-звёзды: лёгкая гротеска, интент-точка всегда видна */
     .asn-star{position:absolute;display:inline-flex;align-items:center;gap:8px;border:0;
@@ -847,14 +862,31 @@
       animation:asnGlowSlide 7s ease-in-out infinite;}
     .asn-line:focus-within .asn-underline::after{animation-duration:2.6s;}
     .asn-ask{margin-top:16px;}
-    .asn-go{border:0;border-radius:999px;padding:11px 24px;font-size:12.5px;font-weight:800;
-      letter-spacing:.05em;color:#2a1f0a;cursor:pointer;
-      background:linear-gradient(180deg,#ffc15e,#f08a12);
-      box-shadow:inset 0 1px 0 rgba(255,255,255,.5),inset 0 -1px 0 rgba(0,0,0,.25),0 6px 16px -6px rgba(240,138,18,.6);
-      transition:transform .18s cubic-bezier(.34,1.56,.64,1),box-shadow .18s;}
-    .asn-go:hover{transform:scale(1.045);}
-    .asn-go:active{transform:scale(.97) translateY(1px);box-shadow:inset 0 2px 5px rgba(0,0,0,.35);}
-    .asn-go:disabled{opacity:.55;cursor:default;transform:none;}
+    /* «Спросить» — liquid-glass капсула в языке страницы (янтарная «физическая»
+       клавиша осталась в наследии рекомендаций и здесь выглядела чужой). */
+    .asn-go{position:relative;border:1px solid rgba(255,255,255,.16);border-radius:999px;
+      padding:11px 28px;font-size:12.5px;font-weight:700;letter-spacing:.07em;color:#eeeef3;
+      cursor:pointer;overflow:hidden;
+      background:linear-gradient(135deg,rgba(124,91,255,.30),rgba(255,120,200,.16) 60%,rgba(124,91,255,.22));
+      backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.22),0 10px 28px -14px rgba(124,91,255,.7);
+      transition:transform .2s ease,box-shadow .25s ease,border-color .25s ease;}
+    .asn-go:hover{transform:translateY(-2px);border-color:rgba(124,91,255,.55);
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.3),0 14px 34px -14px rgba(124,91,255,.9);}
+    .asn-go:active{transform:translateY(0) scale(.97);}
+    .asn-go:disabled{opacity:.5;cursor:default;transform:none;}
+    body[data-theme="light"] .asn-go{color:#3a2f6b;border-color:rgba(96,66,220,.24);
+      background:linear-gradient(135deg,rgba(124,91,255,.16),rgba(255,120,200,.10) 60%,rgba(124,91,255,.12));
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.75),0 10px 28px -16px rgba(96,66,220,.5);}
+    body[data-theme="light"] .asn-go:hover{border-color:rgba(96,66,220,.45);}
+    /* Сброс ответа: тихая текстовая кнопка под композером. */
+    .asn-resetrow{text-align:center;margin-top:12px;}
+    .asn-reset{border:0;background:none;font:inherit;font-size:12px;letter-spacing:.04em;
+      color:rgba(238,238,243,.42);cursor:pointer;padding:5px 12px;border-radius:999px;
+      transition:color .2s ease,background .2s ease;}
+    .asn-reset:hover{color:#eeeef3;background:rgba(255,255,255,.05);}
+    body[data-theme="light"] .asn-reset{color:rgba(22,22,32,.42);}
+    body[data-theme="light"] .asn-reset:hover{color:#161620;background:rgba(22,22,32,.05);}
 
     /* секции-точки входа: воздух вместо рамок */
     .asn-sec{max-width:640px;margin:44px auto 0;text-align:center;}
@@ -907,12 +939,12 @@
     .asn-hstar.asn-on i{box-shadow:0 0 14px var(--hc,#6ac8ff),0 0 0 3px color-mix(in oklab, var(--hc,#6ac8ff) 22%, transparent);}
     .asn-hstar em{position:absolute;bottom:26px;left:50%;transform:translateX(-50%) translateY(4px);
       font-size:11.5px;font-style:normal;white-space:nowrap;max-width:240px;overflow:hidden;
-      text-overflow:ellipsis;color:inherit;opacity:0;pointer-events:none;padding:6px 13px;
+      text-overflow:ellipsis;color:#eeeef3;opacity:0;pointer-events:none;padding:6px 13px;
       border-radius:999px;background:rgba(22,19,36,.9);border:1px solid rgba(255,255,255,.10);
       backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
       box-shadow:0 10px 26px -14px rgba(0,0,0,.8);transition:opacity .22s ease,transform .22s ease;z-index:5;}
     body[data-theme="light"] .asn-hstar em{background:rgba(255,255,255,.92);border-color:rgba(22,22,32,.10);
-      box-shadow:0 10px 26px -16px rgba(40,30,60,.5);}
+      color:#161620;box-shadow:0 10px 26px -16px rgba(40,30,60,.5);}
     .asn-hstar:hover em{opacity:1;transform:translateX(-50%) translateY(0);}
 
     /* ответ-плейлист: коллаж-хедер */
@@ -951,15 +983,15 @@
     .asn-plbtn:disabled{opacity:.6;cursor:default;transform:none;}
 
     @media (max-width: 640px){
-      .asn-hero{height:268px;margin-top:8px;}
-      .asn-hero.asn-compact{height:118px;}
+      .asn-hero{height:300px;margin-top:22px;}
+      .asn-hero.asn-compact{height:126px;margin-top:12px;}
       .asn-s3,.asn-s4{display:none;}
       .asn-star{font-size:11px;}
       .asn-line input{font-size:17px;}
       .asn-pl-title{font-size:23px;}
       .asn-sec{margin-top:36px;}
       .asn-hrow{gap:14px;}
-      .asn-a{opacity:.22;}
+      .asn-a{opacity:.55;}
     }
     /* батарейная политика: фоновые дрейфы замирают на таче */
     @media (max-width: 768px), (hover: none) and (pointer: coarse){
