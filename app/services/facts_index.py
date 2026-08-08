@@ -171,7 +171,9 @@ def search(qdrant, query_vector, *, limit: int, slugs: list[str] | None = None,
     try:
         res = qdrant.query_points(
             collection_name=COLLECTION,
-            query=list(query_vector),
+            # float(), not list(): a numpy array yields np.float32 items, which
+            # the client will not serialise.
+            query=[float(x) for x in query_vector],
             using=ModelRegistry.VECTOR_NAME,
             query_filter=query_filter,
             limit=limit,
@@ -221,7 +223,43 @@ def warm_collection(qdrant, collection_name: str, *, budget: int = 200) -> int:
     return written
 
 
+_warming: set[str] = set()
+
+
+def warm_in_background(qdrant, collection_name: str) -> None:
+    """Kick a bounded warm-up for this account, at most one at a time.
+
+    A daemon thread rather than an asyncio task: the work is a sync GPU encode
+    loop that would need ``to_thread`` anyway, and a fire-and-forget task can be
+    garbage-collected mid-run unless someone keeps a reference. One thread per
+    collection, re-armed on the next question.
+    """
+    if not collection_name:
+        return
+    with _lock:
+        if collection_name in _warming:
+            return
+        _warming.add(collection_name)
+
+    def _run() -> None:
+        try:
+            written = warm_collection(qdrant, collection_name)
+            if written:
+                logger.info("[facts_index] warm-up indexed %d entities for %s",
+                            written, collection_name)
+        except Exception:
+            logger.warning("[facts_index] warm-up failed for %s", collection_name,
+                           exc_info=True)
+        finally:
+            with _lock:
+                _warming.discard(collection_name)
+
+    threading.Thread(target=_run, name=f"facts-warm-{collection_name}",
+                     daemon=True).start()
+
+
 def forget_cache() -> None:
     """Drop the "already indexed" memo. For tests and factory reset."""
     with _lock:
         _indexed.clear()
+        _warming.clear()

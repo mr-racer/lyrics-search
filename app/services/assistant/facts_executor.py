@@ -74,19 +74,20 @@ EXPLAIN_MAX_WEB_SEARCHES = 3
 # Enough snippets to stop early: past this another query buys context the 12b
 # will not read anyway.
 EXPLAIN_ENOUGH_SNIPPETS = 5
-# Ceiling on the narrowed pack. Deliberately far below MAX_PACK_ITEMS: the
-# failure mode being fixed here is precisely "too much unrelated material".
-EXPLAIN_MAX_EVIDENCE = 10
-# A library item joins the evidence when it shares this many content tokens with
-# the fact. One is noise ("the", "песня"); two means it is about the same thing.
-EXPLAIN_MIN_OVERLAP = 2
-# Below this length a fact standing alone cannot contain its own explanation —
-# "«A» сэмплирует «B»" states a thing, it does not account for it. Asking the
-# model to explain a lone one-liner buys a paraphrase and a wasted round-trip,
-# so the web is asked first instead. A longer stored fact often DOES carry the
-# story ("…, потому что продюсер записывал партию в подвале"), and that one is
-# worth reading before spending three searches on it.
-EXPLAIN_SELF_CONTAINED_CHARS = 180
+# Ceiling on the evidence handed to the model. Higher than the 10 the old
+# token-overlap filter allowed — retrieval ranks now, so a weak item costs a
+# slot at the bottom instead of crowding out a strong one — but still far below
+# MAX_PACK_ITEMS, because "too much unrelated material" remains the failure
+# this branch guards against.
+EXPLAIN_MAX_EVIDENCE = 20
+# Below this many retrieved facts the library plainly has nothing to say, and
+# the web is asked before the model is.
+EXPLAIN_MIN_CANDIDATES = 2
+# ...and the same when nothing retrieved is actually close. Cosine over
+# Qwen3-Embedding: same-topic facts land around 0.6+, unrelated ones near 0.4.
+# A proxy, calibrated on the golden set — it knows about topical closeness, not
+# about whether the fact is EXPLAINED.
+EXPLAIN_MIN_TOP_SCORE = 0.5
 # Hard ceiling on what goes into the prompt — a 12b context filled with 60 facts
 # produces worse answers than one filled with the best 18.
 MAX_PACK_ITEMS = 18
@@ -147,7 +148,10 @@ HARD RULES:
 
 HOW TO BUILD THE ANSWER — three steps, in this order:
 1. CONNECT. Several facts usually tell parts of ONE story: the same recording session, the same feud, the same sample, the same film. Find those threads first and merge each into a single narrative — never retell the facts one by one in list order.
-2. SELECT. Keep only the 2-4 most interesting threads. Interesting = a story with people acting (someone refused, found, hid, fought), a surprise, a vivid concrete detail. Boring = generic praise, awards lists, chart numbers without a story, encyclopedic summaries. Drop boring threads entirely and do not cite them.
+2. SELECT. Keep only the 2-4 most interesting threads.
+   Interesting = a cause or a consequence (why it happened, what it led to); a concrete detail that could not be guessed (a name, a place, a number, a date, something someone actually said); a contradiction of the obvious reading; something that changes how the listener hears the song next time.
+   Boring = generic praise, awards lists, chart positions and sales without a story, "it became popular", encyclopedic summaries, a retelling of what the lyrics are about.
+   Drop boring threads entirely and do not cite them.
 3. SHAPE.
    - Broad question («расскажи про», "tell me about", «чем интересен») → 2-4 short thematic blocks. Each block: a bold mini-heading of 1-3 words in {lang_name} (**Запись**, **Слова**, **Клип** — name it after the thread, these are examples, not a fixed set), then 1-3 sentences weaving that thread's facts together. Blank line between blocks.
    - Narrow question (who produced it, what year, the story of the video, what a line means) → answer ONLY that thread: 1-4 sentences, direct, no headings. Facts about other sides of the song are not an answer to a narrow question — do not add them as bonus blocks or closing context, and do not cite them.
@@ -248,6 +252,20 @@ HARD RULES:
 - Evidence about the same artist or song but NOT about this fact is not material. Ignore it completely. Do not list other facts, do not "add context" with them, do not close on a general remark about the artist.
 - If the evidence does not actually explain the FACT — if it only repeats it in other words, or only talks about other things — then answer with exactly {{"answer":"","used":[]}}. This is a correct outcome, not a failure. An honest nothing beats a plausible invention.
 - Copy any artist, song, album, producer or label name EXACTLY as it appears in the evidence — never translated, transliterated or declined.
+
+WHAT COUNTS AS AN EXPLANATION WORTH GIVING:
+- A cause or a consequence, not a restatement. Why it happened, what it led to, what someone was trying to do.
+- A concrete detail that cannot be guessed from the fact: a name, a place, a number, a date, a piece of gear, something someone actually said.
+- A contradiction of the obvious reading — it turned out not to be what it looks like, or it was meant as something else.
+- Something that changes how the listener hears the song the next time.
+
+WHAT DOES NOT COUNT — never build an answer out of these:
+- The fact in other words. If your answer would still be true after deleting every evidence line, you have written nothing.
+- Genre, chart position, awards, sales, "it became popular", "it was well received" — unless the evidence tells a story about them.
+- A retelling of what the lyrics are about, when the fact was not about lyrics.
+- General praise for the artist, or a closing remark about their career.
+
+HARD REQUIREMENT: your answer must contain at least one specific piece of information that is NOT in the FACT itself — a name, a date, a place, a quote, a cause. If the evidence gives you none, answer with exactly {{"answer":"","used":[]}}.
 
 STYLE (when you do have an explanation):
 - 1-4 sentences. Open with the substance, not with a restatement of the fact.
@@ -874,11 +892,14 @@ def _snippets_from_web(raw: str, limit: int = 5) -> list[dict]:
     return out
 
 
-# ── explain mode: narrowing the pack and building its queries ────────────────
+# ── explain mode: building the web queries ───────────────────────────────────
+# Narrowing the pack used to live here too — a token-overlap filter between the
+# Russian statement and the English sources, which threw the material away
+# rather than ranking it. It is now real retrieval, in app/services/facts_retrieval.py.
 
-# Words that carry no topic. Kept deliberately short: this list only has to stop
-# a shared "песня"/"the" from counting as evidence that two texts are about the
-# same thing, and every word added here is a word the overlap can no longer see.
+# Words that carry no topic. Kept deliberately short: this list only has to keep
+# a shared "песня"/"the" out of a search query, and every word added here is a
+# word a query can no longer be built from.
 _STOPWORDS = {
     "и", "в", "во", "на", "с", "со", "у", "о", "об", "от", "до", "за", "по", "из",
     "что", "это", "эта", "этот", "как", "для", "же", "а", "но", "не", "то", "тот",
@@ -898,37 +919,6 @@ _QUERY_NOISE = re.compile(r'(?i)\b(?:site|inurl|filetype|intitle):\S*|["“”«
 def _content_tokens(text: str) -> list[str]:
     """Topic-bearing tokens: folded, de-noised, short words dropped."""
     return [t for t in tokenize(text) if len(t) > 2 and t not in _STOPWORDS]
-
-
-def _fact_evidence(items: list[dict], focus_fact: str,
-                   subject_tokens: set[str]) -> list[dict]:
-    """The fact first, then only the pack items that are about THAT fact.
-
-    ``subject_tokens`` (the artist and title) are removed from the needle on
-    purpose: every item in a song's pack names the song, so counting those
-    tokens would readmit the whole pack and rebuild the exact failure this
-    narrowing exists to prevent.
-    """
-    fact_text = _clean(focus_fact)
-    needle = set(_content_tokens(focus_fact)) - subject_tokens
-    if not needle:
-        # A fact made only of the subject's own name ("Runaway — Kanye West")
-        # has no distinctive words; fall back to matching on the name itself
-        # rather than admitting everything.
-        needle = set(_content_tokens(focus_fact))
-
-    fact_key = fold(fact_text)
-    scored: list[tuple[int, dict]] = []
-    for item in items:
-        text = item.get("text") or ""
-        if fold(text) == fact_key:
-            continue                      # the fact itself is already item [1]
-        overlap = len(needle & set(_content_tokens(text)))
-        if overlap >= EXPLAIN_MIN_OVERLAP:
-            scored.append((overlap, item))
-    scored.sort(key=lambda pair: -pair[0])
-    return ([{"text": fact_text, "source": "facts"}]
-            + [item for _, item in scored[:EXPLAIN_MAX_EVIDENCE - 1]])
 
 
 def _sane_queries(raw: object, focus_fact: str, subject: dict) -> list[str]:
@@ -1021,12 +1011,23 @@ def _deterministic_answer(subject: dict, items: list[dict], lang: str) -> str:
     return f"{head}\n{bullets}"
 
 
-def _verify(raw: object, n_items: int) -> tuple[str, list[int]] | None:
+# In explain mode the tapped statement is evidence [1]. A paraphrase of it is
+# a perfectly well-formed answer that cites a real number, which is how the old
+# gate let one through — so explain mode also demands a citation that is NOT it.
+MAIN_FACT_INDEX = 1
+
+
+def _verify(raw: object, n_items: int,
+            *, require_beyond: int | None = None) -> tuple[str, list[int]] | None:
     """Accept the LLM answer only if it is non-empty and cites real fact numbers.
 
     Returns ``(answer, used)`` or None — None means "throw it away, render the
     pack instead". This is the gate that makes an ungrounded paragraph
     impossible, no matter what the model produced.
+
+    ``require_beyond`` (explain mode) additionally rejects an answer whose only
+    citation is that item. Restating the fact is not explaining it, and the
+    check costs nothing — no second model call, just the numbers we already have.
     """
     if not isinstance(raw, dict):
         return None
@@ -1045,6 +1046,9 @@ def _verify(raw: object, n_items: int) -> tuple[str, list[int]] | None:
         if 1 <= n <= n_items and n not in used:
             used.append(n)
     if not used:
+        return None
+    if require_beyond is not None and used == [require_beyond]:
+        logger.info("[assistant/facts] answer cited only the fact itself — rejected")
         return None
     return answer, used
 
@@ -1134,7 +1138,8 @@ async def _ask_explain(evidence: list[dict], *, subject: dict, focus_fact: str,
         raw = await ask_llm(prompt, system_prompt=system, parse_json=False,
                             temperature=0.2, base_url=llm_base_url, model=llm_model,
                             extra_body={"enable_thinking": False})
-        verified = _verify(_parse_json_object(raw), len(evidence))
+        verified = _verify(_parse_json_object(raw), len(evidence),
+                           require_beyond=MAIN_FACT_INDEX)
         if verified is not None:
             return verified
         if _declined(raw):
@@ -1146,7 +1151,8 @@ async def _ask_explain(evidence: list[dict], *, subject: dict, focus_fact: str,
                             parse_json=False, temperature=0.0,
                             base_url=llm_base_url, model=llm_model,
                             extra_body={"enable_thinking": False})
-        return _verify(_parse_json_object(raw), len(evidence))
+        return _verify(_parse_json_object(raw), len(evidence),
+                       require_beyond=MAIN_FACT_INDEX)
     except Exception:
         logger.exception("[assistant/facts] explain call failed")
         return None
@@ -1176,31 +1182,96 @@ async def _fact_web_queries(subject: dict, focus_fact: str, *,
     return _fallback_fact_queries(subject, focus_fact)
 
 
-def _needs_the_web_first(evidence: list[dict], focus_fact: str) -> bool:
-    """True when the library provably has nothing to explain this fact with.
+def _subject_slugs(subject: dict) -> dict[str, str]:
+    """``{kind: slug}`` for the entities whose facts are worth reading first.
 
-    A code decision, like every other "should we search?" in this module: the
-    narrowing found no related item, and the fact is a one-liner, so the only
-    thing the model could do with it is rephrase it.
+    A song question gets BOTH the song and its artist: the reason a line means
+    what it means is as often in the artist's biography as in the song's own
+    page. Each slug comes from the function that owns the table it keys — see
+    the three-``_slugify`` warning in CLAUDE.md.
     """
-    return len(evidence) <= 1 and len(focus_fact) < EXPLAIN_SELF_CONTAINED_CHARS
+    from app.services.artist_facts_service import _slugify as artist_slugify
+    from app.services.song_facts_service import get_song_facts_key
+
+    artist = (subject.get("artist") or "").strip()
+    title = (subject.get("title") or "").strip()
+    out: dict[str, str] = {}
+    if subject.get("kind") == "song" and artist and title:
+        out["song"] = get_song_facts_key(artist, title)
+    slug = subject.get("artist_slug") or (artist_slugify(artist) if artist else "")
+    if slug:
+        out["artist"] = slug
+    return out
 
 
-async def _explain_fact(*, subject: dict, items: list[dict], focus_fact: str,
+async def _retrieve_evidence(subject: dict, focus_fact: str, *, qdrant,
+                             collection_name: str) -> list[dict]:
+    """Raw source facts that might explain ``focus_fact``, best first.
+
+    Only raw material: the refined one-liner the listener tapped is a display
+    artefact — shortened, re-worded, occasionally wrong — so it goes into the
+    prompt as the thing being explained, never as evidence to explain it with.
+    Lyrics, the catalog line and gems are left out too: they are exactly what
+    used to turn an explanation into «входит в альбом X, жанр Pop».
+    """
+    from app.services import facts_index, facts_retrieval
+
+    slugs = _subject_slugs(subject)
+    if not slugs:
+        return []
+    # Cross-entity retrieval only sees what has been embedded, so trickle the
+    # rest of this account's pool in behind the answer. Bounded and one thread
+    # per collection — the first question must not wait on the whole library.
+    facts_index.warm_in_background(qdrant, collection_name)
+    try:
+        hits = await asyncio.to_thread(
+            facts_retrieval.retrieve, qdrant,
+            collection_name=collection_name, query=focus_fact,
+            subject_slugs=slugs, limit=EXPLAIN_MAX_EVIDENCE,
+        )
+    except Exception:
+        logger.warning("[assistant/facts] fact retrieval failed", exc_info=True)
+        return []
+    return [{"text": _clean_story(_strip_annotation_boilerplate(h["text"])),
+             "source": "facts", "score": h.get("dense_score") or 0.0}
+            for h in hits if (h.get("text") or "").strip()]
+
+
+def _needs_the_web(evidence: list[dict]) -> bool:
+    """True when retrieval plainly came back with nothing worth reading.
+
+    A count and a score — no LLM judgement. Both are proxies: they know the
+    library has little on this topic, not whether the fact is explained.
+    """
+    if len(evidence) < EXPLAIN_MIN_CANDIDATES:
+        return True
+    return max((e.get("score") or 0.0) for e in evidence) < EXPLAIN_MIN_TOP_SCORE
+
+
+async def _explain_fact(*, subject: dict, focus_fact: str,
                         message: str, qdrant, collection_name: str, lang: str,
                         llm_base_url, llm_model, say) -> dict:
     """The ``focus_fact`` branch: explain one statement, or say nothing.
 
+    Deliberately does NOT take the question-mode pack: that pack carries the
+    lyrics blob, the catalog line and gems, which is what used to turn an
+    explanation into «входит в альбом X, жанр Pop». Evidence here is retrieved
+    against the statement itself, from raw sources only.
+
     The library is asked first because an explanation already stored beats three
     web searches; the web is the fill-in, not the default.
     """
-    subject_tokens = (set(_content_tokens(subject.get("title") or ""))
-                      | set(_content_tokens(subject.get("artist") or "")))
-    evidence = _fact_evidence(items, focus_fact, subject_tokens)
+    retrieved = await _retrieve_evidence(subject, focus_fact, qdrant=qdrant,
+                                         collection_name=collection_name)
+    # The tapped statement leads the evidence and stays citable — it is what is
+    # being explained, and an explanation may legitimately lean on it. What it
+    # must not do is BE the answer, which _verify enforces by refusing a reply
+    # that cites nothing else (see MAIN_FACT_INDEX).
+    evidence = [{"text": _clean(focus_fact), "source": "facts"}] + retrieved
 
     verified = None
-    if not _needs_the_web_first(evidence, focus_fact):
-        await say("explaining", found=max(0, len(evidence) - 1))
+    if not _needs_the_web(retrieved):
+        await say("explaining", found=len(retrieved))
         verified = await _ask_explain(evidence, subject=subject, focus_fact=focus_fact,
                                       message=message, lang=lang,
                                       llm_base_url=llm_base_url, llm_model=llm_model)
@@ -1221,7 +1292,7 @@ async def _explain_fact(*, subject: dict, items: list[dict], focus_fact: str,
         if snippets:
             web_used = True
             evidence = (evidence + snippets)[:MAX_PACK_ITEMS]
-            await say("explaining", found=max(0, len(evidence) - 1))
+            await say("explaining", found=len(evidence))
             verified = await _ask_explain(evidence, subject=subject,
                                           focus_fact=focus_fact, message=message,
                                           lang=lang, llm_base_url=llm_base_url,
@@ -1324,7 +1395,7 @@ async def run(*, qdrant, collection_name: str, message: str, route, slots,
     focus = (focus_fact or "").strip()
     if focus:
         payload = await _explain_fact(
-            subject=subject, items=items, focus_fact=focus, message=message,
+            subject=subject, focus_fact=focus, message=message,
             qdrant=qdrant, collection_name=collection_name, lang=lang,
             llm_base_url=llm_base_url, llm_model=llm_model, say=_say,
         )

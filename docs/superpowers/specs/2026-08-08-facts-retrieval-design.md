@@ -110,11 +110,15 @@ carry six times the weight in the vector — not throughput.
 
 ### Facts retrieval
 
-**Qdrant stores vectors only.** A `facts` collection holding the dense vector and
-nothing else. Payload retrieval from Qdrant is slow enough that the codebase
-already routes around it (`light_points`' 90 s memoised scroll,
-`PAYLOAD_EXCLUDE_HEAVY`, credits read from the SQLite mirror), so text never goes
-in. Search returns ids and scores; the texts are joined from SQLite.
+**Qdrant stores vectors only.** A `facts` collection holding the dense vector
+plus a three-scalar payload — `{kind, row_id, slug}` — and no text. Payload
+retrieval from Qdrant is slow enough that the codebase already routes around it
+(`light_points`' 90 s memoised scroll, `PAYLOAD_EXCLUDE_HEAVY`, credits read
+from the SQLite mirror), so the words never go in; search returns ids and scores
+and the texts are joined from SQLite. The three scalars earn their place: `slug`
+and `kind` are what the subject-scoped filter matches on (both keyword-indexed),
+and `row_id` is the join key back to SQLite — a uuid5 point id is not
+reversible.
 
 Point ids are `uuid5(NAMESPACE, f"{kind}:{row_id}")`. Required, not cosmetic:
 `song_facts.id` and `artist_facts.id` are independent autoincrement sequences and
@@ -152,19 +156,23 @@ tapped statement and places them alongside it — including facts belonging to
 *neighbouring* entities, which is where the actual explanation often lives, and
 which is the same retrieval the redesigned web search will use later.
 
-The main fact stays citable. The consequence is accepted knowingly: a pure
-paraphrase can still satisfy `_verify` by citing only `[1]`, so `_verify` gains a
-one-line rule — `used` must contain at least one item that is not the main fact.
+The tapped statement leads the evidence as item `[1]` and stays citable — it is
+what is being explained, and an explanation may legitimately lean on it. The
+consequence is handled in code, not by asking the model nicely: `_verify` grows
+a `require_beyond` argument that rejects an answer whose only citation is `[1]`.
+Restating a fact is not explaining it, and the check costs no extra model call.
 
 The web-search trigger moves off `len(evidence) <= 1` (`:1179`) onto retrieval
-quality: too few candidates after filtering, or a top score below a threshold.
-This is a proxy — a score does not know whether a fact is *explained* — so the
-threshold is calibrated against the golden set from stage 0 rather than guessed.
+quality: fewer than `EXPLAIN_MIN_CANDIDATES` retrieved facts, or a top cosine
+below `EXPLAIN_MIN_TOP_SCORE`. Both are proxies — a score knows about topical
+closeness, not about whether the fact is *explained* — so they are calibrated
+against the golden set from stage 0 rather than guessed. No LLM judge: that was
+considered and dropped, since a 12b asked to grade its own answer says yes.
 
-Evidence cap rises from 10 to 20, and the lyrics blob, the catalog line
-(`"{title} — {artist}: album …, released …, genre …"`) and gems are excluded from
-explain mode. Those are the items that produce endings like «входит в альбом X,
-жанр Pop».
+Evidence rises from 10 items to 20, and `_explain_fact` no longer receives the
+question-mode pack at all. That pack carries the lyrics blob, the catalog line
+(`"{title} — {artist}: album …, released …, genre …"`) and gems — exactly the
+items that produce endings like «входит в альбом X, жанр Pop».
 
 ### The prompt
 
@@ -186,7 +194,7 @@ cannot be read.
 
 | Stage | Work |
 |---|---|
-| 0 | `dry_run_assistant_facts.py` reads `(focus_fact, track_id)` pairs from a file and pins the subject; 15–20 real facts become the golden set |
+| 0 | `dry_run_assistant_facts.py --facts` accepts `track_id<TAB>statement` lines and pins `subject_track_id`; unpinned rows re-guess the subject from a refined one-liner and their numbers mean little, so the run reports how many were pinned. 15–20 real facts become the golden set |
 | 1 | One model; vector renamed; model-choice config and UI removed |
 | 2 | ModelRegistry: fp16, GPU-resident, `max_seq_length`, `is_query`, reaper deleted |
 | 3 | Paragraph dedup fixed and consumed |

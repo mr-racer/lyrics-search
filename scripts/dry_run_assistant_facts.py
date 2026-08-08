@@ -66,7 +66,7 @@ class _Route:
 
 
 async def one(qdrant, collection: str, question: str, lang: str,
-              focus_fact: str | None = None) -> dict:
+              focus_fact: str | None = None, track_id: str | None = None) -> dict:
     # The web queries are the thing to inspect when a fact goes unexplained, and
     # they are otherwise only visible in the server log.
     queries: list = []
@@ -74,10 +74,10 @@ async def one(qdrant, collection: str, question: str, lang: str,
     payload, options = await facts_executor.run(
         qdrant=qdrant, collection_name=collection, message=question,
         route=_Route(), slots=AssistantSlots(), lang=lang,
-        focus_fact=focus_fact, emit=emit,
+        focus_fact=focus_fact, subject_track_id=track_id, emit=emit,
     )
     return {"question": question, "focus_fact": focus_fact, "payload": payload,
-            "web_queries": queries,
+            "track_id": track_id, "web_queries": queries,
             "options": [o.get("title") for o in (options or [])]}
 
 
@@ -126,16 +126,34 @@ async def main() -> None:
     ap.add_argument("--collection", default=os.environ.get("MUSIX_COLLECTION", "acct_1"))
     ap.add_argument("--lang", default="ru", choices=["ru", "en"])
     ap.add_argument("--questions", help="file with one question per line")
-    ap.add_argument("--facts", help="file with one STATEMENT per line — runs "
-                                    "explain mode instead of the question mode")
+    ap.add_argument("--facts", help="file of statements — runs explain mode "
+                                    "instead of question mode. One per line, "
+                                    "optionally 'TRACK_ID\tSTATEMENT' to pin the "
+                                    "subject (see the note below)")
     ap.add_argument("--json", help="also dump raw results to this file")
     ap.add_argument("--verbose", action="store_true", help="print pack items in full")
     args = ap.parse_args()
 
     facts: list[str] = []
+    track_ids: list[str | None] = []
     if args.facts:
+        # A tapped card sends the track id alongside the statement, and without
+        # it the executor re-guesses the subject from the words of a refined
+        # one-liner — which resolves to the wrong song often enough to make the
+        # numbers below meaningless. Accept "track_id<TAB>statement" so a golden
+        # set can pin the subject exactly the way the SPA does.
         with open(args.facts, encoding="utf-8") as fh:
-            facts = [ln.strip() for ln in fh if ln.strip()]
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                if "	" in line:
+                    tid, _, text = line.partition("	")
+                    facts.append(text.strip())
+                    track_ids.append(tid.strip() or None)
+                else:
+                    facts.append(line)
+                    track_ids.append(None)
         # The message a tapped card sends, built the same way the SPA builds it.
         questions = [(f"объясни: {f}" if args.lang == "ru" else f"explain this: {f}")
                      for f in facts]
@@ -155,8 +173,10 @@ async def main() -> None:
             return
         for i, question in enumerate(questions):
             focus = facts[i] if facts else None
+            tid = track_ids[i] if track_ids else None
             try:
-                result = await one(db.qdrant, args.collection, question, args.lang, focus)
+                result = await one(db.qdrant, args.collection, question, args.lang,
+                                   focus, tid)
             except Exception as exc:  # one bad question must not end the run
                 result = {"question": question, "focus_fact": focus, "payload": None,
                           "options": [], "web_queries": [],
@@ -168,8 +188,11 @@ async def main() -> None:
     if facts:
         explained = [r for r in results if r["payload"] and r["payload"].get("explained")]
         from_web = [r for r in explained if r["payload"].get("web_search_used")]
+        pinned = sum(1 for r in results if r.get("track_id"))
         print(f"{len(explained)}/{len(results)} explained · {len(from_web)} of those "
               f"needed the web · {len(results) - len(explained)} honestly blank")
+        print(f"subject pinned by track id on {pinned}/{len(results)} — an unpinned "
+              f"row re-guesses the song and its numbers mean little")
     else:
         answered = [r for r in results
                     if r["payload"] and (r["payload"].get("answer") or "").strip()]

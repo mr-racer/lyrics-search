@@ -1050,8 +1050,7 @@ class SettingItem(BaseModel):
 
 class InstanceSettingsResponse(BaseModel):
     """Body of GET /instance/settings (owner-only). Keyed by setting name
-    (LLM_BASE_URL, LLM_MODEL, LLM_API_KEY, EMBED_MODEL, CLAP_ENABLED,
-    AI_ENABLED)."""
+    (LLM_BASE_URL, LLM_MODEL, LLM_API_KEY, CLAP_ENABLED, AI_ENABLED)."""
     settings: Dict[str, SettingItem]
 
 

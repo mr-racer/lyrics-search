@@ -6,6 +6,8 @@ thrown away and the deterministic fact rendering is served instead.
 """
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from app.services.assistant import facts_executor as F
@@ -499,52 +501,101 @@ _SUBJECT = {"kind": "song", "title": "Runaway", "artist": "Kanye West"}
 _SUBJECT_TOKENS = {"runaway", "kanye", "west"}
 
 
-def test_the_fact_itself_is_always_evidence_one():
-    out = F._fact_evidence([], _FACT, _SUBJECT_TOKENS)
-    assert out[0]["text"] == _FACT
-    assert len(out) == 1
+def test_subject_slugs_cover_the_song_and_its_artist():
+    """A song question reads the artist's facts too — the reason a line means
+    what it means is as often in the biography as on the song's own page."""
+    slugs = F._subject_slugs(_SUBJECT)
+    assert set(slugs) == {"song", "artist"}
+    assert "runaway" in slugs["song"]
+    assert "kanye" in slugs["artist"]
 
 
-def test_only_items_about_the_fact_join_the_evidence():
-    items = [
-        {"text": "Содержит сэмпл: Expo 83 by Backyard Heavies", "source": "credits"},
-        {"text": "Runaway — Kanye West: album My Beautiful Dark Twisted Fantasy",
-         "source": "catalog"},
-        {"text": "Продюсер: Mike Dean", "source": "credits"},
-    ]
-    texts = [it["text"] for it in F._fact_evidence(items, _FACT, _SUBJECT_TOKENS)]
-    assert "Содержит сэмпл: Expo 83 by Backyard Heavies" in texts
-    assert not any("Mike Dean" in t for t in texts)
-    assert not any("Twisted Fantasy" in t for t in texts)
+def test_subject_slugs_for_an_artist_have_no_song_key():
+    slugs = F._subject_slugs({"kind": "artist", "title": "Radiohead",
+                              "artist": "Radiohead", "artist_slug": "radiohead"})
+    assert slugs == {"artist": "radiohead"}
 
 
-def test_the_subjects_own_name_is_not_evidence_of_relevance():
-    """Every item in a song's pack names the song. Counting those tokens would
-    readmit the whole pack — which is the failure being fixed."""
-    items = [{"text": "Runaway by Kanye West was released in 2010", "source": "catalog"}]
-    assert len(F._fact_evidence(items, _FACT, _SUBJECT_TOKENS)) == 1
+def test_subject_slugs_are_empty_without_a_name():
+    assert F._subject_slugs({"kind": "song", "title": "", "artist": ""}) == {}
 
 
-def test_the_fact_is_not_repeated_when_the_pack_already_holds_it():
-    items = [{"text": _FACT, "source": "facts"}]
-    assert len(F._fact_evidence(items, _FACT, _SUBJECT_TOKENS)) == 1
+def test_retrieval_is_asked_for_the_raw_pool_not_the_refined_line(monkeypatch):
+    """The tapped statement is a display artefact — shortened and re-worded.
+    It is what we explain, never what we explain it WITH."""
+    seen = {}
+
+    def _fake_retrieve(qdrant, **kw):
+        seen.update(kw)
+        return [{"text": "Kanye found the Expo 83 break on a Chicago record run.",
+                 "dense_score": 0.71}]
+
+    import app.services.facts_retrieval as fr
+    monkeypatch.setattr(fr, "retrieve", _fake_retrieve)
+
+    out = asyncio.run(F._retrieve_evidence(
+        _SUBJECT, _FACT, qdrant=object(), collection_name="acct_x",
+    ))
+    assert seen["query"] == _FACT
+    assert seen["collection_name"] == "acct_x"
+    assert seen["limit"] == F.EXPLAIN_MAX_EVIDENCE
+    assert [e["text"] for e in out] == [
+        "Kanye found the Expo 83 break on a Chicago record run."]
+    assert all(e["source"] == "facts" for e in out)
 
 
-def test_evidence_is_capped():
-    items = [{"text": f"Expo 83 Backyard Heavies detail {i}", "source": "facts"}
-             for i in range(40)]
-    out = F._fact_evidence(items, _FACT, _SUBJECT_TOKENS)
-    assert len(out) == F.EXPLAIN_MAX_EVIDENCE
+def test_retrieval_failure_degrades_to_no_evidence(monkeypatch):
+    import app.services.facts_retrieval as fr
+
+    def _boom(qdrant, **kw):
+        raise RuntimeError("qdrant is down")
+
+    monkeypatch.setattr(fr, "retrieve", _boom)
+    out = asyncio.run(F._retrieve_evidence(
+        _SUBJECT, _FACT, qdrant=object(), collection_name="acct_x",
+    ))
+    assert out == []
 
 
-def test_a_fact_made_only_of_the_subject_name_still_matches_on_it():
-    """Nothing distinctive left after removing the subject tokens — matching on
-    the name beats admitting the entire pack."""
-    items = [{"text": "Runaway by Kanye West runs nine minutes", "source": "facts"},
-             {"text": "Продюсер: Mike Dean", "source": "credits"}]
-    out = F._fact_evidence(items, "Runaway — Kanye West", _SUBJECT_TOKENS)
-    assert len(out) == 2
-    assert "nine minutes" in out[1]["text"]
+# ── restating the fact is not explaining it ──────────────────────────────────
+
+
+def test_an_answer_citing_only_the_fact_itself_is_rejected():
+    """The tapped statement is evidence [1] and stays citable — but a reply
+    that leans on nothing else is the paraphrase this whole branch exists to
+    stop, and it used to sail through the gate."""
+    raw = {"answer": "При написании песни он вдохновлялся Diana Ross.", "used": [1]}
+    assert F._verify(raw, 5, require_beyond=F.MAIN_FACT_INDEX) is None
+
+
+def test_the_fact_may_be_cited_alongside_real_evidence():
+    raw = {"answer": "Он писал её, думая о Diana Ross [1], с которой познакомился "
+                     "на съёмках в 1972-м [3].", "used": [1, 3]}
+    assert F._verify(raw, 5, require_beyond=F.MAIN_FACT_INDEX) == (raw["answer"], [1, 3])
+
+
+def test_the_main_branch_gate_is_unchanged_without_the_flag():
+    raw = {"answer": "It samples an old soul record.", "used": [1]}
+    assert F._verify(raw, 5) == (raw["answer"], [1])
+
+
+# ── when to spend a web search ───────────────────────────────────────────────
+
+
+def test_too_few_candidates_sends_us_to_the_web():
+    assert F._needs_the_web([]) is True
+    assert F._needs_the_web([{"text": "one thing", "score": 0.9}]) is True
+
+
+def test_weak_matches_send_us_to_the_web():
+    """Enough rows, but nothing close to the topic."""
+    evidence = [{"text": "a", "score": 0.31}, {"text": "b", "score": 0.28}]
+    assert F._needs_the_web(evidence) is True
+
+
+def test_a_strong_match_is_read_before_searching():
+    evidence = [{"text": "a", "score": 0.72}, {"text": "b", "score": 0.30}]
+    assert F._needs_the_web(evidence) is False
 
 
 # ── the queries the model writes for the web ─────────────────────────────────
@@ -644,22 +695,4 @@ def test_the_honest_empty_answer_promises_nothing():
     assert "couldn't find" in en and "invent" in en
 
 
-def test_a_lone_one_liner_goes_straight_to_the_web():
-    """Nothing in the library matched and the fact is one line: the only thing
-    the model could do with it is rephrase it, so don't ask."""
-    assert F._needs_the_web_first([{"text": _FACT}], _FACT) is True
 
-
-def test_a_long_stored_fact_is_read_before_searching():
-    """A fact that carries its own story is worth a look before three searches."""
-    long_fact = ("«Runaway» строится на сэмпле «Expo 83», который Канье нашёл на "
-                 "виниле в чикагском магазине; партия фортепиано в интро — это "
-                 "замедленный фрагмент той же записи, и именно из-за него трек "
-                 "пришлось перезаписывать вживую для альбомной версии.")
-    assert len(long_fact) >= F.EXPLAIN_SELF_CONTAINED_CHARS
-    assert F._needs_the_web_first([{"text": long_fact}], long_fact) is False
-
-
-def test_related_library_material_is_always_read_first():
-    evidence = [{"text": _FACT}, {"text": "Содержит сэмпл: Expo 83"}]
-    assert F._needs_the_web_first(evidence, _FACT) is False
