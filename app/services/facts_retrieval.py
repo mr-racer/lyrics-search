@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import logging
 import math
-import re
 from collections import Counter
 
 from app.services.text_normalize import tokenize, translit_variants
@@ -76,8 +75,6 @@ _STOPWORDS = {
     "they", "his", "her", "their", "who", "which", "when", "what", "about",
 }
 
-_WORD = re.compile(r"\w+", re.UNICODE)
-
 
 def content_tokens(text: str) -> list[str]:
     """Topic-bearing tokens: folded, de-noised, short and common words dropped."""
@@ -91,7 +88,6 @@ class _Bm25:
     """Single-field BM25 over a small in-memory corpus of fact texts."""
 
     def __init__(self, docs: list[list[str]]):
-        self.docs = docs
         self.n = len(docs)
         self.lengths = [len(d) for d in docs]
         self.avglen = (sum(self.lengths) / self.n) if self.n else 0.0
@@ -132,13 +128,21 @@ class _Bm25:
         return out
 
 
-def _prf_terms(bm25: _Bm25, seed_indices: list[int]) -> list[tuple[str, float]]:
-    """Terms lifted from the top dense hits, weighted below the user's own."""
+def _prf_terms(bm25: _Bm25, seed_indices: list[int],
+               already: set[str] | None = None) -> list[tuple[str, float]]:
+    """Terms lifted from the top dense hits, weighted below the user's own.
+
+    ``already`` holds the terms the user actually typed; re-adding one would
+    quietly score it at 1.45 instead of 1.0.
+    """
+    already = already or set()
     scored: dict[str, float] = {}
     for i in seed_indices[:PRF_DOCS]:
         if not (0 <= i < bm25.n):
             continue
         for term, freq in bm25.tf[i].items():
+            if term in already:
+                continue
             idf = bm25.idf(term)
             if idf <= 0:
                 continue
@@ -274,8 +278,9 @@ def retrieve(qdrant, *, collection_name: str, query: str,
     dense_ranking = list(range(len(merged)))
 
     bm25 = _Bm25([content_tokens(h["text"]) for h in merged])
-    terms: list[tuple[str, float]] = [(t, 1.0) for t in content_tokens(query)]
-    terms += _prf_terms(bm25, dense_ranking)
+    query_terms = content_tokens(query)
+    terms: list[tuple[str, float]] = [(t, 1.0) for t in query_terms]
+    terms += _prf_terms(bm25, dense_ranking, set(query_terms))
     lexical = bm25.score(terms)
     lexical_ranking = sorted(range(len(merged)),
                              key=lambda i: -lexical[i])
