@@ -456,29 +456,6 @@ async def run_chat_search(
     # Phase D-soft: derive collection from JWT user; ignore client-supplied value.
     derived = derive_collection_for_user(current_user)
 
-    # Resolve which text model this collection was indexed with, so chat's
-    # searches hit the matching Qdrant vector_name (a collection indexed with
-    # qwen must not be queried with the default jina vectors).
-    #
-    # Phase B: resolve the NAME only and thread it through as `text_model=` to
-    # service.search (which forwards it to the now-stateless engine). We MUST NOT
-    # mutate db.lyrics_db._model / _vector_name / _vector_dim here — that global
-    # mutation is exactly the cross-account race Phase B removed from search.py.
-    # The agent/planner paths pass collection_name, and
-    # SearchService._resolve_model_name falls back to the collection's pinned
-    # model when text_model is None, so they resolve correctly without mutation.
-    resolved_text_model: str | None = None
-    if derived:
-        from app.resources.metadata_db import MetadataDB
-        try:
-            MetadataDB.init()
-            persisted = MetadataDB.get_collection_text_model(derived)
-            if persisted:
-                resolved_text_model = persisted
-                logger.info("[chat] text model resolved: %s", persisted)
-        except Exception as exc:
-            logger.warning("[chat] text model lookup failed (non-fatal): %s", exc)
-
     # Common kwargs forwarded to every ask_llm call
     llm_kw: dict[str, Any] = {
         "base_url":   (req.llm_base_url or "").strip() or None,
@@ -662,7 +639,6 @@ async def run_chat_search(
                     query=rq, mode="audio", limit=10,
                     collection_name=derived,
                     filters=audio_filters,
-                    text_model=resolved_text_model,
                 )
                 per_query_hits.append(round_hits)
             except Exception as exc:
@@ -852,7 +828,6 @@ async def run_chat_search(
                 collection_name=derived,
                 forced_mode=forced_mode,
                 filters=filters_obj,
-                text_model=resolved_text_model,
                 llm_kw=llm_kw,
                 skip_rephrase=use_skip_rephrase,
             )
