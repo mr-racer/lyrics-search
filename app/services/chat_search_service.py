@@ -295,8 +295,15 @@ async def _run_searches(
                 key = (hit.track.title.lower(), hit.track.artist.lower())
                 if key not in seen:
                     seen.add(key)
-                    if mode in ("text", "hybrid") and hit.lyrics and hit.matched_line is None:
-                        hit.matched_line = _pick_matched_line(hit.lyrics, query_text)
+                    if mode in ("text", "hybrid") and hit.matched_line is None:
+                        # Prefer track.lyrics: real line breaks. hit.lyrics is the
+                        # flattened excerpt (newlines replaced with spaces at
+                        # index time) — feeding that in makes the picker fall
+                        # back to arbitrary sliding-word-window "lines" that
+                        # never line up with what the frontend renders.
+                        full_lyrics = hit.track.lyrics or hit.lyrics
+                        if full_lyrics:
+                            hit.matched_line = _pick_matched_line(full_lyrics, query_text)
                     hits.append(hit)
         except Exception as exc:
             logger.warning("[chat] search error for '%s': %s", query_text, exc)
@@ -960,9 +967,10 @@ async def run_chat_search(
     # Re-anchor the highlight on the line the LLM actually cited in its answer.
     # matched_line was picked at retrieval time from the *executed query*, which
     # regularly disagrees with the line the answer quotes.
-    if best_hit is not None and best_hit.lyrics:
+    best_full_lyrics = (best_hit.track.lyrics or best_hit.lyrics) if best_hit is not None else None
+    if best_full_lyrics:
         for frag in _quoted_fragments(final_result.get("message", "")):
-            line = _pick_matched_line(best_hit.lyrics, frag)
+            line = _pick_matched_line(best_full_lyrics, frag)
             if line:
                 best_hit.matched_line = line
                 break

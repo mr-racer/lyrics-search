@@ -6814,10 +6814,6 @@ function AsxSearchCard({ payload, query, c, isDark, lang, navigateToArtist,
                   color={c.textMuted} />
               </div>
             </div>
-            <div className="mono" style={{ padding: '4px 9px', borderRadius: 16, fontSize: 11.5,
-              fontWeight: 600, background: c.accentBg, color: c.accent, flexShrink: 0 }}>
-              {Math.round((best.score || 0) * 100)}%
-            </div>
           </div>
           {snippetLyrics && best.matched_on !== 'audio' && (
             <div style={{ position: 'relative', zIndex: 1, marginTop: 11 }}>
@@ -7054,6 +7050,7 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
   const [slots, setSlots] = useState({});
   const [saving, setSaving] = useState(false);
   const [savedId, setSavedId] = useState(null);
+  const [showSaveModal, setShowSaveModal] = useState(false);
   const [cards, setCards] = useState(null);   // «samples» hooks; null = not fetched yet
   const [ideas, setIdeas] = useState(null);   // random facts strip; null = not fetched yet
 
@@ -7180,18 +7177,19 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
     setFailed(false);
   };
 
-  const savePlaylist = async () => {
+  const savePlaylist = async (name) => {
     const pl = turn?.playlist;
     if (!pl || !playlistsListing || saving) return;
     setSaving(true);
     try {
       const created = await playlistsListing.createPlaylist(
-        pl.title || (ru ? 'Подборка ИИ' : 'AI playlist'), query || null);
+        name || pl.title || (ru ? 'Подборка ИИ' : 'AI playlist'), query || null);
       for (const t of pl.tracks || []) {
         if (t.track_id) await playlistsListing.addTrack(created.id, t.track_id);
       }
       setSavedId(created.id);
       if (turnId) patchTurn(turnId, { saved_playlist_id: created.id });
+      setShowSaveModal(false);
     } catch { /* the pill stays actionable — nothing was created */ }
     finally { setSaving(false); }
   };
@@ -7376,7 +7374,18 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
           {turn && turn.playlist && (
             <AsxPlaylistCard payload={turn.playlist} query={query} c={c} isDark={isDark} lang={lang}
               onPlayTrack={onPlayTrack} onQueueNext={onQueueNext} onAddToPlaylist={onAddToPlaylist}
-              onSave={savePlaylist} saved={!!savedId} saving={saving} />
+              onSave={() => setShowSaveModal(true)} saved={!!savedId} saving={saving} />
+          )}
+          {showSaveModal && turn?.playlist && (
+            <NewPlaylistModal
+              lang={lang} isDark={isDark}
+              title={ru ? 'Сохранить плейлист' : 'Save playlist'}
+              submitLabel={ru ? 'Сохранить ▶' : 'Save ▶'}
+              initialName={turn.playlist.title || (ru ? 'Подборка ИИ' : 'AI playlist')}
+              hideDescription
+              onCancel={() => setShowSaveModal(false)}
+              onSubmit={(name) => savePlaylist(name)}
+            />
           )}
           {turn && turn.search && (
             <AsxSearchCard payload={turn.search} query={query} c={c} isDark={isDark} lang={lang}
@@ -8688,8 +8697,10 @@ function LibraryTabsStrip({ active, onChange, counts, lang, isDark }) {
   );
 }
 // ─── NEW PLAYLIST MODAL ───────────────────────────────────────────────────────
-function NewPlaylistModal({ onCancel, onSubmit, lang, isDark = true }) {
-  const [name, setName] = React.useState('');
+function NewPlaylistModal({ onCancel, onSubmit, lang, isDark = true,
+                             initialName = '', hideDescription = false,
+                             title, submitLabel }) {
+  const [name, setName] = React.useState(initialName);
   const [description, setDescription] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState(null);
@@ -8743,13 +8754,14 @@ function NewPlaylistModal({ onCancel, onSubmit, lang, isDark = true }) {
           : 'inset 0 1px 0 rgba(255,255,255,.95), 0 28px 60px rgba(46,36,86,.24), 0 0 0 1px rgba(124,91,255,.2)',
       }}>
         <div className="mono" style={{ fontSize: 10, letterSpacing: '0.24em', color: isDark ? 'rgba(238,238,243,.5)' : 'rgba(10,10,18,.55)', marginBottom: 18, textTransform: 'uppercase' }}>
-          {lang === 'ru' ? 'Новый плейлист' : 'New playlist'}
+          {title || (lang === 'ru' ? 'Новый плейлист' : 'New playlist')}
         </div>
         <div style={{ fontSize: 12, color: isDark ? 'rgba(238,238,243,.6)' : 'rgba(10,10,18,.65)', margin: '14px 0 6px', letterSpacing: '0.02em' }}>
           {lang === 'ru' ? 'Название' : 'Name'}
         </div>
         <input
           autoFocus
+          onFocus={(e) => e.target.select()}
           value={name} onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') handleSubmit(); }}
           placeholder={lang === 'ru' ? 'Например: Late night ride' : 'e.g.: Late night ride'}
@@ -8761,21 +8773,25 @@ function NewPlaylistModal({ onCancel, onSubmit, lang, isDark = true }) {
             boxShadow: isDark ? 'inset 0 1px 2px rgba(0,0,0,.3)' : 'inset 0 1px 2px rgba(46,36,86,.08)',
           }}
         />
-        <div style={{ fontSize: 12, color: isDark ? 'rgba(238,238,243,.6)' : 'rgba(10,10,18,.65)', margin: '14px 0 6px', letterSpacing: '0.02em' }}>
-          {lang === 'ru' ? 'Описание (опционально)' : 'Description (optional)'}
-        </div>
-        <textarea
-          value={description} onChange={(e) => setDescription(e.target.value)}
-          rows={3}
-          style={{
-            width: '100%', padding: '10px 12px',
-            background: isDark ? 'rgba(0,0,0,.32)' : '#ffffff',
-            border: `1px solid ${isDark ? 'rgba(255,255,255,.07)' : 'rgba(10,10,18,.14)'}`,
-            borderRadius: 10, color: isDark ? '#fff' : '#161620',
-            fontFamily: "'Noto Serif Display', Georgia, serif", fontStyle: 'italic', fontSize: 15,
-            outline: 'none', boxShadow: isDark ? 'inset 0 1px 2px rgba(0,0,0,.3)' : 'inset 0 1px 2px rgba(46,36,86,.08)', resize: 'vertical', minHeight: 76,
-          }}
-        />
+        {!hideDescription && (
+          <>
+            <div style={{ fontSize: 12, color: isDark ? 'rgba(238,238,243,.6)' : 'rgba(10,10,18,.65)', margin: '14px 0 6px', letterSpacing: '0.02em' }}>
+              {lang === 'ru' ? 'Описание (опционально)' : 'Description (optional)'}
+            </div>
+            <textarea
+              value={description} onChange={(e) => setDescription(e.target.value)}
+              rows={3}
+              style={{
+                width: '100%', padding: '10px 12px',
+                background: isDark ? 'rgba(0,0,0,.32)' : '#ffffff',
+                border: `1px solid ${isDark ? 'rgba(255,255,255,.07)' : 'rgba(10,10,18,.14)'}`,
+                borderRadius: 10, color: isDark ? '#fff' : '#161620',
+                fontFamily: "'Noto Serif Display', Georgia, serif", fontStyle: 'italic', fontSize: 15,
+                outline: 'none', boxShadow: isDark ? 'inset 0 1px 2px rgba(0,0,0,.3)' : 'inset 0 1px 2px rgba(46,36,86,.08)', resize: 'vertical', minHeight: 76,
+              }}
+            />
+          </>
+        )}
         {error && (
           <div style={{ marginTop: 12, padding: '8px 12px', borderRadius: 8, fontSize: 12, color: isDark ? '#ffc99a' : '#8a4d05', background: isDark ? 'rgba(255,180,80,.08)' : 'rgba(240,138,18,.10)', border: `1px solid ${isDark ? 'rgba(255,180,80,.25)' : 'rgba(190,105,10,.35)'}` }}>
             {error}
@@ -8794,7 +8810,7 @@ function NewPlaylistModal({ onCancel, onSubmit, lang, isDark = true }) {
             disabled={busy || !name.trim()}
             onClick={handleSubmit}
             style={{ opacity: busy || !name.trim() ? 0.5 : 1 }}>
-            {busy ? '…' : (lang === 'ru' ? 'Создать ▶' : 'Create ▶')}
+            {busy ? '…' : (submitLabel || (lang === 'ru' ? 'Создать ▶' : 'Create ▶'))}
           </button>
         </div>
       </div>
