@@ -96,41 +96,23 @@ def _make_cover_thumb(src: Path, dst: Path, width: int) -> bool:
 
 
 async def _preload_models_in_background(db_client: DbClient):
-    """Background task: find the largest collection and preload its text model + CLAP.
+    """Background task: preload the text model + CLAP after the server is ready.
 
-    This runs after the server is ready, so the user can start browsing immediately.
-    Models are loaded into ModelRegistry cache; LyricsDB picks them up lazily.
+    Both loads are heavily blocking, so both go to worker threads and the user
+    can browse while they run.
     """
     try:
         await asyncio.sleep(1)  # give the event loop a moment
 
-        # ── Step 1: Find the largest collection ──
-        # The sync qdrant-client blocks — run the whole sweep in a thread so
-        # early requests aren't stalled while we probe collections.
-        def _find_largest() -> tuple[str | None, int]:
-            largest_col, largest_count = None, 0
-            try:
-                cols = db_client.qdrant.get_collections().collections
-                for col in cols:
-                    try:
-                        info = db_client.qdrant.get_collection(col.name)
-                        count = info.points_count or 0
-                        if count > largest_count:
-                            largest_count = count
-                            largest_col = col.name
-                    except Exception:
-                        pass
-            except Exception as e:
-                logger.warning("[preload] Could not query collections: %s", e)
-            return largest_col, largest_count
-
-        largest_col, largest_count = await asyncio.to_thread(_find_largest)
-
-        logger.info("[preload] Largest collection: %s (%d points)",
-                    largest_col, largest_count)
-
-        # Text models are loaded lazily on first use (per-collection, different collections
-        # can use different embedding models). No background preload needed here.
+        # ── Step 1: the text model ──
+        # It is GPU-resident for the process lifetime and every search, chat
+        # turn and fact lookup encodes through it, so paying the load cost here
+        # is strictly better than paying it inside the first request.
+        try:
+            await asyncio.to_thread(ModelRegistry.get_text_model)
+            logger.info("[preload] text model loaded")
+        except Exception as e:
+            logger.warning("[preload] text model load failed: %s", e)
 
         # ── Step 2: Load CLAP ──
         # load_clap() is heavily blocking (checkpoint load, possibly a ~2.3 GB

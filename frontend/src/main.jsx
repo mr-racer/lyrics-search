@@ -10482,11 +10482,6 @@ function MembersPanel({ members, loading, onReload, lang, showToast, hideHeader 
   );
 }
 
-// Embedding tiers for the new-collection form — a two-stop slider replaces the
-// raw model dropdown. Light = backend default (CPU-friendly), heavy = higher
-// quality but really wants a GPU. Names must match ModelRegistry.TEXT_MODELS.
-const HEAVY_TEXT_MODEL = 'Qwen/Qwen3-Embedding-0.6B';
-
 // ─── Instance AI settings (owner) ─────────────────────────────────────────────
 // Standalone editor for the server-side AI/embedding policy. Reads the
 // authoritative resolver view from GET /instance/settings (key arrives masked:
@@ -10503,7 +10498,6 @@ function InstanceAISettings({ isDark, lang, showToast }) {
   const [apiKey, setApiKey] = useState('');
   const [hasKey, setHasKey] = useState(false);
   const [aiEnabled, setAiEnabled] = useState(false);
-  const [tier, setTier] = useState(0);   // index into WIZ_TIERS (Speed/Balance/Quality)
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
 
@@ -10524,9 +10518,6 @@ function InstanceAISettings({ isDark, lang, showToast }) {
       setModel(sval('LLM_MODEL'));
       setHasKey(!!(s['LLM_API_KEY'] && s['LLM_API_KEY'].has_value));
       setAiEnabled(sbool('AI_ENABLED', false));
-      const em = sval('EMBED_MODEL');
-      const ti = WIZ_TIERS.findIndex(t => (t.model || '') === em);
-      setTier(ti >= 0 ? ti : 0);
       setLoaded(true);
     }).catch(e => { if (alive) { setLoadErr(String(e.message || e)); setLoaded(true); } });
     return () => { alive = false; };
@@ -10537,11 +10528,9 @@ function InstanceAISettings({ isDark, lang, showToast }) {
     setBusy(true);
     try {
       // Send the full policy; omit llm_api_key when blank so the secret is kept.
-      // embed_model=null on the light tier clears the override (resolver default).
       const body = {
         llm_base_url: baseUrl.trim() || null,
         llm_model: model.trim() || null,
-        embed_model: WIZ_TIERS[tier].model,
         clap_enabled: true,
         ai_enabled: aiEnabled,
         ...(apiKey.trim() ? { llm_api_key: apiKey.trim() } : {}),
@@ -10619,23 +10608,6 @@ function InstanceAISettings({ isDark, lang, showToast }) {
       )}
 
       <div style={{ height: 1, background: c.border, margin: '16px 0' }} />
-
-      {label(ru ? 'КАЧЕСТВО ОБРАБОТКИ ТЕКСТОВ ПЕСЕН' : 'LYRICS-SEARCH QUALITY')}
-      <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
-        {WIZ_TIERS.map((t, i) => (
-          <button key={i} type="button" disabled={busy}
-            onClick={() => !busy && setTier(i)}
-            className={`pill-v3${tier === i ? ' pill-v3-active' : ''}`}
-            style={{ flex: 1, padding: '10px 6px', fontSize: 13, fontWeight: 600, cursor: busy ? 'not-allowed' : 'pointer' }}>
-            {ru ? t.ru : t.en}
-          </button>
-        ))}
-      </div>
-      <div style={{ fontSize: 11, color: c.textMuted, lineHeight: 1.5, margin: '8px 2px 16px' }}>
-        {ru
-          ? 'Точность поиска по словам внутри песен. Применяется к новым библиотекам участников; уже добавленные не меняются.'
-          : "How precisely members search words inside songs. Applied to new libraries; already-added libraries are unchanged."}
-      </div>
 
       <button onClick={save} disabled={busy} className="cta-v3" style={{
         padding: '10px 20px', fontSize: 13,
@@ -10843,10 +10815,6 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
   const [closing, setClosing] = useState(false);
   const requestClose = () => { setClosing(true); setTimeout(onClose, 260); };
   const [guideOpen, setGuideOpen] = useState(false);  // «Как пользоваться» re-open
-  // 'light' | 'heavy' — derived from the legacy text_model localStorage key so
-  // an earlier explicit heavy pick survives the UI change.
-  const [modelTier, setModelTier] = useState(() =>
-    localStorage.getItem('text_model') === HEAVY_TEXT_MODEL ? 'heavy' : 'light');
   const [collName, setCollName] = useState('');
   const [folderPath, setFolderPath] = useState('');
   const [betterLyrics, setBetterLyrics] = useState(false);
@@ -10900,12 +10868,8 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
   // Section UI state: collection switcher list + LLM advanced fields.
   const [llmOpen, setLlmOpen] = useState(false);
 
-  // Persist the heavy pick under the legacy key; remove it for light so the
-  // backend falls back to its default model (never store the string "null").
-  useEffect(() => {
-    if (modelTier === 'heavy') localStorage.setItem('text_model', HEAVY_TEXT_MODEL);
-    else localStorage.removeItem('text_model');
-  }, [modelTier]);
+  // One embedding model app-wide now; drop the stale per-browser override.
+  useEffect(() => { localStorage.removeItem('text_model'); }, []);
 
   // `aiEnabledArg` is passed explicitly by the caller because React state
   // updates batched in the same tick won't have flushed yet — reading
@@ -10916,11 +10880,8 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
     aiEnabledRef.current = aiEnabledArg;
     indexingJob.begin();
     try {
-      // Only send text_model for the heavy tier — omit otherwise so backend
-      // falls back to its default (the light model).
-      const validModel = modelTier === 'heavy' ? HEAVY_TEXT_MODEL : undefined;
       const res = await apiFetch('/library/index', { method:'POST',
-        body: JSON.stringify({ folder_path:folderPath, better_lyrics_quality:betterLyrics, text_model:validModel, enhance_by_musicbrainz:refineMetadata }) });
+        body: JSON.stringify({ folder_path:folderPath, better_lyrics_quality:betterLyrics, enhance_by_musicbrainz:refineMetadata }) });
       if (res.status === 'failed') { indexingJob.fail(res.message); return; }
       if (!res.job_id) {
         // Immediate completion — the completion effect above handles the
@@ -20311,19 +20272,6 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
 // step is the single point that calls POST /instance/setup; success stores the
 // returned JWT and the wizard continues authenticated.
 
-// Slider tiers — must mirror TEXT_MODELS in app/resources/model_registry.py.
-// model:null = omit text_model (backend default jina-small).
-const WIZ_TIERS = [
-  { model: null,                            dim: 512,
-    ru: 'Скорость', en: 'Speed',
-    noteRu: 'только английский',         noteEn: 'English only' },
-  { model: 'intfloat/multilingual-e5-base', dim: 768,
-    ru: 'Баланс',   en: 'Balanced',
-    noteRu: 'мультиязычный',             noteEn: 'multilingual' },
-  { model: 'Qwen/Qwen3-Embedding-0.6B',     dim: 1024,
-    ru: 'Качество', en: 'Quality',
-    noteRu: 'мультиязычный · медленнее', noteEn: 'multilingual · slower' },
-];
 
 // Step order branches on the chosen mode. Server: the owner sets instance-wide
 // AI + embedding policy (no music — members bring their own libraries later).
@@ -20463,7 +20411,6 @@ function SetupWizard({ onComplete }) {
   // music — folder (sharing) / uploads (server) + quality slider.
   // jobId: async indexing job to watch; syncDoneCount: sharing-mode small
   // libraries can finish inline (no job_id) — remember the count instead.
-  const [tier, setTier]                     = useState(1);   // default: Balanced
   const [folderPath, setFolderPath]         = useState('');
   const [picking, setPicking]               = useState(false);
   const [files, setFiles]                   = useState([]);
@@ -20555,7 +20502,6 @@ function SetupWizard({ onComplete }) {
         llm_base_url: llmUrl.trim(),
         llm_model: llmModel.trim(),
         ...(llmKey.trim() ? { llm_api_key: llmKey.trim() } : {}),
-        embed_model: WIZ_TIERS[tier].model,
         ai_enabled: true,
       }) });
       setAiConnected(true);
@@ -20572,7 +20518,7 @@ function SetupWizard({ onComplete }) {
     if (policyBusy) return;
     setPolicyBusy(true); setPolicyError('');
     try {
-      const body = { embed_model: WIZ_TIERS[tier].model, clap_enabled: true };
+      const body = { clap_enabled: true };
       if (enableAi) {
         body.llm_base_url = llmUrl.trim();
         body.llm_model = llmModel.trim();
@@ -20582,7 +20528,6 @@ function SetupWizard({ onComplete }) {
         body.ai_enabled = false;
       }
       await apiFetch('/instance/settings', { method:'PATCH', body: JSON.stringify(body) });
-      applyTierToLocalStorage();   // owner's own search session uses the same model
       onComplete({ mode });
     } catch (e) {
       setPolicyError(String(e.message || e));
@@ -20673,15 +20618,6 @@ function SetupWizard({ onComplete }) {
     return () => { cancelled = true; };
   }, [indexDone, shouldEnrich, sseAiStages]);
 
-  const applyTierToLocalStorage = () => {
-    // Mirror the Settings panel behavior: search must use the same model the
-    // collection is indexed with; server also pins it in collection_settings
-    // at the end of the job.
-    const m = WIZ_TIERS[tier].model;
-    if (m) localStorage.setItem('text_model', m);
-    else localStorage.removeItem('text_model');
-  };
-
   const handlePickFolder = async () => {
     setPicking(true); setMusicError('');
     try {
@@ -20694,10 +20630,8 @@ function SetupWizard({ onComplete }) {
   const startIndexingSharing = async () => {
     if (!folderPath.trim() || musicBusy) return;
     setMusicBusy(true); setMusicError('');
-    applyTierToLocalStorage();
     try {
       const body = { folder_path: folderPath.trim() };
-      if (WIZ_TIERS[tier].model) body.text_model = WIZ_TIERS[tier].model;
       const res = await apiFetch('/library/index', { method:'POST', body: JSON.stringify(body) });
       if (res.status === 'failed') throw new Error(res.message || 'indexing failed');
       if (res.job_id) setJobId(res.job_id);
@@ -20728,7 +20662,6 @@ function SetupWizard({ onComplete }) {
   const startIndexingServer = async () => {
     if (!files.length || musicBusy) return;
     setMusicBusy(true); setMusicError('');
-    applyTierToLocalStorage();
     try {
       // Sequential like ServerOnboardingScreen — keeps server memory bounded.
       const ids = [];
@@ -20746,7 +20679,6 @@ function SetupWizard({ onComplete }) {
       }
       if (!ids.length) throw new Error(ru ? 'Ни один файл не загрузился' : 'No files were uploaded');
       const body = { upload_ids: ids, lang: ru ? 'ru' : 'en' };
-      if (WIZ_TIERS[tier].model) body.text_model = WIZ_TIERS[tier].model;
       const res = await apiFetch('/library/upload/batch-commit', { method:'POST', body: JSON.stringify(body) });
       setJobId(res.job_id);
       advanceFromMusic();
@@ -20859,31 +20791,6 @@ function SetupWizard({ onComplete }) {
 
   // account + mode merged into renderAccountMode (above).
 
-  const renderSlider = () => (
-    <div style={{ marginTop:'20px', marginBottom:'4px' }}>
-      <div className="mono" style={{ fontSize:'12px', color:c.textSubtle, letterSpacing:'0.22em', marginBottom:'2px' }}>
-        {ru ? 'КАЧЕСТВО ОБРАБОТКИ ТЕКСТОВ ПЕСЕН' : 'LYRICS-SEARCH QUALITY'}
-      </div>
-      <div style={{ fontSize:'12px', color:c.textMuted, marginBottom:'12px' }}>
-        {ru ? 'Точность поиска по словам внутри песен.' : 'How precisely you can search words inside songs.'}
-      </div>
-      <SkeRange min={0} max={2} step={1} value={tier} animated
-        onChange={setTier} disabled={musicBusy}
-        accent="oklch(62% 0.2 275)" style={{ width:'100%' }}
-        ariaLabel={ru ? 'Качество обработки текстов песен' : 'Lyrics-search quality'} />
-      <div style={{ display:'flex', marginTop:'6px' }}>
-        {WIZ_TIERS.map((t, i) => (
-          <div key={i} onClick={() => !musicBusy && setTier(i)}
-            style={{ flex:1, textAlign: i === 0 ? 'left' : i === 2 ? 'right' : 'center', cursor:'pointer' }}>
-            <div style={{ fontSize:'13.5px', fontWeight: tier === i ? '600' : '400', color: tier === i ? 'oklch(62% 0.2 275)' : c.textMuted }}>
-              {ru ? t.ru : t.en}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-
   const renderMusic = () => {
     // Server mode offers BOTH paths: a host folder (owner runs the host, the
     // backend allows owner folder-indexing in server mode) or browser uploads.
@@ -20956,7 +20863,6 @@ function SetupWizard({ onComplete }) {
         </div>
       )}
 
-      {renderSlider()}
 
       {musicError && (
         <div style={{ padding:'9px 13px', marginTop:'14px', borderRadius:'10px', background:c.redBg, color:c.red, fontSize:'13px' }}>{musicError}</div>
@@ -21075,7 +20981,6 @@ function SetupWizard({ onComplete }) {
             : 'These apply to the whole server. Invited members only upload their music; you choose the model and AI once.'}
       </p>
 
-      {renderSlider()}
 
       <div style={{ height:'1px', background:c.border, margin:'22px 0 18px' }} />
 

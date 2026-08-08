@@ -188,7 +188,7 @@ class LibraryService:
 
     def enqueue_upload_indexing(
         self, *, account_id: str, upload_ids: list[str],
-        text_model: Optional[str] = None, lang: str = "ru",
+        lang: str = "ru",
     ) -> str:
         """Server-mode batch-commit entry point. Returns the JobTracker job_id.
 
@@ -222,13 +222,13 @@ class LibraryService:
             )
         job.overall_status = IndexStatus.RUNNING
         asyncio.create_task(
-            self._run_upload_indexing_job(job, account_id, upload_ids, text_model, lang)
+            self._run_upload_indexing_job(job, account_id, upload_ids, lang)
         )
         return job.job_id
 
     async def _run_upload_indexing_job(
         self, job, account_id: str, upload_ids: list[str],
-        text_model: Optional[str] = None, lang: str = "ru",
+        lang: str = "ru",
     ):
         """Background runner for server-mode uploads — mirrors _run_indexing_job."""
         await asyncio.to_thread(_INDEX_SEMAPHORE.acquire)
@@ -261,15 +261,11 @@ class LibraryService:
             # shared engine is never mutated, so two accounts indexing in
             # parallel (semaphore=2) can't leak models/collections into each
             # other's job. Warm the registry cache up front.
-            if text_model in (None, "", "null", "undefined", "None"):
-                text_model = None
-            if text_model:
-                logger.info("[LibraryService] upload batch text model: %s", text_model)
-                # Warm cache OFF the event loop: a cold SentenceTransformer load
-                # is tens of seconds of blocking I/O + torch init, and this
-                # coroutine runs on the loop — inline it and every request
-                # (login included) freezes until the weights are in RAM.
-                await asyncio.to_thread(ModelRegistry.get_text_model, text_model)
+            # Warm cache OFF the event loop: a cold SentenceTransformer load
+            # is tens of seconds of blocking I/O + torch init, and this
+            # coroutine runs on the loop — inline it and every request
+            # (login included) freezes until the weights are in RAM.
+            await asyncio.to_thread(ModelRegistry.get_text_model)
 
             collection_name = f"acct_{account_id}"
             loop = asyncio.get_running_loop()
@@ -314,7 +310,7 @@ class LibraryService:
             )
 
             # Encode pipeline: lyrics fetch ‖ (CLAP → dense) → upsert.
-            pipeline = IndexPipeline(engine, model_name=text_model)
+            pipeline = IndexPipeline(engine)
             _, track_ids = await pipeline.run(
                 tracks, collection_name, better_lyrics_quality=False,
                 progress=_pipeline_progress, resolve_track_ids=True,
@@ -328,14 +324,6 @@ class LibraryService:
             else:
                 self._apply_producer_label(producer_label_by_song, track_ids, collection_name)
 
-            # Persist which text model this collection was indexed with so future
-            # searches resolve the matching vector_name.
-            try:
-                MetadataDB.set_collection_text_model(collection_name, text_model)
-            except Exception as e:
-                logger.warning(
-                    "[LibraryService] failed to persist collection_settings: %s", e,
-                )
 
             # Stamp pending_uploads.track_id from the resolved point ids.
             self._apply_upload_track_ids(upload_by_key, track_ids)
@@ -465,11 +453,9 @@ class LibraryService:
         skipped_n = len(report.get("skipped", []))
         indexing_job_id = None
         if upload_ids:
-            from app.services.settings_service import settings_service
             try:
                 indexing_job_id = self.enqueue_upload_indexing(
-                    account_id=account_id, upload_ids=upload_ids,
-                    text_model=settings_service.embed_model(), lang=lang,
+                    account_id=account_id, upload_ids=upload_ids, lang=lang,
                 )
             except Exception:
                 logger.exception(
@@ -839,7 +825,6 @@ class LibraryService:
         folder_path: str,
         collection_name: str,
         better_lyrics_quality: bool = False,
-        text_model: Optional[str] = None,
         enhance_by_musicbrainz: bool = False,
         account_id: str = "default",
     ) -> dict:
@@ -861,8 +846,8 @@ class LibraryService:
         account is rejected.
         """
         logger.info(
-            "[LibraryService] index_folder called: account=%s folder=%s collection=%s text_model=%s",
-            account_id, folder_path, collection_name, text_model,
+            "[LibraryService] index_folder called: account=%s folder=%s collection=%s",
+            account_id, folder_path, collection_name,
         )
 
         # Reject if THIS account is already indexing (other accounts unaffected).
@@ -898,7 +883,7 @@ class LibraryService:
         # Start indexing in background task to allow SSE progress updates
         task = asyncio.create_task(
             self._run_indexing_job(
-                job, better_lyrics_quality, text_model, enhance_by_musicbrainz, account_id
+                job, better_lyrics_quality, enhance_by_musicbrainz, account_id
             )
         )
         logger.info("[LibraryService] Background task created: %s", task)
@@ -910,7 +895,7 @@ class LibraryService:
         }
 
     async def _run_indexing_job(
-        self, job, better_lyrics_quality: bool, text_model: Optional[str] = None,
+        self, job, better_lyrics_quality: bool,
         enhance_by_musicbrainz: bool = False, account_id: str = "default",
     ):
         """Execute the indexing process with progress updates."""
@@ -925,20 +910,9 @@ class LibraryService:
         # to_thread keeps the event loop responsive while this job waits its turn.
         await asyncio.to_thread(_INDEX_SEMAPHORE.acquire)
         try:
-            # Sanitize text_model: treat literal strings "null"/"undefined"/"" the
-            # same as None. This guards against legacy frontend localStorage where
-            # `localStorage.setItem('text_model', null)` stringified the value.
-            if text_model in (None, "", "null", "undefined", "None"):
-                text_model = None
-
-            # Use already-loaded text model (don't reload during indexing).
-            if text_model:
-                logger.info("[LibraryService] Getting text model: %s (cached if already loaded)", text_model)
-                # Cold load = tens of seconds of blocking work; keep it off the
-                # event loop or every request (login included) hangs meanwhile.
-                await asyncio.to_thread(ModelRegistry.load_text_model, text_model)
-            else:
-                logger.info("[LibraryService] No text_model specified, using default")
+            # Cold load = tens of seconds of blocking work; keep it off the
+            # event loop or every request (login included) hangs meanwhile.
+            await asyncio.to_thread(ModelRegistry.get_text_model)
 
             loop = asyncio.get_event_loop()
 
@@ -1108,14 +1082,11 @@ class LibraryService:
 
             track_ids: dict = {}
             if self.db_client and processed_files:
-                # Text model for THIS batch goes into the pipeline explicitly
-                # (ModelRegistry is the cache) — the shared engine is never
-                # mutated, so parallel jobs can't cross-contaminate.
+                # The shared engine is never mutated, so parallel jobs can't
+                # cross-contaminate; the collection is per-run.
                 engine = self.db_client.search_engine
-                if text_model:
-                    logger.info("[LibraryService] batch text model: %s", text_model)
-                    # warm cache off-loop (см. комментарий у load_text_model выше)
-                    await asyncio.to_thread(ModelRegistry.get_text_model, text_model)
+                # warm cache off-loop (см. комментарий выше)
+                await asyncio.to_thread(ModelRegistry.get_text_model)
 
                 loop = asyncio.get_event_loop()
 
@@ -1126,7 +1097,7 @@ class LibraryService:
                         self._on_index_progress(job, stage, current, total, message), loop,
                     )
 
-                pipeline = IndexPipeline(engine, model_name=text_model)
+                pipeline = IndexPipeline(engine)
                 # resolve_track_ids=True: needed to apply Genius producer/label
                 # (collected by the concurrent FACTS stage) onto track_metadata
                 # once point ids exist post-upsert — see _apply_producer_label.
@@ -1212,14 +1183,6 @@ class LibraryService:
             # Persist which text model this collection was indexed with, so that
             # future searches load the matching model automatically and don't
             # accidentally hit Qdrant with a vector_name that doesn't exist.
-            try:
-                from app.resources.metadata_db import MetadataDB
-                MetadataDB.init()
-                MetadataDB.set_collection_text_model(collection_name, text_model)
-                logger.info("[LibraryService] persisted collection_settings: %s → text_model=%s",
-                            collection_name, text_model or "(default)")
-            except Exception as e:
-                logger.warning("[LibraryService] failed to persist collection_settings: %s", e)
 
             # Mark job as completed
             job.overall_status = IndexStatus.COMPLETED

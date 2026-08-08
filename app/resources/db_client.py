@@ -24,8 +24,7 @@ class DbClient:
 
     def __init__(self,
                  qdrant_url: str | None = None,
-                 collection_name: str = "music_explorer",
-                 model_name: str | None = None):
+                 collection_name: str = "music_explorer"):
         # QDRANT_URL env override lets the app reach Qdrant by its Docker
         # Compose service name (http://qdrant:6333) inside a container, while
         # still defaulting to localhost for bare-metal/Windows runs.
@@ -33,10 +32,6 @@ class DbClient:
             "QDRANT_URL", "http://localhost:6333"
         )
         self.collection_name = collection_name
-        self.model_name = model_name or os.environ.get(
-            "TEXT_MODEL",
-            "jinaai/jina-embeddings-v2-small-en",
-        )
 
         self._qdrant_client: QdrantClient | None = None
         self._lyrics_db: LyricsSearchEngine | None = None
@@ -65,7 +60,6 @@ class DbClient:
         self._lyrics_db = LyricsSearchEngine(
             qdrant_client=self._qdrant_client,
             collection_name=self.collection_name,
-            model_name=self.model_name,
             include_clap=True,
             lazy=True,  # defer model loading
         )

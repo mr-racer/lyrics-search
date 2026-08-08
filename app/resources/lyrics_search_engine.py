@@ -27,27 +27,21 @@ logger = logging.getLogger(__name__)
 class LyricsSearchEngine:
     """Search-focused wrapper over one Qdrant collection.
 
-    STATELESS DISPATCH (Phase B): ``search()`` accepts ``model_name`` and
-    resolves the text model via ``ModelRegistry.get_text_model`` per call. It
-    must NOT mutate ``self.model_name`` / ``self._model`` / ``self._vector_name``
-    in the search path — that pattern caused concurrent searches from two
-    accounts with different models to race (one thread's model leaked into the
-    other's Qdrant query). If you reach for a ``self._model = ...`` assignment
-    inside ``search()`` you are reintroducing the race. See
-    docs/superpowers/plans/2026-06-02-phase-b-singleton-fixes.md.
+    There is exactly one text embedding model in this application
+    (``ModelRegistry.TEXT_MODEL_NAME``) and one dense vector name
+    (``ModelRegistry.VECTOR_NAME``), so this class no longer dispatches on a
+    model: the per-call ``model_name`` plumbing that used to live here existed
+    only to keep two accounts on two different models from racing, and there is
+    now nothing to race over.
 
-    Model loading is lazy by default. The ``__init__`` ``model_name`` remains a
-    per-engine default (used when ``search`` is called with ``model_name=None``)
-    and the pre-load target for the indexing path (which calls ``engine.model``
-    directly to encode batches). Pre-loaded models can be passed via ``model`` /
-    ``model_clap`` to skip lazy loading entirely.
+    Model loading stays lazy — ``ModelRegistry`` owns it and caches it process
+    wide. A pre-loaded ``model`` / ``model_clap`` may still be injected by tests.
     """
 
     def __init__(
         self,
         qdrant_client: QdrantClient,
         collection_name: str,
-        model_name: str,
         include_clap: bool = False,
         lazy: bool = True,
         model: Any = None,
@@ -57,99 +51,51 @@ class LyricsSearchEngine:
         self.collection_name = collection_name
         self._init_qdrant()
 
-        self.model_name = model_name
         self.include_clap = include_clap
         self._model_lock = threading.Lock()
+        self._model = model
 
-        # ── Text model: pre-loaded > eager > lazy ───────────────────────────
-        if model is not None:
-            self._model = model
-            self._vector_name = f"text_{self.model_name.replace('/', '_')}"
-            self._vector_dim = model.get_sentence_embedding_dimension()
-            logger.info(
-                "[LyricsSearchEngine] Using pre-loaded text model '%s' (dim=%d)",
-                model_name, self._vector_dim,
-            )
-        elif not lazy:
+        if model is None and not lazy:
             # Eager = warm the registry cache now, but do NOT pin the model on
-            # self: the registry's idle reaper must stay able to unload it.
+            # self; the registry is the single owner of the weights.
             from .model_registry import ModelRegistry
-            self._model = None
-            _, self._vector_name, self._vector_dim = ModelRegistry.load_text_model(self.model_name)
-            logger.info(
-                "[LyricsSearchEngine] Text model '%s' loaded eagerly via ModelRegistry (dim=%d)",
-                model_name, self._vector_dim,
-            )
-        else:
-            self._model = None
-            self._vector_name = None
-            self._vector_dim = None
-            logger.info(
-                "[LyricsSearchEngine] Text model '%s' — lazy load enabled", model_name,
-            )
+            ModelRegistry.get_text_model()
 
-        # ── CLAP model: same pre-loaded > eager > lazy ──────────────────────
+        # ── CLAP model: pre-loaded > eager > lazy ───────────────────────────
         if model_clap is not None:
             self._model_clap = model_clap
-            logger.info("[LyricsSearchEngine] Using pre-loaded CLAP model")
         elif include_clap and not lazy:
             from .model_registry import ModelRegistry
             self._model_clap = ModelRegistry.load_clap()
-            logger.info("[LyricsSearchEngine] CLAP loaded eagerly via ModelRegistry")
         else:
             self._model_clap = None
-            if include_clap:
-                logger.info("[LyricsSearchEngine] CLAP — lazy load enabled")
 
-    # ── Lazy model accessors ────────────────────────────────────────────────
-
-    @property
-    def _model_config(self) -> tuple[str, int]:
-        """Return (vector_name, vector_dim) — loads model if needed."""
-        if self._vector_name is None:
-            self._ensure_model()
-        return self._vector_name, self._vector_dim
+    # ── Model accessors ─────────────────────────────────────────────────────
 
     @property
     def vector_name(self) -> str:
-        return self._model_config[0]
+        from .model_registry import ModelRegistry
+        return ModelRegistry.VECTOR_NAME
 
     @property
     def vector_dim(self) -> int:
-        return self._model_config[1]
+        from .model_registry import ModelRegistry
+        return ModelRegistry.VECTOR_DIM
 
     @property
     def model(self):
-        """Return the text model for the engine's default ``model_name``.
-
-        Resolved through ModelRegistry on EVERY access (a dict hit once
-        loaded) instead of being cached on ``self`` — caching here would pin
-        the weights and defeat the registry's idle unload. A ctor-supplied
-        pre-loaded ``model`` (tests) is the only thing kept on the instance.
-        """
+        """The text model. Resolved through ModelRegistry on every access (a
+        cheap attribute hit once loaded); a ctor-supplied model (tests) wins."""
         if self._model is not None:
             return self._model
         from .model_registry import ModelRegistry
-        m, self._vector_name, self._vector_dim = ModelRegistry.get_text_model(self.model_name)
-        return m
+        return ModelRegistry.get_text_model()[0]
 
     @property
     def model_clap(self):
         """Return the CLAP model, loading lazily via ModelRegistry."""
         self._ensure_clap()
         return self._model_clap
-
-    def _ensure_model(self) -> None:
-        """Resolve vector metadata for the default model (no pinning)."""
-        if self._vector_name is not None:
-            return
-        with self._model_lock:
-            if self._vector_name is not None:
-                return
-            from .model_registry import ModelRegistry
-            logger.info("[LyricsSearchEngine] Loading text model '%s' via ModelRegistry...", self.model_name)
-            _, self._vector_name, self._vector_dim = ModelRegistry.load_text_model(self.model_name)
-            logger.info("[LyricsSearchEngine] Text model loaded (dim=%d)", self._vector_dim)
 
     def _ensure_clap(self) -> None:
         if self._model_clap is not None or not self.include_clap:
@@ -189,15 +135,8 @@ class LyricsSearchEngine:
         year_ranges: list[str] | None = None,
         sonic_tags: list[str] | None = None,
         collection_name_override: str | None = None,
-        model_name: str | None = None,
     ) -> list[models.ScoredPoint]:
         """Hybrid (dense + BM25) or CLAP search against the collection.
-
-        ``model_name`` selects the text embedding model and is resolved via
-        ``ModelRegistry.get_text_model`` per call (stateless dispatch); falls
-        back to ``self.model_name`` when not supplied. The engine does NOT cache
-        the resolved model on ``self`` — keeping search stateless makes
-        concurrent calls with different models safe.
 
         When ``include_clap=True`` the query is converted to a CLAP text embedding
         and matched against the ``clap`` audio vectors (CLAP is the single global
@@ -213,13 +152,10 @@ class LyricsSearchEngine:
         )
 
         if not include_clap:
-            # Resolve the text model per call — stateless dispatch, no self.* write.
-            # encode_text (not raw model.encode) so the registry's in-flight
-            # tracking keeps the idle reaper from moving/unloading mid-encode.
+            # is_query=True: this side of the pair takes the instruction prefix.
             from .model_registry import ModelRegistry
-            effective_model_name = model_name or self.model_name
-            _, vector_name, _vector_dim = ModelRegistry.get_text_model(effective_model_name)
-            query_vector = ModelRegistry.encode_text(effective_model_name, query).tolist()
+            vector_name = ModelRegistry.VECTOR_NAME
+            query_vector = ModelRegistry.encode_text(query, is_query=True).tolist()
             results = self.qdrant_client.query_points(
                 collection_name=col,
                 prefetch=[

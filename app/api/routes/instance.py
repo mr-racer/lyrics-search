@@ -25,11 +25,13 @@ from app.services.settings_service import SettingsService
 router = APIRouter(prefix="/instance", tags=["Instance"])
 
 # PATCH field (snake) → instance_settings key (mirrors env var name).
+# ``embed_model`` is deliberately absent: the field is still accepted on the
+# request model so cached clients don't 422, but there is one embedding model
+# app-wide and nothing to store.
 _FIELD_TO_KEY = {
     "llm_base_url": "LLM_BASE_URL",
     "llm_model":    "LLM_MODEL",
     "llm_api_key":  "LLM_API_KEY",
-    "embed_model":  "EMBED_MODEL",
     "clap_enabled": "CLAP_ENABLED",
     "ai_enabled":   "AI_ENABLED",
 }

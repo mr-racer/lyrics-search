@@ -1063,6 +1063,7 @@ class InstanceSettingsPatch(BaseModel):
     llm_base_url: Optional[str] = None
     llm_model: Optional[str] = None
     llm_api_key: Optional[str] = None
+    # IGNORED (kept so cached clients don't 422): one embedding model app-wide.
     embed_model: Optional[str] = None
     clap_enabled: Optional[bool] = None
     ai_enabled: Optional[bool] = None

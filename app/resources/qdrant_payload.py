@@ -5,15 +5,47 @@ Extracted from legacy search_engine/utils.py during Refactor 2.
 
 from __future__ import annotations
 
+import re
+
 import numpy as np
 
 
 # Filtering threshold reused by prepare_metadata + downstream callers.
 MAX_DURATION = 420  # seconds — songs longer than this are dropped from the index
 
+# A blank line separates paragraphs. Tolerant on purpose: 82 of 758 prod tracks
+# carry CRLF line endings, and a plain ``split("\n\n")`` misses those plus every
+# "blank" line that holds a stray space — 99 of 758 tracks collapsed into a
+# single paragraph that way, silently skipping the dedup below.
+_PARA_SPLIT = re.compile(r"\n\s*\n")
+
+
+def unique_paragraphs(lyrics: str) -> list[str]:
+    """Paragraphs of ``lyrics`` with duplicates dropped, IN SOURCE ORDER.
+
+    A chorus repeated six times should not carry six times the weight in the
+    track's embedding — but the verses around it must stay in the order the song
+    puts them in, so the vector still describes the song and not a bag of lines.
+    ``dict`` preserves insertion order; the previous ``tuple(set(...))`` did not,
+    and measured on prod it reordered 711 of 758 tracks — which also meant the
+    same track embedded differently on every re-index.
+
+    Duplicates are matched on a folded key (collapsed whitespace, casefolded) so
+    that "Oh-oh-oh" and "oh-oh-oh " count as one paragraph, while the text kept
+    is the first occurrence exactly as written.
+    """
+    text = (lyrics or "").replace("\r\n", "\n").replace("\r", "\n")
+    seen: dict[str, str] = {}
+    for para in _PARA_SPLIT.split(text):
+        para = para.strip()
+        if not para:
+            continue
+        seen.setdefault(" ".join(para.split()).casefold(), para)
+    return list(seen.values())
+
 
 def build_text_for_embedding(track: dict) -> str:
-    """Concatenate metadata + lyrics into a single text blob for sentence-transformer encoding."""
+    """Concatenate metadata + deduplicated lyrics into one blob for encoding."""
     parts = []
     if track.get("title"):
         parts.append(f"title: {track['title']}")
@@ -23,7 +55,7 @@ def build_text_for_embedding(track: dict) -> str:
         parts.append(f"album: {track['album']}")
     if track.get("genre"):
         parts.append(f"genre: {track['genre']}")
-    lyrics = track.get("lyrics", "").strip()
+    lyrics = "\n\n".join(unique_paragraphs(track.get("lyrics") or ""))
     if len(lyrics) > 20:
         parts.append(lyrics)
     return " | ".join(parts)
@@ -36,8 +68,12 @@ def prepare_metadata(data: dict):
     Output: list of metadata dicts with original numeric ``duration`` preserved
     (Pydantic models downstream expect float seconds), plus added:
         - ``duration_range`` — IQR-based bucket label (mirrors year/year_range pair)
-        - ``lyrics_chunked`` — tuple of unique paragraphs
         - ``year_range`` — decade label, e.g. ``1990-1999``
+
+    Note: this used to also emit ``lyrics_chunked``. Nothing ever read it, it
+    shipped a near-copy of the lyrics into every Qdrant payload, and it was built
+    with ``set()`` so its order changed between runs. Paragraph dedup now lives in
+    :func:`unique_paragraphs`, applied where it is actually used — at encode time.
 
     Historical note: pre-2026-05-22 this function CLOBBERED ``duration`` with the
     bucket string, which broke Pydantic validation for the Spotify-MVP responses
@@ -87,9 +123,6 @@ def prepare_metadata(data: dict):
         {**d, 'duration_range': bucket}
         for d, bucket in zip(filtered, buckets)
     ]
-
-    for rec in result:
-        rec['lyrics_chunked'] = tuple(set(rec['lyrics'].split('\n\n')))
 
     for track in result:
         if track.get('year'):

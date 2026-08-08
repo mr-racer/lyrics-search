@@ -44,7 +44,6 @@ def test_default_when_nothing_set():
     s = SettingsService(db=FakeDB())
     assert s.llm_base_url() is None
     assert s.llm_api_key() == "lm-studio"   # built-in default
-    assert s.embed_model() is None
     assert s.clap_enabled() is True
     assert s.ai_enabled() is False
 

@@ -27,7 +27,6 @@ _SPEC: dict[str, tuple[str, Optional[str]]] = {
     "LLM_BASE_URL": ("LLM_BASE_URL", None),
     "LLM_MODEL":    ("LLM_MODEL", None),
     "LLM_API_KEY":  ("OPENAI_API_KEY", "lm-studio"),
-    "EMBED_MODEL":  ("EMBED_MODEL", None),
     "CLAP_ENABLED": ("CLAP_ENABLED", "1"),
     "AI_ENABLED":   ("AI_ENABLED", "0"),
 }
@@ -100,9 +99,6 @@ class SettingsService:
 
     def llm_api_key(self) -> Optional[str]:
         return self.get("LLM_API_KEY")
-
-    def embed_model(self) -> Optional[str]:
-        return self.get("EMBED_MODEL")
 
     def clap_enabled(self) -> bool:
         return _parse_bool(self.get("CLAP_ENABLED"))

@@ -36,7 +36,7 @@ from app.services.search_service import SearchService
 
 class _FakeModel:
     def __init__(self, name, dim=4): self.name = name; self.dim = dim
-    def encode(self, q):
+    def encode(self, q, **kw):
         # numpy array so search()'s .tolist() works, like real sentence-transformers.
         return np.array([hash(self.name) % 1000] + [0.0] * (self.dim - 1), dtype=np.float32)
     def get_sentence_embedding_dimension(self): return self.dim
@@ -44,13 +44,12 @@ class _FakeModel:
 
 @pytest.fixture
 def seeded_registry():
-    ModelRegistry._text_models.clear()
-    if hasattr(ModelRegistry, "_load_locks"):
-        ModelRegistry._load_locks.clear()
-    ModelRegistry._text_models["model-jina"] = (_FakeModel("model-jina"), "text_model_jina", 4)
-    ModelRegistry._text_models["model-qwen"] = (_FakeModel("model-qwen"), "text_model_qwen", 4)
+    previous = ModelRegistry._text_model
+    ModelRegistry._text_model = (
+        _FakeModel("pinned"), ModelRegistry.VECTOR_NAME, ModelRegistry.VECTOR_DIM,
+    )
     yield
-    ModelRegistry._text_models.clear()
+    ModelRegistry._text_model = previous
 
 
 @pytest.fixture
@@ -94,31 +93,19 @@ def _login(app, uid: str) -> None:
 
 
 class TestConcurrentMultiAccount:
-    def test_two_accounts_search_with_different_models_no_cross_contamination(self, seeded_registry, fake_qdrant):
-        """Account A queries with jina, account B with qwen. Each must reach Qdrant
-        with the vector_name matching their own model — no leak.
+    def test_concurrent_searches_share_the_one_vector_name(self, seeded_registry, fake_qdrant):
+        """Two accounts searching the same shared engine at once.
 
-        col-shared has no pinned collection_settings model, so _resolve_model_name
-        falls through to each account's user setting (collection would otherwise win).
+        This used to guard against a real race: each account carried its own
+        embedding model and the engine wrote the resolved one onto ``self``, so
+        one thread's model could leak into the other's Qdrant query. There is
+        one model app-wide now, so what is left to verify is that concurrent
+        searches still reach Qdrant cleanly, every one of them under the single
+        pinned vector name.
         """
-        _seed_user("acct-A", "model-jina")
-        _seed_user("acct-B", "model-qwen")
-
         engine = LyricsSearchEngine(
-            qdrant_client=fake_qdrant, collection_name="col-shared",
-            model_name="model-jina", lazy=True,
+            qdrant_client=fake_qdrant, collection_name="col-shared", lazy=True,
         )
-        svc = SearchService(lyrics_db=engine)
-
-        # Per-account model resolution — done in the MAIN thread. SQLite connections
-        # aren't safe for concurrent use across threads, and resolution isn't the
-        # concurrency target here; the stateless engine is.
-        resolved = {
-            "acct-A": svc._resolve_model_name(account_id="acct-A", collection_name="col-shared"),
-            "acct-B": svc._resolve_model_name(account_id="acct-B", collection_name="col-shared"),
-        }
-        assert resolved["acct-A"] == "model-jina"
-        assert resolved["acct-B"] == "model-qwen"
 
         # Capture every `using` the engine sends to Qdrant, thread-safely via a
         # side_effect (no reliance on the racy shared call_args_list[-1]).
@@ -134,20 +121,16 @@ class TestConcurrentMultiAccount:
 
         fake_qdrant.query_points.side_effect = _record
 
-        def _worker(account_id: str):
-            engine.search(
-                query="q", limit=5,
-                model_name=resolved[account_id], collection_name_override="col-shared",
-            )
+        def _worker(_account_id: str):
+            engine.search(query="q", limit=5, collection_name_override="col-shared")
 
         threads = [threading.Thread(target=_worker, args=("acct-A",)),
                    threading.Thread(target=_worker, args=("acct-B",))]
         for t in threads: t.start()
         for t in threads: t.join()
 
-        # Both accounts' models reached Qdrant under their OWN vector_name —
-        # concurrent searches on the shared stateless engine didn't cross-contaminate.
-        assert seen_usings == {"text_model_jina", "text_model_qwen"}
+        assert seen_usings == {ModelRegistry.VECTOR_NAME}
+        assert fake_qdrant.query_points.call_count == 2
 
     def test_two_accounts_can_start_indexing_concurrently(self):
         svc = LibraryService(search_service=MagicMock(), db_client=MagicMock())

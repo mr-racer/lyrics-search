@@ -283,14 +283,9 @@ class TestBatchCommit:
             )
             assert resp.status_code == 400
 
-    def test_embedding_model_uses_instance_setting_ignoring_body(self, _server_mode_batch):
-        """D5: in server mode the embedding model is the admin's instance
-        setting; the body text_model is IGNORED (member can't override)."""
-        import time
-        from app.resources.metadata_db import MetadataDB
-        MetadataDB.set_instance_settings(
-            {"EMBED_MODEL": "intfloat/multilingual-e5-base"}, time.time(),
-        )
+    def test_body_text_model_is_accepted_and_ignored(self, _server_mode_batch):
+        """One embedding model app-wide. A stale client may still send the
+        field — it must not 422, and it must not reach the service."""
         u1 = _mk("acct_alice", "d" * 64, "x.flac")
         app = create_app()
         _login_batch(app, "acct_alice")
@@ -299,48 +294,25 @@ class TestBatchCommit:
             with TestClient(app) as c:
                 resp = c.post(
                     "/api/v1/library/upload/batch-commit",
-                    # Body value must be ignored in favor of the instance model.
                     json={"upload_ids": [u1],
                           "text_model": "Qwen/Qwen3-Embedding-0.6B"},
                 )
                 assert resp.status_code == 200, resp.text
-            assert enq.call_args.kwargs.get("text_model") == "intfloat/multilingual-e5-base"
-
-    def test_text_model_optional_defaults_none(self, _server_mode_batch):
-        u1 = _mk("acct_alice", "e" * 64, "y.flac")
-        app = create_app()
-        _login_batch(app, "acct_alice")
-        with patch("app.services.library_service.LibraryService.enqueue_upload_indexing") as enq:
-            enq.return_value = "job_tm2"
-            with TestClient(app) as c:
-                resp = c.post(
-                    "/api/v1/library/upload/batch-commit",
-                    json={"upload_ids": [u1]},
-                )
-                assert resp.status_code == 200, resp.text
-            assert enq.call_args.kwargs.get("text_model") is None
+            assert "text_model" not in enq.call_args.kwargs
 
 
 class TestFolderIndexEmbedModel:
     """POST /library/index (server-mode member, MEMBER_INDEX_ROOT opt-in).
 
-    Same policy as batch-commit: the embedding model is the admin's instance
-    setting; the request body cannot override it. Regression guard for the bug
-    where a member's mounted-folder index silently fell back to the jina default
-    because the route forwarded req.text_model (which the member UI never sends)
-    instead of the instance EMBED_MODEL setting.
+    There is one embedding model app-wide, so the body can no longer select one.
+    The field is still accepted so a cached client does not 422.
     """
 
-    def test_server_member_index_uses_instance_setting(self, _server_mode_batch, monkeypatch):
-        import time
+    def test_server_member_index_ignores_body_text_model(self, _server_mode_batch, monkeypatch):
         from unittest.mock import AsyncMock
-        from app.resources.metadata_db import MetadataDB
 
         root = _server_mode_batch  # tmp_path — a real dir, passes the is_dir() check
         monkeypatch.setenv("MEMBER_INDEX_ROOT", str(root))
-        MetadataDB.set_instance_settings(
-            {"EMBED_MODEL": "intfloat/multilingual-e5-base"}, time.time(),
-        )
         app = create_app()
         _login_batch(app, "acct_alice")
         with patch(
@@ -358,9 +330,8 @@ class TestFolderIndexEmbedModel:
                     app.state.library_service = object.__new__(LibraryService)
                 resp = c.post(
                     "/api/v1/library/index",
-                    # Body value must be IGNORED in favor of the instance model.
                     json={"folder_path": str(root),
                           "text_model": "Qwen/Qwen3-Embedding-0.6B"},
                 )
                 assert resp.status_code == 200, resp.text
-            assert idx.call_args.kwargs.get("text_model") == "intfloat/multilingual-e5-base"
+            assert "text_model" not in idx.call_args.kwargs

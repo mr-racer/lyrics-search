@@ -25,70 +25,25 @@ class SearchService:
     - hybrid: parallel dense+BM25 + CLAP, merged with 0.5/0.5 score weighting
     """
 
-    # Last-resort fallback when neither the collection nor the user pins a model.
-    # Must be a model that actually loads in this env and is in the TEXT_MODELS
-    # catalog — jina-v3 needs trust_remote_code/custom_st (not installed) and no
-    # existing collection is indexed with it. v2-small-en matches what every
-    # current collection was indexed with (see collection_settings).
-    DEFAULT_TEXT_MODEL = "jinaai/jina-embeddings-v2-small-en"
-
     def __init__(self, lyrics_db: LyricsDB):
         self.lyrics_db = lyrics_db
-
-    def _resolve_model_name(self, account_id: Optional[str], collection_name: Optional[str]) -> str:
-        """Decide which text model to use, WITHOUT mutating any shared engine
-        state. Order:
-
-            collection_settings  →  user.text_model_name  →  hardcoded default
-
-        ``collection_settings`` records the model the collection was actually
-        indexed with — its Qdrant vectors are named after it, so it is the
-        correctness ground-truth and must win over a user's (possibly defaulted)
-        preference. The user setting is the fallback for collections with no
-        recorded model; the hardcoded default is the last resort. ``account_id``
-        may be None (unauthenticated / pre-Phase-D paths) — that just skips the
-        user branch.
-
-        Callers that pass an explicit ``text_model`` override bypass this
-        entirely (handled in ``_search_text``)."""
-        if collection_name:
-            try:
-                MetadataDB.init()
-                pinned = MetadataDB.get_collection_text_model(collection_name)
-                if pinned:
-                    return pinned
-            except Exception:
-                logger.debug("[SearchService] collection settings lookup failed; continuing", exc_info=True)
-        if account_id:
-            try:
-                MetadataDB.init()
-                s = MetadataDB.get_user_settings(account_id)
-                if s and s.get("text_model_name"):
-                    return s["text_model_name"]
-            except Exception:
-                logger.debug("[SearchService] user settings lookup failed; continuing", exc_info=True)
-        return self.DEFAULT_TEXT_MODEL
 
     async def search(
         self,
         query: str,
         mode: Literal["text", "audio", "hybrid"] = "text",
-        text_model: Optional[str] = None,
         filters: Optional[SearchFilters] = None,
         limit: int = 10,
         collection_name: Optional[str] = None,
         account_id: Optional[str] = None,
     ) -> List[TrackHit]:
-        """Unified search dispatching to mode-specific handlers.
-
-        ``text_model``: explicit override (highest precedence). When None we
-        resolve via ``_resolve_model_name(account_id, collection_name)``."""
+        """Unified search dispatching to mode-specific handlers."""
         if mode == "audio":
             return await self._search_audio(query, filters, limit, collection_name)
         elif mode == "hybrid":
-            return await self._search_hybrid(query, filters, limit, collection_name, account_id, text_model)
+            return await self._search_hybrid(query, filters, limit, collection_name, account_id)
         else:  # text
-            return await self._search_text(query, filters, limit, collection_name, account_id, text_model)
+            return await self._search_text(query, filters, limit, collection_name, account_id)
 
     # ── Text search (dense + BM25) ──
 
@@ -99,25 +54,20 @@ class SearchService:
         limit: int,
         collection_name: Optional[str] = None,
         account_id: Optional[str] = None,
-        text_model: Optional[str] = None,
     ) -> List[TrackHit]:
         """Text-based search using dense + BM25 fusion."""
         col = collection_name or self.lyrics_db.collection_name
-        effective_model = text_model or self._resolve_model_name(account_id, col)
 
         filter_kwargs = self._extract_filter_kwargs(filters)
         active = {k: v for k, v in filter_kwargs.items() if v is not None}
         logger.info(
-            "[SearchService] _search_text: query=%r  collection=%s  model=%s  filters=%s",
-            query, col, effective_model, active or "(none)",
+            "[SearchService] _search_text: query=%r  collection=%s  filters=%s",
+            query, col, active or "(none)",
         )
 
-        # lyrics_db.search is fully blocking (SentenceTransformer.encode — and,
-        # on the first call for a model, the model load itself — plus a sync
-        # Qdrant query). Run it in a worker thread so one search doesn't stall
-        # every open SSE/audio connection on the event loop. The engine's
-        # stateless dispatch + ModelRegistry's per-name lock make concurrent
-        # executor calls safe.
+        # lyrics_db.search is fully blocking (SentenceTransformer.encode plus a
+        # sync Qdrant query). Run it in a worker thread so one search doesn't
+        # stall every open SSE/audio connection on the event loop.
         results = await asyncio.get_running_loop().run_in_executor(
             None,
             lambda: self.lyrics_db.search(
@@ -126,7 +76,6 @@ class SearchService:
                 min_dense_score=0.3,
                 include_clap=False,
                 collection_name_override=collection_name,
-                model_name=effective_model,
                 **filter_kwargs,
             ),
         )
@@ -221,14 +170,13 @@ class SearchService:
         limit: int,
         collection_name: Optional[str] = None,
         account_id: Optional[str] = None,
-        text_model: Optional[str] = None,
     ) -> List[TrackHit]:
         """Hybrid search: parallel text (dense+BM25) + CLAP, merge with 0.5/0.5 weighting.
 
         If audio search fails, gracefully degrades to text-only results.
         """
         text_task = asyncio.create_task(
-            self._search_text(query, filters, limit * 2, collection_name, account_id, text_model)
+            self._search_text(query, filters, limit * 2, collection_name, account_id)
         )
         audio_task = asyncio.create_task(
             self._search_audio(query, filters, limit * 2, collection_name)

@@ -344,12 +344,9 @@ def get_collections(
             count = info.points_count or 0
         except Exception:
             count = 0
-        text_model = None
-        try:
-            text_model = MetadataDB.get_collection_text_model(col.name)
-        except Exception:
-            pass
-        result.append({"name": col.name, "count": count, "text_model": text_model})
+        from app.resources.model_registry import ModelRegistry
+        result.append({"name": col.name, "count": count,
+                       "text_model": ModelRegistry.TEXT_MODEL_NAME})
 
         if col.name == derived:
             user_points = count
@@ -381,7 +378,9 @@ def get_collection_settings(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read settings: {e}")
 
-    base = {"collection_name": derived, "text_model": None, "indexed_at": None}
+    from app.resources.model_registry import ModelRegistry
+    base = {"collection_name": derived,
+            "text_model": ModelRegistry.TEXT_MODEL_NAME, "indexed_at": None}
     if settings is not None:
         base.update(settings)
     base["ai_enabled"] = ai_enabled
@@ -1205,24 +1204,12 @@ async def index_folder(
             status_code=400,
             detail=f"folder does not exist on this host: {req.folder_path}",
         )
-    # In server mode the embedding model is an instance-wide admin decision
-    # (same policy as /library/upload/batch-commit): the request body cannot
-    # override it. Without this a member's mounted-folder index sent no
-    # text_model (the member UI omits it), so the pipeline silently fell back to
-    # the jina default instead of honoring the Settings-chosen model. In sharing
-    # mode the single owner picks the model per-index, so keep the body value.
-    text_model = req.text_model
-    if cfg is not None and cfg.get("mode") == "server":
-        from app.services.settings_service import settings_service
-        text_model = settings_service.embed_model()
-
     # Phase B: key the in-flight indexing slot by the authenticated account, so
     # two accounts can index concurrently while one account can't double-start.
     result = await service.index_folder(
         folder_path=req.folder_path,
         collection_name=derived,
         better_lyrics_quality=req.better_lyrics_quality,
-        text_model=text_model,
         enhance_by_musicbrainz=req.enhance_by_musicbrainz,
         account_id=current_user.id,
     )
@@ -1346,8 +1333,7 @@ def get_upload_status(
 
 class _BatchCommitRequest(BaseModel):
     upload_ids: list[str]
-    # IGNORED (kept for graceful back-compat): in server mode the embedding
-    # model is the admin's instance setting (EMBED_MODEL), not a member choice.
+    # IGNORED (kept so cached clients don't 422): one embedding model app-wide.
     text_model: str | None = None
     # UI language → language of auto-generated AI enrichment (bios/facts/vibes).
     lang: str = "ru"
@@ -1379,11 +1365,8 @@ async def batch_commit_uploads(
             status_code=400, detail="none of the upload_ids belong to the caller",
         )
 
-    # Hard-lock the embedding model to the instance setting (admin decides).
-    # None → backend default (jina-small), same as before when unset.
     job_id = service.enqueue_upload_indexing(
         account_id=current_user.id, upload_ids=mine,
-        text_model=settings_service.embed_model(),
         lang=(req.lang or "ru").strip().lower(),
     )
     return {"job_id": job_id}

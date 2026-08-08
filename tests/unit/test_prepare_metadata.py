@@ -63,11 +63,13 @@ class TestPrepareMetadata:
                 decade = (rec["year"] // 10) * 10
                 assert rec["year_range"] == f"{decade}-{decade + 9}"
 
-    def test_lyrics_chunked_added(self, sample_tracks_data):
+    def test_lyrics_chunked_no_longer_emitted(self, sample_tracks_data):
+        """It had no readers, shipped a near-copy of the lyrics into every
+        Qdrant payload, and its set()-built order changed between runs.
+        Paragraph dedup now lives in qdrant_payload.unique_paragraphs."""
         result = utils_module.prepare_metadata(sample_tracks_data)
         for rec in result:
-            assert "lyrics_chunked" in rec
-            assert isinstance(rec["lyrics_chunked"], tuple)
+            assert "lyrics_chunked" not in rec
 
     def test_single_track(self):
         data = {

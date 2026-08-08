@@ -1,47 +1,46 @@
-"""Engine must be stateless: concurrent search(... model_name=...) calls
-must NOT clobber each other's view of which model is in use."""
+"""The engine must hold no per-search model state.
+
+This file used to guard a race: two accounts searching with two different
+embedding models could clobber each other's ``engine.model_name``. There is one
+model app-wide now, so that race is structurally impossible — what is still
+worth pinning down is that the engine keeps nothing per-call on ``self`` and
+always queries the one vector name the collections are built with.
+"""
 
 import threading
 from typing import Any
 from unittest.mock import MagicMock
 
 import numpy as np
+import pytest
 
 from app.resources.lyrics_search_engine import LyricsSearchEngine
 from app.resources.model_registry import ModelRegistry
 
 
 class _FakeModel:
-    """Records every encode() call so the test can assert per-thread model use."""
+    """Records every encode() call so the test can inspect what was sent."""
 
-    def __init__(self, name: str, dim: int = 4):
-        self.name = name
+    def __init__(self, dim: int = 4):
         self.dim = dim
+        self.calls: list = []
 
-    def encode(self, query: str):
+    def encode(self, query, **kw):
+        self.calls.append(query)
         # numpy array so search()'s .tolist() works, like real sentence-transformers.
-        return np.array(
-            [hash(self.name) % 1000] + [0.0] * (self.dim - 1), dtype=np.float32
-        )
+        return np.zeros(self.dim, dtype=np.float32)
 
     def get_sentence_embedding_dimension(self) -> int:
         return self.dim
 
 
-import pytest
-
-
-@pytest.fixture(autouse=True)
-def _seed_registry():
-    ModelRegistry._text_models.clear()
-    if hasattr(ModelRegistry, "_load_locks"):
-        ModelRegistry._load_locks.clear()
-    a = _FakeModel("model-A")
-    b = _FakeModel("model-B")
-    ModelRegistry._text_models["model-A"] = (a, "text_model_A", 4)
-    ModelRegistry._text_models["model-B"] = (b, "text_model_B", 4)
-    yield
-    ModelRegistry._text_models.clear()
+@pytest.fixture
+def fake_model():
+    model = _FakeModel()
+    previous = ModelRegistry._text_model
+    ModelRegistry._text_model = (model, ModelRegistry.VECTOR_NAME, model.dim)
+    yield model
+    ModelRegistry._text_model = previous
 
 
 def _make_qdrant() -> Any:
@@ -51,68 +50,51 @@ def _make_qdrant() -> Any:
     return q
 
 
-def test_concurrent_searches_use_correct_per_call_model():
-    """Two threads call search() with different model_name args. Each
-    Qdrant query must be issued with the vector_name matching that model."""
-    engine = LyricsSearchEngine(
-        qdrant_client=_make_qdrant(),
-        collection_name="col",
-        model_name="model-A",   # initial / fallback only
-        lazy=True,
-    )
+def _engine(qdrant) -> LyricsSearchEngine:
+    return LyricsSearchEngine(qdrant_client=qdrant, collection_name="col")
 
-    using_per_thread: dict[str, str] = {}
-    lock = threading.Lock()
+
+def test_search_queries_the_pinned_vector_name(fake_model):
+    qdrant = _make_qdrant()
+    _engine(qdrant).search(query="hello", limit=3)
+
+    prefetch = qdrant.query_points.call_args.kwargs["prefetch"]
+    dense = next(p for p in prefetch if p.using != "bm25")
+    assert dense.using == ModelRegistry.VECTOR_NAME == "text"
+
+
+def test_search_encodes_the_query_side_with_the_instruction_prefix(fake_model):
+    """Qwen3-Embedding is asymmetric; the query side takes the prefix and the
+    indexed documents do not."""
+    _engine(_make_qdrant()).search(query="who produced this", limit=1)
+
+    assert fake_model.calls == [ModelRegistry.QUERY_PREFIX + "who produced this"]
+
+
+def test_concurrent_searches_leave_no_state_on_the_engine(fake_model):
+    qdrant = _make_qdrant()
+    engine = _engine(qdrant)
+    before = dict(engine.__dict__)
     errors: list[BaseException] = []
 
-    def _worker(model_name: str):
+    def _worker(q: str):
         try:
-            engine.search(
-                query="q",
-                limit=5,
-                model_name=model_name,
-                collection_name_override="col",
-            )
-            call = engine.qdrant_client.query_points.call_args_list[-1]
-            prefetches = call.kwargs.get("prefetch") or []
-            using = prefetches[0].using if prefetches else None
-            with lock:
-                using_per_thread[model_name] = using
+            engine.search(query=q, limit=1)
         except BaseException as e:  # noqa: BLE001
-            with lock:
-                errors.append(e)
+            errors.append(e)
 
-    threads = [
-        threading.Thread(target=_worker, args=("model-A",)),
-        threading.Thread(target=_worker, args=("model-B",)),
-    ]
+    threads = [threading.Thread(target=_worker, args=(f"q{i}",)) for i in range(8)]
     for t in threads:
         t.start()
     for t in threads:
         t.join()
 
     assert not errors, errors
-    # The race-sensitive part is per-call vector resolution; since both threads
-    # hit a shared MagicMock query_points, we assert each model_name resolved to
-    # its own vector_name (proves search read model_name, not shared self state).
-    assert using_per_thread.get("model-A") == "text_model_A"
-    assert using_per_thread.get("model-B") == "text_model_B"
+    assert engine.__dict__ == before
+    assert qdrant.query_points.call_count == 8
 
 
-def test_search_resolves_per_call_model_not_self_state():
-    """A single engine, two sequential searches with different model_name, must
-    issue Qdrant queries with the matching vector_name each time."""
-    engine = LyricsSearchEngine(
-        qdrant_client=_make_qdrant(),
-        collection_name="col",
-        model_name="model-A",
-        lazy=True,
-    )
-    engine.search(query="q", model_name="model-A", collection_name_override="col")
-    using_a = engine.qdrant_client.query_points.call_args_list[-1].kwargs["prefetch"][0].using
-    engine.search(query="q", model_name="model-B", collection_name_override="col")
-    using_b = engine.qdrant_client.query_points.call_args_list[-1].kwargs["prefetch"][0].using
-    assert using_a == "text_model_A"
-    assert using_b == "text_model_B"
-    # Engine must NOT have cached model-B onto self (stateless dispatch).
-    assert engine.model_name == "model-A"
+def test_vector_metadata_comes_from_the_registry(fake_model):
+    engine = _engine(_make_qdrant())
+    assert engine.vector_name == ModelRegistry.VECTOR_NAME
+    assert engine.vector_dim == ModelRegistry.VECTOR_DIM

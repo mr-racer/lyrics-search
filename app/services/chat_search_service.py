@@ -229,7 +229,6 @@ async def _run_searches(
     collection_name: str | None = None,
     forced_mode: str | None = None,
     filters: SearchFilters | None = None,
-    text_model: str | None = None,
     llm_kw: dict | None = None,
     skip_rephrase: bool = False,
 ) -> tuple[str, str, list[TrackHit]]:
@@ -289,7 +288,6 @@ async def _run_searches(
                 query=search_query, mode=mode, limit=SEARCH_LIMIT,
                 collection_name=collection_name,
                 filters=filters,
-                text_model=text_model,
             )
             for hit in round_hits:
                 key = (hit.track.title.lower(), hit.track.artist.lower())

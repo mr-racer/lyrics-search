@@ -171,28 +171,21 @@ class IndexingService:
         engine: LyricsSearchEngine,
         *,
         collection_name: str | None = None,
-        model_name: str | None = None,
     ):
-        """``collection_name`` / ``model_name`` are snapshotted PER INSTANCE.
+        """``collection_name`` is snapshotted PER INSTANCE.
 
         The engine is shared across concurrent indexing jobs (semaphore allows
         2), so job-specific state must never be written onto it — two accounts
-        indexing at once used to race on ``engine.collection_name`` /
-        ``engine.model_name`` and could upsert into each other's collection.
-        Instances are cheap; create one per run with explicit targets.
+        indexing at once used to race on ``engine.collection_name`` and could
+        upsert into each other's collection. Instances are cheap; create one per
+        run with an explicit target.
         """
         self.engine = engine
         self.collection_name = str(collection_name or engine.collection_name)
-        # None → engine default stays possible for test fakes without model_name.
-        self.model_name = model_name or getattr(engine, "model_name", None)
 
     def _vector_params(self) -> tuple[str, int]:
-        """Resolve ``(vector_name, vector_dim)`` for this run's text model."""
-        if self.model_name:
-            from app.resources.model_registry import ModelRegistry
-            _, vector_name, vector_dim = ModelRegistry.get_text_model(self.model_name)
-            return vector_name, vector_dim
-        # Test fakes provide vector_name/vector_dim directly on the engine.
+        """``(vector_name, vector_dim)`` — constants now, one model app-wide.
+        Read off the engine so test fakes can still supply their own."""
         return self.engine.vector_name, self.engine.vector_dim
 
     def _create_collection(self, clap_paths: list) -> None:
@@ -622,27 +615,18 @@ class IndexingService:
         that fetches lyrics after CLAP must have written them into the same
         ``filtered`` dicts before calling this.
 
-        The text model is pinned to the GPU for the duration of the batch via
-        ``ModelRegistry.begin_indexing`` (waits out in-flight search encodes,
-        blocks the idle reaper) and released with ``end_indexing`` — the
-        registry then demotes it back to the CPU after ~60s of quiet.
+        No instruction prefix here on purpose: Qwen3-Embedding is asymmetric and
+        this is the DOCUMENT side of the pair (the query side adds it via
+        ``ModelRegistry.encode_text(..., is_query=True)``).
         """
         total = len(filtered)
         if progress_callback:
             progress_callback("lyrics", 0, total, "Encoding lyrics...")
 
         texts = [s["lyrics"] for s in filtered]
-        encode_kwargs = dict(batch_size=32, show_progress_bar=True, convert_to_numpy=True)
-        if self.model_name:
-            from app.resources.model_registry import ModelRegistry
-            model = ModelRegistry.begin_indexing(self.model_name)
-            try:
-                text_vecs = model.encode(texts, **encode_kwargs)
-            finally:
-                ModelRegistry.end_indexing(self.model_name)
-        else:
-            # Test fakes without a model_name supply .model directly.
-            text_vecs = self.engine.model.encode(texts, **encode_kwargs)
+        text_vecs = self.engine.model.encode(
+            texts, batch_size=32, show_progress_bar=True, convert_to_numpy=True,
+        )
 
         if progress_callback:
             progress_callback("lyrics", total, total, "Lyrics encoding done")

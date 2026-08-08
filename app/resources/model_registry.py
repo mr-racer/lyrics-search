@@ -2,22 +2,22 @@
 Resources layer — singletons for models and database.
 
 ModelRegistry:
-- get_text_model(model_name) -> (model, vector_name, dim)
-- encode_text(model_name, sentences, **kw) -> embeddings (tracked; use for ALL text encodes)
-- begin_indexing/end_indexing(model_name) — pin the text model to the GPU for a dense pass
+- get_text_model() -> (model, VECTOR_NAME, VECTOR_DIM)
+- encode_text(sentences, is_query=False, **kw) -> embeddings (use for ALL text encodes)
 - load_clap() -> model
-- list_text_models() -> dict of available models
 
-Device policy (2026-07):
+Device policy (2026-08):
+- ONE text embedding model, ``TEXT_MODEL_NAME``, chosen once and for all. It is
+  loaded in fp16 straight onto the GPU and stays there: the assistant's fact
+  retrieval encodes on nearly every turn, so the old load/demote/unload dance
+  bought latency and nothing else. There is no per-model dispatch left — the
+  Qdrant vector is called ``text`` and no longer encodes a model name, so a
+  future model swap is a re-embed either way (see
+  ``scripts/migrate_dense.py``).
 - CLAP lives on the CPU permanently: loaded once (startup preload), never
-  moved, never unloaded. It no longer competes with text models for VRAM,
-  which removed the GPU juggling the indexing path used to do.
-- Text embedders load on the CPU and are moved to the GPU only for the
-  dense-encode stage of indexing (``begin_indexing``). A background reaper
-  demotes an idle model back to the CPU after ``TEXT_IDLE_TO_CPU_SEC`` (60s)
-  of no requests — waiting out in-flight encodes — and unloads it entirely
-  after ``TEXT_IDLE_UNLOAD_SEC`` (10 min) of inactivity. The next search or
-  indexing run lazy-loads it again.
+  moved, never unloaded. It does not compete with the text model for VRAM.
+- ``FORCE_CPU=1`` puts the text model on the CPU in fp32 (fp16 on CPU is
+  slower than fp32 for most ops, and unsupported for some).
 
 DbClient:
 - __enter__/__exit__
@@ -27,7 +27,6 @@ DbClient:
 import gc
 import os
 import threading
-import time
 from pathlib import Path
 import torch
 from typing import Any, Optional
@@ -49,287 +48,118 @@ import logging
 logger = logging.getLogger(__name__)
 
 _FORCE_CPU = os.environ.get("FORCE_CPU", "").strip().lower() in ("1", "true", "yes", "on")
-# GPU target for the indexing-time text encode; None → everything stays on CPU.
 _GPU_DEVICE = None if (_FORCE_CPU or not torch.cuda.is_available()) else torch.device("cuda")
-if _FORCE_CPU:
-    logger.info("[ModelRegistry] FORCE_CPU set — using CPU for all models")
-else:
-    logger.info(
-        "[ModelRegistry] CLAP pinned to CPU; text models use %s during indexing",
-        _GPU_DEVICE or "cpu",
-    )
 CLAP_WEIGHTS_PATH = Path(__file__).parent.parent.parent / "weights" / "music_audioset_epoch_15_esc_90.14.pt"
 CLAP_WEIGHTS_URL = "https://huggingface.co/lukewys/laion_clap/resolve/main/music_audioset_epoch_15_esc_90.14.pt"
 
-# Text-model lifecycle timings (seconds). Env-tunable for ops experiments.
-TEXT_IDLE_TO_CPU_SEC = float(os.environ.get("TEXT_IDLE_TO_CPU_SEC", "60"))
-TEXT_IDLE_UNLOAD_SEC = float(os.environ.get("TEXT_IDLE_UNLOAD_SEC", "600"))
-_REAPER_INTERVAL_SEC = 15.0
-
-# Available text embedding models. Vector storage in Qdrant is keyed per
-# model (vector_name/dim come from get_text_model), so adding an entry here
-# needs no migration. NOTE: e5 models nominally want "query:"/"passage:"
-# prefixes; we skip them (accepted simplification, wizard spec §3.2 —
-# consistent with how Qwen is used without instruction prefixes).
-TEXT_MODELS = {
-    "jinaai/jina-embeddings-v2-small-en": {"dim": 512, "desc": "Lightweight model with CPU optimisation"},
-    "intfloat/multilingual-e5-base": {"dim": 768, "desc": "Balanced, multilingual"},
-    "Qwen/Qwen3-Embedding-0.6B": {"dim": 1024, "desc": "Higher quality, slower"},
-}
-
-
-class _TextModelState:
-    """Concurrency + lifecycle bookkeeping for one loaded text model.
-
-    ``cond`` guards every device move: encodes register in ``inflight`` under
-    it, movers (begin_indexing / the reaper) only call ``.to()`` while holding
-    it with ``inflight == 0`` — so a tensor is never mid-forward on a moving
-    model. ``indexing`` pins the model to the GPU across a dense pass.
-    """
-
-    __slots__ = ("cond", "inflight", "indexing", "last_used", "on_gpu")
-
-    def __init__(self) -> None:
-        self.cond = threading.Condition()
-        self.inflight = 0
-        self.indexing = 0
-        self.last_used = time.monotonic()
-        self.on_gpu = False
+# ── The one text embedding model ─────────────────────────────────────────────
+# Multilingual on purpose: the assistant matches a Russian statement against
+# English source facts, which the previous English-only default could not do at
+# all. Everything downstream (Qdrant vector name, migration script, facts
+# collection) is pinned to this choice.
+TEXT_MODEL_NAME = "Qwen/Qwen3-Embedding-0.6B"
+VECTOR_NAME = "text"
+VECTOR_DIM = 1024
+# Set explicitly: the model's own config carries a 32768-token window, and a
+# full lyric would then be encoded whole. Measured on 758 prod tracks, the
+# longest deduplicated lyric is ~1900 tokens, so 2048 covers the library.
+MAX_SEQ_LENGTH = 2048
+# Qwen3-Embedding is asymmetric — queries take an instruction, documents do not.
+QUERY_PREFIX = (
+    "Instruct: Given a statement about music, retrieve passages that explain it\n"
+    "Query: "
+)
 
 
 class ModelRegistry:
     """
     Singleton registry for models.
-    - Text models (sentence-transformers) — multiple models cached by name,
-      CPU-resident, GPU only during indexing, idle-demoted/unloaded (see the
-      module docstring for the full device policy)
+    - Text model (sentence-transformers) — one pinned model, loaded once in fp16
+      onto the GPU and kept resident (see the module docstring)
     - CLAP model (audio embeddings) — loaded once, always on CPU, never unloaded
     """
 
-    # Phase B: get_text_model is the canonical accessor — returns the
-    # (model, vector_name, vector_dim) triple and lazy-loads on first call.
-    # Concurrent first-loads of the same name serialise on a per-name lock so
-    # only one SentenceTransformer(...) instantiation happens (no GPU-mem waste).
-    _text_models: dict[str, tuple[Any, str, int]] = {}
-    _text_state: dict[str, _TextModelState] = {}
-    _load_locks: dict[str, threading.Lock] = {}
-    _load_locks_master: threading.Lock = threading.Lock()
+    # Re-exported on the class so call sites read one name
+    # (``ModelRegistry.VECTOR_NAME``) instead of importing module globals.
+    TEXT_MODEL_NAME = TEXT_MODEL_NAME
+    VECTOR_NAME = VECTOR_NAME
+    VECTOR_DIM = VECTOR_DIM
+    MAX_SEQ_LENGTH = MAX_SEQ_LENGTH
+    QUERY_PREFIX = QUERY_PREFIX
+
+    _text_model: Optional[tuple[Any, str, int]] = None
+    _text_lock: threading.Lock = threading.Lock()
     _clap_model: Optional[Any] = None
     _clap_lock: threading.Lock = threading.Lock()
-    _reaper_started: bool = False
 
-    # ── Text models ──
-
-    @classmethod
-    def _lock_for(cls, model_name: str) -> threading.Lock:
-        """Return the per-model load lock, creating it under the master lock."""
-        lock = cls._load_locks.get(model_name)
-        if lock is not None:
-            return lock
-        with cls._load_locks_master:
-            # Double-check after acquiring the master lock.
-            lock = cls._load_locks.get(model_name)
-            if lock is None:
-                lock = threading.Lock()
-                cls._load_locks[model_name] = lock
-            return lock
+    # ── Text model ──
 
     @classmethod
-    def _state_for(cls, model_name: str) -> _TextModelState:
-        """Return the per-model lifecycle state, creating it under the master lock.
+    def get_text_model(cls) -> tuple[Any, str, int]:
+        """Return ``(model, VECTOR_NAME, VECTOR_DIM)``, loading on first call.
 
-        State survives unloads on purpose: last_used/inflight bookkeeping must
-        not reset when the reaper drops the weights.
+        Thread-safe: concurrent first calls serialise on ``_text_lock`` so only
+        one ``SentenceTransformer(...)`` is ever instantiated — a duplicate load
+        would double the VRAM footprint for nothing.
         """
-        st = cls._text_state.get(model_name)
-        if st is not None:
-            return st
-        with cls._load_locks_master:
-            st = cls._text_state.get(model_name)
-            if st is None:
-                st = _TextModelState()
-                cls._text_state[model_name] = st
-            return st
-
-    @classmethod
-    def get_text_model(cls, model_name: str) -> tuple[Any, str, int]:
-        """Return ``(model, vector_name, vector_dim)`` for ``model_name``.
-
-        Lazy-loads on first call (onto the CPU — GPU placement happens only
-        via ``begin_indexing``). Subsequent calls return the cached triple.
-        Thread-safe: concurrent first-loads of the same name serialise on a
-        per-name lock so only one ``SentenceTransformer(...)`` is instantiated.
-
-        Every call counts as activity for the idle reaper. Callers must NOT
-        cache the returned model across requests — that would pin weights the
-        reaper is supposed to free; go through ``encode_text`` instead.
-        """
-        st = cls._state_for(model_name)
-        st.last_used = time.monotonic()
-
-        cached = cls._text_models.get(model_name)
+        cached = cls._text_model
         if cached is not None:
             return cached
 
-        with cls._lock_for(model_name):
-            cached = cls._text_models.get(model_name)
-            if cached is not None:
-                return cached
-            model = SentenceTransformer(model_name, device="cpu")
+        with cls._text_lock:
+            if cls._text_model is not None:
+                return cls._text_model
+
+            device = "cuda" if _GPU_DEVICE is not None else "cpu"
+            # fp16 halves the resident footprint (~1.2 GB instead of ~2.4) and
+            # costs nothing measurable on embeddings. On CPU it would be slower
+            # than fp32, and some ops have no CPU half kernel — so fp32 there.
+            model_kwargs = {"torch_dtype": torch.float16} if device == "cuda" else None
+            model = SentenceTransformer(
+                TEXT_MODEL_NAME, device=device,
+                **({"model_kwargs": model_kwargs} if model_kwargs else {}),
+            )
+            model.max_seq_length = MAX_SEQ_LENGTH
+
             dim = model.get_sentence_embedding_dimension()
-            vector_name = f"text_{model_name.replace('/', '_')}"
-            triple = (model, vector_name, dim)
-            with st.cond:
-                st.on_gpu = False
-                st.last_used = time.monotonic()
-            cls._text_models[model_name] = triple
-            cls._ensure_reaper()
-            logger.info("[ModelRegistry] text model '%s' loaded (dim=%d, cpu)", model_name, dim)
-            return triple
+            if dim != VECTOR_DIM:
+                # Loud, not fatal: a mismatch means every vector written from
+                # here on disagrees with the collection schema, and silence
+                # would surface as empty search results days later.
+                logger.error(
+                    "[ModelRegistry] '%s' reports dim=%d but VECTOR_DIM=%d — "
+                    "collections were built for %d",
+                    TEXT_MODEL_NAME, dim, VECTOR_DIM, VECTOR_DIM,
+                )
+
+            cls._text_model = (model, VECTOR_NAME, VECTOR_DIM)
+            logger.info(
+                "[ModelRegistry] text model '%s' loaded (dim=%d, %s, %s, max_seq=%d)",
+                TEXT_MODEL_NAME, dim, device,
+                "fp16" if model_kwargs else "fp32", MAX_SEQ_LENGTH,
+            )
+            return cls._text_model
 
     @classmethod
-    def load_text_model(cls, model_name: str) -> tuple[Any, str, int]:
-        """Back-compat alias for ``get_text_model``. Existing callers
-        (lyrics_search_engine, library_service, search/chat routes) keep
-        working and now get the per-model load lock for free."""
-        return cls.get_text_model(model_name)
+    def encode_text(cls, sentences, *, is_query: bool = False, **encode_kwargs):
+        """Encode ``sentences`` — the ONE sanctioned way to run a text encode.
 
-    @classmethod
-    def encode_text(cls, model_name: str, sentences, **encode_kwargs):
-        """Encode ``sentences`` with ``model_name`` — the ONE sanctioned way to
-        run a text encode outside indexing.
-
-        Registers the call as in-flight so the reaper never moves or unloads
-        the model mid-forward, and stamps ``last_used`` so activity delays the
-        idle demotion/unload.
+        ``is_query=True`` prepends the model's instruction prefix. Qwen3-Embedding
+        is asymmetric: the query side takes an instruction, the document side does
+        not, and mixing the two up costs real recall. Indexing never sets it;
+        search and fact retrieval always do.
         """
-        model, _, _ = cls.get_text_model(model_name)
-        st = cls._state_for(model_name)
-        with st.cond:
-            st.inflight += 1
-            st.last_used = time.monotonic()
-        try:
-            return model.encode(sentences, **encode_kwargs)
-        finally:
-            with st.cond:
-                st.inflight -= 1
-                st.last_used = time.monotonic()
-                st.cond.notify_all()
+        model, _, _ = cls.get_text_model()
+        if is_query:
+            if isinstance(sentences, str):
+                sentences = QUERY_PREFIX + sentences
+            else:
+                sentences = [QUERY_PREFIX + s for s in sentences]
+        return model.encode(sentences, **encode_kwargs)
 
     @classmethod
-    def begin_indexing(cls, model_name: str) -> Any:
-        """Pin ``model_name`` for an indexing dense pass and move it to the GPU.
-
-        Waits (bounded) for in-flight search encodes to drain before the device
-        move so a running forward pass is never yanked between devices. Returns
-        the model; the caller MUST pair this with ``end_indexing`` in a finally.
-        No-op device-wise when no GPU is available / FORCE_CPU is set.
-        """
-        model, _, _ = cls.get_text_model(model_name)
-        st = cls._state_for(model_name)
-        with st.cond:
-            st.indexing += 1
-            st.last_used = time.monotonic()
-            if _GPU_DEVICE is not None and not st.on_gpu:
-                deadline = time.monotonic() + 30.0
-                while st.inflight > 0 and time.monotonic() < deadline:
-                    st.cond.wait(timeout=1.0)
-                try:
-                    model.to(_GPU_DEVICE)
-                    st.on_gpu = True
-                    logger.info("[ModelRegistry] text model '%s' → GPU (indexing)", model_name)
-                except Exception:
-                    logger.exception(
-                        "[ModelRegistry] failed to move '%s' to GPU — dense pass stays on CPU",
-                        model_name,
-                    )
-        return model
-
-    @classmethod
-    def end_indexing(cls, model_name: str) -> None:
-        """Release the indexing pin taken by ``begin_indexing``.
-
-        The model intentionally STAYS on the GPU here: back-to-back batches
-        shouldn't thrash devices. The reaper demotes it to the CPU after
-        ``TEXT_IDLE_TO_CPU_SEC`` of quiet.
-        """
-        st = cls._state_for(model_name)
-        with st.cond:
-            st.indexing = max(0, st.indexing - 1)
-            st.last_used = time.monotonic()
-            st.cond.notify_all()
-
-    # ── Idle reaper ──
-
-    @classmethod
-    def _ensure_reaper(cls) -> None:
-        """Start the daemon reaper thread once (lazily, on first model load)."""
-        with cls._load_locks_master:
-            if cls._reaper_started:
-                return
-            threading.Thread(
-                target=cls._reaper_loop, name="model-registry-reaper", daemon=True,
-            ).start()
-            cls._reaper_started = True
-
-    @classmethod
-    def _reaper_loop(cls) -> None:
-        while True:
-            time.sleep(_REAPER_INTERVAL_SEC)
-            try:
-                cls._reap_once()
-            except Exception:
-                logger.exception("[ModelRegistry] reaper iteration failed")
-
-    @classmethod
-    def _reap_once(cls, now: float | None = None) -> None:
-        """One reaper sweep: GPU→CPU after TEXT_IDLE_TO_CPU_SEC idle, full
-        unload after TEXT_IDLE_UNLOAD_SEC. Skips models with in-flight encodes
-        or an active indexing pin — never kills running work."""
-        now = now if now is not None else time.monotonic()
-        for name in list(cls._text_models.keys()):
-            st = cls._state_for(name)
-            with st.cond:
-                if st.inflight > 0 or st.indexing > 0:
-                    continue
-                triple = cls._text_models.get(name)
-                if triple is None:
-                    continue
-                idle = now - st.last_used
-                model = triple[0]
-                if st.on_gpu and idle >= TEXT_IDLE_TO_CPU_SEC:
-                    try:
-                        model.to("cpu")
-                        st.on_gpu = False
-                        if torch.cuda.is_available():
-                            torch.cuda.empty_cache()
-                        logger.info(
-                            "[ModelRegistry] text model '%s' → CPU (%.0fs idle)", name, idle,
-                        )
-                    except Exception:
-                        logger.exception("[ModelRegistry] GPU→CPU demotion failed for '%s'", name)
-                        continue
-                if idle >= TEXT_IDLE_UNLOAD_SEC:
-                    cls._text_models.pop(name, None)
-                    st.on_gpu = False
-                    del model, triple
-                    gc.collect()
-                    if torch.cuda.is_available():
-                        torch.cuda.empty_cache()
-                    logger.info(
-                        "[ModelRegistry] text model '%s' unloaded (%.0fs idle) — "
-                        "will lazy-reload on next use", name, idle,
-                    )
-
-    @classmethod
-    def list_text_models(cls) -> dict[str, dict]:
-        """Return catalog of available text embedding models."""
-        return TEXT_MODELS
-
-    @classmethod
-    def get_loaded_text_models(cls) -> list[str]:
-        """Return names of currently loaded text models."""
-        return list(cls._text_models.keys())
+    def is_text_model_loaded(cls) -> bool:
+        return cls._text_model is not None
 
     # ── CLAP ──
 

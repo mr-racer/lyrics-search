@@ -1396,6 +1396,87 @@ class MetadataDB:
         ).fetchall()
         return [{"fact": r[0], "category": r[1]} for r in rows]
 
+    # ── Raw facts, keyed by row id (the vector index over facts) ─────────────
+    # These three deliberately do NOT filter by fact_visibility: the vector
+    # index is one shared collection over the shared fact pool, so it is built
+    # per slug and access is enforced when results come back
+    # (:meth:`filter_visible_slugs`).
+
+    @classmethod
+    def get_facts_with_ids(cls, kind: str, slug: str) -> List[dict]:
+        """``[{"id", "fact", "source", "category"}]`` for one entity, in
+        insertion order. ``kind`` is ``"song"`` or ``"artist"``."""
+        table, key = (("song_facts", "song_slug") if kind == "song"
+                      else ("artist_facts", "artist_slug"))
+        conn = cls._connect()
+        rows = conn.execute(
+            f"""SELECT id, fact, source, category FROM {table}
+                WHERE {key} = ? AND lang = 'en' ORDER BY id""",
+            (slug,),
+        ).fetchall()
+        return [{"id": r[0], "fact": r[1], "source": r[2] or "",
+                 "category": r[3] or ""} for r in rows]
+
+    @classmethod
+    def get_facts_by_ids(cls, kind: str, ids: List[int]) -> Dict[int, dict]:
+        """``{row_id: {"fact", "source", "category", "slug"}}`` for the given ids.
+
+        This is the join that keeps fact TEXT out of Qdrant: retrieval returns
+        ids and scores, the words come from here.
+        """
+        if not ids:
+            return {}
+        table, key = (("song_facts", "song_slug") if kind == "song"
+                      else ("artist_facts", "artist_slug"))
+        conn = cls._connect()
+        out: Dict[int, dict] = {}
+        # Chunked to stay under SQLite's variable limit on a big fan-out.
+        for i in range(0, len(ids), 500):
+            chunk = ids[i: i + 500]
+            ph = ",".join("?" * len(chunk))
+            for r in conn.execute(
+                f"""SELECT id, fact, source, category, {key} FROM {table}
+                    WHERE id IN ({ph})""",
+                tuple(chunk),
+            ):
+                out[r[0]] = {"fact": r[1], "source": r[2] or "",
+                             "category": r[3] or "", "slug": r[4]}
+        return out
+
+    @classmethod
+    def filter_visible_slugs(cls, kind: str, slugs: List[str],
+                             collection_name: str) -> set:
+        """The subset of ``slugs`` this account may see.
+
+        The fact pool is shared across accounts; the vector index is too. This
+        is what keeps a global similarity search from surfacing facts about
+        entities the caller has not indexed.
+        """
+        if not slugs:
+            return set()
+        conn = cls._connect()
+        out: set = set()
+        for i in range(0, len(slugs), 500):
+            chunk = slugs[i: i + 500]
+            ph = ",".join("?" * len(chunk))
+            for r in conn.execute(
+                f"""SELECT slug FROM fact_visibility
+                    WHERE kind = ? AND collection_name = ? AND slug IN ({ph})""",
+                (kind, collection_name, *chunk),
+            ):
+                out.add(r[0])
+        return out
+
+    @classmethod
+    def get_visible_fact_slugs(cls, kind: str, collection_name: str) -> List[str]:
+        """Every slug of ``kind`` this collection can see — the work list for
+        the background warm-up of the facts vector index."""
+        conn = cls._connect()
+        return [r[0] for r in conn.execute(
+            "SELECT slug FROM fact_visibility WHERE kind = ? AND collection_name = ?",
+            (kind, collection_name),
+        )]
+
     @classmethod
     def get_all_song_facts_by_collection(cls, collection_name: str) -> Dict[str, str]:
         """Return ``{song_slug: joined_facts_text}`` for a collection."""

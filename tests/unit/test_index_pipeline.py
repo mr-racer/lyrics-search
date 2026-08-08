@@ -79,9 +79,9 @@ def test_partitions_lyrics_and_orders_clap_before_dense(monkeypatch):
     assert order[2] == ("embedded", "ONLINE")
     fake_indexing.create_collection.assert_called_once()
     fake_indexing.upsert.assert_called_once()
-    # Collection/model are passed to the per-run IndexingService instance;
+    # The collection is passed to the per-run IndexingService instance;
     # the shared engine is never mutated (parallel-jobs isolation).
-    assert ctor_kwargs == {"collection_name": "acct_x", "model_name": None}
+    assert ctor_kwargs == {"collection_name": "acct_x"}
     assert engine.collection_name == "saved"
 
 

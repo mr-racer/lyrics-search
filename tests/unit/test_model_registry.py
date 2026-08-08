@@ -1,8 +1,8 @@
 """Unit tests for app.resources.model_registry.
 
-Consolidated from test_model_registry_concurrent.py and
-test_model_registry_tiers.py. Lifecycle tests (idle demote/unload, indexing
-pin, CLAP single-load) cover the 2026-07 device policy.
+The 2026-08 policy: ONE text embedding model, loaded once in fp16 onto the GPU
+and kept resident. No per-model dispatch, no idle reaper — so the lifecycle
+tests that covered demote/unload are gone with the code they described.
 """
 
 import threading
@@ -11,9 +11,11 @@ import time
 import numpy as np
 
 from app.resources.model_registry import (
-    TEXT_IDLE_TO_CPU_SEC,
-    TEXT_IDLE_UNLOAD_SEC,
-    TEXT_MODELS,
+    MAX_SEQ_LENGTH,
+    QUERY_PREFIX,
+    TEXT_MODEL_NAME,
+    VECTOR_DIM,
+    VECTOR_NAME,
     ModelRegistry,
 )
 
@@ -21,48 +23,49 @@ from app.resources.model_registry import (
 class _FakeSentenceTransformer:
     """Records every instantiation so the test can assert call count."""
     instance_count = 0
+    last_kwargs: dict = {}
 
-    def __init__(self, name, device=None):
+    def __init__(self, name, device=None, **kwargs):
         type(self).instance_count += 1
+        type(self).last_kwargs = {"device": device, **kwargs}
         self.name = name
-        self.device_moves: list[str] = []
+        self.max_seq_length = 32768
+        self.encoded: list = []
 
     def get_sentence_embedding_dimension(self):
-        return 384
+        return VECTOR_DIM
 
     def encode(self, sentences, **kw):
+        self.encoded.append(sentences)
         return np.zeros(4, dtype=np.float32)
-
-    def to(self, device):
-        self.device_moves.append(str(device))
-        return self
 
 
 def _reset_registry():
-    ModelRegistry._text_models.clear()
-    if hasattr(ModelRegistry, "_load_locks"):
-        ModelRegistry._load_locks.clear()
-    if hasattr(ModelRegistry, "_text_state"):
-        ModelRegistry._text_state.clear()
+    ModelRegistry._text_model = None
 
 
-class TestConcurrent:
-    """Concurrent get_text_model loads must NOT instantiate the same model twice."""
+def _install_fake(monkeypatch):
+    _reset_registry()
+    _FakeSentenceTransformer.instance_count = 0
+    monkeypatch.setattr(
+        "app.resources.model_registry.SentenceTransformer",
+        _FakeSentenceTransformer,
+    )
 
+
+class TestLoading:
     def test_concurrent_loads_share_one_instance(self, monkeypatch):
-        _reset_registry()
-        _FakeSentenceTransformer.instance_count = 0
-        monkeypatch.setattr(
-            "app.resources.model_registry.SentenceTransformer",
-            _FakeSentenceTransformer,
-        )
-
+        """Two threads racing on the first call must not build two models —
+        a duplicate would double the resident VRAM for nothing."""
+        _install_fake(monkeypatch)
         results: list[tuple] = []
         errors: list[BaseException] = []
+        barrier = threading.Barrier(8)
 
         def _worker():
             try:
-                results.append(ModelRegistry.get_text_model("fake/model"))
+                barrier.wait()
+                results.append(ModelRegistry.get_text_model())
             except BaseException as e:  # noqa: BLE001
                 errors.append(e)
 
@@ -74,112 +77,69 @@ class TestConcurrent:
 
         assert not errors, errors
         assert _FakeSentenceTransformer.instance_count == 1
-        # All eight workers got the same triple
-        first = results[0]
-        assert all(r is first or r == first for r in results)
-        # Triple shape: (model, vector_name, vector_dim)
-        model, vector_name, vector_dim = first
-        assert isinstance(model, _FakeSentenceTransformer)
-        assert vector_name == "text_fake_model"
-        assert vector_dim == 384
-
-    def test_get_text_model_returns_cached_triple_without_reloading(self, monkeypatch):
+        assert all(r is results[0] for r in results)
         _reset_registry()
-        _FakeSentenceTransformer.instance_count = 0
-        monkeypatch.setattr(
-            "app.resources.model_registry.SentenceTransformer",
-            _FakeSentenceTransformer,
-        )
 
-        a = ModelRegistry.get_text_model("fake/model")
-        b = ModelRegistry.get_text_model("fake/model")
+    def test_returns_the_pinned_vector_name_and_dim(self, monkeypatch):
+        _install_fake(monkeypatch)
+        model, vector_name, dim = ModelRegistry.get_text_model()
+        assert vector_name == VECTOR_NAME == "text"
+        assert dim == VECTOR_DIM == 1024
+        assert model.name == TEXT_MODEL_NAME
+        _reset_registry()
+
+    def test_vector_name_does_not_encode_the_model(self):
+        """The old name was f"text_{model}" — renaming the model silently
+        orphaned every existing collection."""
+        assert "/" not in VECTOR_NAME
+        assert "qwen" not in VECTOR_NAME.lower()
+
+    def test_input_length_is_capped(self, monkeypatch):
+        """The model's own config carries a 32768 window; left alone, a full
+        lyric would be encoded whole."""
+        _install_fake(monkeypatch)
+        model, _, _ = ModelRegistry.get_text_model()
+        assert model.max_seq_length == MAX_SEQ_LENGTH == 2048
+        _reset_registry()
+
+    def test_second_call_is_cached(self, monkeypatch):
+        _install_fake(monkeypatch)
+        a = ModelRegistry.get_text_model()
+        b = ModelRegistry.get_text_model()
+        assert a is b
         assert _FakeSentenceTransformer.instance_count == 1
-        assert a == b
-
-    def test_get_text_model_two_distinct_models_two_instances(self, monkeypatch):
         _reset_registry()
-        _FakeSentenceTransformer.instance_count = 0
-        monkeypatch.setattr(
-            "app.resources.model_registry.SentenceTransformer",
-            _FakeSentenceTransformer,
-        )
 
-        ModelRegistry.get_text_model("model-a")
-        ModelRegistry.get_text_model("model-b")
-        assert _FakeSentenceTransformer.instance_count == 2
-
-
-class TestLifecycle:
-    """Device policy 2026-07: idle text models are demoted to CPU (60s) and
-    unloaded (10 min); in-flight encodes and indexing pins block the reaper."""
-
-    def _load_fake(self, monkeypatch, name="fake/model"):
+    def test_is_text_model_loaded_flips_on_load(self, monkeypatch):
+        _install_fake(monkeypatch)
+        assert ModelRegistry.is_text_model_loaded() is False
+        ModelRegistry.get_text_model()
+        assert ModelRegistry.is_text_model_loaded() is True
         _reset_registry()
-        _FakeSentenceTransformer.instance_count = 0
-        monkeypatch.setattr(
-            "app.resources.model_registry.SentenceTransformer",
-            _FakeSentenceTransformer,
-        )
-        model, _, _ = ModelRegistry.get_text_model(name)
-        return model
 
-    def test_reap_unloads_after_idle_timeout(self, monkeypatch):
-        self._load_fake(monkeypatch)
-        st = ModelRegistry._state_for("fake/model")
-        st.last_used = time.monotonic() - (TEXT_IDLE_UNLOAD_SEC + 1)
-        ModelRegistry._reap_once()
-        assert "fake/model" not in ModelRegistry.get_loaded_text_models()
-        # Next use lazy-reloads (fresh instance).
-        ModelRegistry.get_text_model("fake/model")
-        assert _FakeSentenceTransformer.instance_count == 2
 
-    def test_reap_keeps_fresh_model(self, monkeypatch):
-        self._load_fake(monkeypatch)
-        ModelRegistry._reap_once()  # last_used = just now
-        assert "fake/model" in ModelRegistry.get_loaded_text_models()
+class TestEncode:
+    def test_query_side_gets_the_instruction_prefix(self, monkeypatch):
+        """Qwen3-Embedding is asymmetric — mixing the sides up costs recall."""
+        _install_fake(monkeypatch)
+        ModelRegistry.encode_text("who produced this", is_query=True)
+        model, _, _ = ModelRegistry.get_text_model()
+        assert model.encoded[-1] == QUERY_PREFIX + "who produced this"
+        _reset_registry()
 
-    def test_inflight_encode_blocks_reap(self, monkeypatch):
-        self._load_fake(monkeypatch)
-        st = ModelRegistry._state_for("fake/model")
-        st.last_used = time.monotonic() - (TEXT_IDLE_UNLOAD_SEC + 1)
-        st.inflight = 1
-        ModelRegistry._reap_once()
-        assert "fake/model" in ModelRegistry.get_loaded_text_models()
-        st.inflight = 0
+    def test_document_side_is_left_bare(self, monkeypatch):
+        _install_fake(monkeypatch)
+        ModelRegistry.encode_text("a fact about a song")
+        model, _, _ = ModelRegistry.get_text_model()
+        assert model.encoded[-1] == "a fact about a song"
+        _reset_registry()
 
-    def test_indexing_pin_blocks_reap_until_released(self, monkeypatch):
-        self._load_fake(monkeypatch)
-        ModelRegistry.begin_indexing("fake/model")
-        st = ModelRegistry._state_for("fake/model")
-        st.last_used = time.monotonic() - (TEXT_IDLE_UNLOAD_SEC + 1)
-        ModelRegistry._reap_once()
-        assert "fake/model" in ModelRegistry.get_loaded_text_models()
-        ModelRegistry.end_indexing("fake/model")
-        st.last_used = time.monotonic() - (TEXT_IDLE_UNLOAD_SEC + 1)
-        ModelRegistry._reap_once()
-        assert "fake/model" not in ModelRegistry.get_loaded_text_models()
-
-    def test_gpu_demote_after_short_idle(self, monkeypatch):
-        model = self._load_fake(monkeypatch)
-        st = ModelRegistry._state_for("fake/model")
-        # Simulate an indexing run having promoted the model to the GPU.
-        st.on_gpu = True
-        st.last_used = time.monotonic() - (TEXT_IDLE_TO_CPU_SEC + 1)
-        ModelRegistry._reap_once()
-        assert st.on_gpu is False
-        assert model.device_moves[-1] == "cpu"
-        # Demoted but NOT unloaded (idle < unload threshold).
-        assert "fake/model" in ModelRegistry.get_loaded_text_models()
-
-    def test_encode_text_tracks_activity(self, monkeypatch):
-        self._load_fake(monkeypatch)
-        st = ModelRegistry._state_for("fake/model")
-        st.last_used = time.monotonic() - (TEXT_IDLE_UNLOAD_SEC + 1)
-        out = ModelRegistry.encode_text("fake/model", "hello")
-        assert out is not None
-        assert st.inflight == 0
-        # Activity was stamped — the stale timestamp must be gone.
-        assert time.monotonic() - st.last_used < 5.0
+    def test_prefix_applies_to_every_item_of_a_list(self, monkeypatch):
+        _install_fake(monkeypatch)
+        ModelRegistry.encode_text(["one", "two"], is_query=True)
+        model, _, _ = ModelRegistry.get_text_model()
+        assert model.encoded[-1] == [QUERY_PREFIX + "one", QUERY_PREFIX + "two"]
+        _reset_registry()
 
 
 class _FakeClapModule:
@@ -234,18 +194,3 @@ class TestClapSingleLoad:
         assert _FakeClapModule.instance_count == 1
         assert all(r is results[0] for r in results)
         monkeypatch.setattr(ModelRegistry, "_clap_model", None)
-
-
-class TestTiers:
-    """The wizard's quality slider maps to exactly these three registry tiers
-    (spec §2 — Fast / Balanced / Quality)."""
-
-    def test_three_wizard_tiers_present(self):
-        assert "jinaai/jina-embeddings-v2-small-en" in TEXT_MODELS   # Fast
-        assert "intfloat/multilingual-e5-base" in TEXT_MODELS        # Balanced (new)
-        assert "Qwen/Qwen3-Embedding-0.6B" in TEXT_MODELS            # Quality
-
-    def test_tier_dims(self):
-        assert TEXT_MODELS["jinaai/jina-embeddings-v2-small-en"]["dim"] == 512
-        assert TEXT_MODELS["intfloat/multilingual-e5-base"]["dim"] == 768
-        assert TEXT_MODELS["Qwen/Qwen3-Embedding-0.6B"]["dim"] == 1024

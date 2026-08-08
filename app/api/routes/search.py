@@ -45,24 +45,14 @@ async def search_tracks(
     if service is None:
         raise HTTPException(status_code=503, detail="Search service unavailable — is Qdrant running?")
 
-    # Sanitize legacy "null"/"undefined" string values coming from a frontend
-    # that ever wrote ``localStorage.setItem('text_model', null)`` (Web Storage
-    # API stringifies non-string values).
-    requested_model = req.text_model
-    if requested_model in ("", "null", "undefined", "None"):
-        requested_model = None
-
     # Phase D-soft: derive collection from JWT user; ignore client-supplied value.
     derived = derive_collection_for_user(current_user)
 
-    # Phase B: no more db.lyrics_db.* mutation. The stateless engine resolves the
-    # model per call — SearchService._resolve_model_name reads collection_settings
-    # (the indexed model) → user.text_model_name → default. An explicit
-    # requested_model still wins as a per-request override.
+    # ``req.text_model`` is accepted and ignored — there is one embedding model
+    # app-wide now, and rejecting the field would 422 every cached PWA client.
     hits = await service.search(
         query=req.query,
         mode=req.mode,
-        text_model=requested_model,
         filters=req.filters,
         limit=req.limit,
         collection_name=derived,
@@ -99,15 +89,17 @@ async def catalog_search(
 
 @router.get("/models/text")
 async def list_text_models():
-    """Return catalog of available text embedding models."""
-    return ModelRegistry.list_text_models()
+    """The pinned text embedding model. A list of one, kept as a list so
+    existing clients keep parsing it."""
+    return {ModelRegistry.TEXT_MODEL_NAME: {"dim": ModelRegistry.VECTOR_DIM}}
 
 
 @router.get("/models/loaded")
 async def get_loaded_models():
-    """Return names of currently loaded text models."""
+    """Report whether the text model is resident yet."""
     return {
-        "text_models": ModelRegistry.get_loaded_text_models(),
+        "text_models": ([ModelRegistry.TEXT_MODEL_NAME]
+                        if ModelRegistry.is_text_model_loaded() else []),
         "clap_available": ModelRegistry.is_clap_available(),
     }
 

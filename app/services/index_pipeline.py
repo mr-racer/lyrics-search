@@ -45,13 +45,8 @@ _LYRICS_WORKERS = 8
 class IndexPipeline:
     """Run CLAP/dense encoding concurrently with the online-lyrics fetch."""
 
-    def __init__(self, engine, *, model_name: str | None = None):
-        """``model_name`` — text embedding model for THIS batch (None → the
-        engine's default). Passed through to a per-run IndexingService instead
-        of being written onto the shared engine (two concurrent jobs used to
-        race on ``engine.model_name`` / ``engine.collection_name``)."""
+    def __init__(self, engine):
         self.engine = engine
-        self.model_name = model_name
 
     async def run(
         self,
@@ -78,11 +73,9 @@ class IndexPipeline:
         Returns ``(upserted_count, track_ids_by_key)``.
         """
         loop = asyncio.get_running_loop()
-        # Per-run service: collection + model are instance-local, so parallel
-        # jobs for different accounts can't cross-contaminate via the engine.
-        indexing = IndexingService(
-            self.engine, collection_name=collection_name, model_name=self.model_name,
-        )
+        # Per-run service: the collection is instance-local, so parallel jobs
+        # for different accounts can't cross-contaminate via the shared engine.
+        indexing = IndexingService(self.engine, collection_name=collection_name)
 
         filtered, clap_paths = await loop.run_in_executor(None, indexing.prepare, tracks)
         if not filtered:
