@@ -124,15 +124,29 @@ Point ids are `uuid5(NAMESPACE, f"{kind}:{row_id}")`. Required, not cosmetic:
 `song_facts.id` and `artist_facts.id` are independent autoincrement sequences and
 would otherwise collide.
 
-The collection is **shared, not per-account** — a deliberate exception to
-`derive_collection_for_user`. `song_facts` / `artist_facts` are themselves a shared
-pool keyed by slug, with per-account visibility in `fact_visibility`
-(`metadata_db.py:90-98`); duplicating the same embedding into every account's
-collection would buy nothing. Isolation is preserved by filtering *results* against
-`fact_visibility` in SQLite — a few dozen rows per query.
+The collection is **per-account**: `facts_acct_{id}`, derived by
+`facts_index.collection_for()` from the caller's own `acct_{id}`, and dropped
+wherever that collection is dropped (both admin wipe paths; `reset_instance`
+already drops everything).
 
-Filled lazily in a background task on first use for a subject, so there is no new
-indexing stage, no backfill gate, and nothing to keep in sync offline.
+A single shared collection was built first and rejected. The argument for it was
+that `song_facts` / `artist_facts` are themselves a shared pool keyed by slug
+(`metadata_db.py:90-98`) — two accounts owning the same song share the literal
+rows — so per-account embeddings duplicate work. The argument against won:
+partitioning makes cross-account isolation *structural*, where the shared design
+made it depend on remembering to apply a `fact_visibility` filter to every query
+path, forever. A duplicated embedding for a shared song is cheap; a leak is not.
+
+The `fact_visibility` check survives, with a different job: it is now about
+**staleness inside one account**. Deleting a track removes its visibility row but
+leaves its vectors, and a fact about a song the user deleted should not surface as
+a neighbour.
+
+**Filled on demand, never in bulk.** The subject of a question is embedded on the
+spot (~80 short texts) and nothing else is. A bounded background warm-up was built
+and removed: it turned the first question about any track into a long GPU job for
+facts nobody had asked about — much worse still when the model lands on the CPU.
+The pool therefore fills as the listener explores.
 
 **BM25 and RRF run in Python**, over the retrieved candidate set, in
 `app/services/facts_retrieval.py`. Not Qdrant's server-side BM25: that needs the
@@ -199,7 +213,7 @@ cannot be read.
 | 2 | ModelRegistry: fp16, GPU-resident, `max_seq_length`, `is_query`, reaper deleted |
 | 3 | Paragraph dedup fixed and consumed |
 | 4 | `scripts/migrate_dense.py` |
-| 5 | `facts` collection: vectors only, UUID5 ids, lazy fill |
+| 5 | `facts_acct_{id}` collections: vectors only, UUID5 ids, on-demand fill, dropped with the account |
 | 6 | `facts_retrieval.py`: dense + BM25(PRF) + RRF, texts from SQLite, visibility filter |
 | 7 | Explain branch reworked |
 | 8 | Prompts |
@@ -215,7 +229,11 @@ functions. New coverage:
 - BM25: scoring and the pseudo-relevance expansion, on a fixed toy corpus
 - RRF fusion: rank ordering from two known input rankings
 - `_verify`: rejects an answer citing only the main fact
-- retrieval: `fact_visibility` filtering removes out-of-account rows
+- retrieval: `fact_visibility` filtering removes rows for deleted tracks
+- partitioning: each account resolves to its own facts collection; dropping one
+  account leaves another's memo and collection alone
+- device: fp16 is requested on GPU and not on CPU, an old `sentence-transformers`
+  without `model_kwargs` still loads, and the chosen device is reported
 
 Frontend changes are verified by `npm --prefix frontend run build`.
 

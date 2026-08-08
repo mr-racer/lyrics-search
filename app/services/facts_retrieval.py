@@ -8,9 +8,9 @@ material that actually explained a fact was thrown away before the model saw it.
 
 Three parts:
 
-**Dense** — ``facts_index`` searches the shared ``facts`` collection and returns
-ids. Qwen3-Embedding is multilingual, so a Russian query matches English facts
-directly; this is where the cross-language work happens.
+**Dense** — ``facts_index`` searches this account's ``facts_acct_{id}``
+collection and returns ids. Qwen3-Embedding is multilingual, so a Russian query
+matches English facts directly; this is where the cross-language work happens.
 
 **BM25** — a plain single-field BM25 over the retrieved candidates, computed
 here. It contributes precision on names, numbers and titles, which dense
@@ -25,9 +25,11 @@ an LLM call to translate, the query is expanded with the strongest terms from
 the top dense hits, which are already in the documents' own language. Standard
 PRF, and free.
 
-Access control lives here, not in ``facts_index``: the fact pool and its vector
-index are shared across accounts, so every hit from outside the subject is
-checked against ``fact_visibility`` before it can reach a prompt.
+Cross-account isolation is structural — the vector index is partitioned per
+account, so this module cannot reach another account's facts even by mistake.
+The ``fact_visibility`` check that remains is about STALENESS, not leakage: a
+track the user deleted leaves its vectors behind in their own facts collection,
+and a fact about a song they no longer own should not turn up as a neighbour.
 """
 
 from __future__ import annotations
@@ -193,7 +195,14 @@ def _join_texts(hits: list[dict]) -> list[dict]:
 
 def _drop_invisible(hits: list[dict], collection_name: str,
                     always_allow: set[str]) -> list[dict]:
-    """Keep hits the account may see. ``always_allow`` is the subject itself."""
+    """Drop hits for entities this account no longer owns.
+
+    Not a cross-account gate — the index is per-account, so nothing from another
+    account can be here. This catches the account's OWN stale vectors: deleting
+    a track removes its ``fact_visibility`` row but leaves the embeddings, and a
+    neighbour fact about a song the user deleted has no business in an answer.
+    ``always_allow`` is the subject itself, which needs no lookup.
+    """
     from app.resources.metadata_db import MetadataDB
 
     by_kind: dict[str, set[str]] = {}
@@ -209,7 +218,7 @@ def _drop_invisible(hits: list[dict], collection_name: str,
                 kind, sorted(slugs), collection_name)
         except Exception:
             # Fail CLOSED: an unreadable visibility table must not turn into
-            # "show everything from every account".
+            # "surface everything, including what was deleted".
             logger.warning("[facts_retrieval] visibility check failed", exc_info=True)
             visible[kind] = set()
 
@@ -221,11 +230,14 @@ def retrieve(qdrant, *, collection_name: str, query: str,
              subject_slugs: dict[str, str], limit: int = 12) -> list[dict]:
     """Facts most likely to explain ``query``, best first.
 
+    ``collection_name`` is the caller's own account collection (``acct_{id}``)
+    — the facts collection is derived from it, never passed in.
+
     ``subject_slugs`` maps kind → slug for what the question is about, e.g.
     ``{"song": "queen-bohemian-rhapsody", "artist": "queen"}``. Those entities
     are indexed on the spot if needed and searched with priority; the rest of
-    the pool is searched too, because the explanation for a sample or a cover
-    routinely lives in the *other* song's facts.
+    this account's pool is searched too, because the explanation for a sample or
+    a cover routinely lives in the *other* song's facts.
 
     Returns ``[{"text", "source", "category", "kind", "row_id", "slug",
     "dense_score", "scope"}]``. Never raises — an unreachable Qdrant or a cold
@@ -241,7 +253,7 @@ def retrieve(qdrant, *, collection_name: str, query: str,
     own = {slug for slug in subject_slugs.values() if slug}
     for kind, slug in subject_slugs.items():
         if slug:
-            facts_index.index_entity(qdrant, kind, slug)
+            facts_index.index_entity(qdrant, collection_name, kind, slug)
 
     try:
         query_vector = ModelRegistry.encode_text(query, is_query=True)
@@ -249,9 +261,11 @@ def retrieve(qdrant, *, collection_name: str, query: str,
         logger.warning("[facts_retrieval] query encode failed", exc_info=True)
         return []
 
-    subject_hits = (facts_index.search(qdrant, query_vector, limit=SUBJECT_LIMIT,
-                                       slugs=sorted(own)) if own else [])
-    global_hits = facts_index.search(qdrant, query_vector, limit=GLOBAL_LIMIT)
+    subject_hits = (facts_index.search(qdrant, collection_name, query_vector,
+                                       limit=SUBJECT_LIMIT, slugs=sorted(own))
+                    if own else [])
+    global_hits = facts_index.search(qdrant, collection_name, query_vector,
+                                     limit=GLOBAL_LIMIT)
 
     seen: set[tuple[str, int]] = set()
     merged: list[dict] = []

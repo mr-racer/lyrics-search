@@ -17,7 +17,10 @@ Device policy (2026-08):
 - CLAP lives on the CPU permanently: loaded once (startup preload), never
   moved, never unloaded. It does not compete with the text model for VRAM.
 - ``FORCE_CPU=1`` puts the text model on the CPU in fp32 (fp16 on CPU is
-  slower than fp32 for most ops, and unsupported for some).
+  slower than fp32 for most ops, and unsupported for some). Any OTHER reason
+  for landing on the CPU is logged as a warning and reported by
+  ``ModelRegistry.text_device()`` — a silent CPU fallback on a GPU box is the
+  failure that looks like success.
 
 DbClient:
 - __enter__/__exit__
@@ -48,7 +51,32 @@ import logging
 logger = logging.getLogger(__name__)
 
 _FORCE_CPU = os.environ.get("FORCE_CPU", "").strip().lower() in ("1", "true", "yes", "on")
-_GPU_DEVICE = None if (_FORCE_CPU or not torch.cuda.is_available()) else torch.device("cuda")
+
+
+def _resolve_device() -> tuple[str, str]:
+    """``(device, reason)`` — decided at LOAD time, not at import time.
+
+    Import happens very early (``app/__init__.py`` pulls this module in), and a
+    CUDA probe that early can answer "no" in setups where the runtime is
+    perfectly fine a moment later. More importantly: falling back to the CPU
+    used to be silent, and a silent CPU fallback on a GPU box is the difference
+    between 50 ms and several seconds per encode. Say which, and why.
+    """
+    if _FORCE_CPU:
+        return "cpu", "FORCE_CPU is set"
+    try:
+        if torch.cuda.is_available():
+            return "cuda", f"cuda:0 = {torch.cuda.get_device_name(0)}"
+        return "cpu", ("torch.cuda.is_available() is False — no CUDA runtime "
+                       "visible to this process (in Docker: is the container "
+                       "started with GPU access?)")
+    except Exception as e:  # noqa: BLE001 — a broken CUDA install must not crash startup
+        return "cpu", f"CUDA probe raised {type(e).__name__}: {e}"
+
+
+# What the model actually loaded onto, for /models/loaded and the logs.
+_device_in_use: str | None = None
+_device_reason: str = "not loaded yet"
 CLAP_WEIGHTS_PATH = Path(__file__).parent.parent.parent / "weights" / "music_audioset_epoch_15_esc_90.14.pt"
 CLAP_WEIGHTS_URL = "https://huggingface.co/lukewys/laion_clap/resolve/main/music_audioset_epoch_15_esc_90.14.pt"
 
@@ -110,16 +138,32 @@ class ModelRegistry:
             if cls._text_model is not None:
                 return cls._text_model
 
-            device = "cuda" if _GPU_DEVICE is not None else "cpu"
+            global _device_in_use, _device_reason
+            device, _device_reason = _resolve_device()
+            if device == "cpu" and not _FORCE_CPU:
+                # Loud on purpose: this is the failure that looks like success.
+                logger.warning(
+                    "[ModelRegistry] falling back to CPU — %s. Every search, "
+                    "chat turn and fact lookup will encode on the CPU.",
+                    _device_reason,
+                )
+
             # fp16 halves the resident footprint (~1.2 GB instead of ~2.4) and
             # costs nothing measurable on embeddings. On CPU it would be slower
             # than fp32, and some ops have no CPU half kernel — so fp32 there.
-            model_kwargs = {"torch_dtype": torch.float16} if device == "cuda" else None
-            model = SentenceTransformer(
-                TEXT_MODEL_NAME, device=device,
-                **({"model_kwargs": model_kwargs} if model_kwargs else {}),
-            )
+            kwargs = {}
+            if device == "cuda":
+                kwargs["model_kwargs"] = {"torch_dtype": torch.float16}
+            try:
+                model = SentenceTransformer(TEXT_MODEL_NAME, device=device, **kwargs)
+            except TypeError:
+                # Older sentence-transformers has no model_kwargs. fp32 on the
+                # GPU still beats fp16 on the CPU by a wide margin.
+                logger.warning("[ModelRegistry] model_kwargs unsupported — "
+                               "loading fp32 on %s", device)
+                model = SentenceTransformer(TEXT_MODEL_NAME, device=device)
             model.max_seq_length = MAX_SEQ_LENGTH
+            _device_in_use = device
 
             dim = model.get_sentence_embedding_dimension()
             if dim != VECTOR_DIM:
@@ -134,9 +178,10 @@ class ModelRegistry:
 
             cls._text_model = (model, VECTOR_NAME, VECTOR_DIM)
             logger.info(
-                "[ModelRegistry] text model '%s' loaded (dim=%d, %s, %s, max_seq=%d)",
-                TEXT_MODEL_NAME, dim, device,
-                "fp16" if model_kwargs else "fp32", MAX_SEQ_LENGTH,
+                "[ModelRegistry] text model '%s' loaded (dim=%d, device=%s [%s], "
+                "%s, max_seq=%d)",
+                TEXT_MODEL_NAME, dim, device, _device_reason,
+                "fp16" if kwargs else "fp32", MAX_SEQ_LENGTH,
             )
             return cls._text_model
 
@@ -160,6 +205,13 @@ class ModelRegistry:
     @classmethod
     def is_text_model_loaded(cls) -> bool:
         return cls._text_model is not None
+
+    @classmethod
+    def text_device(cls) -> dict:
+        """What the text model actually runs on, and why. Surfaced by
+        ``GET /search/models/loaded`` so a silent CPU fallback is visible
+        without reading the startup log."""
+        return {"device": _device_in_use, "reason": _device_reason}
 
     # ── CLAP ──
 

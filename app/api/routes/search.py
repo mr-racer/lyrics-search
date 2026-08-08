@@ -100,6 +100,9 @@ async def get_loaded_models():
     return {
         "text_models": ([ModelRegistry.TEXT_MODEL_NAME]
                         if ModelRegistry.is_text_model_loaded() else []),
+        # Which device the text model actually landed on, and why. A silent CPU
+        # fallback on a GPU box is the failure that looks like success.
+        "text_device": ModelRegistry.text_device(),
         "clap_available": ModelRegistry.is_clap_available(),
     }
 

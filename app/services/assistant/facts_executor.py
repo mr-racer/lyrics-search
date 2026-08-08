@@ -1214,15 +1214,11 @@ async def _retrieve_evidence(subject: dict, focus_fact: str, *, qdrant,
     Lyrics, the catalog line and gems are left out too: they are exactly what
     used to turn an explanation into «входит в альбом X, жанр Pop».
     """
-    from app.services import facts_index, facts_retrieval
+    from app.services import facts_retrieval
 
     slugs = _subject_slugs(subject)
     if not slugs:
         return []
-    # Cross-entity retrieval only sees what has been embedded, so trickle the
-    # rest of this account's pool in behind the answer. Bounded and one thread
-    # per collection — the first question must not wait on the whole library.
-    facts_index.warm_in_background(qdrant, collection_name)
     try:
         hits = await asyncio.to_thread(
             facts_retrieval.retrieve, qdrant,

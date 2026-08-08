@@ -18,9 +18,15 @@ if not os.environ.get("MUSIX_LIVE_STACK"):
     sys.modules.setdefault("laion_clap", types.ModuleType("laion_clap"))
 
     _torch_stub = types.ModuleType("torch")
-    _torch_stub.cuda = types.SimpleNamespace(is_available=lambda: False)
+    _torch_stub.cuda = types.SimpleNamespace(
+        is_available=lambda: False,
+        get_device_name=lambda i=0: "stub",
+    )
     _torch_stub.device = lambda x: "cpu"
     _torch_stub.Tensor = object  # dummy for scipy is_torch_array check
+    # ModelRegistry names this when it asks for an fp16 GPU load. A sentinel is
+    # enough — nothing under the stubs ever runs a kernel.
+    _torch_stub.float16 = "float16"
     sys.modules.setdefault("torch", _torch_stub)
 
     _st_stub = types.ModuleType("sentence_transformers")

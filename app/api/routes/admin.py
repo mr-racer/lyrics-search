@@ -89,6 +89,11 @@ def wipe_account_library(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to delete collection: {e}")
 
+    # The account's fact vectors live in their own collection alongside it;
+    # leaving them behind would hand them to whoever takes this id next.
+    from app.services import facts_index
+    facts_index.drop_collection(qdrant, target_collection)
+
     # ── Best-effort cache cleanups — never fail the wipe over a stale file ──
     # 1. top-pairs JSON cache (keyed by collection name).
     try:
@@ -171,6 +176,8 @@ def delete_account(
             db_client.qdrant.delete_collection(collection)
         except Exception as e:
             logger.warning("[admin] delete: qdrant drop failed for %s: %s", collection, e)
+        from app.services import facts_index
+        facts_index.drop_collection(db_client.qdrant, collection)
 
     # 3. SQL — atomic. Surfaces as 500 on failure rather than orphaning files.
     MetadataDB.delete_account_data(user_id, collection)

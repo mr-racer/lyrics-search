@@ -1468,16 +1468,6 @@ class MetadataDB:
         return out
 
     @classmethod
-    def get_visible_fact_slugs(cls, kind: str, collection_name: str) -> List[str]:
-        """Every slug of ``kind`` this collection can see — the work list for
-        the background warm-up of the facts vector index."""
-        conn = cls._connect()
-        return [r[0] for r in conn.execute(
-            "SELECT slug FROM fact_visibility WHERE kind = ? AND collection_name = ?",
-            (kind, collection_name),
-        )]
-
-    @classmethod
     def get_all_song_facts_by_collection(cls, collection_name: str) -> Dict[str, str]:
         """Return ``{song_slug: joined_facts_text}`` for a collection."""
         conn = cls._connect()

@@ -194,6 +194,72 @@ class TestPointIds:
         assert facts_index.point_id("song", 42) == facts_index.point_id("song", 42)
 
 
+# ── per-account partitioning ─────────────────────────────────────────────────
+
+
+class TestPerAccountCollections:
+    def test_each_account_gets_its_own_facts_collection(self):
+        a = facts_index.collection_for("acct_alice")
+        b = facts_index.collection_for("acct_bob")
+        assert a == "facts_acct_alice"
+        assert a != b
+
+    def test_search_targets_the_callers_own_collection(self, monkeypatch):
+        """Isolation is structural: this module cannot name another account's
+        collection, because the name is derived from the caller's own."""
+        seen = {}
+
+        class _Q:
+            def query_points(self, **kw):
+                seen.update(kw)
+                return type("R", (), {"points": []})()
+
+        monkeypatch.setattr(
+            "app.resources.model_registry.ModelRegistry.VECTOR_NAME", "text",
+            raising=False)
+        facts_index.search(_Q(), "acct_alice", [0.1, 0.2], limit=5)
+        assert seen["collection_name"] == "facts_acct_alice"
+
+    def test_dropping_an_account_drops_its_facts_collection(self, monkeypatch):
+        dropped = []
+
+        class _Q:
+            def delete_collection(self, name):
+                dropped.append(name)
+
+        facts_index.drop_collection(_Q(), "acct_alice")
+        assert dropped == ["facts_acct_alice"]
+
+    def test_dropping_forgets_only_that_accounts_memo(self):
+        facts_index.forget_cache()
+        facts_index._indexed.update({
+            ("acct_alice", "song", "s1"),
+            ("acct_bob", "song", "s1"),
+        })
+
+        class _Q:
+            def delete_collection(self, name):
+                pass
+
+        facts_index.drop_collection(_Q(), "acct_alice")
+        assert ("acct_alice", "song", "s1") not in facts_index._indexed
+        assert ("acct_bob", "song", "s1") in facts_index._indexed
+        facts_index.forget_cache()
+
+    def test_a_missing_collection_makes_the_drop_a_no_op(self):
+        class _Q:
+            def delete_collection(self, name):
+                raise RuntimeError("404 collection not found")
+
+        facts_index.drop_collection(_Q(), "acct_ghost")  # must not raise
+
+    def test_there_is_no_bulk_background_indexer(self):
+        """Facts are embedded on demand, for the subject asked about — a bulk
+        sweep turned the first question into minutes of GPU work."""
+        assert not hasattr(facts_index, "warm_collection")
+        assert not hasattr(facts_index, "warm_in_background")
+
+
 # ── the entry point degrades instead of raising ──────────────────────────────
 
 

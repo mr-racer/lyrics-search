@@ -9,6 +9,7 @@ import threading
 import time
 
 import numpy as np
+import torch
 
 from app.resources.model_registry import (
     MAX_SEQ_LENGTH,
@@ -115,6 +116,52 @@ class TestLoading:
         assert ModelRegistry.is_text_model_loaded() is False
         ModelRegistry.get_text_model()
         assert ModelRegistry.is_text_model_loaded() is True
+        _reset_registry()
+
+    def test_the_device_and_its_reason_are_reported(self, monkeypatch):
+        """A silent CPU fallback on a GPU box is the failure that looks like
+        success, so the choice has to be inspectable without the startup log."""
+        _install_fake(monkeypatch)
+        monkeypatch.setattr("app.resources.model_registry._resolve_device",
+                            lambda: ("cpu", "no CUDA runtime visible"))
+        ModelRegistry.get_text_model()
+        assert ModelRegistry.text_device() == {
+            "device": "cpu", "reason": "no CUDA runtime visible"}
+        _reset_registry()
+
+    def test_gpu_load_asks_for_fp16(self, monkeypatch):
+        _install_fake(monkeypatch)
+        monkeypatch.setattr("app.resources.model_registry._resolve_device",
+                            lambda: ("cuda", "cuda:0 = fake"))
+        ModelRegistry.get_text_model()
+        kwargs = _FakeSentenceTransformer.last_kwargs
+        assert kwargs["device"] == "cuda"
+        assert kwargs["model_kwargs"]["torch_dtype"] is torch.float16
+        _reset_registry()
+
+    def test_cpu_load_stays_fp32(self, monkeypatch):
+        """fp16 on the CPU is slower than fp32 and some ops have no half kernel."""
+        _install_fake(monkeypatch)
+        monkeypatch.setattr("app.resources.model_registry._resolve_device",
+                            lambda: ("cpu", "FORCE_CPU is set"))
+        ModelRegistry.get_text_model()
+        assert "model_kwargs" not in _FakeSentenceTransformer.last_kwargs
+        _reset_registry()
+
+    def test_an_old_sentence_transformers_still_loads(self, monkeypatch):
+        """No model_kwargs support: fp32 on the GPU still beats fp16 on the CPU."""
+        class _NoKwargs(_FakeSentenceTransformer):
+            def __init__(self, name, device=None, **kwargs):
+                if kwargs:
+                    raise TypeError("unexpected keyword argument 'model_kwargs'")
+                super().__init__(name, device=device)
+
+        _reset_registry()
+        monkeypatch.setattr("app.resources.model_registry.SentenceTransformer", _NoKwargs)
+        monkeypatch.setattr("app.resources.model_registry._resolve_device",
+                            lambda: ("cuda", "cuda:0 = fake"))
+        model, _, _ = ModelRegistry.get_text_model()
+        assert model is not None
         _reset_registry()
 
 
