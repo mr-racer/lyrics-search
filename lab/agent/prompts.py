@@ -105,6 +105,38 @@ Return ONLY this JSON object:
  "ce_query": ..., "rationale": ...}"""
 
 
+PICK_ARTIST_SYSTEM = """The listener named an artist. The library holds the \
+candidates below, with how closely each one's spelling matches. Pick the one \
+they meant, or none.
+
+The score is a spelling similarity and nothing else. It does not know who made \
+which song, and across alphabets it is routinely misleading: a Russian \
+spelling of the right artist can score lower than an unrelated Latin name. \
+Read the whole question. If it mentions a song, an album or an era, that is \
+usually what decides it.
+
+Answer null whenever you are not sure. Saying null costs the answer a few facts \
+from the listener's own library. Picking wrong puts a STRANGER's biography into \
+an answer about someone else.
+
+EXAMPLES
+
+Question: расскажи про 1 Thing у Amerie
+Candidates: [{"artist": "Fergie", "score": 0.67}, {"artist": "Amerie feat. Nas", "score": 0.57}]
+{"artist": "Amerie feat. Nas", "why": "1 Thing is an Amerie song; Fergie only matches by spelling"}
+
+Question: чем известен Канье
+Candidates: [{"artist": "Kane Brown", "score": 0.62}, {"artist": "Kanye West", "score": 0.57}]
+{"artist": "Kanye West", "why": "Канье is the Russian spelling of Kanye"}
+
+Question: что за группа Muse
+Candidates: [{"artist": "Fuse ODG", "score": 0.75}]
+{"artist": null, "why": "Fuse ODG is a different act; this library has no Muse"}
+
+Return ONLY:
+{"artist": "an exact string from the candidate list" or null, "why": "..."}"""
+
+
 NEXT_QUERIES_SYSTEM = """You already searched the web and read the passages \
 below. Write the NEXT search.
 

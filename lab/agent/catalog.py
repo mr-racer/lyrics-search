@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
 from lab.agent.models import MatchMode, ResolvedTrack, TrackRef
@@ -37,8 +38,41 @@ logger = logging.getLogger(__name__)
 # resolver, where it was tuned against real "best of" listicles.
 FUZZY_TITLE_MIN = 0.75
 FUZZY_ARTIST_MIN = 0.75
-# An artist candidate below this never reaches the model.
+# An artist candidate below this never reaches the SHORTLIST. It is not, and
+# must not become, a threshold for deciding identity on its own — measured on
+# this library, "Muse" scores 0.750 against "Fuse" (wrong) while "канье" scores
+# 0.571 against "Kanye West" (right), so no single number separates the two.
+# Whoever consumes the shortlist decides; this only bounds its length.
 ARTIST_SCORE_MIN = 0.5
+
+_FEAT_MARKERS = ("feat", "ft", "featuring", "with", "vs", "x", "и")
+
+
+@dataclass(slots=True)
+class Subject:
+    """Who and what a question is about, once the library has had its say.
+
+    ``how`` records which tier answered, because the tiers differ in kind and
+    not just in confidence:
+
+    ``song-row``     the named song is in the library and its row carries the
+                     artist slug — no name matching happened at all
+    ``exact-name``   the artist name matched a library name exactly (folded)
+    ``participant``  the query is the leading participant of a collab tag
+                     ("Amerie" of "Amerie feat. Nas") — structure, not similarity
+    ``shortlist``    genuinely ambiguous; ``candidates`` is for a judgement call
+    ``none``         nothing plausible. No facts, and that is the right answer.
+    """
+
+    song_slug: Optional[str] = None
+    artist_slug: Optional[str] = None
+    artist_name: Optional[str] = None
+    how: str = "none"
+    candidates: list[dict] = field(default_factory=list)
+
+    @property
+    def resolved(self) -> bool:
+        return bool(self.song_slug or self.artist_slug)
 
 
 def _artist_contains(query: str, value: str) -> bool:
@@ -58,6 +92,11 @@ class LibraryCatalog:
         self.by_title: dict[str, list[dict]] = {}
         self.artists: list[str] = []
         self.artist_slugs: dict[str, str] = {}     # folded name -> slug
+        self.artist_names: dict[str, str] = {}     # slug -> display name
+        # Rows of the `songs` table: the only place that pairs a song slug with
+        # its artist slug, which is what lets a named song answer "whose facts?"
+        # without any name matching at all.
+        self.song_rows: list[dict] = []
         self.degraded = False
         self._load()
 
@@ -118,9 +157,23 @@ class LibraryCatalog:
             self._load_degraded()
 
         self._load_artists()
-        logger.info("[catalog] %s: %d tracks, %d artists%s", self.collection_name,
-                    len(self.songs), len(self.artists),
-                    " (degraded)" if self.degraded else "")
+        self._load_song_rows()
+        logger.info("[catalog] %s: %d tracks, %d artists, %d song rows%s",
+                    self.collection_name, len(self.songs), len(self.artists),
+                    len(self.song_rows), " (degraded)" if self.degraded else "")
+
+    def _load_song_rows(self) -> None:
+        try:
+            with self._connect() as conn:
+                rows = conn.execute(
+                    "SELECT slug, title, artist_slug FROM songs "
+                    "WHERE collection_name = ?", (self.collection_name,)).fetchall()
+        except Exception:
+            logger.warning("[catalog] songs table unreadable", exc_info=True)
+            return
+        self.song_rows = [{"slug": r["slug"], "title": r["title"] or "",
+                           "artist_slug": r["artist_slug"] or "",
+                           "key": title_key(r["title"] or "")} for r in rows]
 
     def _load_degraded(self) -> None:
         """Titles from ``songs`` when the track mirror has not been backfilled."""
@@ -145,34 +198,36 @@ class LibraryCatalog:
             self.by_title.setdefault(title_key(song["title"]), []).append(song)
 
     def _load_artists(self) -> None:
-        names: dict[str, str] = {}
+        slugs: dict[str, str] = {}      # folded name -> slug
+        display: dict[str, str] = {}    # folded name -> name as written
+        names_by_slug: dict[str, str] = {}
         try:
             with self._connect() as conn:
                 for r in conn.execute(
                         "SELECT slug, name FROM artists WHERE collection_name = ?",
                         (self.collection_name,)).fetchall():
-                    if r["name"]:
-                        names[fold(r["name"])] = r["slug"]
+                    if not r["name"]:
+                        continue
+                    slugs[fold(r["name"])] = r["slug"]
+                    display[fold(r["name"])] = r["name"]
+                    names_by_slug.setdefault(r["slug"], r["name"])
         except Exception:
             logger.warning("[catalog] artists table unreadable", exc_info=True)
 
-        # Tags carry spellings the artists table does not (features, casing),
-        # so both sources feed the candidate list the model is shown.
+        # Tags carry spellings the artists table does not ("Amerie feat. Nas"
+        # where the table only has the collab as one row, or nothing at all),
+        # so both sources feed the shortlist.
         for song in self.songs:
-            if song["artist"]:
-                names.setdefault(fold(song["artist"]), song.get("artist_slug") or "")
-        self.artist_slugs = names
-        by_fold = {fold(s["artist"]): s["artist"] for s in self.songs if s["artist"]}
-        try:
-            with self._connect() as conn:
-                for r in conn.execute(
-                        "SELECT name FROM artists WHERE collection_name = ?",
-                        (self.collection_name,)).fetchall():
-                    if r["name"]:
-                        by_fold.setdefault(fold(r["name"]), r["name"])
-        except Exception:
-            pass
-        self.artists = sorted(by_fold.values(), key=str.lower)
+            artist = song.get("artist") or ""
+            if not artist:
+                continue
+            key = fold(artist)
+            slugs.setdefault(key, song.get("artist_slug") or "")
+            display.setdefault(key, artist)
+
+        self.artist_slugs = slugs
+        self.artist_names = names_by_slug
+        self.artists = sorted(display.values(), key=str.lower)
 
     # ── resolution ────────────────────────────────────────────────────────
 
@@ -180,10 +235,11 @@ class LibraryCatalog:
         return len(self.songs)
 
     def resolve_artist(self, query: str, limit: int = 5) -> list[dict]:
-        """How the user spelled an artist → what the library actually calls them.
+        """A SHORTLIST of who the user might mean, best first.
 
-        Transliteration-aware, so «канье» finds "Kanye West". Returns at most
-        ``limit`` candidates with a score, best first.
+        Transliteration-aware, so «канье» reaches "Kanye West". This is a
+        suggestion generator, not an identity decision — see
+        :meth:`resolve_subject` for the difference and why it matters.
         """
         if not (query or "").strip() or not self.artists:
             return []
@@ -194,11 +250,72 @@ class LibraryCatalog:
                 for score, name in scored[:limit] if score >= ARTIST_SCORE_MIN]
 
     def artist_slug_for(self, name: str) -> Optional[str]:
-        slug = self.artist_slugs.get(fold(name or ""))
+        """The slug of an artist we are SURE about, or None."""
+        return self._artist_identity(name)[0]
+
+    def _artist_identity(self, name: str) -> tuple[Optional[str], str]:
+        """``(slug, how)`` for an artist we are sure about, else ``(None, ...)``.
+
+        Three tiers, all of them structural:
+
+        1. **exact-name** — the folded name matches a library name outright.
+        2. **transliteration** — the two are EQUAL once Cyrillic is mapped
+           across ("Эминем" and "Eminem"). Not a fuzzy tier: it is the same
+           string under the same normalisation the exact tier uses. Uniqueness
+           is required, because two library artists collapsing onto one query
+           is an ambiguity, not a match.
+        3. **participant** — the query is the leading participant of a collab
+           tag: "Amerie" of "Amerie feat. Nas", "RAYE" of "RAYE, Regard". That
+           is parsing the tag, not measuring similarity.
+
+        There is deliberately NO similarity tier. One is what made "Amerie"
+        resolve to "Fergie" (they score 0.667) and load a stranger's facts —
+        an identity decided silently by a spelling distance, somewhere being
+        wrong is invisible. And no threshold could have saved it: on this
+        library "Muse"/"Fuse" scores 0.750 while «канье»/"Kanye West", which is
+        right, scores 0.571. Ambiguity goes to :meth:`resolve_subject`, which
+        hands it to something able to actually judge.
+        """
+        folded = fold(name or "")
+        if not folded:
+            return None, "none"
+
+        slug = self.artist_slugs.get(folded)
         if slug:
-            return slug
-        best = self.resolve_artist(name, limit=1)
-        return (best[0]["slug"] or None) if best else None
+            return slug, "exact-name"
+
+        equal = [n for n in self.artists if similar(name, n) >= 1.0]
+        if len(equal) == 1:
+            slug = self.artist_slugs.get(fold(equal[0]))
+            if slug:
+                logger.info("[catalog] %r is %r across alphabets", name, equal[0])
+                return slug, "transliteration"
+
+        # Shortest first: "Amerie feat. Nas" beats "Amerie feat. Nas & Eve" as
+        # the reading of a bare "Amerie".
+        participants = sorted(
+            (n for n in self.artist_slugs if self._is_leading_participant(folded, n)),
+            key=len)
+        for candidate in participants:
+            found = self.artist_slugs.get(candidate)
+            if found:
+                logger.info("[catalog] %r resolved to %r as the leading participant",
+                            name, candidate)
+                return found, "participant"
+        return None, "none"
+
+    @staticmethod
+    def _is_leading_participant(folded_query: str, folded_candidate: str) -> bool:
+        """True when the candidate tag STARTS with the query as whole tokens.
+
+        The separator has to be a real one — a feature marker or nothing — so
+        that "Kanye" does not claim "Kanye Wester" while "Kanye West" does
+        claim "Kanye West, Jay-Z".
+        """
+        if not folded_candidate.startswith(folded_query + " "):
+            return False
+        rest = folded_candidate[len(folded_query):].split()
+        return bool(rest) and rest[0] in _FEAT_MARKERS
 
     def song_slug_for(self, title: str, artist: Optional[str] = None) -> Optional[str]:
         """The ``song_facts.song_slug`` of a track, looked up rather than derived.
@@ -208,31 +325,56 @@ class LibraryCatalog:
         three ``_slugify`` variants in the app are not interchangeable. The
         ``songs`` table already stores the answer.
         """
-        key = title_key(title)
-        if not key:
-            return None
-        try:
-            with self._connect() as conn:
-                rows = conn.execute(
-                    "SELECT slug, title, artist_slug FROM songs "
-                    "WHERE collection_name = ?", (self.collection_name,)).fetchall()
-        except Exception:
-            logger.warning("[catalog] songs lookup failed", exc_info=True)
-            return None
+        return self.resolve_subject(song=title, artist=artist).song_slug
 
-        artist_slug = self.artist_slug_for(artist) if artist else None
-        best: Optional[tuple[float, str]] = None
-        for r in rows:
-            if title_key(r["title"] or "") != key:
-                continue
-            score = 1.0
-            if artist_slug and r["artist_slug"]:
-                score += 1.0 if r["artist_slug"] == artist_slug else 0.0
-            elif artist:
-                score += similar(artist, r["artist_slug"] or "")
-            if best is None or score > best[0]:
-                best = (score, r["slug"])
-        return best[1] if best else None
+    def resolve_subject(self, *, song: Optional[str] = None,
+                        artist: Optional[str] = None) -> Subject:
+        """Who a question is about — structure first, a shortlist as last resort.
+
+        The order is what matters. A named song that the library has answers
+        the artist question outright: its row in ``songs`` carries the artist
+        slug, so no name is compared to any other name and no wrong artist is
+        reachable. Only when there is no such row does the artist's name get
+        looked at, and only when THAT is ambiguous does anyone have to judge.
+        """
+        artist_slug, artist_how = (self._artist_identity(artist) if artist
+                                   else (None, "none"))
+
+        if song and self.song_rows:
+            key = title_key(song)
+            matches = [r for r in self.song_rows if r["key"] == key] if key else []
+            if artist_slug:
+                narrowed = [r for r in matches if r["artist_slug"] == artist_slug]
+                matches = narrowed or matches
+            distinct = {r["artist_slug"] for r in matches}
+            if len(matches) == 1 or (matches and len(distinct) == 1):
+                row = matches[0]
+                return Subject(song_slug=row["slug"],
+                               artist_slug=row["artist_slug"] or artist_slug,
+                               artist_name=self.artist_names.get(row["artist_slug"]),
+                               how="song-row")
+            if len(distinct) > 1:
+                # The same title by several artists in this library. The name
+                # the user gave did not separate them, so someone must choose.
+                return Subject(
+                    how="shortlist",
+                    candidates=[{"artist": self.artist_names.get(s, s), "slug": s,
+                                 "score": 1.0,
+                                 "song_slug": next(r["slug"] for r in matches
+                                                   if r["artist_slug"] == s)}
+                                for s in sorted(distinct)])
+
+        if artist_slug:
+            return Subject(artist_slug=artist_slug,
+                           artist_name=self.artist_names.get(artist_slug) or artist,
+                           how=artist_how)
+
+        if artist:
+            candidates = self.resolve_artist(artist)
+            if candidates:
+                return Subject(how="shortlist", candidates=candidates)
+
+        return Subject(how="none")
 
     def resolve_tracks(self, refs: Iterable[TrackRef],
                        *, max_fuzzy: int = 150) -> tuple[list[ResolvedTrack], list[TrackRef]]:

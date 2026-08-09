@@ -192,3 +192,113 @@ class TestSongSlug:
 
     def test_an_unknown_song_has_no_slug(self, catalog):
         assert catalog.song_slug_for("Not In Here", "Kanye West") is None
+
+
+@pytest.fixture
+def collab_db(tmp_path):
+    """A library shaped like the one that produced the Amerie/Fergie bug: the
+    artist is only ever tagged as a collaboration, and a similarly-spelled
+    stranger is present."""
+    path = tmp_path / "collab.db"
+    conn = sqlite3.connect(path)
+    conn.execute("""CREATE TABLE track_metadata (
+        collection_name TEXT, track_id TEXT, title TEXT, artist TEXT,
+        artists TEXT, artist_slugs TEXT, primary_artist_slug TEXT,
+        album TEXT, year INTEGER)""")
+    conn.execute("CREATE TABLE artists (slug TEXT, name TEXT, collection_name TEXT)")
+    conn.execute("CREATE TABLE songs (slug TEXT, title TEXT, artist_slug TEXT, "
+                 "collection_name TEXT)")
+    rows = [("a1", "1 Thing", "Amerie feat. Nas", "amerie"),
+            ("f1", "Big Girls Don't Cry", "Fergie", "fergie"),
+            ("e1", "Hurt", "Nine Inch Nails", "nine-inch-nails"),
+            ("c1", "Hurt", "Johnny Cash", "johnny-cash")]
+    for track_id, title, artist, slug in rows:
+        conn.execute("INSERT INTO track_metadata VALUES (?,?,?,?,?,?,?,?,?)",
+                     (COLLECTION, track_id, title, artist, None, None, slug, "", 2005))
+        conn.execute("INSERT INTO songs VALUES (?,?,?,?)",
+                     (f"{slug}-{title.lower().replace(' ', '-')}", title, slug,
+                      COLLECTION))
+    # Note: NO plain "Amerie" row here — only the collab tag and Fergie.
+    conn.execute("INSERT INTO artists VALUES ('fergie','Fergie',?)", (COLLECTION,))
+    conn.execute("INSERT INTO artists VALUES ('nine-inch-nails','Nine Inch Nails',?)",
+                 (COLLECTION,))
+    conn.execute("INSERT INTO artists VALUES ('johnny-cash','Johnny Cash',?)",
+                 (COLLECTION,))
+    conn.commit()
+    conn.close()
+    return str(path)
+
+
+class TestSubjectResolution:
+    """Identity is decided by structure. Where structure runs out, nobody
+    guesses silently — the ambiguity is handed on."""
+
+    def test_a_named_song_answers_the_artist_question_outright(self, collab_db):
+        """The bug that started this: "Amerie" scores 0.667 against "Fergie"
+        and only 0.571 against "Amerie feat. Nas". No similarity is consulted
+        at all when the song is in the library — the row carries the slug."""
+        cat = LibraryCatalog(collab_db, COLLECTION)
+        subject = cat.resolve_subject(song="1 Thing", artist="Amerie")
+        assert subject.how == "song-row"
+        assert subject.artist_slug == "amerie"
+        assert subject.song_slug == "amerie-1-thing"
+
+    def test_a_bare_collab_tag_resolves_by_participant(self, collab_db):
+        cat = LibraryCatalog(collab_db, COLLECTION)
+        subject = cat.resolve_subject(artist="Amerie")
+        assert subject.how == "participant"
+        assert subject.artist_slug == "amerie"
+
+    def test_a_stranger_is_never_picked_silently(self, collab_db):
+        """Fergie outscores every real candidate for "Ameria". The old code
+        took her; this one refuses and says so."""
+        cat = LibraryCatalog(collab_db, COLLECTION)
+        assert cat.artist_slug_for("Ameria") is None
+
+    def test_transliteration_is_treated_as_exact(self, catalog):
+        """Not a fuzzy tier — the strings are EQUAL once Cyrillic is mapped, so
+        no model call is needed to be sure."""
+        subject = catalog.resolve_subject(artist="МГМТ")
+        assert subject.how == "transliteration"
+        assert subject.artist_slug == "mgmt"
+
+    def test_a_near_miss_across_alphabets_goes_to_the_shortlist(self, catalog):
+        """«Радиохед» scores 0.941 against "Radiohead" — very likely right, but
+        "Muse"/"Fuse" scores 0.750 while «канье»/"Kanye West" scores 0.571, so
+        no threshold separates likely from wrong. Someone has to judge."""
+        subject = catalog.resolve_subject(artist="Радиохед")
+        assert subject.how == "shortlist"
+        assert subject.candidates[0]["artist"] == "Radiohead"
+
+    def test_an_unmatched_name_becomes_a_shortlist_not_a_pick(self, collab_db):
+        cat = LibraryCatalog(collab_db, COLLECTION)
+        subject = cat.resolve_subject(artist="Ferji")
+        assert subject.how == "shortlist"
+        assert not subject.resolved
+        assert any(c["artist"] == "Fergie" for c in subject.candidates)
+
+    def test_one_title_by_two_artists_is_an_ambiguity(self, collab_db):
+        """"Hurt" is in this library twice. Guessing which one the listener
+        meant would load the wrong song's facts half the time."""
+        cat = LibraryCatalog(collab_db, COLLECTION)
+        subject = cat.resolve_subject(song="Hurt")
+        assert subject.how == "shortlist"
+        assert {c["artist"] for c in subject.candidates} == {"Nine Inch Nails",
+                                                             "Johnny Cash"}
+        assert all(c["song_slug"] for c in subject.candidates)
+
+    def test_the_artist_disambiguates_a_shared_title(self, collab_db):
+        cat = LibraryCatalog(collab_db, COLLECTION)
+        subject = cat.resolve_subject(song="Hurt", artist="Johnny Cash")
+        assert subject.how == "song-row"
+        assert subject.artist_slug == "johnny-cash"
+
+    def test_nothing_named_resolves_to_nothing(self, collab_db):
+        cat = LibraryCatalog(collab_db, COLLECTION)
+        assert cat.resolve_subject().how == "none"
+
+    def test_a_leading_prefix_that_is_not_a_participant_is_refused(self, collab_db):
+        """"Fer" is a prefix of "Fergie" as a string, but not a participant of
+        it as a tag — the separator has to be a real one."""
+        cat = LibraryCatalog(collab_db, COLLECTION)
+        assert cat.artist_slug_for("Fer") is None

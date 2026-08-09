@@ -42,6 +42,7 @@ from lab.agent.reasons import clean_reason
 from lab.agent.retrieval import HybridRetriever, ModelHub
 from lab.agent.retrieval.facts import FactsRetriever, SqliteFactSource
 from lab.agent.sources import SearchSources, rerank_hits
+from lab.websearch_lab import fold
 
 logger = logging.getLogger(__name__)
 
@@ -121,29 +122,69 @@ class Assistant:
             out.extend(self.chunker.split_page(page, start_id=start_id + len(out)))
         return out
 
-    def subject_facts(self, plan: Plan, query: str) -> list:
-        """The subject's own facts, ranked. Empty when there is no library."""
+    async def subject_facts(self, plan: Plan, message: str, query: str) -> list:
+        """The subject's own facts, ranked. Empty when the subject is unclear.
+
+        Empty is a perfectly good outcome. The web branch answers either way,
+        and loading the wrong artist's biography is a worse failure than
+        loading none: it is invisible, and it makes the answer confidently
+        about someone else.
+        """
         if self.facts is None or self.catalog is None:
             return []
-        artist = plan.filters.artist
-        song = plan.filters.song
+        artist, song = plan.filters.artist, plan.filters.song
         if not artist and not song:
             return []
 
-        artist_name = None
-        if artist:
-            candidates = self.catalog.resolve_artist(artist, limit=1)
-            artist_name = candidates[0]["artist"] if candidates else artist
-        artist_slug = self.catalog.artist_slug_for(artist_name or "") if artist_name else None
-        song_slug = self.catalog.song_slug_for(song, artist_name) if song else None
-        if not artist_slug and not song_slug:
+        subject = self.catalog.resolve_subject(song=song, artist=artist)
+        if subject.how == "shortlist":
+            subject = await self._pick_from_shortlist(subject, message)
+        self.sink.put("subject", how=subject.how, artist=subject.artist_slug,
+                      song=subject.song_slug)
+        if not subject.resolved:
+            logger.info("[assistant] no confident subject for artist=%r song=%r "
+                        "— answering from the web alone", artist, song)
             return []
 
-        self.sink.put("facts", artist=artist_slug, song=song_slug)
-        found = self.facts.retrieve(query, song_slug=song_slug,
-                                    artist_slug=artist_slug)
+        found = await asyncio.to_thread(
+            self.facts.retrieve, query,
+            song_slug=subject.song_slug, artist_slug=subject.artist_slug)
         self.sink.put("facts_done", kept=len(found))
         return found
+
+    async def _pick_from_shortlist(self, subject, message: str):
+        """Let the model choose between candidates code could not separate.
+
+        The same division of labour as everywhere else: code builds the list
+        (the model never sees the catalog and so cannot invent a name), the
+        model judges, and code checks the answer against the list before
+        acting on it. The model is worth asking here because it has what the
+        similarity score structurally lacks — it knows that "1 Thing" is an
+        Amerie song, and no spelling distance ever will.
+        """
+        from lab.agent.catalog import Subject
+        from lab.agent.prompts import PICK_ARTIST_SYSTEM
+
+        listing = [{"artist": c["artist"], "score": c.get("score")}
+                   for c in subject.candidates]
+        self.sink.put("disambiguate", candidates=[c["artist"] for c in listing])
+        raw = await self.llm.ask_json([
+            {"role": "system", "content": PICK_ARTIST_SYSTEM},
+            {"role": "user",
+             "content": f"Question: {message}\nCandidates: {listing}"},
+        ], required=("artist",))
+
+        picked = as_str((raw or {}).get("artist"), 160)
+        chosen = next((c for c in subject.candidates
+                       if fold(c["artist"]) == fold(picked)), None) if picked else None
+        if chosen is None:
+            logger.info("[assistant] shortlist unresolved (model said %r)", picked)
+            return Subject(how="none", candidates=subject.candidates)
+        logger.info("[assistant] shortlist resolved to %r: %s", chosen["artist"],
+                    as_str((raw or {}).get("why"), 120))
+        return Subject(song_slug=chosen.get("song_slug"),
+                       artist_slug=chosen.get("slug") or None,
+                       artist_name=chosen["artist"], how="model-pick")
 
 
 class _WebBranch:
@@ -227,7 +268,7 @@ class GeneralBranch(_WebBranch):
     """Questions about an artist, a song or an incident."""
 
     async def run(self, message: str, plan: Plan) -> GeneralResult:
-        facts = await asyncio.to_thread(self.agent.subject_facts, plan, plan.ce_query)
+        facts = await self.agent.subject_facts(plan, message, plan.ce_query)
 
         queries, ce_query = plan.web_queries, plan.ce_query
         answer, used, evidence = "", [], []

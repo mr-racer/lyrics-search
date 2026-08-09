@@ -431,6 +431,106 @@ class TestClarify:
         assert done["expansion"] == "Test Drive Unlimited 2"
 
 
+class TestSubjectDisambiguation:
+    """Layer 4: code builds the shortlist, the model judges, code checks the
+    judgement against the shortlist before acting on it."""
+
+    def _db_with_two_hurts(self, tmp_path):
+        path = tmp_path / "two.db"
+        conn = sqlite3.connect(path)
+        conn.execute("""CREATE TABLE track_metadata (
+            collection_name TEXT, track_id TEXT, title TEXT, artist TEXT,
+            artists TEXT, artist_slugs TEXT, primary_artist_slug TEXT,
+            album TEXT, year INTEGER)""")
+        conn.execute("CREATE TABLE artists (slug TEXT, name TEXT, collection_name TEXT)")
+        conn.execute("CREATE TABLE songs (slug TEXT, title TEXT, artist_slug TEXT, "
+                     "collection_name TEXT)")
+        conn.execute("""CREATE TABLE artist_facts (
+            id INTEGER, artist_slug TEXT, lang TEXT, fact TEXT, category TEXT,
+            source TEXT)""")
+        conn.execute("""CREATE TABLE song_facts (
+            id INTEGER, song_slug TEXT, lang TEXT, fact TEXT, category TEXT,
+            source TEXT)""")
+        for slug, name in (("nine-inch-nails", "Nine Inch Nails"),
+                           ("johnny-cash", "Johnny Cash")):
+            conn.execute("INSERT INTO artists VALUES (?,?,?)", (slug, name, COLLECTION))
+            conn.execute("INSERT INTO songs VALUES (?,?,?,?)",
+                         (f"{slug}-hurt", "Hurt", slug, COLLECTION))
+            conn.execute("INSERT INTO track_metadata VALUES (?,?,?,?,?,?,?,?,?)",
+                         (COLLECTION, slug, "Hurt", name, None, None, slug, "", 1994))
+        conn.execute("INSERT INTO song_facts VALUES (1,'johnny-cash-hurt','en',"
+                     "'Johnny Cash recorded Hurt in 2002 as a Nine Inch Nails cover.',"
+                     "'cover','songfacts.com')")
+        conn.execute("INSERT INTO song_facts VALUES (2,'nine-inch-nails-hurt','en',"
+                     "'Trent Reznor wrote Hurt for The Downward Spiral in 1994.',"
+                     "'origin','songfacts.com')")
+        conn.commit()
+        conn.close()
+        return str(path)
+
+    def _llm(self, pick):
+        return FakeLLM({
+            "You plan how to answer": {
+                "intent": "general", "song": "Hurt",
+                "web_queries": ["Hurt song"], "ce_query": "the song Hurt"},
+            "The listener named an artist": pick,
+            "You answer a music question": {
+                "answer": "Ответ.", "used": [1], "sufficient": True},
+            "You already searched": {"web_queries": []},
+        })
+
+    async def test_the_models_pick_selects_whose_facts_are_loaded(
+            self, monkeypatch, tmp_path):
+        db = self._db_with_two_hurts(tmp_path)
+        agent = _assistant(monkeypatch, db,
+                           llm=self._llm({"artist": "Johnny Cash",
+                                          "why": "the 2002 cover"}),
+                           sources={}, pages={})
+        result = await agent.run("расскажи про Hurt")
+        assert agent.sink.of("subject")[0]["how"] == "model-pick"
+        assert "Johnny Cash recorded Hurt" in result.evidence[0].text
+
+    async def test_a_pick_outside_the_shortlist_is_refused(
+            self, monkeypatch, tmp_path):
+        """The model can only choose from what code offered it. An invented
+        name means "unresolved", not "load whatever that is"."""
+        db = self._db_with_two_hurts(tmp_path)
+        agent = _assistant(monkeypatch, db,
+                           llm=self._llm({"artist": "Fergie", "why": "vibes"}),
+                           sources={}, pages={})
+        await agent.run("расскажи про Hurt")
+        assert agent.sink.of("subject")[0]["how"] == "none"
+
+    async def test_declining_costs_the_facts_and_nothing_else(
+            self, monkeypatch, tmp_path):
+        """Saying null loses a few library facts. Picking wrong would put a
+        stranger's song into the answer — so null is the cheaper mistake."""
+        db = self._db_with_two_hurts(tmp_path)
+        agent = _assistant(monkeypatch, db,
+                           llm=self._llm({"artist": None, "why": "not sure"}),
+                           sources={}, pages={})
+        result = await agent.run("расскажи про Hurt")
+        assert agent.sink.of("subject")[0]["how"] == "none"
+        assert not [e for e in result.evidence if e.kind == "fact"]
+
+    async def test_a_structural_match_never_reaches_the_model(
+            self, monkeypatch, db):
+        """One LLM call saved on every unambiguous subject, which is most of
+        them. "Эминем" is "Eminem" across alphabets — nothing to judge."""
+        llm = FakeLLM({
+            "You plan how to answer": {
+                "intent": "general", "artist": "Эминем",
+                "web_queries": ["Eminem"], "ce_query": "Eminem"},
+            "You answer a music question": {
+                "answer": "Ответ.", "used": [1], "sufficient": True},
+            "You already searched": {"web_queries": []},
+        })
+        agent = _assistant(monkeypatch, db, llm=llm, sources={}, pages={})
+        await agent.run("расскажи про Эминема")
+        assert "The listener named an artist" not in llm.calls
+        assert agent.sink.of("subject")[0]["artist"] == "eminem"
+
+
 class TestPlannerFailure:
     async def test_an_unusable_plan_ends_the_run_honestly(self, monkeypatch, db):
         agent = _assistant(monkeypatch, db, llm=FakeLLM({}), sources={}, pages={})
