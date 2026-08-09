@@ -88,9 +88,9 @@ class Assistant:
         self.sink.put("start", message=message)
         plan = await self.planner.plan(message)
         if plan is None:
-            return GeneralResult(
-                answer="", evidence=[], used=[], grounded=False, iterations=0,
-                notes=["planner returned nothing usable"])
+            why = self.planner.last_failure or "the planner returned nothing usable"
+            return GeneralResult(answer="", evidence=[], used=[], grounded=False,
+                                 iterations=0, notes=[f"no plan: {why}"])
 
         sources = SearchSources(self.cfg, self.sink)
         if plan.abbreviation is not None:

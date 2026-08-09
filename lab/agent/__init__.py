@@ -38,19 +38,31 @@ The shape of it:
 the package — it is the part meant to move into ``app/`` first.
 """
 
-from lab.agent.catalog import LibraryCatalog
+from lab.agent.catalog import LibraryCatalog, Subject
+from lab.agent.chunking import MarkdownChunker
 from lab.agent.config import AgentConfig
 from lab.agent.events import EventSink
+from lab.agent.extraction import TrackExtractor, structured_tracks
+from lab.agent.fetch import PageFetcher
+from lab.agent.llm import LLMClient
 from lab.agent.models import (Chunk, ClarifyRequest, Evidence, Filters,
                               GeneralResult, Page, Plan, PlaylistResult,
                               ResolvedTrack, SearchHit, TrackRef)
 from lab.agent.pipeline import Assistant
+from lab.agent.planner import Planner
 from lab.agent.retrieval import HybridRetriever, ModelHub
 from lab.agent.retrieval.facts import FactsRetriever, SqliteFactSource
+from lab.agent.sources import SearchSources, rerank_hits
 
 __all__ = [
-    "AgentConfig", "Assistant", "EventSink", "LibraryCatalog",
-    "HybridRetriever", "ModelHub", "FactsRetriever", "SqliteFactSource",
+    # the two you need for a normal run
+    "AgentConfig", "Assistant",
+    # the parts, for driving a stage at a time from a notebook
+    "EventSink", "HybridRetriever", "LLMClient", "LibraryCatalog",
+    "MarkdownChunker", "ModelHub", "PageFetcher", "Planner", "SearchSources",
+    "TrackExtractor", "FactsRetriever", "SqliteFactSource",
+    "rerank_hits", "structured_tracks",
+    # contracts
     "Chunk", "ClarifyRequest", "Evidence", "Filters", "GeneralResult", "Page",
-    "Plan", "PlaylistResult", "ResolvedTrack", "SearchHit", "TrackRef",
+    "Plan", "PlaylistResult", "ResolvedTrack", "SearchHit", "Subject", "TrackRef",
 ]

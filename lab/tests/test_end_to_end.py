@@ -532,9 +532,55 @@ class TestSubjectDisambiguation:
 
 
 class TestPlannerFailure:
+    """"No plan" has two causes with two different fixes, so the run must say
+    which one happened. They used to produce the same opaque note."""
+
     async def test_an_unusable_plan_ends_the_run_honestly(self, monkeypatch, db):
         agent = _assistant(monkeypatch, db, llm=FakeLLM({}), sources={}, pages={})
         result = await agent.run("что-нибудь")
         assert result.grounded is False
         assert result.answer == ""
         assert result.notes
+
+    async def test_an_unreachable_llm_says_so_with_the_endpoint(
+            self, monkeypatch, db):
+        """The failure the owner actually hit. "Nothing usable" sent them
+        looking at the planner; the endpoint is what they needed to see."""
+        class _Dead:
+            last_error = ("ConnectError: [Errno 111] Connection refused "
+                          "(POST http://192.168.0.168:8082/v1/chat/completions, "
+                          "model='gemma-4-12b')")
+            last_raw = ""
+
+            async def ask_json(self, messages, *, required=(), **kw):
+                return None
+
+        agent = _assistant(monkeypatch, db, llm=_Dead(), sources={}, pages={})
+        result = await agent.run("Песни из Test Drive Unlimited 2")
+        note = result.notes[0]
+        assert "did not answer" in note
+        assert "8082" in note and "Connection refused" in note
+        assert agent.sink.of("plan_failed")
+
+    async def test_a_talkative_llm_is_reported_differently(self, monkeypatch, db):
+        """Reachable, but answering in prose. Same empty result, opposite fix —
+        so the note quotes what it actually said."""
+        class _Chatty:
+            last_error = None
+            last_raw = "Sure! I can help you build that playlist."
+
+            async def ask_json(self, messages, *, required=(), **kw):
+                return None
+
+        agent = _assistant(monkeypatch, db, llm=_Chatty(), sources={}, pages={})
+        result = await agent.run("Песни из Test Drive Unlimited 2")
+        note = result.notes[0]
+        assert "not with a JSON object" in note
+        assert "Sure!" in note
+
+    async def test_an_out_of_list_intent_names_what_the_model_said(
+            self, monkeypatch, db):
+        llm = FakeLLM({"You plan how to answer": {"intent": "vibes"}})
+        agent = _assistant(monkeypatch, db, llm=llm, sources={}, pages={})
+        result = await agent.run("что-нибудь")
+        assert "vibes" in result.notes[0]

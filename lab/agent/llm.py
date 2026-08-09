@@ -85,6 +85,10 @@ class LLMClient:
         self.cfg = config or AgentConfig()
         self.calls = 0
         self.last_raw: str = ""
+        # Why the last call produced nothing. "Unreachable endpoint" and
+        # "answered with prose" both end as an empty result upstream, and they
+        # have completely different fixes — so the difference is kept.
+        self.last_error: Optional[str] = None
 
     async def chat(self, messages: list[dict], *,
                    temperature: Optional[float] = None,
@@ -100,6 +104,7 @@ class LLMClient:
             "max_tokens": max_tokens or self.cfg.llm_max_tokens,
         }
         self.calls += 1
+        self.last_error = None
         try:
             async with httpx.AsyncClient(timeout=self.cfg.llm_timeout) as client:
                 resp = await client.post(
@@ -108,15 +113,21 @@ class LLMClient:
                 resp.raise_for_status()
                 data = resp.json()
         except Exception as exc:  # noqa: BLE001 — an unreachable LLM is a normal state
-            logger.warning("[llm] call failed: %s: %s", type(exc).__name__, exc)
+            self.last_error = (f"{type(exc).__name__}: {exc} "
+                               f"(POST {self.cfg.llm_base_url}/chat/completions, "
+                               f"model={self.cfg.llm_model!r})")
+            logger.warning("[llm] call failed — %s", self.last_error)
             return ""
 
         try:
             text = data["choices"][0]["message"]["content"] or ""
         except (KeyError, IndexError, TypeError):
-            logger.warning("[llm] unexpected response shape: %.200s", data)
+            self.last_error = f"unexpected response shape: {str(data)[:200]}"
+            logger.warning("[llm] %s", self.last_error)
             return ""
         self.last_raw = text
+        if not text.strip():
+            self.last_error = "the model returned an empty message"
         return text
 
     async def ask_json(self, messages: list[dict], *,

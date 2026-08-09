@@ -194,17 +194,38 @@ class Planner:
         self.llm = llm
         self.cfg = config or AgentConfig()
         self.sink = sink
+        # Why the last plan attempt produced nothing, in words a human can act
+        # on. Read by the caller so the run's notes say "the LLM is
+        # unreachable" instead of "nothing usable".
+        self.last_failure: Optional[str] = None
 
     async def plan(self, message: str) -> Optional[Plan]:
         """One LLM call, then every field checked. None means "ask the user"."""
+        self.last_failure = None
         raw = await self.llm.ask_json(
             [{"role": "system", "content": PLAN_SYSTEM},
              {"role": "user", "content": message}],
             required=("intent",))
         if raw is None:
-            logger.warning("[planner] no plan came back")
+            transport = getattr(self.llm, "last_error", None)
+            self.last_failure = (
+                f"the LLM did not answer — {transport}" if transport else
+                "the LLM answered, but not with a JSON object carrying "
+                f"\"intent\" (last reply: {getattr(self.llm, 'last_raw', '')[:200]!r})")
+            logger.warning("[planner] %s", self.last_failure)
+            if self.sink is not None:
+                self.sink.put("plan_failed", why=self.last_failure)
             return None
-        return self.validate(raw, message)
+
+        plan = self.validate(raw, message)
+        if plan is None:
+            self.last_failure = (
+                f"the plan had no usable intent (model said "
+                f"{as_str(raw.get('intent'), 40)!r}, expected one of {INTENTS})")
+            logger.warning("[planner] %s", self.last_failure)
+            if self.sink is not None:
+                self.sink.put("plan_failed", why=self.last_failure)
+        return plan
 
     def validate(self, raw: dict, message: str) -> Optional[Plan]:
         intent = as_str(raw.get("intent"), 20).lower()
