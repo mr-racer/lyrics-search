@@ -80,13 +80,25 @@ class Chunk:
 
 @dataclass(slots=True)
 class TrackRef:
-    """A track a PAGE claims exists. Not yet anything in the library."""
+    """A track a PAGE claims exists. Not yet anything in the library.
+
+    The provenance fields are not decoration. A title lifted from a table under
+    "Other appearances" and one from "Soundtrack" are worth different things,
+    and the difference is invisible once both are just a string — which is how
+    a listicle's "you might also like" sidebar ends up in a playlist.
+    """
 
     title: str
     artist: Optional[str] = None
     year: Optional[int] = None
     source: SourceKind = "web"
     source_url: str = ""
+    # Heading path the claim was found under, e.g. "Discography > Singles".
+    section: str = ""
+    # The page's own title.
+    page_title: str = ""
+    # A few words either side, for a human or a model to judge by.
+    context: str = ""
 
 
 @dataclass(slots=True)
@@ -104,6 +116,11 @@ class ResolvedTrack:
     weight: float = 0.0
     sources: list[str] = field(default_factory=list)
     reason: Optional[str] = None
+    # Carried over from the claim that produced it, so the final triage pass
+    # can see WHERE a track came from and not just that it exists.
+    section: str = ""
+    page_title: str = ""
+    context: str = ""
 
 
 @dataclass(slots=True)

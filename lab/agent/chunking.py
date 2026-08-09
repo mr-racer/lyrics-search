@@ -101,6 +101,59 @@ def _size(parts: list[str]) -> int:
     return sum(len(p) for p in parts) + 2 * max(0, len(parts) - 1)
 
 
+def table_header(block: str) -> Optional[tuple[str, str, list[str]]]:
+    """``(header_row, separator_row, body_rows)`` if this block is a table.
+
+    The separator row is what makes a markdown table unambiguous — a run of
+    pipe-containing lines without one is just text.
+    """
+    lines = [ln for ln in block.split("\n") if ln.strip()]
+    if len(lines) < 3:
+        return None
+    header, separator = lines[0].strip(), lines[1].strip()
+    if not header.startswith("|") or not separator.startswith("|"):
+        return None
+    cells = [c.strip() for c in separator.strip("|").split("|")]
+    if not cells or not all(re.fullmatch(r":?-{2,}:?", c) for c in cells if c):
+        return None
+    return header, separator, [ln for ln in lines[2:] if ln.strip().startswith("|")]
+
+
+def split_table(block: str, *, max_chars: int) -> list[str]:
+    """Cut a long table into chunks that EACH carry the header row.
+
+    Without this, a 900-row discography becomes one oversized chunk or — worse,
+    once a cell happens to contain a full stop — a series of chunks where only
+    the first says what the columns are. The rest are grids of bare strings:
+    unreadable to a model and near-meaningless to an embedding, since the words
+    "Title" and "Year" are exactly what gives the numbers around them a sense.
+
+    Repeating the header costs a line per chunk and makes every one of them
+    self-describing.
+    """
+    parsed = table_header(block)
+    if parsed is None:
+        return []
+    header, separator, rows = parsed
+    prefix = f"{header}\n{separator}"
+    budget = max_chars - len(prefix) - 1
+    if budget <= 0:            # a header wider than the whole budget
+        return [block]
+
+    out: list[str] = []
+    current: list[str] = []
+    size = 0
+    for row in rows:
+        if current and size + len(row) + 1 > budget:
+            out.append(prefix + "\n" + "\n".join(current))
+            current, size = [], 0
+        current.append(row)
+        size += len(row) + 1
+    if current:
+        out.append(prefix + "\n" + "\n".join(current))
+    return out or [block]
+
+
 def pack_blocks(blocks: list[str], *, max_chars: int,
                 overlap: int = 1) -> list[str]:
     out: list[str] = []
@@ -111,6 +164,14 @@ def pack_blocks(blocks: list[str], *, max_chars: int,
             if cur:
                 out.append("\n\n".join(cur))
                 cur = []
+            # A table is cut by rows with the header repeated. Sentence
+            # splitting a table is what produced headerless fragments: a cell
+            # containing "Vol. 2" or "G.O.A.T." is a sentence boundary to the
+            # regex, and everything after it lost its columns.
+            pieces = split_table(block, max_chars=max_chars)
+            if pieces:
+                out.extend(pieces)
+                continue
             acc = ""
             for part in re.split(r"(?<=[.!?])\s+", block):
                 if len(acc) + len(part) > max_chars and acc:

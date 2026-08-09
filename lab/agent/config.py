@@ -124,6 +124,14 @@ class AgentConfig:
     min_yield_ratio: float = 0.6
     max_relaxations: int = 2
     fuzzy_title_threshold: float = 0.75
+    # Final pass: the model sees where each confirmed track was found (page,
+    # section, row) and returns the ids that actually answer the request.
+    # Nothing else in the pipeline can remove a track once it matched the
+    # library, and matching only proves the library HAS it — not that the page
+    # was offering it as an answer.
+    llm_triage: bool = True
+    # Below this there is nothing to triage; the whole list is the answer.
+    triage_min_candidates: int = 8
 
     # ── behaviour ─────────────────────────────────────────────────────────
     # What to do with an abbreviation the model expanded on its own. "auto"

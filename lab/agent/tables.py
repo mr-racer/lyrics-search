@@ -31,6 +31,7 @@ ARTIST_HEADERS = ("artist", "artists", "performer", "performed by", "performer(s
 YEAR_HEADERS = ("year", "released", "release", "release date", "date", "original release")
 
 # A cell that is only a number is a track/position number, not a title.
+_HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
 _NUMERIC_RE = re.compile(r"^\d{1,4}$")
 _YEAR_RE = re.compile(r"(1[89]\d{2}|20\d{2})")
 # Wikipedia leaves reference markers in cell text often enough to matter.
@@ -46,6 +47,10 @@ class Table:
     # eleventh" when deciding what to trust.
     position: int = 0
     caption: str = ""
+    # Heading path the table sits under: "Discography > Singles". The single
+    # most useful thing to know about a tracklist, because "Soundtrack" and
+    # "Other appearances" are different claims and the rows look identical.
+    section: str = ""
 
     @property
     def folded_header(self) -> list[str]:
@@ -71,13 +76,24 @@ def parse_markdown_tables(markdown: str) -> list[Table]:
     """
     tables: list[Table] = []
     lines = (markdown or "").split("\n")
+    stack: list[tuple[int, str]] = []
     i = 0
     while i < len(lines) - 1:
+        heading = _HEADING_RE.match(lines[i])
+        if heading:
+            level, text = len(heading.group(1)), heading.group(2).strip()
+            while stack and stack[-1][0] >= level:
+                stack.pop()
+            stack.append((level, text))
+            i += 1
+            continue
+
         header_line = lines[i].strip()
         sep_line = lines[i + 1].strip()
         if not (header_line.startswith("|") and _is_separator(sep_line)):
             i += 1
             continue
+        section = " > ".join(text for _, text in stack)
         header = _split_row(header_line)
         rows: list[list[str]] = []
         j = i + 2
@@ -87,7 +103,8 @@ def parse_markdown_tables(markdown: str) -> list[Table]:
                 rows.append(row)
             j += 1
         if header and rows:
-            tables.append(Table(header=header, rows=rows, position=len(tables)))
+            tables.append(Table(header=header, rows=rows, position=len(tables),
+                                section=section))
         i = j
     return tables
 
@@ -130,7 +147,7 @@ def _column_index(folded: list[str], candidates: tuple[str, ...]) -> Optional[in
 
 
 def tracks_from_table(table: Table, *, source: SourceKind = "wikipedia",
-                      source_url: str = "",
+                      source_url: str = "", page_title: str = "",
                       default_artist: Optional[str] = None) -> list[TrackRef]:
     """Rows of ``table`` as track references, or ``[]`` if it is not a tracklist.
 
@@ -167,19 +184,25 @@ def tracks_from_table(table: Table, *, source: SourceKind = "wikipedia",
             if m:
                 year = int(m.group(1))
 
+        # The whole row is the context here: the other columns are what tell a
+        # reader that this line is a chart position, a B-side or a remix.
+        context = " | ".join(_clean_value(c) for c in row if _clean_value(c))
         out.append(TrackRef(title=title, artist=artist, year=year,
-                            source=source, source_url=source_url))
+                            source=source, source_url=source_url,
+                            section=table.section, page_title=page_title,
+                            context=context[:200]))
     return out
 
 
 def tracks_from_markdown(markdown: str, *, source: SourceKind = "wikipedia",
-                         source_url: str = "",
+                         source_url: str = "", page_title: str = "",
                          default_artist: Optional[str] = None) -> list[TrackRef]:
     """Every tracklist row on the page, deduplicated on (title, artist)."""
     seen: set[tuple[str, str]] = set()
     out: list[TrackRef] = []
     for table in parse_markdown_tables(markdown):
         for ref in tracks_from_table(table, source=source, source_url=source_url,
+                                     page_title=page_title,
                                      default_artist=default_artist):
             key = (_fold_cell(ref.title), _fold_cell(ref.artist or ""))
             if key in seen:

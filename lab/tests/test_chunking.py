@@ -109,3 +109,54 @@ class TestChunker:
 
     def test_an_empty_document_yields_nothing(self):
         assert MarkdownChunker(AgentConfig()).split("") == []
+
+
+DISCOGRAPHY = ("| Title | Artist | Year |\n| --- | --- | --- |\n"
+               + "".join(f"| Song number {i} | Artist {i} | {1990 + i % 30} |\n"
+                         for i in range(120)))
+
+
+class TestTableChunks:
+    """A table cut without its header produces chunks that say nothing.
+
+    The words "Title" and "Year" are what give the strings and numbers under
+    them a meaning — to a reader and to an embedding alike. A fragment that
+    lost them is a grid of bare tokens.
+    """
+
+    def test_a_long_table_is_cut_by_rows(self):
+        pieces = pack_blocks([DISCOGRAPHY], max_chars=600)
+        assert len(pieces) > 1
+
+    def test_every_piece_carries_the_header_and_separator(self):
+        for piece in pack_blocks([DISCOGRAPHY], max_chars=600):
+            lines = piece.split("\n")
+            assert lines[0].startswith("| Title | Artist | Year |")
+            assert set(lines[1].replace("|", "").replace(" ", "")) <= {"-"}
+
+    def test_no_row_is_lost_or_duplicated(self):
+        rows = []
+        for piece in pack_blocks([DISCOGRAPHY], max_chars=600):
+            rows += [ln for ln in piece.split("\n")[2:] if ln.strip()]
+        assert len(rows) == 120
+        assert len(set(rows)) == 120
+
+    def test_a_cell_with_a_full_stop_no_longer_splits_the_table(self):
+        """"Vol. 2" and "G.O.A.T." are sentence boundaries to the old regex,
+        and everything after one lost its columns."""
+        table = ("| Title | Year |\n| --- | --- |\n"
+                 + "".join(f"| Vol. {i} G.O.A.T. edition | 20{i:02d} |\n"
+                           for i in range(60)))
+        for piece in pack_blocks([table], max_chars=400):
+            assert piece.startswith("| Title | Year |")
+
+    def test_a_short_table_stays_whole(self):
+        small = "| Title |\n| --- |\n| Kids |\n"
+        assert pack_blocks([small], max_chars=1200) == [small]
+
+    def test_the_chunker_keeps_the_heading_path_on_table_chunks(self):
+        doc = "# Artist\n\n## Discography\n\n" + DISCOGRAPHY
+        chunks = MarkdownChunker(AgentConfig(chunk_max_chars=600)).split(doc)
+        table_chunks = [c for c in chunks if c.body.startswith("| Title")]
+        assert len(table_chunks) > 1
+        assert all(c.text.startswith("Artist > Discography") for c in table_chunks)

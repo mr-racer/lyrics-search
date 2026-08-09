@@ -28,7 +28,7 @@ import logging
 import re
 from typing import Optional
 
-from lab.agent.catalog import LibraryCatalog
+from lab.agent.catalog import LibraryCatalog, filter_by_era
 from lab.agent.chunking import MarkdownChunker
 from lab.agent.clarify import AbbreviationResolver, ClarifyCallback
 from lab.agent.events import EventSink
@@ -38,7 +38,7 @@ from lab.agent.llm import LLMClient, as_str
 from lab.agent.models import (Chunk, Evidence, GeneralResult, Page, Plan,
                               PlaylistResult, ResolvedTrack, TrackRef)
 from lab.agent.planner import Planner, quote_work
-from lab.agent.prompts import ANSWER_SYSTEM, CURATE_SYSTEM
+from lab.agent.prompts import ANSWER_SYSTEM, CURATE_SYSTEM, TRIAGE_SYSTEM
 from lab.agent.reasons import clean_reason
 from lab.agent.retrieval import HybridRetriever, ModelHub
 from lab.agent.retrieval.facts import FactsRetriever, SqliteFactSource
@@ -445,6 +445,8 @@ class PlaylistBranch(_WebBranch):
             notes.append(f"relaxed the query (round {relaxations})")
 
         resolved, missing = self._resolve(claims, plan)
+        if self.cfg.llm_triage:
+            resolved = await self._triage(message, resolved, plan)
         resolved = resolved[:target]
         title, comment, resolved = await self._curate(message, resolved)
         self.sink.put("result", tracks=len(resolved), missing=len(missing))
@@ -479,16 +481,16 @@ class PlaylistBranch(_WebBranch):
                         existing.sources.append(source)
 
         out = list(merged.values())
-        era = plan.filters.era
-        if era:
-            lo, hi = era
-            before = len(out)
-            # A track with no year survives: the library not knowing when it
-            # came out is not evidence that it came out in the wrong decade.
-            out = [t for t in out if not t.year or lo <= int(t.year) <= hi]
-            if before != len(out):
-                self.sink.put("era_filter", range=era, dropped=before - len(out),
-                              kept=len(out))
+        before = len(out)
+        # Applied here, BEFORE anything reaches a model: an out-of-era track
+        # in the triage or curate context is context spent on a track that is
+        # going to be dropped anyway. A track with no year survives — the
+        # library not knowing when it came out is not evidence of the wrong
+        # decade.
+        out = filter_by_era(out, plan.filters.era)
+        if before != len(out):
+            self.sink.put("era_filter", range=plan.filters.era,
+                          dropped=before - len(out), kept=len(out))
 
         out.sort(key=lambda t: (-t.weight, t.match != "exact", t.title.lower()))
         return out, missing
@@ -520,6 +522,64 @@ class PlaylistBranch(_WebBranch):
             if relaxed and relaxed not in out:
                 out.append(relaxed)
         return out or None
+
+    async def _triage(self, message: str, tracks: list[ResolvedTrack],
+                      plan: Plan) -> list[ResolvedTrack]:
+        """Let the model drop what the page had for another reason.
+
+        Until now nothing could remove a track once it matched the library.
+        Matching only proves the library HAS it — not that the page was
+        offering it as an answer. A discography page's "Other appearances"
+        table, a listicle's sidebar and a chart-position grid all resolve just
+        as cleanly as the tracklist, and all of them end up in the playlist.
+
+        This is the one judgement code cannot make: whether a section heading
+        means "this belongs". So the model gets the provenance and returns IDs
+        only — it cannot add, rename or reorder, and an ID that was not offered
+        is discarded. If the call fails, everything stays; a broken triage must
+        not empty a playlist.
+        """
+        if len(tracks) < self.cfg.triage_min_candidates:
+            return tracks
+
+        keys = {f"T{i + 1}": t for i, t in enumerate(tracks)}
+        listing = []
+        for key, t in keys.items():
+            where = " · ".join(p for p in (t.page_title, t.section) if p)
+            line = f"{key}. {t.artist} — {t.title}"
+            if t.year:
+                line += f" ({t.year})"
+            if where:
+                line += f"\n     found under: {where}"
+            if t.context:
+                line += f"\n     row: {t.context[:160]}"
+            listing.append(line)
+
+        self.sink.put("triage", candidates=len(keys))
+        raw = await self.agent.llm.ask_json([
+            {"role": "system", "content": TRIAGE_SYSTEM},
+            {"role": "user",
+             "content": f"Request: {message}\n\nCandidates:\n" + "\n".join(listing)},
+        ], required=("keep",))
+        if raw is None:
+            logger.info("[playlist] triage unavailable — keeping all %d", len(tracks))
+            return tracks
+
+        kept_ids = [as_str(k, 8).upper() for k in (raw.get("keep") or [])
+                    if isinstance(k, (str, int))]
+        kept = [keys[k] for k in dict.fromkeys(kept_ids) if k in keys]
+        if not kept:
+            # An empty answer is far more likely to be a model failure than a
+            # verdict that nothing on the page was relevant.
+            logger.info("[playlist] triage kept nothing — ignoring it")
+            return tracks
+
+        dropped = len(tracks) - len(kept)
+        self.sink.put("triage_done", kept=len(kept), dropped=dropped,
+                      why=as_str(raw.get("dropped_because"), 160))
+        logger.info("[playlist] triage dropped %d/%d: %s", dropped, len(tracks),
+                    as_str(raw.get("dropped_because"), 160))
+        return kept
 
     async def _curate(self, message: str, tracks: list[ResolvedTrack]):
         """Order and describe. The model cannot add, remove or rename a track."""

@@ -206,3 +206,36 @@ class TestReasonGate:
 
     def test_a_non_string_is_dropped(self):
         assert clean_reason(None, title="a", artist="b") is None
+
+
+class TestEraFilter:
+    """Filtering is the point of extracting an era; a missing year is not
+    evidence of the wrong decade."""
+
+    def _tracks(self):
+        from lab.agent.models import ResolvedTrack
+        return [ResolvedTrack("a", "Old", "X", 1985, "exact"),
+                ResolvedTrack("b", "New", "X", 2021, "exact"),
+                ResolvedTrack("c", "Unknown", "X", None, "exact")]
+
+    def test_out_of_range_tracks_go(self):
+        from lab.agent.catalog import filter_by_era
+        kept = filter_by_era(self._tracks(), (2020, 2029))
+        assert {t.title for t in kept} == {"New", "Unknown"}
+
+    def test_a_track_without_a_year_always_survives(self):
+        from lab.agent.catalog import filter_by_era
+        kept = filter_by_era(self._tracks(), (1900, 1901))
+        assert [t.title for t in kept] == ["Unknown"]
+
+    def test_no_era_means_no_filtering(self):
+        from lab.agent.catalog import filter_by_era
+        assert len(filter_by_era(self._tracks(), None)) == 3
+
+    def test_it_works_on_claims_too(self):
+        """Same rule, applied to page claims before anything reaches a model."""
+        from lab.agent.catalog import filter_by_era
+        refs = [TrackRef(title="A", year=1999), TrackRef(title="B", year=2005),
+                TrackRef(title="C")]
+        kept = filter_by_era(refs, (2000, 2009))
+        assert {r.title for r in kept} == {"B", "C"}

@@ -105,3 +105,31 @@ class TestExtraction:
         table = parse_markdown_tables(SOUNDTRACK)[0]
         refs = tracks_from_table(table, source="fandom")
         assert all(r.source == "fandom" for r in refs)
+
+
+class TestProvenance:
+    """Where a row was found is what the final triage pass judges by."""
+
+    def test_the_heading_path_is_attached_to_every_row(self):
+        md = ("# Kanye West\n\n## Discography\n\n### Singles\n\n"
+              "| Title | Year |\n| --- | --- |\n| Power | 2010 |\n")
+        ref = tracks_from_markdown(md)[0]
+        assert ref.section == "Kanye West > Discography > Singles"
+
+    def test_tables_under_different_headings_keep_their_own(self):
+        md = ("## Soundtrack\n\n| Title |\n| --- |\n| Kids |\n\n"
+              "## Other appearances\n\n| Title |\n| --- |\n| Electric Feel |\n")
+        by_title = {r.title: r.section for r in tracks_from_markdown(md)}
+        assert by_title["Kids"] == "Soundtrack"
+        assert by_title["Electric Feel"] == "Other appearances"
+
+    def test_the_row_is_kept_as_context(self):
+        md = ("## Charts\n\n| Title | Peak | Year |\n| --- | --- | --- |\n"
+              "| Power | 24 | 2010 |\n")
+        ref = tracks_from_markdown(md)[0]
+        assert "24" in ref.context and "2010" in ref.context
+
+    def test_the_page_title_travels_with_the_row(self):
+        md = "| Title |\n| --- |\n| Kids |\n"
+        ref = tracks_from_markdown(md, page_title="TDU2 soundtrack")[0]
+        assert ref.page_title == "TDU2 soundtrack"

@@ -584,3 +584,91 @@ class TestPlannerFailure:
         agent = _assistant(monkeypatch, db, llm=llm, sources={}, pages={})
         result = await agent.run("что-нибудь")
         assert "vibes" in result.notes[0]
+
+
+class TestTriage:
+    """The last gate: matching the library proves the library HAS a track, not
+    that the page was offering it as an answer."""
+
+    WIKI = """# Kanye West discography
+
+## Singles
+
+| Title | Year |
+| --- | --- |
+| Runaway | 2010 |
+| Power | 2010 |
+
+## Other appearances
+
+| Title | Artist | Year |
+| --- | --- | --- |
+| Kids | MGMT | 2007 |
+"""
+
+    def _llm(self, triage):
+        return FakeLLM({
+            "You plan how to answer": {
+                "intent": "playlist", "artist": "Kanye West",
+                "web_queries": ["Kanye West singles"], "ce_query": "singles"},
+            "Pull song titles": {"tracks": []},
+            "Below are songs found on web pages": triage,
+            "You are finishing a playlist": {"title": "K", "comment": "",
+                                             "order": []},
+            "You already searched": {"web_queries": []},
+        })
+
+    def _agent(self, monkeypatch, db, triage, **cfg):
+        page = Page(url="https://wiki/kw", title="Kanye West discography",
+                    markdown=self.WIKI, source="wikipedia")
+        return _assistant(
+            monkeypatch, db, llm=self._llm(triage),
+            sources={"wikipedia": [SearchHit(url="https://wiki/kw", title="d",
+                                             snippet="", source="wikipedia",
+                                             rank=0)]},
+            pages={"https://wiki/kw": page}, **cfg)
+
+    async def test_the_model_can_drop_a_track_that_only_shared_the_page(
+            self, monkeypatch, db):
+        # Candidates are ordered by weight, then match, then title — so T1 is
+        # "Kids" (from Other appearances) and T2 is "Runaway" (from Singles).
+        agent = self._agent(monkeypatch, db,
+                            {"keep": ["T2"],
+                             "dropped_because": "Kids is an MGMT track listed "
+                                                "under Other appearances"},
+                            triage_min_candidates=1)
+        result = await agent.run("хиты Канье")
+        assert {t.title for t in result.tracks} == {"Runaway"}
+        assert agent.sink.of("triage_done")[0]["dropped"] == 1
+
+    async def test_an_id_the_model_invented_is_ignored(self, monkeypatch, db):
+        agent = self._agent(monkeypatch, db,
+                            {"keep": ["T1", "T99"]}, triage_min_candidates=1)
+        result = await agent.run("хиты Канье")
+        assert len(result.tracks) == 1
+
+    async def test_keeping_nothing_is_treated_as_a_model_failure(
+            self, monkeypatch, db):
+        """Far likelier than a genuine verdict that the whole page was junk —
+        and emptying the playlist on it would be the worst possible response."""
+        agent = self._agent(monkeypatch, db, {"keep": []},
+                            triage_min_candidates=1)
+        result = await agent.run("хиты Канье")
+        assert len(result.tracks) >= 2
+
+    async def test_a_short_list_skips_triage_entirely(self, monkeypatch, db):
+        """Nothing to triage when the whole list is the answer — and it saves
+        an LLM call on most runs."""
+        agent = self._agent(monkeypatch, db, {"keep": ["T1"]},
+                            triage_min_candidates=50)
+        result = await agent.run("хиты Канье")
+        assert not agent.sink.of("triage")
+        assert len(result.tracks) >= 2
+
+    async def test_provenance_reaches_the_resolved_track(self, monkeypatch, db):
+        agent = self._agent(monkeypatch, db, {"keep": ["T1", "T2", "T3"]},
+                            triage_min_candidates=1)
+        result = await agent.run("хиты Канье")
+        runaway = next(t for t in result.tracks if t.title == "Runaway")
+        assert runaway.section.endswith("Singles")
+        assert runaway.page_title == "Kanye West discography"

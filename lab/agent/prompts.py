@@ -187,6 +187,28 @@ Return ONLY:
 Empty list is a valid and useful answer."""
 
 
+TRIAGE_SYSTEM = """Below are songs found on web pages and confirmed to exist in \
+the listener's library. Some of them answer the request. Some were simply on \
+the same page.
+
+Your only job is to say which IDs belong. Return IDs, nothing else — you cannot \
+add a song, rename one, or reorder anything here.
+
+Judge by WHERE each one was found. The section and the surrounding row tell you \
+what the page was claiming:
+- a soundtrack table, a "Singles" discography row, an editorial playlist — these \
+are answers;
+- "Other appearances", "See also", "Related artists", a chart-position table, a \
+sidebar of recommendations, a list of an unrelated act's songs — these were on \
+the page for another reason.
+
+When the section does not settle it, keep the song. A thin playlist is a worse \
+failure than a slightly loose one, and the listener can skip a track.
+
+Return ONLY:
+{"keep": ["T1", "T4", ...], "dropped_because": "one short sentence"}"""
+
+
 CURATE_SYSTEM = """You are finishing a playlist. The tracks below are already \
 confirmed to exist in the listener's library — you cannot add to them, and you \
 cannot remove them by inventing reasons.

@@ -31,12 +31,32 @@ from lab.agent.tables import tracks_from_markdown
 
 logger = logging.getLogger(__name__)
 
-# An Apple playlist curated by anyone but Apple is a user playlist.
-_APPLE_CURATORS = ("apple music", "apple ")
+# Editorial playlists are credited to "Apple Music" plus a genre desk —
+# "Apple Music Alternative", "Apple Music Hip-Hop", or plain "Apple Music".
+# Anything else is somebody's personal playlist wearing the same URL shape.
+_EDITORIAL_AUTHOR = "apple music"
+# User-created playlist ids carry a `u-` marker. A hard reject on top of the
+# author check: it needs no parsing to have succeeded, so it still holds when
+# the page shape changes and the author comes back empty.
+_USER_PLAYLIST_PREFIX = "pl.u-"
+
+
+def is_editorial_playlist(playlist) -> bool:
+    """Whether an Apple playlist is curated by Apple rather than by a listener.
+
+    Both signals must agree, and they fail in opposite directions: the id
+    catches a user playlist whose author string is missing, the author catches
+    a curator that is neither Apple nor a listener (a label, a brand).
+    """
+    playlist_id = (getattr(playlist, "playlist_id", "") or "").lower()
+    if playlist_id.startswith(_USER_PLAYLIST_PREFIX):
+        return False
+    author = (getattr(playlist, "author", "") or "").strip().lower()
+    return author.startswith(_EDITORIAL_AUTHOR)
 
 
 def apple_tracks(page: Page) -> list[TrackRef]:
-    """Tracks from an Apple Music playlist page, or [] if it is not a verified one.
+    """Tracks from an Apple Music playlist page, or [] if it is not editorial.
 
     Re-fetches the raw HTML: the pipeline's markdown extraction throws away the
     embedded JSON this parser needs, and Apple pages render almost nothing as
@@ -52,10 +72,11 @@ def apple_tracks(page: Page) -> list[TrackRef]:
         logger.info("[extract] apple parse failed for %s", page.url, exc_info=True)
         return []
 
-    author = (playlist.author or "").lower()
-    if not any(author.startswith(c) for c in _APPLE_CURATORS):
-        logger.info("[extract] %s: skipping playlist by %r — not editorial",
-                    page.url, playlist.author)
+    if not is_editorial_playlist(playlist):
+        # Logged with the author, because "no tracks from Apple" and "the
+        # parser stopped finding the author" look identical from outside.
+        logger.info("[extract] %s: skipped — author=%r id=%r is not editorial",
+                    page.url, playlist.author, playlist.playlist_id)
         return []
 
     out: list[TrackRef] = []
@@ -78,6 +99,7 @@ def structured_tracks(page: Page, *,
     if page.source in ("wikipedia", "fandom"):
         return tracks_from_markdown(page.markdown, source=page.source,
                                     source_url=page.url,
+                                    page_title=page.title,
                                     default_artist=default_artist)
     return []
 

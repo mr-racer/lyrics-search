@@ -27,10 +27,14 @@ import json
 import logging
 import sqlite3
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from typing import Iterable, Optional
 
 from lab.agent.models import MatchMode, ResolvedTrack, TrackRef
-from lab.websearch_lab import fold, similar, title_key
+# _translit is private to websearch_lab but it is the same Cyrillic->Latin map
+# `similar` uses; the token index has to agree with the scorer or blocking
+# would hide exactly the cross-script matches the scorer exists to find.
+from lab.websearch_lab import _translit, fold, similar, title_key
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +94,13 @@ class LibraryCatalog:
         self.collection_name = collection_name or self._largest_collection()
         self.songs: list[dict] = []
         self.by_title: dict[str, list[dict]] = {}
+        # token -> songs containing it. Blocking: the fuzzy leg used to score
+        # every claim against every track in the library, recomputing the
+        # folded title key each time. On 5000 tracks and 900 claims that is
+        # ~20 seconds of SequenceMatcher; with the index it is a few
+        # milliseconds, because two titles with no token in common cannot be
+        # a fuzzy match anyway.
+        self.by_token: dict[str, list[dict]] = {}
         self.artists: list[str] = []
         self.artist_slugs: dict[str, str] = {}     # folded name -> slug
         self.artist_names: dict[str, str] = {}     # slug -> display name
@@ -156,11 +167,28 @@ class LibraryCatalog:
                 self.collection_name)
             self._load_degraded()
 
+        self._build_indexes()
         self._load_artists()
         self._load_song_rows()
         logger.info("[catalog] %s: %d tracks, %d artists, %d song rows%s",
                     self.collection_name, len(self.songs), len(self.artists),
                     len(self.song_rows), " (degraded)" if self.degraded else "")
+
+    def _build_indexes(self) -> None:
+        """Precompute what the matcher would otherwise recompute per comparison.
+
+        ``_key`` and ``_artist_fold`` are derived from the same functions the
+        matcher uses; doing it once at load turns the inner loop from "normalise
+        two strings, then score them" into "score them".
+        """
+        self.by_token = {}
+        for song in self.songs:
+            key = title_key(song.get("title") or "")
+            song["_key"] = key
+            song["_key_variants"] = _variants(key)
+            song["_artist_variants"] = _variants(fold(song.get("artist") or ""))
+            for token in _index_tokens(key):
+                self.by_token.setdefault(token, []).append(song)
 
     def _load_song_rows(self) -> None:
         try:
@@ -407,7 +435,9 @@ class LibraryCatalog:
                 # The library's own year wins: a listicle prints the year of
                 # the compilation it is plugging as often as the release year.
                 year=picked.get("year") or ref.year,
-                match=mode, sources=[ref.source]))
+                match=mode, sources=[ref.source],
+                section=ref.section, page_title=ref.page_title,
+                context=ref.context))
         return resolved, missing
 
     def _match_one(self, ref: TrackRef,
@@ -425,19 +455,41 @@ class LibraryCatalog:
             return None, "none"
 
         key = title_key(ref.title)
+        if not key:
+            return None, "none"
+
+        # Only titles sharing a token can be a fuzzy match, and the index knows
+        # which those are. Scanning the whole library instead was the three
+        # minutes this used to take on a 900-row discography page.
+        seen: set[int] = set()
+        pool: list[dict] = []
+        for token in _index_tokens(key):
+            for candidate in self.by_token.get(token, ()):
+                marker = id(candidate)
+                if marker not in seen:
+                    seen.add(marker)
+                    pool.append(candidate)
+        if not pool:
+            return None, "none"
+
+        # Folded once per claim, not once per comparison.
+        title_variants = _variants(key)
+        artist_variants = _variants(fold(ref.artist or "")) if ref.artist else ()
+
         best: Optional[tuple[float, dict]] = None
-        for candidate in self.songs:
-            ck = title_key(candidate.get("title") or "")
+        for candidate in pool:
+            ck = candidate.get("_key") or ""
             if not ck:
                 continue
-            title_score = similar(ref.title, candidate.get("title") or "")
-            title_ok = (key and ck and key in ck) or title_score >= FUZZY_TITLE_MIN
-            if not title_ok:
+            title_score = _ratio(title_variants, candidate["_key_variants"],
+                                 FUZZY_TITLE_MIN)
+            if not ((key in ck) or title_score >= FUZZY_TITLE_MIN):
                 continue
             artist_ok = (
                 not ref.artist
                 or _artist_contains(ref.artist, candidate.get("artist", ""))
-                or similar(ref.artist, candidate.get("artist") or "") >= FUZZY_ARTIST_MIN
+                or _ratio(artist_variants, candidate["_artist_variants"],
+                          FUZZY_ARTIST_MIN) >= FUZZY_ARTIST_MIN
             )
             if not artist_ok:
                 continue
@@ -452,6 +504,64 @@ class LibraryCatalog:
         return {"collection": self.collection_name, "tracks": len(self.songs),
                 "artists": len(self.artists), "degraded": self.degraded,
                 "years": (min(years), max(years)) if years else None}
+
+
+def _variants(folded: str) -> tuple[str, ...]:
+    """The folded string and its transliteration, deduplicated.
+
+    Precomputed per library track so the matcher never re-folds the same text
+    once per comparison — which is what ``similar()`` does internally, and what
+    made the fuzzy leg quadratic in practice.
+    """
+    return tuple({folded, _translit(folded)} - {""})
+
+
+def _ratio(a_variants: tuple[str, ...], b_variants: tuple[str, ...],
+           floor: float) -> float:
+    """Best similarity across the variant pairs, with a free early exit.
+
+    ``SequenceMatcher`` can never exceed ``2*min(len)/sum(len)``, so a pair
+    whose lengths differ enough is skipped without building a matcher at all.
+    """
+    best = 0.0
+    for a in a_variants:
+        for b in b_variants:
+            total = len(a) + len(b)
+            if not total:
+                continue
+            if 2.0 * min(len(a), len(b)) / total < floor:
+                continue
+            best = max(best, SequenceMatcher(None, a, b).ratio())
+            if best >= 1.0:
+                return best
+    return best
+
+
+def filter_by_era(items, era: Optional[tuple[int, int]], *,
+                  year=lambda item: item.year):
+    """Drop what the era rules out. Anything with no year survives.
+
+    Both halves matter. Filtering is the whole point of extracting an era; but
+    a missing year is not evidence of the wrong decade, and dropping year-less
+    tracks would quietly delete everything the library has no metadata for.
+    """
+    if not era:
+        return list(items)
+    low, high = era
+    return [item for item in items
+            if not year(item) or low <= int(year(item)) <= high]
+
+
+def _index_tokens(folded_key: str) -> set[str]:
+    """Tokens a title is indexed and looked up under.
+
+    Both the folded form and its transliteration, so a Cyrillic title still
+    lands in the same bucket as its Latin spelling — blocking must not hide the
+    cross-script matches the scorer exists to find.
+    """
+    tokens = set(folded_key.split())
+    tokens |= {_translit(t) for t in tokens}
+    return {t for t in tokens if t}
 
 
 def _json_list(raw) -> list[str]:
