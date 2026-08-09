@@ -18,6 +18,14 @@ ipynb на отдельной машине, обращаясь к LLM и SearXNG
 отдельной сессией), CLAP-фильтрация по стилю (LLM только извлекает стиль, ветку автор
 доделает сам), фронтенд.
 
+> **Поправка по ходу реализации (2026-08-09).** Изначально спека предполагала
+> корневой пакет `retrieval_core/`, общий для лабы и переписанного боевого
+> `app/services/facts_retrieval.py`. Владелец уточнил объём: прод трогаем только
+> сменой модели, новый ретрив фактов живёт в лабе. Поэтому переносимая часть
+> лежит в `lab/agent/retrieval/` (никаких импортов из остального `lab`),
+> а `app/services/facts_retrieval.py` и `facts_index.py` не тронуты. Ниже
+> Части 1 и 3 приведены к фактическому состоянию.
+
 ## Часть 1. Смена эмбеддера в проде
 
 Octen-Embedding-0.6B: **dim 1024** (совпадает с Qwen — геометрия коллекций не меняется),
@@ -68,17 +76,19 @@ lab/agent/
   clarify.py       расшифровка аббревиатур: гипотеза → пользователь → !wp → сдаёмся
   catalog.py       LibraryCatalog поверх SQLite track_metadata
   fetch.py         PageFetcher: websearch_lab.md() + кэш по URL + параллель
-  sources.py       SearxSource / WikipediaSource / AppleMusicSource / FandomSource
+  sources.py       SearchSources: web / wikipedia / apple / fandom + rerank_hits
   chunking.py      MarkdownChunker (context-aware, путь заголовков внутри чанка)
   tables.py        markdown-таблица → TrackRef по заголовкам колонок
-  extraction.py    TrackExtractor: структура сначала, LLM только для прозы
+  extraction.py    структура (Apple/таблицы) + TrackExtractor (LLM для прозы)
+  reasons.py       порт reason_gate: отсев причин-заглушек
   pipeline.py      Assistant + GeneralBranch + PlaylistBranch
   retrieval/       ← подпакет, который потом переносится в прод целиком
-    __init__.py    HybridRetriever
+    __init__.py    HybridRetriever (+ extend: доиндексация без переэмбеддинга)
+    types.py       Ranked, Fact — здесь, чтобы подпакет ни от кого не зависел
     hub.py         ModelHub: ленивые синглтоны dense / sparse / cross-encoder
     bm25.py        BM25Okapi своей реализацией (новая зависимость не нужна)
-    facts.py       FactsRetriever: факты субъекта из SQLite → ранжированный список
-lab/tests/         юнит-тесты чистой логики (запускать `pytest lab/tests`)
+    facts.py       FactSource + SqliteFactSource + FactsRetriever
+lab/tests/         141 тест чистой логики и проводки (запускать `pytest lab/tests`)
 ```
 
 `retrieval/` не импортирует ничего из остального `lab/` и зависит только от
@@ -112,6 +122,8 @@ RRF (k=60) с весами `{dense: 1.0, milco: 1.0, bm25: 0.3}`, затем к�
 (песня и её артист) из SQLite `song_facts` / `artist_facts`. Без фильтра по длине, без
 обрезки текста, без Qdrant. Дедуп идентичных строк. Отбор — только по порогу CE, без
 ограничения по количеству; размер пачки и её длина в символах логируются.
+Источник хранилища инжектируется (`FactSource` — один метод), поэтому при переносе в
+прод `MetadataDB` подключается адаптером в четыре строки, а не переписыванием модуля.
 
 **Применение Б — чанки веб-страниц (`retrieval.py` в корне пакета).** Один ретривер на
 ВСЕ чанки всех страниц итерации, накопительно между итерациями, дедуп по `(url, hash
@@ -221,13 +233,21 @@ exact (фолдинг, снятие feat) → fuzzy с жёстким порог
 
 ## Часть 9. Тесты и верификация
 
-`lab/tests/` — юнит-тесты чистой логики, без моделей и без сети:
+`lab/tests/` — 141 тест, без моделей и без сети:
 
-- `tables.py`: заголовки колонок, colspan, пропуск таблиц-навигации, строки без артиста;
-- `planner.py`: каждый валидатор, включая выброс выдуманного `style` и нормализацию эпохи;
-- `catalog.py`: exact/fuzzy/none на подготовленной SQLite in-memory базе;
-- `chunking.py`: путь заголовков, склейка микро-секций, неделимость таблиц и код-блоков;
-- `pipeline`: правило вето по итерациям на фейковых CE-вероятностях.
+- `test_tables.py`: заголовки колонок, отказ от чартовых таблиц, приоритет «artist» над
+  «original artist», числовые ячейки, рваные строки;
+- `test_planner.py`: каждый валидатор, включая выброс выдуманного `style` и нормализацию
+  эпохи;
+- `test_catalog.py`: exact/fuzzy/none на подготовленной SQLite-базе, кросс-скриптовое
+  имя, деградация при пустой `track_metadata`;
+- `test_chunking.py`: путь заголовков, склейка микро-секций, неделимость таблиц и
+  код-блоков;
+- `test_retrieval.py`: работа без единой модели (BM25-путь), порог CE, `extend`,
+  пул фактов;
+- `test_pipeline.py`: правило вето, проверка цитат, послабления, разбор JSON, reason_gate;
+- `test_end_to_end.py`: обе ветки целиком на заглушках LLM/сети/моделей — включая то, что
+  выдуманный моделью трек не доходит до плейлиста, а ответ без цитат выбрасывается.
 
 Запуск: `pytest lab/tests` (в `pytest.ini` `testpaths = tests`, поэтому в обычный прогон
 они не попадают и никому не мешают).
