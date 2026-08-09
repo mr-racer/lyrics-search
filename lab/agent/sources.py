@@ -20,6 +20,7 @@ cross-encoder slot.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from typing import Optional
 from urllib.parse import urlparse
@@ -65,6 +66,19 @@ class SearchSources:
         self.sink = sink
         self.searches = 0
         self._seen_queries: set[str] = set()
+        self._publish_searxng_url()
+
+    def _publish_searxng_url(self) -> None:
+        """Point ``websearch_lab`` at the configured SearXNG.
+
+        It reads its address from ``os.environ`` at call time (that is what its
+        own ``configure()`` writes to, and what makes it survive %autoreload).
+        Without this the AgentConfig field is decoration: every search would
+        quietly go to whatever the notebook happened to configure last, or to
+        localhost.
+        """
+        if self.cfg.searxng_url:
+            os.environ["SEARXNG_URL"] = self.cfg.searxng_url
 
     def _emit(self, stage: str, **fields) -> None:
         if self.sink is not None:
