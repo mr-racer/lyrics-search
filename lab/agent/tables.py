@@ -67,6 +67,45 @@ def _clean_value(text: str) -> str:
     return " ".join(text.split()).strip().strip(_QUOTES).strip()
 
 
+def _clean_title(text: str) -> str:
+    """A title cell, with the quoting Wikipedia wraps every song in removed.
+
+    Stripping only the ends is not enough: the cell reads
+    ``"All Falls Down" (featuring Syleena Johnson)``, so the closing quote sits
+    in the middle and survives. Double quotes never carry meaning inside a song
+    title, apostrophes routinely do ("Can't Tell Me Nothing") — so only the
+    former go.
+    """
+    return " ".join(_clean_value(text).replace('"', " ")
+                    .replace("«", " ").replace("»", " ")
+                    .replace("“", " ").replace("”", " ").split())
+
+
+def _is_subheader_row(header: list[str], row: list[str]) -> bool:
+    """True when this row is the second tier of a two-row header.
+
+    Wikipedia's chart tables span one header cell across many columns
+    ("Peak chart positions") and put the individual chart names underneath.
+    The markdown conversion turns the span into empty header cells, so the
+    empty cells ARE the signal — and the row below them is column labels, not
+    a song. Without this, every such table contributes a track called "US".
+    """
+    if sum(1 for cell in header if not cell.strip()) < 2:
+        return False
+    values = [c.strip() for c in row if c.strip()]
+    if not values:
+        return False
+    # Column labels are short and none of them is a year.
+    return (all(len(v) <= 12 for v in values)
+            and not any(_YEAR_RE.fullmatch(v) for v in values))
+
+
+def _is_footnote_row(row: list[str], title: str) -> bool:
+    """A table's trailing legend: one long sentence, every other cell empty."""
+    filled = [c for c in row[1:] if c.strip()]
+    return not filled and (len(title) > 60 or " denotes " in title.lower())
+
+
 def parse_markdown_tables(markdown: str) -> list[Table]:
     """Every pipe table in the document, header row separated from the body.
 
@@ -166,10 +205,14 @@ def tracks_from_table(table: Table, *, source: SourceKind = "wikipedia",
     for row in table.rows:
         if title_col >= len(row):
             continue
-        title = _clean_value(row[title_col])
+        if _is_subheader_row(table.header, row):
+            continue
+        title = _clean_title(row[title_col])
         # A bare number in the title column means the columns were misread
         # (a numbered list rendered as a table) — skip rather than guess.
         if not title or _NUMERIC_RE.match(title) or len(title) > 200:
+            continue
+        if _is_footnote_row(row, title):
             continue
 
         artist = None

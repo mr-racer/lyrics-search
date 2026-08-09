@@ -60,6 +60,31 @@ def canonical_url(url: str) -> str:
     return urlunsplit(("", host, path, query, ""))
 
 
+def source_for_url(url: str, fallback: str = "web") -> str:
+    """What KIND of page this is, from the host.
+
+    Not from the search stream that found it. A Wikipedia article is a
+    Wikipedia article whether the ``wikipedia`` engine returned it or Google
+    did — and the difference matters twice over: structured extraction only
+    runs for the kinds that have parseable structure, and the source weight
+    only doubles for the kinds worth double.
+
+    Labelling by stream is what made a 900-row discography table yield nothing:
+    the page came back from the open-web search, was labelled "web", and the
+    table parser never looked at it.
+    """
+    host = (urlsplit(url or "").netloc or "").lower()
+    if not host:
+        return fallback
+    if host.endswith("wikipedia.org"):
+        return "wikipedia"
+    if host.endswith("fandom.com") or host.endswith("wikia.org"):
+        return "fandom"
+    if host.endswith("music.apple.com"):
+        return "apple"
+    return fallback
+
+
 def dedupe_by_url(items, *, key=lambda item: item.url):
     """Keep the first of each distinct page, in order.
 

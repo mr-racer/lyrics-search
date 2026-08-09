@@ -133,3 +133,59 @@ class TestProvenance:
         md = "| Title |\n| --- |\n| Kids |\n"
         ref = tracks_from_markdown(md, page_title="TDU2 soundtrack")[0]
         assert ref.page_title == "TDU2 soundtrack"
+
+
+DISCOGRAPHY = (
+    "## As lead artist\n\n"
+    "| Title | Year | Peak chart positions |  |  |  | Certifications | Album |\n"
+    "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+    "| US | US R&B | US Rap | AUS | CAN | WW |  |  |\n"
+    '| "Through the Wire" | 2003 | 15 | 8 | 4 | 81 | RIAA: 3× Platinum | '
+    "The College Dropout |\n"
+    '| "All Falls Down" (featuring Syleena Johnson) | 2004 | 7 | 4 | 2 | — | '
+    "RIAA: 6× Platinum |  |\n"
+    '| "Can\'t Tell Me Nothing" | 41 | 20 | 8 | — | 16 | RIAA: 7× Platinum |  |\n'
+    '| "—" denotes a recording that did not chart or was not released in that '
+    "territory. |  |  |  |  |  |  |  |\n"
+)
+
+
+class TestRealWikipediaDiscography:
+    """The shape that actually turned up: a two-tier header from a colspan, a
+    legend row at the bottom, and every title in quotes."""
+
+    def test_the_songs_come_out(self):
+        titles = [r.title for r in tracks_from_markdown(DISCOGRAPHY)]
+        assert "Through the Wire" in titles
+        assert "Can't Tell Me Nothing" in titles
+
+    def test_the_chart_subheader_is_not_a_song(self):
+        """"Peak chart positions" spans several columns; markdown renders the
+        span as empty header cells and puts "US | US R&B | ..." on the row
+        below. Without the colspan signal every such table yields a track
+        called "US"."""
+        assert "US" not in [r.title for r in tracks_from_markdown(DISCOGRAPHY)]
+
+    def test_the_legend_row_is_not_a_song(self):
+        assert not any("denotes" in r.title
+                       for r in tracks_from_markdown(DISCOGRAPHY))
+
+    def test_the_closing_quote_inside_a_title_is_removed(self):
+        """The cell reads `"All Falls Down" (featuring ...)`, so stripping the
+        ends leaves a quote in the middle."""
+        titles = [r.title for r in tracks_from_markdown(DISCOGRAPHY)]
+        assert "All Falls Down (featuring Syleena Johnson)" in titles
+        assert all('"' not in t for t in titles)
+
+    def test_an_apostrophe_survives(self):
+        """Double quotes never mean anything in a title cell; apostrophes do."""
+        assert "Can't Tell Me Nothing" in [r.title
+                                           for r in tracks_from_markdown(DISCOGRAPHY)]
+
+    def test_a_row_whose_year_column_shifted_still_yields_the_song(self):
+        """Wikipedia omits the year on rows continuing the previous one, which
+        shifts every column left. The song is still real; the year is unknown,
+        and unknown survives the era filter."""
+        row = next(r for r in tracks_from_markdown(DISCOGRAPHY)
+                   if r.title == "Can't Tell Me Nothing")
+        assert row.year is None

@@ -26,7 +26,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from lab.agent.models import SearchHit
-from lab.agent.urls import dedupe_by_url
+from lab.agent.urls import dedupe_by_url, source_for_url
 
 logger = logging.getLogger(__name__)
 
@@ -256,7 +256,9 @@ class SearchSources:
             out.append(SearchHit(
                 url=url, title=(row.get("title") or "").strip(),
                 snippet=(row.get("content") or "").strip(),
-                source=source, rank=i))
+                # The host decides, not the stream. Google returning a
+                # Wikipedia article makes it a Wikipedia article.
+                source=source_for_url(url, fallback=source), rank=i))
         return out
 
     # ── the four sources ──────────────────────────────────────────────────

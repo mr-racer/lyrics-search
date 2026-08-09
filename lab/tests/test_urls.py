@@ -10,7 +10,7 @@ import pytest
 
 from lab.agent.fetch import PageFetcher
 from lab.agent.models import Page, SearchHit
-from lab.agent.urls import canonical_url, dedupe_by_url
+from lab.agent.urls import canonical_url, dedupe_by_url, source_for_url
 
 FEUD = "https://en.wikipedia.org/wiki/Taylor_Swift–Kanye_West_feud"
 FEUD_ENCODED = "https://en.wikipedia.org/wiki/Taylor_Swift%E2%80%93Kanye_West_feud"
@@ -106,3 +106,24 @@ class TestFetcherDeduplication:
         pages = await fetcher.fetch_many(hits, limit=2)
         assert len(pages) == 2
         assert {p.url for p in pages} == {FEUD, "https://ex.com/a"}
+
+
+class TestSourceKind:
+    """What a page IS, not who found it."""
+
+    def test_wikipedia_is_wikipedia_whoever_returned_it(self):
+        """The bug this fixes: a discography article came back from the
+        open-web stream, was labelled "web", and the table parser skipped it."""
+        assert source_for_url(
+            "https://en.wikipedia.org/wiki/Kanye_West_singles_discography") == "wikipedia"
+
+    def test_fandom_and_apple_are_recognised(self):
+        assert source_for_url("https://gta.fandom.com/wiki/Soundtrack") == "fandom"
+        assert source_for_url("https://music.apple.com/us/playlist/x/pl.1") == "apple"
+
+    def test_anything_else_falls_back(self):
+        assert source_for_url("https://billboard.com/charts") == "web"
+        assert source_for_url("", fallback="wikipedia") == "wikipedia"
+
+    def test_a_mobile_mirror_counts_too(self):
+        assert source_for_url("https://en.m.wikipedia.org/wiki/Power") == "wikipedia"

@@ -28,6 +28,7 @@ from lab.agent.llm import LLMClient, as_int, as_str
 from lab.agent.models import Page, TrackRef
 from lab.agent.prompts import EXTRACT_TRACKS_SYSTEM
 from lab.agent.tables import tracks_from_markdown
+from lab.agent.urls import source_for_url
 
 logger = logging.getLogger(__name__)
 
@@ -93,11 +94,18 @@ def apple_tracks(page: Page) -> list[TrackRef]:
 
 def structured_tracks(page: Page, *,
                       default_artist: Optional[str] = None) -> list[TrackRef]:
-    """Whatever the page yields without asking a model. May be empty."""
-    if page.source == "apple":
+    """Whatever the page yields without asking a model. May be empty.
+
+    Dispatched on the HOST, not on ``page.source``. The source label records
+    which search stream found the page, and a Wikipedia article found by the
+    open-web search used to be labelled "web" — so the table parser skipped a
+    900-row discography without a word.
+    """
+    kind = source_for_url(page.url, fallback=page.source)
+    if kind == "apple":
         return apple_tracks(page)
-    if page.source in ("wikipedia", "fandom"):
-        return tracks_from_markdown(page.markdown, source=page.source,
+    if kind in ("wikipedia", "fandom"):
+        return tracks_from_markdown(page.markdown, source=kind,
                                     source_url=page.url,
                                     page_title=page.title,
                                     default_artist=default_artist)
