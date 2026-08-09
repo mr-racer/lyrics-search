@@ -85,14 +85,23 @@ CLAP_WEIGHTS_URL = "https://huggingface.co/lukewys/laion_clap/resolve/main/music
 # English source facts, which the previous English-only default could not do at
 # all. Everything downstream (Qdrant vector name, migration script, facts
 # collection) is pinned to this choice.
-TEXT_MODEL_NAME = "Qwen/Qwen3-Embedding-0.6B"
+TEXT_MODEL_NAME = "Octen/Octen-Embedding-0.6B"
 VECTOR_NAME = "text"
 VECTOR_DIM = 1024
 # Set explicitly: the model's own config carries a 32768-token window, and a
 # full lyric would then be encoded whole. Measured on 758 prod tracks, the
 # longest deduplicated lyric is ~1900 tokens, so 2048 covers the library.
 MAX_SEQ_LENGTH = 2048
-# Qwen3-Embedding is asymmetric — queries take an instruction, documents do not.
+
+# The model is asymmetric, and it ships BOTH sides of the pair in its own
+# ``prompts`` config: an instruction for the query, a single space for the
+# document. Address them by name rather than hand-rolling the query prefix and
+# leaving the document bare — that was right for Qwen3-Embedding, whose
+# document side genuinely takes nothing, and it silently costs recall here.
+QUERY_PROMPT_NAME = "query"
+DOCUMENT_PROMPT_NAME = "document"
+# Fallback for a model that carries no prompts at all: instruction on the query
+# side, nothing on the document side.
 QUERY_PREFIX = (
     "Instruct: Given a statement about music, retrieve passages that explain it\n"
     "Query: "
@@ -116,6 +125,10 @@ class ModelRegistry:
     QUERY_PREFIX = QUERY_PREFIX
 
     _text_model: Optional[tuple[Any, str, int]] = None
+    # (query prompt name, document prompt name) — resolved once at load from
+    # what the model actually carries. ``None`` on a side means "this model has
+    # no prompt for it", which sends the query side to QUERY_PREFIX.
+    _prompt_names: tuple[Optional[str], Optional[str]] = (None, None)
     _text_lock: threading.Lock = threading.Lock()
     _clap_model: Optional[Any] = None
     _clap_lock: threading.Lock = threading.Lock()
@@ -151,18 +164,24 @@ class ModelRegistry:
             # fp16 halves the resident footprint (~1.2 GB instead of ~2.4) and
             # costs nothing measurable on embeddings. On CPU it would be slower
             # than fp32, and some ops have no CPU half kernel — so fp32 there.
-            kwargs = {}
+            kwargs: dict[str, Any] = {
+                # Decoder-derived embedders pool the LAST token, so padding has
+                # to sit on the left or a short text in a batch is pooled off
+                # its own padding.
+                "tokenizer_kwargs": {"padding_side": "left"},
+            }
             if device == "cuda":
                 kwargs["model_kwargs"] = {"torch_dtype": torch.float16}
             try:
                 model = SentenceTransformer(TEXT_MODEL_NAME, device=device, **kwargs)
             except TypeError:
-                # Older sentence-transformers has no model_kwargs. fp32 on the
+                # Older sentence-transformers has neither kwarg. fp32 on the
                 # GPU still beats fp16 on the CPU by a wide margin.
-                logger.warning("[ModelRegistry] model_kwargs unsupported — "
-                               "loading fp32 on %s", device)
+                logger.warning("[ModelRegistry] model_kwargs/tokenizer_kwargs "
+                               "unsupported — loading fp32 on %s", device)
                 model = SentenceTransformer(TEXT_MODEL_NAME, device=device)
             model.max_seq_length = MAX_SEQ_LENGTH
+            cls._prompt_names = cls._resolve_prompt_names(model)
             _device_in_use = device
 
             dim = model.get_sentence_embedding_dimension()
@@ -179,23 +198,46 @@ class ModelRegistry:
             cls._text_model = (model, VECTOR_NAME, VECTOR_DIM)
             logger.info(
                 "[ModelRegistry] text model '%s' loaded (dim=%d, device=%s [%s], "
-                "%s, max_seq=%d)",
+                "%s, max_seq=%d, prompts=%s)",
                 TEXT_MODEL_NAME, dim, device, _device_reason,
-                "fp16" if kwargs else "fp32", MAX_SEQ_LENGTH,
+                "fp16" if "model_kwargs" in kwargs else "fp32", MAX_SEQ_LENGTH,
+                cls._prompt_names,
             )
             return cls._text_model
+
+    @staticmethod
+    def _resolve_prompt_names(model: Any) -> tuple[Optional[str], Optional[str]]:
+        """Which of the model's own prompts to use for each side of the pair.
+
+        Read off the loaded model rather than assumed: a model that ships no
+        ``prompts`` (or only a query one) must not be handed a ``prompt_name``
+        sentence-transformers will reject.
+        """
+        prompts = getattr(model, "prompts", None) or {}
+        return (
+            QUERY_PROMPT_NAME if QUERY_PROMPT_NAME in prompts else None,
+            DOCUMENT_PROMPT_NAME if DOCUMENT_PROMPT_NAME in prompts else None,
+        )
 
     @classmethod
     def encode_text(cls, sentences, *, is_query: bool = False, **encode_kwargs):
         """Encode ``sentences`` — the ONE sanctioned way to run a text encode.
 
-        ``is_query=True`` prepends the model's instruction prefix. Qwen3-Embedding
-        is asymmetric: the query side takes an instruction, the document side does
-        not, and mixing the two up costs real recall. Indexing never sets it;
-        search and fact retrieval always do.
+        The model is asymmetric, so each side gets its own prompt: the query
+        side an instruction, the document side whatever the model was trained
+        with (for Octen, a single space). Getting this backwards, or leaving one
+        side bare because a previous model wanted that, costs real recall.
+        Indexing passes ``is_query=False``; search and fact retrieval pass True.
+
+        An explicit ``prompt``/``prompt_name`` from the caller wins — the two
+        cannot be combined, and sentence-transformers raises when both arrive.
         """
         model, _, _ = cls.get_text_model()
-        if is_query:
+        name = cls._prompt_names[0 if is_query else 1]
+        caller_set = "prompt" in encode_kwargs or "prompt_name" in encode_kwargs
+        if name is not None and not caller_set:
+            encode_kwargs["prompt_name"] = name
+        elif name is None and is_query and not caller_set:
             if isinstance(sentences, str):
                 sentences = QUERY_PREFIX + sentences
             else:

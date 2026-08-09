@@ -26,32 +26,40 @@ class _FakeSentenceTransformer:
     instance_count = 0
     last_kwargs: dict = {}
 
+    prompts: dict = {}
+
     def __init__(self, name, device=None, **kwargs):
         type(self).instance_count += 1
         type(self).last_kwargs = {"device": device, **kwargs}
         self.name = name
         self.max_seq_length = 32768
         self.encoded: list = []
+        self.encode_kwargs: list = []
 
     def get_sentence_embedding_dimension(self):
         return VECTOR_DIM
 
     def encode(self, sentences, **kw):
         self.encoded.append(sentences)
+        self.encode_kwargs.append(kw)
         return np.zeros(4, dtype=np.float32)
+
+
+class _FakeWithPrompts(_FakeSentenceTransformer):
+    """What Octen actually is: an instruction on the query side, a single space
+    on the document side, both shipped in the model's own config."""
+    prompts = {"query": "Instruct: …\nQuery:", "document": " "}
 
 
 def _reset_registry():
     ModelRegistry._text_model = None
+    ModelRegistry._prompt_names = (None, None)
 
 
-def _install_fake(monkeypatch):
+def _install_fake(monkeypatch, cls=_FakeSentenceTransformer):
     _reset_registry()
-    _FakeSentenceTransformer.instance_count = 0
-    monkeypatch.setattr(
-        "app.resources.model_registry.SentenceTransformer",
-        _FakeSentenceTransformer,
-    )
+    cls.instance_count = 0
+    monkeypatch.setattr("app.resources.model_registry.SentenceTransformer", cls)
 
 
 class TestLoading:
@@ -91,9 +99,19 @@ class TestLoading:
 
     def test_vector_name_does_not_encode_the_model(self):
         """The old name was f"text_{model}" — renaming the model silently
-        orphaned every existing collection."""
-        assert "/" not in VECTOR_NAME
-        assert "qwen" not in VECTOR_NAME.lower()
+        orphaned every existing collection. Swapping Qwen for Octen in 2026-08
+        is exactly the event this guards against."""
+        assert VECTOR_NAME == "text"
+        assert TEXT_MODEL_NAME.split("/")[-1].lower() not in VECTOR_NAME.lower()
+
+    def test_padding_is_on_the_left(self, monkeypatch):
+        """Last-token pooling: right padding would pool a short text off its
+        own padding instead of its final token."""
+        _install_fake(monkeypatch)
+        ModelRegistry.get_text_model()
+        assert _FakeSentenceTransformer.last_kwargs["tokenizer_kwargs"] == {
+            "padding_side": "left"}
+        _reset_registry()
 
     def test_input_length_is_capped(self, monkeypatch):
         """The model's own config carries a 32768 window; left alone, a full
@@ -165,13 +183,46 @@ class TestLoading:
         _reset_registry()
 
 
-class TestEncode:
+class TestEncodeWithModelPrompts:
+    """The live model ships both prompts, so neither side is hand-rolled."""
+
+    def test_query_side_uses_the_models_own_query_prompt(self, monkeypatch):
+        _install_fake(monkeypatch, _FakeWithPrompts)
+        ModelRegistry.encode_text("who produced this", is_query=True)
+        model, _, _ = ModelRegistry.get_text_model()
+        assert model.encoded[-1] == "who produced this"      # untouched text
+        assert model.encode_kwargs[-1]["prompt_name"] == "query"
+        _reset_registry()
+
+    def test_document_side_uses_the_document_prompt(self, monkeypatch):
+        """Not "bare": Octen's document prompt is a space, and leaving it off
+        encodes documents differently from how the model was trained."""
+        _install_fake(monkeypatch, _FakeWithPrompts)
+        ModelRegistry.encode_text("a fact about a song")
+        model, _, _ = ModelRegistry.get_text_model()
+        assert model.encode_kwargs[-1]["prompt_name"] == "document"
+        _reset_registry()
+
+    def test_an_explicit_prompt_from_the_caller_wins(self, monkeypatch):
+        """sentence-transformers raises when prompt and prompt_name both arrive."""
+        _install_fake(monkeypatch, _FakeWithPrompts)
+        ModelRegistry.encode_text("q", is_query=True, prompt="Custom: ")
+        model, _, _ = ModelRegistry.get_text_model()
+        assert "prompt_name" not in model.encode_kwargs[-1]
+        assert model.encode_kwargs[-1]["prompt"] == "Custom: "
+        _reset_registry()
+
+
+class TestEncodeFallback:
+    """A model carrying no prompts at all — the query side keeps the explicit
+    instruction, the document side stays bare."""
+
     def test_query_side_gets_the_instruction_prefix(self, monkeypatch):
-        """Qwen3-Embedding is asymmetric — mixing the sides up costs recall."""
         _install_fake(monkeypatch)
         ModelRegistry.encode_text("who produced this", is_query=True)
         model, _, _ = ModelRegistry.get_text_model()
         assert model.encoded[-1] == QUERY_PREFIX + "who produced this"
+        assert "prompt_name" not in model.encode_kwargs[-1]
         _reset_registry()
 
     def test_document_side_is_left_bare(self, monkeypatch):
@@ -179,6 +230,7 @@ class TestEncode:
         ModelRegistry.encode_text("a fact about a song")
         model, _, _ = ModelRegistry.get_text_model()
         assert model.encoded[-1] == "a fact about a song"
+        assert "prompt_name" not in model.encode_kwargs[-1]
         _reset_registry()
 
     def test_prefix_applies_to_every_item_of_a_list(self, monkeypatch):
@@ -186,6 +238,16 @@ class TestEncode:
         ModelRegistry.encode_text(["one", "two"], is_query=True)
         model, _, _ = ModelRegistry.get_text_model()
         assert model.encoded[-1] == [QUERY_PREFIX + "one", QUERY_PREFIX + "two"]
+        _reset_registry()
+
+    def test_a_query_only_prompt_set_does_not_reach_the_document_side(self, monkeypatch):
+        class _QueryOnly(_FakeSentenceTransformer):
+            prompts = {"query": "Instruct: …"}
+
+        _install_fake(monkeypatch, _QueryOnly)
+        ModelRegistry.encode_text("a fact", is_query=False)
+        model, _, _ = ModelRegistry.get_text_model()
+        assert "prompt_name" not in model.encode_kwargs[-1]
         _reset_registry()
 
 

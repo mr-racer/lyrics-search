@@ -26,6 +26,10 @@ Usage::
 
 The dump lives in ``cache/migrate/<collection>.pkl`` and is kept after a
 successful run — delete it by hand once the collection looks right.
+
+Once every collection is through, the matching ``facts_acct_*`` collections are
+dropped: their vectors came from the previous text model and would be compared
+against queries encoded by the new one. They refill on demand.
 """
 
 from __future__ import annotations
@@ -191,6 +195,31 @@ def migrate_one(client: QdrantClient, collection: str, *, resume: bool,
     return True
 
 
+def drop_facts_collections(client: QdrantClient, targets: list[str], *,
+                           dry_run: bool) -> None:
+    """Drop the ``facts_acct_*`` companions of the migrated collections.
+
+    Not optional housekeeping — correctness. Those collections hold fact
+    vectors written by the PREVIOUS text model, and after a model swap the
+    query is encoded by the new one. Comparing across two embedding spaces
+    returns confident nonsense and logs nothing at all, which is the worst
+    failure shape there is.
+
+    Safe to drop: ``facts_index`` fills them on demand, so the first question
+    about a subject rebuilds what that subject needs.
+    """
+    for collection in targets:
+        facts = f"facts_{collection}"
+        if not client.collection_exists(facts):
+            continue
+        if dry_run:
+            logger.info("[%s] DRY RUN: would drop (stale vectors from the old "
+                        "text model)", facts)
+            continue
+        client.delete_collection(facts)
+        logger.info("[%s] dropped — refills on demand", facts)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -222,6 +251,8 @@ def main() -> int:
     if not args.dry_run and not args.yes:
         print("\nThis DROPS and rebuilds each collection above. CLAP vectors and "
               "point ids are preserved via a dump written first.")
+        print("The matching facts_acct_* collections are dropped too — they hold "
+              "vectors from the old model and refill on demand.")
         if input("Type 'yes' to continue: ").strip().lower() != "yes":
             logger.info("aborted")
             return 1
@@ -232,6 +263,10 @@ def main() -> int:
     if failed:
         logger.error("FAILED: %s", ", ".join(failed))
         return 1
+
+    # Only after every track collection came through: a half-migrated instance
+    # should keep whatever it still has.
+    drop_facts_collections(client, targets, dry_run=args.dry_run)
     logger.info("all done")
     return 0
 
