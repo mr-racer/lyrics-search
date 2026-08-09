@@ -239,3 +239,49 @@ class TestEraFilter:
                 TrackRef(title="C")]
         kept = filter_by_era(refs, (2000, 2009))
         assert {r.title for r in kept} == {"B", "C"}
+
+
+class TestSelection:
+    """The deterministic half, driven directly — this is what a notebook runs,
+    so it has to behave identically to what the agent runs."""
+
+    def _tracks(self):
+        from lab.agent.models import ResolvedTrack
+        return [ResolvedTrack("a", "Kids", "MGMT", 2007, "exact",
+                              sources=["wikipedia"]),
+                ResolvedTrack("a", "Kids", "MGMT", 2007, "exact",
+                              sources=["web"]),
+                ResolvedTrack("b", "Creep", "Radiohead", 1992, "fuzzy",
+                              sources=["web"])]
+
+    def test_the_same_track_from_two_sources_becomes_one_row(self):
+        from lab.agent.selection import merge_claims
+        merged = merge_claims(self._tracks(),
+                              source_weights={"wikipedia": 2.0, "web": 1.0})
+        assert len(merged) == 2
+
+    def test_corroboration_adds_up(self):
+        """Two independent pages naming a track is stronger than one page
+        naming it twice — and that is what the weight expresses."""
+        from lab.agent.selection import merge_claims
+        merged = merge_claims(self._tracks(),
+                              source_weights={"wikipedia": 2.0, "web": 1.0})
+        kids = next(t for t in merged if t.title == "Kids")
+        assert kids.weight == 3.0
+        assert set(kids.sources) == {"wikipedia", "web"}
+
+    def test_ranking_puts_corroborated_exact_matches_first(self):
+        from lab.agent.selection import merge_claims, rank_tracks
+        ranked = rank_tracks(merge_claims(
+            self._tracks(), source_weights={"wikipedia": 2.0, "web": 1.0}))
+        assert ranked[0].title == "Kids"
+
+    def test_the_more_specific_provenance_wins_on_merge(self):
+        from lab.agent.models import ResolvedTrack
+        from lab.agent.selection import merge_claims
+        bare = ResolvedTrack("a", "Kids", "MGMT", 2007, "exact", sources=["web"])
+        rich = ResolvedTrack("a", "Kids", "MGMT", 2007, "exact",
+                             sources=["wikipedia"], section="Soundtrack",
+                             page_title="TDU2")
+        merged = merge_claims([bare, rich], source_weights={})
+        assert merged[0].section == "Soundtrack"

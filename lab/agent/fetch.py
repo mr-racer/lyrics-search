@@ -18,7 +18,7 @@ import logging
 from typing import Iterable, Optional
 
 from lab.agent.models import Page, SourceKind
-from lab.agent.urls import canonical_url, dedupe_by_url
+from lab.agent.urls import canonical_url
 
 logger = logging.getLogger(__name__)
 

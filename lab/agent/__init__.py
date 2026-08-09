@@ -52,6 +52,8 @@ from lab.agent.pipeline import Assistant
 from lab.agent.planner import Planner
 from lab.agent.retrieval import HybridRetriever, ModelHub
 from lab.agent.retrieval.facts import FactsRetriever, SqliteFactSource
+from lab.agent.selection import (curate_tracks, merge_claims, rank_tracks,
+                                 select_tracks, triage_tracks)
 from lab.agent.sources import SearchSources, rerank_hits
 
 __all__ = [
@@ -62,6 +64,9 @@ __all__ = [
     "MarkdownChunker", "ModelHub", "PageFetcher", "Planner", "SearchSources",
     "TrackExtractor", "FactsRetriever", "SqliteFactSource",
     "rerank_hits", "structured_tracks",
+    # playlist selection, the same functions the agent runs
+    "select_tracks", "triage_tracks", "curate_tracks", "merge_claims",
+    "rank_tracks",
     # contracts
     "Chunk", "ClarifyRequest", "Evidence", "Filters", "GeneralResult", "Page",
     "Plan", "PlaylistResult", "ResolvedTrack", "SearchHit", "Subject", "TrackRef",
