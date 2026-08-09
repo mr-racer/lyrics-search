@@ -60,10 +60,41 @@ class PageFetcher:
 
         from lab import websearch_lab as L
         from lab.agent.cleanup import strip_appendix
+        from lab.agent import mediawiki
+
+        def by_scraping():
+            text = L.md(url, quiet=True)
+            return text, dict(L.LAST_EXTRACT.get("meta") or {}), \
+                L.LAST_EXTRACT.get("fetcher")
+
+        def by_api():
+            got = mediawiki.fetch_html(url, timeout=self.cfg.fetch_timeout)
+            if got is None:
+                return "", {}, None
+            html, api_meta = got
+            return L.extract_page(html, url, "trafilatura")["text"], \
+                api_meta, "mediawiki_api"
+
+        # Order matters and differs by host. Fandom sits behind a Cloudflare
+        # interstitial that answers 403 to every HTTP fetcher, so there the API
+        # is the only way in. On Wikipedia the ordinary fetch wins: the API
+        # returns the whole raw article (120k chars on a discography page)
+        # where trafilatura extracts half that, cleaner and faster.
+        first, second = ((by_api, by_scraping)
+                         if mediawiki.prefers_api(url, self.cfg.mediawiki_api_first)
+                         else (by_scraping, by_api))
 
         try:
-            markdown = L.md(url, quiet=True)
-            meta = dict(L.LAST_EXTRACT.get("meta") or {})
+            markdown, meta, fetcher = "", {}, None
+            for attempt in (first, second):
+                try:
+                    markdown, meta, fetcher = attempt()
+                except Exception as exc:  # noqa: BLE001 — try the other route
+                    logger.info("[fetch] %s: %s failed (%s), trying the other route",
+                                url, attempt.__name__, type(exc).__name__)
+                    markdown = ""
+                if (markdown or "").strip():
+                    break
             if self.cfg.strip_appendix:
                 markdown, removed = strip_appendix(markdown or "")
                 if removed:
@@ -71,7 +102,7 @@ class PageFetcher:
                                 "(references, external links)", url, removed)
             page = Page(url=url, title=(title or meta.get("title") or ""),
                         markdown=markdown or "", source=source, meta=meta,
-                        fetcher=L.LAST_EXTRACT.get("fetcher"))
+                        fetcher=fetcher)
             if not page.markdown.strip():
                 page.error = "extractor returned nothing"
         except Exception as exc:  # noqa: BLE001 — every fetcher refused, or a parse blew up

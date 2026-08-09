@@ -26,6 +26,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from lab.agent.models import SearchHit
+from lab.agent.spam import is_spam_host, spam_report
 from lab.agent.urls import dedupe_by_url, source_for_url
 
 logger = logging.getLogger(__name__)
@@ -69,7 +70,15 @@ def _count_by_engine(results: list[dict]) -> dict[str, int]:
 
 
 def is_junk(url: str) -> bool:
-    return not url or bool(JUNK_URL.search(url))
+    """A URL not worth a slot: a known dead end, or outright spam.
+
+    Two different reasons kept behind one gate at the edge. A dead end
+    (Spotify, Instagram) is a real page we cannot read; spam is a broken
+    engine's output. Both are dropped here, at ingestion, before dedup and
+    before the cross-encoder — the counters that tell them apart live in
+    ``SearchSources.diagnostics``.
+    """
+    return not url or bool(JUNK_URL.search(url)) or is_spam_host(url)
 
 
 class SearchSources:
@@ -103,6 +112,19 @@ class SearchSources:
                 out[name] = reason
         return out
 
+    def spam_by_engine(self) -> dict[str, int]:
+        """Adult/gambling results contributed per engine, across the run.
+
+        This is the number that answers "which engine do I remove?" — a broken
+        engine's spam is fused in by rank and looks like any other result from
+        inside, so without attribution the only symptom is a filthy answer.
+        """
+        out: dict[str, int] = {}
+        for entry in self.diagnostics:
+            for engine, count in (entry.get("spam_by_engine") or {}).items():
+                out[engine] = out.get(engine, 0) + count
+        return dict(sorted(out.items(), key=lambda kv: -kv[1]))
+
     def report(self) -> str:
         """One line per search: what was asked, who answered, who did not."""
         lines = []
@@ -110,6 +132,12 @@ class SearchSources:
             engines = ", ".join(f"{k}:{v}" for k, v in entry["per_engine"].items())
             lines.append(f"{entry['results']:>3} results  {entry['query'][:60]!r}")
             lines.append(f"     from: {engines or '(nobody)'}")
+            if entry.get("spam"):
+                by = ", ".join(f"{k}:{v}" for k, v
+                               in (entry.get("spam_by_engine") or {}).items())
+                hosts = ", ".join(list(entry.get("spam_hosts") or {})[:4])
+                lines.append(f"     SPAM: {entry['spam']} dropped "
+                             f"[{by or 'engine not reported'}] {hosts}")
             if entry["unresponsive"]:
                 dead = "; ".join(f"{n} ({r})" for n, r in entry["unresponsive"])
                 lines.append(f"     DOWN: {dead}")
@@ -216,15 +244,35 @@ class SearchSources:
                            query, type(exc).__name__, exc)
             return None
 
-        results = (data.get("results") or [])[:limit]
+        all_results = data.get("results") or []
+        # Spam is attributed BEFORE it is dropped. Knowing that an engine
+        # returned nine cam sites is the only way to decide whether to keep
+        # asking it; dropping the results silently leaves you with "the answers
+        # got worse" and nothing to act on.
+        spam_rows = [r for r in all_results if is_spam_host(r.get("url") or "")]
+        clean = [r for r in all_results if not is_spam_host(r.get("url") or "")]
+        results = clean[:limit]
+
         self.last_response = {
             "query": query,
             "engines_asked": pinned or "(server default)",
-            "results": len(data.get("results") or []),
-            "per_engine": _count_by_engine(data.get("results") or []),
+            "results": len(clean),
+            "per_engine": _count_by_engine(clean),
+            "spam": len(spam_rows),
+            "spam_by_engine": _count_by_engine(spam_rows),
+            "spam_hosts": spam_report(r.get("url") or "" for r in spam_rows),
             "unresponsive": [list(e) for e in (data.get("unresponsive_engines") or [])],
         }
         self.diagnostics.append(self.last_response)
+
+        if spam_rows:
+            logger.warning(
+                "[sources] dropped %d adult/gambling results for %r — from %s",
+                len(spam_rows), query,
+                self.last_response["spam_by_engine"] or "(engine not reported)")
+            if self.sink is not None:
+                self.sink.put("spam_dropped", query=query, count=len(spam_rows),
+                              engines=self.last_response["spam_by_engine"])
 
         dead = self.last_response["unresponsive"]
         if dead:

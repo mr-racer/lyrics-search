@@ -119,6 +119,11 @@ class AgentConfig:
     # Strip the References / External links tail off MediaWiki pages before
     # anything is chunked or embedded.
     strip_appendix: bool = True
+    # Wikis to read through api.php FIRST. These answer a Cloudflare challenge
+    # to every HTTP fetcher, so scraping simply does not work on them. Every
+    # other MediaWiki host is scraped first and only falls back to the API —
+    # on Wikipedia the ordinary path is both faster and cleaner.
+    mediawiki_api_first: tuple = ("fandom.com", "wikia.org", "wiki.gg")
 
     # ── budgets ───────────────────────────────────────────────────────────
     max_pages_per_iteration: int = 5
