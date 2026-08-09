@@ -797,3 +797,84 @@ class TestDiscographyRescue:
         agent = _assistant(monkeypatch, db, llm=llm, sources={}, pages={})
         await agent.run("спокойные хиты 80х")
         assert not agent.sink.of("discography")
+
+
+class TestDiscographyTitles:
+    """Wikipedia has no single naming convention for a discography.
+
+    "Kanye West discography" is a disambiguation stub — three links to
+    albums/production/singles and not one table. JAY-Z's songs are under
+    "albums discography", Sade's under the plain title. A page with no rows is
+    almost always the stub, so the next spelling is tried.
+    """
+
+    STUB = """# Kanye West discography
+
+Kanye West discography encompasses:
+
+- Kanye West albums discography
+- Kanye West production discography
+- Kanye West singles discography
+"""
+
+    SINGLES = """# Kanye West singles discography
+
+## As lead artist
+
+| Title | Year |
+| --- | --- |
+| Runaway | 2010 |
+"""
+
+    def _agent(self, monkeypatch, db, wiki_by_query, pages):
+        llm = FakeLLM({
+            "You plan how to answer": {
+                "intent": "playlist", "artist": "Kanye West",
+                "web_queries": ["Kanye West hits"], "ce_query": "hits"},
+            "Pull song titles": {"tracks": []},
+            "You are finishing a playlist": {"title": "K", "comment": "",
+                                             "order": []},
+            "You already searched": {"web_queries": []},
+        })
+        return _assistant(monkeypatch, db, llm=llm,
+                          sources={"wikipedia": wiki_by_query}, pages=pages,
+                          triage_min_candidates=99)
+
+    async def test_a_disambiguation_stub_is_not_the_end_of_it(self, monkeypatch, db):
+        wiki = {
+            "singles discography": [SearchHit(url="https://wiki/singles",
+                                              title="singles", snippet="",
+                                              source="wikipedia", rank=0)],
+            "discography": [SearchHit(url="https://wiki/stub", title="stub",
+                                      snippet="", source="wikipedia", rank=0)],
+        }
+        pages = {
+            "https://wiki/stub": Page(url="https://wiki/stub", title="stub",
+                                      markdown=self.STUB, source="wikipedia"),
+            "https://wiki/singles": Page(url="https://wiki/singles",
+                                         title="singles",
+                                         markdown=self.SINGLES,
+                                         source="wikipedia"),
+        }
+        agent = self._agent(monkeypatch, db, wiki, pages)
+        result = await agent.run("хиты Канье")
+        assert [t.title for t in result.tracks] == ["Runaway"]
+
+    async def test_it_stops_at_the_first_title_that_works(self, monkeypatch, db):
+        """Each try costs a search and a fetch."""
+        wiki = {"singles discography": [
+            SearchHit(url="https://wiki/singles", title="s", snippet="",
+                      source="wikipedia", rank=0)]}
+        pages = {"https://wiki/singles": Page(url="https://wiki/singles",
+                                              title="s", markdown=self.SINGLES,
+                                              source="wikipedia")}
+        agent = self._agent(monkeypatch, db, wiki, pages)
+        await agent.run("хиты Канье")
+        assert agent.sink.of("discography_done")[0]["queries"] == 1
+
+    async def test_the_attempts_are_capped(self, monkeypatch, db):
+        """Nothing found anywhere — it must not walk the whole list forever."""
+        agent = self._agent(monkeypatch, db, {}, {})
+        await agent.run("хиты Канье")
+        done = agent.sink.of("discography_done")[0]
+        assert done["queries"] == 3 and done["claims"] == 0

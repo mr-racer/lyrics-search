@@ -52,6 +52,24 @@ logger = logging.getLogger(__name__)
 # Used only for the iterate/stop veto, never to drop material.
 WEAK_CONTEXT_PROB = 0.45
 
+# Titles to try for the discography rescue, in order, until one yields rows.
+#
+# There is no single naming convention and no way to know which an artist has.
+# "Kanye West discography" is a disambiguation stub — three links, no table —
+# while the songs live under "singles discography"; JAY-Z's are under "albums
+# discography"; Sade's are on the plain "discography" page. A page that yields
+# nothing is almost always the stub, so the next spelling is simply tried.
+#
+# Order is by usefulness for a PLAYLIST: singles and song lists are tracks,
+# an albums table is albums. The albums page is last and its rows arrive
+# labelled with their section, so the triage pass can see what they are.
+DISCOGRAPHY_TITLES = (
+    "{artist} singles discography",
+    "List of songs recorded by {artist}",
+    "{artist} discography",
+    "{artist} albums discography",
+)
+
 
 class Assistant:
     """One instance per conversation; one :meth:`run` per user message."""
@@ -536,23 +554,31 @@ class PlaylistBranch(_WebBranch):
         logger.info("[playlist] only %d tracks — reading %s's discography",
                     found, artist)
 
-        hits = []
-        for query in (f"{artist} discography",
-                      f"List of songs recorded by {artist}"):
-            hits += await asyncio.to_thread(
-                self.sources.wikipedia, query, 2, True)
-            if hits:
-                break
-
-        pages = await self.fetcher.fetch_many(dedupe_by_url(hits), limit=2)
         refs: list[TrackRef] = []
-        for page in pages:
-            got = await asyncio.to_thread(structured_tracks, page,
-                                          default_artist=artist)
-            logger.info("[playlist] discography %s -> %d rows", page.url, len(got))
-            refs += got
+        tried = 0
+        for template in DISCOGRAPHY_TITLES:
+            if tried >= self.cfg.discography_max_queries:
+                break
+            tried += 1
+            query = template.format(artist=artist)
+            hits = await asyncio.to_thread(
+                self.sources.wikipedia, query, 2, True)
+            pages = await self.fetcher.fetch_many(dedupe_by_url(hits), limit=1)
+            for page in pages:
+                got = await asyncio.to_thread(structured_tracks, page,
+                                              default_artist=artist)
+                logger.info("[playlist] discography %r -> %s -> %d rows",
+                            query, page.url, len(got))
+                refs += got
+            if refs:
+                break
+            # Nothing on that page. Almost always the disambiguation stub —
+            # "Kanye West discography" is three links and no table — so the
+            # next spelling is tried rather than giving up.
+            logger.info("[playlist] %r yielded no rows, trying the next title",
+                        query)
 
-        self.sink.put("discography_done", pages=len(pages), claims=len(refs))
+        self.sink.put("discography_done", queries=tried, claims=len(refs))
         return refs
 
     # ── selection, all of it code ─────────────────────────────────────────

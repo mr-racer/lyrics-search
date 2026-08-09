@@ -49,10 +49,20 @@ class Page:
     meta: dict = field(default_factory=dict)
     fetcher: Optional[str] = None
     error: Optional[str] = None
+    # Raw body, kept only where a structured parser needs it. Apple Music puts
+    # its track list in embedded JSON and renders almost nothing as text, so
+    # markdown extraction throws away the only part worth having.
+    html: str = ""
 
     @property
     def ok(self) -> bool:
-        return not self.error and bool(self.markdown.strip())
+        """Usable by SOMETHING — not necessarily by the chunker.
+
+        An Apple page can be perfectly good with no extractable prose at all:
+        its value is in the JSON. Judging it by markdown alone dropped it
+        before the parser ever saw it.
+        """
+        return not self.error and bool(self.markdown.strip() or self.html)
 
 
 @dataclass(slots=True)

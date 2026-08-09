@@ -18,7 +18,7 @@ import logging
 from typing import Iterable, Optional
 
 from lab.agent.models import Page, SourceKind
-from lab.agent.urls import canonical_url
+from lab.agent.urls import canonical_url, source_for_url
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,18 @@ class PageFetcher:
         from lab.agent.cleanup import strip_appendix
         from lab.agent import mediawiki
 
+        keep_html = source_for_url(url) == "apple"
+        raw_html = ""
+
         def by_scraping():
+            nonlocal raw_html
+            if keep_html:
+                # One request, two consumers. Apple's track list is in embedded
+                # JSON that markdown extraction discards, so the body is kept
+                # for `apple_tracks` instead of being downloaded again there.
+                raw_html = L.http_get_text(url)
+                out = L.extract_page(raw_html, url, "trafilatura")
+                return out["text"], out["meta"], L.LAST_FETCH.get("fetcher")
             text = L.md(url, quiet=True)
             return text, dict(L.LAST_EXTRACT.get("meta") or {}), \
                 L.LAST_EXTRACT.get("fetcher")
@@ -93,7 +104,9 @@ class PageFetcher:
                     logger.info("[fetch] %s: %s failed (%s), trying the other route",
                                 url, attempt.__name__, type(exc).__name__)
                     markdown = ""
-                if (markdown or "").strip():
+                # Raw html counts as success: an Apple page can be entirely
+                # worth having with no extractable prose at all.
+                if (markdown or "").strip() or raw_html:
                     break
             if self.cfg.strip_appendix:
                 markdown, removed = strip_appendix(markdown or "")
@@ -102,8 +115,8 @@ class PageFetcher:
                                 "(references, external links)", url, removed)
             page = Page(url=url, title=(title or meta.get("title") or ""),
                         markdown=markdown or "", source=source, meta=meta,
-                        fetcher=fetcher)
-            if not page.markdown.strip():
+                        fetcher=fetcher, html=raw_html)
+            if not page.ok:
                 page.error = "extractor returned nothing"
         except Exception as exc:  # noqa: BLE001 — every fetcher refused, or a parse blew up
             page = Page(url=url, title=title, markdown="", source=source,

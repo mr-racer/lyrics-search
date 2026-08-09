@@ -160,6 +160,12 @@ class AgentConfig:
     # nobody writes a listicle per artist per era — but the singles table
     # exists, and the era filter can do the narrowing itself.
     discography_min_tracks: int = 10
+    # How many title spellings to try before giving up. Wikipedia has no single
+    # convention: Kanye's songs are under "singles discography" (the plain
+    # "discography" title is a disambiguation stub), JAY-Z's under "albums
+    # discography", Sade's under the plain one. Each try costs one search and
+    # one fetch, and stops at the first page that actually has rows.
+    discography_max_queries: int = 3
     fuzzy_title_threshold: float = 0.75
     # Final pass: the model sees where each confirmed track was found (page,
     # section, row) and returns the ids that actually answer the request.

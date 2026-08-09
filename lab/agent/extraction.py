@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 from typing import Optional
+from urllib.parse import urlsplit
 
 from lab.agent.llm import LLMClient, as_int, as_str
 from lab.agent.models import Page, TrackRef
@@ -34,21 +35,47 @@ logger = logging.getLogger(__name__)
 
 # Editorial playlists are credited to "Apple Music" plus a genre desk —
 # "Apple Music Alternative", "Apple Music Hip-Hop", or plain "Apple Music".
-# Anything else is somebody's personal playlist wearing the same URL shape.
+# Anything else under /playlist/ is somebody's personal collection wearing the
+# same URL shape.
 _EDITORIAL_AUTHOR = "apple music"
 # User-created playlist ids carry a `u-` marker. A hard reject on top of the
 # author check: it needs no parsing to have succeeded, so it still holds when
 # the page shape changes and the author comes back empty.
 _USER_PLAYLIST_PREFIX = "pl.u-"
+# Paths that are Apple's OWN catalogue. There is no user-generated variant of
+# these — an artist's top songs is Apple's chart of that artist, an album is
+# an album — so there is no curator to check and none to find.
+_CATALOGUE_PATHS = ("/artist/", "/album/", "/song/")
 
 
-def is_editorial_playlist(playlist) -> bool:
-    """Whether an Apple playlist is curated by Apple rather than by a listener.
+def apple_page_kind(url: str) -> str:
+    """``"playlist"``, ``"catalogue"`` or ``"other"`` from the URL alone."""
+    path = (urlsplit(url or "").path or "").lower()
+    if "/playlist/" in path:
+        return "playlist"
+    if any(marker in path for marker in _CATALOGUE_PATHS):
+        return "catalogue"
+    return "other"
 
-    Both signals must agree, and they fail in opposite directions: the id
-    catches a user playlist whose author string is missing, the author catches
-    a curator that is neither Apple nor a listener (a label, a brand).
+
+def is_usable_apple_page(playlist, url: str) -> bool:
+    """Whether this Apple page is Apple's own material rather than a listener's.
+
+    The rule depends on the KIND of page, and conflating them is what made
+    ``/artist/kanye-west/…/top-songs`` come back empty: it has no author and no
+    ``pl.`` id because it is not a playlist at all, and the editorial check
+    rejected it for failing to be one.
+
+    * ``/playlist/`` — could be anyone's, so both signals are checked: a
+      ``pl.u-`` id is a listener's, and the curator must be an Apple desk.
+    * ``/artist/``, ``/album/``, ``/song/`` — Apple's catalogue. No curator
+      exists, so there is nothing to verify.
     """
+    kind = apple_page_kind(url)
+    if kind == "catalogue":
+        return True
+    if kind != "playlist":
+        return False
     playlist_id = (getattr(playlist, "playlist_id", "") or "").lower()
     if playlist_id.startswith(_USER_PLAYLIST_PREFIX):
         return False
@@ -57,38 +84,47 @@ def is_editorial_playlist(playlist) -> bool:
 
 
 def apple_tracks(page: Page) -> list[TrackRef]:
-    """Tracks from an Apple Music playlist page, or [] if it is not editorial.
+    """Tracks from an Apple Music page, or [] if it is a listener's playlist.
 
-    Re-fetches the raw HTML: the pipeline's markdown extraction throws away the
-    embedded JSON this parser needs, and Apple pages render almost nothing as
-    text anyway.
+    Uses the HTML the fetcher already kept. Apple's track list lives in
+    embedded JSON that markdown extraction throws away, so the fetcher keeps
+    the raw body for these pages; re-downloading it here was a second request
+    for a page already in hand.
     """
     from lab import websearch_lab as L
     from lab.apple_music_playlist import parse_apple_playlist
 
     try:
-        html = L.http_get_text(page.url)
+        html = page.html or L.http_get_text(page.url)
         playlist = parse_apple_playlist(html, url=page.url)
     except Exception:
         logger.info("[extract] apple parse failed for %s", page.url, exc_info=True)
         return []
 
-    if not is_editorial_playlist(playlist):
-        # Logged with the author, because "no tracks from Apple" and "the
-        # parser stopped finding the author" look identical from outside.
-        logger.info("[extract] %s: skipped — author=%r id=%r is not editorial",
-                    page.url, playlist.author, playlist.playlist_id)
+    # Logged before the verdict, and always: "Apple gave us nothing" and "the
+    # parser found forty tracks and the gate refused them" look identical from
+    # outside, and they need opposite fixes.
+    logger.info("[extract] apple %s: kind=%s author=%r id=%r parsed=%d tracks",
+                page.url, apple_page_kind(page.url), playlist.author,
+                playlist.playlist_id, len(playlist.tracks))
+
+    if not is_usable_apple_page(playlist, page.url):
+        logger.info("[extract] %s: skipped — a listener's playlist, not Apple's",
+                    page.url)
         return []
 
+    where = playlist.title or apple_page_kind(page.url)
     out: list[TrackRef] = []
     for track in playlist.tracks:
         if not track.title:
             continue
-        out.append(TrackRef(title=track.title,
-                            artist=(track.artists[0] if track.artists else None),
-                            year=None, source="apple", source_url=page.url))
-    logger.info("[extract] apple %r by %r: %d tracks",
-                playlist.title, playlist.author, len(out))
+        out.append(TrackRef(
+            title=track.title,
+            artist=(track.artists[0] if track.artists else None),
+            year=None, source="apple", source_url=page.url,
+            section=where, page_title=playlist.title or "",
+            context=" · ".join(p for p in (", ".join(track.artists),
+                                           track.album) if p)[:200]))
     return out
 
 
