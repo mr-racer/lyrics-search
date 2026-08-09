@@ -31,6 +31,7 @@ from difflib import SequenceMatcher
 from typing import Iterable, Optional
 
 from lab.agent.models import MatchMode, ResolvedTrack, TrackRef
+from lab.agent.urls import canonical_url
 # _translit is private to websearch_lab but it is the same Cyrillic->Latin map
 # `similar` uses; the token index has to agree with the scorer or blocking
 # would hide exactly the cross-script matches the scorer exists to find.
@@ -414,7 +415,12 @@ class LibraryCatalog:
         """
         resolved: list[ResolvedTrack] = []
         missing: list[TrackRef] = []
-        seen_ids: set[str] = set()
+        # (track, page) — one page cannot vote for the same track twice, but a
+        # second page can. Deduplicating on the track alone (which this did)
+        # threw away every corroboration before it could be counted: the
+        # weights in `merge_claims` never summed, and a track found by Apple,
+        # Wikipedia and a listicle scored the same as one found once.
+        seen: set[tuple[str, str]] = set()
         fuzzy_left = max_fuzzy
 
         for ref in refs:
@@ -425,10 +431,11 @@ class LibraryCatalog:
                 missing.append(ref)
                 continue
             track_id = picked.get("track_id") or ""
-            if track_id and track_id in seen_ids:
+            key = (track_id, canonical_url(ref.source_url))
+            if track_id and key in seen:
                 continue
             if track_id:
-                seen_ids.add(track_id)
+                seen.add(key)
             resolved.append(ResolvedTrack(
                 track_id=track_id, title=picked.get("title") or ref.title,
                 artist=picked.get("artist") or (ref.artist or ""),

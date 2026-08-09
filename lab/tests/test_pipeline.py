@@ -285,3 +285,101 @@ class TestSelection:
                              page_title="TDU2")
         merged = merge_claims([bare, rich], source_weights={})
         assert merged[0].section == "Soundtrack"
+
+
+class TestVotingThroughTheSeam:
+    """Voting, exercised through select_tracks rather than merge_claims.
+
+    This is here because the unit test above passed while the feature was
+    broken end to end. `merge_claims` summed correctly; `resolve_tracks`
+    deduplicated by track_id before it ever got there, so it only ever saw one
+    claim per track and the weights never added up. Testing the unit is not
+    testing the seam.
+    """
+
+    import pytest as _pytest
+
+    @staticmethod
+    def _catalog(tmp_path):
+        import sqlite3
+
+        from lab.agent.catalog import LibraryCatalog
+
+        path = tmp_path / "m.db"
+        conn = sqlite3.connect(path)
+        conn.execute("""CREATE TABLE track_metadata (
+            collection_name TEXT, track_id TEXT, title TEXT, artist TEXT,
+            artists TEXT, artist_slugs TEXT, primary_artist_slug TEXT,
+            album TEXT, year INTEGER)""")
+        conn.execute("CREATE TABLE artists (slug TEXT, name TEXT, "
+                     "collection_name TEXT)")
+        conn.execute("CREATE TABLE songs (slug TEXT, title TEXT, "
+                     "artist_slug TEXT, collection_name TEXT)")
+        for tid, title in (("t1", "Runaway"), ("t2", "Power")):
+            conn.execute("INSERT INTO track_metadata VALUES "
+                         "('acct',?,?,'Kanye West',NULL,NULL,'kanye-west','',2010)",
+                         (tid, title))
+        conn.execute("INSERT INTO artists VALUES ('kanye-west','Kanye West','acct')")
+        conn.commit()
+        conn.close()
+        return LibraryCatalog(str(path), "acct")
+
+    WEIGHTS = {"apple": 2.0, "wikipedia": 1.5, "fandom": 1.5, "web": 1.0}
+
+    def test_three_sources_add_up(self, tmp_path):
+        from lab.agent.selection import select_tracks
+
+        cat = self._catalog(tmp_path)
+        claims = [
+            TrackRef(title="Runaway", artist="Kanye West", source="apple",
+                     source_url="https://music.apple.com/a"),
+            TrackRef(title="Runaway", artist="Kanye West", source="wikipedia",
+                     source_url="https://en.wikipedia.org/b"),
+            TrackRef(title="Runaway", artist="Kanye West", source="web",
+                     source_url="https://billboard.com/c"),
+        ]
+        tracks, _ = select_tracks(cat, claims, source_weights=self.WEIGHTS)
+        assert len(tracks) == 1
+        assert tracks[0].weight == 4.5
+        assert set(tracks[0].sources) == {"apple", "wikipedia", "web"}
+
+    def test_one_page_cannot_vote_twice(self, tmp_path):
+        """A table listing the same song in two rows is one page's opinion."""
+        from lab.agent.selection import select_tracks
+
+        cat = self._catalog(tmp_path)
+        same = "https://music.apple.com/a"
+        claims = [TrackRef(title="Runaway", artist="Kanye West", source="apple",
+                           source_url=same) for _ in range(3)]
+        tracks, _ = select_tracks(cat, claims, source_weights=self.WEIGHTS)
+        assert tracks[0].weight == 2.0
+
+    def test_apple_outranks_wikipedia_which_outranks_a_listicle(self, tmp_path):
+        from lab.agent.selection import select_tracks
+
+        cat = self._catalog(tmp_path)
+        claims = [
+            TrackRef(title="Power", artist="Kanye West", source="wikipedia",
+                     source_url="https://en.wikipedia.org/b"),
+            TrackRef(title="Runaway", artist="Kanye West", source="apple",
+                     source_url="https://music.apple.com/a"),
+        ]
+        tracks, _ = select_tracks(cat, claims, source_weights=self.WEIGHTS)
+        assert [t.title for t in tracks] == ["Runaway", "Power"]
+
+    def test_corroboration_beats_a_single_stronger_source(self, tmp_path):
+        """Wikipedia plus a listicle is 2.5 and outranks Apple alone at 2.0 —
+        two independent pages naming a track is the stronger signal."""
+        from lab.agent.selection import select_tracks
+
+        cat = self._catalog(tmp_path)
+        claims = [
+            TrackRef(title="Runaway", artist="Kanye West", source="apple",
+                     source_url="https://music.apple.com/a"),
+            TrackRef(title="Power", artist="Kanye West", source="wikipedia",
+                     source_url="https://en.wikipedia.org/b"),
+            TrackRef(title="Power", artist="Kanye West", source="web",
+                     source_url="https://billboard.com/c"),
+        ]
+        tracks, _ = select_tracks(cat, claims, source_weights=self.WEIGHTS)
+        assert [t.title for t in tracks] == ["Power", "Runaway"]

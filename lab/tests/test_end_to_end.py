@@ -369,9 +369,12 @@ class TestPlaylistBranch:
         result = await agent.run("Песни из Test Drive Unlimited 2")
         assert any(m.title == "Not In The Library" for m in result.missing)
 
-    async def test_wiki_sourced_tracks_carry_the_double_weight(self, agent):
+    async def test_wiki_sourced_tracks_carry_the_wiki_weight(self, agent):
+        """1.5, not 2.0: Apple leads the vote now. A discography table is
+        exhaustive but it is a list of everything, not a selection."""
         result = await agent.run("Песни из Test Drive Unlimited 2")
-        assert all(t.weight == 2.0 for t in result.tracks)
+        assert all(t.weight == 1.5 for t in result.tracks)
+        assert all(t.sources == ["wikipedia"] for t in result.tracks)
 
     async def test_filler_reasons_are_stripped_but_the_track_stays(self, agent):
         result = await agent.run("Песни из Test Drive Unlimited 2")

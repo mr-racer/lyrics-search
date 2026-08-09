@@ -155,10 +155,22 @@ class AgentConfig:
 
     # ── playlist assembly ─────────────────────────────────────────────────
     default_target_count: int = 15
-    # Wikipedia/Apple titles are more often real than a listicle's.
+    # Votes. Every source that names a track adds its weight, so a track found
+    # by Apple and Wikipedia scores 3.5 and outranks one found by Apple alone.
+    #
+    # Apple leads because its lists are the product itself: an editorial
+    # playlist or an artist's top-songs chart is assembled by people whose job
+    # it is, with no SEO incentive. Wikipedia is a shade below — its tables are
+    # exhaustive and accurate but they are discographies, not selections, so
+    # "appears in the table" says less about a song than "Apple put it in a
+    # playlist". Everything else is a listicle until proven otherwise.
+    #
+    # Fandom sits with Wikipedia rather than with "everything else": it is the
+    # same MediaWiki tables read by the same parser, and for a game soundtrack
+    # it is often the only structured source there is.
     source_weights: dict = field(
-        default_factory=lambda: {"wikipedia": 2.0, "apple": 2.0,
-                                 "fandom": 2.0, "web": 1.0})
+        default_factory=lambda: {"apple": 2.0, "wikipedia": 1.5,
+                                 "fandom": 1.5, "web": 1.0})
     # Below this share of the target, the constraint comes out of the query
     # text and becomes a post-hoc filter instead.
     min_yield_ratio: float = 0.6
