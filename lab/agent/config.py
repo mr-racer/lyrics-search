@@ -142,7 +142,15 @@ class AgentConfig:
     general_max_iterations: int = 2
     playlist_max_iterations: int = 3
     max_web_searches: int = 8
-    fetch_timeout: float = 15.0
+    # Per HTTP attempt. Low on purpose: a host that has not answered in eight
+    # seconds is usually not going to, and there are two more fetchers behind
+    # this one. Also pinned onto trafilatura's own downloader, which otherwise
+    # ignores it and waits 30 (see fetch._pin_trafilatura_timeout).
+    fetch_timeout: float = 8.0
+    # Ceiling over the whole cascade for one page — three fetchers plus
+    # extraction. Bounds the damage from a library that ignores its timeout or
+    # grows a retry loop; without it a single stuck page stalls the iteration.
+    fetch_deadline: float = 25.0
     fetch_concurrency: int = 4
 
     # ── playlist assembly ─────────────────────────────────────────────────

@@ -191,3 +191,47 @@ class TestAppleArtistPage:
             got = normalise_apple_url(url)
             slug, ident = url.split("/artist/")[1].split("/")[:2]
             assert f"/artist/{slug}/{ident}" in got, url
+
+
+class TestFetchDeadline:
+    """A stuck page must cost one page, not the iteration.
+
+    Note what the deadline does and does not do: it stops the pipeline WAITING.
+    The worker thread runs to completion regardless — Python cannot cancel it —
+    so the sleeps here are short on purpose, or every run of this file would
+    wait for them at exit.
+    """
+
+    async def test_a_hanging_fetch_is_abandoned(self, monkeypatch):
+        import time
+
+        from lab.agent.config import AgentConfig
+
+        f = PageFetcher(AgentConfig(fetch_deadline=0.05))
+        monkeypatch.setattr(f, "fetch_sync",
+                            lambda url, **kw: time.sleep(0.3) or Page(
+                                url=url, title="", markdown="x", source="web"))
+        page = await f.fetch("https://slow.example/a")
+        assert not page.ok
+        assert "deadline" in page.error
+
+    async def test_the_run_continues_after_one_page_gives_up(self, monkeypatch):
+        import time
+
+        from lab.agent.config import AgentConfig
+        from lab.agent.models import SearchHit
+
+        f = PageFetcher(AgentConfig(fetch_deadline=0.05, fetch_concurrency=2))
+
+        def maybe_hang(url, *, source="web", title=""):
+            if "slow" in url:
+                time.sleep(0.3)
+            return Page(url=url, title="", markdown="body", source=source)
+
+        monkeypatch.setattr(f, "fetch_sync", maybe_hang)
+        pages = await f.fetch_many([
+            SearchHit(url="https://slow.example/a", title="", snippet="",
+                      source="web", rank=0),
+            SearchHit(url="https://fast.example/b", title="", snippet="",
+                      source="web", rank=1)])
+        assert [p.url for p in pages] == ["https://fast.example/b"]

@@ -23,6 +23,27 @@ from lab.agent.urls import canonical_url, source_for_url
 logger = logging.getLogger(__name__)
 
 
+def _pin_trafilatura_timeout(seconds: float) -> None:
+    """Make our timeout actually reach trafilatura's downloader.
+
+    ``websearch_lab._fetch_trafilatura`` takes a ``timeout`` argument and does
+    not use it — it calls ``trafilatura.fetch_url(url)``, which falls back to
+    the library's own ``DOWNLOAD_TIMEOUT`` of 30 seconds. So a dead host cost
+    30 seconds per page no matter what the config said, and the log said
+    ``connect timeout=30`` while the config said 15.
+
+    Setting it on the module-level config is what ``fetch_url`` reads when it
+    is called without one. Done once, from here, so the lab file stays the
+    author's.
+    """
+    try:
+        from trafilatura.settings import DEFAULT_CONFIG
+
+        DEFAULT_CONFIG.set("DEFAULT", "DOWNLOAD_TIMEOUT", str(int(seconds)))
+    except Exception:  # noqa: BLE001 — no trafilatura, or it moved the setting
+        logger.debug("[fetch] could not pin trafilatura's timeout", exc_info=True)
+
+
 class PageFetcher:
     """Fetch and extract, at most once per PAGE per instance.
 
@@ -39,6 +60,7 @@ class PageFetcher:
         self.sink = sink
         self._cache: dict[str, Page] = {}
         self._semaphore = asyncio.Semaphore(self.cfg.fetch_concurrency)
+        _pin_trafilatura_timeout(self.cfg.fetch_timeout)
 
     @property
     def seen_urls(self) -> set[str]:
@@ -67,16 +89,16 @@ class PageFetcher:
 
         def by_scraping():
             nonlocal raw_html
+            # http_get_text + extract_page rather than md(): md() takes no
+            # timeout, and the whole point here is that ours applies.
+            html = L.http_get_text(url, timeout=self.cfg.fetch_timeout)
             if keep_html:
                 # One request, two consumers. Apple's track list is in embedded
                 # JSON that markdown extraction discards, so the body is kept
                 # for `apple_tracks` instead of being downloaded again there.
-                raw_html = L.http_get_text(url)
-                out = L.extract_page(raw_html, url, "trafilatura")
-                return out["text"], out["meta"], L.LAST_FETCH.get("fetcher")
-            text = L.md(url, quiet=True)
-            return text, dict(L.LAST_EXTRACT.get("meta") or {}), \
-                L.LAST_EXTRACT.get("fetcher")
+                raw_html = html
+            out = L.extract_page(html, url, "trafilatura")
+            return out["text"], out["meta"], L.LAST_FETCH.get("fetcher")
 
         def by_api():
             got = mediawiki.fetch_html(url, timeout=self.cfg.fetch_timeout)
@@ -132,8 +154,20 @@ class PageFetcher:
         if key in self._cache:
             return self._cache[key]
         async with self._semaphore:
-            return await asyncio.to_thread(self.fetch_sync, url,
-                                           source=source, title=title)
+            try:
+                # A hard ceiling over the whole cascade. Each fetcher has its
+                # own timeout, but three of them in a row is three times the
+                # wait, and a library that ignores the setting (or grows a new
+                # retry) would otherwise stall the run with nothing in the log.
+                return await asyncio.wait_for(
+                    asyncio.to_thread(self.fetch_sync, url, source=source,
+                                      title=title),
+                    timeout=self.cfg.fetch_deadline)
+            except asyncio.TimeoutError:
+                logger.info("[fetch] %s gave up after %.0fs", url,
+                            self.cfg.fetch_deadline)
+                return Page(url=url, title=title, markdown="", source=source,
+                            error=f"deadline of {self.cfg.fetch_deadline:.0f}s")
 
     # ── many pages ────────────────────────────────────────────────────────
 
