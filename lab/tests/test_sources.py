@@ -243,3 +243,99 @@ class TestRerankDeduplication:
 
         kept = rerank_hits(self._hits(), "q", hub=_NoCE(), threshold=0.2)
         assert len(kept) == 2
+
+
+class TestBrokenEngineDetection:
+    """A scraper that landed on the wrong page returns THAT page's navigation.
+
+    The results are real URLs on a real site with nothing to do with the query
+    — a Polish TV guide's channel list, a Czech portal's sections. No blocklist
+    finds this; the shape does. One host, many results.
+    """
+
+    TAKEOVER = [
+        {"url": "https://telemagazyn.pl/", "title": "t", "content": "",
+         "engine": "brokenengine", "engines": ["brokenengine"]},
+        {"url": "https://playback.fm/artist/kanye-west-top-songs", "title": "t",
+         "content": "", "engine": "google", "engines": ["google"]},
+        {"url": "https://telemagazyn.pl/program-tv", "title": "t", "content": "",
+         "engine": "brokenengine", "engines": ["brokenengine"]},
+        {"url": "https://www.billboard.com/artist/kanye-west/", "title": "t",
+         "content": "", "engine": "google", "engines": ["google"]},
+        {"url": "https://telemagazyn.pl/stacje/tvp-1", "title": "t", "content": "",
+         "engine": "brokenengine", "engines": ["brokenengine"]},
+        {"url": "https://telemagazyn.pl/stacje/tv6", "title": "t", "content": "",
+         "engine": "brokenengine", "engines": ["brokenengine"]},
+        {"url": "https://kworb.net/spotify/x.html", "title": "t", "content": "",
+         "engine": "google", "engines": ["google"]},
+        {"url": "https://telemagazyn.pl/stacje/tv-4", "title": "t", "content": "",
+         "engine": "brokenengine", "engines": ["brokenengine"]},
+    ]
+
+    def _sources(self, monkeypatch, rows, **cfg):
+        cfg.setdefault("searx_min_interval", 0)
+        src = SearchSources(AgentConfig(searxng_url="http://x.invalid", **cfg))
+
+        class _Resp:
+            status_code = 200
+
+            @staticmethod
+            def raise_for_status():
+                pass
+
+            @staticmethod
+            def json():
+                return {"results": rows}
+
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: _Resp())
+        return src
+
+    def test_the_takeover_host_is_dropped_entirely(self, monkeypatch):
+        src = self._sources(monkeypatch, self.TAKEOVER)
+        urls = [h.url for h in src.web("kanye west hit songs")]
+        assert not any("telemagazyn" in u for u in urls)
+        assert any("billboard" in u for u in urls)
+
+    def test_the_engine_behind_it_is_named(self, monkeypatch):
+        """The answer to "which engine do I remove?" — the whole point."""
+        src = self._sources(monkeypatch, self.TAKEOVER)
+        src.web("kanye west hit songs")
+        assert src.last_response["takeover_host"] == "telemagazyn.pl"
+        assert "brokenengine" in src.suspect_engines()
+        assert src.suspect_engines()["brokenengine"]["hosts"] == ["telemagazyn.pl"]
+        assert "DUMP" in src.report()
+
+    def test_a_healthy_result_set_is_untouched(self, monkeypatch):
+        rows = [{"url": f"https://site{i}.com/a", "title": "t", "content": "",
+                 "engine": "google", "engines": ["google"]} for i in range(8)]
+        src = self._sources(monkeypatch, rows)
+        assert len(src.web("kanye west")) == 8
+        assert src.last_response["takeover_host"] is None
+        assert src.suspect_engines() == {}
+
+    def test_a_host_pinned_query_is_exempt(self, monkeypatch):
+        """site:music.apple.com is SUPPOSED to come back from one host."""
+        rows = [{"url": f"https://music.apple.com/us/playlist/x/pl.{i}",
+                 "title": "t", "content": "", "engine": "google",
+                 "engines": ["google"]} for i in range(6)]
+        src = self._sources(monkeypatch, rows)
+        assert len(src.apple_music("2000s club hits")) == 3   # limited, not dropped
+
+    def test_a_pinned_engine_is_exempt(self, monkeypatch):
+        rows = [{"url": f"https://en.wikipedia.org/wiki/P{i}", "title": "t",
+                 "content": "", "engine": "wikipedia", "engines": ["wikipedia"]}
+                for i in range(5)]
+        src = self._sources(monkeypatch, rows)
+        assert len(src.wikipedia("kanye west", limit=4)) == 4
+
+    def test_a_merely_popular_host_is_capped_not_dropped(self, monkeypatch):
+        """Three Wikipedia articles for one query is normal; ten is a dump."""
+        rows = ([{"url": f"https://en.wikipedia.org/wiki/A{i}", "title": "t",
+                  "content": "", "engine": "google", "engines": ["google"]}
+                 for i in range(4)]
+                + [{"url": f"https://site{i}.com/x", "title": "t", "content": "",
+                    "engine": "google", "engines": ["google"]} for i in range(8)])
+        src = self._sources(monkeypatch, rows)
+        urls = [h.url for h in src.web("kanye west")]
+        assert sum("wikipedia" in u for u in urls) == 3
+        assert len(urls) == 11

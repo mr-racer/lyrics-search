@@ -110,13 +110,41 @@ def _bounded(lo: Optional[int], hi: Optional[int]) -> Optional[tuple[int, int]]:
     return max(lo, EARLIEST_YEAR), min(hi, _current_year() + 1)
 
 
-def validate_style(raw, user_text: str) -> Optional[str]:
-    """Keep the style only if the user actually wrote it.
+# Words about how well known a song is, not about how it sounds. They pass the
+# "did the user write it?" test and mean nothing to the CLAP filter this field
+# feeds: there is no audio signature of being popular, so a style of
+# "популярные" would filter the library against noise.
+# Russian is matched by stem because of the cases; English by whole word.
+_NOT_SOUND_STEMS = ("популярн", "известн", "знаменит", "прославлен", "раскруч",
+                    "хит", "лучш", "топов", "главн", "недооцен", "малоизвестн",
+                    "редк", "культов")
+_NOT_SOUND_WORDS = frozenset({
+    "popular", "famous", "best", "greatest", "top", "hit", "hits", "biggest",
+    "essential", "iconic", "renowned", "underrated", "obscure", "rare",
+    "known", "wellknown", "bestselling", "charting",
+})
 
-    Word-level containment on the folded text, so "спокойные хиты" yields
-    "спокойные" but a helpfully invented "energetic" yields nothing. Checking
-    word by word rather than as one string lets "спокойные, мелодичные" survive
-    when the user wrote both words separately.
+
+def _is_sound_word(folded_word: str) -> bool:
+    """False for words describing fame or chart position rather than sound."""
+    if folded_word in _NOT_SOUND_WORDS:
+        return False
+    return not any(folded_word.startswith(stem) for stem in _NOT_SOUND_STEMS)
+
+
+def validate_style(raw, user_text: str) -> Optional[str]:
+    """Keep the style only if the user wrote it AND it describes SOUND.
+
+    Two independent gates, guarding two different mistakes:
+
+    * the model inventing a mood nobody asked for — caught by requiring every
+      word to appear in the user's own sentence;
+    * the model answering with popularity — "популярные", "хиты", "best" — which
+      does pass the first gate, because the user really did type it. It is
+      still not a style: this field exists to be handed to a CLAP audio filter,
+      and being popular has no sound.
+
+    Word-level, so "популярные клубные хиты" keeps "клубные" and drops the rest.
     """
     text = as_str(raw, 80)
     if not text:
@@ -128,14 +156,21 @@ def validate_style(raw, user_text: str) -> Optional[str]:
     words = [w for w in text.split() if fold(w)]
     if not words:
         return None
-    kept = [w for w in words if all(f in haystack for f in fold(w).split())]
+    def usable(word: str) -> bool:
+        parts = fold(word).split()
+        return (bool(parts)
+                and all(p in haystack for p in parts)     # the user wrote it
+                and all(_is_sound_word(p) for p in parts))  # …about the sound
+
+    kept = [w for w in words if usable(w)]
     if len(kept) == len(words):
         return text
     if kept:
-        logger.info("[planner] style %r trimmed to %r — the rest is not in the "
-                    "user's words", text, " ".join(kept))
+        logger.info("[planner] style %r trimmed to %r — the rest is either not "
+                    "the user's words or not about sound", text, " ".join(kept))
         return " ".join(kept)
-    logger.info("[planner] style %r dropped — not in the user's words", text)
+    logger.info("[planner] style %r dropped — not a description of sound the "
+                "user gave", text)
     return None
 
 

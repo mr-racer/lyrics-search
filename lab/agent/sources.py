@@ -54,6 +54,53 @@ def _host(url: str) -> str:
     return (urlparse(url).netloc or "").lower()
 
 
+def _engine_names(row: dict) -> list[str]:
+    return row.get("engines") or ([row["engine"]] if row.get("engine") else [])
+
+
+def engine_host_spread(results: list[dict]) -> dict[str, dict]:
+    """Per engine: how many results, and from how many distinct hosts.
+
+    This is the measurement that identifies a broken engine, and no blocklist
+    can replace it. A scraper that has landed on the wrong page — a redirect, an
+    error page, an ad portal — returns THAT page's navigation as results: ten
+    links, one host, none of them about the query. Observed as a Polish TV
+    guide's channel list, a Czech portal's sections and a run of Indonesian
+    journal PDFs, all for music queries.
+
+    A healthy engine returns many hosts. One host and several results is the
+    signature.
+    """
+    out: dict[str, dict] = {}
+    for row in results:
+        host = _host(row.get("url") or "")
+        for name in _engine_names(row):
+            entry = out.setdefault(name, {"results": 0, "hosts": set()})
+            entry["results"] += 1
+            if host:
+                entry["hosts"].add(host)
+    return {name: {"results": e["results"], "hosts": len(e["hosts"]),
+                   "top_host": max(e["hosts"], key=len, default="") if len(e["hosts"]) == 1
+                   else ""}
+            for name, e in sorted(out.items(), key=lambda kv: -kv[1]["results"])}
+
+
+def dominating_host(results: list[dict], *, min_share: float,
+                    min_count: int) -> Optional[str]:
+    """The host that took over the result set, if there is one."""
+    if len(results) < min_count:
+        return None
+    counts: dict[str, int] = {}
+    for row in results:
+        host = _host(row.get("url") or "")
+        if host:
+            counts[host] = counts.get(host, 0) + 1
+    if not counts:
+        return None
+    host, count = max(counts.items(), key=lambda kv: kv[1])
+    return host if count >= min_count and count / len(results) >= min_share else None
+
+
 def _count_by_engine(results: list[dict]) -> dict[str, int]:
     """How many results each engine contributed, best-effort.
 
@@ -125,6 +172,30 @@ class SearchSources:
                 out[engine] = out.get(engine, 0) + count
         return dict(sorted(out.items(), key=lambda kv: -kv[1]))
 
+    def suspect_engines(self) -> dict[str, dict]:
+        """Engines that returned several results from a SINGLE host.
+
+        The one measurement that finds a broken scraper. It has landed on the
+        wrong page and is returning that page's navigation, so its results are
+        many and its hosts are one — while a healthy engine's results are
+        spread across the web. No blocklist finds this, because the host is
+        usually a perfectly real site that has nothing to do with the query.
+        """
+        totals: dict[str, dict] = {}
+        for entry in self.diagnostics:
+            for name, spread in (entry.get("engine_spread") or {}).items():
+                if spread["hosts"] == 1 and spread["results"] >= 3:
+                    row = totals.setdefault(
+                        name, {"dumps": 0, "results": 0, "hosts": set()})
+                    row["dumps"] += 1
+                    row["results"] += spread["results"]
+                    if spread["top_host"]:
+                        row["hosts"].add(spread["top_host"])
+        return {name: {"dumps": r["dumps"], "results": r["results"],
+                       "hosts": sorted(r["hosts"])}
+                for name, r in sorted(totals.items(),
+                                      key=lambda kv: -kv[1]["results"])}
+
     def report(self) -> str:
         """One line per search: what was asked, who answered, who did not."""
         lines = []
@@ -132,6 +203,13 @@ class SearchSources:
             engines = ", ".join(f"{k}:{v}" for k, v in entry["per_engine"].items())
             lines.append(f"{entry['results']:>3} results  {entry['query'][:60]!r}")
             lines.append(f"     from: {engines or '(nobody)'}")
+            for name, spread in (entry.get("engine_spread") or {}).items():
+                if spread["hosts"] == 1 and spread["results"] >= 3:
+                    lines.append(f"     DUMP: {name} returned "
+                                 f"{spread['results']} results, all from "
+                                 f"{spread['top_host'] or '(one host)'}")
+            if entry.get("takeover_host"):
+                lines.append(f"     TAKEOVER dropped: {entry['takeover_host']}")
             if entry.get("spam"):
                 by = ", ".join(f"{k}:{v}" for k, v
                                in (entry.get("spam_by_engine") or {}).items())
@@ -251,6 +329,34 @@ class SearchSources:
         # got worse" and nothing to act on.
         spam_rows = [r for r in all_results if is_spam_host(r.get("url") or "")]
         clean = [r for r in all_results if not is_spam_host(r.get("url") or "")]
+
+        # A query pinned to one HOST is supposed to come back from one host, so
+        # the takeover rules are off for it. Two ways that happens: a `site:`
+        # operator, or a single-engine request (engines=wikipedia).
+        #
+        # Note what does NOT count: `pinned` being set. The engine WHITELIST is
+        # non-empty on every open-web search, and reading that as "host-pinned"
+        # switched the whole check off silently — which is how it shipped
+        # broken the first time.
+        pinned_to_host = ("site:" in (query or "").lower()
+                          or (engines is not None and "," not in engines))
+        dominant = None
+        if not pinned_to_host:
+            dominant = dominating_host(
+                clean, min_share=self.cfg.host_takeover_share,
+                min_count=self.cfg.host_takeover_min)
+            if dominant:
+                clean = [r for r in clean if _host(r.get("url") or "") != dominant]
+
+        capped, per_host = [], {}
+        for row in clean:
+            host = _host(row.get("url") or "")
+            if not pinned_to_host and host:
+                per_host[host] = per_host.get(host, 0) + 1
+                if per_host[host] > self.cfg.max_results_per_host:
+                    continue
+            capped.append(row)
+        clean = capped
         results = clean[:limit]
 
         self.last_response = {
@@ -261,9 +367,23 @@ class SearchSources:
             "spam": len(spam_rows),
             "spam_by_engine": _count_by_engine(spam_rows),
             "spam_hosts": spam_report(r.get("url") or "" for r in spam_rows),
+            "takeover_host": dominant,
+            "engine_spread": engine_host_spread(all_results),
             "unresponsive": [list(e) for e in (data.get("unresponsive_engines") or [])],
         }
         self.diagnostics.append(self.last_response)
+
+        if dominant:
+            culprits = {name: e for name, e in
+                        self.last_response["engine_spread"].items()
+                        if e["top_host"] == dominant}
+            logger.warning(
+                "[sources] %r took over the results for %r — dropped. "
+                "Engine(s) dumping it: %s", dominant, query,
+                culprits or "(not reported; see engine_spread)")
+            if self.sink is not None:
+                self.sink.put("host_takeover", query=query, host=dominant,
+                              engines=sorted(culprits))
 
         if spam_rows:
             logger.warning(

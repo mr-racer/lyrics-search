@@ -112,6 +112,18 @@ class AgentConfig:
     # whatever fringe engines are left. That is the mechanism behind a Kanye
     # query coming back with Indonesian journal PDFs.
     searx_min_interval: float = 1.5
+    # At most this many results from one host. A real answer is spread across
+    # hosts; a broken scraper returns one site's navigation menu, ten links
+    # deep. Observed as a Polish TV guide's channel list interleaved
+    # one-for-one with genuine music results.
+    max_results_per_host: int = 3
+    # ...and when one host is this much of the whole result set, it is not a
+    # popular source, it is an engine dumping a page it landed on by mistake.
+    # Dropped entirely, with the engine named in the log. Host-pinned queries
+    # (site:music.apple.com, engines=wikipedia) are exempt — they are supposed
+    # to come back from one host.
+    host_takeover_share: float = 0.4
+    host_takeover_min: int = 4
     # Host-pinned sources run on the FIRST query only. A rephrasing rarely
     # surfaces a different Apple playlist or a different Fandom wiki, and each
     # extra call is another turn of the burst that costs the good engines.

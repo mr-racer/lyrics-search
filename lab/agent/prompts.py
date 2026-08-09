@@ -35,8 +35,14 @@ Fields:
 - intent: "playlist" or "general"
 - era: a year range as "YYYY-YYYY" if the user named a decade, a year, or a \
 boundary like "after 2020". Otherwise null.
-- style: the user's OWN words for mood or energy, copied verbatim in their \
-language. Not your paraphrase. Null if they said nothing about mood.
+- style: how the music SOUNDS, in the user's own words, copied verbatim in \
+their language. Mood, energy, tempo, texture, production: спокойная, \
+мелодичная, резкая, драйвовая, экспериментальная, минималистичная, клубная, \
+акустическая, тяжёлая, calm, melodic, aggressive, lo-fi, dreamy.
+  This is NOT how well known a song is. "Популярные", "известные", "хиты", \
+"лучшие", "топ", "best", "greatest", "famous" say nothing about sound — they \
+are not a style, and if the request contains only those, style is null.
+  Null also when the user described no sound at all.
 - work: the film, game or TV series the music belongs to, expanded to its full \
 official title. Null if none.
 - abbreviation: when `work` came from an abbreviation, give {"raw": what the \
@@ -98,6 +104,17 @@ User: популярные клубные хиты 00х
                  "2000s club classics essential playlist track list"],
  "ce_query": "Club and dance tracks that were hits during the 2000s.",
  "rationale": "Клубные хиты двухтысячных."}
+(style is "клубные" and NOT "популярные хиты": the first describes the sound, \
+the second describes the chart.)
+
+User: Включи самые известные песни Radiohead
+{"intent": "playlist", "era": null, "style": null, "work": null,
+ "abbreviation": null, "artist": "Radiohead", "song": null, "count": null,
+ "web_queries": ["Radiohead most popular songs of all time",
+                 "Radiohead best known tracks chart singles"],
+ "ce_query": "The best known songs by Radiohead.",
+ "rationale": "Самые известные песни Radiohead."}
+(No style at all — "известные" is fame, not sound.)
 
 Return ONLY this JSON object:
 {"intent": ..., "era": ..., "style": ..., "work": ..., "abbreviation": ...,

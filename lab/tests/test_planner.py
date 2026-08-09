@@ -146,3 +146,45 @@ class TestValidate:
     def test_ce_query_falls_back_to_the_message(self):
         plan = _planner().validate({"intent": "general"}, "почему так вышло")
         assert plan.ce_query == "почему так вышло"
+
+
+class TestStyleIsSound:
+    """Style feeds a CLAP audio filter, so it has to describe SOUND.
+
+    "Популярные" passes the "did the user write it?" gate — they really did
+    type it — and is still not a style: being popular has no audio signature,
+    so filtering the library against it would drop good tracks for nothing.
+    """
+
+    def test_a_sound_word_survives(self):
+        for word, text in (("спокойные", "спокойные хиты 80х"),
+                           ("мелодичные", "мелодичные треки"),
+                           ("резкие", "резкие агрессивные песни"),
+                           ("экспериментальная", "экспериментальная музыка"),
+                           ("клубные", "популярные клубные хиты 00х")):
+            assert validate_style(word, text) == word, word
+
+    def test_popularity_is_not_a_style(self):
+        for word, text in (("популярные", "популярные хиты 00х"),
+                           ("известные", "самые известные песни Radiohead"),
+                           ("хиты", "хиты Канье"),
+                           ("лучшие", "лучшие треки Muse"),
+                           ("топовые", "топовые песни"),
+                           ("знаменитые", "знаменитые песни Queen")):
+            assert validate_style(word, text) is None, word
+
+    def test_english_popularity_words_too(self):
+        for word, text in (("popular", "popular songs"),
+                           ("best", "best tracks"),
+                           ("greatest", "greatest hits"),
+                           ("famous", "famous songs"),
+                           ("iconic", "iconic tracks")):
+            assert validate_style(word, text) is None, word
+
+    def test_a_mixed_phrase_keeps_only_the_sound(self):
+        """The exact case: "популярные клубные хиты 00х"."""
+        assert validate_style("популярные клубные",
+                              "популярные клубные хиты 00х") == "клубные"
+
+    def test_a_sound_word_that_merely_starts_like_a_stop_word_survives(self):
+        assert validate_style("хрустящий", "хрустящий лоу-фай") == "хрустящий"
