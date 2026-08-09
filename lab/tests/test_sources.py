@@ -191,3 +191,55 @@ class TestRerank:
 
     def test_an_empty_list_stays_empty(self):
         assert rerank_hits([], "q", hub=self._Hub([]), threshold=0.2) == []
+
+
+class TestRerankDeduplication:
+    """An iteration runs two queries and concatenates their results, so a page
+    both queries found arrives twice — with different titles and snippets,
+    because each engine words them its own way."""
+
+    class _Hub:
+        def __init__(self):
+            self.batches: list[list[str]] = []
+
+        def ce_probabilities(self, query, docs):
+            self.batches.append(list(docs))
+            return [0.9] * len(docs)
+
+    FEUD = "https://en.wikipedia.org/wiki/Taylor_Swift–Kanye_West_feud"
+    FEUD_ENCODED = ("https://en.wikipedia.org/wiki/"
+                    "Taylor_Swift%E2%80%93Kanye_West_feud")
+
+    def _hits(self):
+        return [
+            SearchHit(url=self.FEUD, title="Taylor Swift-Kanye West feud",
+                      snippet="from query one", source="web", rank=0),
+            SearchHit(url="https://people.com/x", title="A Complete Timeline",
+                      snippet="a", source="web", rank=1),
+            SearchHit(url=self.FEUD_ENCODED, title="Taylor Swift–Kanye West feud",
+                      snippet="from query two", source="web", rank=2),
+            SearchHit(url="https://people.com/x", title="A Complete Timeline",
+                      snippet="a", source="web", rank=3),
+        ]
+
+    def test_the_same_page_is_scored_once(self):
+        """Two slots in the most expensive stage, and two different
+        probabilities for one document."""
+        hub = self._Hub()
+        kept = rerank_hits(self._hits(), "q", hub=hub, threshold=0.2)
+        assert len(hub.batches[0]) == 2
+        assert len(kept) == 2
+
+    def test_the_better_ranked_spelling_is_the_one_kept(self):
+        kept = rerank_hits(self._hits(), "q", hub=self._Hub(), threshold=0.2)
+        assert kept[0].url == self.FEUD or kept[1].url == self.FEUD
+        assert all(h.url != self.FEUD_ENCODED for h in kept)
+
+    def test_dedup_happens_even_without_a_cross_encoder(self):
+        class _NoCE:
+            @staticmethod
+            def ce_probabilities(query, docs):
+                return None
+
+        kept = rerank_hits(self._hits(), "q", hub=_NoCE(), threshold=0.2)
+        assert len(kept) == 2

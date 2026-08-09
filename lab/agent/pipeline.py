@@ -237,9 +237,9 @@ class _WebBranch:
         if web_hits:
             kept = await asyncio.to_thread(
                 rerank_hits, web_hits, ce_query,
-                hub=self.agent.hub, threshold=self.cfg.ce_threshold)
+                hub=self.agent.hub, threshold=self.cfg.ce_threshold_docs)
         self.sink.put("rerank", candidates=len(web_hits), kept=len(kept),
-                      threshold=self.cfg.ce_threshold)
+                      threshold=self.cfg.ce_threshold_docs)
 
         # Deduplicated ACROSS the two lists, not within each: a Wikipedia
         # article reached by the pinned-host stream and again by the open-web
@@ -286,12 +286,26 @@ class _WebBranch:
         """Top chunks across every page read so far, above the threshold."""
         if self.retriever is None or not self.chunks:
             return []
+        threshold = self.cfg.ce_threshold_chunks
         ranked = self.retriever.search(
-            ce_query, min_prob=self.cfg.ce_threshold,
+            ce_query, min_prob=threshold,
             limit=self.cfg.max_chunks_in_context)
         out = [(self.chunks[r.index], r.ce_prob or 0.0) for r in ranked]
-        self.sink.put("chunks", selected=len(out),
-                      best=round(max((p for _, p in out), default=0.0), 3))
+        if not out:
+            # A high chunk threshold is the right default, but "nothing passed"
+            # and "nothing was found" look identical from the outside. Say
+            # which, and say how close it came, so the number can be calibrated
+            # instead of guessed at.
+            unfiltered = self.retriever.search(ce_query, limit=1)
+            best = unfiltered[0].ce_prob if unfiltered else None
+            logger.info("[pipeline] no chunk cleared p>=%.2f over %d chunks "
+                        "(best was %s)", threshold, len(self.chunks),
+                        f"{best:.3f}" if best is not None else "unscored")
+            self.sink.put("chunks", selected=0, threshold=threshold,
+                          best=round(best, 3) if best is not None else None)
+            return []
+        self.sink.put("chunks", selected=len(out), threshold=threshold,
+                      best=round(max(p for _, p in out), 3))
         return out
 
 
@@ -316,12 +330,20 @@ class GeneralBranch(_WebBranch):
             chunks = self.best_chunks(ce_query)
 
             evidence = _pack(facts, chunks)
-            if not evidence:
-                notes.append(f"iteration {iterations}: nothing retrieved")
-                break
-
-            answer, used, sufficient, missing = await self._ask(message, evidence)
-            best_prob = max((e.ce_prob or 0.0 for e in evidence), default=0.0)
+            if evidence:
+                answer, used, sufficient, missing = await self._ask(message, evidence)
+                best_prob = max((e.ce_prob or 0.0 for e in evidence), default=0.0)
+            else:
+                # Nothing cleared the threshold. That is a reason to search
+                # AGAIN, not to stop: the pages were wrong, the question was
+                # not. Stopping here is what a high chunk threshold turns into
+                # if the empty case is treated as an answer — one unlucky pair
+                # of queries and the run is over.
+                answer, used, sufficient = "", [], False
+                missing = "nothing on those pages was about the question"
+                best_prob = 0.0
+                notes.append(f"iteration {iterations}: nothing cleared the "
+                             f"chunk threshold")
 
             stop, why = self._should_stop(
                 iterations=iterations, sufficient=sufficient,
@@ -333,7 +355,9 @@ class GeneralBranch(_WebBranch):
                 break
 
             queries, next_ce, model_missing = await self.agent.planner.next_queries(
-                message=message, context=_render(evidence, limit=6),
+                message=message,
+                context=(_render(evidence, limit=6) if evidence
+                         else "(nothing found yet)"),
                 used=self.used_queries)
             if not queries:
                 notes.append("no fresh queries — stopping")

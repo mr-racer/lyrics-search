@@ -26,6 +26,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from lab.agent.models import SearchHit
+from lab.agent.urls import dedupe_by_url
 
 logger = logging.getLogger(__name__)
 
@@ -315,11 +316,23 @@ def rerank_hits(hits: list[SearchHit], ce_query: str, *, hub,
                 threshold: float) -> list[SearchHit]:
     """Keep the hits whose title+snippet the cross-encoder likes.
 
-    With no cross-encoder available the list comes back untouched: an
-    unfiltered pool is a worse pool, an empty one is no pool at all.
+    Deduplicated FIRST, and that ordering matters. An iteration runs two
+    queries and concatenates their results, so a page both queries found
+    arrives twice — with different titles and snippets, because each engine
+    words them its own way. Scored twice it takes two slots in the most
+    expensive stage of the pipeline and comes back with two different
+    probabilities for the same document, which is nonsense on its face.
+
+    With no cross-encoder available the list comes back deduplicated but
+    unfiltered: an unfiltered pool is a worse pool, an empty one is no pool.
     """
     if not hits:
         return []
+    before = len(hits)
+    hits = dedupe_by_url(hits)
+    if before != len(hits):
+        logger.info("[sources] %d duplicate URLs collapsed before reranking",
+                    before - len(hits))
     docs = [f"{h.title}\n{h.snippet}".strip() for h in hits]
     probs = hub.ce_probabilities(ce_query, docs)
     if probs is None:

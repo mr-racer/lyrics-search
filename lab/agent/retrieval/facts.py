@@ -130,7 +130,7 @@ class FactsRetriever:
         if not facts or not (query or "").strip():
             return facts
 
-        threshold = self.cfg.ce_threshold if min_prob is None else min_prob
+        threshold = self.cfg.ce_threshold_facts if min_prob is None else min_prob
         retriever = HybridRetriever([f.text for f in facts], hub=self.hub,
                                     config=self.cfg)
         ranked = retriever.search(query, min_prob=threshold)

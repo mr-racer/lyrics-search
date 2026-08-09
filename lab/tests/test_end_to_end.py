@@ -276,9 +276,7 @@ class TestGroundingGate:
 
 
 class TestVetoInPractice:
-    async def test_a_weak_context_forces_a_second_round(self, monkeypatch, db):
-        """The model says it is done; the cross-encoder says the material is
-        unrelated. Code sends it back out."""
+    def _weak_agent(self, monkeypatch, db, **cfg):
         llm = FakeLLM({
             "You plan how to answer": {
                 "intent": "general", "web_queries": ["zzz unrelated"],
@@ -289,15 +287,37 @@ class TestVetoInPractice:
                 "web_queries": ["another angle"], "ce_query": "zzz"},
         })
         page = Page(url="https://ex/w", title="W", markdown=PROSE_MD, source="web")
-        agent = _assistant(
+        return _assistant(
             monkeypatch, db, llm=llm,
             sources={"web": [SearchHit(url="https://ex/w", title="W",
                                        snippet="driving songs", source="web",
                                        rank=0)]},
-            pages={"https://ex/w": page})
+            pages={"https://ex/w": page}, **cfg)
+
+    async def test_a_weak_context_forces_a_second_round(self, monkeypatch, db):
+        """The model says it is done; the cross-encoder says the material is
+        unrelated. Code sends it back out.
+
+        The chunk threshold is lowered here on purpose: at the default 0.75 a
+        weak passage never reaches the pack at all, and the case under test is
+        the one where it does — weak enough to distrust, strong enough to read.
+        """
+        agent = self._weak_agent(monkeypatch, db, ce_threshold_docs=0.1,
+                                 ce_threshold_chunks=0.2)
         result = await agent.run("вопрос ни о чём")
         assert result.iterations == 2
         assert any("searching again" in n for n in result.notes)
+
+    async def test_nothing_clearing_the_threshold_is_a_reason_to_search_again(
+            self, monkeypatch, db):
+        """Not a reason to stop. The pages were wrong; the question was not.
+        Treating the empty case as an answer is what a high chunk threshold
+        turns into otherwise — one unlucky pair of queries ends the run."""
+        agent = self._weak_agent(monkeypatch, db, ce_threshold_docs=0.1,
+                                 ce_threshold_chunks=0.99)
+        result = await agent.run("вопрос ни о чём")
+        assert result.iterations == 2
+        assert any("nothing cleared" in n for n in result.notes)
 
 
 # ── the playlist branch ──────────────────────────────────────────────────────

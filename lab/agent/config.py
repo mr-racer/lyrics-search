@@ -5,9 +5,9 @@ the LLM live on the server, the models and the library dump live locally. So
 nothing here is read from the environment at import time — you build an
 :class:`AgentConfig` in the notebook and hand it to the assistant.
 
-Thresholds start where the notebook left them. ``ce_threshold`` is 0.2 for
-every cross-encoder call in the pipeline; it is deliberately ONE number so it
-can be tuned as one number before anyone starts splitting it per stage.
+The cross-encoder threshold is split three ways — documents, chunks, facts —
+because they are three different questions asked of three different corpora.
+See the fields for what each one is defending against.
 """
 
 from __future__ import annotations
@@ -48,7 +48,22 @@ class AgentConfig:
     milco_source_view: bool = True
 
     # ── retrieval ─────────────────────────────────────────────────────────
-    ce_threshold: float = 0.2
+    # Three thresholds, because they are three different decisions over three
+    # different score distributions — one number cannot serve all of them.
+    #
+    # Documents: "is this page worth downloading?", judged on a title and a
+    # two-line snippet. Cheap to be wrong in either direction — a bad page
+    # costs one fetch, a missed page costs the answer — so the bar is low.
+    ce_threshold_docs: float = 0.3
+    # Chunks: "does this passage go in front of the model?". Expensive to be
+    # wrong: a loose passage takes a slot in a small context window and pulls
+    # the answer towards whatever it is about. The bar is high.
+    ce_threshold_chunks: float = 0.75
+    # Facts: the library's own material about the subject. Left where it was
+    # while the threshold is being calibrated by hand — the corpus is tens of
+    # short texts rather than page passages, and its scores do not sit on the
+    # same scale as either of the above.
+    ce_threshold_facts: float = 0.2
     # 1.0 puts the order entirely in the cross-encoder's hands; 0.8 keeps a
     # fifth of the first-stage signal, which stops a single confident CE
     # mistake from burying a chunk every other signal liked.
