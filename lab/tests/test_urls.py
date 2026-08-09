@@ -11,7 +11,7 @@ import pytest
 from lab.agent.fetch import PageFetcher
 from lab.agent.models import Page, SearchHit
 from lab.agent.urls import (canonical_url, dedupe_by_url,
-                            prefer_apple_top_songs, source_for_url)
+                            normalise_apple_url, source_for_url)
 
 FEUD = "https://en.wikipedia.org/wiki/Taylor_Swift–Kanye_West_feud"
 FEUD_ENCODED = "https://en.wikipedia.org/wiki/Taylor_Swift%E2%80%93Kanye_West_feud"
@@ -140,12 +140,31 @@ class TestAppleArtistPage:
     """
 
     def test_a_landing_page_becomes_top_songs(self):
-        assert prefer_apple_top_songs(
+        assert normalise_apple_url(
+            "https://music.apple.com/us/artist/kanye-west/2715720"
+        ) == "https://music.apple.com/us/artist/kanye-west/2715720/top-songs"
+
+    def test_the_storefront_is_pinned(self):
+        """Search returns the same artist under any country code — /vc/ as
+        readily as /us/ — and the catalogue and ordering differ per country."""
+        assert normalise_apple_url(
             "https://music.apple.com/vc/artist/kanye-west/2715720"
-        ) == "https://music.apple.com/vc/artist/kanye-west/2715720/top-songs"
+        ) == "https://music.apple.com/us/artist/kanye-west/2715720/top-songs"
+
+    def test_two_storefronts_become_one_page(self):
+        """Otherwise the same artist costs two fetch slots and appears twice."""
+        a = normalise_apple_url("https://music.apple.com/vc/artist/sade/462006")
+        b = normalise_apple_url("https://music.apple.com/de-de/artist/sade/462006")
+        assert a == b
+        assert canonical_url(a) == canonical_url(b)
+
+    def test_a_non_artist_apple_page_keeps_its_shape_but_moves_storefront(self):
+        assert normalise_apple_url(
+            "https://music.apple.com/de/album/yeezus/1440851894"
+        ) == "https://music.apple.com/us/album/yeezus/1440851894"
 
     def test_a_trailing_slash_does_not_confuse_it(self):
-        assert prefer_apple_top_songs(
+        assert normalise_apple_url(
             "https://music.apple.com/us/artist/kanye-west/2715720/"
         ).endswith("/2715720/top-songs")
 
@@ -160,10 +179,15 @@ class TestAppleArtistPage:
         "https://en.wikipedia.org/wiki/Kanye_West",
     ])
     def test_everything_else_is_left_alone(self, url):
-        assert prefer_apple_top_songs(url) == url
+        assert normalise_apple_url(url) == url
 
-    def test_it_can_only_ever_add_a_suffix(self):
-        """A rewrite that could land on a different artist would be worse than
-        no rewrite at all."""
-        url = "https://music.apple.com/de-de/artist/sade/462006"
-        assert prefer_apple_top_songs(url).startswith(url)
+    def test_the_artist_itself_is_never_changed(self):
+        """The guarantee that makes the rewrite safe: the slug and the numeric
+        id survive it, so it cannot land on a different artist. Only the
+        storefront and the trailing section move."""
+        for url in ("https://music.apple.com/de-de/artist/sade/462006",
+                    "https://music.apple.com/vc/artist/kanye-west/2715720",
+                    "https://music.apple.com/jp/artist/muse/1990/top-songs"):
+            got = normalise_apple_url(url)
+            slug, ident = url.split("/artist/")[1].split("/")[:2]
+            assert f"/artist/{slug}/{ident}" in got, url

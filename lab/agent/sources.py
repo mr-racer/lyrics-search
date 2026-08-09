@@ -27,7 +27,7 @@ from urllib.parse import urlparse
 
 from lab.agent.models import SearchHit
 from lab.agent.spam import is_spam_host, spam_report
-from lab.agent.urls import (dedupe_by_url, prefer_apple_top_songs,
+from lab.agent.urls import (dedupe_by_url, normalise_apple_url,
                             source_for_url)
 
 logger = logging.getLogger(__name__)
@@ -425,10 +425,11 @@ class SearchSources:
                 continue
             # Rewritten here rather than at fetch time so that dedup, the
             # reranker and the fetcher all agree on which page this is.
-            better = prefer_apple_top_songs(url)
+            better = normalise_apple_url(url)
             if better != url:
-                logger.info("[sources] %s -> %s (artist landing page rotates "
-                            "and mixes in other artists' songs)", url, better)
+                logger.info("[sources] %s -> %s (one storefront; the artist "
+                            "landing page rotates and mixes in other "
+                            "artists' songs)", url, better)
                 url = better
             if host_filter:
                 host = _host(url)

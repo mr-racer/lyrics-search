@@ -85,16 +85,28 @@ def source_for_url(url: str, fallback: str = "web") -> str:
     return fallback
 
 
-# music.apple.com/<locale>/artist/<slug>/<id> — the artist's landing page.
+# music.apple.com/<storefront>/artist/<slug>/<id> — the artist's landing page.
 _APPLE_ARTIST_LANDING = re.compile(
     r"^/[a-z]{2}(?:-[a-z]+)?/artist/[^/]+/\d+/?$", re.I)
+_APPLE_STOREFRONT = re.compile(r"^/([a-z]{2}(?:-[a-z]+)?)(/|$)", re.I)
+# One storefront for the whole pipeline. The catalogue and the popularity
+# ordering differ per country, and search hands back whichever one it happened
+# to index — /vc/ (Vatican City) as readily as /us/. Pinning it makes runs
+# reproducible and, just as usefully, makes the same artist page from two
+# storefronts deduplicate to one fetch instead of two.
+APPLE_STOREFRONT = "us"
 
 
-def prefer_apple_top_songs(url: str) -> str:
-    """An Apple artist landing page → that artist's ``/top-songs`` page.
+def normalise_apple_url(url: str) -> str:
+    """Apple URL → the page we actually want to read, on one storefront.
 
-    Measured on Kanye West's, the landing page is the worse source in three
-    ways and the better one in none:
+    Two rewrites, both deterministic:
+
+    **Storefront → ``us``.** Search returns the same artist under any country
+    code; without this they are different URLs to every cache and every dedup.
+
+    **Artist landing → ``/top-songs``.** Measured on Kanye West's page, the
+    landing page is the worse source in three ways and the better one in none:
 
     * it rotates. Two fetches a second apart returned different songs, because
       the page is carousels and the carousels are personalised;
@@ -104,14 +116,21 @@ def prefer_apple_top_songs(url: str) -> str:
     * it is 830 KB against 150 KB for the same twenty songs.
 
     ``/top-songs`` is Apple's own chart for that artist and nothing else. The
-    rewrite is a pure path suffix, so it cannot land on a different artist.
+    rewrite only ever appends a path segment, so it cannot land on a different
+    artist.
     """
     parts = urlsplit(url or "")
     if (parts.netloc or "").lower() != "music.apple.com":
         return url
-    if not _APPLE_ARTIST_LANDING.match(parts.path or ""):
+
+    path = parts.path or ""
+    match = _APPLE_STOREFRONT.match(path)
+    if match and match.group(1).lower() != APPLE_STOREFRONT:
+        path = f"/{APPLE_STOREFRONT}{path[match.end(1):]}"
+    if _APPLE_ARTIST_LANDING.match(path):
+        path = path.rstrip("/") + "/top-songs"
+    if path == parts.path:
         return url
-    path = (parts.path or "").rstrip("/") + "/top-songs"
     return urlunsplit((parts.scheme, parts.netloc, path, parts.query, ""))
 
 
