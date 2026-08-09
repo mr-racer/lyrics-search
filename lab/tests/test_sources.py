@@ -16,12 +16,19 @@ from lab.agent.sources import SearchSources, is_junk, rerank_hits
 
 @pytest.fixture
 def sources(monkeypatch):
-    cfg = AgentConfig(searxng_url="http://192.168.0.168:8088", max_web_searches=3)
+    """A SearchSources whose transport is stubbed.
+
+    Stubbed at ``_searx_raw``, which is the seam between "decide what to ask"
+    and "ask it". An earlier version of this fixture patched a function the
+    code no longer called, so the tests quietly started hitting a real SearXNG
+    on the LAN — they passed, slowly, and depended on someone's server.
+    """
+    cfg = AgentConfig(searxng_url="http://searxng.invalid:8088", max_web_searches=3)
     src = SearchSources(cfg)
     calls: list[dict] = []
 
-    def fake_search(query, max_results=10, engines=None):
-        calls.append({"query": query, "engines": engines, "limit": max_results})
+    def fake_raw(query, *, engines=None, limit=10):
+        calls.append({"query": query, "engines": engines, "limit": limit})
         return [{"url": "https://en.wikipedia.org/wiki/Kanye_West",
                  "title": "Kanye West", "content": "rapper"},
                 {"url": "https://music.apple.com/us/playlist/x/pl.1",
@@ -31,8 +38,7 @@ def sources(monkeypatch):
                 {"url": "https://example.com/best-songs",
                  "title": "Best songs", "content": "a list"}]
 
-    import lab.websearch_lab as L
-    monkeypatch.setattr(L, "search_searxng", fake_search)
+    monkeypatch.setattr(src, "_searx_raw", fake_raw)
     src._calls = calls
     return src
 
@@ -80,6 +86,14 @@ class TestSources:
         assert all("wikipedia.org" in h.url for h in hits)
         assert sources._calls[-1]["engines"] == "wikipedia"
 
+    def test_the_open_web_asks_for_the_configured_whitelist(self, sources):
+        """None would mean the server's stock ~70-engine general set, which is
+        where the Indonesian journal PDFs came from."""
+        sources.web("kanye west")
+        assert sources._calls[-1]["engines"] is None      # resolved downstream
+        assert sources.cfg.searx_engines
+        assert "duckduckgo" in sources.cfg.searx_engines
+
     def test_apple_pins_the_host_and_says_so_in_the_query(self, sources):
         hits = sources.apple_music("2000s club hits")
         assert all("music.apple.com" in h.url for h in hits)
@@ -105,6 +119,53 @@ class TestSources:
     def test_an_empty_query_costs_nothing(self, sources):
         assert sources.web("   ") == []
         assert sources.searches == 0
+
+
+class TestDiagnostics:
+    """Surfacing what the JSON already said and the old code threw away."""
+
+    def test_a_suspended_engine_is_recorded_not_swallowed(self, monkeypatch):
+        cfg = AgentConfig(searxng_url="http://searxng.invalid:8088",
+                          searx_min_interval=0)
+        src = SearchSources(cfg)
+
+        class _Resp:
+            @staticmethod
+            def raise_for_status():
+                pass
+
+            @staticmethod
+            def json():
+                return {"results": [{"url": "https://ex.com/a", "title": "A",
+                                     "content": "c", "engine": "google",
+                                     "engines": ["google", "bing"]}],
+                        "unresponsive_engines": [["duckduckgo", "timeout"],
+                                                 ["brave", "timeout"]]}
+
+        monkeypatch.setattr("httpx.get", lambda *a, **kw: _Resp())
+        src.web("kanye west")
+
+        assert src.suspended_engines() == {"duckduckgo": "timeout",
+                                           "brave": "timeout"}
+        assert src.last_response["per_engine"] == {"google": 1, "bing": 1}
+        assert "DOWN" in src.report()
+
+    def test_an_unreachable_instance_falls_back_to_ddg_direct(self, monkeypatch):
+        """A dead SearXNG is not a dead search — websearch_lab talks to DDG
+        without it."""
+        import lab.websearch_lab as L
+
+        cfg = AgentConfig(searxng_url="http://searxng.invalid:8088",
+                          searx_min_interval=0)
+        src = SearchSources(cfg)
+
+        def boom(*a, **kw):
+            raise OSError("connection refused")
+
+        monkeypatch.setattr("httpx.get", boom)
+        monkeypatch.setattr(L, "search_ddg", lambda q, max_results=10: [
+            {"url": "https://ex.com/x", "title": "X", "content": "c"}])
+        assert [h.url for h in src.web("kanye west")] == ["https://ex.com/x"]
 
 
 class TestRerank:

@@ -52,6 +52,21 @@ def _host(url: str) -> str:
     return (urlparse(url).netloc or "").lower()
 
 
+def _count_by_engine(results: list[dict]) -> dict[str, int]:
+    """How many results each engine contributed, best-effort.
+
+    SearXNG reports both a single ``engine`` and, when several found the same
+    page, an ``engines`` list. Counting the list is what shows an engine that
+    is technically responding but only ever corroborating others.
+    """
+    counts: dict[str, int] = {}
+    for row in results:
+        names = row.get("engines") or ([row["engine"]] if row.get("engine") else [])
+        for name in names:
+            counts[name] = counts.get(name, 0) + 1
+    return dict(sorted(counts.items(), key=lambda kv: -kv[1]))
+
+
 def is_junk(url: str) -> bool:
     return not url or bool(JUNK_URL.search(url))
 
@@ -66,7 +81,38 @@ class SearchSources:
         self.sink = sink
         self.searches = 0
         self._seen_queries: set[str] = set()
+        # One entry per SearXNG call: who answered, who did not, how many
+        # results each engine contributed. Read it after a run to find out why
+        # the same query by hand looked better.
+        self.diagnostics: list[dict] = []
+        self.last_response: dict = {}
+        self._next_call_at = 0.0
         self._publish_searxng_url()
+
+    def suspended_engines(self) -> dict[str, str]:
+        """Engines that failed at least once this run, and why.
+
+        The single most useful thing to look at after a run that returned
+        nonsense: if google, duckduckgo and brave are all in here, the answer
+        was assembled by whoever was left.
+        """
+        out: dict[str, str] = {}
+        for entry in self.diagnostics:
+            for name, reason in entry.get("unresponsive") or []:
+                out[name] = reason
+        return out
+
+    def report(self) -> str:
+        """One line per search: what was asked, who answered, who did not."""
+        lines = []
+        for entry in self.diagnostics:
+            engines = ", ".join(f"{k}:{v}" for k, v in entry["per_engine"].items())
+            lines.append(f"{entry['results']:>3} results  {entry['query'][:60]!r}")
+            lines.append(f"     from: {engines or '(nobody)'}")
+            if entry["unresponsive"]:
+                dead = "; ".join(f"{n} ({r})" for n, r in entry["unresponsive"])
+                lines.append(f"     DOWN: {dead}")
+        return "\n".join(lines)
 
     def _publish_searxng_url(self) -> None:
         """Point ``websearch_lab`` at the configured SearXNG.
@@ -94,6 +140,13 @@ class SearchSources:
         pages again: small models rephrase cosmetically when they are stuck,
         and paying for that twice is how a run burns its budget without
         learning anything.
+
+        The raw JSON is read here rather than through
+        ``websearch_lab.search_searxng`` for one reason: that helper returns
+        ``results`` and drops the rest, and the rest is where the diagnosis
+        lives. ``unresponsive_engines`` is how you learn that DuckDuckGo timed
+        out and the answer you are looking at came from three fallbacks — which
+        is invisible otherwise, and shows up only as "the results got worse".
         """
         norm = " ".join((query or "").lower().split())
         if not norm:
@@ -108,13 +161,83 @@ class SearchSources:
         self._seen_queries.add(key)
         self.searches += 1
 
-        from lab import websearch_lab as L
+        results = self._searx_raw(query, engines=engines, limit=limit)
+        if results is None:
+            from lab import websearch_lab as L
+
+            logger.info("[sources] falling back to DDG direct for %r", query)
+            try:
+                return L.search_ddg(query, max_results=limit)
+            except Exception:
+                logger.warning("[sources] DDG fallback failed", exc_info=True)
+                return []
+        return results
+
+    def _searx_raw(self, query: str, *, engines: Optional[str],
+                   limit: int) -> Optional[list[dict]]:
+        """The JSON call. ``None`` means the instance itself did not answer."""
+        import time
+
+        import httpx
+
+        # Space the calls out. See AgentConfig.searx_min_interval — a burst is
+        # what gets the good engines suspended, and a suspended engine is
+        # invisible except as "the results got worse".
+        wait = self._next_call_at - time.monotonic()
+        if wait > 0:
+            logger.debug("[sources] pacing: waiting %.1fs", wait)
+            time.sleep(wait)
+        self._next_call_at = time.monotonic() + self.cfg.searx_min_interval
+
+        base = self.cfg.searxng_url
+        params = {
+            "q": query,
+            "format": "json",
+            "language": self.cfg.searx_language,
+            "safesearch": 0,
+            "pageno": 1,
+        }
+        pinned = engines if engines is not None else self.cfg.searx_engines
+        if pinned:
+            params["engines"] = pinned
 
         try:
-            return L.search_searxng(query, max_results=limit, engines=engines)
-        except Exception:
-            logger.warning("[sources] searxng failed for %r", query, exc_info=True)
-            return []
+            resp = httpx.get(f"{base}/search", params=params, timeout=20, headers={
+                "Accept": "application/json, text/javascript, */*",
+                "Referer": f"{base}/",
+                "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                               "AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"),
+            })
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[sources] searxng unreachable for %r: %s: %s",
+                           query, type(exc).__name__, exc)
+            return None
+
+        results = (data.get("results") or [])[:limit]
+        self.last_response = {
+            "query": query,
+            "engines_asked": pinned or "(server default)",
+            "results": len(data.get("results") or []),
+            "per_engine": _count_by_engine(data.get("results") or []),
+            "unresponsive": [list(e) for e in (data.get("unresponsive_engines") or [])],
+        }
+        self.diagnostics.append(self.last_response)
+
+        dead = self.last_response["unresponsive"]
+        if dead:
+            # Loud, because this is the difference between "the web has nothing"
+            # and "half the web was not asked".
+            logger.warning("[sources] %d engine(s) did not answer %r: %s",
+                           len(dead), query,
+                           "; ".join(f"{name}: {reason}" for name, reason in dead))
+        logger.info("[sources] %r -> %d results from %s", query, len(results),
+                    self.last_response["per_engine"] or "nobody")
+        if self.sink is not None and dead:
+            self.sink.put("engines_down", query=query,
+                          engines=[name for name, _ in dead])
+        return results
 
     @staticmethod
     def _to_hits(rows: list[dict], source: str,

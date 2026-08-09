@@ -62,8 +62,50 @@ class AgentConfig:
     chunk_min_chars: int = 200
     chunk_overlap_blocks: int = 1
 
-    # ── search budgets ────────────────────────────────────────────────────
+    # ── search ────────────────────────────────────────────────────────────
     searx_pool: int = 20            # results pulled before the CE pass
+    # The SearXNG UI defaults to `default_lang: en` from its settings, so an
+    # API call sending "all" is not the search you ran by hand in the browser —
+    # it also pulls de/fr/es mirrors of the same article. English matches both
+    # the UI and this pipeline's own "search in English" rule.
+    searx_language: str = "en"
+    # An explicit whitelist, because the server default is SearXNG's stock set
+    # of ~70 engines in the general category and it shows: one run of
+    # "Kanye West G.O.A.T. and Yeezus era hit songs" came back with Indonesian
+    # journal PDFs, MusicBrainz release UUIDs and the front page of a Czech
+    # web portal. Pinning the engines removes that whole class of result
+    # regardless of which engine misbehaved, and it does it per call, without
+    # touching what the SearXNG UI does for a human.
+    #
+    # reddit is in on purpose — threads there are often the only place a
+    # niche soundtrack is discussed. An `engines=` parameter activates an
+    # engine even when settings.yml has it `disabled: true` (same mechanism as
+    # a `!re` bang), so no server change is needed to try it.
+    #
+    # startpage is deliberately absent: it answers a CAPTCHA under any burst,
+    # and settings.yml suspends a CAPTCHA'd engine for 3600 seconds — one
+    # tripped run costs it for the rest of the hour.
+    #
+    # Set to None to fall back to the server's default set.
+    searx_engines: Optional[str] = "google,duckduckgo,brave,bing,reddit"
+    # Seconds to leave between SearXNG calls. Not politeness — self-defence.
+    # An iteration fires up to eight searches, each fanning out to every engine
+    # in the whitelist, so a burst is ~50 outbound requests from one IP in a
+    # couple of seconds. DuckDuckGo and Brave rate-limit that immediately;
+    # SearXNG reads the timeout as a failure and suspends the engine for up to
+    # `max_ban_time_on_fail` (120s), and the rest of the run gets served by
+    # whatever fringe engines are left. That is the mechanism behind a Kanye
+    # query coming back with Indonesian journal PDFs.
+    searx_min_interval: float = 1.5
+    # Host-pinned sources run on the FIRST query only. A rephrasing rarely
+    # surfaces a different Apple playlist or a different Fandom wiki, and each
+    # extra call is another turn of the burst that costs the good engines.
+    structured_first_query_only: bool = True
+    # Strip the References / External links tail off MediaWiki pages before
+    # anything is chunked or embedded.
+    strip_appendix: bool = True
+
+    # ── budgets ───────────────────────────────────────────────────────────
     max_pages_per_iteration: int = 5
     general_max_iterations: int = 2
     playlist_max_iterations: int = 3

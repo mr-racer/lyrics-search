@@ -957,24 +957,27 @@ engines:
   - name: genius
     engine: genius
     shortcut: gen
-    # Участвует и в general-поиске: для запросов "artist hits" / "soundtrack"
-    # Genius отдаёт реальные названия песен. weight сильно <1, чтобы genius не
-    # забивал топ выдачи: эмпирически при 0.7 под бёрстом плейлист-агента (6
-    # запросов подряд) genius всё равно владел топ-5 и вытеснял Billboard/
-    # Wikipedia/MusicBrainz. Код-ранкер (rank_playlist_results) — основной фикс;
-    # это второй слой защиты на уровне фьюжена.
-    categories: [general, music]
+    # Убран из general (2026-08). Его добавляли под СТАРЫЙ плейлист-агент,
+    # который вытаскивал названия песен из сниппетов, и уже тогда он давил
+    # выдачу — weight пришлось ронять до 0.3, а сверху ставить код-ранкер.
+    # Новый агент берёт треклисты структурно (Apple Music + вики-таблицы), так
+    # что от genius в общем поиске остаётся только шум: страницы лирики,
+    # которые всё равно отсекает JUNK_URL. Через бэнг !gen он по-прежнему
+    # доступен.
+    categories: [music]
     weight: 0.3
 
   # ── Кастомные музыкальные движки (MusicBrainz / Discogs) ──────────────────
-  # MusicBrainz: открытое API без ключа, лимит ~1 rps. Релизы находят альбомы
-  # и саундтреки ("Watch Dogs Original Game Soundtrack"), записи — конкретные
-  # песни. Страница релиза musicbrainz.org содержит ПОЛНЫЙ трек-лист — идеальная
-  # цель для fetch_content агента.
+  # MusicBrainz: открытое API без ключа, лимит ~1 rps.
+  # Убран из general (2026-08). Отдаёт ссылки вида /release/<uuid> — это
+  # страницы метаданных, а не текст: фетчер вытаскивает из них почти пустой
+  # markdown, реранкер честно ставит им низкую вероятность, и весь их вклад —
+  # занятые слоты в выдаче. Треклисты новый агент берёт с Apple Music и из
+  # вики-таблиц структурно. Через бэнг !mbr доступен.
   - name: musicbrainz releases
     engine: json_engine
     shortcut: mbr
-    categories: [general, music]
+    categories: [music]
     paging: false
     search_url: https://musicbrainz.org/ws/2/release/?query={query}&fmt=json&limit=10
     results_query: releases
@@ -1910,7 +1913,10 @@ engines:
     engine: reddit
     shortcut: re
     page_size: 25
-    disabled: true
+    # Enabled on purpose (stock SearXNG ships it off). For niche soundtracks
+    # and "what was that song in X" questions a Reddit thread is regularly the
+    # only place the answer is written down at all.
+    disabled: false
 
   - name: reuters
     engine: reuters

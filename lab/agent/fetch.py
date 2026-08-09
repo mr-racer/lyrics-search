@@ -18,12 +18,19 @@ import logging
 from typing import Iterable, Optional
 
 from lab.agent.models import Page, SourceKind
+from lab.agent.urls import canonical_url, dedupe_by_url
 
 logger = logging.getLogger(__name__)
 
 
 class PageFetcher:
-    """Fetch and extract, at most once per URL per instance."""
+    """Fetch and extract, at most once per PAGE per instance.
+
+    Per page, not per URL string: the cache is keyed by
+    :func:`~lab.agent.urls.canonical_url`, so the same Wikipedia article
+    arriving percent-encoded from one search stream and decoded from another is
+    downloaded once.
+    """
 
     def __init__(self, config=None, sink=None):
         from lab.agent.config import AgentConfig
@@ -46,15 +53,22 @@ class PageFetcher:
     def fetch_sync(self, url: str, *, source: SourceKind = "web",
                    title: str = "") -> Page:
         """Blocking fetch. Returns a Page with ``error`` set on failure."""
-        cached = self._cache.get(url)
+        key = canonical_url(url)
+        cached = self._cache.get(key)
         if cached is not None:
             return cached
 
         from lab import websearch_lab as L
+        from lab.agent.cleanup import strip_appendix
 
         try:
             markdown = L.md(url, quiet=True)
             meta = dict(L.LAST_EXTRACT.get("meta") or {})
+            if self.cfg.strip_appendix:
+                markdown, removed = strip_appendix(markdown or "")
+                if removed:
+                    logger.info("[fetch] %s: dropped %d chars of appendix "
+                                "(references, external links)", url, removed)
             page = Page(url=url, title=(title or meta.get("title") or ""),
                         markdown=markdown or "", source=source, meta=meta,
                         fetcher=L.LAST_EXTRACT.get("fetcher"))
@@ -65,13 +79,14 @@ class PageFetcher:
                         error=f"{type(exc).__name__}: {exc}")
             logger.info("[fetch] %s failed: %s", url, page.error)
 
-        self._cache[url] = page
+        self._cache[key] = page
         return page
 
     async def fetch(self, url: str, *, source: SourceKind = "web",
                     title: str = "") -> Page:
-        if url in self._cache:
-            return self._cache[url]
+        key = canonical_url(url)
+        if key in self._cache:
+            return self._cache[key]
         async with self._semaphore:
             return await asyncio.to_thread(self.fetch_sync, url,
                                            source=source, title=title)
@@ -84,13 +99,22 @@ class PageFetcher:
 
         Order follows the input, not completion: the caller ranked those hits
         for a reason, and downstream chunk ids should be stable across runs.
-        Already-fetched URLs are skipped entirely — an iteration that re-finds
-        a page it read last time must not pay for it twice.
+
+        The batch is deduplicated against ITSELF as well as against what has
+        already been read, and both matter. The second one is easy to miss: two
+        search streams routinely return the same article, so without it a
+        single Wikipedia page can take three of the five fetch slots and then
+        land in the retriever three times, where the copies inflate the
+        document frequencies BM25 runs on and crowd the top-k with one
+        paragraph repeated.
         """
         selected = []
+        batch: set[str] = set()
         for hit in hits:
-            if hit.url in self._cache:
+            key = canonical_url(hit.url)
+            if key in self._cache or key in batch:
                 continue
+            batch.add(key)
             selected.append(hit)
             if limit and len(selected) >= limit:
                 break

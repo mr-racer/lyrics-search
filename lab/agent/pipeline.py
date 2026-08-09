@@ -23,6 +23,7 @@ not check out. An unnumbered paragraph physically cannot reach the caller.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import re
 from typing import Optional
@@ -42,6 +43,7 @@ from lab.agent.reasons import clean_reason
 from lab.agent.retrieval import HybridRetriever, ModelHub
 from lab.agent.retrieval.facts import FactsRetriever, SqliteFactSource
 from lab.agent.sources import SearchSources, rerank_hits
+from lab.agent.urls import canonical_url, dedupe_by_url
 from lab.websearch_lab import fold
 
 logger = logging.getLogger(__name__)
@@ -200,6 +202,10 @@ class _WebBranch:
         self.chunks: list[Chunk] = []
         self.retriever: Optional[HybridRetriever] = None
         self.used_queries: list[str] = []
+        # Content hashes of everything indexed. URL deduplication catches the
+        # same page twice; this catches the same TEXT arriving from two pages,
+        # which listicles syndicating each other do constantly.
+        self._chunk_hashes: set[str] = set()
 
     async def gather(self, plan: Plan, queries: list[str], ce_query: str,
                      *, structured: bool) -> tuple[list[Page], list[Page]]:
@@ -210,9 +216,14 @@ class _WebBranch:
         an Apple playlist page has almost no text for a reranker to read.
         """
         structured_hits, web_hits = [], []
-        for query in queries:
+        for i, query in enumerate(queries):
             self.used_queries.append(query)
-            if structured:
+            # Host-pinned sources on the first query only by default: a
+            # rephrasing rarely finds a different Apple playlist, and every
+            # extra call is another turn of the burst that gets the good
+            # engines rate-limited.
+            first_only = self.cfg.structured_first_query_only
+            if structured and (i == 0 or not first_only):
                 structured_hits += await asyncio.to_thread(
                     self.sources.apple_music, query)
                 if plan.filters.work:
@@ -230,15 +241,35 @@ class _WebBranch:
         self.sink.put("rerank", candidates=len(web_hits), kept=len(kept),
                       threshold=self.cfg.ce_threshold)
 
+        # Deduplicated ACROSS the two lists, not within each: a Wikipedia
+        # article reached by the pinned-host stream and again by the open-web
+        # stream is one page. Structured goes first so the shared page keeps
+        # its structured treatment (tables parsed, not chunked as prose).
+        structured_hits = dedupe_by_url(structured_hits)
+        structured_keys = {canonical_url(h.url) for h in structured_hits}
+        prose_hits = [h for h in dedupe_by_url(kept)
+                      if canonical_url(h.url) not in structured_keys]
+
         structured_pages = await self.fetcher.fetch_many(
-            _dedupe_hits(structured_hits), limit=self.cfg.max_pages_per_iteration)
+            structured_hits, limit=self.cfg.max_pages_per_iteration)
         prose_pages = await self.fetcher.fetch_many(
-            _dedupe_hits(kept), limit=self.cfg.max_pages_per_iteration)
+            prose_hits, limit=self.cfg.max_pages_per_iteration)
         return structured_pages, prose_pages
 
     def index(self, pages: list[Page]) -> int:
         """Chunk ``pages`` and add them to the retriever. Returns new chunks."""
-        fresh = self.agent.chunks_of(pages, len(self.chunks))
+        candidates = self.agent.chunks_of(pages, len(self.chunks))
+        fresh: list[Chunk] = []
+        for chunk in candidates:
+            digest = _text_hash(chunk.body)
+            if digest in self._chunk_hashes:
+                continue
+            self._chunk_hashes.add(digest)
+            chunk.id = len(self.chunks) + len(fresh)
+            fresh.append(chunk)
+        duplicates = len(candidates) - len(fresh)
+        if duplicates:
+            logger.info("[pipeline] dropped %d duplicate chunks", duplicates)
         if not fresh:
             return 0
         texts = [c.text for c in fresh]
@@ -532,15 +563,10 @@ class PlaylistBranch(_WebBranch):
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 
-def _dedupe_hits(hits: list) -> list:
-    seen: set[str] = set()
-    out = []
-    for hit in hits:
-        if hit.url in seen:
-            continue
-        seen.add(hit.url)
-        out.append(hit)
-    return out
+def _text_hash(text: str) -> str:
+    """Content key for a chunk, insensitive to whitespace and case."""
+    return hashlib.sha1(" ".join((text or "").lower().split()).encode("utf-8")
+                        ).hexdigest()
 
 
 def _pack(facts: list, chunks: list[tuple[Chunk, float]]) -> list[Evidence]:
