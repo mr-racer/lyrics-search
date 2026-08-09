@@ -155,6 +155,11 @@ class AgentConfig:
     # text and becomes a post-hoc filter instead.
     min_yield_ratio: float = 0.6
     max_relaxations: int = 2
+    # Below this many library tracks, the run reads the artist's Wikipedia
+    # discography as a rescue. "Хиты Канье после 2020" has no page of its own —
+    # nobody writes a listicle per artist per era — but the singles table
+    # exists, and the era filter can do the narrowing itself.
+    discography_min_tracks: int = 10
     fuzzy_title_threshold: float = 0.75
     # Final pass: the model sees where each confirmed track was found (page,
     # section, row) and returns the ids that actually answer the request.

@@ -76,13 +76,22 @@ class FakeSources:
         self.queries: list[str] = []
 
     def _get(self, kind, query):
+        """Hits for a kind. A dict value keys them by query substring, so a
+        test can make a page reachable ONLY by a particular query."""
         self.queries.append(f"{kind}:{query}")
-        return list(self.hits.get(kind, []))
+        value = self.hits.get(kind, [])
+        if isinstance(value, dict):
+            low = (query or "").lower()
+            for marker, hits in value.items():
+                if marker.lower() in low:
+                    return list(hits)
+            return []
+        return list(value)
 
     def web(self, query):
         return self._get("web", query)
 
-    def wikipedia(self, query, limit=2):
+    def wikipedia(self, query, limit=2, force=False):
         return self._get("wikipedia", query)
 
     def apple_music(self, query, limit=3):
@@ -692,3 +701,99 @@ class TestTriage:
         runaway = next(t for t in result.tracks if t.title == "Runaway")
         assert runaway.section.endswith("Singles")
         assert runaway.page_title == "Kanye West discography"
+
+
+class TestDiscographyRescue:
+    """"Хиты Канье после 2020" has no page. The singles table does."""
+
+    # Only Kanye's own singles: a discography page listing MGMT's "Kids" would
+    # be wrong, and the artist check would (correctly) refuse it.
+    DISCOGRAPHY = """# Kanye West discography
+
+## Singles
+
+| Title | Year |
+| --- | --- |
+| Runaway | 2010 |
+| Power | 2010 |
+"""
+
+    THIN = "# News\n\nKanye West gave an interview about his plans.\n"
+
+    def _llm(self):
+        return FakeLLM({
+            "You plan how to answer": {
+                "intent": "playlist", "artist": "Канье",
+                "web_queries": ["Kanye West hits"], "ce_query": "hits"},
+            "Pull song titles": {"tracks": []},
+            "Below are songs found on web pages": {"keep": ["T1", "T2", "T3"]},
+            "You are finishing a playlist": {"title": "K", "comment": "",
+                                             "order": []},
+            "You already searched": {"web_queries": []},
+        })
+
+    def _agent(self, monkeypatch, db, *, wiki_pages, **cfg):
+        pages = {"https://news/x": Page(url="https://news/x", title="News",
+                                        markdown=self.THIN, source="web")}
+        pages.update(wiki_pages)
+        # The discography page is reachable ONLY by the rescue's own query, so
+        # the test proves the rescue found it and not the main loop.
+        hits = {"web": [SearchHit(url="https://news/x", title="News",
+                                  snippet="Kanye interview", source="web",
+                                  rank=0)],
+                "wikipedia": {"discography": [
+                    SearchHit(url="https://wiki/disco",
+                              title="Kanye West discography",
+                              snippet="", source="wikipedia", rank=0)]}}
+        return _assistant(monkeypatch, db, llm=self._llm(), sources=hits,
+                          pages=pages, **cfg)
+
+    async def test_a_thin_result_pulls_in_the_discography(self, monkeypatch, db):
+        wiki = {"https://wiki/disco": Page(url="https://wiki/disco",
+                                           title="Kanye West discography",
+                                           markdown=self.DISCOGRAPHY,
+                                           source="wikipedia")}
+        agent = self._agent(monkeypatch, db, wiki_pages=wiki,
+                            triage_min_candidates=99)
+        result = await agent.run("хиты Канье")
+        assert agent.sink.of("discography")
+        # Nothing matched before the rescue; "Runaway" only exists in the
+        # discography table, which only the rescue's query reaches.
+        assert [t.title for t in result.tracks] == ["Runaway"]
+        assert any("discography rescue" in n for n in result.notes)
+
+    async def test_the_query_uses_the_librarys_spelling(self, monkeypatch, db):
+        """The user typed «Канье»; a Cyrillic query to the English Wikipedia
+        finds nothing, and the library already knows the real name."""
+        wiki = {"https://wiki/disco": Page(url="https://wiki/disco",
+                                           title="d", markdown=self.DISCOGRAPHY,
+                                           source="wikipedia")}
+        agent = self._agent(monkeypatch, db, wiki_pages=wiki,
+                            triage_min_candidates=99)
+        await agent.run("хиты Канье")
+        assert agent.sink.of("discography")[0]["artist"] == "Kanye West"
+
+    async def test_a_full_playlist_skips_the_rescue(self, monkeypatch, db):
+        """It costs a search and two fetches — only worth it when thin."""
+        wiki = {"https://wiki/disco": Page(url="https://wiki/disco",
+                                           title="d", markdown=self.DISCOGRAPHY,
+                                           source="wikipedia")}
+        agent = self._agent(monkeypatch, db, wiki_pages=wiki,
+                            discography_min_tracks=0, triage_min_candidates=99)
+        await agent.run("хиты Канье")
+        assert not agent.sink.of("discography")
+
+    async def test_no_artist_means_no_rescue(self, monkeypatch, db):
+        """There is nothing to look up for "спокойные хиты 80х"."""
+        llm = FakeLLM({
+            "You plan how to answer": {
+                "intent": "playlist", "web_queries": ["calm 80s hits"],
+                "ce_query": "calm hits"},
+            "Pull song titles": {"tracks": []},
+            "You are finishing a playlist": {"title": "x", "comment": "",
+                                             "order": []},
+            "You already searched": {"web_queries": []},
+        })
+        agent = _assistant(monkeypatch, db, llm=llm, sources={}, pages={})
+        await agent.run("спокойные хиты 80х")
+        assert not agent.sink.of("discography")

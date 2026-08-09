@@ -418,6 +418,9 @@ class PlaylistBranch(_WebBranch):
 
     async def run(self, message: str, plan: Plan) -> PlaylistResult:
         target = plan.filters.count or self.cfg.default_target_count
+        # Resolved once: table rows that name no artist are tagged with it, and
+        # the user's spelling («Канье») matches nothing in the library.
+        artist = self._library_artist(plan)
         queries, ce_query = list(plan.web_queries), plan.ce_query
         claims: list[TrackRef] = []
         notes: list[str] = []
@@ -432,7 +435,7 @@ class PlaylistBranch(_WebBranch):
 
             for page in structured_pages:
                 found = await asyncio.to_thread(
-                    structured_tracks, page, default_artist=plan.filters.artist)
+                    structured_tracks, page, default_artist=artist)
                 claims.extend(found)
                 if found:
                     self.sink.put("structured", url=page.url, tracks=len(found))
@@ -469,6 +472,14 @@ class PlaylistBranch(_WebBranch):
             notes.append(f"relaxed the query (round {relaxations})")
 
         resolved, missing = self._resolve(claims, plan)
+        if len(resolved) < self.cfg.discography_min_tracks:
+            rescued = await self._discography(plan, found=len(resolved))
+            if rescued:
+                claims += rescued
+                resolved, missing = self._resolve(claims, plan)
+                notes.append(f"discography rescue added "
+                             f"{len(rescued)} claims")
+
         resolved = await triage_tracks(self.agent.llm, message, resolved,
                                        config=self.cfg, sink=self.sink)
         resolved = resolved[:target]
@@ -478,6 +489,71 @@ class PlaylistBranch(_WebBranch):
         return PlaylistResult(title=title, comment=comment, tracks=resolved,
                               missing=missing[:40], iterations=iterations,
                               relaxations=relaxations, notes=notes)
+
+    def _library_artist(self, plan: Plan) -> Optional[str]:
+        """The artist as the LIBRARY spells it, best effort.
+
+        Used for two things: the rows of a table that names no artist, and the
+        discography search. Both want "Kanye West" where the user typed
+        «Канье» — a table row tagged with the Cyrillic spelling matches nothing
+        in the library, and a Cyrillic query finds nothing on the English
+        Wikipedia.
+
+        A best guess is acceptable here, unlike when choosing whose FACTS to
+        read: every title is still matched against the library under this name,
+        so a wrong guess yields no tracks rather than the wrong ones.
+        """
+        raw = plan.filters.artist
+        if not raw or self.agent.catalog is None:
+            return raw
+        subject = self.agent.catalog.resolve_subject(artist=raw)
+        best = subject.candidates[0]["artist"] if subject.candidates else None
+        return subject.artist_name or best or raw
+
+    async def _discography(self, plan: Plan, *, found: int) -> list[TrackRef]:
+        """Last resort: go and read the artist's discography article.
+
+        The failure this exists for is specific and common. "Хиты Канье после
+        2020" has no page — nobody writes a listicle per artist per era — so
+        the searches come back with charts, interviews and news, and the
+        deterministic stage matches four tracks. Meanwhile Wikipedia has the
+        whole singles discography in a table, and the era filter can do the
+        rest itself.
+
+        The query is built by CODE, not by the model: the artist is already
+        resolved against the library, and "<artist> discography" is not a
+        judgement call. Wikipedia's engine searches article titles, so it is
+        also very likely to land exactly right.
+
+        Runs at most twice, and only when the playlist would otherwise be thin.
+        """
+        artist = plan.filters.artist
+        if not artist:
+            return []
+        artist = self._library_artist(plan) or artist
+
+        self.sink.put("discography", artist=artist, found=found)
+        logger.info("[playlist] only %d tracks — reading %s's discography",
+                    found, artist)
+
+        hits = []
+        for query in (f"{artist} discography",
+                      f"List of songs recorded by {artist}"):
+            hits += await asyncio.to_thread(
+                self.sources.wikipedia, query, 2, True)
+            if hits:
+                break
+
+        pages = await self.fetcher.fetch_many(dedupe_by_url(hits), limit=2)
+        refs: list[TrackRef] = []
+        for page in pages:
+            got = await asyncio.to_thread(structured_tracks, page,
+                                          default_artist=artist)
+            logger.info("[playlist] discography %s -> %d rows", page.url, len(got))
+            refs += got
+
+        self.sink.put("discography_done", pages=len(pages), claims=len(refs))
+        return refs
 
     # ── selection, all of it code ─────────────────────────────────────────
 

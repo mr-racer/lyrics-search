@@ -239,8 +239,8 @@ class SearchSources:
 
     # ── the raw call ──────────────────────────────────────────────────────
 
-    def _searx(self, query: str, *, engines: Optional[str],
-               limit: int) -> list[dict]:
+    def _searx(self, query: str, *, engines: Optional[str], limit: int,
+               force: bool = False) -> list[dict]:
         """One SearXNG call. Budgeted, deduplicated, never raises.
 
         A repeat of a query already run returns nothing rather than the same
@@ -263,8 +263,14 @@ class SearchSources:
             logger.info("[sources] repeat refused: %r", query)
             return []
         if self.searches >= self.cfg.max_web_searches:
-            logger.info("[sources] search budget spent (%d)", self.searches)
-            return []
+            if not force:
+                logger.info("[sources] search budget spent (%d)", self.searches)
+                return []
+            # ``force`` is for the last-resort searches only — the rescue that
+            # runs when a playlist would otherwise come back nearly empty. It
+            # still counts against the budget, so it cannot loop.
+            logger.info("[sources] budget spent, running %r anyway (forced)",
+                        query)
         self._seen_queries.add(key)
         self.searches += 1
 
@@ -438,11 +444,13 @@ class SearchSources:
         self._emit("search", source="web", query=query, found=len(hits))
         return hits
 
-    def wikipedia(self, query: str, limit: int = 2) -> list[SearchHit]:
+    def wikipedia(self, query: str, limit: int = 2,
+                  force: bool = False) -> list[SearchHit]:
         """Wikipedia only. The engine searches article TITLES, so any query
         naming an artist lands on their page — which is what we want here and
         exactly why this engine is excluded from the open-web call."""
-        rows = self._searx(query, engines="wikipedia", limit=max(limit, 5))
+        rows = self._searx(query, engines="wikipedia", limit=max(limit, 5),
+                           force=force)
         hits = self._to_hits(rows, "wikipedia",
                              host_filter=("wikipedia.org",))[:limit]
         self._emit("search", source="wikipedia", query=query, found=len(hits))
