@@ -142,8 +142,17 @@ class FactsRetriever:
             out.append(fact)
 
         chars = sum(len(f.text) for f in out)
-        logger.info(
-            "[facts] %s/%s: %d facts -> %d above p>=%.2f (%d chars into the prompt)",
-            song_slug or "-", artist_slug or "-", len(facts), len(out),
-            threshold, chars)
+        if any(f.ce_prob is None for f in out):
+            # Say so plainly. "N above p>=0.20" when no cross-encoder ran is a
+            # lie that reads as a working filter, and the symptom downstream is
+            # an oversized prompt full of loosely related facts.
+            logger.warning(
+                "[facts] %s/%s: %d facts, NO cross-encoder — threshold not "
+                "applied, all %d go to the prompt (%d chars). Check hub.status().",
+                song_slug or "-", artist_slug or "-", len(facts), len(out), chars)
+        else:
+            logger.info(
+                "[facts] %s/%s: %d facts -> %d above p>=%.2f (%d chars into the prompt)",
+                song_slug or "-", artist_slug or "-", len(facts), len(out),
+                threshold, chars)
         return out
