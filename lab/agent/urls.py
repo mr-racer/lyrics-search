@@ -85,6 +85,36 @@ def source_for_url(url: str, fallback: str = "web") -> str:
     return fallback
 
 
+# music.apple.com/<locale>/artist/<slug>/<id> — the artist's landing page.
+_APPLE_ARTIST_LANDING = re.compile(
+    r"^/[a-z]{2}(?:-[a-z]+)?/artist/[^/]+/\d+/?$", re.I)
+
+
+def prefer_apple_top_songs(url: str) -> str:
+    """An Apple artist landing page → that artist's ``/top-songs`` page.
+
+    Measured on Kanye West's, the landing page is the worse source in three
+    ways and the better one in none:
+
+    * it rotates. Two fetches a second apart returned different songs, because
+      the page is carousels and the carousels are personalised;
+    * it mixes in "Appears On" — "Run This Town" is a JAY-Z song and "Knock You
+      Down" is Keri Hilson's, and in the serialized payload they sit next to
+      the artist's own with nothing to tell them apart;
+    * it is 830 KB against 150 KB for the same twenty songs.
+
+    ``/top-songs`` is Apple's own chart for that artist and nothing else. The
+    rewrite is a pure path suffix, so it cannot land on a different artist.
+    """
+    parts = urlsplit(url or "")
+    if (parts.netloc or "").lower() != "music.apple.com":
+        return url
+    if not _APPLE_ARTIST_LANDING.match(parts.path or ""):
+        return url
+    path = (parts.path or "").rstrip("/") + "/top-songs"
+    return urlunsplit((parts.scheme, parts.netloc, path, parts.query, ""))
+
+
 def dedupe_by_url(items, *, key=lambda item: item.url):
     """Keep the first of each distinct page, in order.
 

@@ -10,7 +10,8 @@ import pytest
 
 from lab.agent.fetch import PageFetcher
 from lab.agent.models import Page, SearchHit
-from lab.agent.urls import canonical_url, dedupe_by_url, source_for_url
+from lab.agent.urls import (canonical_url, dedupe_by_url,
+                            prefer_apple_top_songs, source_for_url)
 
 FEUD = "https://en.wikipedia.org/wiki/Taylor_Swift–Kanye_West_feud"
 FEUD_ENCODED = "https://en.wikipedia.org/wiki/Taylor_Swift%E2%80%93Kanye_West_feud"
@@ -127,3 +128,42 @@ class TestSourceKind:
 
     def test_a_mobile_mirror_counts_too(self):
         assert source_for_url("https://en.m.wikipedia.org/wiki/Power") == "wikipedia"
+
+
+class TestAppleArtistPage:
+    """The artist landing page is the worse source in three ways and the
+    better one in none — measured on Kanye West's:
+
+    it rotates (two fetches a second apart returned different songs), it mixes
+    in "Appears On" ("Run This Town" is a JAY-Z song), and it is 830 KB against
+    150 KB for the same twenty tracks. So it is rewritten, not read.
+    """
+
+    def test_a_landing_page_becomes_top_songs(self):
+        assert prefer_apple_top_songs(
+            "https://music.apple.com/vc/artist/kanye-west/2715720"
+        ) == "https://music.apple.com/vc/artist/kanye-west/2715720/top-songs"
+
+    def test_a_trailing_slash_does_not_confuse_it(self):
+        assert prefer_apple_top_songs(
+            "https://music.apple.com/us/artist/kanye-west/2715720/"
+        ).endswith("/2715720/top-songs")
+
+    @pytest.mark.parametrize("url", [
+        # already the page we want
+        "https://music.apple.com/us/artist/kanye-west/2715720/top-songs",
+        # other Apple pages, which are not artist landings
+        "https://music.apple.com/us/album/yeezus/1440851894",
+        "https://music.apple.com/us/playlist/muse-essentials/pl.5d8ac",
+        "https://music.apple.com/us/artist/kanye-west/2715720/see-all",
+        # not Apple at all
+        "https://en.wikipedia.org/wiki/Kanye_West",
+    ])
+    def test_everything_else_is_left_alone(self, url):
+        assert prefer_apple_top_songs(url) == url
+
+    def test_it_can_only_ever_add_a_suffix(self):
+        """A rewrite that could land on a different artist would be worse than
+        no rewrite at all."""
+        url = "https://music.apple.com/de-de/artist/sade/462006"
+        assert prefer_apple_top_songs(url).startswith(url)
