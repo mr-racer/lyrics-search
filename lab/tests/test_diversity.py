@@ -231,6 +231,21 @@ class TestThroughTheSeam:
         assert len(branch.best_chunks("q")) == 3
         assert branch.sink.of("dedup") == []
 
+    def test_the_notebook_entry_point_builds_the_same_pack(self):
+        """`select_pack` is what a cell calls; `best_chunks` is what the agent
+        calls. One of them being a reimplementation of the other is how a
+        notebook stops describing the run it is supposed to measure."""
+        from lab.agent.pipeline import select_pack
+
+        branch = _branch()
+        assert select_pack(branch.retriever, branch.chunks, "q",
+                           config=branch.cfg) == branch.best_chunks("q")
+
+    def test_it_survives_without_a_sink(self):
+        branch = _branch()
+        branch.sink = None
+        assert len(branch.best_chunks("q")) == 3
+
     def test_the_threshold_still_rules(self):
         """Dedup changes WHICH passages fill the pack, never whether a passage
         was good enough to be in it."""

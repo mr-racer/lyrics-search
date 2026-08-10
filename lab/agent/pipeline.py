@@ -308,82 +308,8 @@ class _WebBranch:
 
     def best_chunks(self, ce_query: str) -> list[tuple[Chunk, float]]:
         """Top chunks across every page read so far, above the threshold."""
-        if self.retriever is None or not self.chunks:
-            return []
-        threshold = self.cfg.ce_threshold_chunks
-        limit = self.cfg.max_chunks_in_context
-        # A deeper pool than the pack needs, so that dropping a copy FREES a
-        # slot rather than shrinking the pack: the next distinct passage moves
-        # up into it. With dedup off this is exactly the old behaviour.
-        pool = limit * max(1, self.cfg.dedup_pool_factor) \
-            if self.cfg.dedup_chunks else limit
-        ranked = self.retriever.search(ce_query, min_prob=threshold, limit=pool)
-        ranked = self._diverse(ranked, limit)
-        out = [(self.chunks[r.index], r.ce_prob or 0.0) for r in ranked]
-        if not out:
-            # A high chunk threshold is the right default, but "nothing passed"
-            # and "nothing was found" look identical from the outside. Say
-            # which, and say how close it came, so the number can be calibrated
-            # instead of guessed at.
-            unfiltered = self.retriever.search(ce_query, limit=1)
-            best = unfiltered[0].ce_prob if unfiltered else None
-            logger.info("[pipeline] no chunk cleared p>=%.2f over %d chunks "
-                        "(best was %s)", threshold, len(self.chunks),
-                        f"{best:.3f}" if best is not None else "unscored")
-            self.sink.put("chunks", selected=0, threshold=threshold,
-                          best=round(best, 3) if best is not None else None)
-            return []
-        self.sink.put("chunks", selected=len(out), threshold=threshold,
-                      best=round(max(p for _, p in out), 3))
-        return out
-
-    def _diverse(self, ranked: list, limit: int) -> list:
-        """Take the top ``limit`` DISTINCT passages out of the ranked pool.
-
-        Five hosts carrying the same syndicated bio produce five chunks that
-        score alike, and the pack ends up saying one thing five times. This
-        spends those slots on the next-best passage that says something else.
-
-        Nothing is removed from the index — see
-        :mod:`lab.agent.retrieval.diversity` for why that distinction is the
-        safety property here.
-        """
-        if not self.cfg.dedup_chunks or len(ranked) <= 1:
-            return ranked[:limit]
-
-        from lab.agent.retrieval.diversity import pick_diverse
-
-        sims = self.retriever.similarity_matrix([r.index for r in ranked])
-        if not sims:
-            logger.info("[pipeline] no document vectors to compare — "
-                        "keeping the top %d as ranked", limit)
-            return ranked[:limit]
-        missing = [n for n in self.cfg.dedup_thresholds if n not in sims]
-        if missing:
-            # Worth saying out loud: the two-signal agreement rule is what
-            # keeps this from collapsing passages that merely share a topic,
-            # and with one signal it is not being applied.
-            logger.info("[pipeline] duplicate check running on %s alone (%s "
-                        "unavailable) — a weaker guard than intended",
-                        ", ".join(sorted(sims)), ", ".join(missing))
-
-        picked = pick_diverse(
-            [len(self.chunks[r.index].text) for r in ranked], sims,
-            thresholds=self.cfg.dedup_thresholds, limit=limit,
-            prefer_longer=self.cfg.dedup_prefer_longer)
-        for dup in picked.duplicates:
-            scores = " ".join(f"{n}={v:.3f}" for n, v in sorted(dup.sims.items()))
-            logger.info("[pipeline] %s chunk %d (%s) — same as chunk %d (%s) [%s]",
-                        "displaced" if dup.replaced else "skipped",
-                        self.chunks[ranked[dup.index].index].id,
-                        self.chunks[ranked[dup.index].index].url,
-                        self.chunks[ranked[dup.twin].index].id,
-                        self.chunks[ranked[dup.twin].index].url, scores)
-        if picked.duplicates:
-            self.sink.put("dedup", pool=len(ranked), selected=len(picked.kept),
-                          duplicates=len(picked.duplicates),
-                          signals=sorted(sims))
-        return [ranked[i] for i in picked.kept]
+        return select_pack(self.retriever, self.chunks, ce_query,
+                           config=self.cfg, sink=self.sink)
 
 
 class GeneralBranch(_WebBranch):
@@ -684,6 +610,103 @@ class PlaylistBranch(_WebBranch):
             if relaxed and relaxed not in out:
                 out.append(relaxed)
         return out or None
+
+# ── the context pack ─────────────────────────────────────────────────────────
+
+
+def select_pack(retriever, chunks: list[Chunk], ce_query: str, *,
+                config=None, sink=None) -> list[tuple[Chunk, float]]:
+    """The passages that go in front of the model, and their probabilities.
+
+    A free function, not a method, for the same reason ``selection.py`` is:
+    a notebook driving the stages by hand must be able to build the SAME pack
+    the agent builds. Reimplementing the pool depth and the duplicate rule in a
+    cell is how a lab result stops describing the thing it measures.
+    """
+    from lab.agent.config import AgentConfig
+
+    cfg = config or AgentConfig()
+    if retriever is None or not chunks:
+        return []
+
+    threshold = cfg.ce_threshold_chunks
+    limit = cfg.max_chunks_in_context
+    # A deeper pool than the pack needs, so that dropping a copy FREES a slot
+    # rather than shrinking the pack: the next distinct passage moves up into
+    # it. With dedup off this is exactly the old behaviour.
+    pool = limit * max(1, cfg.dedup_pool_factor) if cfg.dedup_chunks else limit
+    ranked = retriever.search(ce_query, min_prob=threshold, limit=pool)
+    ranked = _diverse(retriever, chunks, ranked, limit=limit, cfg=cfg, sink=sink)
+    out = [(chunks[r.index], r.ce_prob or 0.0) for r in ranked]
+
+    if not out:
+        # A high chunk threshold is the right default, but "nothing passed" and
+        # "nothing was found" look identical from the outside. Say which, and
+        # say how close it came, so the number can be calibrated instead of
+        # guessed at.
+        unfiltered = retriever.search(ce_query, limit=1)
+        best = unfiltered[0].ce_prob if unfiltered else None
+        logger.info("[pipeline] no chunk cleared p>=%.2f over %d chunks "
+                    "(best was %s)", threshold, len(chunks),
+                    f"{best:.3f}" if best is not None else "unscored")
+        if sink is not None:
+            sink.put("chunks", selected=0, threshold=threshold,
+                     best=round(best, 3) if best is not None else None)
+        return []
+    if sink is not None:
+        sink.put("chunks", selected=len(out), threshold=threshold,
+                 best=round(max(p for _, p in out), 3))
+    return out
+
+
+def _diverse(retriever, chunks: list[Chunk], ranked: list, *, limit: int,
+             cfg, sink=None) -> list:
+    """Take the top ``limit`` DISTINCT passages out of the ranked pool.
+
+    Five hosts carrying the same syndicated bio produce five chunks that score
+    alike, and the pack ends up saying one thing five times. This spends those
+    slots on the next-best passage that says something else.
+
+    Nothing is removed from the index — see
+    :mod:`lab.agent.retrieval.diversity` for why that distinction is the safety
+    property here.
+    """
+    if not cfg.dedup_chunks or len(ranked) <= 1:
+        return ranked[:limit]
+
+    from lab.agent.retrieval.diversity import pick_diverse
+
+    sims = retriever.similarity_matrix([r.index for r in ranked])
+    if not sims:
+        logger.info("[pipeline] no document vectors to compare — keeping the "
+                    "top %d as ranked", limit)
+        return ranked[:limit]
+    missing = [n for n in cfg.dedup_thresholds if n not in sims]
+    if missing:
+        # Worth saying out loud: the two-signal agreement rule is what keeps
+        # this from collapsing passages that merely share a topic, and with one
+        # signal it is not being applied.
+        logger.info("[pipeline] duplicate check running on %s alone (%s "
+                    "unavailable) — a weaker guard than intended",
+                    ", ".join(sorted(sims)), ", ".join(missing))
+
+    picked = pick_diverse(
+        [len(chunks[r.index].text) for r in ranked], sims,
+        thresholds=cfg.dedup_thresholds, limit=limit,
+        prefer_longer=cfg.dedup_prefer_longer)
+    for dup in picked.duplicates:
+        scores = " ".join(f"{n}={v:.3f}" for n, v in sorted(dup.sims.items()))
+        logger.info("[pipeline] %s chunk %d (%s) — same as chunk %d (%s) [%s]",
+                    "displaced" if dup.replaced else "skipped",
+                    chunks[ranked[dup.index].index].id,
+                    chunks[ranked[dup.index].index].url,
+                    chunks[ranked[dup.twin].index].id,
+                    chunks[ranked[dup.twin].index].url, scores)
+    if picked.duplicates and sink is not None:
+        sink.put("dedup", pool=len(ranked), selected=len(picked.kept),
+                 duplicates=len(picked.duplicates), signals=sorted(sims))
+    return [ranked[i] for i in picked.kept]
+
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 

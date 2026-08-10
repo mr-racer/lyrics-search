@@ -48,7 +48,7 @@ from lab.agent.llm import LLMClient
 from lab.agent.models import (Chunk, ClarifyRequest, Evidence, Filters,
                               GeneralResult, Page, Plan, PlaylistResult,
                               ResolvedTrack, SearchHit, TrackRef)
-from lab.agent.pipeline import Assistant
+from lab.agent.pipeline import Assistant, select_pack
 from lab.agent.planner import Planner
 from lab.agent.retrieval import HybridRetriever, ModelHub
 from lab.agent.retrieval.facts import FactsRetriever, SqliteFactSource
@@ -63,7 +63,7 @@ __all__ = [
     "EventSink", "HybridRetriever", "LLMClient", "LibraryCatalog",
     "MarkdownChunker", "ModelHub", "PageFetcher", "Planner", "SearchSources",
     "TrackExtractor", "FactsRetriever", "SqliteFactSource",
-    "rerank_hits", "structured_tracks",
+    "rerank_hits", "structured_tracks", "select_pack",
     # playlist selection, the same functions the agent runs
     "select_tracks", "triage_tracks", "curate_tracks", "merge_claims",
     "rank_tracks",
