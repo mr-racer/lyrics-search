@@ -133,37 +133,94 @@ def pick_diverse(lengths: list[int], sims: Optional[dict], *,
     return Selection(kept=kept, duplicates=duplicates)
 
 
+def margin(pair: dict[str, float],
+           thresholds: Optional[dict[str, float]]) -> float:
+    """How far a pair is from being called a duplicate. ``>= 0`` means it is.
+
+    The distance to the CUT, not the similarity: with a rule that needs every
+    signal to agree, a pair is only as close as its weakest signal, and 0.99
+    dense next to 0.40 sparse is not close at all. Ranking by this is what puts
+    the informative pairs — the ones just under the line — at the top of the
+    report.
+    """
+    scored = {n: v for n, v in pair.items() if n in (thresholds or {})}
+    if not scored:
+        return min(pair.values()) if pair else 0.0
+    return min(v - thresholds[n] for n, v in scored.items())
+
+
+def _quantile(values: list[float], q: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    return ordered[min(len(ordered) - 1,
+                       max(0, int(round(q * (len(ordered) - 1)))))]
+
+
 def duplicate_report(labels: list[str], lengths: list[int],
                      sims: Optional[dict], *,
                      thresholds: Optional[dict[str, float]] = None,
-                     floor: float = 0.8, limit: int = 40) -> str:
-    """Every pair any signal scored at or above ``floor``, most similar first.
+                     floor: float = 0.8, top: int = 10,
+                     limit: int = 40) -> str:
+    """What the similarity numbers actually look like on this corpus.
 
     A calibration tool, not part of the pipeline. Thresholds like these cannot
-    be reasoned out — the distributions depend on the corpus and on both
-    models — so the way to set them is to look at what the numbers actually are
-    for pairs you can read, and put the line between the ones that repeat each
-    other and the ones that merely share a subject.
+    be reasoned out — the scale depends on the corpus and on both models, and
+    two embedding families disagree about what "0.9" means — so the way to set
+    them is to read pairs you can judge by eye next to the numbers they got.
 
-    ``floor`` is deliberately below any sane threshold: the pairs just under
-    the cut are the informative ones.
+    Three things, in order of usefulness:
+
+    * the DISTRIBUTION per signal, which is the part that says whether a
+      threshold is in the right postcode at all. A corpus whose closest pair
+      scores 0.87 dense cannot produce a duplicate at 0.95, and no list of
+      pairs makes that as obvious as one line of quantiles;
+    * every pair that clears the thresholds;
+    * the ``top`` closest pairs regardless, because when nothing clears them
+      the near-misses are the entire signal. An empty report proves nothing —
+      it looks the same whether the corpus has no duplicates or the threshold
+      is in the wrong place.
+
+    ``floor`` only widens the listing beyond ``top``; it never hides the
+    closest pairs.
     """
-    rows = []
+    pairs = []
     for i in range(len(labels)):
         for j in range(i + 1, len(labels)):
             pair = pair_similarity(sims, i, j)
-            if not pair or max(pair.values()) < floor:
-                continue
-            rows.append((max(pair.values()), i, j, pair))
-    if not rows:
-        return f"no pair scored {floor:.2f} on any signal"
+            if pair:
+                pairs.append((margin(pair, thresholds), i, j, pair))
+    if not pairs:
+        return "no signal scored a single pair — are there vectors in the index?"
 
-    rows.sort(key=lambda r: -r[0])
-    out = []
-    for _, i, j, pair in rows[:limit]:
-        verdict = "DUPLICATE" if is_duplicate(pair, thresholds) else "kept both"
+    out = [f"{len(pairs)} pairs over {len(labels)} passages"]
+    for name in sorted({n for _, _, _, p in pairs for n in p}):
+        values = [p[name] for _, _, _, p in pairs if name in p]
+        cut = (thresholds or {}).get(name)
+        out.append(f"  {name:<7} p50={_quantile(values, 0.5):.3f}  "
+                   f"p90={_quantile(values, 0.9):.3f}  "
+                   f"p99={_quantile(values, 0.99):.3f}  "
+                   f"max={max(values):.3f}" +
+                   (f"   порог {cut:.2f}" if cut is not None else ""))
+
+    pairs.sort(key=lambda r: -r[0])
+    duplicates = [r for r in pairs if r[0] >= 0]
+    shown = duplicates or []
+    for row in pairs[:max(top, len(shown))]:
+        if row not in shown:
+            shown.append(row)
+    extra = [r for r in pairs if r not in shown
+             and max(r[3].values()) >= floor][:max(0, limit - len(shown))]
+    shown = (shown + extra)[:limit]
+
+    out.append("")
+    out.append(f"{len(duplicates)} pair(s) cleared every threshold"
+               if duplicates else
+               "nothing cleared every threshold — the closest pairs:")
+    for m, i, j, pair in shown:
+        verdict = "DUPLICATE" if m >= 0 else "kept both"
         scores = "  ".join(f"{n}={v:.3f}" for n, v in sorted(pair.items()))
-        out.append(f"{verdict:<10} {scores}")
+        out.append(f"{verdict:<10} margin={m:+.3f}   {scores}")
         out.append(f"           [{i}] {lengths[i]:>5}ch  {labels[i][:80]}")
         out.append(f"           [{j}] {lengths[j]:>5}ch  {labels[j][:80]}")
     return "\n".join(out)

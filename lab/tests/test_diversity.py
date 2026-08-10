@@ -12,12 +12,15 @@ that is right in isolation and never reached is what the source-voting bug
 turned out to be.
 """
 
+import pytest
+
 from lab.agent.config import AgentConfig
 from lab.agent.events import EventSink
 from lab.agent.models import Chunk
 from lab.agent.pipeline import GeneralBranch
 from lab.agent.retrieval.diversity import (duplicate_report, is_duplicate,
-                                           pair_similarity, pick_diverse)
+                                           margin, pair_similarity,
+                                           pick_diverse)
 from lab.agent.retrieval.types import Ranked
 
 THRESHOLDS = {"dense": 0.95, "milco": 0.90}
@@ -137,24 +140,61 @@ class TestPicking:
 
 
 class TestReport:
-    """The calibration tool — the numbers, not a verdict."""
+    """The calibration tool — the numbers, not a verdict.
+
+    Its job is to say where the thresholds sit relative to the corpus. A report
+    that lists nothing looks identical whether there are no duplicates or the
+    threshold is in the wrong postcode, and those need opposite responses.
+    """
 
     def test_it_shows_the_pairs_just_under_the_line(self):
         sims = _sims({(0, 1): {"dense": 0.96, "milco": 0.71}}, 2)
         text = duplicate_report(["wiki", "genius"], [500, 400], sims,
-                               thresholds=THRESHOLDS, floor=0.8)
+                                thresholds=THRESHOLDS)
         assert "kept both" in text
         assert "dense=0.960" in text and "milco=0.710" in text
 
     def test_it_names_the_ones_that_would_be_dropped(self):
-        sims = _sims({(0, 1): 0.99}, 2)
-        text = duplicate_report(["a", "b"], [500, 400], sims,
-                               thresholds=THRESHOLDS, floor=0.8)
+        text = duplicate_report(["a", "b"], [500, 400], _sims({(0, 1): 0.99}, 2),
+                                thresholds=THRESHOLDS)
         assert "DUPLICATE" in text
 
-    def test_a_quiet_corpus_says_so(self):
-        assert "no pair" in duplicate_report(["a", "b"], [1, 1], _sims({}, 2),
-                                             thresholds=THRESHOLDS)
+    def test_a_corpus_with_no_duplicates_still_shows_its_closest_pairs(self):
+        """The report the user called sparse: nothing near the threshold, and
+        the old version answered with one line that could not be acted on."""
+        sims = _sims({(0, 1): {"dense": 0.865, "milco": 0.715}}, 4,
+                     background=0.4)
+        text = duplicate_report([f"p{i}" for i in range(4)], [500] * 4, sims,
+                                thresholds=THRESHOLDS)
+        assert "nothing cleared every threshold" in text
+        assert "dense=0.865" in text
+        assert text.count("kept both") >= 3
+
+    def test_the_distribution_says_whether_the_threshold_is_reachable(self):
+        sims = _sims({(0, 1): {"dense": 0.865, "milco": 0.715}}, 4,
+                     background=0.4)
+        text = duplicate_report([f"p{i}" for i in range(4)], [500] * 4, sims,
+                                thresholds=THRESHOLDS)
+        assert "6 pairs over 4 passages" in text
+        assert "max=0.865" in text and "порог 0.95" in text
+
+    def test_the_closest_pair_is_first(self):
+        sims = _sims({(0, 1): 0.85, (2, 3): 0.93}, 4)
+        text = duplicate_report([f"p{i}" for i in range(4)], [500] * 4, sims,
+                                thresholds=THRESHOLDS)
+        assert text.index("dense=0.930") < text.index("dense=0.850")
+
+    def test_the_margin_is_measured_at_the_weakest_signal(self):
+        """0.99 dense next to 0.40 sparse is not a near-miss under a rule that
+        needs both."""
+        assert margin({"dense": 0.99, "milco": 0.40}, THRESHOLDS) == \
+            pytest.approx(-0.50)
+        assert margin({"dense": 0.96, "milco": 0.92}, THRESHOLDS) == \
+            pytest.approx(0.01)
+
+    def test_an_index_with_no_vectors_says_so(self):
+        assert "no signal" in duplicate_report(["a", "b"], [1, 1], {},
+                                               thresholds=THRESHOLDS)
 
 
 class _FakeRetriever:

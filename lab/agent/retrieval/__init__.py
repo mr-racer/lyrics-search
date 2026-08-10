@@ -23,7 +23,7 @@ from typing import Optional
 from lab.agent.retrieval.bm25 import BM25
 from lab.agent.retrieval.diversity import (Duplicate, Selection,
                                            duplicate_report, is_duplicate,
-                                           pick_diverse)
+                                           margin, pick_diverse)
 from lab.agent.retrieval.hub import ModelHub
 from lab.agent.retrieval.types import Fact, Ranked
 
@@ -287,4 +287,4 @@ class HybridRetriever:
 
 __all__ = ["HybridRetriever", "ModelHub", "BM25", "Fact", "Ranked", "rrf",
            "RRF_K", "pick_diverse", "duplicate_report", "is_duplicate",
-           "Duplicate", "Selection"]
+           "margin", "Duplicate", "Selection"]
