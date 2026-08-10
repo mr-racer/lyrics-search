@@ -21,6 +21,9 @@ from collections import defaultdict
 from typing import Optional
 
 from lab.agent.retrieval.bm25 import BM25
+from lab.agent.retrieval.diversity import (Duplicate, Selection,
+                                           duplicate_report, is_duplicate,
+                                           pick_diverse)
 from lab.agent.retrieval.hub import ModelHub
 from lab.agent.retrieval.types import Fact, Ranked
 
@@ -190,6 +193,66 @@ class HybridRetriever:
             results = [r for r in results if (r.ce_prob or 0.0) >= min_prob]
         return results[:limit] if limit else results
 
+    # ── document-to-document ──────────────────────────────────────────────
+
+    def similarity_matrix(self, indices: list[int]) -> dict[str, list[list[float]]]:
+        """Cosine between the given documents, per signal.
+
+        No model call and no re-encoding: these are the same document vectors
+        the search itself ranked with, so asking whether two passages say the
+        same thing costs one small matrix multiply. That is what makes it
+        affordable to ask on every query.
+
+        A signal that is unavailable is simply absent from the result. The
+        caller decides what to do with one opinion instead of two.
+        """
+        out: dict[str, list[list[float]]] = {}
+        if len(indices) < 2:
+            return out
+        dense = self._dense_similarity(indices)
+        if dense is not None:
+            out["dense"] = dense
+        sparse = self._sparse_similarity(indices)
+        if sparse is not None:
+            out["milco"] = sparse
+        return out
+
+    def _dense_similarity(self, indices: list[int]):
+        if self._dense is None:
+            return None
+        try:
+            import torch
+
+            idx = torch.as_tensor(indices, dtype=torch.long,
+                                  device=self._dense.device)
+            sub = self._dense.index_select(0, idx).float()
+            # Encoded normalised already; renormalising costs nothing and makes
+            # this correct regardless of how the vectors got here.
+            sub = sub / sub.norm(dim=1, keepdim=True).clamp_min(1e-9)
+            return (sub @ sub.T).clamp(-1.0, 1.0).cpu().tolist()
+        except Exception:
+            logger.warning("[retrieval] dense similarity failed", exc_info=True)
+            return None
+
+    def _sparse_similarity(self, indices: list[int]):
+        if self._sparse is None:
+            return None
+        try:
+            import torch
+
+            idx = torch.as_tensor(indices, dtype=torch.long,
+                                  device=self._sparse.device)
+            sub = torch.index_select(self._sparse, 0, idx).coalesce().float()
+            gram = torch.sparse.mm(sub, sub.t()).to_dense()
+            # The diagonal of a Gram matrix IS the squared norm of each row, so
+            # normalising needs no second pass over the sparse values.
+            norms = gram.diagonal().clamp_min(1e-12).sqrt()
+            return (gram / norms[:, None] / norms[None, :]
+                    ).clamp(0.0, 1.0).cpu().tolist()
+        except Exception:
+            logger.warning("[retrieval] sparse similarity failed", exc_info=True)
+            return None
+
     # ── per-signal scoring ────────────────────────────────────────────────
 
     def _dense_scores(self, query: str) -> Optional[list[float]]:
@@ -222,4 +285,6 @@ class HybridRetriever:
             return None
 
 
-__all__ = ["HybridRetriever", "ModelHub", "BM25", "Fact", "Ranked", "rrf", "RRF_K"]
+__all__ = ["HybridRetriever", "ModelHub", "BM25", "Fact", "Ranked", "rrf",
+           "RRF_K", "pick_diverse", "duplicate_report", "is_duplicate",
+           "Duplicate", "Selection"]

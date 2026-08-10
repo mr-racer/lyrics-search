@@ -193,6 +193,96 @@ class TestAppleArtistPage:
             assert f"/artist/{slug}/{ident}" in got, url
 
 
+class TestRefill:
+    """A limit is a number of pages READ, not a number attempted.
+
+    The run this fixes: eight candidates cleared the cross-encoder, five slots
+    were spent on the top five, two of those hosts answered 403, and the
+    iteration got three pages while a hit scored 0.88 sat unread.
+    """
+
+    @staticmethod
+    def _fetcher(dead: set[str], config=None):
+        from lab.agent.config import AgentConfig
+
+        f = PageFetcher(config or AgentConfig())
+        tried: list[str] = []
+
+        def fake(url, *, source="web", title=""):
+            tried.append(url)
+            page = (Page(url=url, title=title, markdown="", source=source,
+                         error="403") if url in dead
+                    else Page(url=url, title=title, markdown="body",
+                              source=source))
+            f._cache[canonical_url(url)] = page
+            return page
+
+        f.fetch_sync = fake
+        f.tried = tried
+        return f
+
+    @staticmethod
+    def _hits(n: int):
+        return [SearchHit(url=f"https://h{i}.example/p", title="", snippet="",
+                          source="web", rank=i) for i in range(n)]
+
+    async def test_a_failure_pulls_in_the_next_candidate(self):
+        f = self._fetcher(dead={"https://h1.example/p"})
+        pages = await f.fetch_many(self._hits(6), limit=3)
+        assert len(pages) == 3
+        assert [p.url for p in pages] == ["https://h0.example/p",
+                                          "https://h2.example/p",
+                                          "https://h3.example/p"]
+
+    async def test_the_ranking_order_is_respected_when_refilling(self):
+        """The replacement is the next-best candidate, not an arbitrary one."""
+        f = self._fetcher(dead={"https://h0.example/p", "https://h1.example/p"})
+        pages = await f.fetch_many(self._hits(8), limit=2)
+        assert [p.url for p in pages] == ["https://h2.example/p",
+                                          "https://h3.example/p"]
+
+    async def test_an_exhausted_pool_returns_what_it_got(self):
+        f = self._fetcher(dead={"https://h1.example/p"})
+        pages = await f.fetch_many(self._hits(2), limit=2)
+        assert [p.url for p in pages] == ["https://h0.example/p"]
+
+    async def test_a_dead_pool_cannot_cost_more_than_the_budget(self):
+        """Without a cap, twenty unreachable candidates are twenty deadlines."""
+        from lab.agent.config import AgentConfig
+
+        f = self._fetcher(dead={f"https://h{i}.example/p" for i in range(20)},
+                          config=AgentConfig(fetch_refill_attempts=4))
+        pages = await f.fetch_many(self._hits(20), limit=3)
+        assert pages == []
+        assert len(f.tried) == 3 + 4
+
+    async def test_nothing_is_fetched_twice_while_refilling(self):
+        f = self._fetcher(dead={"https://h0.example/p"})
+        await f.fetch_many(self._hits(5), limit=3)
+        assert len(f.tried) == len(set(f.tried))
+
+    async def test_an_uncapped_call_does_not_refill(self):
+        """No limit means "read this list" — there is no reserve to draw on."""
+        f = self._fetcher(dead={"https://h0.example/p"})
+        pages = await f.fetch_many(self._hits(3))
+        assert len(pages) == 2
+        assert len(f.tried) == 3
+
+    async def test_all_good_pages_means_one_wave(self):
+        f = self._fetcher(dead=set())
+        pages = await f.fetch_many(self._hits(9), limit=4)
+        assert len(pages) == 4
+        assert len(f.tried) == 4
+
+    async def test_a_page_that_failed_is_not_retried_next_iteration(self):
+        f = self._fetcher(dead={"https://h0.example/p"})
+        await f.fetch_many(self._hits(3), limit=2)
+        f.tried.clear()
+        again = await f.fetch_many(self._hits(3), limit=2)
+        assert again == []
+        assert f.tried == []
+
+
 class TestFetchDeadline:
     """A stuck page must cost one page, not the iteration.
 

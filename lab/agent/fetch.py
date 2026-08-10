@@ -166,17 +166,31 @@ class PageFetcher:
             except asyncio.TimeoutError:
                 logger.info("[fetch] %s gave up after %.0fs", url,
                             self.cfg.fetch_deadline)
-                return Page(url=url, title=title, markdown="", source=source,
+                page = Page(url=url, title=title, markdown="", source=source,
                             error=f"deadline of {self.cfg.fetch_deadline:.0f}s")
+                # Remembered like any other failure, so no later batch — and no
+                # refill — spends the deadline on it a second time. The worker
+                # thread runs on and may still land a real page in this slot;
+                # that is an improvement, not a race.
+                self._cache.setdefault(key, page)
+                return page
 
     # ── many pages ────────────────────────────────────────────────────────
 
     async def fetch_many(self, hits: Iterable, *,
                          limit: Optional[int] = None) -> list[Page]:
-        """Fetch a batch of :class:`~lab.agent.models.SearchHit` concurrently.
+        """Fetch until ``limit`` pages have actually been READ, not attempted.
 
         Order follows the input, not completion: the caller ranked those hits
         for a reason, and downstream chunk ids should be stable across runs.
+
+        ``limit`` counts successes. A failed fetch pulls in the next candidate
+        the ranking had already approved, in waves, until the pool runs out or
+        ``fetch_refill_attempts`` is spent. This is the difference between "the
+        cross-encoder liked eight pages, three of which are unreachable, so the
+        iteration gets two" and "…so the iteration gets five". Refetching the
+        same dead host is not among the outcomes — a failure is cached like any
+        other result.
 
         The batch is deduplicated against ITSELF as well as against what has
         already been read, and both matter. The second one is easy to miss: two
@@ -186,24 +200,56 @@ class PageFetcher:
         document frequencies BM25 runs on and crowd the top-k with one
         paragraph repeated.
         """
-        selected = []
-        batch: set[str] = set()
+        queue: list = []
+        seen: set[str] = set()
         for hit in hits:
             key = canonical_url(hit.url)
-            if key in self._cache or key in batch:
+            if key in self._cache or key in seen:
                 continue
-            batch.add(key)
-            selected.append(hit)
-            if limit and len(selected) >= limit:
-                break
-        if not selected:
+            seen.add(key)
+            queue.append(hit)
+        if not queue:
             return []
 
-        self._emit("fetch", count=len(selected),
-                   urls=[h.url for h in selected])
-        pages = await asyncio.gather(*[
-            self.fetch(h.url, source=h.source, title=h.title) for h in selected
-        ])
-        ok = [p for p in pages if p.ok]
-        self._emit("fetch_done", fetched=len(ok), failed=len(pages) - len(ok))
+        want = limit or len(queue)
+        # Only a capped run refills: with no limit the caller asked for the
+        # whole queue and there is nothing left to fall back on anyway.
+        refills_left = self.cfg.fetch_refill_attempts if limit else 0
+        ok: list[Page] = []
+        failed = 0
+        cursor = wave_no = 0
+
+        while cursor < len(queue) and len(ok) < want:
+            need = want - len(ok)
+            if wave_no:
+                need = min(need, refills_left)
+                if need <= 0:
+                    logger.info("[fetch] %d page(s) short, but the refill "
+                                "budget (%d) is spent", want - len(ok),
+                                self.cfg.fetch_refill_attempts)
+                    break
+                refills_left -= need
+            wave = queue[cursor:cursor + need]
+            cursor += len(wave)
+            wave_no += 1
+
+            self._emit("fetch", count=len(wave), urls=[h.url for h in wave],
+                       refill=wave_no > 1)
+            pages = await asyncio.gather(*[
+                self.fetch(h.url, source=h.source, title=h.title) for h in wave
+            ])
+            good = [p for p in pages if p.ok]
+            ok.extend(good)
+            for page in pages:
+                if not page.ok:
+                    failed += 1
+                    logger.info("[fetch] %s unusable: %s", page.url,
+                                page.error or "no content")
+            if len(good) < len(wave) and cursor < len(queue) and len(ok) < want:
+                logger.info("[fetch] %d of %d failed — taking the next "
+                            "candidate(s) from the %d still ranked below",
+                            len(wave) - len(good), len(wave), len(queue) - cursor)
+
+        self._emit("fetch_done", fetched=len(ok), failed=failed,
+                   waves=wave_no, unread=len(queue) - cursor)
         return ok

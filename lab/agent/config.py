@@ -72,6 +72,35 @@ class AgentConfig:
         default_factory=lambda: {"dense": 1.0, "milco": 1.0, "bm25": 0.3})
     max_chunks_in_context: int = 10
 
+    # ── near-duplicate passages ───────────────────────────────────────────
+    # The top hits for "who is X" are routinely the same paragraph on five
+    # hosts: an artist bio gets syndicated, and every copy scores alike because
+    # every copy IS alike. Without this the pack spends five of its ten slots
+    # saying one thing.
+    #
+    # Two guards against the opposite failure — collapsing passages that merely
+    # share a topic. First, this runs on the SELECTED PACK only, never on the
+    # index: nothing is deleted, a dropped passage is simply not shown this
+    # time and can be chosen for the next question. Second, both signals must
+    # agree, and they fail differently — dense reads meaning and blurs two
+    # paragraphs about one event into near-identity, MILCO reads (expanded)
+    # terms and separates them again.
+    dedup_chunks: bool = True
+    # Ranked candidates pulled per context slot. The freed slots are refilled
+    # from further down, so removing a copy costs no material — it buys a
+    # different passage. 1 turns the refill off and keeps only the saving.
+    dedup_pool_factor: int = 3
+    # Deliberately conservative: a missed duplicate wastes a slot, a false one
+    # loses a fact. Read `duplicate_report()` from the notebook before moving
+    # them — the useful distributions are per-corpus and per-model, and these
+    # were set by argument rather than by measurement.
+    dedup_thresholds: dict = field(
+        default_factory=lambda: {"dense": 0.95, "milco": 0.90})
+    # When the later copy is this much longer, it takes the earlier one's slot
+    # instead of being dropped: same content, more of it. Below the ratio the
+    # first (better-ranked) one stays.
+    dedup_prefer_longer: float = 1.2
+
     # ── chunking ──────────────────────────────────────────────────────────
     chunk_max_chars: int = 1200
     chunk_min_chars: int = 200
@@ -152,6 +181,12 @@ class AgentConfig:
     # grows a retry loop; without it a single stuck page stalls the iteration.
     fetch_deadline: float = 25.0
     fetch_concurrency: int = 4
+    # Extra pages a single batch may try after failures, taken from the ranked
+    # candidates the batch did not reach. One or two hosts refusing every
+    # fetcher is the normal case, not the exception, and without this a page
+    # the cross-encoder scored 0.9 is simply lost while a 0.4 one sits unread.
+    # Bounded because the alternative is a dead pool costing 20 × fetch_deadline.
+    fetch_refill_attempts: int = 5
 
     # ── playlist assembly ─────────────────────────────────────────────────
     default_target_count: int = 15
