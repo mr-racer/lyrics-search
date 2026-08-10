@@ -134,9 +134,14 @@ async def triage_tracks(llm, message: str, tracks: list[ResolvedTrack], *,
         logger.info("[selection] triage unavailable — keeping all %d", len(tracks))
         return tracks
 
-    ids = [as_str(k, 8).upper() for k in (raw.get("keep") or [])
-           if isinstance(k, (str, int))]
-    kept = [keys[k] for k in dict.fromkeys(ids) if k in keys]
+    ids = {as_str(k, 8).upper() for k in (raw.get("keep") or [])
+           if isinstance(k, (str, int))}
+    # Walked in RANK order, not in the order the model listed its ids. Its own
+    # prompt says it cannot reorder anything, and it has no business doing so:
+    # the caller cuts this list to the target count straight afterwards, so the
+    # sequence the model happened to type would decide which tracks survive.
+    # That is how a three-source track ended up below a single-listicle one.
+    kept = [track for key, track in keys.items() if key in ids]
     if not kept:
         logger.info("[selection] triage kept nothing — ignoring it")
         return tracks
@@ -186,6 +191,13 @@ async def curate_tracks(llm, message: str, tracks: list[ResolvedTrack], *,
     # Anything the model forgot keeps its place at the end. Losing a track to a
     # formatting slip is not an acceptable failure mode.
     ordered += [t for k, t in keys.items() if k not in seen]
+
+    if getattr(config, "curate_respects_weight", True):
+        # Corroboration outranks sequencing, and the sort is STABLE: tracks of
+        # equal weight keep the flow the model built for them. Only the tiers
+        # move — a track three pages named goes above one a single listicle
+        # did, which for a request like "хиты X" is the whole question.
+        ordered.sort(key=lambda t: -t.weight)
 
     if sink is not None:
         sink.put("curated", tracks=len(ordered),

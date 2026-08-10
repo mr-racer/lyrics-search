@@ -230,6 +230,13 @@ class AgentConfig:
     llm_triage: bool = True
     # Below this there is nothing to triage; the whole list is the answer.
     triage_min_candidates: int = 8
+    # Whether the vote outranks the model's sequencing in the FINAL order.
+    # The curation prompt asks for a playlist that flows, and that is worth
+    # having — but only within one level of confidence. A track named by Apple
+    # and Wikipedia sitting eleventh behind six single-source album cuts is not
+    # a flow decision, it is the evidence being ignored. Stable sort: equal
+    # weights keep the order the model chose. False hands the sequence back.
+    curate_respects_weight: bool = True
 
     # ── behaviour ─────────────────────────────────────────────────────────
     # What to do with an abbreviation the model expanded on its own. "auto"

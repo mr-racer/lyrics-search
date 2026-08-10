@@ -383,3 +383,95 @@ class TestVotingThroughTheSeam:
         ]
         tracks, _ = select_tracks(cat, claims, source_weights=self.WEIGHTS)
         assert [t.title for t in tracks] == ["Power", "Runaway"]
+
+
+class TestFinalOrder:
+    """Who decides the order of the finished playlist, and who only thinks it does.
+
+    Two stages sit between the ranking and the user, and both used to overwrite
+    it with whatever order a 12b happened to type. One of them was told in its
+    own prompt that it must not.
+    """
+
+    class _Llm:
+        def __init__(self, reply):
+            self.reply = reply
+
+        async def ask_json(self, messages, *, required=(), **kwargs):
+            return self.reply
+
+    @staticmethod
+    def _tracks():
+        from lab.agent.models import ResolvedTrack
+        # As select_tracks would hand them over: corroborated first.
+        return [ResolvedTrack("t1", "Ok Ok", "Kanye West", 2021, "fuzzy",
+                              weight=3.5, sources=["apple", "wikipedia"]),
+                ResolvedTrack("t2", "Famous", "Kanye West", 2016, "exact",
+                              weight=2.5, sources=["web", "wikipedia"]),
+                ResolvedTrack("t3", "Fade", "Kanye West", 2016, "exact",
+                              weight=2.5, sources=["web", "wikipedia"]),
+                ResolvedTrack("t4", "Feedback", "Kanye West", 2016, "exact",
+                              weight=1.5, sources=["wikipedia"]),
+                ResolvedTrack("t5", "Fire", "KIDS SEE GHOSTS", 2018, "exact",
+                              weight=1.5, sources=["wikipedia"])]
+
+    async def test_triage_cannot_reorder_however_it_lists_its_ids(self):
+        """Its prompt says so, and it matters: the caller cuts this list to the
+        target count next, so the model's typing order would decide who
+        survives."""
+        from lab.agent.selection import triage_tracks
+
+        cfg = AgentConfig(triage_min_candidates=1)
+        kept = await triage_tracks(
+            self._Llm({"keep": ["T5", "T2", "T1"]}), "хиты Канье",
+            self._tracks(), config=cfg)
+        assert [t.title for t in kept] == ["Ok Ok", "Famous", "Fire"]
+
+    async def test_triage_still_drops(self):
+        from lab.agent.selection import triage_tracks
+
+        cfg = AgentConfig(triage_min_candidates=1)
+        kept = await triage_tracks(self._Llm({"keep": ["T2"]}), "q",
+                                   self._tracks(), config=cfg)
+        assert [t.title for t in kept] == ["Famous"]
+
+    async def test_the_vote_outranks_the_model_between_tiers(self):
+        from lab.agent.selection import curate_tracks
+
+        order = [{"id": f"T{i}", "reason": ""} for i in (4, 5, 2, 3, 1)]
+        _, _, final = await curate_tracks(
+            self._Llm({"title": "x", "comment": "", "order": order}),
+            "хиты Канье", self._tracks(), config=AgentConfig())
+        assert [t.weight for t in final] == [3.5, 2.5, 2.5, 1.5, 1.5]
+
+    async def test_the_model_still_sequences_within_a_tier(self):
+        """Stable sort: the flow it built survives wherever the evidence is
+        equal — which is most of the list."""
+        from lab.agent.selection import curate_tracks
+
+        order = [{"id": f"T{i}", "reason": ""} for i in (5, 4, 3, 2, 1)]
+        _, _, final = await curate_tracks(
+            self._Llm({"title": "x", "comment": "", "order": order}),
+            "q", self._tracks(), config=AgentConfig())
+        assert [t.title for t in final] == ["Ok Ok", "Fade", "Famous",
+                                            "Fire", "Feedback"]
+
+    async def test_the_sequencing_can_be_handed_back(self):
+        from lab.agent.selection import curate_tracks
+
+        order = [{"id": f"T{i}", "reason": ""} for i in (4, 5, 2, 3, 1)]
+        _, _, final = await curate_tracks(
+            self._Llm({"title": "x", "comment": "", "order": order}), "q",
+            self._tracks(), config=AgentConfig(curate_respects_weight=False))
+        assert [t.title for t in final] == ["Feedback", "Fire", "Famous",
+                                            "Fade", "Ok Ok"]
+
+    async def test_a_track_the_model_forgot_is_not_lost(self):
+        from lab.agent.selection import curate_tracks
+
+        _, _, final = await curate_tracks(
+            self._Llm({"title": "x", "comment": "",
+                       "order": [{"id": "T2", "reason": ""}]}),
+            "q", self._tracks(), config=AgentConfig())
+        assert len(final) == 5
+        assert final[0].title == "Ok Ok"
