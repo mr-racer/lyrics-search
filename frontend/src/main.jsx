@@ -18315,6 +18315,7 @@ function ArtistAtlasSection({
   onPlayTrack, navigateToArtist, playerTrack, audioPlaying, onQueueNext,
 }) {
   const c = useColors(isDark);
+  const isMobile = useIsMobile();
   const [data, setData] = useState(null);
   const [status, setStatus] = useState('idle');  // 'idle'|'loading'|'loaded'|'error'
   const [albumModal, setAlbumModal] = useState(null);  // { album, originRect }
@@ -18444,10 +18445,15 @@ function ArtistAtlasSection({
           <AtlasHero data={data} isDark={isDark} lang={lang} onNav={onNav} heroRef={heroRef} playingHere={playingHere} />
 
           {/* Floating glass dock overlapping the hero's bottom edge */}
-          <div className="lib-rise" style={{ maxWidth:1120, margin:'0 auto', padding:'0 32px', position:'relative', zIndex:6 }}>
+          <div className="lib-rise" style={{ maxWidth:1120, margin:'0 auto', padding: isMobile ? '0 16px' : '0 32px', position:'relative', zIndex:6 }}>
             <div className="atlas-glare" onMouseMove={atlasGlareMove} style={{
-              marginTop:-34, borderRadius:16, padding:'10px 14px',
-              display:'flex', alignItems:'center', justifyContent:'space-between', gap:14,
+              marginTop: isMobile ? 0 : -34,
+              borderRadius:16,
+              padding: isMobile ? '12px 14px' : '10px 14px',
+              display:'flex',
+              alignItems:'center',
+              justifyContent:'space-between',
+              gap:14,
               ...atlasGlass(isDark),
             }}>
               <AtlasAnchorPills sections={sectionsCfg} activeId={effectiveActive} onAnchor={scrollToSection} isDark={isDark} />
@@ -18457,7 +18463,7 @@ function ArtistAtlasSection({
 
           {/* position+z lift the column's text above the light field's tail
               (a positioned z-auto hero paints over later static siblings) */}
-          <div style={{ maxWidth:1120, margin:'0 auto', padding:'34px 32px 110px', display:'flex', flexDirection:'column', gap:46, position:'relative', zIndex:2 }}>
+          <div style={{ maxWidth:1120, margin:'0 auto', padding: isMobile ? '24px 16px 110px' : '34px 32px 110px', display:'flex', flexDirection:'column', gap:46, position:'relative', zIndex:2 }}>
             {data.bio && (
               <section ref={bioRef} className="lib-rise" style={{ '--lib-d':'0.08s', scrollMarginTop:84 }}>
                 <AtlasBio bio={data.bio} isDark={isDark} lang={lang} />
