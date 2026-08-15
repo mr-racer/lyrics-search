@@ -66,15 +66,25 @@ class EventSink:
         Anything not on the loop is hopped over with ``call_soon_threadsafe`` so
         ordering against the final ``result`` frame is preserved.
         """
-        item = self._frame(event)
+        frames = [self._frame(event)]
+        if event.get("stage") == "plan" and event.get("intent"):
+            # The client colours the orb off a ``route`` frame, and it lands the
+            # moment the plan does — long before the first token of an answer.
+            # That early colour is the page's only "I understood you" signal, so
+            # the plan is announced as one rather than left as a status line.
+            frames.insert(0, {"type": "route", "intent": event["intent"],
+                              "confidence": 1.0,
+                              "human": human("route", self.lang,
+                                             intent=event["intent"])})
         try:
             running = asyncio.get_running_loop()
         except RuntimeError:
             running = None
-        if running is self._loop:
-            self.queue.put_nowait(item)
-        else:
-            self._loop.call_soon_threadsafe(self.queue.put_nowait, item)
+        for item in frames:
+            if running is self._loop:
+                self.queue.put_nowait(item)
+            else:
+                self._loop.call_soon_threadsafe(self.queue.put_nowait, item)
 
 
 def _clarify_options(lang: str | None) -> list:

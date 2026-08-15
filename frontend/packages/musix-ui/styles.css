@@ -599,7 +599,8 @@
 
     /* Intent palettes (assistant page). The route frame lands ~200 ms in —
        long before the first LLM token — so colour is the first thing that
-       says which branch is answering. Default work palette = search. */
+       says which branch is answering. The default work palette IS lyrics_search
+       (blue), so that branch needs no rule of its own. */
     .aio-work.aio-i-playlist .aio-b1{background:#ffb35c;}
     .aio-work.aio-i-playlist .aio-b2{background:#ff6fae;}
     .aio-work.aio-i-playlist .aio-b3{background:#ffd76a;}
@@ -609,15 +610,24 @@
       background:conic-gradient(from 0deg,#ffb35c,#ff6fae,#ffd76a,#ffb35c);}
     .aio-work.aio-i-playlist .aio-dust{background:#ffcf94;
       box-shadow:0 0 8px 2px rgba(255,182,110,.7);}
-    .aio-work.aio-i-facts .aio-b1{background:#3ec9d6;}
-    .aio-work.aio-i-facts .aio-b2{background:#5f7cff;}
-    .aio-work.aio-i-facts .aio-b3{background:#5ee6c8;}
-    .aio-work.aio-i-facts .aio-b4{background:#7b6bff;}
-    .aio-work.aio-i-facts .aio-orb{box-shadow:0 12px 34px -6px rgba(62,201,214,.55);}
-    .aio-work.aio-i-facts .aio-ring{
+    .aio-work.aio-i-general .aio-b1{background:#3ec9d6;}
+    .aio-work.aio-i-general .aio-b2{background:#5f7cff;}
+    .aio-work.aio-i-general .aio-b3{background:#5ee6c8;}
+    .aio-work.aio-i-general .aio-b4{background:#7b6bff;}
+    .aio-work.aio-i-general .aio-orb{box-shadow:0 12px 34px -6px rgba(62,201,214,.55);}
+    .aio-work.aio-i-general .aio-ring{
       background:conic-gradient(from 0deg,#3ec9d6,#5f7cff,#5ee6c8,#3ec9d6);}
-    .aio-work.aio-i-facts .aio-dust{background:#8ef0e0;
+    .aio-work.aio-i-general .aio-dust{background:#8ef0e0;
       box-shadow:0 0 8px 2px rgba(94,230,200,.7);}
+    .aio-work.aio-i-audio_search .aio-b1{background:#b48cff;}
+    .aio-work.aio-i-audio_search .aio-b2{background:#7c5bff;}
+    .aio-work.aio-i-audio_search .aio-b3{background:#d6a8ff;}
+    .aio-work.aio-i-audio_search .aio-b4{background:#5f7cff;}
+    .aio-work.aio-i-audio_search .aio-orb{box-shadow:0 12px 34px -6px rgba(150,110,255,.55);}
+    .aio-work.aio-i-audio_search .aio-ring{
+      background:conic-gradient(from 0deg,#b48cff,#7c5bff,#d6a8ff,#b48cff);}
+    .aio-work.aio-i-audio_search .aio-dust{background:#cbb0ff;
+      box-shadow:0 0 8px 2px rgba(170,130,255,.7);}
     /* Asleep: the LLM is unreachable, so the page says so instead of
        pretending. One flat grey palette, no ring, no motion. */
     .aio-sleep .aio-blob{background:#4a4a58;animation:none;}
@@ -696,9 +706,10 @@
     body[data-theme="light"] .asx-pill:hover{background:#fff;color:#161620;border-color:rgba(22,22,32,.2);}
 
     .asx-dot{width:7px;height:7px;border-radius:50%;flex:none;}
-    .asx-dot-search{background:#6ac8ff;box-shadow:0 0 7px rgba(106,200,255,.8);}
+    .asx-dot-lyrics_search{background:#6ac8ff;box-shadow:0 0 7px rgba(106,200,255,.8);}
+    .asx-dot-audio_search{background:#b48cff;box-shadow:0 0 7px rgba(180,140,255,.8);}
     .asx-dot-playlist{background:#ffb35c;box-shadow:0 0 7px rgba(255,179,92,.8);}
-    .asx-dot-facts{background:#5ee6c8;box-shadow:0 0 7px rgba(94,230,200,.8);}
+    .asx-dot-general{background:#5ee6c8;box-shadow:0 0 7px rgba(94,230,200,.8);}
 
     /* Glass card — the shared surface of turn results and both rails. */
     .asx-card{position:relative;border-radius:16px;overflow:hidden;cursor:pointer;
@@ -820,7 +831,8 @@
     .asn-hero.asn-compact .asn-glow{top:calc(16px + var(--asn-os,136px)/2);}
     .asn-hero.aio-work{--asn-g1:#4d7dff;--asn-g2:#6ac8ff;}
     .asn-hero.aio-work.aio-i-playlist{--asn-g1:#ffb35c;--asn-g2:#ff6fae;}
-    .asn-hero.aio-work.aio-i-facts{--asn-g1:#3ec9d6;--asn-g2:#5ee6c8;}
+    .asn-hero.aio-work.aio-i-general{--asn-g1:#3ec9d6;--asn-g2:#5ee6c8;}
+    .asn-hero.aio-work.aio-i-audio_search{--asn-g1:#b48cff;--asn-g2:#8f6bff;}
     .asn-hero.aio-done{--asn-g1:#3ecf8e;--asn-g2:#4dd6c2;}
     .asn-hero.aio-fail{--asn-g1:#e0607e;--asn-g2:#a04057;}
     .asn-hero.aio-sleep .asn-glow{opacity:.25;}
@@ -931,22 +943,29 @@
     .asn-tplx:hover::after{right:0;}
 
     /* инлайн-цитаты в факт-ответе: суп-пилюля + глас-тултип с текстом источника */
-    .asn-cite{position:relative;display:inline-block;margin:0 1.5px;padding:0 5px;border-radius:7px;
-      font-size:10px;font-weight:700;line-height:1.7;top:-1px;cursor:help;
+    /* Ссылка [n] в тексте ответа. Наведение — предпросмотр источника, клик —
+       раскрывает его целиком в списке ниже: факт библиотеки в тултип влезает,
+       а веб-чанк до 1200 символов — нет, и обрезка молчком съедала половину. */
+    .asx-cite{position:relative;display:inline-block;margin:0 1.5px;padding:0 5px;border-radius:7px;
+      font-size:10px;font-weight:700;line-height:1.7;top:-1px;cursor:pointer;
       color:#c9baff;background:rgba(124,91,255,.16);transition:background .2s ease;}
-    .asn-cite:hover{background:rgba(124,91,255,.30);}
-    body[data-theme="light"] .asn-cite{color:#5b3fd4;background:rgba(124,91,255,.12);}
-    .asn-cite::after{content:attr(data-tip);position:absolute;bottom:calc(100% + 8px);left:50%;
-      transform:translateX(-50%) translateY(3px);width:max-content;max-width:280px;
-      white-space:normal;font-size:11.5px;font-weight:400;line-height:1.45;text-align:left;
+    .asx-cite:hover{background:rgba(124,91,255,.30);}
+    body[data-theme="light"] .asx-cite{color:#5b3fd4;background:rgba(124,91,255,.12);}
+    .asx-cite::after{content:attr(data-tip);position:absolute;bottom:calc(100% + 8px);left:50%;
+      transform:translateX(-50%) translateY(3px);width:max-content;max-width:460px;
+      white-space:pre-wrap;font-size:11.5px;font-weight:400;line-height:1.45;text-align:left;
       color:#eeeef3;background:rgba(22,19,36,.95);border:1px solid rgba(255,255,255,.10);
       border-radius:12px;padding:9px 12px;opacity:0;pointer-events:none;z-index:30;
       box-shadow:0 14px 30px -14px rgba(0,0,0,.8);
       backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
       transition:opacity .2s ease,transform .2s ease;}
-    .asn-cite:hover::after{opacity:1;transform:translateX(-50%) translateY(0);}
-    body[data-theme="light"] .asn-cite::after{background:rgba(255,255,255,.97);color:#161620;
+    .asx-cite:hover::after{opacity:1;transform:translateX(-50%) translateY(0);}
+    body[data-theme="light"] .asx-cite::after{background:rgba(255,255,255,.97);color:#161620;
       border-color:rgba(22,22,32,.10);box-shadow:0 14px 30px -18px rgba(40,30,60,.5);}
+    /* Узкий экран: тултип шириной с колонку, иначе он уезжает за край. */
+    @media (max-width:560px){
+      .asx-cite::after{max-width:min(78vw,460px);}
+    }
 
     /* спойлер «Источники» под ответом */
     .asn-src{margin-top:14px;}
@@ -968,6 +987,31 @@
     body[data-theme="light"] .asn-src-row{color:rgba(22,22,32,.62);}
     .asn-src-n{flex:none;font-size:11px;color:rgba(238,238,243,.38);padding-top:1px;}
     body[data-theme="light"] .asn-src-n{color:rgba(22,22,32,.40);}
+    /* Одна строка списка источников. Полный текст, без обрезки: список для
+       этого и существует. `is-used` — на что ответ реально опёрся, `is-open` —
+       куда только что кликнули из текста. */
+    .asx-srcrow{display:flex;gap:10px;padding:8px 10px;border-radius:10px;
+      border:1px solid transparent;transition:background .25s ease,border-color .25s ease;}
+    .asx-srcrow.is-used{background:rgba(124,91,255,.06);}
+    .asx-srcrow.is-open{background:rgba(124,91,255,.14);border-color:rgba(124,91,255,.35);}
+    body[data-theme="light"] .asx-srcrow.is-used{background:rgba(124,91,255,.05);}
+    body[data-theme="light"] .asx-srcrow.is-open{background:rgba(124,91,255,.10);
+      border-color:rgba(124,91,255,.30);}
+    .asx-srcmeta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+      font-size:11px;margin-bottom:4px;}
+    .asx-srckind{padding:1px 7px;border-radius:999px;letter-spacing:.04em;
+      color:rgba(238,238,243,.62);background:rgba(255,255,255,.07);}
+    body[data-theme="light"] .asx-srckind{color:rgba(22,22,32,.6);background:rgba(22,22,32,.06);}
+    .asx-srclink{color:#c9baff;text-decoration:none;}
+    .asx-srclink:hover{text-decoration:underline;}
+    body[data-theme="light"] .asx-srclink{color:#5b3fd4;}
+    .asx-srchost{color:rgba(238,238,243,.38);}
+    body[data-theme="light"] .asx-srchost{color:rgba(22,22,32,.38);}
+    .asx-srcp{color:rgba(238,238,243,.32);font-size:10.5px;}
+    body[data-theme="light"] .asx-srcp{color:rgba(22,22,32,.32);}
+    .asx-srctext{font-size:12.5px;line-height:1.55;color:rgba(238,238,243,.62);
+      white-space:pre-wrap;}
+    body[data-theme="light"] .asx-srctext{color:rgba(22,22,32,.62);}
 
     /* история: тусклые звёзды с глас-тултипом */
     .asn-hist{max-width:640px;margin:52px auto 0;text-align:center;}

@@ -6582,28 +6582,35 @@ function CatalogResults({ hits, loading, onOpen, onQueueNext, isDark, lang }) {
 const ASX_MAX_TURNS = 20;
 const ASX_REVEAL_MS = 750;   // stages arrive in bursts; pace them or they flash by
 
+// One example per branch, because the constellation is the only place the four
+// branches are discoverable at all — nothing else on the page says the assistant
+// can be asked for a line it half-remembers or for a sound.
 const ASX_PHRASES = {
   ru: [
-    { text: 'где-то там про дождь и такси', intent: 'search' },
+    { text: 'Расскажи про конфликт Канье и Тейлор', intent: 'general' },
+    { text: 'Песни с неофициальным появлением Майкла Джексона', intent: 'playlist' },
     { text: 'хиты Kanye West', intent: 'playlist' },
-    { text: 'расскажи про Radiohead', intent: 'facts' },
-    { text: 'что-нибудь медленное на вечер', intent: 'playlist' },
-    { text: 'строчка про бетон и небо', intent: 'search' },
-    { text: 'какие сэмплы в «Stronger»?', intent: 'facts' },
+    { text: 'что-нибудь спокойное на вечер', intent: 'audio_search' },
+    { text: 'песня, где поётся, что гравитация всегда выигрывает', intent: 'lyrics_search' },
+    { text: 'какие сэмплы в «Stronger»?', intent: 'general' },
   ],
   en: [
-    { text: 'something about rain and a taxi', intent: 'search' },
+    { text: 'Tell me about the Kanye and Taylor feud', intent: 'general' },
+    { text: 'Songs with an uncredited Michael Jackson appearance', intent: 'playlist' },
     { text: 'Kanye West hits', intent: 'playlist' },
-    { text: 'tell me about Radiohead', intent: 'facts' },
-    { text: 'something slow for the evening', intent: 'playlist' },
-    { text: 'the line about concrete and sky', intent: 'search' },
-    { text: 'what samples are in “Stronger”?', intent: 'facts' },
+    { text: 'something calm for the evening', intent: 'audio_search' },
+    { text: 'the song that says gravity always wins', intent: 'lyrics_search' },
+    { text: 'what samples are in “Stronger”?', intent: 'general' },
   ],
 };
 
-// Intent → glow colour for constellation stars and the history row. The same
-// three hues the orb palettes use — colour is the only «legend» the page has.
-const ASX_INTENT_COLOR = { search: '#6ac8ff', playlist: '#ffb35c', facts: '#5ee6c8' };
+// Intent → glow colour for constellation stars and the history row. Colour is the
+// only «legend» the page has, so the two search branches sit on neighbouring hues
+// (both are "find me this track") and the two list branches on their own.
+const ASX_INTENT_COLOR = {
+  lyrics_search: '#6ac8ff', audio_search: '#b48cff',
+  playlist: '#ffb35c', general: '#5ee6c8',
+};
 
 // Prompt templates for the «Быстрые подборки» row — pre-written playlist turns.
 const ASX_TEMPLATES = {
@@ -6665,7 +6672,7 @@ function asxTurnEmpty(p) {
   if ((p.clarify && p.clarify.length) || (p.disambiguate && p.disambiguate.length)) return false;
   if (p.playlist) return !(p.playlist.tracks || []).length;
   if (p.search) return !p.search.best_hit && !(p.search.hits || []).length;
-  if (p.facts) return !(p.facts.answer || '').trim();
+  if (p.answer) return !(p.answer.answer || '').trim();
   return true;
 }
 
@@ -6677,7 +6684,7 @@ function AsxLabel({ children, c, style }) {
 }
 
 function AsxIntentDot({ intent }) {
-  return <span className={`asx-dot asx-dot-${intent || 'search'}`} />;
+  return <span className={`asx-dot asx-dot-${intent || 'general'}`} />;
 }
 
 // One track row: recessed groove that fills on hover, ▶ fades in with it.
@@ -6839,63 +6846,101 @@ function AsxSearchCard({ payload, query, c, isDark, lang, navigateToArtist,
   );
 }
 
-// Inline [n] marks → interactive superscript pills: hover shows the source
-// text (CSS tooltip off data-tip). The injected HTML rides through marked +
-// DOMPurify (data-* attributes survive its default allowlist).
-function asxEnrichCitations(answer, sources) {
+// Inline [n] marks → interactive superscript pills. Hover shows a PREVIEW of the
+// source; clicking one opens the source list below and highlights that entry.
+//
+// Both halves are needed because the two kinds of evidence are different sizes.
+// A library fact is a sentence and fits a tooltip; a web passage is up to 1200
+// characters and does not — the old card truncated every source at 240 and a
+// chunk lost its second half without saying so. So the tooltip previews and the
+// list holds the whole thing.
+//
+// The injected HTML rides through marked + DOMPurify (data-* attributes survive
+// its default allowlist), and the click is caught by delegation on the wrapper —
+// nothing reaches into the sanitized markup.
+const ASX_TIP_CHARS = 420;
+
+function asxEnrichCitations(answer, evidence) {
   const byN = {};
-  (sources || []).forEach(s => { byN[s.n] = s.text || ''; });
+  (evidence || []).forEach(e => { byN[e.n] = e.text || ''; });
   const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   return String(answer || '').replace(/\[(\d+(?:\s*,\s*\d+)*)\]/g, (m, grp) => {
     const sups = grp.split(/\s*,\s*/).filter(n => byN[n] != null).map(n => {
-      const tip = byN[n].length > 240 ? byN[n].slice(0, 239).trimEnd() + '…' : byN[n];
-      return `<sup class="asn-cite" data-tip="${esc(tip)}">${n}</sup>`;
+      const full = byN[n];
+      const tip = full.length > ASX_TIP_CHARS
+        ? full.slice(0, ASX_TIP_CHARS - 1).trimEnd() + '…' : full;
+      return `<sup class="asx-cite" data-n="${esc(n)}" data-tip="${esc(tip)}">${n}</sup>`;
     });
     return sups.length ? sups.join('') : '';
   });
 }
 
-function AsxFactsCard({ payload, c, isDark, lang, navigateToArtist, onPlayTrack, onQueueNext,
-                        onAddToPlaylist, onAsk }) {
+function asxHost(url) {
+  try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; }
+}
+
+// The answer card. Deliberately not the old facts card with a hidden header: a
+// web-sourced answer has no library subject, and a card built around one shows
+// an empty frame whenever the question was not about something you own.
+function AsxAnswerCard({ payload, c, isDark, lang, navigateToArtist, onAsk }) {
   const ru = lang === 'ru';
+  const evidence = payload.evidence || [];
+  const [openSrc, setOpenSrc] = useState(null);
+  const srcRefs = useRef({});
   // Explain mode: the turn was "what does THIS line mean", so the line itself is
   // the header of the answer and `explained === false` is an honest outcome, not
   // an error — the backend refuses to invent a reason it could not find.
   const focus = payload.focus_fact;
   const unexplained = focus && payload.explained === false;
-  const related = payload.related_tracks || [];
-  const hits = related.map(t => ({ track: t, score: 0, matched_on: 'facts' }));
-  const image = homeCoverUrl(payload.image_path);
+  const subject = payload.subject;
+  const image = subject ? homeCoverUrl(subject.image_path) : null;
+
+  const onBodyClick = (e) => {
+    const el = e.target && e.target.closest ? e.target.closest('.asx-cite') : null;
+    if (!el) return;
+    const n = Number(el.getAttribute('data-n'));
+    if (!n) return;
+    setOpenSrc(n);
+    requestAnimationFrame(() => {
+      const row = srcRefs.current[n];
+      if (row && row.scrollIntoView) row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  };
+
   return (
     <div className="asx-fade" style={{ marginTop: 18 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 13 }}>
-        {image
-          ? <img src={image} alt="" style={{ width: 64, height: 64, borderRadius:
-              payload.subject_kind === 'artist' ? '50%' : 12, objectFit: 'cover', flex: 'none' }} />
-          : <AlbumCover title={payload.subject_title || ''} artist={payload.subject_subtitle || ''}
-              size={64} isDark={isDark} />}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <AsxLabel c={c} style={{ marginBottom: 3 }}>
-            {payload.subject_kind === 'artist' ? (ru ? 'АРТИСТ' : 'ARTIST')
-              : payload.subject_kind === 'album' ? (ru ? 'АЛЬБОМ' : 'ALBUM')
-              : (ru ? 'ТРЕК' : 'TRACK')}
-          </AsxLabel>
-          <div className="serif" style={{ fontSize: 21, color: c.text, lineHeight: 1.2 }}>
-            {payload.subject_title}
-          </div>
-          {payload.subject_subtitle && (
-            <div style={{ fontSize: 12.5, color: c.textMuted, marginTop: 2 }}>
-              {payload.subject_subtitle}
+      {/* The header only exists when the library could say who this is about.
+          Nothing is invented to fill it. */}
+      {subject && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 13 }}>
+          {image
+            ? <img src={image} alt="" style={{ width: 64, height: 64, borderRadius:
+                subject.kind === 'artist' ? '50%' : 12, objectFit: 'cover', flex: 'none' }} />
+            : <AlbumCover title={subject.title || ''} artist={subject.subtitle || ''}
+                size={64} isDark={isDark} />}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <AsxLabel c={c} style={{ marginBottom: 3 }}>
+              {subject.kind === 'artist' ? (ru ? 'АРТИСТ' : 'ARTIST')
+                : subject.kind === 'album' ? (ru ? 'АЛЬБОМ' : 'ALBUM')
+                : (ru ? 'ТРЕК' : 'TRACK')}
+            </AsxLabel>
+            <div className="serif" style={{ fontSize: 21, color: c.text, lineHeight: 1.2 }}>
+              {subject.title}
             </div>
+            {subject.subtitle && (
+              <div style={{ fontSize: 12.5, color: c.textMuted, marginTop: 2 }}>
+                {subject.subtitle}
+              </div>
+            )}
+          </div>
+          {subject.artist_slug && navigateToArtist && (
+            <button className="asx-pill" onClick={() => navigateToArtist(subject.artist_slug)}>
+              {ru ? 'Страница артиста' : 'Artist page'}
+            </button>
           )}
         </div>
-        {payload.artist_slug && navigateToArtist && (
-          <button className="asx-pill" onClick={() => navigateToArtist(payload.artist_slug)}>
-            {ru ? 'Страница артиста' : 'Artist page'}
-          </button>
-        )}
-      </div>
+      )}
 
       {/* The statement being explained leads the card: without it on screen an
           explanation reads as a non-sequitur. */}
@@ -6908,88 +6953,94 @@ function AsxFactsCard({ payload, c, isDark, lang, navigateToArtist, onPlayTrack,
         </div>
       )}
 
-      <div style={{ fontSize: 14.5, lineHeight: 1.65,
+      <div onClick={onBodyClick} style={{ fontSize: 14.5, lineHeight: 1.65,
         color: unexplained ? c.textMuted : c.text }}>
-        <MarkdownText text={asxEnrichCitations(payload.answer, payload.sources)} />
+        <MarkdownText text={asxEnrichCitations(payload.answer, evidence)} />
       </div>
 
-      {/* Sources under a spoiler: exactly the facts the inline marks point at,
-          renumbered server-side to 1..K by first appearance. */}
-      {(payload.sources || []).length > 0 && (
-        <details className="asn-src">
-          <summary>{ru ? `Источники · ${payload.sources.length}`
-                       : `Sources · ${payload.sources.length}`}</summary>
+      {/* Sources under a spoiler: the whole grounding pack, with the ones the
+          answer actually leaned on marked. Clicking a mark above opens this and
+          scrolls to the entry. */}
+      {evidence.length > 0 && (
+        <details className="asn-src" open={openSrc != null}>
+          <summary>{ru ? `Источники · ${evidence.length}` : `Sources · ${evidence.length}`}</summary>
           <div className="asn-src-list">
-            {payload.sources.map(s => (
-              <div key={s.n} className="asn-src-row">
-                <span className="asn-src-n num-tab">{s.n}</span>
-                <span>{s.text}</span>
-              </div>
-            ))}
+            {evidence.map(e => {
+              const host = asxHost(e.url);
+              return (
+                <div key={e.n} ref={el => { srcRefs.current[e.n] = el; }}
+                  className={'asx-srcrow' + (openSrc === e.n ? ' is-open' : '')
+                             + (e.used ? ' is-used' : '')}>
+                  <span className="asn-src-n num-tab">{e.n}</span>
+                  <div style={{ minWidth: 0 }}>
+                    <div className="asx-srcmeta">
+                      <span className="asx-srckind">
+                        {e.kind === 'fact' ? (ru ? 'библиотека' : 'library')
+                                           : (ru ? 'веб' : 'web')}
+                      </span>
+                      {e.url
+                        ? <a href={e.url} target="_blank" rel="noopener noreferrer"
+                            className="asx-srclink">{e.source || host || e.url}</a>
+                        : <span>{e.source}</span>}
+                      {host && e.source && <span className="asx-srchost">{host}</span>}
+                      {typeof e.ce_prob === 'number' && (
+                        <span className="asx-srcp mono">p={e.ce_prob.toFixed(2)}</span>
+                      )}
+                    </div>
+                    <div className="asx-srctext">{e.text}</div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </details>
       )}
 
       {/* Honest provenance: the answer either passed the citation check or the
-          deterministic "here is what is known" rendering was served instead.
+          deterministic "here is what was found" rendering was served instead.
           In explain mode `grounded: false` just means "nothing to write", and
           the answer already says so — a second badge would be noise. */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
-        {payload.web_search_used && (
+        {evidence.some(e => e.kind === 'chunk') && (
           <span className="asx-pill" style={{ cursor: 'default' }}>
             {ru ? 'нашёл в интернете' : 'found on the web'}
           </span>
         )}
         {!focus && payload.grounded === false && (
           <span className="asx-pill" style={{ cursor: 'default' }}>
-            {ru ? 'только известные факты, без формулировки ИИ'
-                : 'known facts only, not written by the AI'}
+            {ru ? 'только найденные источники, без формулировки ИИ'
+                : 'sources only, not written by the AI'}
           </span>
         )}
       </div>
 
-      {/* Follow-up chips: written by the model in the same answer call (its
-          own next-question ideas), sanitized server-side. Tapping one asks it
-          with the subject pinned by id so the answer can't drift onto a
-          same-named track. In explain mode the turn already is a follow-up. */}
+      {/* Follow-up chips: written by the model in the same answer call (its own
+          next-question ideas), sanitized server-side. Tapping one asks it with
+          the subject pinned by id so the answer can't drift onto a same-named
+          track. In explain mode the turn already is a follow-up. */}
       {!focus && ((payload.follow_ups || []).length > 0
-                  || payload.subject_kind === 'artist') && onAsk && (
+                  || (subject && subject.kind === 'artist')) && onAsk && (
         <div style={{ display: 'flex', gap: 9, flexWrap: 'wrap', marginTop: 16 }}>
           {(payload.follow_ups || []).map(q => (
             <button key={q} className="asx-pill" type="button"
               onClick={() => onAsk(q, {
-                intent: 'facts',
-                subjectTrackId: payload.track_id || undefined,
-                subjectArtistSlug: payload.track_id ? undefined
-                  : (payload.artist_slug || undefined),
+                intent: 'general',
+                subjectTrackId: (subject && subject.track_id) || undefined,
+                subjectArtistSlug: (subject && !subject.track_id && subject.artist_slug)
+                  || undefined,
               })}>
-              <AsxIntentDot intent="facts" />{q}
+              <AsxIntentDot intent="general" />{q}
             </button>
           ))}
-          {payload.subject_kind === 'artist' && payload.subject_title && (
+          {subject && subject.kind === 'artist' && subject.title && (
             <button className="asx-pill" type="button"
               onClick={() => onAsk(
-                ru ? `собери лучшее ${payload.subject_title}` : `build the best of ${payload.subject_title}`,
+                ru ? `собери лучшее ${subject.title}` : `build the best of ${subject.title}`,
                 { intent: 'playlist' })}>
               <AsxIntentDot intent="playlist" />
-              {ru ? `собери лучшее ${payload.subject_title}` : `best of ${payload.subject_title}`}
+              {ru ? `собери лучшее ${subject.title}` : `best of ${subject.title}`}
             </button>
           )}
-        </div>
-      )}
-
-      {related.length > 0 && (
-        <div style={{ marginTop: 16 }}>
-          {/* Backend only fills this with the in-library sides of the track's
-              sample links now — never the artist's catalogue. */}
-          <AsxLabel c={c}>{ru ? 'СЭМПЛЫ У ВАС В БИБЛИОТЕКЕ' : 'SAMPLES IN YOUR LIBRARY'}</AsxLabel>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {related.map((t, i) => (
-              <AsxTrackRow key={t.track_id || i} track={t} c={c} isDark={isDark} lang={lang}
-                onPlay={() => onPlayTrack(hits[i], hits)}
-                onQueueNext={onQueueNext} onAddToPlaylist={onAddToPlaylist} />
-            ))}
-          </div>
         </div>
       )}
     </div>
@@ -7104,7 +7155,7 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
     // Two most recent turns are enough context for the LLM executors; the
     // structural state that actually drives follow-ups lives in `slots`.
     const history = turns.slice(0, 2).reverse().flatMap(t => {
-      const answer = t.result?.facts?.answer || t.result?.search?.message
+      const answer = t.result?.answer?.answer || t.result?.search?.message
         || t.result?.playlist?.title || '';
       return answer ? [{ role: 'user', content: t.message },
                        { role: 'assistant', content: String(answer).slice(0, 600) }] : [];
@@ -7350,7 +7401,7 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
               <div className="asx-rail">
                 {turn.disambiguate.map((o, i) => (
                   <div key={i} className="asx-card" style={{ padding: 12, width: 190 }}
-                       onClick={() => send(query, { intent: 'facts', subjectTrackId: o.track_id,
+                       onClick={() => send(query, { intent: 'general', subjectTrackId: o.track_id,
                                                     subjectArtistSlug: o.artist_slug })}>
                     <div style={{ position: 'relative', zIndex: 1, display: 'flex',
                       alignItems: 'center', gap: 10 }}>
@@ -7392,11 +7443,9 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
               navigateToArtist={navigateToArtist} onPlayTrack={onPlayTrack}
               onQueueNext={onQueueNext} onAddToPlaylist={onAddToPlaylist} />
           )}
-          {turn && turn.facts && (
-            <AsxFactsCard payload={turn.facts} c={c} isDark={isDark} lang={lang}
-              navigateToArtist={navigateToArtist} onPlayTrack={onPlayTrack}
-              onQueueNext={onQueueNext} onAddToPlaylist={onAddToPlaylist}
-              onAsk={send} />
+          {turn && turn.answer && (
+            <AsxAnswerCard payload={turn.answer} c={c} isDark={isDark} lang={lang}
+              navigateToArtist={navigateToArtist} onAsk={send} />
           )}
 
           {/* ── Idle entry points. Every section is a pre-written turn, and
@@ -7412,7 +7461,7 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
                   {ideas.map((f, i) => (
                     <AsxNebulaFact key={i} fact={f} lang={lang}
                       onSend={(fx) => send((ru ? 'объясни: ' : 'explain this: ') + fx.fact, {
-                        intent: 'facts', focusFact: fx.fact,
+                        intent: 'general', focusFact: fx.fact,
                         // The card knows its subject — pin it by id so the
                         // assistant never re-guesses the song from the words.
                         subjectTrackId: fx.track_id || undefined,
@@ -7431,7 +7480,7 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
                     {cards.map((card, i) => (
                       <AsxNebulaSample key={card.track_id || i} card={card} isDark={isDark}
                         onSend={(cd) => send(cd.prompt, {
-                          intent: cd.intent || 'facts',
+                          intent: cd.intent || 'general',
                           subjectTrackId: cd.track_id || undefined,
                         })} />
                     ))}
