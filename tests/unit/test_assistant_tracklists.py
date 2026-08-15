@@ -6,8 +6,14 @@ render as tables. A parser that returns rows from those is worse than the
 regexes it replaced, because it looks authoritative.
 """
 
-from app.services.assistant.tracklists import (parse_markdown_tables, tracks_from_markdown,
-                              tracks_from_table)
+import pytest
+
+from app.services.assistant.contracts import Page
+from app.services.assistant.tracklists import (has_structured_parser,
+                                               parse_markdown_tables,
+                                               structured_tracks,
+                                               tracks_from_markdown,
+                                               tracks_from_table)
 
 SOUNDTRACK = """
 ## Soundtrack
@@ -208,3 +214,47 @@ class TestRealWikipediaDiscography:
         row = next(r for r in tracks_from_markdown(DISCOGRAPHY)
                    if r.title == "Can't Tell Me Nothing")
         assert row.year is None
+
+
+class TestParserAvailability:
+    """The tuple that routes a page away from the model.
+
+    Kept honest against ``structured_tracks`` itself: a kind this says yes to and
+    the parser then ignores is a page nobody reads at all.
+    """
+
+    @staticmethod
+    def _page(url: str, source: str = "web") -> Page:
+        return Page(url=url, title="", markdown="", source=source)
+
+    @pytest.mark.parametrize("url", [
+        "https://en.wikipedia.org/wiki/MGMT_discography",
+        "https://gta.fandom.com/wiki/Radio_X",
+        "https://sonic.wikia.org/wiki/Soundtrack",
+        "https://music.apple.com/us/playlist/pl.1",
+    ])
+    def test_hosts_with_a_parser(self, url):
+        assert has_structured_parser(self._page(url))
+
+    @pytest.mark.parametrize("url", [
+        "https://pitchfork.com/features/lists/best-songs",
+        "https://www.reddit.com/r/hiphopheads/comments/abc/",
+        "https://genius.com/albums/Mgmt/Oracular-spectacular",
+    ])
+    def test_hosts_without_one(self, url):
+        assert not has_structured_parser(self._page(url))
+
+    def test_an_unknown_host_falls_back_to_the_stream_label(self):
+        """``source_for_url`` cannot read a host it does not know, and the label
+        the search stream attached is the only other thing on offer."""
+        assert has_structured_parser(self._page("https://mirror.example/x",
+                                                source="wikipedia"))
+
+    def test_a_kind_outside_the_tuple_is_never_parsed(self):
+        """The other half of the contract. A page the branch sends to the model
+        must be one the parser would have refused anyway — otherwise the two
+        disagree about who reads it and it gets read twice, or not at all."""
+        page = Page(url="https://pitchfork.com/x", title="",
+                    markdown=SOUNDTRACK, source="web")
+        assert not has_structured_parser(page)
+        assert structured_tracks(page) == []

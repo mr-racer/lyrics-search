@@ -17,7 +17,9 @@ from app.services.assistant.branches.base import WebBranch
 from app.services.assistant.contracts import Plan, PlaylistResult
 from app.services.assistant.selection import (curate_tracks, select_tracks,
                                               triage_tracks)
-from app.services.assistant.tracklists import TrackExtractor, structured_tracks
+from app.services.assistant.tracklists import (TrackExtractor,
+                                               has_structured_parser,
+                                               structured_tracks)
 from app.services.assistant.web_urls import dedupe_by_url
 
 logger = logging.getLogger(__name__)
@@ -68,15 +70,11 @@ class PlaylistBranch(WebBranch):
             structured_pages, prose_pages = await self.gather(
                 plan, queries, ce_query, structured=True)
 
-            for page in structured_pages:
-                with self.timings.span("structured.tables"):
-                    found = await asyncio.to_thread(structured_tracks, page,
-                                                    default_artist=artist)
-                claims.extend(found)
-                if found:
-                    self.sink.put("structured", url=page.url, tracks=len(found))
+            parsed, prose = await self._harvest(structured_pages + prose_pages,
+                                                artist=artist)
+            claims += parsed
 
-            self.index(prose_pages)
+            self.index(prose)
             chunks = self.best_chunks(ce_query)
             if chunks:
                 extractor = TrackExtractor(self.agent.llm, self.cfg, self.sink)
@@ -129,6 +127,42 @@ class PlaylistBranch(WebBranch):
         return PlaylistResult(title=title, comment=comment, tracks=resolved,
                               missing=missing[:40], iterations=iterations,
                               relaxations=relaxations, notes=notes)
+
+    async def _harvest(self, pages: list, *, artist: Optional[str]) -> tuple:
+        """``(claims, prose)`` — parse what has a parser, hand back the rest.
+
+        Routing is by HOST, and it used to be by search stream, which is not the
+        same thing: ``gather`` splits its result by which stream found each page,
+        so a Wikipedia discography that only the open-web search surfaced went
+        into the prose lane and was read by the MODEL. That is the most expensive
+        way to read a table. Extraction emits one JSON object per track, so its
+        output — and therefore its wall time, the largest single span in a
+        playlist run — grows with the length of the list it is retyping, and it
+        was retyping rows that parse in milliseconds.
+
+        A parser that comes back empty hands the page to the prose lane rather
+        than dropping it. ``tracks_from_markdown`` reads markdown TABLES and
+        nothing else, so a Fandom soundtrack written as a bulleted list is a page
+        full of real tracks with no rows in it — and refusing it on its host alone
+        would lose the whole page instead of just the cheap way of reading it.
+        """
+        claims: list = []
+        prose: list = []
+        for page in pages:
+            if not has_structured_parser(page):
+                prose.append(page)
+                continue
+            with self.timings.span("structured.tables"):
+                found = await asyncio.to_thread(structured_tracks, page,
+                                                default_artist=artist)
+            if found:
+                claims += found
+                self.sink.put("structured", url=page.url, tracks=len(found))
+                continue
+            logger.info("[playlist] %s: a parseable host with nothing to parse "
+                        "— reading it as prose", page.url)
+            prose.append(page)
+        return claims, prose
 
     def _library_artist(self, plan: Plan) -> Optional[str]:
         """The artist as the LIBRARY spells it, best effort.

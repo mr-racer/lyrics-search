@@ -449,6 +449,23 @@ def apple_tracks(page: Page) -> list:
     return out
 
 
+# The hosts a parser exists for, as ONE tuple: the playlist branch decides what
+# to put in front of the model by asking whether a page is in here, so a kind
+# listed in one place and not the other is a page routed away from the model and
+# then dropped unparsed — silently, and only for that host.
+STRUCTURED_KINDS = ("apple", "wikipedia", "fandom")
+
+
+def has_structured_parser(page: Page) -> bool:
+    """Whether ``structured_tracks`` has anything to try on this page.
+
+    Says nothing about whether it will FIND anything: a Wikipedia article with no
+    tables is in here and yields nothing. That difference is the caller's to
+    handle — see ``PlaylistBranch._harvest``.
+    """
+    return source_for_url(page.url, fallback=page.source) in STRUCTURED_KINDS
+
+
 def structured_tracks(page: Page,
                       *, default_artist: Optional[str] = None) -> list:
     """Whatever the page yields without asking a model. May be empty.
@@ -459,13 +476,13 @@ def structured_tracks(page: Page,
     discography without a word.
     """
     kind = source_for_url(page.url, fallback=page.source)
+    if kind not in STRUCTURED_KINDS:
+        return []
     if kind == "apple":
         return apple_tracks(page)
-    if kind in ("wikipedia", "fandom"):
-        return tracks_from_markdown(page.markdown, source=kind,
-                                    source_url=page.url, page_title=page.title,
-                                    default_artist=default_artist)
-    return []
+    return tracks_from_markdown(page.markdown, source=kind,
+                                source_url=page.url, page_title=page.title,
+                                default_artist=default_artist)
 
 
 # ── prose ───────────────────────────────────────────────────────────────────
