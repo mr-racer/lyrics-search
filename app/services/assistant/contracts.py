@@ -141,9 +141,12 @@ class ResolvedTrack:
     section: str = ""
     page_title: str = ""
     context: str = ""
-    # Filled from track_metadata before the payload leaves the service.
+    # Carried from track_metadata by the matcher, so the payload can be built
+    # without a second read per row.
     cover_art_path: Optional[str] = None
     album: Optional[str] = None
+    duration_sec: float = 0.0
+    file_path: str = ""
 
 
 @dataclass(slots=True)

@@ -1,44 +1,38 @@
-"""Assistant orchestrator — routes one message and normalises the three
-executors into a single NDJSON envelope.
+"""Assistant orchestrator — one entry point over the deterministic web agent.
 
-Owns no business logic: ``search`` delegates to ``chat_search_service``,
-``playlist`` to ``recsys_ai_service.ai_playlist``, ``facts`` to
-``facts_executor``. What it *does* own is the plumbing those three don't share.
+Owns no business logic. It builds the run's config out of the request, hands the
+message to :class:`agent.Assistant`, and turns whichever of the four result
+contracts comes back into the payload the route serves.
 
-**The callback problem.** The two existing stacks report progress differently:
-``chat_search_service`` takes an *async* ``emit``; ``ai_playlist`` takes a
-*sync* ``on_status`` that its playlist-agent tools may call from a worker thread
-(they run inside ``asyncio.to_thread``). Feeding both into one stream naively
-either drops the thread-borne events or lets them overtake the terminal
-``result``. :class:`EventSink` solves it the way ``routes/recommend.py`` already
-does — one ``asyncio.Queue`` plus ``loop.call_soon_threadsafe`` for anything
-arriving off-loop.
+**The callback problem.** The pipeline reports progress from wherever it happens
+to be: the LLM calls are on the event loop, but the whole search and fetch phase
+runs inside ``asyncio.to_thread``. Feeding both into one stream naively either
+drops the thread-borne events or lets them overtake the terminal ``result``.
+:class:`EventSink` solves it the way ``routes/recommend.py`` already does — one
+``asyncio.Queue`` plus ``loop.call_soon_threadsafe`` for anything arriving
+off-loop.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Optional
 
-from app.services.assistant import facts_executor, reason_gate, router as intent_router
 from app.services.assistant.humanize import clarify_labels, human
 
 logger = logging.getLogger(__name__)
 
-# How long the stream may stay silent before a keepalive line goes out. The SSE
-# chat had a heartbeat; the NDJSON playlist route did not, and behind the VPS
-# nginx a long quiet stretch during an LLM call gets the connection torn down.
+# How long the stream may stay silent before a keepalive line goes out. Behind
+# the VPS nginx a long quiet stretch during an LLM call gets the connection torn
+# down, and an LLM call here can be silent for a minute.
 HEARTBEAT_SEC = 15.0
 
-_CLARIFY_ORDER = ("search", "playlist", "facts")
+_CLARIFY_ORDER = ("lyrics_search", "audio_search", "playlist", "general")
 
 
 class EventSink:
-    """One queue fed by both callback styles, drained by the streaming route.
-
-    ``emit`` is the async form the search engine expects; ``on_status`` is the
-    sync form the playlist pipeline expects and is safe to call from any thread.
-    """
+    """One queue fed from any thread, drained by the streaming route."""
 
     def __init__(self, lang: str | None = None):
         self.queue: asyncio.Queue = asyncio.Queue()
@@ -50,14 +44,11 @@ class EventSink:
         self.queue.put_nowait(item)
 
     def _frame(self, event: dict) -> dict:
-        """Normalise any producer's event into one ``status`` frame.
+        """Normalise a pipeline event into one ``status`` frame.
 
-        Two vocabularies arrive here: ``chat_search_service`` names the stage in
-        ``type`` (``{"type": "search", "found": 3}``), while the playlist and
-        facts branches name it in ``stage``. Either may already carry a
-        ``human`` caption. Both keys are stripped before the remaining fields
-        are handed to :func:`human` — passing them through is what made a facts
-        event blow up with "human() got multiple values for argument 'stage'".
+        ``stage`` and ``human`` are stripped before the remaining fields reach
+        :func:`human` — passing them through is what once made an event blow up
+        with "human() got multiple values for argument 'stage'".
         """
         stage = event.get("stage") or event.get("type") or "status"
         fields = {k: v for k, v in event.items()
@@ -66,15 +57,14 @@ class EventSink:
         return {"type": "status", "stage": stage, "human": caption, **fields}
 
     async def emit(self, event: dict) -> None:
-        """Async callback for ``chat_search_service`` and ``facts_executor``."""
+        """Async callback, for anything already on the loop."""
         self.put(self._frame(event))
 
     def on_status(self, event: dict) -> None:
-        """Sync callback for ``ai_playlist`` / ``playlist_agent``.
+        """Sync callback, safe from a worker thread.
 
-        May be invoked from a worker thread — anything not on the loop is
-        hopped over with ``call_soon_threadsafe`` so ordering against the final
-        ``result`` frame is preserved.
+        Anything not on the loop is hopped over with ``call_soon_threadsafe`` so
+        ordering against the final ``result`` frame is preserved.
         """
         item = self._frame(event)
         try:
@@ -87,208 +77,237 @@ class EventSink:
             self._loop.call_soon_threadsafe(self.queue.put_nowait, item)
 
 
-def _clarify_options(lang: str | None) -> list[dict]:
+def _clarify_options(lang: str | None) -> list:
     labels = clarify_labels(lang)
     return [{"intent": i, "label": labels[i]} for i in _CLARIFY_ORDER]
 
 
 async def run_assistant(req, *, search_service, qdrant, collection_name: str,
                         current_user, sink: EventSink | None = None) -> dict:
-    """Route ``req`` and run the matching executor to completion.
+    """Run one message to completion and return the terminal payload.
 
-    Returns the terminal payload — the same dict the non-streaming endpoint
-    serves and the streaming one ships as its final ``result`` frame. Progress
-    reaches the client through ``sink`` while this runs.
+    ``qdrant`` and ``current_user`` are part of the route's contract and are not
+    used here: the agent reaches the vector store through ``search_service`` and
+    the library through ``collection_name``, which is the only thing that decides
+    what this run may see.
+    """
+    from app.services.assistant.agent import Assistant
+    from app.services.assistant.config import AgentConfig
+    from app.services.assistant.contracts import (AudioResult, GeneralResult,
+                                                  LyricsResult, PlaylistResult)
+    from app.services.assistant.events import AgentSink
+
+    lang = req.lang
+    cfg = AgentConfig(lang=lang, llm_base_url=req.llm_base_url,
+                      llm_model=req.llm_model)
+    # An explicit "на 20 треков" is the user's own cap and beats the default.
+    if req.limit:
+        cfg.default_target_count = req.limit
+        cfg.clap_result_count = req.limit
+
+    agent_sink = AgentSink(sink.on_status if sink is not None else None)
+    agent = Assistant(collection_name, config=cfg, sink=agent_sink,
+                      search_service=search_service)
+
+    result = await agent.run(req.message, focus_fact=req.focus_fact,
+                             subject_track_id=req.subject_track_id,
+                             subject_artist_slug=req.subject_artist_slug,
+                             forced_intent=req.intent)
+
+    slots = _merge_slots(req.slots)
+    if isinstance(result, LyricsResult):
+        return _lyrics_payload(result, slots, lang)
+    if isinstance(result, PlaylistResult):
+        return _playlist_payload(result, slots, lang)
+    if isinstance(result, AudioResult):
+        return _audio_payload(result, slots, lang)
+    if isinstance(result, GeneralResult):
+        return _answer_payload(result, slots, lang, sink=sink,
+                               collection_name=collection_name,
+                               catalog=agent.catalog)
+    logger.error("[assistant] unknown result type %s", type(result))
+    return {"intent": None, "human": human("error", lang),
+            "slots": slots.model_dump(), "clarify": _clarify_options(lang)}
+
+
+# ── payload builders ────────────────────────────────────────────────────────
+
+
+def _merge_slots(slots, **updates):
+    """Carry the client's slots forward, overwriting only what this turn learned.
+
+    The merge rule is unconditional on purpose: slots always carry, freshly
+    resolved entities overwrite. That removes any need to decide "is this a
+    follow-up?" — «ещё у этого артиста» simply finds no artist and falls back to
+    whatever the last turn stored.
     """
     from app.domain.models import AssistantSlots
 
-    lang = req.lang
-    slots = req.slots or AssistantSlots()
-
-    def _say(item: dict) -> None:
-        if sink is not None:
-            sink.put(item)
-
-    # ── route (LLM reads the sentence, GLiNER pulls the spans) ──
-    # The last user turn goes along so a modifier («а побыстрее?») is recognised
-    # as one; the structural state the executors need lives in `slots`.
-    last_message = next(
-        (m.content for m in reversed(req.history or []) if getattr(m, "role", "") == "user"),
-        None,
-    )
-    route = await intent_router.route(
-        req.message, slots, explicit_intent=req.intent, last_message=last_message,
-        llm_base_url=req.llm_base_url, llm_model=req.llm_model,
-    )
-
-    if route.intent is None:
-        # Refusing to guess is a feature: a wrong branch costs the user a whole
-        # wasted pipeline run, one tap costs a second.
-        options = _clarify_options(lang)
-        _say({"type": "clarify", "human": human("clarify", lang), "options": options})
-        return {
-            "intent": None,
-            "human": human("clarify", lang),
-            "slots": intent_router.merge_slots(slots, None).model_dump(),
-            "clarify": options,
-        }
-
-    _say({"type": "route", "intent": route.intent,
-          "confidence": route.confidence,
-          "human": human("route", lang, intent=route.intent)})
-
-    merged = intent_router.merge_slots(slots, route)
-
-    if route.intent == "search":
-        return await _run_search(req, route, merged, search_service, current_user, sink, lang)
-    if route.intent == "playlist":
-        return await _run_playlist(req, route, merged, search_service, qdrant,
-                                   collection_name, sink, lang)
-    return await _run_facts(req, route, merged, qdrant,
-                            collection_name, sink, lang)
+    base = (slots or AssistantSlots()).model_dump()
+    for key, value in updates.items():
+        if value is not None:
+            base[key] = value
+    return AssistantSlots(**base)
 
 
-async def _run_search(req, route, slots, search_service, current_user, sink, lang) -> dict:
-    """Delegate to the agentic lyrics/audio search engine.
-
-    ``planner_enabled`` is forced on: the intent is already known, so the old
-    ``CLASSIFICATION_SYSTEM_PROMPT`` round-trip would be a wasted LLM call, and
-    the planner is what produces filters and CLAP-ready queries.
-    """
-    from app.domain.models import ChatRequest
-    from app.services.chat_search_service import run_chat_search
-
-    chat_req = ChatRequest(
-        message=req.message,
-        history=req.history,
-        auto_mode=True,
-        planner_enabled=True,
-        llm_base_url=req.llm_base_url,
-        llm_model=req.llm_model,
-        lang=req.lang,
-    )
-    result = await run_chat_search(
-        chat_req, search_service, current_user,
-        emit=(sink.emit if sink is not None else None),
-    )
-    best = result.get("best_hit") or {}
-    track = (best.get("track") or {}) if isinstance(best, dict) else {}
-    slots = intent_router.merge_slots(
-        slots, None,
-        last_track_id=track.get("track_id"),
-        last_song=result.get("song"),
-        last_artist=result.get("artist"),
-    )
+def _lyrics_payload(result, slots, lang: str) -> dict:
+    best = result.best_hit
+    track = best.track if best is not None else None
+    slots = _merge_slots(slots, last_intent="lyrics_search",
+                         last_track_id=(track.track_id if track else None),
+                         last_song=result.song, last_artist=result.artist)
     return {
-        "intent": "search",
+        "intent": "lyrics_search",
         "human": human("answer", lang),
         "slots": slots.model_dump(),
-        "search": result,
+        "search": {
+            "message": result.message,
+            "song": result.song,
+            "artist": result.artist,
+            "confidence": result.confidence,
+            "best_hit": best.model_dump() if best is not None else None,
+            "hits": [h.model_dump() for h in result.hits],
+            "attempts": 1,
+            "classification": "text",
+        },
     }
 
 
-async def _run_playlist(req, route, slots, search_service, qdrant,
-                        collection_name, sink, lang) -> dict:
-    """Delegate to the plan→execute→select playlist pipeline (unchanged)."""
-    from app.services import recsys_ai_service
-
-    result = await recsys_ai_service.ai_playlist(
-        search_service=search_service,
-        qdrant_client=qdrant,
-        collection_name=collection_name,
-        prompt=req.message,
-        lang=req.lang,
-        # An explicit "на 20 треков" is the user's own cap and beats the default.
-        limit=route.count if (route.count and 1 <= route.count <= 40) else req.limit,
-        llm_base_url=req.llm_base_url,
-        llm_model=req.llm_model,
-        on_status=(sink.on_status if sink is not None else None),
-    )
-    payload = recsys_ai_service.build_playlist_response(result)
-    ids = [t.track_id for t in payload.tracks]
-    slots = intent_router.merge_slots(slots, None, last_playlist_ids=ids or None)
+def _playlist_payload(result, slots, lang: str) -> dict:
+    tracks = [_playlist_track(t) for t in result.tracks]
+    slots = _merge_slots(slots, last_intent="playlist",
+                         last_playlist_ids=[t["track_id"] for t in tracks] or None)
     return {
         "intent": "playlist",
-        "human": human("select_done", lang, picked=len(ids)),
+        "human": human("select_done", lang, picked=len(tracks)),
         "slots": slots.model_dump(),
-        # Filler reasons never reach the card — see reason_gate for why the
-        # check lives here and not in the (frozen) playlist pipeline.
-        "playlist": reason_gate.gate_playlist(payload.model_dump(mode="json")),
+        "playlist": {"title": result.title, "steps": [], "tracks": tracks},
     }
 
 
-async def _run_facts(req, route, slots, qdrant,
-                     collection_name, sink, lang) -> dict:
-    """Run the grounded facts branch; may end in a ``disambiguate`` frame."""
-    payload, options = await facts_executor.run(
-        qdrant=qdrant,
-        collection_name=collection_name,
-        message=req.message,
-        route=route,
-        slots=slots,
-        lang=req.lang,
-        subject_track_id=req.subject_track_id,
-        subject_artist_slug=req.subject_artist_slug,
-        now_playing_track_id=req.now_playing_track_id,
-        focus_fact=req.focus_fact,
-        llm_base_url=req.llm_base_url,
-        llm_model=req.llm_model,
-        emit=(sink.emit if sink is not None else None),
-    )
+def _audio_payload(result, slots, lang: str) -> dict:
+    """The sound-alike list, rendered by the playlist card.
 
-    if options:
-        subject_options = [
-            {
-                "kind": o["kind"],
-                "title": o["title"],
-                "subtitle": o.get("subtitle"),
-                "track_id": o.get("track_id"),
-                "artist_slug": o.get("artist_slug"),
-                "cover_art_path": o.get("image_path"),
-            }
-            for o in options
-        ]
-        if sink is not None:
-            sink.put({"type": "disambiguate", "human": human("disambiguate", lang),
-                      "subject_options": subject_options})
-        return {
-            "intent": "facts",
-            "human": human("disambiguate", lang),
-            "slots": slots.model_dump(),
-            "disambiguate": subject_options,
-        }
-
-    if payload is None:
-        ru = (lang or "en").lower().startswith("ru")
-        return {
-            "intent": "facts",
-            "human": human("answer", lang),
-            "slots": slots.model_dump(),
-            "facts": {
-                "subject_kind": "song",
-                "subject_title": req.message[:80],
-                "answer": ("Не нашёл в твоей библиотеке, о чём речь. Уточни название "
-                           "трека или имя артиста."
-                           if ru else
-                           "I couldn't find what you mean in your library. Try naming "
-                           "the track or the artist."),
-                "grounded": False,
-                "focus_fact": req.focus_fact,
-                "explained": False if req.focus_fact else None,
-                "items": [],
-                "related_tracks": [],
-            },
-        }
-
-    slots = intent_router.merge_slots(
-        slots, None,
-        last_track_id=payload.get("track_id"),
-        last_artist=(payload.get("subject_title")
-                     if payload.get("subject_kind") == "artist" else None),
-    )
+    It is a list to play and to save, which is what that card is for. The tracks
+    carry no ``reason``: nothing wrote one, and having a model invent one is
+    exactly what this branch exists to avoid.
+    """
+    tracks = []
+    for hit in result.tracks:
+        row = hit.track.model_dump()
+        row["reason"] = None
+        row["source_tool"] = "clap_search"
+        row["score"] = float(getattr(hit, "score", 0.0) or 0.0)
+        tracks.append(row)
+    slots = _merge_slots(slots, last_intent="audio_search",
+                         last_playlist_ids=[t["track_id"] for t in tracks] or None)
     return {
-        "intent": "facts",
+        "intent": "audio_search",
+        "human": human("select_done", lang, picked=len(tracks)),
+        "slots": slots.model_dump(),
+        "playlist": {"title": result.title, "steps": [], "tracks": tracks},
+    }
+
+
+def _playlist_track(track) -> dict:
+    """A matched library track as the playlist card expects it."""
+    return {
+        "track_id": track.track_id,
+        "title": track.title,
+        "artist": track.artist,
+        "album": track.album,
+        "year": track.year,
+        "duration_sec": track.duration_sec,
+        "file_path": track.file_path,
+        "cover_art_path": track.cover_art_path,
+        "reason": track.reason,
+        "source_tool": "+".join(track.sources) or "web",
+        # The vote, surfaced as the card's score: a track three pages named is a
+        # different thing from one a single listicle did, and the number is the
+        # only place that difference is visible.
+        "score": round(track.weight, 2),
+    }
+
+
+def _answer_payload(result, slots, lang: str, *, sink=None,
+                    collection_name: str = "", catalog=None) -> dict:
+    if result.clarify is not None:
+        # The only clarify the new pipeline raises is an abbreviation it could not
+        # expand. There is nothing to route between, so it is surfaced as the
+        # question it is rather than as a list of branches.
+        question = result.clarify.question
+        if sink is not None:
+            sink.put({"type": "clarify", "human": question, "options": []})
+        return {"intent": "general", "human": question,
+                "slots": slots.model_dump(),
+                "answer": {"answer": question, "grounded": False,
+                           "iterations": 0, "evidence": [],
+                           "notes": result.notes}}
+
+    used = set(result.used)
+    evidence = [{
+        "n": e.n, "kind": e.kind, "text": e.text, "source": e.source,
+        "url": e.url or None, "ce_prob": e.ce_prob, "used": e.n in used,
+    } for e in result.evidence]
+
+    subject = result.subject
+    slots = _merge_slots(
+        slots, last_intent="general",
+        last_track_id=(subject.track_id if subject else None),
+        last_artist=(subject.artist_name if subject else None),
+        last_song=(subject.song_title if subject else None))
+
+    return {
+        "intent": "general",
         "human": human("answer", lang),
         "slots": slots.model_dump(),
-        "facts": payload,
+        "answer": {
+            "answer": result.answer,
+            "grounded": result.grounded,
+            "iterations": result.iterations,
+            "evidence": evidence,
+            "subject": _subject_ref(subject, collection_name, catalog),
+            "focus_fact": result.focus_fact,
+            "explained": result.explained,
+            "follow_ups": result.follow_ups,
+            "notes": result.notes,
+        },
     }
+
+
+def _subject_ref(subject, collection_name: str = "",
+                 catalog=None) -> Optional[dict]:
+    """The card header, or None when the answer had no library subject.
+
+    None is the honest answer for a purely web-sourced reply, and the card is
+    built to render without a header rather than to invent one.
+    """
+    if subject is None or not subject.resolved:
+        return None
+    if subject.song_title:
+        cover = None
+        if catalog is not None and subject.track_id:
+            row = catalog.track(subject.track_id)
+            cover = (row or {}).get("cover_art_path")
+        return {"kind": "song", "title": subject.song_title,
+                "subtitle": subject.artist_name,
+                "artist_slug": subject.artist_slug,
+                "track_id": subject.track_id, "image_path": cover}
+    return {"kind": "artist", "title": subject.artist_name or "",
+            "subtitle": None, "artist_slug": subject.artist_slug,
+            "track_id": None,
+            "image_path": _artist_image(subject.artist_slug, collection_name)}
+
+
+def _artist_image(slug: Optional[str], collection_name: str) -> Optional[str]:
+    """The artist's cached AudioDB photo, gated by this account's visibility."""
+    if not slug or not collection_name:
+        return None
+    try:
+        from app.resources.metadata_db import MetadataDB
+
+        MetadataDB.init()
+        row = MetadataDB.get_artist_audiodb(slug, collection_name) or {}
+    except Exception:  # noqa: BLE001 — a missing photo is not an error
+        return None
+    return row.get("thumb_path") or row.get("cutout_path")

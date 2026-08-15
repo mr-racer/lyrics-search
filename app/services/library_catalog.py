@@ -128,7 +128,8 @@ class LibraryCatalog:
         try:
             rows = self._rows(
                 "SELECT track_id, title, artist, artists, artist_slugs, "
-                "       primary_artist_slug, album, year, cover_art_path "
+                "       primary_artist_slug, album, year, cover_art_path, "
+                "       duration, file_path "
                 "FROM track_metadata WHERE collection_name = ?",
                 (self.collection_name,))
         except Exception:  # noqa: BLE001
@@ -140,6 +141,9 @@ class LibraryCatalog:
                 "artists": _json_list(r[3]), "artist_slugs": _json_list(r[4]),
                 "artist_slug": r[5] or "", "album": r[6] or "", "year": r[7],
                 "cover_art_path": r[8],
+                # Carried so a matched claim can be serialised as a playable
+                # track without a second trip to the database per row.
+                "duration_sec": r[9] or 0.0, "file_path": r[10] or "",
             }
             self.songs.append(song)
             self.by_title.setdefault(title_key(song["title"]), []).append(song)
@@ -445,7 +449,9 @@ class LibraryCatalog:
                 section=ref.section, page_title=ref.page_title,
                 context=ref.context,
                 cover_art_path=picked.get("cover_art_path"),
-                album=picked.get("album") or None))
+                album=picked.get("album") or None,
+                duration_sec=float(picked.get("duration_sec") or 0.0),
+                file_path=picked.get("file_path") or ""))
         return resolved, missing
 
     def _match_one(self, ref: TrackRef, *, allow_fuzzy: bool) -> tuple:

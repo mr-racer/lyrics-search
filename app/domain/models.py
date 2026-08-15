@@ -1097,7 +1097,12 @@ class DeleteAccountRequest(BaseModel):
 # app/services/assistant/router.py — never by the LLM — so the closed label set
 # below is authoritative: the model picks from it, it cannot invent a fourth.
 
-AssistantIntent = Literal["search", "playlist", "facts"]
+# The four branches of the assistant. Renamed from search/playlist/facts in
+# 2026-08 when the deterministic web agent replaced the router: "search" split
+# into lyrics_search (find the song from its words) and audio_search (find it by
+# how it sounds), and "facts" became "general" — the branch answers questions
+# about anything, from the library's facts and the open web together.
+AssistantIntent = Literal["lyrics_search", "audio_search", "playlist", "general"]
 
 
 class AssistantSlots(BaseModel):
@@ -1221,12 +1226,66 @@ class AssistantFactsPayload(BaseModel):
     related_tracks: List[TrackMetadata] = Field(default_factory=list)
 
 
+class AssistantEvidenceItem(BaseModel):
+    """One numbered item of the grounding pack behind an ``answer`` payload.
+
+    ``n`` is what the model cites and what code verified: an answer whose numbers
+    do not check out never reaches this model at all. The frontend renders the
+    inline ``[n]`` marks off these, and the hover shows ``text`` — which for a web
+    chunk is a whole passage, not a sentence.
+    """
+    n: int
+    kind: Literal["fact", "chunk"] = "chunk"
+    text: str
+    # The page title for a chunk, the fact's origin (songfacts, genius) for a fact.
+    source: str = ""
+    url: Optional[str] = None
+    # The cross-encoder's probability for this item against the question.
+    ce_prob: Optional[float] = None
+    used: bool = False
+
+
+class AssistantSubjectRef(BaseModel):
+    """Who the answer turned out to be about, when the library could tell.
+
+    Optional on purpose: a purely web-sourced answer has no library subject, and
+    inventing one to fill a card header is how an answer about one artist ends up
+    illustrated with another.
+    """
+    kind: Literal["artist", "album", "song"] = "artist"
+    title: str
+    subtitle: Optional[str] = None
+    artist_slug: Optional[str] = None
+    track_id: Optional[str] = None
+    image_path: Optional[str] = None
+
+
+class AssistantAnswerPayload(BaseModel):
+    """Result payload for intent="general" — a grounded prose answer."""
+    answer: str
+    # False when the model's answer failed the citation check. The card then shows
+    # the sources instead of a paragraph nobody can trace.
+    grounded: bool = True
+    iterations: int = 0
+    evidence: List[AssistantEvidenceItem] = Field(default_factory=list)
+    subject: Optional[AssistantSubjectRef] = None
+    # Set when the turn was "explain THIS statement" rather than "tell me about
+    # this subject": the statement itself, and whether anything actually explained
+    # it. ``explained=False`` means the honest empty answer was served.
+    focus_fact: Optional[str] = None
+    explained: Optional[bool] = None
+    follow_ups: List[str] = Field(default_factory=list)
+    notes: List[str] = Field(default_factory=list)
+
+
 class AssistantResponse(BaseModel):
     """Terminal payload — the non-streaming twin of the final NDJSON frame.
 
-    Exactly one of ``search``/``playlist``/``facts`` is set, matching ``intent``.
-    Deliberately NOT a merged union: the three results render as three different
-    card types, and flattening them is what makes the UX muddy.
+    Exactly one of ``search``/``playlist``/``answer`` is set, matching ``intent``:
+    ``lyrics_search`` fills ``search``, ``playlist`` and ``audio_search`` both
+    fill ``playlist`` (a list to play and save either way), ``general`` fills
+    ``answer``. Deliberately NOT a merged union: they render as different card
+    types, and flattening them is what makes the UX muddy.
     """
     intent: Optional[AssistantIntent] = None
     human: str = ""
@@ -1234,6 +1293,9 @@ class AssistantResponse(BaseModel):
 
     search: Optional[Dict] = None                      # shape of _run_chat_core
     playlist: Optional[AIPlaylistResponse] = None
+    answer: Optional[AssistantAnswerPayload] = None
+    # The pre-2026-08 facts payload. Kept on the model while the old executor is
+    # still in the tree; nothing fills it any more.
     facts: Optional[AssistantFactsPayload] = None
 
     # Set instead of a payload when routing was inconclusive.

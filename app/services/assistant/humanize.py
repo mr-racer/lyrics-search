@@ -16,26 +16,30 @@ _MODE_LABEL_RU = {"text": "по тексту", "audio": "по звучанию",
 _MODE_LABEL_EN = {"text": "by lyrics", "audio": "by sound", "hybrid": "by lyrics and sound"}
 
 _INTENT_LABEL_RU = {
-    "search": "Понял — ищу трек",
+    "lyrics_search": "Понял — ищу трек по тексту",
+    "audio_search": "Понял — ищу по звучанию",
     "playlist": "Понял — собираю подборку",
-    "facts": "Понял — рассказываю",
+    "general": "Понял — рассказываю",
 }
 _INTENT_LABEL_EN = {
-    "search": "Got it — finding a track",
+    "lyrics_search": "Got it — finding the track by its words",
+    "audio_search": "Got it — finding it by sound",
     "playlist": "Got it — building a playlist",
-    "facts": "Got it — looking it up",
+    "general": "Got it — looking it up",
 }
 
-# Labels for the buttons of a `clarify` frame (routing was inconclusive).
+# Labels for the buttons of a `clarify` frame (the planner could not settle).
 CLARIFY_LABELS_RU = {
-    "search": "Найти трек",
+    "lyrics_search": "Найти по строчке",
+    "audio_search": "Найти по звучанию",
     "playlist": "Собрать подборку",
-    "facts": "Рассказать подробнее",
+    "general": "Рассказать подробнее",
 }
 CLARIFY_LABELS_EN = {
-    "search": "Find a track",
+    "lyrics_search": "Find it by a line",
+    "audio_search": "Find it by sound",
     "playlist": "Build a playlist",
-    "facts": "Tell me more",
+    "general": "Tell me more",
 }
 
 
@@ -94,6 +98,104 @@ def human(stage: str, lang: str | None = None, **kw) -> str:
         if step == "answer":
             return "Формулирую ответ" if ru else "Writing the answer"
         return "Думаю" if ru else "Thinking"
+
+    # ── the web agent ─────────────────────────────────────────────────────
+    # One caption per stage the pipeline actually emits. A stage with no branch
+    # here still streams — it just renders without a caption — so this list is
+    # allowed to lag behind the pipeline without breaking anything.
+    if stage == "start":
+        return "Разбираю запрос" if ru else "Reading the request"
+    if stage == "plan_failed":
+        return ("Не удалось составить план — модель не ответила"
+                if ru else "Couldn't plan the run — the model didn't answer")
+    if stage == "iteration":
+        n = int(kw.get("n") or 1)
+        if n <= 1:
+            return "Иду в интернет" if ru else "Going to the web"
+        return (f"Захожу на второй круг (попытка {n})"
+                if ru else f"Another round (attempt {n})")
+    if stage == "rerank":
+        kept = int(kw.get("kept") or 0)
+        total = int(kw.get("candidates") or 0)
+        return (f"Из {total} ссылок стоит читать {kept}"
+                if ru else f"{kept} of {total} links are worth reading")
+    if stage == "fetch":
+        n = int(kw.get("count") or 0)
+        if kw.get("refill"):
+            return ("Часть страниц не открылась — беру следующие"
+                    if ru else "Some pages refused — taking the next ones")
+        return (f"Читаю {n} " + plural_ru(n, "страницу", "страницы", "страниц")
+                if ru else f"Reading {n} page{'' if n == 1 else 's'}")
+    if stage == "fetch_done":
+        got = int(kw.get("fetched") or 0)
+        return (f"Прочитал {got} " + plural_ru(got, "страницу", "страницы", "страниц")
+                if ru else f"Read {got} page{'' if got == 1 else 's'}")
+    if stage == "index":
+        return "Раскладываю прочитанное" if ru else "Indexing what I read"
+    if stage == "chunks":
+        n = int(kw.get("selected") or 0)
+        if not n:
+            return ("Ничего по делу на этих страницах" if ru
+                    else "Nothing on those pages was about it")
+        return (f"Отобрал {n} " + plural_ru(n, "фрагмент", "фрагмента", "фрагментов")
+                if ru else f"Picked {n} passage{'' if n == 1 else 's'}")
+    if stage == "dedup":
+        n = int(kw.get("duplicates") or 0)
+        return (f"Схлопнул {n} " + plural_ru(n, "повтор", "повтора", "повторов")
+                if ru else f"Collapsed {n} near-duplicate{'' if n == 1 else 's'}")
+    if stage == "verdict":
+        if kw.get("stop"):
+            return "Материала достаточно" if ru else "That's enough material"
+        return "Материала мало — ищу ещё" if ru else "Not enough yet — searching again"
+    if stage == "subject":
+        return ("Понял, о ком речь" if kw.get("artist") or kw.get("song")
+                else "Не понял, о ком речь — иду в интернет") if ru else (
+            "Worked out who this is about" if kw.get("artist") or kw.get("song")
+            else "Couldn't tell who this is about — going to the web")
+    if stage == "facts_done":
+        n = int(kw.get("kept") or 0)
+        if n:
+            return (f"В библиотеке нашлось {_facts_ru(n)}"
+                    if ru else f"Found {n} fact{'' if n == 1 else 's'} in the library")
+        return ("В библиотеке фактов нет — иду в интернет"
+                if ru else "No facts stored — going to the web")
+    if stage == "reddit_rescue":
+        return ("Больше нигде нет — смотрю обсуждения на Reddit"
+                if ru else "Nothing anywhere else — checking Reddit threads")
+    if stage == "structured":
+        n = int(kw.get("tracks") or 0)
+        return (f"Разобрал таблицу: {_tracks_ru(n)}"
+                if ru else f"Parsed a table: {n} track{'' if n == 1 else 's'}")
+    if stage == "extract":
+        n = int(kw.get("claims") or 0)
+        return (f"Выписал {_tracks_ru(n)} из текста"
+                if ru else f"Pulled {n} track{'' if n == 1 else 's'} out of the text")
+    if stage == "matched":
+        n = int(kw.get("resolved") or 0)
+        return (f"В твоей библиотеке из них есть {_tracks_ru(n)}"
+                if ru else f"Your library has {n} of them")
+    if stage == "discography":
+        return (f"Мало треков — читаю дискографию {kw.get('artist') or ''}"
+                if ru else f"Thin so far — reading {kw.get('artist') or ''}'s discography")
+    if stage == "triage":
+        n = int(kw.get("candidates") or 0)
+        return (f"Отсеиваю лишнее из {_tracks_ru(n)}"
+                if ru else f"Weeding out {n} candidate{'' if n == 1 else 's'}")
+    if stage == "curated":
+        n = int(kw.get("tracks") or 0)
+        return (f"Собрал подборку из {_tracks_ru(n)}"
+                if ru else f"Built a playlist of {n} track{'' if n == 1 else 's'}")
+    if stage == "clap_rephrase":
+        n = len(kw.get("queries") or [])
+        return (f"Перевожу звучание на язык модели: {n} формулировки"
+                if ru else f"Rewriting the sound into {n} prompts")
+    if stage == "result":
+        n = int(kw.get("tracks") or 0)
+        return (f"Готово: {_tracks_ru(n)}"
+                if ru else f"Done: {n} track{'' if n == 1 else 's'}")
+    if stage == "engines_down":
+        return ("Часть поисковиков не ответила"
+                if ru else "Some search engines didn't answer")
 
     # ── search branch (was chat.py::_human) ───────────────────────────────
     if stage == "classify":
