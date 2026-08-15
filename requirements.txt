@@ -21,6 +21,12 @@ openai
 pydantic-ai>=1.0,<2.0
 ddgs
 readability-lxml
+# Page extraction for the assistant's web branch (app/resources/web_fetch.py):
+# markdown + metadata, with our own table converter layered on top. Used as the
+# EXTRACTOR only — its downloader cannot be handed a per-call proxy, so curl_cffi
+# does the fetching. lxml_html_clean is readability-lxml's split-out dependency.
+trafilatura
+lxml_html_clean
 beautifulsoup4
 torchvision
 fastapi

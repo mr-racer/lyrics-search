@@ -1,10 +1,17 @@
 """Text analyzer for catalog search — diacritic folding, tokenization, and
 Cyrillic↔Latin transliteration. Pure functions, no I/O; shared at index time and
 query time so the same normalization applies to both.
+
+The lower half (``similar``, ``strip_qualifiers``, ``title_key``) serves title
+and name MATCHING rather than indexing: the assistant's library catalog resolves
+what a web page claims against what the user owns, and both sides have to be
+normalised the same way or the match is decided by punctuation.
 """
 from __future__ import annotations
 
+import re
 import unicodedata
+from difflib import SequenceMatcher
 
 
 def fold(text: str) -> str:
@@ -103,3 +110,85 @@ def analyze(text: str) -> list[str]:
     for tok in tokenize(text):
         bag.extend(sorted(translit_variants(tok)))
     return bag
+
+
+def to_latin(text: str) -> str:
+    """Cyrillic → Latin, one direction, deterministic.
+
+    Public because the assistant's catalog needs the *single* Latin form of a
+    string, not the variant set: it precomputes one per library track and
+    compares them pairwise, where building a set per comparison is what made the
+    fuzzy leg quadratic in practice.
+    """
+    return _cyr_to_lat(text)
+
+
+def similar(a: str, b: str) -> float:
+    """Cross-script similarity of two names, 0..1.
+
+    A simplified ``name_match.score_names``: fold both, try both alphabets, take
+    the best ratio. Used to SHORTLIST candidates, never to decide identity —
+    measured on a real library, "Muse"/"Fuse" scores 0.750 (wrong) while
+    «канье»/"Kanye West" scores 0.571 (right), so no threshold separates the two
+    and whoever consumes the shortlist has to judge.
+    """
+    fa, fb = fold(a), fold(b)
+    if not fa or not fb:
+        return 0.0
+    return max(SequenceMatcher(None, x, y).ratio()
+               for x in {fa, _cyr_to_lat(fa)} for y in {fb, _cyr_to_lat(fb)})
+
+
+_FEAT = {"feat", "ft", "featuring"}
+
+# Words that make a bracketed tail a QUALIFIER of the recording rather than part
+# of its name. Measured on a 5630-track library: 968 titles end in a bracket,
+# 781 of them like this — 14% of the library that a plain claim for "Work" could
+# never reach while the file is called "Work (Freemasons Remix)".
+#
+# The list is deliberately a whitelist and not "strip any bracket". The other
+# 187 carry brackets that ARE the title — "See You on Monday (You're Lost)",
+# "I Just Wanna Love U (Give It 2 Me)", "Eh, Eh (Nothing Else I Can Say)" — and
+# cutting those merges songs that merely share a first half.
+_QUALIFIER = re.compile(
+    r"(?i)\b(remix|mix|version|edit|live|acoustic|instrumental|demo"
+    r"|remaster(?:ed)?|radio|single|extended|club|dub|reprise|bonus|deluxe"
+    r"|mono|stereo|cover|feat|ft|featuring|with|explicit|clean|original"
+    r"|album)\b")
+
+# TRAILING only. 22 titles in the same library OPEN with a bracket —
+# "(I Can't Get No) Satisfaction", "(Sittin' On) the Dock of the Bay" — and
+# there the bracket is the beginning of the sentence, not a note about the mix.
+_TRAILING_BRACKET = re.compile(r"[\(\[]([^)\]]*)[\)\]]\s*$")
+
+
+def strip_qualifiers(s: str) -> str:
+    """Drop trailing "(remix)" / "[live]" / "(feat. X)" tails, repeatedly.
+
+    Repeatedly because they stack: "Faint [Live] [bonus track]" needs two passes
+    to become "Faint". A title that is nothing BUT a bracket is left alone —
+    "[Premade Sandwiches]" is a real track name.
+    """
+    out = (s or "").strip()
+    while True:
+        found = _TRAILING_BRACKET.search(out)
+        if not found or not _QUALIFIER.search(found.group(1)):
+            return out
+        shorter = out[:found.start()].strip()
+        if not shorter:
+            return out
+        out = shorter
+
+
+def title_key(s: str) -> str:
+    """The key two titles must share to be the same song.
+
+    Qualifiers go before folding, because ``fold`` turns brackets into spaces and
+    by then "Work (Freemasons Remix)" is indistinguishable from a song genuinely
+    called "Work Freemasons Remix".
+    """
+    toks = fold(strip_qualifiers(s)).split()
+    for i, t in enumerate(toks):
+        if t in _FEAT:
+            return " ".join(toks[:i]) or " ".join(toks)
+    return " ".join(toks)

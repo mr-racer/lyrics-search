@@ -1,0 +1,233 @@
+"""Context-aware chunking of a markdown page.
+
+Three rules, in order of importance:
+
+1. **A chunk never loses where it came from.** The heading path is prepended to
+   the text that gets embedded, so a paragraph under
+   "Kanye West > Controversies > 2009 VMA incident" carries that meaning into the
+   vector. A bare paragraph about "the interruption" matches nothing.
+2. **A block is never split.** A paragraph, a list, a table and a fenced code
+   block are indivisible; a table cut in half is worse than useless, because the
+   half without the header row looks like prose.
+3. **Micro-sections are glued to their neighbour.** A two-line section under the
+   same parent produces a chunk that is mostly heading; merged, it produces
+   context.
+
+Only when a single block is longer than the budget does it get cut, and then on
+sentence boundaries — except for tables, which are cut by rows with the header
+repeated.
+"""
+
+from __future__ import annotations
+
+import re
+from typing import Optional
+
+from app.services.assistant.config import AgentConfig
+from app.services.assistant.contracts import Chunk, Page
+
+HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
+FENCE_RE = re.compile(r"^\s*(```|~~~)")
+
+
+def split_sections(md_text: str) -> list:
+    """Cut the document at headings, keeping the hierarchy in ``path``."""
+    sections: list = []
+    stack: list = []
+    buf: list = []
+    in_fence, fence = False, None
+
+    def flush() -> None:
+        text = "\n".join(buf).strip()
+        buf.clear()
+        if text:
+            sections.append({"path": [t for _, t in stack], "text": text})
+
+    for line in (md_text or "").split("\n"):
+        m_fence = FENCE_RE.match(line)
+        if m_fence:
+            if not in_fence:
+                in_fence, fence = True, m_fence.group(1)
+            elif line.strip().startswith(fence):
+                in_fence = False
+            buf.append(line)
+            continue
+
+        m_head = HEADING_RE.match(line) if not in_fence else None
+        if m_head:
+            flush()
+            level, title = len(m_head.group(1)), m_head.group(2).strip()
+            while stack and stack[-1][0] >= level:
+                stack.pop()
+            stack.append((level, title))
+            continue
+        buf.append(line)
+
+    flush()
+    return sections
+
+
+def split_blocks(text: str) -> list:
+    """Paragraph / list / table / fenced code — one indivisible block each."""
+    blocks: list = []
+    cur: list = []
+    in_fence, fence = False, None
+
+    for line in text.split("\n"):
+        m_fence = FENCE_RE.match(line)
+        if m_fence and not in_fence:
+            in_fence, fence = True, m_fence.group(1)
+            cur.append(line)
+            continue
+        if in_fence:
+            cur.append(line)
+            if line.strip().startswith(fence):
+                in_fence = False
+                blocks.append("\n".join(cur))
+                cur = []
+            continue
+        if not line.strip():
+            if cur:
+                blocks.append("\n".join(cur))
+                cur = []
+        else:
+            cur.append(line)
+
+    if cur:
+        blocks.append("\n".join(cur))
+    return [b for b in blocks if b.strip()]
+
+
+def _size(parts: list) -> int:
+    """Length of ``parts`` once joined with a blank line between each."""
+    return sum(len(p) for p in parts) + 2 * max(0, len(parts) - 1)
+
+
+def table_header(block: str) -> Optional[tuple]:
+    """``(header_row, separator_row, body_rows)`` if this block is a table.
+
+    The separator row is what makes a markdown table unambiguous — a run of
+    pipe-containing lines without one is just text.
+    """
+    lines = [ln for ln in block.split("\n") if ln.strip()]
+    if len(lines) < 3:
+        return None
+    header, separator = lines[0].strip(), lines[1].strip()
+    if not header.startswith("|") or not separator.startswith("|"):
+        return None
+    cells = [c.strip() for c in separator.strip("|").split("|")]
+    if not cells or not all(re.fullmatch(r":?-{2,}:?", c) for c in cells if c):
+        return None
+    return header, separator, [ln for ln in lines[2:] if ln.strip().startswith("|")]
+
+
+def split_table(block: str, *, max_chars: int) -> list:
+    """Cut a long table into chunks that EACH carry the header row.
+
+    Without this, a 900-row discography becomes one oversized chunk or — worse,
+    once a cell happens to contain a full stop — a series of chunks where only
+    the first says what the columns are. The rest are grids of bare strings:
+    unreadable to a model and near-meaningless to an embedding, since the words
+    "Title" and "Year" are exactly what gives the numbers around them a sense.
+    """
+    parsed = table_header(block)
+    if parsed is None:
+        return []
+    header, separator, rows = parsed
+    prefix = f"{header}\n{separator}"
+    budget = max_chars - len(prefix) - 1
+    if budget <= 0:            # a header wider than the whole budget
+        return [block]
+
+    out: list = []
+    current: list = []
+    size = 0
+    for row in rows:
+        if current and size + len(row) + 1 > budget:
+            out.append(prefix + "\n" + "\n".join(current))
+            current, size = [], 0
+        current.append(row)
+        size += len(row) + 1
+    if current:
+        out.append(prefix + "\n" + "\n".join(current))
+    return out or [block]
+
+
+def pack_blocks(blocks: list, *, max_chars: int, overlap: int = 1) -> list:
+    out: list = []
+    cur: list = []
+
+    for block in blocks:
+        if len(block) > max_chars:
+            if cur:
+                out.append("\n\n".join(cur))
+                cur = []
+            # A table is cut by rows with the header repeated. Sentence splitting
+            # a table is what produced headerless fragments: a cell containing
+            # "Vol. 2" or "G.O.A.T." is a sentence boundary to the regex, and
+            # everything after it lost its columns.
+            pieces = split_table(block, max_chars=max_chars)
+            if pieces:
+                out.extend(pieces)
+                continue
+            acc = ""
+            for part in re.split(r"(?<=[.!?])\s+", block):
+                if len(acc) + len(part) > max_chars and acc:
+                    out.append(acc.strip())
+                    acc = ""
+                acc += part + " "
+            if acc.strip():
+                out.append(acc.strip())
+            continue
+
+        if cur and _size(cur) + 2 + len(block) > max_chars:
+            out.append("\n\n".join(cur))
+            # Carry a tail into the next chunk, but only if it IS a tail (not the
+            # whole chunk again) and only if the new block still fits.
+            tail = cur[-overlap:] if overlap and len(cur) > overlap else []
+            cur = tail if _size(tail) + 2 + len(block) <= max_chars else []
+        cur.append(block)
+
+    if cur:
+        out.append("\n\n".join(cur))
+    return out
+
+
+class MarkdownChunker:
+    def __init__(self, config: Optional[AgentConfig] = None):
+        self.cfg = config or AgentConfig()
+
+    def split(self, markdown: str, *, url: str = "", title: str = "",
+              source: str = "web", start_id: int = 0) -> list:
+        chunks: list = []
+        buffered: Optional[dict] = None
+
+        def emit(section: dict) -> None:
+            for body in pack_blocks(split_blocks(section["text"]),
+                                    max_chars=self.cfg.chunk_max_chars,
+                                    overlap=self.cfg.chunk_overlap_blocks):
+                chunks.append(Chunk(id=start_id + len(chunks),
+                                    path=list(section["path"]), body=body,
+                                    url=url, title=title, source=source))
+
+        for section in split_sections(markdown):
+            same_parent = (buffered is not None
+                           and section["path"][:-1] == buffered["path"][:-1])
+            if (buffered is not None and same_parent
+                    and len(section["text"]) < self.cfg.chunk_min_chars):
+                heading = section["path"][-1] if section["path"] else ""
+                buffered["text"] += f"\n\n**{heading}**\n\n" + section["text"]
+                continue
+            if buffered is not None:
+                emit(buffered)
+            buffered = dict(section)
+
+        if buffered is not None:
+            emit(buffered)
+        return chunks
+
+    def split_page(self, page: Page, *, start_id: int = 0) -> list:
+        if not page.ok:
+            return []
+        return self.split(page.markdown, url=page.url, title=page.title,
+                          source=page.source, start_id=start_id)

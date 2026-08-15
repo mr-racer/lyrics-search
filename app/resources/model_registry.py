@@ -4,6 +4,8 @@ Resources layer — singletons for models and database.
 ModelRegistry:
 - get_text_model() -> (model, VECTOR_NAME, VECTOR_DIM)
 - encode_text(sentences, is_query=False, **kw) -> embeddings (use for ALL text encodes)
+- encode_sparse(texts, is_query=False) -> coalesced sparse tensor | None
+- ce_probabilities(query, docs) -> list[float] | None
 - load_clap() -> model
 
 Device policy (2026-08):
@@ -14,6 +16,14 @@ Device policy (2026-08):
   Qdrant vector is called ``text`` and no longer encodes a model name, so a
   future model swap is a re-embed either way (see
   ``scripts/migrate_dense.py``).
+- TWO more residents joined it in 2026-08 for the assistant's retrieval stack:
+  a learned-sparse encoder (``SPARSE_MODEL_NAME``) and a cross-encoder
+  (``RERANK_MODEL_NAME``). Both fp16 on the same device, both loaded once and
+  never released — the assistant reranks on every turn, and the alternative
+  (load on demand, free after) is the dance that was already removed once.
+  Three residents come to ~3.6 GB, which is what the deployment budget allows.
+  This registry is their ONLY owner: nothing else may instantiate them, or the
+  same weights land on the card twice.
 - CLAP lives on the CPU permanently: loaded once (startup preload), never
   moved, never unloaded. It does not compete with the text model for VRAM.
 - ``FORCE_CPU=1`` puts the text model on the CPU in fp32 (fp16 on CPU is
@@ -107,6 +117,28 @@ QUERY_PREFIX = (
     "Query: "
 )
 
+# ── The assistant's retrieval stack ──────────────────────────────────────────
+# Learned sparse. It reads (expanded) TERMS where the dense model reads meaning,
+# which is what lets the two disagree usefully — the near-duplicate check in
+# ``services/retrieval/diversity.py`` requires both to agree before it drops a
+# passage, and that guard is only worth anything while the signals fail
+# differently.
+SPARSE_MODEL_NAME = "omai-research/milco-650m"
+# LexEcho source view. Matters for proper nouns in non-English text, which is
+# most of what gets asked here.
+SPARSE_SOURCE_VIEW = True
+
+# Cross-encoder. Reads the query and the document TOGETHER and produces the
+# number every threshold in the assistant is expressed in.
+RERANK_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
+# Pairs are (question, passage) and a passage is at most ~1200 chars, so 512
+# tokens covers it. Raising this costs quadratic attention for text the chunker
+# already decided not to send.
+RERANK_MAX_LEN = 512
+
+ENCODE_BATCH = 8
+RERANK_BATCH = 16
+
 
 class ModelRegistry:
     """
@@ -123,6 +155,8 @@ class ModelRegistry:
     VECTOR_DIM = VECTOR_DIM
     MAX_SEQ_LENGTH = MAX_SEQ_LENGTH
     QUERY_PREFIX = QUERY_PREFIX
+    SPARSE_MODEL_NAME = SPARSE_MODEL_NAME
+    RERANK_MODEL_NAME = RERANK_MODEL_NAME
 
     _text_model: Optional[tuple[Any, str, int]] = None
     # (query prompt name, document prompt name) — resolved once at load from
@@ -132,6 +166,15 @@ class ModelRegistry:
     _text_lock: threading.Lock = threading.Lock()
     _clap_model: Optional[Any] = None
     _clap_lock: threading.Lock = threading.Lock()
+    _sparse_model: Optional[Any] = None
+    _sparse_lock: threading.Lock = threading.Lock()
+    # (tokenizer, model)
+    _reranker: Optional[tuple[Any, Any]] = None
+    _rerank_lock: threading.Lock = threading.Lock()
+    # A leg that tried to load and failed is not retried. A missing model is a
+    # missing model, and re-attempting it on every query turns one slow request
+    # into every request being slow.
+    _failed: set = set()
 
     # ── Text model ──
 
@@ -254,6 +297,156 @@ class ModelRegistry:
         ``GET /search/models/loaded`` so a silent CPU fallback is visible
         without reading the startup log."""
         return {"device": _device_in_use, "reason": _device_reason}
+
+    # ── Retrieval stack: learned sparse + cross-encoder ──
+    #
+    # Both follow the text model's pattern (double-checked locking, fp16 on the
+    # GPU) and both DEGRADE instead of raising: a leg that will not load is
+    # recorded in ``_failed`` and reported by ``retrieval_status()``. The
+    # retriever ranks on whatever signals it has, so a missing MILCO costs
+    # ranking quality and a missing cross-encoder costs the thresholds — neither
+    # costs the request.
+
+    @classmethod
+    def _shared_device(cls) -> str:
+        """The device the retrieval models load onto.
+
+        Whatever the text model landed on, so all three agree without probing
+        CUDA three times. Resolved here when the text model has not loaded yet
+        (the sparse leg can be the first thing a process touches).
+        """
+        global _device_in_use, _device_reason
+        if _device_in_use is not None:
+            return _device_in_use
+        device, _device_reason = _resolve_device()
+        _device_in_use = device
+        return device
+
+    @classmethod
+    def load_sparse(cls) -> Optional[Any]:
+        """The learned-sparse encoder, or None if it is unavailable."""
+        if cls._sparse_model is not None or "sparse" in cls._failed:
+            return cls._sparse_model
+
+        with cls._sparse_lock:
+            if cls._sparse_model is not None or "sparse" in cls._failed:
+                return cls._sparse_model
+            device = cls._shared_device()
+            try:
+                from transformers import AutoModel
+
+                kwargs: dict[str, Any] = {"trust_remote_code": True}
+                if device == "cuda":
+                    kwargs["torch_dtype"] = torch.float16
+                model = AutoModel.from_pretrained(SPARSE_MODEL_NAME, **kwargs)
+                cls._sparse_model = model.to(device).eval()
+                logger.info("[ModelRegistry] sparse model '%s' loaded (device=%s, %s)",
+                            SPARSE_MODEL_NAME, device,
+                            "fp16" if device == "cuda" else "fp32")
+            except Exception as e:  # noqa: BLE001 — a missing leg is a valid state
+                cls._failed.add("sparse")
+                logger.warning("[ModelRegistry] sparse model '%s' unavailable: %s",
+                               SPARSE_MODEL_NAME, e, exc_info=True)
+            return cls._sparse_model
+
+    @classmethod
+    def load_reranker(cls) -> Optional[tuple[Any, Any]]:
+        """``(tokenizer, model)`` for the cross-encoder, or None."""
+        if cls._reranker is not None or "reranker" in cls._failed:
+            return cls._reranker
+
+        with cls._rerank_lock:
+            if cls._reranker is not None or "reranker" in cls._failed:
+                return cls._reranker
+            device = cls._shared_device()
+            try:
+                from transformers import (AutoModelForSequenceClassification,
+                                          AutoTokenizer)
+
+                tokenizer = AutoTokenizer.from_pretrained(
+                    RERANK_MODEL_NAME, trust_remote_code=True)
+                model = AutoModelForSequenceClassification.from_pretrained(
+                    RERANK_MODEL_NAME, trust_remote_code=True,
+                    torch_dtype=(torch.float16 if device == "cuda"
+                                 else torch.float32),
+                ).to(device).eval()
+                cls._reranker = (tokenizer, model)
+                logger.info("[ModelRegistry] cross-encoder '%s' loaded (device=%s, %s)",
+                            RERANK_MODEL_NAME, device,
+                            "fp16" if device == "cuda" else "fp32")
+            except Exception as e:  # noqa: BLE001
+                cls._failed.add("reranker")
+                logger.warning("[ModelRegistry] cross-encoder '%s' unavailable: %s",
+                               RERANK_MODEL_NAME, e, exc_info=True)
+            return cls._reranker
+
+    @classmethod
+    def encode_sparse(cls, texts: list, *, is_query: bool = False):
+        """Learned-sparse vectors as one coalesced sparse tensor, or None.
+
+        Asymmetric like the dense model: queries and documents go through
+        different heads, so the side is named rather than inferred.
+        """
+        model = cls.load_sparse()
+        if model is None or not texts:
+            return None
+        try:
+            encode = model.encode_query if is_query else model.encode_document
+            reps = []
+            with torch.no_grad():
+                for i in range(0, len(texts), ENCODE_BATCH):
+                    batch = texts[i:i + ENCODE_BATCH]
+                    reps.append(
+                        encode(batch, source_view=SPARSE_SOURCE_VIEW).coalesce())
+            return torch.cat(reps, dim=0).coalesce()
+        except Exception:  # noqa: BLE001
+            logger.warning("[ModelRegistry] sparse encode failed", exc_info=True)
+            return None
+
+    @classmethod
+    def ce_probabilities(cls, query: str, docs: list) -> Optional[list]:
+        """``sigmoid(logit)`` per (query, doc) pair, or None when unavailable.
+
+        A probability rather than a raw logit because every threshold in the
+        assistant is one number compared against this: logits are not comparable
+        between model families, probabilities roughly are.
+        """
+        pair = cls.load_reranker()
+        if pair is None or not docs:
+            return None
+        tokenizer, model = pair
+        device = cls._shared_device()
+        try:
+            out: list[float] = []
+            with torch.no_grad():
+                for i in range(0, len(docs), RERANK_BATCH):
+                    batch = docs[i:i + RERANK_BATCH]
+                    enc = tokenizer([query] * len(batch), batch, padding=True,
+                                    truncation=True, max_length=RERANK_MAX_LEN,
+                                    return_tensors="pt").to(device)
+                    logits = model(**enc).logits.float()
+                    # 1-logit head (bge/jina/gte) vs the older 2-class one.
+                    col = logits[:, 0] if logits.shape[-1] == 1 else logits[:, -1]
+                    out.extend(torch.sigmoid(col).cpu().tolist())
+            return out
+        except Exception:  # noqa: BLE001
+            logger.warning("[ModelRegistry] cross-encoder scoring failed",
+                           exc_info=True)
+            return None
+
+    @classmethod
+    def retrieval_status(cls) -> dict:
+        """Which retrieval legs are actually up. Surfaced by
+        ``GET /search/models/loaded`` so a degraded ranking is visible without
+        reading the startup log — the failure that otherwise looks like
+        'the answers got worse'."""
+        return {
+            "device": _device_in_use,
+            "dense": cls._text_model is not None,
+            "sparse": cls._sparse_model is not None,
+            "cross_encoder": cls._reranker is not None,
+            "failed": sorted(cls._failed),
+        }
 
     # ── CLAP ──
 

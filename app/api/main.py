@@ -96,10 +96,12 @@ def _make_cover_thumb(src: Path, dst: Path, width: int) -> bool:
 
 
 async def _preload_models_in_background(db_client: DbClient):
-    """Background task: preload the text model + CLAP after the server is ready.
+    """Background task: preload every resident model after the server is ready.
 
-    Both loads are heavily blocking, so both go to worker threads and the user
-    can browse while they run.
+    All four loads are heavily blocking, so all four go to worker threads and
+    the user can browse while they run. Order is by how early each is needed:
+    the text model serves ordinary search, the two retrieval legs serve the
+    assistant, CLAP serves audio search and is the largest.
     """
     try:
         await asyncio.sleep(1)  # give the event loop a moment
@@ -114,7 +116,21 @@ async def _preload_models_in_background(db_client: DbClient):
         except Exception as e:
             logger.warning("[preload] text model load failed: %s", e)
 
-        # ── Step 2: Load CLAP ──
+        # ── Step 2: the assistant's retrieval legs ──
+        # Learned sparse + cross-encoder, both fp16 and both resident. Loading
+        # them lazily would put ~2.4 GB of weights on the critical path of the
+        # first assistant turn — the one where the user is already waiting on a
+        # web search. Neither raises: a leg that will not load is reported by
+        # ``retrieval_status()`` and the retriever ranks without it.
+        try:
+            await asyncio.to_thread(ModelRegistry.load_sparse)
+            await asyncio.to_thread(ModelRegistry.load_reranker)
+            logger.info("[preload] retrieval stack: %s",
+                        ModelRegistry.retrieval_status())
+        except Exception as e:
+            logger.warning("[preload] retrieval stack load failed: %s", e)
+
+        # ── Step 3: Load CLAP ──
         # load_clap() is heavily blocking (checkpoint load, possibly a ~2.3 GB
         # download). Calling it inline would freeze the event loop — and this
         # coroutine runs exactly when the user starts browsing — so it goes to
