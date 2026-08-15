@@ -346,6 +346,28 @@ Added to `requirements.txt`: `trafilatura`, `lxml_html_clean`. Already present:
 7. `npm run build` + unit tests. After a live check on production, a separate commit
    deletes `facts_executor.py`, `assistant/router.py`, `assistant/intent_llm.py` and `lab/`.
 
+## Deviations found while implementing
+
+Four, all small, all recorded here rather than left to be rediscovered:
+
+1. **`chunking` lives in `assistant/`, not `retrieval/`.** It builds `Chunk` and
+   reads `Page`, both assistant contracts. Putting it under `retrieval/` would
+   have made that package depend on the assistant's contracts and lost the one
+   structural property worth keeping: retrieval indexes strings and knows nothing
+   about music, pages or branches.
+2. **The near-duplicate calibration report did not travel.** `duplicate_report`
+   and `margin` existed to set the thresholds from a notebook against a corpus
+   you could read by eye. The thresholds are set; the rule they feed is what
+   ships, and what the tests cover.
+3. **`reason_gate.clean_reason` is reused, not re-ported.** The lab's `reasons.py`
+   was a port OF it in the first place, so the production module stays alive and
+   there is one gate rather than two.
+4. **The legacy router keeps its own intent literal.** `LegacyAssistantIntent`
+   exists so that `assistant/router.py`, which stays in the tree until the new
+   agent has been checked on a real library, is still self-consistent and its
+   tests still mean something. `AssistantSlots.last_intent` became a plain string
+   for the same reason — it is opaque client state that both sides write.
+
 ## Out of scope
 
 - `/search` and `/chat` keep using `chat_search_service` — untouched.
