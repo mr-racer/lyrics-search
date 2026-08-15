@@ -145,11 +145,21 @@ class LLMClient:
             return ""
 
         try:
-            text = response.choices[0].message.content or ""
+            choice = response.choices[0]
+            text = choice.message.content or ""
         except (AttributeError, IndexError, TypeError):
             self.last_error = f"unexpected response shape: {str(response)[:200]}"
             logger.warning("[llm] %s", self.last_error)
             return ""
+
+        # Truncation and "the model cannot write JSON" both arrive here as an
+        # unparseable reply, and they have opposite fixes — raise the ceiling
+        # versus change the prompt. Only the server knows which, so ask it.
+        if getattr(choice, "finish_reason", None) == "length":
+            logger.warning("[llm] output hit max_tokens=%d and was cut off — "
+                           "this reply is a fragment",
+                           max_tokens or self.cfg.llm_max_tokens)
+
         self.last_raw = text
         if not text.strip():
             self.last_error = "the model returned an empty message"
@@ -173,8 +183,13 @@ class LLMClient:
         if not text:
             return None
 
-        logger.info("[llm] JSON repair round (missing=%s)",
-                    [k for k in required if not obj or k not in obj])
+        # "No object at all" and "an object without the key" read the same in a
+        # bare missing= list, and the tail is what tells a truncated reply (cut
+        # mid-string) from a model that answered in prose.
+        why = ("no JSON object in the reply" if obj is None else
+               "keys missing: " + ", ".join(k for k in required if k not in obj))
+        logger.info("[llm] JSON repair round — %s (%d chars, tail=%r)",
+                    why, len(text), text[-120:])
         demand = ("Reply with the JSON object only. No prose, no markdown fence, "
                   "no explanation.")
         if required:

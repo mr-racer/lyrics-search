@@ -215,7 +215,15 @@ CLAP_RRF_K = 60
 
 # ── behaviour ───────────────────────────────────────────────────────────────
 LLM_TIMEOUT = 180.0
-LLM_MAX_TOKENS = 2000
+# Output ceiling for every call in the package. Sized for the two that actually
+# generate at length, because a cap that truncates does not save time — it costs
+# a whole second generation through the repair round:
+# * extraction returns one JSON object per track, ~30 tokens each, and the code
+#   downstream accepts up to 120 of them;
+# * a Russian answer of the allowed 4000 characters is ~1500 tokens on its own,
+#   before `used`, `missing` and `follow_ups`.
+# A reasoning preamble is spent out of the same budget, so leave headroom.
+LLM_MAX_TOKENS = 4000
 LLM_TEMPERATURE = 0.2
 # What to do with an abbreviation the model expanded on its own. "auto" accepts
 # it, "ask" goes through the clarify frame, "wiki" skips the model's guess and
