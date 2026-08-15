@@ -1104,6 +1104,13 @@ class DeleteAccountRequest(BaseModel):
 # about anything, from the library's facts and the open web together.
 AssistantIntent = Literal["lyrics_search", "audio_search", "playlist", "general"]
 
+# The pre-2026-08 vocabulary, still spoken by the GLiNER2 router that is kept in
+# the tree until the new agent has been checked on a real library. It is NOT a
+# subset of the above — "search" split in two and "facts" was renamed — so the
+# two literals are deliberately separate rather than merged into one permissive
+# union that would let either side accept the other's words by accident.
+LegacyAssistantIntent = Literal["search", "playlist", "facts"]
+
 
 class AssistantSlots(BaseModel):
     """Conversation state carried by the CLIENT across turns.
@@ -1115,7 +1122,10 @@ class AssistantSlots(BaseModel):
     decide "is this a follow-up?" — «ещё у этого артиста» simply finds no
     artist entity and falls back to ``last_artist``.
     """
-    last_intent: Optional[AssistantIntent] = None
+    # A plain string, not the intent literal: this is opaque client-side state
+    # that both the current agent and the legacy router write, and validating it
+    # would only fail a request over a word the client is echoing back to us.
+    last_intent: Optional[str] = None
     last_artist: Optional[str] = None
     last_song: Optional[str] = None
     last_track_id: Optional[str] = None
@@ -1152,8 +1162,8 @@ class AssistantRequest(BaseModel):
 
 
 class AssistantRoute(BaseModel):
-    """Outcome of the GLiNER2 routing pass."""
-    intent: Optional[AssistantIntent] = None   # None → needs clarification
+    """Outcome of the GLiNER2 routing pass. Legacy — nothing calls it now."""
+    intent: Optional[LegacyAssistantIntent] = None   # None → needs clarification
     confidence: float = 0.0
     margin: float = 0.0                        # top1 - top2, drives clarify
     # "llm" — the language model read the sentence; "gliner" — the zero-shot

@@ -143,6 +143,7 @@ class SearchSources:
         # each engine contributed. Read it after a run to find out why the same
         # query by hand looked better.
         self.diagnostics: list = []
+        self.last_response: dict = {}
 
     # ── diagnostics ───────────────────────────────────────────────────────
 
@@ -189,6 +190,37 @@ class SearchSources:
                 for name, r in sorted(totals.items(),
                                       key=lambda kv: -kv[1]["results"])}
 
+    def report(self) -> str:
+        """One block per search: what was asked, who answered, who did not.
+
+        The thing to read after a run that came back with nonsense. Every line
+        here answers a question a log level cannot: which engine dumped one
+        host's navigation, which one contributed the spam, and how much of the
+        web was simply never asked.
+        """
+        lines = []
+        for entry in self.diagnostics:
+            engines = ", ".join(f"{k}:{v}" for k, v in entry["per_engine"].items())
+            lines.append(f"{entry['results']:>3} results  {entry['query'][:60]!r}")
+            lines.append(f"     from: {engines or '(nobody)'}")
+            for name, spread in (entry.get("engine_spread") or {}).items():
+                if spread["hosts"] == 1 and spread["results"] >= 3:
+                    lines.append(f"     DUMP: {name} returned {spread['results']} "
+                                 f"results, all from "
+                                 f"{spread['top_host'] or '(one host)'}")
+            if entry.get("takeover_host"):
+                lines.append(f"     TAKEOVER dropped: {entry['takeover_host']}")
+            if entry.get("spam"):
+                by = ", ".join(f"{k}:{v}" for k, v
+                               in (entry.get("spam_by_engine") or {}).items())
+                hosts = ", ".join(list(entry.get("spam_hosts") or {})[:4])
+                lines.append(f"     SPAM: {entry['spam']} dropped "
+                             f"[{by or 'engine not reported'}] {hosts}")
+            if entry["unresponsive"]:
+                dead = "; ".join(f"{n} ({r})" for n, r in entry["unresponsive"])
+                lines.append(f"     DOWN: {dead}")
+        return "\n".join(lines)
+
     def _emit(self, stage: str, **fields) -> None:
         if self.sink is not None:
             self.sink.put(stage, **fields)
@@ -221,13 +253,28 @@ class SearchSources:
         self._seen_queries.add(key)
         self.searches += 1
 
+        results = self._searx_raw(query, engines=engines, limit=limit,
+                                  host_pinned=host_pinned)
+        if results is None:
+            logger.info("[sources] falling back to DDG direct for %r", query)
+            return searxng_client.search_ddg(query, limit=limit)
+        return results
+
+    def _searx_raw(self, query: str, *, engines: Optional[str] = None,
+                   limit: int = 10, host_pinned: bool = False):
+        """The transport plus the cleaning. ``None`` means the instance did not
+        answer — which is a different failure from "the engines found nothing",
+        and the two need opposite fixes.
+
+        A seam on purpose: everything above it decides WHAT to ask, everything
+        below it asks. That is where the tests cut.
+        """
         pinned = engines if engines is not None else self.cfg.searx_engines
         data = searxng_client.query(
             query, engines=pinned, language=self.cfg.searx_language,
             limit=self.cfg.searx_pool, min_interval=self.cfg.searx_min_interval)
         if data is None:
-            logger.info("[sources] falling back to DDG direct for %r", query)
-            return searxng_client.search_ddg(query, limit=limit)
+            return None
         return self._clean(query, data, engines=engines, limit=limit,
                            host_pinned=host_pinned, asked=pinned)
 
@@ -282,6 +329,7 @@ class SearchSources:
             "unresponsive": data.get("unresponsive_engines") or [],
         }
         self.diagnostics.append(entry)
+        self.last_response = entry
 
         if dominant:
             culprits = {name: e for name, e in entry["engine_spread"].items()

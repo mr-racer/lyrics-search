@@ -24,9 +24,10 @@ if not os.environ.get("MUSIX_LIVE_STACK"):
     )
     _torch_stub.device = lambda x: "cpu"
     _torch_stub.Tensor = object  # dummy for scipy is_torch_array check
-    # ModelRegistry names this when it asks for an fp16 GPU load. A sentinel is
-    # enough — nothing under the stubs ever runs a kernel.
+    # ModelRegistry names these when it asks for an fp16 GPU load or an fp32 CPU
+    # one. Sentinels are enough — nothing under the stubs ever runs a kernel.
     _torch_stub.float16 = "float16"
+    _torch_stub.float32 = "float32"
     sys.modules.setdefault("torch", _torch_stub)
 
     _st_stub = types.ModuleType("sentence_transformers")
@@ -62,12 +63,18 @@ def _clear_light_payload_cache():
     case would read the first case's cached points. Cheap and isolating.
     """
     from app.resources.qdrant_utils import invalidate_light_cache
+    from app.services.library_catalog import invalidate as invalidate_catalog
     from app.services.similarity_service import clear_load_memo
     invalidate_light_cache()
     clear_load_memo()
+    # The assistant's library catalog is memoised the same way and for the same
+    # reason (a full scan plus a token index). Without this the second test to
+    # use a collection name reads the first one's library.
+    invalidate_catalog()
     yield
     invalidate_light_cache()
     clear_load_memo()
+    invalidate_catalog()
 
 
 @pytest.fixture
