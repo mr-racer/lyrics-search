@@ -2191,7 +2191,9 @@
       transform-style: preserve-3d;
       transition: transform 140ms cubic-bezier(0.22, 0.9, 0.3, 1);
     }
-    .player-art-wrap:active .player-art-press { transform: scale(0.96); }
+    /* No press feedback while flipped to lyrics — a tap there scrolls/expands
+       lyric lines, not play/pause, so the cover must not physically react. */
+    .player-art-wrap:not(.player-art-wrap--lyrics):active .player-art-press { transform: scale(0.96); }
 
     /* Glassy play/pause indicator — ~50% cover area, appears on toggle and
        fades out over ~1200ms. Sits OUTSIDE the tilt+flip layers so it stays
@@ -2970,31 +2972,59 @@
       border-color: rgba(22,22,32,0.28);
     }
 
-    /* Mobile flank arrows — small glass circles overlaying the cover row's
-       side gutters (the near-full-width cover leaves no in-flow room).
+    /* Mobile flank arrows — borderless half-disc blur zones hugging the
+       row's left/right edges. The semicircle (flat side at the edge) is cut
+       by border-radius as the hard fallback and feathered by a radial mask,
+       so the backdrop blur melts from the icon toward the cover's edge with
+       no visible rim. Buttons stay mounted in lyrics mode and fade via
+       .is-hidden so the toggle animates both ways.
        Every transform keeps the translateY(-50%) centering, otherwise the
        base :hover/:active scale rules would yank the button off-axis. */
     .player-side-btn--flank {
       position: absolute;
       top: 50%;
       transform: translateY(-50%);
-      width: 44px; height: 44px;
+      width: 68px; height: 136px;
       z-index: 2;
-      opacity: 0.85;
-      background: rgba(18,18,26,0.32);
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      border-color: rgba(255,255,255,0.16);
-      color: rgba(255,255,255,0.88);
+      opacity: 0.9;
+      border: 0;
+      background: none;
+      color: rgba(255,255,255,0.92);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      transition: opacity 280ms ease, transform 200ms ease;
     }
+    .player-side-btn--flank svg { filter: drop-shadow(0 1px 5px rgba(0,0,0,0.45)); }
     .player-side-btn--flank:hover:not(:disabled) { transform: translateY(-50%); }
-    .player-side-btn--flank:active:not(:disabled) { transform: translateY(-50%) scale(0.92); }
-    .player-side-btn--flank-left  { left: 2px; }
-    .player-side-btn--flank-right { right: 2px; }
-    body[data-theme="light"] .player-side-btn--flank {
-      background: rgba(255,255,255,0.55);
-      border-color: rgba(22,22,32,0.14);
-      color: rgba(22,22,32,0.78);
+    .player-side-btn--flank:active:not(:disabled) { transform: translateY(-50%) scale(0.94); }
+    .player-side-btn--flank-left {
+      left: 0;
+      justify-content: flex-start;
+      padding-left: 17px;
+      border-radius: 0 999px 999px 0;
+      background: linear-gradient(90deg, rgba(10,10,18,0.28), rgba(10,10,18,0) 72%);
+      -webkit-mask-image: radial-gradient(100% 50% at 0% 50%, #000 42%, transparent 76%);
+              mask-image: radial-gradient(100% 50% at 0% 50%, #000 42%, transparent 76%);
+    }
+    .player-side-btn--flank-right {
+      right: 0;
+      justify-content: flex-end;
+      padding-right: 17px;
+      border-radius: 999px 0 0 999px;
+      background: linear-gradient(270deg, rgba(10,10,18,0.28), rgba(10,10,18,0) 72%);
+      -webkit-mask-image: radial-gradient(100% 50% at 100% 50%, #000 42%, transparent 76%);
+              mask-image: radial-gradient(100% 50% at 100% 50%, #000 42%, transparent 76%);
+    }
+    /* Triple selector beats `.player-side-btn:disabled` on specificity so a
+       disabled arrow still vanishes completely in lyrics mode. */
+    .player-side-btn.player-side-btn--flank.is-hidden { opacity: 0; pointer-events: none; }
+    body[data-theme="light"] .player-side-btn--flank { color: rgba(22,22,32,0.82); }
+    body[data-theme="light"] .player-side-btn--flank svg { filter: drop-shadow(0 1px 5px rgba(255,255,255,0.55)); }
+    body[data-theme="light"] .player-side-btn--flank-left {
+      background: linear-gradient(90deg, rgba(255,255,255,0.42), rgba(255,255,255,0) 72%);
+    }
+    body[data-theme="light"] .player-side-btn--flank-right {
+      background: linear-gradient(270deg, rgba(255,255,255,0.42), rgba(255,255,255,0) 72%);
     }
 
     /* Compact icon buttons in title row (like/dislike/lyrics/AI) + burst */
@@ -3183,6 +3213,35 @@
       background: linear-gradient(135deg, #f6f5ed, #ede9d8);
       box-shadow: 0 16px 40px color-mix(in srgb, var(--player-accent, #7C5BFF) 14%, transparent),
                   0 0 0 1px rgba(22,22,32,0.08) inset;
+    }
+    /* Phones: keep only the inset ring on the back face — the box-shadow glow
+       clipped to a hard edge and is replaced by .player-lyrics-aura below. */
+    @media (max-width: 768px) {
+      .player-art-back { box-shadow: 0 0 0 1px rgba(255,255,255,0.06) inset; }
+      body[data-theme="light"] .player-art-back { box-shadow: 0 0 0 1px rgba(22,22,32,0.08) inset; }
+    }
+    /* Mobile lyrics aura — flat accent wash behind the flipped cover. Overhangs
+       the section's 12px gutters (clipped at the screen edge by the player's
+       scroll container) with a smooth radial falloff, so the glow melts to the
+       screen edges instead of cutting off. */
+    .player-lyrics-aura {
+      position: absolute;
+      top: -10%; bottom: -10%; left: -24px; right: -24px;
+      z-index: 0;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 700ms ease;
+      background: radial-gradient(52% 55% at 50% 52%,
+        color-mix(in srgb, var(--player-accent, #7C5BFF) 30%, transparent),
+        color-mix(in srgb, var(--player-accent, #7C5BFF) 10%, transparent) 55%,
+        transparent 98%);
+    }
+    .player-lyrics-aura.is-on { opacity: 1; }
+    body[data-theme="light"] .player-lyrics-aura {
+      background: radial-gradient(52% 55% at 50% 52%,
+        color-mix(in srgb, var(--player-accent, #7C5BFF) 19%, transparent),
+        color-mix(in srgb, var(--player-accent, #7C5BFF) 7%, transparent) 55%,
+        transparent 98%);
     }
     /* Respect motion-reduction preference: instant swap, no flip. */
     @media (prefers-reduced-motion: reduce) {
@@ -4440,10 +4499,12 @@
            pans stay native page scroll. */
         touch-action: pan-y;
       }
-      /* Clip the swipe fly-out at the row bounds so the exiting cover can't
-         stretch the page's horizontal scroll. overflow-y stays visible for
-         the flank arrows' glow / cover shadow. */
-      .player-cover-row { overflow-x: clip; overflow-y: visible; }
+      /* The swipe fly-out / entry animations may paint past the row. The
+         horizontal clip that used to sit here also cut the lyric-mode glow to
+         a hard edge mid-gutter; the guard against stretching the page's
+         horizontal scroll now lives on the player's scroll container
+         (overflow-x: hidden — see PlayerSection), which clips at the screen
+         edge instead. */
 
       /* ── Don't-break guard (heavy Phase-2 screens) ───────────────────────
          Recsys / atlas / efir are desktop-first and can push fixed-width

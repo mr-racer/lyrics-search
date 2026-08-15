@@ -16613,8 +16613,11 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
     }}>
 
       {/* Main content area — top padding gives the cover breathing room from
-          the (now collapsed) section header bar. */}
-      <div style={{ flex:1, display:'flex', flexDirection: isMobile ? 'column' : 'row', overflow: isMobile ? 'auto' : 'hidden', padding: isMobile ? '10px 12px 24px' : 'clamp(20px, 4vh, 48px) 24px 12px', gap: isMobile ? 14 : 28, position:'relative' }}>
+          the (now collapsed) section header bar. Mobile: vertical scroll only;
+          horizontal overflow (vinyl fly-outs, the lyrics aura's full-bleed
+          overhang) clips at the SCREEN edge — not at the cover row, whose old
+          overflow-x clip cut the lyric-mode glow to a hard edge mid-gutter. */}
+      <div style={{ flex:1, display:'flex', flexDirection: isMobile ? 'column' : 'row', overflowY: isMobile ? 'auto' : 'hidden', overflowX:'hidden', padding: isMobile ? '10px 12px 24px' : 'clamp(20px, 4vh, 48px) 24px 12px', gap: isMobile ? 14 : 28, position:'relative' }}>
 
         {/* ════════════════ LEFT: Player ════════════════
             justifyContent:center keeps the cover+controls visually centered
@@ -16656,6 +16659,13 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
             display:'flex', alignItems:'center', justifyContent:'center',
             gap:'clamp(10px, 1.6vw, 36px)', width:'100%', flexShrink:0,
           }}>
+            {/* Mobile lyrics aura — full-bleed accent wash behind the flipped
+                cover. Replaces the back face's box-shadow glow on phones (see
+                styles.css): a flat layer can run past the gutters and fade at
+                the screen edges instead of cutting off. */}
+            {isMobile && (
+              <div aria-hidden="true" className={`player-lyrics-aura${lyricsMode ? ' is-on' : ''}`} />
+            )}
             {/* No spectrum on phones: the analyser is never wired there
                 (_IS_MOBILE), but the mounted components still burned a rAF
                 loop each — pure battery drain with zero pixels moving. */}
@@ -16699,7 +16709,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                 a stray tap while reading was pure surprise. */}
             <div
               ref={artWrapRef}
-              className="player-art-wrap"
+              className={`player-art-wrap${lyricsMode ? ' player-art-wrap--lyrics' : ''}`}
               onMouseMove={lyricsMode || outgoingTrack ? undefined : handleArtMouseMove}
               onMouseEnter={lyricsMode ? undefined : handleArtMouseEnter}
               onMouseLeave={handleArtMouseLeave}
@@ -16841,25 +16851,32 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
             </button>
             )}
 
-            {/* Mobile: compact prev/next arrows overlay the row's side gutters
-                (the near-full-width cover leaves no room for in-flow buttons). */}
+            {/* Mobile: prev/next arrows in the row's side gutters — borderless
+                half-disc blur zones (styles.css). Stay mounted in lyrics mode
+                and fade out via .is-hidden so the toggle animates both ways. */}
             {isMobile && currentTrack && (
               <>
                 <button
-                  type="button" className="player-side-btn player-side-btn--flank player-side-btn--flank-left"
+                  type="button"
+                  className={`player-side-btn player-side-btn--flank player-side-btn--flank-left${lyricsMode ? ' is-hidden' : ''}`}
                   onClick={prevTrack} disabled={currentIndex <= 0}
+                  aria-hidden={lyricsMode}
+                  tabIndex={lyricsMode ? -1 : 0}
                   aria-label={lang==='ru'?'Предыдущий':'Previous'}
                 >
-                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round">
                     <polyline points="15 18 9 12 15 6"/>
                   </svg>
                 </button>
                 <button
-                  type="button" className="player-side-btn player-side-btn--flank player-side-btn--flank-right"
+                  type="button"
+                  className={`player-side-btn player-side-btn--flank player-side-btn--flank-right${lyricsMode ? ' is-hidden' : ''}`}
                   onClick={nextTrack} disabled={currentIndex >= playlist.length - 1}
+                  aria-hidden={lyricsMode}
+                  tabIndex={lyricsMode ? -1 : 0}
                   aria-label={lang==='ru'?'Следующий':'Next'}
                 >
-                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                  <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.3" strokeLinecap="round" strokeLinejoin="round">
                     <polyline points="9 18 15 12 9 6"/>
                   </svg>
                 </button>
