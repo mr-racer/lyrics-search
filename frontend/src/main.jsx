@@ -18647,28 +18647,132 @@ function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
     }
   };
 
-  // Cursor halo: write --mx/--my straight onto the root element so pointer
-  // moves never re-render React — .login-glow reads the vars in CSS.
-  const rootRef = useRef(null);
-  const onMove = (e) => {
-    const el = rootRef.current;
-    if (!el) return;
-    el.style.setProperty('--mx', `${e.clientX}px`);
-    el.style.setProperty('--my', `${e.clientY}px`);
-  };
-
   const ru = lang === 'ru';
-  const features = [
-    { icon: '🎧', text: ru ? 'Плеер, который чувствует твой вкус' : 'A player that learns your taste' },
-    { icon: '🌊', text: ru ? 'Бесконечная волна под настроение' : 'An endless wave for any mood' },
-    { icon: '💬', text: ru ? 'Истории песен и разговор о музыке' : 'Song stories and music talk' },
+
+  // ── Landing sections (the pre-auth pitch below the fold) ──────────────────
+  // Each section carries its own aurora hue — the page "recolors" as you
+  // scroll, the same way the player recolors to the current album cover.
+  const sections = [
+    {
+      id: 'design', hue: 280, icon: '🖥️',
+      chip: ru ? 'Живой дизайн' : 'Living design',
+      eyebrow: ru ? 'Дизайн' : 'Design',
+      title: ru ? 'Интерфейс, который дышит музыкой' : 'An interface that breathes with the music',
+      body: ru
+        ? 'Живой амбиент главной подстраивается под обложку играющего трека. Всё адаптировано под телефон, а благодаря PWA MusiX ставится как обычное приложение. Сам плеер лёгкий: меняй очередь на лету, читай факты про песню и исполнителя — а если стало интересно, зови ИИ-ассистента, не выходя из плеера.'
+        : 'The home screen\'s living ambient recolors to the playing track\'s cover. Fully mobile-ready, and thanks to PWA MusiX installs like a regular app. The player itself stays light: reorder the queue on the fly, read song and artist facts while listening — and call the AI assistant right from the player.',
+      media: [{ src: '/landing/player.webp', alt: ru ? 'Экран плеера' : 'Player screen' }],
+      wide: [{ src: '/landing/home-ambient.mp4', v: true, alt: ru ? 'Живой амбиент главного экрана' : 'Living home-screen ambient' }],
+    },
+    {
+      id: 'wave', hue: 210, icon: '🌊',
+      chip: ru ? 'Волна под тебя' : 'A wave that learns',
+      eyebrow: ru ? 'Рекомендации' : 'Recommendations',
+      title: ru ? 'Волна, которая привыкает именно к тебе' : 'A wave that adapts to you',
+      body: ru
+        ? 'Собственный движок рекомендаций не скачет с жанра на жанр — музыка плавно перетекает вслед за настроением. Твой вкус сам разбивается на острова: они крепнут от дослушанных треков, тают без внимания, и любой запускается как плейлист прямо с главной. Зашёл трек — добавь огонька 🔥, хочется другого — плесни воды 💧.'
+        : 'A home-grown recommendation engine that never jumps genres — the music flows with your mood. Your taste splits into islands on its own: they grow stronger with every finished track, fade without attention, and any of them starts as a playlist right from the home screen. Loved a track — add fire 🔥; want something else — splash water 💧.',
+      media: [{ src: '/landing/taste-islands.webp', alt: ru ? 'Острова вкуса' : 'Taste islands' }],
+    },
+    {
+      id: 'guru', hue: 75, icon: '🧙',
+      chip: ru ? 'ИИ-гуру' : 'AI guru',
+      eyebrow: ru ? 'ИИ-ассистент' : 'AI assistant',
+      title: ru ? 'Гуру-меломан на связи' : 'A music guru on call',
+      body: ru
+        ? 'Скажи, что хочешь — «спокойные песни под поездку домой летним вечером» или «хиты Канье, где он читает рэп, а не поёт» — и получи готовый плейлист. Спрашивай про историю исполнителей и создание песен, ищи треки по строчке текста или по звучанию — такого больше нет нигде. А любую строчку он объяснит — просто ткни в неё.'
+        : 'Say what you want — "calm songs for the drive home on a summer evening" or "Kanye hits where he raps, not sings" — and get a ready playlist. Ask about artists\' history and how songs were made, find tracks by a lyric line or by how they sound — nothing else does this. And it explains any lyric — just tap it.',
+      media: [
+        { src: '/landing/assistant-playlist.webp', alt: ru ? 'Плейлист по запросу' : 'Playlist from a wish' },
+        { src: '/landing/artist-facts.webp', alt: ru ? 'Рассказ об исполнителе' : 'Artist story' },
+      ],
+      wide: [{ src: '/landing/lyrics-explain.mp4', v: true, alt: ru ? 'Объяснение строчки по клику' : 'Tap a lyric to explain it' }],
+    },
+    {
+      id: 'links', hue: 330, icon: '🔗',
+      chip: ru ? 'Связи песен' : 'Song DNA',
+      eyebrow: ru ? 'Взаимосвязи' : 'Connections',
+      title: ru ? 'Кто кого семплировал' : 'Who sampled whom',
+      body: ru
+        ? 'Узнай, как твоя коллекция связана изнутри: сэмплы, общие продюсеры, лейбл, на котором встретились два совершенно разных артиста. Бейджи прямо под обложкой раскрываются в карточки с деталями.'
+        : 'See how your collection connects from the inside: samples, shared producers, the label where two totally different artists met. Badges right under the cover unfold into detail cards.',
+      media: [{ src: '/landing/song-links.mp4', v: true, alt: ru ? 'Бейджи сэмплов и продюсеров в плеере' : 'Sample and producer badges in the player' }],
+      wide: [{ src: '/landing/song-connections.webp', alt: ru ? 'Сэмплы и отсылки в твоей музыке' : 'Samples and references in your music' }],
+    },
+    {
+      id: 'stats', hue: 150, icon: '📊',
+      chip: ru ? 'Честная статистика' : 'Honest stats',
+      eyebrow: ru ? 'Статистика' : 'Stats',
+      title: ru ? 'Правда, которую прячут цифры' : 'The truth plain numbers hide',
+      body: ru
+        ? 'Самый активный час и день, серии прослушиваний подряд — и главное, сколько треков ты дослушиваешь до конца. Такое не покажет никто, кроме MusiX.'
+        : 'Your most active hour and day, listening streaks — and above all, how many tracks you actually finish. Nobody else will show you that.',
+      media: [{ src: '/landing/listening-stats.webp', alt: ru ? 'Таймлайн прослушиваний' : 'Listening timeline' }],
+    },
+    {
+      id: 'files', hue: 270, icon: '🎧',
+      chip: ru ? 'Твои файлы' : 'Your files',
+      eyebrow: ru ? 'Твоя библиотека' : 'Your library',
+      title: ru ? 'Твоя музыка — твои файлы' : 'Your music, your files',
+      body: ru
+        ? 'MusiX — именно плеер: в него загружаются твои музыкальные файлы, и они навсегда остаются твоими. Никакого каталога, подписки и чужих «вам может понравиться».'
+        : 'MusiX is a player in the true sense: you load your own music files, and they stay yours forever. No catalog, no subscription, no borrowed "you may also like".',
+      minis: [
+        { icon: '🎼', t: 'Lossless', d: ru ? 'FLAC и ALAC играют без сжатия — как записано.' : 'FLAC and ALAC play uncompressed — as recorded.' },
+        { icon: '🟡', t: ru ? 'Импорт из Яндекс Музыки' : 'Yandex Music import', d: ru ? 'С подпиской Плюс плейлисты переезжают в пару кликов.' : 'With a Plus subscription, playlists move over in a couple of clicks.' },
+        { icon: '🏠', t: ru ? 'Всё на твоей машине' : 'All on your machine', d: ru ? 'Никакого облака: библиотека, история и вкус живут у тебя.' : 'No cloud: your library, history and taste live with you.' },
+      ],
+    },
   ];
 
+  // Floating «sign in» pill once the hero (and its login card) leaves view.
+  const heroRef = useRef(null);
+  const [fab, setFab] = useState(false);
+  useEffect(() => {
+    const hero = heroRef.current;
+    if (!hero || !('IntersectionObserver' in window)) return;
+    const io = new IntersectionObserver(([en]) => setFab(!en.isIntersecting), { threshold: 0.06 });
+    io.observe(hero);
+    return () => io.disconnect();
+  }, []);
+
+  // Scroll-reveal for sections; reduced motion (or no IO) shows them at once.
+  useEffect(() => {
+    const nodes = Array.from(document.querySelectorAll('.ld-reveal'));
+    const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduce || !('IntersectionObserver' in window)) {
+      nodes.forEach(n => n.classList.add('ld-in'));
+      return;
+    }
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach(en => {
+        if (en.isIntersecting) { en.target.classList.add('ld-in'); io.unobserve(en.target); }
+      });
+    }, { threshold: 0.16 });
+    nodes.forEach(n => io.observe(n));
+    return () => io.disconnect();
+  }, [lang]);
+
+  // Anchor scroll without touching location.hash (the app routes on it).
+  const goTo = (id) => {
+    const el = document.getElementById('ld-' + id);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+  const goTop = () => { window.scrollTo({ top: 0, behavior: 'smooth' }); };
+
+  const ldMedia = (m, key) => (
+    <figure key={key} className="liquid-glass ld-frame" {...spotHandlers(true)}>
+      {m.v
+        ? <video src={m.src} autoPlay muted loop playsInline preload="metadata" aria-label={m.alt} />
+        : <img src={m.src} alt={m.alt} loading="lazy" />}
+    </figure>
+  );
+
   return (
-    <div ref={rootRef} className="login-screen" onMouseMove={onMove}>
+    <div className="login-screen">
+      <section className="login-hero-block" ref={heroRef}>
       <div className="login-aurora login-aurora--a" />
       <div className="login-aurora login-aurora--b" />
-      <div className="login-glow" />
 
       {/* «?» — opens the user guide pre-auth. Doesn't touch the seen-flag:
           there's no user id yet, and the auto-show after first login is
@@ -18695,19 +18799,19 @@ function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
             fontSize: 'clamp(30px, 4.2vw, 44px)', lineHeight: 1.12, letterSpacing: '-0.015em',
             margin: '22px 0 12px', color: '#f1eeff', '--d': '0.08s',
           }}>
-            {ru ? 'Место, где живёт твоя музыка' : 'Where your music lives'}
+            {ru ? 'Подними свой Spotify у себя дома' : 'Host your own Spotify at home'}
           </h1>
-          <p className="login-rise" style={{ fontSize: 15, lineHeight: 1.55, color: 'rgba(238,238,243,.6)', margin: 0, maxWidth: 420, '--d': '0.16s', display: 'inline-block' }}>
+          <p className="login-rise" style={{ fontSize: 15, lineHeight: 1.55, color: 'rgba(238,238,243,.6)', margin: 0, maxWidth: 440, '--d': '0.16s', display: 'inline-block' }}>
             {ru
-              ? 'Войди — и MusiX продолжит с того места, где ты остановился.'
-              : 'Sign in and MusiX picks up right where you left off.'}
+              ? 'Бесплатно, на твоих файлах и без буллшита в рекомендациях. Не только слушай музыку — узнавай её.'
+              : 'Free, on your own files, with zero recommendation nonsense. Don’t just listen — get to know your music.'}
           </p>
-          <div className="login-features">
-            {features.map((f, i) => (
-              <div key={f.icon} className="liquid-glass login-feature login-rise" style={{ '--d': `${0.24 + i * 0.09}s` }}>
-                <span className="login-feature-icon">{f.icon}</span>
-                <span>{f.text}</span>
-              </div>
+          <div className="ld-chiprow login-rise" style={{ '--d': '0.26s' }}>
+            {sections.map(s => (
+              <button key={s.id} type="button" className="ld-chip" onClick={() => goTo(s.id)}>
+                <span className="ld-chip-icon">{s.icon}</span>
+                <span>{s.chip}</span>
+              </button>
             ))}
           </div>
         </div>
@@ -18793,6 +18897,63 @@ function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
           )}
         </form>
       </div>
+
+      <div className="ld-scrollhint" aria-hidden="true">
+        <span>{ru ? 'листай — покажем, что внутри' : 'scroll — see what’s inside'}</span>
+        <span className="ld-scrollhint-arrow">↓</span>
+      </div>
+      </section>
+
+      <main className="ld-sections">
+        {sections.map((s, i) => (
+          <section key={s.id} id={`ld-${s.id}`} className={`ld-section ld-reveal${i % 2 ? ' ld-flip' : ''}${s.minis ? ' ld-solo' : ''}`} style={{ '--ld-hue': s.hue }}>
+            <div className="ld-aura" />
+            <div className="ld-copy">
+              <div className="mono-label ld-eyebrow">{s.eyebrow}</div>
+              <h2 className="serif-display">{s.title}</h2>
+              <p>{s.body}</p>
+              {s.minis && (
+                <div className="ld-minis">
+                  {s.minis.map(m => (
+                    <div key={m.t} className="liquid-glass ld-mini" {...spotHandlers(true)}>
+                      <div className="ld-mini-icon">{m.icon}</div>
+                      <div className="ld-mini-title">{m.t}</div>
+                      <div className="ld-mini-body">{m.d}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            {s.media && (
+              <div className="ld-media">
+                {s.media.map((m, j) => ldMedia(m, j))}
+              </div>
+            )}
+            {s.wide && s.wide.map((m, j) => (
+              <div key={`w${j}`} className="ld-wide">{ldMedia(m, j)}</div>
+            ))}
+          </section>
+        ))}
+
+        <footer className="ld-footer ld-reveal">
+          <BrandMark size={36} isDark />
+          <div className="serif-display ld-footer-line">
+            {ru ? 'Не только слушай музыку — узнавай её.' : 'Don’t just listen — get to know your music.'}
+          </div>
+          <a className="pill-v3 ld-footer-gh" href="https://github.com/mr-racer/musix" target="_blank" rel="noreferrer">
+            {ru ? 'Открытый код на GitHub ↗' : 'Open source on GitHub ↗'}
+          </a>
+          <div className="ld-footer-hint">
+            {ru ? 'Хочешь такой же сервер у себя? Инструкция по установке — в README.' : 'Want your own server? Setup guide lives in the README.'}
+          </div>
+        </footer>
+      </main>
+
+      {fab && (
+        <button type="button" className="cta-v3 ld-fab" onClick={goTop}>
+          {ru ? 'Ко входу ↑' : 'Sign in ↑'}
+        </button>
+      )}
 
       {guideOpen && (
         <GuideCarousel isDark={true} lang={lang} onClose={() => setGuideOpen(false)} />

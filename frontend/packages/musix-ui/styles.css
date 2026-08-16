@@ -4837,44 +4837,137 @@
       animation-play-state: paused !important;
     }
 
-    /* ═══ Login / welcome screen ════════════════════════════════════════════
-       Pre-auth screen: a mini welcome page (brand + greeting + feature chips)
-       beside a liquid-glass sign-in card. The pointer feeds --mx/--my on the
-       root (set in JS without re-rendering) and .login-glow paints a soft
-       accent halo under the cursor; touch devices drop the glow entirely. */
+    /* ═══ Login / landing screen ════════════════════════════════════════════
+       Pre-auth page: a full-height hero (pitch + anchor chips beside the
+       liquid-glass sign-in card) over a scrollable feature tour. Each tour
+       section carries its own aurora hue (--ld-hue) — the page recolors as
+       you scroll, echoing how the player recolors to the current cover.
+       No cursor halo: pointer feedback is the shared card tilt (--rx/--ry). */
     .login-screen {
+      min-height: 100vh; min-height: 100dvh;
+      background: #0a0a10;
+      color: #eeeef3;
+    }
+    .login-hero-block {
       min-height: 100vh; min-height: 100dvh;
       display: grid; place-items: center;
       position: relative; overflow: hidden;
-      padding: 28px 18px;
+      padding: 28px 18px 76px;
       background: radial-gradient(120% 90% at 70% -10%, #1c1830 0%, #12101c 45%, #0a0a10 100%);
-      color: #eeeef3;
     }
     .login-aurora { position: absolute; border-radius: 50%; filter: blur(70px); pointer-events: none; }
     .login-aurora--a { width: 46vmax; height: 46vmax; top: -18vmax; left: -12vmax;
       background: radial-gradient(circle, oklch(45% 0.16 290 / .32), transparent 65%); }
     .login-aurora--b { width: 40vmax; height: 40vmax; bottom: -16vmax; right: -10vmax;
       background: radial-gradient(circle, oklch(50% 0.12 210 / .20), transparent 65%); }
-    .login-glow {
-      position: absolute; inset: 0; pointer-events: none;
-      opacity: 0; transition: opacity .6s ease;
-      background: radial-gradient(520px circle at var(--mx, 50%) var(--my, 40%), oklch(60% 0.18 270 / 0.11), transparent 65%);
-    }
-    .login-screen:hover .login-glow { opacity: 1; }
     .login-wrap {
       display: grid; grid-template-columns: minmax(0, 1fr) 384px;
       gap: clamp(30px, 5.5vw, 72px); align-items: center;
       width: 100%; max-width: 940px; position: relative; z-index: 1;
     }
     .login-brandrow { display: flex; align-items: center; gap: 14px; }
-    .login-features { display: flex; flex-direction: column; gap: 10px; margin-top: 28px; max-width: 420px; }
-    .login-feature {
-      display: flex; align-items: center; gap: 13px;
-      padding: 12px 17px; border-radius: 15px;
-      font-size: 14.5px; color: rgba(238,238,243,.82);
-    }
-    .login-feature .login-feature-icon { font-size: 17px; flex: none; }
     .login-card { border-radius: 22px; padding: 30px 28px; }
+    /* Anchor chips — small liquid-glass pills that scroll to tour sections. */
+    .ld-chiprow { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 30px; max-width: 470px; }
+    .ld-chip {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 10px 16px; border-radius: 999px; cursor: pointer;
+      font-size: 13.5px; font-weight: 500; color: rgba(238,238,243,.86);
+      border: 1px solid rgba(255,255,255,0.13);
+      background:
+        linear-gradient(165deg, rgba(255,255,255,0.15) 0%, rgba(255,255,255,0.04) 45%, rgba(255,255,255,0.09) 100%),
+        rgba(24,24,32,0.38);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.22),
+        inset 0 -1px 0 rgba(0,0,0,0.30),
+        0 6px 16px rgba(0,0,0,0.35);
+      transition: transform .15s ease, box-shadow .2s ease, border-color .2s ease;
+    }
+    .ld-chip:hover {
+      transform: translateY(-2px);
+      border-color: rgba(124,91,255,0.45);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,0.3),
+        inset 0 -1px 0 rgba(0,0,0,0.3),
+        0 10px 24px oklch(60% 0.18 270 / 0.35);
+    }
+    .ld-chip:active { transform: translateY(1px); box-shadow: inset 0 2px 5px rgba(0,0,0,0.4); }
+    .ld-chip-icon { font-size: 15px; }
+    /* Scroll hint pinned to the hero's bottom edge. */
+    .ld-scrollhint {
+      position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+      display: flex; flex-direction: column; align-items: center; gap: 4px;
+      color: rgba(238,238,243,.38); font-size: 10.5px; font-weight: 600;
+      letter-spacing: .16em; text-transform: uppercase; z-index: 1;
+      pointer-events: none; white-space: nowrap;
+    }
+    .ld-scrollhint-arrow { font-size: 15px; animation: ldBob 2.2s ease-in-out infinite; }
+    @keyframes ldBob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(6px); } }
+
+    /* ── Feature tour ── */
+    .ld-sections { max-width: 1120px; margin: 0 auto; padding: 6px 22px 26px; }
+    .ld-section {
+      position: relative;
+      display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: clamp(28px, 5vw, 64px); align-items: center;
+      padding: clamp(48px, 7vw, 92px) 0;
+      scroll-margin-top: 16px;
+    }
+    .ld-section.ld-solo { grid-template-columns: minmax(0, 1fr); }
+    .ld-flip .ld-copy { order: 2; }
+    .ld-flip .ld-media { order: 1; }
+    .ld-aura {
+      position: absolute; width: 56vmax; height: 44vmax;
+      top: 50%; left: 50%; transform: translate(-50%, -50%);
+      border-radius: 50%; filter: blur(90px); pointer-events: none; z-index: 0;
+      background: radial-gradient(circle, oklch(42% 0.13 var(--ld-hue, 280) / .17), transparent 62%);
+    }
+    .ld-copy, .ld-media, .ld-wide { position: relative; z-index: 1; }
+    .ld-eyebrow { display: inline-flex; align-items: center; gap: 9px; }
+    .ld-eyebrow::before {
+      content: ''; width: 7px; height: 7px; border-radius: 50%; flex: none;
+      background: oklch(68% 0.16 var(--ld-hue, 280));
+      box-shadow: 0 0 10px oklch(68% 0.16 var(--ld-hue, 280) / .8);
+    }
+    .ld-copy h2 {
+      font-size: clamp(26px, 3vw, 36px); line-height: 1.15;
+      color: #f1eeff; margin: 12px 0 14px; font-weight: 300;
+    }
+    .ld-copy p { font-size: 15px; line-height: 1.66; color: rgba(238,238,243,.62); margin: 0; max-width: 560px; }
+    .ld-media { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+    .ld-frame {
+      border-radius: 20px; padding: 10px; margin: 0;
+      transform: perspective(950px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg));
+      transition: transform .18s ease;
+      will-change: transform;
+    }
+    .ld-frame img, .ld-frame video { display: block; width: 100%; height: auto; border-radius: 12px; }
+    .ld-wide { grid-column: 1 / -1; justify-self: center; width: min(100%, 880px); margin-top: clamp(18px, 3vw, 36px); }
+    .ld-minis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 28px; }
+    .ld-mini {
+      border-radius: 18px; padding: 18px 17px;
+      transform: perspective(700px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg));
+      transition: transform .18s ease;
+    }
+    .ld-mini-icon { font-size: 21px; margin-bottom: 10px; }
+    .ld-mini-title { font-size: 14px; font-weight: 600; color: #f1eeff; margin-bottom: 6px; }
+    .ld-mini-body { font-size: 12.5px; line-height: 1.55; color: rgba(238,238,243,.58); }
+    .ld-footer {
+      display: flex; flex-direction: column; align-items: center; gap: 15px;
+      text-align: center; padding: clamp(48px, 6vw, 84px) 0 46px;
+    }
+    .ld-footer-line { font-size: clamp(19px, 2.2vw, 25px); color: rgba(241,238,255,.86); }
+    .ld-footer-gh { text-decoration: none; display: inline-block; }
+    .ld-footer-hint { font-size: 12px; color: rgba(238,238,243,.4); }
+    .ld-fab {
+      position: fixed; right: 22px;
+      bottom: calc(env(safe-area-inset-bottom, 0px) + 22px);
+      z-index: 30; border-radius: 999px; padding: 13px 22px;
+      animation: fadeInUp .3s ease both;
+    }
+    /* Scroll reveal */
+    .ld-reveal { opacity: 0; transform: translateY(26px); transition: opacity .7s ease, transform .7s cubic-bezier(.22,.9,.3,1); }
+    .ld-reveal.ld-in { opacity: 1; transform: none; }
     .login-input {
       width: 100%; box-sizing: border-box;
       padding: 12px 14px; margin-bottom: 10px; border-radius: 12px;
@@ -4895,11 +4988,21 @@
       .login-wrap { grid-template-columns: 1fr; gap: 28px; max-width: 460px; }
       .login-hero { text-align: center; }
       .login-brandrow { justify-content: center; }
-      .login-features { margin: 22px auto 0; }
       .login-aurora { filter: blur(44px); }
+      .ld-chiprow { justify-content: center; margin-left: auto; margin-right: auto; }
+      .ld-section, .ld-section.ld-flip { grid-template-columns: 1fr; gap: 24px; padding: 44px 0; }
+      .ld-flip .ld-copy { order: 1; }
+      .ld-flip .ld-media { order: 2; }
+      .ld-copy { text-align: center; }
+      .ld-eyebrow { justify-content: center; }
+      .ld-copy p { margin: 0 auto; }
+      .ld-minis { grid-template-columns: 1fr; }
+      .ld-aura { filter: blur(60px); }
     }
-    @media (hover: none), (pointer: coarse) { .login-glow { display: none; } }
     @media (prefers-reduced-motion: reduce) {
       .login-rise { animation: none !important; opacity: 1 !important; }
-      .login-glow { display: none; }
+      .ld-reveal { transition: none !important; opacity: 1 !important; transform: none !important; }
+      .ld-scrollhint-arrow { animation: none !important; }
+      .ld-frame, .ld-mini { transform: none !important; transition: none !important; }
+      .ld-chip { transition: none !important; }
     }
