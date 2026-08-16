@@ -203,10 +203,13 @@ def migrate_one(client: QdrantClient, collection: str, *, resume: bool,
              vector_name=ModelRegistry.VECTOR_NAME, batch=batch,
              encode_batch=encode_batch)
 
+    # Verify against the DUMP, not the pre-run live count: after a crash mid-
+    # rebuild the live collection is empty (or partial), and --resume must be
+    # able to repair it — the dump is the source of truth by then.
     after = client.get_collection(collection).points_count or 0
-    if after != before:
-        logger.error("[%s] point count changed: %d → %d. The dump is still at %s",
-                     collection, before, after, path)
+    if after != len(rows):
+        logger.error("[%s] uploaded %d points but the dump has %d. The dump is "
+                     "still at %s", collection, after, len(rows), path)
         return False
     logger.info("[%s] done: %d points, CLAP carried over for %d",
                 collection, after, sum(1 for r in rows if r["clap"] is not None))
