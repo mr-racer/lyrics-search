@@ -124,15 +124,20 @@ def recreate_collection(client: QdrantClient, collection: str, *,
 
 
 def reupload(client: QdrantClient, collection: str, rows: list[dict], *,
-             vector_name: str, batch: int) -> None:
+             vector_name: str, batch: int, encode_batch: int = 32) -> None:
     from app.resources.model_registry import ModelRegistry
 
     texts = [build_text_for_embedding(r["payload"]) for r in rows]
-    logger.info("[%s] encoding %d documents…", collection, len(texts))
+    logger.info("[%s] encoding %d documents (encode_batch=%d)…",
+                collection, len(texts), encode_batch)
     # Document side of the asymmetric pair — no instruction prefix, matching
     # what IndexingService.encode_dense writes at index time.
+    # encode_batch matters on a shared GPU: sentence-transformers sorts by
+    # length, so the FIRST batch is the longest lyrics — 32 × 2048 tokens
+    # OOMed a 3090 that llama-server and the app already occupy.
     vecs = ModelRegistry.encode_text(
-        texts, batch_size=32, show_progress_bar=True, convert_to_numpy=True,
+        texts, batch_size=encode_batch, show_progress_bar=True,
+        convert_to_numpy=True,
     )
 
     for i in range(0, len(rows), batch):
@@ -155,7 +160,7 @@ def reupload(client: QdrantClient, collection: str, rows: list[dict], *,
 
 
 def migrate_one(client: QdrantClient, collection: str, *, resume: bool,
-                dry_run: bool, batch: int) -> bool:
+                dry_run: bool, batch: int, encode_batch: int = 32) -> bool:
     from app.resources.model_registry import ModelRegistry
 
     before = client.get_collection(collection).points_count or 0
@@ -195,7 +200,8 @@ def migrate_one(client: QdrantClient, collection: str, *, resume: bool,
         with_clap=with_clap,
     )
     reupload(client, collection, rows,
-             vector_name=ModelRegistry.VECTOR_NAME, batch=batch)
+             vector_name=ModelRegistry.VECTOR_NAME, batch=batch,
+             encode_batch=encode_batch)
 
     after = client.get_collection(collection).points_count or 0
     if after != before:
@@ -340,6 +346,9 @@ def main() -> int:
                     help="reuse an existing dump instead of re-scrolling")
     ap.add_argument("--dry-run", action="store_true", help="report and exit")
     ap.add_argument("--batch", type=int, default=64, help="upsert batch size")
+    ap.add_argument("--encode-batch", type=int, default=32,
+                    help="GPU encode batch; lower it when the card is shared "
+                         "(the first batch is the LONGEST lyrics)")
     ap.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
     ap.add_argument("--sample", type=int, metavar="N",
                     help="end-to-end check on N tracks in a temp octen_sample_* "
@@ -386,7 +395,8 @@ def main() -> int:
 
     failed = [c for c in targets
               if not migrate_one(client, c, resume=args.resume,
-                                 dry_run=args.dry_run, batch=args.batch)]
+                                 dry_run=args.dry_run, batch=args.batch,
+                                 encode_batch=args.encode_batch)]
     if failed:
         logger.error("FAILED: %s", ", ".join(failed))
         return 1
