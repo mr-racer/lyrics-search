@@ -5698,23 +5698,36 @@ function PlaylistsListView({ playlists, onOpen, onCreate, onPlayAll, lang, isDar
   );
 }
 
-// ─── VIBE ALBUM RAIL («под твою волну» — AI album picks in the library) ──────
+// ─── VIBE ALBUM RAIL («ИИ-подборка» — AI album picks in the library) ─────────
 // Airy and unboxed on purpose: an ai-orb + kicker line, a serif subline, then
-// a loose row of covers with enlarged captions. Data comes from
+// covers clustered per vibe. Data comes from
 // /recommend/vibes/album-suggestions (per-vibe closest album by mean CLAP);
-// clicks resolve into the full AlbumSummary so the shared AlbumModal opens.
+// the server interleaves vibes round-robin for variety — we regroup here so
+// albums of one vibe sit together under a single full-length label (the old
+// per-tile «≈ …» caption always truncated). Clicks resolve into the full
+// AlbumSummary so the shared AlbumModal opens.
 function VibeAlbumRail({ suggestions, albums, onAlbumOpen, isDark, lang, loading = false }) {
   const c = useColors(isDark);
   const ru = lang === 'ru';
   const resolve = (s) =>
     (albums || []).find(a => a.primary_artist_slug === s.primary_artist_slug && a.album_title === s.album_title)
     || (albums || []).find(a => a.album_title === s.album_title);
+  // Regroup by vibe, preserving each vibe's first appearance order.
+  const groups = [];
+  const byKey = {};
+  (suggestions || []).forEach((s, i) => {
+    const key = s.vibe_track_id || s.vibe_name || `g${i}`;
+    let g = byKey[key];
+    if (!g) { g = { key, name: s.vibe_name || null, items: [] }; byKey[key] = g; groups.push(g); }
+    g.items.push(s);
+  });
+  let tileIdx = 0; // running index across groups → keeps the stagger cascade global
   return (
     <div className="vibe-albums">
       <div style={{ display:'flex', alignItems:'center', gap:9 }}>
         <span className="ai-orb" aria-hidden />
         <span className="mono" style={{ fontSize:11, letterSpacing:'.18em', textTransform:'uppercase', color:c.textSubtle }}>
-          {ru ? 'ИИ · ПОД ТВОЮ ВОЛНУ' : 'AI · RIDING YOUR WAVE'}
+          {ru ? 'ИИ-ПОДБОРКА' : 'AI PICKS'}
         </span>
       </div>
       <div style={{
@@ -5723,67 +5736,196 @@ function VibeAlbumRail({ suggestions, albums, onAlbumOpen, isDark, lang, loading
         color: isDark ? 'rgba(216,204,255,.8)' : 'oklch(44% 0.09 295)', margin:'7px 0 16px',
       }}>
         {loading
-          ? (ru ? 'Подбираем альбомы под твои вайбики…' : 'Picking albums for your vibes…')
-          : (ru ? 'Альбомы, которые звучат как твои вайбики — но целиком' : 'Albums that sound like your vibes — front to back')}
+          ? (ru ? 'Подбираем альбомы под твой текущий вайб…' : 'Picking albums for your current vibe…')
+          : (ru ? 'Альбомы, которые подходят под твой текущий вайб' : 'Albums that fit your current vibe')}
       </div>
       {loading ? (
-        /* Reserved-space skeleton: same tile geometry as the real rail, so the
+        /* Reserved-space skeleton: same group geometry as the real rail, so the
            picks materialize in place instead of shoving the grid down later. */
-        <div className="vibe-albums-rail" aria-hidden="true">
-          {[0, 1, 2, 3].map(i => (
-            <div key={i} className="vibe-album-tile" style={{ '--vt-d': `${i * 70}ms`, cursor: 'default' }}>
-              <div className="vibe-album-cover" style={{ boxShadow: 'none' }}>
-                <Skel w={'100%'} h={'100%'} r={16} isDark={isDark} />
+        <div className="vibe-albums-groups" aria-hidden="true">
+          {[0, 1].map(gi => (
+            <div key={gi} className="vibe-albums-group">
+              <div className="vibe-albums-group-label" style={{ opacity:.6 }}>
+                <Skel w={120} h={12} r={6} isDark={isDark} />
               </div>
-              <div className="vibe-album-caption">
-                <Skel w={'82%'} h={13} r={6} isDark={isDark} />
-                <Skel w={'56%'} h={11} r={6} isDark={isDark} style={{ marginTop: 6 }} />
+              <div className="vibe-albums-group-tiles">
+                {[0, 1].map(i => (
+                  <div key={i} className="vibe-album-tile" style={{ '--vt-d': `${(gi * 2 + i) * 70}ms`, cursor: 'default' }}>
+                    <div className="vibe-album-cover" style={{ boxShadow: 'none' }}>
+                      <Skel w={'100%'} h={'100%'} r={16} isDark={isDark} />
+                    </div>
+                    <div className="vibe-album-caption">
+                      <Skel w={'82%'} h={13} r={6} isDark={isDark} />
+                      <Skel w={'56%'} h={11} r={6} isDark={isDark} style={{ marginTop: 6 }} />
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           ))}
         </div>
       ) : (
-      <div className="vibe-albums-rail">
-        {suggestions.map((s, i) => {
-          const full = resolve(s);
-          return (
-            <div key={`${s.primary_artist_slug}-${s.album_title}`} className="vibe-album-tile"
-              style={{ '--vt-d': `${i * 70}ms` }}
-              onClick={(e) => {
-                if (!full) return;
-                const coverEl = e.currentTarget.querySelector('.vibe-album-cover');
-                const r = (coverEl || e.currentTarget).getBoundingClientRect();
-                onAlbumOpen(full, r ? { top:r.top, left:r.left, width:r.width, height:r.height } : null);
-              }}>
-              <div className="vibe-album-cover">
-                <AlbumCover title={s.album_title} artist={s.primary_artist} size={220} isDark={isDark} coverPath={s.cover_art_path} radius={0} fluid />
-              </div>
-              <div className="vibe-album-caption">
-                <div className="vibe-album-title" style={{ color:c.text }} title={s.album_title}>{s.album_title}</div>
-                <div className="vibe-album-artist" style={{ color:c.textMuted }}>{s.primary_artist}{s.year ? ` · ${s.year}` : ''}</div>
-                {s.vibe_name && <div className="vibe-album-vibe">≈ {s.vibe_name}</div>}
-              </div>
+      <div className="vibe-albums-groups">
+        {groups.map(g => (
+          <div key={g.key} className="vibe-albums-group">
+            {g.name && (
+              <div className="vibe-albums-group-label" title={g.name}>≈ {g.name}</div>
+            )}
+            <div className="vibe-albums-group-tiles">
+              {g.items.map((s) => {
+                const full = resolve(s);
+                const d = tileIdx++;
+                return (
+                  <div key={`${s.primary_artist_slug}-${s.album_title}`} className="vibe-album-tile"
+                    style={{ '--vt-d': `${d * 70}ms` }}
+                    onClick={(e) => {
+                      if (!full) return;
+                      const coverEl = e.currentTarget.querySelector('.vibe-album-cover');
+                      const r = (coverEl || e.currentTarget).getBoundingClientRect();
+                      onAlbumOpen(full, r ? { top:r.top, left:r.left, width:r.width, height:r.height } : null);
+                    }}>
+                    <div className="vibe-album-cover">
+                      <AlbumCover title={s.album_title} artist={s.primary_artist} size={220} isDark={isDark} coverPath={s.cover_art_path} radius={0} fluid />
+                    </div>
+                    <div className="vibe-album-caption">
+                      <div className="vibe-album-title" style={{ color:c.text }} title={s.album_title}>{s.album_title}</div>
+                      <div className="vibe-album-artist" style={{ color:c.textMuted }}>{s.primary_artist}{s.year ? ` · ${s.year}` : ''}</div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-          );
-        })}
+          </div>
+        ))}
       </div>
       )}
     </div>
   );
 }
 
-// ─── ALBUMS GRID TAB ──────────────────────────────────────────────────────────
-function AlbumsGridTab({ albums, suggestions, suggestionsLoading, sort, onSortChange, onAlbumOpen, isDark, lang, navigateToArtist }) {
+// ─── ALBUMS TAB (grid / list, optional soft grouping) ────────────────────────
+
+// One dense row of the albums list view: 44px cover, «Title · Artist», mono
+// meta on the right. No blur (450+ rows would be GPU burn) — hover is a tint.
+function AlbumListRow({ album, isDark, lang, onClick }) {
   const c = useColors(isDark);
-  const sortOpts = [
-    {id:'alphabetical', label: lang==='ru' ? 'А-Я' : 'A-Z'},
-    {id:'year_desc',    label: lang==='ru' ? 'год ↓' : 'year ↓'},
-    {id:'year_asc',     label: lang==='ru' ? 'год ↑' : 'year ↑'},
-    {id:'track_count_desc', label: lang==='ru' ? 'больше треков' : 'most tracks'},
-  ];
+  const yearStr = album.year_range || (album.year ? String(album.year) : '');
+  return (
+    <div className="lib-album-row" onClick={onClick}>
+      <div className="lib-album-row-cover">
+        <AlbumCover title={album.album_title} artist={album.primary_artist} size={44} isDark={isDark} coverPath={album.cover_art_path} radius={0} fluid />
+      </div>
+      <div className="lib-album-row-main">
+        <span className="lib-album-row-title" style={{ color:c.text }}>{album.album_title}</span>
+        <span style={{ color:c.textSubtle, margin:'0 8px' }}>·</span>
+        <span style={{ color: isDark ? '#bba8ff' : '#4a32b8', fontSize:'13px' }}>{album.primary_artist}</span>
+      </div>
+      <div className="mono lib-album-row-meta" style={{ color:c.textSubtle }}>
+        {(album.play_count || 0) > 0 && <span>{album.play_count}×{' '}</span>}
+        {yearStr && <span>{yearStr}{' '}</span>}
+        {album.track_count} {lang==='ru'?'тр':'tr'}
+      </div>
+    </div>
+  );
+}
+
+// Client-side grouping over the server-sorted album list. Returns null for
+// 'none'; otherwise [{key, label, albums}] where group ORDER follows the
+// active sort (plays → summed plays, year → group extremum, А-Я → label) and
+// albums inside a group keep the server order. «Без года/жанра» sinks last.
+function groupLibraryAlbums(albums, grouping, sort, lang) {
+  if (grouping === 'none') return null;
+  const ru = lang === 'ru';
+  const albumYear = (a) => a.year || (a.year_range ? (parseInt(a.year_range, 10) || null) : null);
+  const groups = [];
+  const byKey = new Map();
+  albums.forEach(a => {
+    let key, label;
+    if (grouping === 'artist') {
+      label = a.primary_artist || '—';
+      key = label.toLowerCase();
+    } else if (grouping === 'decade') {
+      const y = albumYear(a);
+      if (!y) { key = '__none'; label = ru ? 'Без года' : 'No year'; }
+      else {
+        const d = Math.floor(y / 10) * 10;
+        key = String(d);
+        label = ru ? `${d >= 2000 ? d : String(d).slice(2)}-е` : `${d >= 2000 ? d : String(d).slice(2)}s`;
+      }
+    } else { // genre
+      const g = a.top_genres?.[0];
+      if (!g) { key = '__none'; label = ru ? 'Без жанра' : 'No genre'; }
+      else { key = g.toLowerCase(); label = g; }
+    }
+    let grp = byKey.get(key);
+    if (!grp) { grp = { key, label, albums: [] }; byKey.set(key, grp); groups.push(grp); }
+    grp.albums.push(a);
+  });
+  const sumPlays = (g) => g.albums.reduce((s, a) => s + (a.play_count || 0), 0);
+  const maxYear = (g) => Math.max(...g.albums.map(a => albumYear(a) || 0));
+  const minYear = (g) => Math.min(...g.albums.map(a => albumYear(a) || 9999));
+  const noneLast = (x, y) => (x.key === '__none') - (y.key === '__none');
+  if (sort === 'plays_desc') groups.sort((x, y) => noneLast(x, y) || sumPlays(y) - sumPlays(x));
+  else if (sort === 'year_desc') groups.sort((x, y) => noneLast(x, y) || maxYear(y) - maxYear(x));
+  else if (sort === 'year_asc') groups.sort((x, y) => noneLast(x, y) || minYear(x) - minYear(y));
+  else groups.sort((x, y) => noneLast(x, y) || x.label.localeCompare(y.label, ru ? 'ru' : 'en'));
+  return groups;
+}
+
+function AlbumsGridTab({ albums, suggestions, suggestionsLoading, sort, onSortChange, view, onViewChange, grouping, onGroupingChange, onAlbumOpen, isDark, lang, navigateToArtist }) {
+  const c = useColors(isDark);
+  const ru = lang === 'ru';
+  const [groupMenuOpen, setGroupMenuOpen] = useState(false);
+  useEffect(() => {
+    if (!groupMenuOpen) return;
+    const close = () => setGroupMenuOpen(false);
+    document.addEventListener('click', close);
+    return () => document.removeEventListener('click', close);
+  }, [groupMenuOpen]);
   if (!albums || albums.length === 0) {
-    return <div style={{ padding:'64px 20px', textAlign:'center', color:c.textSubtle, fontSize:'14px' }}>{lang==='ru' ? 'Нет треков с album-тегом в этой библиотеке' : 'No tracks with album tag in this library'}</div>;
+    return <div style={{ padding:'64px 20px', textAlign:'center', color:c.textSubtle, fontSize:'14px' }}>{ru ? 'Нет треков с album-тегом в этой библиотеке' : 'No tracks with album tag in this library'}</div>;
   }
+
+  const pillStyle = (active) => ({
+    padding:'5px 13px', borderRadius:'14px', fontSize:'12px', cursor:'pointer',
+    background: active ? 'rgba(120,80,200,.18)' : (isDark ? 'rgba(255,255,255,.04)' : 'rgba(10,10,18,.05)'),
+    color: active ? (isDark ? '#bba8ff' : '#4a32b8') : c.textMuted,
+    border:'none', transition:'all .2s', whiteSpace:'nowrap', flexShrink:0,
+  });
+  const yearActive = sort === 'year_desc' || sort === 'year_asc';
+  const groupOpts = [
+    { id:'none',   pill: ru ? 'нет' : 'off',        label: ru ? 'без групп' : 'no groups' },
+    { id:'artist', pill: ru ? 'артисты' : 'artists', label: ru ? 'по артистам' : 'by artist' },
+    { id:'decade', pill: ru ? 'декады' : 'decades',  label: ru ? 'по десятилетиям' : 'by decade' },
+    { id:'genre',  pill: ru ? 'жанры' : 'genres',    label: ru ? 'по жанрам' : 'by genre' },
+  ];
+  const activeGroupOpt = groupOpts.find(o => o.id === grouping) || groupOpts[0];
+  const grouped = groupLibraryAlbums(albums, grouping, sort, lang);
+
+  const openAlbum = (a) => (e) => {
+    // Capture the cover square's on-screen rect so the modal can
+    // fly out of this exact card/row (shared-element transition).
+    const coverEl = e?.currentTarget?.querySelector('.lib-album-cover, .lib-album-row-cover');
+    const r = (coverEl || e?.currentTarget)?.getBoundingClientRect?.();
+    onAlbumOpen(a, r ? { top: r.top, left: r.left, width: r.width, height: r.height } : null);
+  };
+  const renderGrid = (list) => (
+    <div className="lib-grid">
+      {list.map((a, i) => (
+        <AlbumCard key={`${a.primary_artist_slug}-${a.album_title}`} album={a} index={i}
+          isDark={isDark} lang={lang} navigateToArtist={navigateToArtist} onClick={openAlbum(a)} />
+      ))}
+    </div>
+  );
+  const renderRows = (list) => (
+    <div className="lib-album-rows">
+      {list.map(a => (
+        <AlbumListRow key={`${a.primary_artist_slug}-${a.album_title}`} album={a}
+          isDark={isDark} lang={lang} onClick={openAlbum(a)} />
+      ))}
+    </div>
+  );
+
   return (
     <>
       {(suggestionsLoading || (suggestions && suggestions.length > 0)) && (
@@ -5795,40 +5937,70 @@ function AlbumsGridTab({ albums, suggestions, suggestionsLoading, sort, onSortCh
           isDark={isDark} lang={lang}
         />
       )}
-      <div className="lib-sortrow" style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'6px 2px 18px', fontSize:'13px' }}>
-        <span className="mono" style={{ color:c.textSubtle, letterSpacing:'0.06em' }}>{albums.length} {lang==='ru'?'альбомов':'albums'}</span>
-        <div className="lib-sortpills" style={{ display:'flex', gap:'6px' }}>
-          {sortOpts.map(o => (
-            <button key={o.id} onClick={() => onSortChange(o.id)}
-              className="mono lib-sortpill"
-              style={{
-                padding:'5px 13px', borderRadius:'14px', fontSize:'12px', cursor:'pointer',
-                background: sort===o.id ? 'rgba(120,80,200,.18)' : (isDark ? 'rgba(255,255,255,.04)' : 'rgba(10,10,18,.05)'),
-                color: sort===o.id ? (isDark ? '#bba8ff' : '#4a32b8') : c.textMuted,
-                border:'none',
-                transition:'all .2s',
-              }}>{o.label}</button>
-          ))}
+      <div className="lib-sortrow" style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:'10px', padding:'6px 2px 14px', fontSize:'13px' }}>
+        <span className="mono" style={{ color:c.textSubtle, letterSpacing:'0.06em', flexShrink:0 }}>{albums.length} {ru?'альбомов':'albums'}</span>
+        <div style={{ display:'flex', alignItems:'center', gap:'8px', minWidth:0 }}>
+          <div className="lib-sortpills" style={{ display:'flex', gap:'6px' }}>
+            <button className="mono lib-sortpill" style={pillStyle(sort === 'plays_desc')}
+              onClick={() => onSortChange('plays_desc')}>
+              {ru ? 'слушаю чаще' : 'most played'}
+            </button>
+            <button className="mono lib-sortpill" style={pillStyle(yearActive)}
+              title={ru ? 'Повторный клик меняет направление' : 'Click again to flip direction'}
+              onClick={() => onSortChange(sort === 'year_desc' ? 'year_asc' : 'year_desc')}>
+              {ru ? 'год' : 'year'}{yearActive ? (sort === 'year_asc' ? ' ↑' : ' ↓') : ''}
+            </button>
+            <button className="mono lib-sortpill" style={pillStyle(sort === 'alphabetical')}
+              onClick={() => onSortChange('alphabetical')}>
+              {ru ? 'А-Я' : 'A-Z'}
+            </button>
+          </div>
+          <div className="lib-ctl-divider" aria-hidden />
+          <div className="lib-groupmenu-wrap">
+            <button className="mono lib-sortpill" style={pillStyle(grouping !== 'none')}
+              onClick={(e) => { e.stopPropagation(); setGroupMenuOpen(o => !o); }}>
+              {ru ? 'группы' : 'groups'}: {activeGroupOpt.pill} <span style={{ fontSize:'9px', opacity:.7 }}>▾</span>
+            </button>
+            {groupMenuOpen && (
+              <div className="lib-groupmenu" onClick={(e) => e.stopPropagation()}>
+                {groupOpts.map(o => (
+                  <button key={o.id} className="mono"
+                    style={{ color: o.id === grouping ? (isDark ? '#bba8ff' : '#4a32b8') : c.textMuted }}
+                    onClick={() => { onGroupingChange(o.id); setGroupMenuOpen(false); }}>
+                    <span>{o.label}</span>
+                    {o.id === grouping && <span>✓</span>}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="lib-ctl-divider" aria-hidden />
+          <div style={{ display:'flex', gap:'2px', flexShrink:0 }}>
+            {[
+              { id:'grid', title: ru ? 'Плитки' : 'Grid',
+                icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="1" y="1" width="5" height="5" rx="1.2" fill="currentColor"/><rect x="8" y="1" width="5" height="5" rx="1.2" fill="currentColor"/><rect x="1" y="8" width="5" height="5" rx="1.2" fill="currentColor"/><rect x="8" y="8" width="5" height="5" rx="1.2" fill="currentColor"/></svg> },
+              { id:'list', title: ru ? 'Список' : 'List',
+                icon: <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="1" y="2" width="12" height="2" rx="1" fill="currentColor"/><rect x="1" y="6" width="12" height="2" rx="1" fill="currentColor"/><rect x="1" y="10" width="12" height="2" rx="1" fill="currentColor"/></svg> },
+            ].map(v => (
+              <button key={v.id} title={v.title} aria-label={v.title}
+                onClick={() => onViewChange(v.id)}
+                className="lib-sortpill"
+                style={{ ...pillStyle(view === v.id), padding:'5px 10px', display:'grid', placeItems:'center' }}>
+                {v.icon}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
-      <div className="lib-grid">
-        {albums.map((a, i) => (
-          <AlbumCard
-            key={`${a.primary_artist_slug}-${a.album_title}`}
-            album={a}
-            index={i}
-            isDark={isDark} lang={lang}
-            navigateToArtist={navigateToArtist}
-            onClick={(e) => {
-              // Capture the cover square's on-screen rect so the modal can
-              // fly out of this exact card (shared-element transition).
-              const coverEl = e?.currentTarget?.querySelector('.lib-album-cover');
-              const r = (coverEl || e?.currentTarget)?.getBoundingClientRect?.();
-              onAlbumOpen(a, r ? { top: r.top, left: r.left, width: r.width, height: r.height } : null);
-            }}
-          />
-        ))}
-      </div>
+      {grouped ? grouped.map((g, gi) => (
+        <React.Fragment key={g.key}>
+          <div className={`lib-group-head${gi === 0 ? ' lib-group-head--first' : ''}`} style={{ color:c.textSubtle }}>
+            <span className="mono lib-group-head-label" title={g.label}>{g.label}</span>
+            <span className="mono lib-group-head-count">{g.albums.length}</span>
+          </div>
+          {view === 'list' ? renderRows(g.albums) : renderGrid(g.albums)}
+        </React.Fragment>
+      )) : (view === 'list' ? renderRows(albums) : renderGrid(albums))}
     </>
   );
 }
@@ -7554,7 +7726,25 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
   const [engagementData, setEngagementData] = useState(null); // /library/engagement
   const [tasteMap, setTasteMap] = useState(null);            // /library/taste-map (lazy)
   const [tasteMapLoading, setTasteMapLoading] = useState(false);
-  const [albumSort, setAlbumSort] = useState('alphabetical');
+  // Albums tab controls survive across sessions (sort refetches server-side;
+  // view/grouping are pure client state).
+  const [albumSort, setAlbumSort] = useState(() => {
+    const s = localStorage.getItem('library_album_sort');
+    return ['alphabetical', 'year_desc', 'year_asc', 'plays_desc'].includes(s) ? s : 'alphabetical';
+  });
+  const [albumView, setAlbumView] = useState(() =>
+    localStorage.getItem('library_album_view') === 'list' ? 'list' : 'grid');
+  const [albumGrouping, setAlbumGrouping] = useState(() => {
+    const g = localStorage.getItem('library_album_grouping');
+    return ['none', 'artist', 'decade', 'genre'].includes(g) ? g : 'none';
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('library_album_sort', albumSort);
+      localStorage.setItem('library_album_view', albumView);
+      localStorage.setItem('library_album_grouping', albumGrouping);
+    } catch {}
+  }, [albumSort, albumView, albumGrouping]);
   const [recentSort, setRecentSort] = useState('last_played');
 
   // ── UI state ──────────────────────────────────────────────────────────
@@ -7760,6 +7950,10 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
               suggestionsLoading={aiAlbumsLoading}
               sort={albumSort}
               onSortChange={setAlbumSort}
+              view={albumView}
+              onViewChange={setAlbumView}
+              grouping={albumGrouping}
+              onGroupingChange={setAlbumGrouping}
               onAlbumOpen={(a, rect) => setAlbumModal({ album: a, originRect: rect || null })}
               isDark={isDark} lang={lang}
               navigateToArtist={navigateToArtist}

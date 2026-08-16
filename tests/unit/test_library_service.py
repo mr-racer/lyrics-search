@@ -383,6 +383,33 @@ class TestAlbumsSqlite:
         assert a.year is None
         assert a.year_range == "2002—2003"
 
+    def test_sqlite_albums_plays_sort_and_play_count(self, temp_db):
+        """sort=plays_desc orders albums by summed non-skipped plays; every
+        album carries its play_count (0 when never played)."""
+        _upsert("z1", album="Zebra", artist="A", artist_slugs=["a"],
+                title="x", year=2020, duration=200)
+        _upsert("z2", album="Zebra", artist="A", artist_slugs=["a"],
+                title="y", year=2020, duration=200)
+        _upsert("m1", album="Mango", artist="B", artist_slugs=["b"],
+                title="z", year=2021, duration=200)
+        _upsert("a1", album="Apple", artist="C", artist_slugs=["c"],
+                title="w", year=2022, duration=200)
+        for tid in ("z1", "z1", "z2", "m1"):
+            MetadataDB.record_playback_event(
+                session_id="s", collection_name="c", track_id=tid,
+                played_sec=120.0, total_dur=200.0)
+        # A skipped-early play must not count toward the album total.
+        MetadataDB.record_playback_event(
+            session_id="s", collection_name="c", track_id="a1",
+            played_sec=5.0, total_dur=200.0)
+
+        res = LibraryService.get_albums(
+            qdrant_client=_empty_qdrant(), collection_name="c", sort="plays_desc")
+
+        assert [a.album_title for a in res.albums] == ["Zebra", "Mango", "Apple"]
+        assert {a.album_title: a.play_count for a in res.albums} == {
+            "Zebra": 3, "Mango": 1, "Apple": 0}
+
     def test_get_light_points_shape_and_sonic_axes(self, temp_db):
         _upsert("t1", title="A", artist="X", artist_slugs=["x"], album="Al",
                 year=2020, genre="Pop", duration=200, file_path="/a.flac",

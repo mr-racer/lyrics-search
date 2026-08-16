@@ -461,6 +461,9 @@ class AlbumSummary(BaseModel):
     tracks: list[AlbumTrack] = Field(default_factory=list)
     # Record labels across the album's tracks (deduped, most frequent first).
     labels: list[str] = Field(default_factory=list)
+    # Summed non-skipped plays across the album's tracks (this account's
+    # collection). Powers sort=plays_desc and the list view's «N×» badge.
+    play_count: int = 0
 
 
 class LibraryAlbumsResponse(BaseModel):

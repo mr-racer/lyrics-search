@@ -1458,11 +1458,29 @@
       .pl-detail, .pl-detail--closing, .pl-list-enter { animation: none !important; opacity: 1 !important; }
     }
 
-    /* ── Vibe album rail (library «под твою волну») ──────────────────────
+    /* ── Vibe album rail (library «ИИ-подборка») ─────────────────────────
        Deliberately unboxed: no panel background, just the ai-orb header, a
-       serif subline and floating covers — «подборка», not another card. */
+       serif subline and floating covers — «подборка», not another card.
+       Covers cluster per vibe: tight gap inside a group, wide gap between
+       groups, one full-length serif label per group (no per-tile clamp). */
     .vibe-albums { margin: 4px 0 34px; }
-    .vibe-albums-rail { display: flex; flex-wrap: wrap; gap: 20px 22px; }
+    .vibe-albums-groups { display: flex; flex-wrap: wrap; gap: 24px 48px; }
+    .vibe-albums-group { display: flex; flex-direction: column; min-width: 0; }
+    .vibe-albums-group-label {
+      display: flex; align-items: center; gap: 12px;
+      font-family: 'Noto Serif Display', Georgia, serif; font-style: italic;
+      font-size: 13px; line-height: 1.3; color: oklch(72% 0.12 295 / .9);
+      margin-bottom: 10px; white-space: nowrap;
+    }
+    .vibe-albums-group-label::after {
+      content: ''; flex: 1; height: 1px; min-width: 26px;
+      background: linear-gradient(90deg, oklch(70% 0.12 285 / .35), transparent);
+    }
+    body[data-theme="light"] .vibe-albums-group-label { color: oklch(46% 0.11 295); }
+    body[data-theme="light"] .vibe-albums-group-label::after {
+      background: linear-gradient(90deg, oklch(46% 0.11 295 / .3), transparent);
+    }
+    .vibe-albums-group-tiles { display: flex; gap: 14px; }
     .vibe-album-tile {
       width: 158px; cursor: pointer; opacity: 0;
       animation: libCardIn 0.55s cubic-bezier(.22,.9,.3,1) forwards;
@@ -1485,12 +1503,6 @@
       overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
     }
     .vibe-album-artist { font-size: 13px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .vibe-album-vibe {
-      font-family: 'Noto Serif Display', Georgia, serif; font-style: italic;
-      font-size: 12.5px; margin-top: 5px; color: oklch(72% 0.12 295 / .9);
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    }
-    body[data-theme="light"] .vibe-album-vibe { color: oklch(46% 0.11 295); }
     @media (max-width: 768px) {
       /* Phones: smaller covers in one horizontally-scrolling row, and the
          rail is set apart from the rest of the library by soft hairlines
@@ -1502,11 +1514,13 @@
       }
       .vibe-albums::before { top: 0; }
       .vibe-albums::after { bottom: 0; }
-      .vibe-albums-rail {
-        flex-wrap: nowrap; overflow-x: auto; gap: 14px; padding: 2px 2px 6px;
+      .vibe-albums-groups {
+        flex-wrap: nowrap; overflow-x: auto; gap: 26px; padding: 2px 2px 6px;
         -webkit-overflow-scrolling: touch; scrollbar-width: none;
       }
-      .vibe-albums-rail::-webkit-scrollbar { display: none; }
+      .vibe-albums-groups::-webkit-scrollbar { display: none; }
+      .vibe-albums-group { flex: none; }
+      .vibe-albums-group-label { font-size: 12px; }
       .vibe-album-tile { width: 128px; flex: none; }
       .vibe-album-cover { border-radius: 13px; }
       .vibe-album-title { font-size: 13.5px; }
@@ -1532,6 +1546,70 @@
     .lib-album-body  { padding: 13px 15px 15px; }
     .lib-album-title { font-size: 15px; }
     .lib-album-sub   { font-size: 14px; }
+
+    /* ── Albums tab: soft group transitions (artists / decades / genres) ──
+       No panels, no backgrounds: a small uppercase label with a fading
+       hairline tail is the whole «border» between groups. Dense margins on
+       purpose — 454 albums must stay scannable, not spread out. */
+    .lib-group-head {
+      display: flex; align-items: center; gap: 12px;
+      margin: 30px 2px 13px; min-width: 0;
+    }
+    .lib-group-head--first { margin-top: 4px; }
+    .lib-group-head::after {
+      content: ''; flex: 1; height: 1px; min-width: 24px;
+      background: linear-gradient(90deg, oklch(70% 0.08 285 / .26), transparent);
+    }
+    body[data-theme="light"] .lib-group-head::after {
+      background: linear-gradient(90deg, oklch(40% 0.06 285 / .22), transparent);
+    }
+    .lib-group-head-label {
+      font-size: 11.5px; letter-spacing: .15em; text-transform: uppercase;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .lib-group-head-count { font-size: 11px; opacity: .55; flex-shrink: 0; }
+
+    /* ── Albums tab: dense list view ─────────────────────────────────────
+       ~54px rows, no backdrop blur (450+ rows), hover = flat tint only. */
+    .lib-album-rows { display: flex; flex-direction: column; gap: 2px; }
+    .lib-album-row {
+      display: grid; grid-template-columns: 44px minmax(0, 1fr) auto;
+      gap: 13px; align-items: center;
+      padding: 5px 10px; border-radius: 11px; cursor: pointer;
+      transition: background .15s ease;
+    }
+    .lib-album-row:hover { background: rgba(255,255,255,.055); }
+    body[data-theme="light"] .lib-album-row:hover { background: rgba(10,10,18,.05); }
+    .lib-album-row-cover {
+      position: relative; width: 44px; height: 44px;
+      border-radius: 8px; overflow: hidden;
+    }
+    .lib-album-row-main { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .lib-album-row-title { font-size: 14.5px; font-weight: 500; letter-spacing: -0.01em; }
+    .lib-album-row-meta { font-size: 11.5px; letter-spacing: .05em; white-space: nowrap; flex-shrink: 0; }
+
+    /* ── Albums tab: grouping popover + control cluster ──────────────────── */
+    .lib-ctl-divider { width: 1px; height: 17px; align-self: center; flex-shrink: 0;
+      background: oklch(70% 0.05 285 / .25); }
+    body[data-theme="light"] .lib-ctl-divider { background: oklch(30% 0.04 285 / .22); }
+    .lib-groupmenu-wrap { position: relative; flex-shrink: 0; }
+    .lib-groupmenu {
+      position: absolute; top: calc(100% + 7px); right: 0; z-index: 60;
+      min-width: 176px; padding: 5px; border-radius: 13px;
+      background: rgba(26,23,40,.97); border: 1px solid rgba(255,255,255,.09);
+      box-shadow: 0 14px 36px rgba(0,0,0,.5);
+    }
+    body[data-theme="light"] .lib-groupmenu {
+      background: #ffffff; border-color: rgba(10,10,18,.1);
+      box-shadow: 0 14px 36px rgba(46,36,86,.2);
+    }
+    .lib-groupmenu button {
+      display: flex; width: 100%; align-items: center; justify-content: space-between;
+      gap: 12px; padding: 8px 11px; border: none; border-radius: 9px;
+      background: transparent; cursor: pointer; font-size: 12.5px; text-align: left;
+      transition: background .12s ease;
+    }
+    .lib-groupmenu button:hover { background: rgba(124,91,255,.13); }
     .player-progress-row { padding: 0 20px; }
     .player-actions-row  { padding: 0 20px; }
     /* App shell height: dvh (dynamic viewport) so the bottom tab bar / mini-player

@@ -430,7 +430,7 @@ async def set_collection_ai_enabled_legacy(collection_name: str, req: AIEnabledR
 def get_library_albums(
     request: Request,
     current_user: User = Depends(get_current_user),
-    sort: str = Query("alphabetical", description="alphabetical | year_desc | year_asc | track_count_desc"),
+    sort: str = Query("alphabetical", description="alphabetical | year_desc | year_asc | track_count_desc | plays_desc"),
     label: Optional[str] = Query(None, description="Only albums where ≥1 track carries this record label"),
 ) -> LibraryAlbumsResponse:
     derived = derive_collection_for_user(current_user)

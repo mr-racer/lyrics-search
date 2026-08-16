@@ -1391,6 +1391,22 @@ class LibraryService:
                     return 0
             return 0
 
+        def _attach_play_counts(albums: list) -> list:
+            """Stamp each album's summed non-skipped plays. Always attached
+            (one indexed GROUP BY) so the list view can show «N×» regardless
+            of the active sort; failures degrade to zeros, never a 500."""
+            try:
+                counts = MetadataDB.get_play_counts_by_track(collection_name)
+            except Exception:
+                logger.warning(
+                    "[LibraryService] play-count lookup failed for %s",
+                    collection_name, exc_info=True,
+                )
+                counts = {}
+            for a in albums:
+                a.play_count = sum(counts.get(t.track_id, 0) for t in a.tracks)
+            return albums
+
         def _apply_sort(albums: list) -> list:
             if sort == "year_desc":
                 albums.sort(key=lambda a: -_year_for_sort(a))
@@ -1398,6 +1414,8 @@ class LibraryService:
                 albums.sort(key=lambda a: _year_for_sort(a) or 9999)
             elif sort == "track_count_desc":
                 albums.sort(key=lambda a: -a.track_count)
+            elif sort == "plays_desc":
+                albums.sort(key=lambda a: (-a.play_count, a.album_title.lower()))
             else:
                 albums.sort(key=lambda a: a.album_title.lower())
             return albums
@@ -1417,9 +1435,9 @@ class LibraryService:
                     len(sqlite_albums), collection_name,
                 )
                 return LibraryAlbumsResponse(
-                    albums=_apply_sort(_apply_label_filter([
+                    albums=_apply_sort(_attach_play_counts(_apply_label_filter([
                         _album_summary_from_sqlite(a) for a in sqlite_albums
-                    ])),
+                    ]))),
                     collection_name=collection_name,
                     qdrant_available=True,
                 )
@@ -1530,7 +1548,7 @@ class LibraryService:
             ))
 
         return LibraryAlbumsResponse(
-            albums=_apply_sort(_apply_label_filter(albums)),
+            albums=_apply_sort(_attach_play_counts(_apply_label_filter(albums))),
             collection_name=collection_name,
             qdrant_available=True,
         )
