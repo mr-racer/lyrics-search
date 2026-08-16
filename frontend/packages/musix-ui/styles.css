@@ -4958,6 +4958,56 @@
       background: #101018;
     }
     .ld-shot img, .ld-shot video { display: block; width: 100%; height: auto; }
+    .ld-fig { margin: 0; min-width: 0; }
+    /* Caption that ties a screenshot/video to its section's story. */
+    .ld-cap {
+      text-align: center; font-size: 14px; line-height: 1.6;
+      color: rgba(238,238,243,.62);
+      max-width: 680px; margin: 0 auto 14px;
+    }
+    /* ── Carousel: fixed-aspect stage, fading slides, explicit «1 / N» ── */
+    .ld-car { min-width: 0; }
+    .ld-car-stage { position: relative; aspect-ratio: 6 / 7; }
+    .ld-car-slide {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%; object-fit: contain;
+      opacity: 0; transition: opacity .45s ease;
+      pointer-events: none;
+    }
+    .ld-car-slide--on { opacity: 1; }
+    .ld-car-btn {
+      position: absolute; top: 50%; transform: translateY(-50%);
+      width: 40px; height: 40px; border-radius: 50%; cursor: pointer;
+      display: grid; place-items: center;
+      font-size: 22px; line-height: 1; color: rgba(238,238,243,.9); padding: 0 0 3px;
+      border: 1px solid rgba(255,255,255,0.16);
+      background:
+        linear-gradient(165deg, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0.05) 60%),
+        rgba(20,20,30,0.55);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.25), 0 6px 16px rgba(0,0,0,0.45);
+      transition: transform .15s ease, border-color .2s ease;
+    }
+    .ld-car-btn:hover { transform: translateY(-50%) scale(1.07); border-color: rgba(124,91,255,0.5); }
+    .ld-car-btn--l { left: 12px; }
+    .ld-car-btn--r { right: 12px; }
+    .ld-car-count {
+      position: absolute; top: 12px; right: 12px;
+      padding: 4px 11px; border-radius: 999px;
+      font-size: 11.5px; font-weight: 600; letter-spacing: .08em;
+      color: rgba(238,238,243,.85);
+      background: rgba(12,12,20,0.6); border: 1px solid rgba(255,255,255,0.14);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+    }
+    .ld-car-dots { display: flex; justify-content: center; gap: 8px; margin-top: 14px; }
+    .ld-dot {
+      width: 8px; height: 8px; border-radius: 50%; padding: 0; cursor: pointer;
+      border: none; background: rgba(255,255,255,0.22);
+      transition: background .2s ease, transform .2s ease;
+    }
+    .ld-dot--on { background: #bba8ff; transform: scale(1.25); box-shadow: 0 0 8px oklch(60% 0.18 270 / .6); }
     .ld-wide { grid-column: 1 / -1; justify-self: center; width: min(100%, 880px); margin-top: clamp(18px, 3vw, 36px); }
     .ld-minis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 28px; }
     .ld-mini { border-radius: 18px; padding: 18px 17px; }
@@ -5016,4 +5066,5 @@
       .ld-reveal { transition: none !important; opacity: 1 !important; transform: none !important; }
       .ld-scrollhint-arrow { animation: none !important; }
       .ld-chip { transition: none !important; }
+      .ld-car-slide { transition: none !important; }
     }

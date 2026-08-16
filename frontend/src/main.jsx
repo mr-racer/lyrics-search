@@ -1086,6 +1086,19 @@ function useMediaSession({ currentTrack, isPlaying, audioRef, onPlay, onPause, o
     }
   }, [isPlaying, currentTrack?.track_id]);
 
+  // Browser tab title: «🎵 Artist — Title» only while audio actually plays;
+  // paused/stopped falls back to the plain brand.
+  useEffect(() => {
+    if (isPlaying && currentTrack) {
+      const t = (currentTrack.title_display || currentTrack.title) || '';
+      const a = currentTrack.artist || '';
+      document.title = `🎵 ${a ? `${a} — ` : ''}${t}`;
+    } else {
+      document.title = 'MusiX';
+    }
+    return () => { document.title = 'MusiX'; };
+  }, [isPlaying, currentTrack?.track_id, currentTrack?.title, currentTrack?.artist]);
+
   // Position/duration for the system scrubber.
   useEffect(() => {
     const el = audioRef?.current;
@@ -18598,6 +18611,37 @@ function ArtistAtlasSection({
   );
 }
 
+// ─── Landing carousel — explicit «1 / N» pager with arrows and dots ─────────
+// Module-level on purpose: LoginScreen re-renders on every keystroke in the
+// sign-in form, and a component declared inside it would remount (and reset
+// the slide) each time. Slides fade in a fixed-aspect stage so images with
+// different proportions don't jump the layout.
+function LdCarousel({ slides }) {
+  const [i, setI] = useState(0);
+  const n = slides.length;
+  const go = (d) => setI(v => (v + d + n) % n);
+  return (
+    <div className="ld-car">
+      <div className="ld-cap">{slides[i].cap}</div>
+      <div className="ld-shot ld-car-stage">
+        {slides.map((m, k) => (
+          <img key={k} src={m.src} alt={m.alt} loading="lazy"
+            className={k === i ? 'ld-car-slide ld-car-slide--on' : 'ld-car-slide'} />
+        ))}
+        <button type="button" className="ld-car-btn ld-car-btn--l" onClick={() => go(-1)} aria-label="Предыдущее фото">‹</button>
+        <button type="button" className="ld-car-btn ld-car-btn--r" onClick={() => go(1)} aria-label="Следующее фото">›</button>
+        <div className="ld-car-count">{i + 1} / {n}</div>
+      </div>
+      <div className="ld-car-dots">
+        {slides.map((_, k) => (
+          <button key={k} type="button" aria-label={`Фото ${k + 1}`}
+            className={k === i ? 'ld-dot ld-dot--on' : 'ld-dot'} onClick={() => setI(k)} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Phase A: Login + Register screens ────────────────────────────────────
 function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
   const [tab, setTab]           = useState('login'); // 'login' | 'register'
@@ -18662,7 +18706,12 @@ function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
         : 'The home screen\'s living ambient recolors to the playing track\'s cover. Fully mobile-ready, and thanks to PWA MusiX installs like a regular app. The player itself stays light: reorder the queue on the fly, read song and artist facts while listening — and call the AI assistant right from the player.',
       wide: [
         { src: '/landing/home-ambient.mp4', v: true, alt: ru ? 'Живой амбиент главного экрана' : 'Living home-screen ambient' },
-        { src: '/landing/player.webp', alt: ru ? 'Экран плеера' : 'Player screen' },
+        {
+          src: '/landing/player.webp', alt: ru ? 'Экран плеера' : 'Player screen',
+          cap: ru
+            ? 'А сам плеер — глоток свежего воздуха на фоне классических плееров: ничего лишнего, и всё под рукой — очередь, факты о песне, похожие и контрастные треки.'
+            : 'And the player itself is a breath of fresh air next to classic players: nothing extra, everything at hand — the queue, song facts, similar and contrast tracks.',
+        },
       ],
     },
     {
@@ -18683,11 +18732,22 @@ function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
       body: ru
         ? 'Скажи, что хочешь — «спокойные песни под поездку домой летним вечером» или «хиты Канье, где он читает рэп, а не поёт» — и получи готовый плейлист. Спрашивай про историю исполнителей и создание песен, ищи треки по строчке текста или по звучанию — такого больше нет нигде. А любую строчку он объяснит — просто ткни в неё.'
         : 'Say what you want — "calm songs for the drive home on a summer evening" or "Kanye hits where he raps, not sings" — and get a ready playlist. Ask about artists\' history and how songs were made, find tracks by a lyric line or by how they sound — nothing else does this. And it explains any lyric — just tap it.',
-      media: [
-        { src: '/landing/assistant-playlist.webp', alt: ru ? 'Плейлист по запросу' : 'Playlist from a wish' },
-        { src: '/landing/artist-facts.webp', alt: ru ? 'Рассказ об исполнителе' : 'Artist story' },
+      carousel: [
+        {
+          src: '/landing/assistant-playlist.webp', alt: ru ? 'Плейлист по запросу' : 'Playlist from a wish',
+          cap: ru ? 'Готовый плейлист по одному запросу' : 'A ready playlist from a single wish',
+        },
+        {
+          src: '/landing/artist-facts.webp', alt: ru ? 'Рассказ об исполнителе' : 'Artist story',
+          cap: ru ? 'История исполнителя — с источниками' : 'An artist story — with sources',
+        },
       ],
-      wide: [{ src: '/landing/lyrics-explain.mp4', v: true, alt: ru ? 'Объяснение строчки по клику' : 'Tap a lyric to explain it' }],
+      wide: [{
+        src: '/landing/lyrics-explain.mp4', v: true, alt: ru ? 'Объяснение строчки по клику' : 'Tap a lyric to explain it',
+        cap: ru
+          ? 'Объяснение строчек в деле: ткни в любую строку текста — и гуру разберёт её смысл, отсылки и игру слов.'
+          : 'Lyric explain in action: tap any line of the lyrics and the guru breaks down its meaning, references and wordplay.',
+      }],
     },
     {
       id: 'links', hue: 330, icon: '🔗',
@@ -18698,7 +18758,12 @@ function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
         ? 'Узнай, как твоя коллекция связана изнутри: сэмплы, общие продюсеры, лейбл, на котором встретились два совершенно разных артиста. Бейджи прямо под обложкой раскрываются в карточки с деталями.'
         : 'See how your collection connects from the inside: samples, shared producers, the label where two totally different artists met. Badges right under the cover unfold into detail cards.',
       media: [{ src: '/landing/song-links.mp4', v: true, alt: ru ? 'Бейджи сэмплов и продюсеров в плеере' : 'Sample and producer badges in the player' }],
-      wide: [{ src: '/landing/song-connections.webp', alt: ru ? 'Сэмплы и отсылки в твоей музыке' : 'Samples and references in your music' }],
+      wide: [{
+        src: '/landing/song-connections.webp', alt: ru ? 'Сэмплы и отсылки в твоей музыке' : 'Samples and references in your music',
+        cap: ru
+          ? 'Эти же находки MusiX собирает в подборку «Интересное в вашей музыке» — отсылки, намёки и сэмплы, зашитые в твоих треках.'
+          : 'MusiX also gathers these finds into an «Interesting in your music» digest — references, easter eggs and samples hidden in your tracks.',
+      }],
     },
     {
       id: 'stats', hue: 150, icon: '📊',
@@ -18769,10 +18834,13 @@ function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
   };
 
   const ldMedia = (m, key) => (
-    <figure key={key} className="ld-shot">
-      {m.v
-        ? <video src={m.src} autoPlay muted loop playsInline preload="metadata" aria-label={m.alt} />
-        : <img src={m.src} alt={m.alt} loading="lazy" />}
+    <figure key={key} className="ld-fig">
+      {m.cap && <figcaption className="ld-cap">{m.cap}</figcaption>}
+      <div className="ld-shot">
+        {m.v
+          ? <video src={m.src} autoPlay muted loop playsInline preload="metadata" aria-label={m.alt} />
+          : <img src={m.src} alt={m.alt} loading="lazy" />}
+      </div>
     </figure>
   );
 
@@ -18901,7 +18969,7 @@ function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
 
       <main className="ld-sections">
         {sections.map((s, i) => (
-          <section key={s.id} id={`ld-${s.id}`} className={`ld-section ld-reveal${i % 2 ? ' ld-flip' : ''}${s.media ? '' : ' ld-solo'}`} style={{ '--ld-hue': s.hue }}>
+          <section key={s.id} id={`ld-${s.id}`} className={`ld-section ld-reveal${i % 2 ? ' ld-flip' : ''}${(s.media || s.carousel) ? '' : ' ld-solo'}`} style={{ '--ld-hue': s.hue }}>
             <div className="ld-aura" />
             <div className="ld-copy">
               <div className="mono-label ld-eyebrow">{s.eyebrow}</div>
@@ -18919,9 +18987,10 @@ function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
                 </div>
               )}
             </div>
-            {s.media && (
+            {(s.media || s.carousel) && (
               <div className="ld-media">
-                {s.media.map((m, j) => ldMedia(m, j))}
+                {s.media && s.media.map((m, j) => ldMedia(m, j))}
+                {s.carousel && <LdCarousel slides={s.carousel} />}
               </div>
             )}
             {s.wide && s.wide.map((m, j) => (
