@@ -5819,11 +5819,15 @@ function VibeAlbumRail({ suggestions, albums, onAlbumOpen, isDark, lang, loading
 
 // ─── ALBUMS TAB (grid / list, optional soft grouping) ────────────────────────
 
-// One dense row of the albums list view: 44px cover, «Title · Artist», mono
-// meta on the right. No blur (450+ rows would be GPU burn) — hover is a tint.
-function AlbumListRow({ album, isDark, lang, onClick }) {
+// One dense row of the albums list view: 44px cover, «Title · Artist», then a
+// columnar mono meta block on the right — year / plays / genre, each in its
+// own fixed-min column so values align vertically across rows. The parameter
+// the active grouping already shows in its headers (year under decades, genre
+// under genres) drops out of the row. No blur (450+ rows) — hover is a tint.
+function AlbumListRow({ album, isDark, lang, grouping = 'none', onClick }) {
   const c = useColors(isDark);
   const yearStr = album.year_range || (album.year ? String(album.year) : '');
+  const genre = album.top_genres?.[0];
   return (
     <div className="lib-album-row" onClick={onClick}>
       <div className="lib-album-row-cover">
@@ -5835,9 +5839,15 @@ function AlbumListRow({ album, isDark, lang, onClick }) {
         <span style={{ color: isDark ? '#bba8ff' : '#4a32b8', fontSize:'13px' }}>{album.primary_artist}</span>
       </div>
       <div className="mono lib-album-row-meta" style={{ color:c.textSubtle }}>
-        {(album.play_count || 0) > 0 && <span>{album.play_count}×{' '}</span>}
-        {yearStr && <span>{yearStr}{' '}</span>}
-        {album.track_count} {lang==='ru'?'тр':'tr'}
+        {grouping !== 'decade' && (
+          <span className="lib-album-row-m lib-album-row-m--year">{yearStr}</span>
+        )}
+        <span className="lib-album-row-m lib-album-row-m--plays">
+          {(album.play_count || 0) > 0 ? `${album.play_count}×` : ''}
+        </span>
+        {grouping !== 'genre' && (
+          <span className="lib-album-row-m lib-album-row-m--genre" title={genre || undefined}>{genre || ''}</span>
+        )}
       </div>
     </div>
   );
@@ -5896,6 +5906,9 @@ function AlbumsGridTab({ albums, suggestions, suggestionsLoading, loading = fals
     document.addEventListener('click', close);
     return () => document.removeEventListener('click', close);
   }, [groupMenuOpen]);
+  // Which collapsible groups the user has opened; resets on grouping switch.
+  const [openGroups, setOpenGroups] = useState({});
+  useEffect(() => { setOpenGroups({}); }, [grouping]);
   if (!loading && (!albums || albums.length === 0)) {
     return <div style={{ padding:'64px 20px', textAlign:'center', color:c.textSubtle, fontSize:'14px' }}>{ru ? 'Нет треков с album-тегом в этой библиотеке' : 'No tracks with album tag in this library'}</div>;
   }
@@ -5915,6 +5928,15 @@ function AlbumsGridTab({ albums, suggestions, suggestionsLoading, loading = fals
   ];
   const activeGroupOpt = groupOpts.find(o => o.id === grouping) || groupOpts[0];
   const grouped = groupLibraryAlbums(albums, grouping, sort, lang);
+  // Heavy groupings (a decade / genre can hold hundreds of albums) collapse:
+  // once ANY group crosses the threshold, ALL groups render as spoilers,
+  // closed by default — the header rows become a one-screen table of contents
+  // and opening the needed group is a single click. Light groupings (по
+  // артистам — hundreds of 1-2 album groups) stay fully expanded as before.
+  const COLLAPSE_WHEN_MAX = 30;
+  const collapsible = !!grouped && grouped.some(g => g.albums.length >= COLLAPSE_WHEN_MAX);
+  const allOpen = collapsible && grouped.every(g => openGroups[g.key]);
+  const toggleGroup = (key) => setOpenGroups(o => ({ ...o, [key]: !o[key] }));
 
   const openAlbum = (a) => (e) => {
     // Capture the cover square's on-screen rect so the modal can
@@ -5936,7 +5958,7 @@ function AlbumsGridTab({ albums, suggestions, suggestionsLoading, loading = fals
     <div className="lib-album-rows">
       {list.map(a => (
         <AlbumListRow key={`${a.primary_artist_slug}-${a.album_title}`} album={a}
-          isDark={isDark} lang={lang} onClick={openAlbum(a)} />
+          isDark={isDark} lang={lang} grouping={grouping} onClick={openAlbum(a)} />
       ))}
     </div>
   );
@@ -6037,15 +6059,34 @@ function AlbumsGridTab({ albums, suggestions, suggestionsLoading, loading = fals
           </div>
         </div>
       </div>
-      {loading ? renderSkeleton() : grouped ? grouped.map((g, gi) => (
-        <React.Fragment key={g.key}>
-          <div className={`lib-group-head${gi === 0 ? ' lib-group-head--first' : ''}`} style={{ color:c.textSubtle }}>
-            <span className="mono lib-group-head-label" title={g.label}>{g.label}</span>
-            <span className="mono lib-group-head-count">{g.albums.length}</span>
-          </div>
-          {view === 'list' ? renderRows(g.albums) : renderGrid(g.albums)}
-        </React.Fragment>
-      )) : (view === 'list' ? renderRows(albums) : renderGrid(albums))}
+      {loading ? renderSkeleton() : grouped ? (
+        <>
+          {collapsible && (
+            <div className="lib-groups-tools" style={{ color:c.textSubtle }}>
+              <button className="mono"
+                onClick={() => setOpenGroups(allOpen ? {} : Object.fromEntries(grouped.map(g => [g.key, true])))}>
+                {allOpen ? (ru ? 'свернуть все' : 'collapse all') : (ru ? 'раскрыть все' : 'expand all')}
+              </button>
+            </div>
+          )}
+          {grouped.map((g, gi) => {
+            const open = !collapsible || !!openGroups[g.key];
+            return (
+              <React.Fragment key={g.key}>
+                <div
+                  className={`lib-group-head${gi === 0 ? ' lib-group-head--first' : ''}${collapsible ? ' lib-group-head--clickable' : ''}`}
+                  style={{ color:c.textSubtle }}
+                  onClick={collapsible ? () => toggleGroup(g.key) : undefined}>
+                  {collapsible && <span className={`lib-group-chevron${open ? ' open' : ''}`} aria-hidden>▸</span>}
+                  <span className="mono lib-group-head-label" title={g.label}>{g.label}</span>
+                  <span className="mono lib-group-head-count">{g.albums.length}</span>
+                </div>
+                {open && (view === 'list' ? renderRows(g.albums) : renderGrid(g.albums))}
+              </React.Fragment>
+            );
+          })}
+        </>
+      ) : (view === 'list' ? renderRows(albums) : renderGrid(albums))}
     </>
   );
 }

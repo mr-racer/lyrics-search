@@ -1568,6 +1568,23 @@
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .lib-group-head-count { font-size: 11px; opacity: .55; flex-shrink: 0; }
+    /* Collapsible variant: heavy groupings (decades/genres) fold into
+       spoilers; the chevron + pointer are the whole affordance. */
+    .lib-group-head--clickable { cursor: pointer; user-select: none; }
+    .lib-group-head--clickable:hover { filter: brightness(1.35); }
+    body[data-theme="light"] .lib-group-head--clickable:hover { filter: brightness(.72); }
+    .lib-group-chevron {
+      display: inline-block; flex-shrink: 0; font-size: 10px; line-height: 1;
+      transition: transform .18s ease;
+    }
+    .lib-group-chevron.open { transform: rotate(90deg); }
+    .lib-groups-tools { display: flex; justify-content: flex-end; margin: 2px 2px -8px; }
+    .lib-groups-tools button {
+      border: none; background: transparent; cursor: pointer; color: inherit;
+      font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+      padding: 4px 2px; opacity: .55; transition: opacity .15s ease;
+    }
+    .lib-groups-tools button:hover { opacity: .95; }
 
     /* ── Albums tab: dense list view ─────────────────────────────────────
        ~54px rows, no backdrop blur (450+ rows), hover = flat tint only. */
@@ -1586,7 +1603,22 @@
     }
     .lib-album-row-main { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .lib-album-row-title { font-size: 14.5px; font-weight: 500; letter-spacing: -0.01em; }
-    .lib-album-row-meta { font-size: 11.5px; letter-spacing: .05em; white-space: nowrap; flex-shrink: 0; }
+    /* Columnar meta: year / plays / genre each in a fixed-min right-aligned
+       column, so values line up vertically across rows instead of jittering
+       with each row's content width. */
+    .lib-album-row-meta {
+      display: flex; align-items: baseline; gap: 18px;
+      font-size: 11.5px; letter-spacing: .05em; white-space: nowrap; flex-shrink: 0;
+    }
+    .lib-album-row-m { text-align: right; }
+    .lib-album-row-m--year  { min-width: 34px; }
+    .lib-album-row-m--plays { min-width: 32px; }
+    .lib-album-row-m--genre {
+      min-width: 92px; max-width: 150px;
+      overflow: hidden; text-overflow: ellipsis;
+      text-transform: uppercase; font-size: 10.5px; letter-spacing: .09em;
+      opacity: .8;
+    }
 
     /* ── Albums tab: grouping popover + control cluster ──────────────────── */
     .lib-ctl-divider { width: 1px; height: 17px; align-self: center; flex-shrink: 0;
@@ -4624,6 +4656,10 @@
       .lib-sortpill { flex-shrink: 0; }  /* keep pills full-size; the row scrolls */
       .lib-sortpills::-webkit-scrollbar { display: none; }
       .lib-sortpill { min-height: 44px; }  /* tap target; text stays compact */
+      /* List rows: a phone can't fit three meta columns — genre goes, the
+         remaining two tighten up. */
+      .lib-album-row-meta { gap: 11px; }
+      .lib-album-row-m--genre { display: none; }
 
       /* ── Library → Stats tab: phone layout ────────────────────────────
          The readout chips are content-sized flex items on desktop (they hug
