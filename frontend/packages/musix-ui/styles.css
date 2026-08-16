@@ -4967,7 +4967,7 @@
     }
     /* ── Carousel: fixed-aspect stage, fading slides, explicit «1 / N» ── */
     .ld-car { min-width: 0; }
-    .ld-car-stage { position: relative; aspect-ratio: 6 / 7; }
+    .ld-car-stage { position: relative; aspect-ratio: 1 / 1; }
     .ld-car-slide {
       position: absolute; inset: 0;
       width: 100%; height: 100%; object-fit: contain;
