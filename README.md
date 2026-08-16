@@ -75,10 +75,9 @@ MusiX автоматически разбивает твой вкус на не�
 артиста. Сэмплы и продюсеры видны прямо в плеере — бейджи под обложкой
 раскрываются в карточки с деталями.
 
-<p align="center">
-  <img src="assets/song-connections.png" width="58%" alt="Сэмплы и отсылки в твоей музыке">
-  <img src="assets/song-links.gif" width="29%" alt="Бейджи сэмплов и продюсеров под обложкой в плеере">
-</p>
+<p align="center"><img src="assets/song-connections.png" width="700" alt="Сэмплы и отсылки в твоей музыке"></p>
+
+<p align="center"><img src="assets/song-links.gif" width="520" alt="Бейджи сэмплов и продюсеров под обложкой в плеере"></p>
 
 ### 📊 Статистика, которую больше никто не покажет
 
