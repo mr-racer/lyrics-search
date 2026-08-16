@@ -4858,6 +4858,14 @@
       padding: 28px 18px 76px;
       background: radial-gradient(120% 90% at 70% -10%, #1c1830 0%, #12101c 45%, #0a0a10 100%);
     }
+    /* Seamless hand-off into the tour: the bottom of the hero (and the
+       clipped aurora blobs) dissolves into the page's #0a0a10 ground.
+       Painted after the aurora children, under the z-index:1 content. */
+    .login-hero-block::after {
+      content: ''; position: absolute; left: 0; right: 0; bottom: 0;
+      height: 34vh; pointer-events: none;
+      background: linear-gradient(180deg, rgba(10,10,16,0) 0%, rgba(10,10,16,.55) 55%, #0a0a10 96%);
+    }
     .login-aurora { position: absolute; border-radius: 50%; filter: blur(70px); pointer-events: none; }
     .login-aurora--a { width: 46vmax; height: 46vmax; top: -18vmax; left: -12vmax;
       background: radial-gradient(circle, oklch(45% 0.16 290 / .32), transparent 65%); }
