@@ -22,7 +22,15 @@ Usage::
     python -m scripts.migrate_dense --dry-run          # report, touch nothing
     python -m scripts.migrate_dense --yes              # migrate every acct_*
     python -m scripts.migrate_dense --collection acct_x --yes
+    python -m scripts.migrate_dense --collection acct_x --collection acct_y --yes
     python -m scripts.migrate_dense --resume --yes     # reuse an existing dump
+
+    # End-to-end check WITHOUT touching the real collection: copy N
+    # lyric-bearing tracks into a temp octen_sample_* collection through the
+    # exact write path above, then self-retrieve each track by a lyric
+    # fragment. The temp collection is dropped afterwards (--keep-sample to
+    # inspect it by hand).
+    python -m scripts.migrate_dense --collection acct_x --sample 50
 
 The dump lives in ``cache/migrate/<collection>.pkl`` and is kept after a
 successful run — delete it by hand once the collection looks right.
@@ -45,13 +53,17 @@ from qdrant_client import QdrantClient, models
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.resources.qdrant_payload import build_text_for_embedding  # noqa: E402
+from app.resources.qdrant_payload import (  # noqa: E402
+    build_text_for_embedding,
+    unique_paragraphs,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("migrate_dense")
 
 DUMP_DIR = Path(__file__).resolve().parent.parent / "cache" / "migrate"
 SCROLL_BATCH = 256
+SAMPLE_PREFIX = "octen_sample_"
 
 
 def _client() -> QdrantClient:
@@ -195,6 +207,105 @@ def migrate_one(client: QdrantClient, collection: str, *, resume: bool,
     return True
 
 
+def _query_fragment(payload: dict) -> str:
+    """A realistic partial-lyrics query: the middle paragraph, capped.
+
+    Deliberately NOT the full document the vector was built from — retrieving
+    a track by its own full text would pass even with a broken document-side
+    prompt. A middle fragment only ranks first when both sides of the
+    asymmetric pair are wired correctly.
+    """
+    paragraphs = unique_paragraphs(payload.get("lyrics") or "")
+    frag = paragraphs[len(paragraphs) // 2] if paragraphs else ""
+    return frag[:400]
+
+
+def sample_check(client: QdrantClient, collection: str, n: int, *,
+                 keep: bool) -> bool:
+    """End-to-end Octen check on ``n`` tracks, without touching ``collection``.
+
+    Copies the first ``n`` lyric-bearing points into a temp collection through
+    the SAME write path the real migration uses (recreate_collection +
+    reupload), then self-retrieves every track by a lyric fragment encoded on
+    the query side. Passing means: the model loads on this box, both prompt
+    sides are wired, the vector name/dim match the schema, and search returns
+    the right song.
+    """
+    from app.resources.model_registry import ModelRegistry
+
+    rows: list[dict] = []
+    offset = None
+    while len(rows) < n:
+        points, offset = client.scroll(
+            collection_name=collection, limit=SCROLL_BATCH, offset=offset,
+            with_payload=True, with_vectors=True,
+        )
+        for p in points:
+            payload = p.payload or {}
+            if len(payload.get("lyrics") or "") < 200:
+                continue
+            vectors = p.vector if isinstance(p.vector, dict) else {}
+            clap = vectors.get("clap")
+            rows.append({
+                "id": str(p.id), "payload": payload,
+                "clap": list(clap) if clap is not None else None,
+            })
+            if len(rows) >= n:
+                break
+        if offset is None:
+            break
+
+    if not rows:
+        logger.error("[%s] no lyric-bearing tracks found — nothing to sample",
+                     collection)
+        return False
+    logger.info("[%s] sampled %d lyric-bearing tracks", collection, len(rows))
+
+    tmp = SAMPLE_PREFIX + collection
+    recreate_collection(
+        client, tmp,
+        vector_name=ModelRegistry.VECTOR_NAME, vector_dim=ModelRegistry.VECTOR_DIM,
+        with_clap=any(r["clap"] is not None for r in rows),
+    )
+    try:
+        reupload(client, tmp, rows,
+                 vector_name=ModelRegistry.VECTOR_NAME, batch=32)
+
+        frags = [_query_fragment(r["payload"]) for r in rows]
+        query_vecs = ModelRegistry.encode_text(
+            frags, is_query=True, batch_size=16, convert_to_numpy=True,
+        )
+        hit1 = hit3 = 0
+        for row, qvec in zip(rows, query_vecs):
+            res = client.query_points(
+                collection_name=tmp, query=qvec.tolist(),
+                using=ModelRegistry.VECTOR_NAME, limit=3, with_payload=False,
+            )
+            ids = [str(pt.id) for pt in res.points]
+            hit1 += ids[:1] == [row["id"]]
+            hit3 += row["id"] in ids
+        total = len(rows)
+        logger.info("[%s] self-retrieval on %d tracks: hit@1 %d/%d (%.0f%%), "
+                    "hit@3 %d/%d (%.0f%%)", collection, total,
+                    hit1, total, 100 * hit1 / total,
+                    hit3, total, 100 * hit3 / total)
+        # Duplicate uploads of the same song legitimately steal rank 1 from
+        # each other, so the pass bar sits on hit@3.
+        ok = hit3 / total >= 0.8
+        if not ok:
+            logger.error("[%s] SAMPLE FAILED — hit@3 below 80%%. Do not run "
+                         "the real migration until this is understood.",
+                         collection)
+        return ok
+    finally:
+        if keep:
+            logger.info("[%s] temp collection kept for inspection: %s",
+                        collection, tmp)
+        else:
+            client.delete_collection(tmp)
+            logger.info("[%s] temp collection %s dropped", collection, tmp)
+
+
 def drop_facts_collections(client: QdrantClient, targets: list[str], *,
                            dry_run: bool) -> None:
     """Drop the ``facts_acct_*`` companions of the migrated collections.
@@ -223,17 +334,23 @@ def drop_facts_collections(client: QdrantClient, targets: list[str], *,
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--collection", help="migrate just this one (default: every acct_*)")
+    ap.add_argument("--collection", action="append",
+                    help="migrate just this one, repeatable (default: every acct_*)")
     ap.add_argument("--resume", action="store_true",
                     help="reuse an existing dump instead of re-scrolling")
     ap.add_argument("--dry-run", action="store_true", help="report and exit")
     ap.add_argument("--batch", type=int, default=64, help="upsert batch size")
     ap.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    ap.add_argument("--sample", type=int, metavar="N",
+                    help="end-to-end check on N tracks in a temp octen_sample_* "
+                         "collection; the real collection is not touched")
+    ap.add_argument("--keep-sample", action="store_true",
+                    help="with --sample: keep the temp collection for inspection")
     args = ap.parse_args()
 
     client = _client()
     if args.collection:
-        targets = [args.collection]
+        targets = list(args.collection)
     else:
         targets = sorted(c.name for c in client.get_collections().collections
                          if c.name.startswith("acct_"))
@@ -247,6 +364,16 @@ def main() -> int:
                 ModelRegistry.TEXT_MODEL_NAME, ModelRegistry.VECTOR_NAME,
                 ModelRegistry.VECTOR_DIM)
     logger.info("collections: %s", ", ".join(targets))
+
+    if args.sample:
+        failed = [c for c in targets
+                  if not sample_check(client, c, args.sample,
+                                      keep=args.keep_sample)]
+        if failed:
+            logger.error("SAMPLE FAILED: %s", ", ".join(failed))
+            return 1
+        logger.info("sample check passed for every collection")
+        return 0
 
     if not args.dry_run and not args.yes:
         print("\nThis DROPS and rebuilds each collection above. CLAP vectors and "
