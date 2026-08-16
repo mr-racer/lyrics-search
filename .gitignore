@@ -25,6 +25,14 @@ CLAUDE.MD
 .tmp/
 demo.html
 /lab/
+# internal one-off / diagnostic scripts — kept in local clones only
+/scripts/dry_run_*.py
+/scripts/smoke_*.py
+/scripts/check_jsx.py
+/scripts/check_track_metadata.py
+/scripts/backfill_gliner_genius.py
+/scripts/gen_pwa_icons.py
+/scripts/clone_account.py
 
 # model weights
 /weights
