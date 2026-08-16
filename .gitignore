@@ -24,6 +24,7 @@ CLAUDE.MD
 # local-only tooling and mockups
 .tmp/
 demo.html
+/lab/
 
 # model weights
 /weights
@@ -257,9 +258,7 @@ ngrok
 ngrok.exe
 ngrok-stable-*.zip
 
-# design-sync (staged scripts, build output, machine state)
+# design-sync (local design tooling — not part of the app)
 .ds-sync/
 ds-bundle/
-.design-sync/.cache/
-.design-sync/learnings/
-.design-sync/node_modules
+.design-sync/
