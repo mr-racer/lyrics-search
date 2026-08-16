@@ -18610,7 +18610,6 @@ function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
   });
   const [error, setError]   = useState('');
   const [busy, setBusy]     = useState(false);
-  const [guideOpen, setGuideOpen] = useState(false);
 
   useEffect(() => {
     if (window.location.hash.startsWith('#/register') && instanceMode === 'server') {
@@ -18661,8 +18660,10 @@ function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
       body: ru
         ? 'Живой амбиент главной подстраивается под обложку играющего трека. Всё адаптировано под телефон, а благодаря PWA MusiX ставится как обычное приложение. Сам плеер лёгкий: меняй очередь на лету, читай факты про песню и исполнителя — а если стало интересно, зови ИИ-ассистента, не выходя из плеера.'
         : 'The home screen\'s living ambient recolors to the playing track\'s cover. Fully mobile-ready, and thanks to PWA MusiX installs like a regular app. The player itself stays light: reorder the queue on the fly, read song and artist facts while listening — and call the AI assistant right from the player.',
-      media: [{ src: '/landing/player.webp', alt: ru ? 'Экран плеера' : 'Player screen' }],
-      wide: [{ src: '/landing/home-ambient.mp4', v: true, alt: ru ? 'Живой амбиент главного экрана' : 'Living home-screen ambient' }],
+      wide: [
+        { src: '/landing/home-ambient.mp4', v: true, alt: ru ? 'Живой амбиент главного экрана' : 'Living home-screen ambient' },
+        { src: '/landing/player.webp', alt: ru ? 'Экран плеера' : 'Player screen' },
+      ],
     },
     {
       id: 'wave', hue: 210, icon: '🌊',
@@ -18725,6 +18726,10 @@ function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
     },
   ];
 
+  // The app root (#root) is overflow:hidden — this screen scrolls itself, so
+  // «back to top» must target the .login-screen element, not the window.
+  const scrollRef = useRef(null);
+
   // Floating «sign in» pill once the hero (and its login card) leaves view.
   const heroRef = useRef(null);
   const [fab, setFab] = useState(false);
@@ -18758,10 +18763,13 @@ function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
     const el = document.getElementById('ld-' + id);
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
-  const goTop = () => { window.scrollTo({ top: 0, behavior: 'smooth' }); };
+  const goTop = () => {
+    const el = scrollRef.current;
+    if (el) el.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   const ldMedia = (m, key) => (
-    <figure key={key} className="liquid-glass ld-frame" {...spotHandlers(true)}>
+    <figure key={key} className="ld-shot">
       {m.v
         ? <video src={m.src} autoPlay muted loop playsInline preload="metadata" aria-label={m.alt} />
         : <img src={m.src} alt={m.alt} loading="lazy" />}
@@ -18769,23 +18777,10 @@ function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
   );
 
   return (
-    <div className="login-screen">
+    <div className="login-screen" ref={scrollRef}>
       <section className="login-hero-block" ref={heroRef}>
       <div className="login-aurora login-aurora--a" />
       <div className="login-aurora login-aurora--b" />
-
-      {/* «?» — opens the user guide pre-auth. Doesn't touch the seen-flag:
-          there's no user id yet, and the auto-show after first login is
-          keyed per account. */}
-      <button type="button" onClick={() => setGuideOpen(true)}
-        aria-label={ru ? 'Как пользоваться' : 'How it works'}
-        title={ru ? 'Как пользоваться' : 'How it works'}
-        className="liquid-glass"
-        style={{ position:'fixed', top:'calc(env(safe-area-inset-top, 0px) + 16px)', right:16, zIndex:20,
-          width:40, height:40, borderRadius:'50%', display:'grid', placeItems:'center',
-          cursor:'pointer', color:'rgba(238,238,243,.82)', fontSize:17, fontWeight:600 }}>
-        ?
-      </button>
 
       <div className="login-wrap">
         {/* ── Mini welcome page ── */}
@@ -18906,7 +18901,7 @@ function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
 
       <main className="ld-sections">
         {sections.map((s, i) => (
-          <section key={s.id} id={`ld-${s.id}`} className={`ld-section ld-reveal${i % 2 ? ' ld-flip' : ''}${s.minis ? ' ld-solo' : ''}`} style={{ '--ld-hue': s.hue }}>
+          <section key={s.id} id={`ld-${s.id}`} className={`ld-section ld-reveal${i % 2 ? ' ld-flip' : ''}${s.media ? '' : ' ld-solo'}`} style={{ '--ld-hue': s.hue }}>
             <div className="ld-aura" />
             <div className="ld-copy">
               <div className="mono-label ld-eyebrow">{s.eyebrow}</div>
@@ -18915,7 +18910,7 @@ function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
               {s.minis && (
                 <div className="ld-minis">
                   {s.minis.map(m => (
-                    <div key={m.t} className="liquid-glass ld-mini" {...spotHandlers(true)}>
+                    <div key={m.t} className="liquid-glass ld-mini">
                       <div className="ld-mini-icon">{m.icon}</div>
                       <div className="ld-mini-title">{m.t}</div>
                       <div className="ld-mini-body">{m.d}</div>
@@ -18953,10 +18948,6 @@ function LoginScreen({ instanceMode, onAuthSuccess, lang }) {
         <button type="button" className="cta-v3 ld-fab" onClick={goTop}>
           {ru ? 'Ко входу ↑' : 'Sign in ↑'}
         </button>
-      )}
-
-      {guideOpen && (
-        <GuideCarousel isDark={true} lang={lang} onClose={() => setGuideOpen(false)} />
       )}
     </div>
   );

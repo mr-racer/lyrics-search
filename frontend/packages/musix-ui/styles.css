@@ -4843,8 +4843,11 @@
        section carries its own aurora hue (--ld-hue) — the page recolors as
        you scroll, echoing how the player recolors to the current cover.
        No cursor halo: pointer feedback is the shared card tilt (--rx/--ry). */
+    /* #root is overflow:hidden (each screen scrolls itself) — the landing
+       scrolls inside .login-screen, and the JS «back to top» targets it. */
     .login-screen {
-      min-height: 100vh; min-height: 100dvh;
+      height: 100%;
+      overflow-y: auto; overflow-x: hidden;
       background: #0a0a10;
       color: #eeeef3;
     }
@@ -4914,6 +4917,9 @@
       scroll-margin-top: 16px;
     }
     .ld-section.ld-solo { grid-template-columns: minmax(0, 1fr); }
+    .ld-solo .ld-copy { text-align: center; max-width: 760px; margin: 0 auto; }
+    .ld-solo .ld-eyebrow { justify-content: center; }
+    .ld-solo .ld-copy p { margin: 0 auto; }
     .ld-flip .ld-copy { order: 2; }
     .ld-flip .ld-media { order: 1; }
     .ld-aura {
@@ -4935,20 +4941,18 @@
     }
     .ld-copy p { font-size: 15px; line-height: 1.66; color: rgba(238,238,243,.62); margin: 0; max-width: 560px; }
     .ld-media { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
-    .ld-frame {
-      border-radius: 20px; padding: 10px; margin: 0;
-      transform: perspective(950px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg));
-      transition: transform .18s ease;
-      will-change: transform;
+    /* Plain screenshot/video block: rounded, hairline border, deep soft shadow —
+       no glass box, no tilt (the media speaks for itself). */
+    .ld-shot {
+      margin: 0; border-radius: 16px; overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.09);
+      box-shadow: 0 28px 70px -28px rgba(0,0,0,0.7), 0 4px 18px rgba(0,0,0,0.35);
+      background: #101018;
     }
-    .ld-frame img, .ld-frame video { display: block; width: 100%; height: auto; border-radius: 12px; }
+    .ld-shot img, .ld-shot video { display: block; width: 100%; height: auto; }
     .ld-wide { grid-column: 1 / -1; justify-self: center; width: min(100%, 880px); margin-top: clamp(18px, 3vw, 36px); }
     .ld-minis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 28px; }
-    .ld-mini {
-      border-radius: 18px; padding: 18px 17px;
-      transform: perspective(700px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg));
-      transition: transform .18s ease;
-    }
+    .ld-mini { border-radius: 18px; padding: 18px 17px; }
     .ld-mini-icon { font-size: 21px; margin-bottom: 10px; }
     .ld-mini-title { font-size: 14px; font-weight: 600; color: #f1eeff; margin-bottom: 6px; }
     .ld-mini-body { font-size: 12.5px; line-height: 1.55; color: rgba(238,238,243,.58); }
@@ -5003,6 +5007,5 @@
       .login-rise { animation: none !important; opacity: 1 !important; }
       .ld-reveal { transition: none !important; opacity: 1 !important; transform: none !important; }
       .ld-scrollhint-arrow { animation: none !important; }
-      .ld-frame, .ld-mini { transform: none !important; transition: none !important; }
       .ld-chip { transition: none !important; }
     }
