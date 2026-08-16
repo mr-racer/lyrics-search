@@ -5531,10 +5531,24 @@ function RecommendSection({ isDark, lang, onPlayTrack, onQueueNext, aiStatus, on
 }
 
 // ─── ALBUM CARD ───────────────────────────────────────────────────────────────
-function AlbumCard({ album, isDark, onClick, navigateToArtist, lang, index = 0 }) {
+// «N раз / раза / раз» — russian count form for the plays badge.
+function razForm(n) {
+  const m10 = n % 10, m100 = n % 100;
+  if (m100 >= 11 && m100 <= 14) return 'раз';
+  if (m10 >= 2 && m10 <= 4) return 'раза';
+  return 'раз';
+}
+
+// playsMode: the cover badge shows how many times the album's tracks were
+// played («56 раз») instead of the track count — active under the
+// «слушаю чаще» sort, where plays are the number the eye is scanning for.
+function AlbumCard({ album, isDark, onClick, navigateToArtist, lang, index = 0, playsMode = false }) {
   const c = useColors(isDark);
   const yearStr = album.year_range || (album.year ? String(album.year) : '');
   const topGenre = album.top_genres?.[0];
+  const badge = playsMode
+    ? (lang === 'ru' ? `${album.play_count || 0} ${razForm(album.play_count || 0)}` : `${album.play_count || 0}×`)
+    : `${album.track_count} ${lang === 'ru' ? 'тр' : 'tr'}`;
   const onArtistClick = (slug) => (e) => {
     e.stopPropagation();
     if (slug && navigateToArtist) navigateToArtist(slug);
@@ -5561,7 +5575,7 @@ function AlbumCard({ album, isDark, onClick, navigateToArtist, lang, index = 0 }
           background: isDark ? 'rgba(0,0,0,.7)' : 'rgba(255,255,255,.92)',
           color: isDark ? '#bba8ff' : '#4a32b8', backdropFilter:'blur(6px)',
           boxShadow: isDark ? 'none' : '0 1px 4px rgba(46,36,86,.18)',
-        }}>{album.track_count} {lang==='ru'?'тр':'tr'}</div>
+        }}>{badge}</div>
       </div>
       <div className="lib-album-body">
         <div className="lib-album-title" style={{ fontWeight:600, color:c.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>{album.album_title}</div>
@@ -5872,7 +5886,7 @@ function groupLibraryAlbums(albums, grouping, sort, lang) {
   return groups;
 }
 
-function AlbumsGridTab({ albums, suggestions, suggestionsLoading, sort, onSortChange, view, onViewChange, grouping, onGroupingChange, onAlbumOpen, isDark, lang, navigateToArtist }) {
+function AlbumsGridTab({ albums, suggestions, suggestionsLoading, loading = false, sort, onSortChange, view, onViewChange, grouping, onGroupingChange, onAlbumOpen, isDark, lang, navigateToArtist }) {
   const c = useColors(isDark);
   const ru = lang === 'ru';
   const [groupMenuOpen, setGroupMenuOpen] = useState(false);
@@ -5882,7 +5896,7 @@ function AlbumsGridTab({ albums, suggestions, suggestionsLoading, sort, onSortCh
     document.addEventListener('click', close);
     return () => document.removeEventListener('click', close);
   }, [groupMenuOpen]);
-  if (!albums || albums.length === 0) {
+  if (!loading && (!albums || albums.length === 0)) {
     return <div style={{ padding:'64px 20px', textAlign:'center', color:c.textSubtle, fontSize:'14px' }}>{ru ? 'Нет треков с album-тегом в этой библиотеке' : 'No tracks with album tag in this library'}</div>;
   }
 
@@ -5913,7 +5927,8 @@ function AlbumsGridTab({ albums, suggestions, suggestionsLoading, sort, onSortCh
     <div className="lib-grid">
       {list.map((a, i) => (
         <AlbumCard key={`${a.primary_artist_slug}-${a.album_title}`} album={a} index={i}
-          isDark={isDark} lang={lang} navigateToArtist={navigateToArtist} onClick={openAlbum(a)} />
+          isDark={isDark} lang={lang} navigateToArtist={navigateToArtist}
+          playsMode={sort === 'plays_desc'} onClick={openAlbum(a)} />
       ))}
     </div>
   );
@@ -5922,6 +5937,36 @@ function AlbumsGridTab({ albums, suggestions, suggestionsLoading, sort, onSortCh
       {list.map(a => (
         <AlbumListRow key={`${a.primary_artist_slug}-${a.album_title}`} album={a}
           isDark={isDark} lang={lang} onClick={openAlbum(a)} />
+      ))}
+    </div>
+  );
+  // Re-sort takes seconds server-side (plays aggregation over 5k+ tracks);
+  // same-geometry skeletons take the albums' place so the click visibly
+  // «took» instead of the page freezing on the old order.
+  const renderSkeleton = () => view === 'list' ? (
+    <div className="lib-album-rows" aria-hidden="true">
+      {Array.from({ length: 14 }, (_, i) => (
+        <div key={i} className="lib-album-row" style={{ cursor:'default' }}>
+          <Skel w={44} h={44} r={8} isDark={isDark} />
+          <Skel w={`${38 + (i * 17) % 40}%`} h={13} r={6} isDark={isDark} />
+          <Skel w={72} h={11} r={6} isDark={isDark} />
+        </div>
+      ))}
+    </div>
+  ) : (
+    <div className="lib-grid" aria-hidden="true">
+      {Array.from({ length: 12 }, (_, i) => (
+        <div key={i} style={{ borderRadius:'14px', overflow:'hidden',
+          background: isDark ? 'rgba(255,255,255,.03)' : 'rgba(255,255,255,.6)',
+          border:`1px solid ${c.border}` }}>
+          <div style={{ aspectRatio:'1' }}>
+            <Skel w={'100%'} h={'100%'} r={0} isDark={isDark} />
+          </div>
+          <div className="lib-album-body">
+            <Skel w={`${52 + (i * 23) % 36}%`} h={13} r={6} isDark={isDark} />
+            <Skel w={'44%'} h={11} r={6} isDark={isDark} style={{ marginTop: 7 }} />
+          </div>
+        </div>
       ))}
     </div>
   );
@@ -5992,7 +6037,7 @@ function AlbumsGridTab({ albums, suggestions, suggestionsLoading, sort, onSortCh
           </div>
         </div>
       </div>
-      {grouped ? grouped.map((g, gi) => (
+      {loading ? renderSkeleton() : grouped ? grouped.map((g, gi) => (
         <React.Fragment key={g.key}>
           <div className={`lib-group-head${gi === 0 ? ' lib-group-head--first' : ''}`} style={{ color:c.textSubtle }}>
             <span className="mono lib-group-head-label" title={g.label}>{g.label}</span>
@@ -7718,6 +7763,7 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
   // ── Data fetching ─────────────────────────────────────────────────────
   const [stats, setStats] = useState(null);                  // /library/stats
   const [albumsData, setAlbumsData] = useState(null);        // /library/albums
+  const [albumsLoading, setAlbumsLoading] = useState(true);  // skeletons while (re)fetching albums
   const [aiAlbums, setAiAlbums] = useState([]);              // /recommend/vibes/album-suggestions
   const [aiAlbumsLoading, setAiAlbumsLoading] = useState(true); // reserve the rail slot until the picks resolve
   const [recentData, setRecentData] = useState(null);        // /playback/recent
@@ -7854,9 +7900,17 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
   }, [activeTab, lang, tasteMap, tasteMapLoading]);
 
   // ── Effect 2: only albums (refires on sort change) ───────────────────
+  // The re-sort can take seconds server-side (plays aggregation), so the tab
+  // shows skeletons meanwhile. The epoch ref drops out-of-order responses
+  // when the user clicks through several sorts quickly.
+  const albumsReqEpoch = useRef(0);
   useEffect(() => {
+    const epoch = ++albumsReqEpoch.current;
+    setAlbumsLoading(true);
     apiFetch(`/library/albums?sort=${albumSort}`)
-      .then(setAlbumsData).catch(() => setAlbumsData({albums:[]}));
+      .then(d => { if (epoch === albumsReqEpoch.current) setAlbumsData(d); })
+      .catch(() => { if (epoch === albumsReqEpoch.current) setAlbumsData({albums:[]}); })
+      .finally(() => { if (epoch === albumsReqEpoch.current) setAlbumsLoading(false); });
   }, [albumSort]);
 
   // ── Effect 3: debounced catalog search ───────────────────────────────
@@ -7948,6 +8002,7 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
               albums={albumsData?.albums || []}
               suggestions={aiAlbums}
               suggestionsLoading={aiAlbumsLoading}
+              loading={albumsLoading}
               sort={albumSort}
               onSortChange={setAlbumSort}
               view={albumView}
