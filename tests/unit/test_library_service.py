@@ -12,6 +12,7 @@ import os
 import sqlite3
 import threading
 import time
+from datetime import date as _date
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -517,6 +518,64 @@ class TestAlbumLabels:
             qdrant_client=_empty_qdrant(), collection_name="c", label="Nonexistent",
         )
         assert res.albums == []
+
+
+# --------------------------------------------------------------------------- #
+# LibraryService.get_weekly_album_covers — the home card's weekly reroll.
+# --------------------------------------------------------------------------- #
+class TestWeeklyAlbumCovers:
+    def _seed_shelf(self, n=8):
+        for i in range(n):
+            _upsert(f"t{i}", album=f"Album {i}", artist=f"Artist {i}",
+                    title=f"Song {i}", duration=200,
+                    cover_art_path=f"/covers/{i}.jpg")
+
+    def test_same_week_same_picks(self, temp_db):
+        self._seed_shelf()
+        day = _date(2026, 8, 17)          # Monday
+        a = LibraryService.get_weekly_album_covers(
+            collection_name="c", limit=3, today=day)
+        b = LibraryService.get_weekly_album_covers(
+            collection_name="c", limit=3, today=_date(2026, 8, 23))  # Sunday, same week
+        assert len(a.albums) == 3
+        assert a.week == b.week == "2026-W34"
+        assert [x.album for x in a.albums] == [x.album for x in b.albums]
+
+    def test_next_week_rerolls(self, temp_db):
+        self._seed_shelf(24)              # enough albums that a reshuffle is visible
+        this_week = LibraryService.get_weekly_album_covers(
+            collection_name="c", limit=3, today=_date(2026, 8, 17))
+        next_week = LibraryService.get_weekly_album_covers(
+            collection_name="c", limit=3, today=_date(2026, 8, 24))
+        assert this_week.week != next_week.week
+        assert ([x.album for x in this_week.albums]
+                != [x.album for x in next_week.albums])
+
+    def test_albums_without_art_are_never_picked(self, temp_db):
+        _upsert("t1", album="With Art", artist="A", title="x", duration=100,
+                cover_art_path="/covers/a.jpg")
+        _upsert("t2", album="No Art", artist="B", title="y", duration=100)
+        res = LibraryService.get_weekly_album_covers(collection_name="c", limit=5)
+        assert [a.album for a in res.albums] == ["With Art"]
+        assert res.albums[0].cover_art_path == "/covers/a.jpg"
+
+    def test_one_entry_per_album_with_majority_artist(self, temp_db):
+        # Two tracks tagged to the band, one to a guest — the card must show
+        # the album once, credited to the band.
+        _upsert("t1", album="Split", artist="Band", title="a", duration=100,
+                cover_art_path="/covers/s.jpg")
+        _upsert("t2", album="split", artist="Band", title="b", duration=100,
+                cover_art_path="/covers/s.jpg")
+        _upsert("t3", album="Split", artist="Guest", title="c", duration=100,
+                cover_art_path="/covers/s.jpg")
+        res = LibraryService.get_weekly_album_covers(collection_name="c", limit=5)
+        assert len(res.albums) == 1
+        assert res.albums[0].artist == "Band"
+
+    def test_empty_library_is_not_an_error(self, temp_db):
+        res = LibraryService.get_weekly_album_covers(collection_name="c", limit=3)
+        assert res.albums == []
+        assert res.week
 
 
 # --------------------------------------------------------------------------- #

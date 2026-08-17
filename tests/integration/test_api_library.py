@@ -254,6 +254,64 @@ class TestAlbums:
                 assert resp.status_code == 200
 
 
+class TestWeeklyAlbumCovers:
+    """The home library card's cover fan — SQLite-only, works with Qdrant down."""
+
+    def _seed(self, collection: str) -> None:
+        shelf = [
+            ("MBDTF", "Kanye West", "/covers/mbdtf.jpg"),
+            ("Madvillainy", "Madvillain", "/covers/madvillainy.jpg"),
+            ("Discovery", "Daft Punk", "/covers/discovery.jpg"),
+            ("In Rainbows", "Radiohead", "/covers/rainbows.jpg"),
+        ]
+        for i, (album, artist, cover) in enumerate(shelf):
+            MetadataDB.upsert_track_metadata(collection, f"cov{i}", {
+                "title": f"Track {i}", "artist": artist, "album": album,
+                "cover_art_path": cover, "duration": 180,
+            })
+        MetadataDB.upsert_track_metadata(collection, "cov-none", {
+            "title": "Untagged", "artist": "Nobody", "album": "No Art",
+            "duration": 180,
+        })
+
+    def test_returns_requested_number_of_sleeves_and_repeats_within_the_week(self):
+        app = create_app()
+        _login_credits(app, "cover-user")
+        self._seed("acct_cover-user")
+        with TestClient(app) as c:
+            first = c.get("/api/v1/library/album-covers", params={"limit": 3})
+            assert first.status_code == 200
+            body = first.json()
+            assert len(body["albums"]) == 3
+            assert all(a["cover_art_path"] for a in body["albums"])
+            assert "No Art" not in [a["album"] for a in body["albums"]]
+            assert body["collection_name"] == "acct_cover-user"
+            assert "-W" in body["week"]
+            # Same week → the shelf must not reshuffle between visits.
+            again = c.get("/api/v1/library/album-covers", params={"limit": 3})
+            assert again.json()["albums"] == body["albums"]
+
+    def test_limit_is_capped_by_what_the_library_has(self):
+        app = create_app()
+        _login_credits(app, "cover-few")
+        MetadataDB.upsert_track_metadata("acct_cover-few", "one", {
+            "title": "Only", "artist": "Solo", "album": "Alone",
+            "cover_art_path": "/covers/alone.jpg", "duration": 100,
+        })
+        with TestClient(app) as c:
+            resp = c.get("/api/v1/library/album-covers", params={"limit": 6})
+            assert resp.status_code == 200
+            assert [a["album"] for a in resp.json()["albums"]] == ["Alone"]
+
+    def test_empty_library_returns_empty_list(self):
+        app = create_app()
+        _login_credits(app, "cover-empty")
+        with TestClient(app) as c:
+            resp = c.get("/api/v1/library/album-covers")
+            assert resp.status_code == 200
+            assert resp.json()["albums"] == []
+
+
 # ── Producer credits + album label filter (SQLite-only, Qdrant not needed) ────
 
 def _login_credits(app, uid: str) -> None:

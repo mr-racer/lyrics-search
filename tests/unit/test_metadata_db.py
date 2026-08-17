@@ -954,3 +954,42 @@ class TestRandomFacts(_IsolatedDB):
             scope="artist", scope_key="radiohead", collection_name="other",
             lang="ru", refined=["X"])
         assert MetadataDB.get_random_facts("c", limit=3, lang="ru") == []
+
+    # ── Lyric commentary never reaches the ambient strip ──
+
+    def test_refined_annotation_items_are_skipped(self):
+        self._seed_artist()
+        MetadataDB.upsert_song("radiohead-creep", "Creep", "radiohead", "c")
+        MetadataDB.set_refined_facts(
+            scope="song", scope_key="radiohead-creep", collection_name="c",
+            lang="ru", refined=[
+                {"text": "В строке «I wish I was special» слышен...",
+                 "src": "annotation"},
+                {"text": "Записана за одну ночь.", "src": "editorial"},
+            ])
+        out = MetadataDB.get_random_facts("c", limit=5, lang="ru")
+        assert [f["fact"] for f in out] == ["Записана за одну ночь."]
+
+    def test_all_annotation_entity_is_treated_as_empty(self):
+        # Nothing editorial survived → the entity is skipped entirely; its raw
+        # facts must not resurface through the top-up either.
+        self._seed_artist()
+        MetadataDB.upsert_song("radiohead-creep", "Creep", "radiohead", "c")
+        MetadataDB.add_song_fact("radiohead-creep", "c", "Raw song fact",
+                                 source="songfacts.com")
+        MetadataDB.set_refined_facts(
+            scope="song", scope_key="radiohead-creep", collection_name="c",
+            lang="ru", refined=[{"text": "В строке «…» …", "src": "annotation"}])
+        assert MetadataDB.get_random_facts("c", limit=3, lang="ru") == []
+
+    def test_raw_top_up_skips_genius_sources(self):
+        self._seed_artist()
+        MetadataDB.upsert_song("radiohead-creep", "Creep", "radiohead", "c")
+        MetadataDB.add_song_fact(
+            "radiohead-creep", "c",
+            "Lyrics string: I'm a creep. Fact: fan note about the line.",
+            source="genius.com", category="genius_annotation")
+        MetadataDB.add_artist_fact("radiohead", "c", "Editorial artist fact",
+                                   source="songfacts.com")
+        out = MetadataDB.get_random_facts("c", limit=5, lang="ru")
+        assert [f["fact"] for f in out] == ["Editorial artist fact"]

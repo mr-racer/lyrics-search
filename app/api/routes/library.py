@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-from app.domain.models import ArtistAggregate, IndexRequest, IndexProgress, AIEnabledRequest, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RhythmResponse, WeeklyPulseResponse, EngagementResponse, TasteMapResponse, RediscoverResponse, User, ProducerResolveResponse, ProducerTracksResponse, SamplesResolveRequest, SamplesResolveResponse, DiscoveryCard, DiscoveriesResponse
+from app.domain.models import ArtistAggregate, IndexRequest, IndexProgress, AIEnabledRequest, AlbumCoversResponse, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RhythmResponse, WeeklyPulseResponse, EngagementResponse, TasteMapResponse, RediscoverResponse, User, ProducerResolveResponse, ProducerTracksResponse, SamplesResolveRequest, SamplesResolveResponse, DiscoveryCard, DiscoveriesResponse
 from app.api.dependencies import get_current_user, require_mode
 from app.api.helpers import derive_collection_for_user, member_index_root, path_within_root
 from app.services.library_service import LibraryService
@@ -444,6 +444,25 @@ def get_library_albums(
         collection_name=derived,
         sort=sort,
         label=label,
+    )
+
+
+@router.get("/album-covers", response_model=AlbumCoversResponse)
+def get_weekly_album_covers(
+    current_user: User = Depends(get_current_user),
+    limit: int = Query(3, ge=1, le=12, description="How many covers to pick"),
+) -> AlbumCoversResponse:
+    """A few album sleeves for the home library card, rerolled weekly.
+
+    Deliberately NOT ``/library/albums`` with a client-side slice: that
+    response carries every album with all of its tracks (hundreds of KB on a
+    real library) and the card needs three image paths. This one reads a
+    grouped SQLite query and returns exactly what is rendered. The pick is
+    seeded by ISO week, so it stays put for the week and changes on Monday.
+    """
+    derived = derive_collection_for_user(current_user)
+    return LibraryService.get_weekly_album_covers(
+        collection_name=derived, limit=limit,
     )
 
 

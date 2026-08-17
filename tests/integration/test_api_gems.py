@@ -93,17 +93,42 @@ class TestGemTracksEndpoint:
             assert resp.json()["tracks"] == []
 
 
-class TestRandomFactsStillServes:
-    def test_random_facts_route_alive_with_gems_seeded(self):
-        """Gems mixing must never break the home facts strip (Qdrant may be
-        unavailable for this derived collection — the gems slots just stay
-        empty then)."""
+class TestRandomFactsExcludeLyricCommentary:
+    """The home strip promises facts about a song, so anything that is really
+    a comment on a lyric line stays out of it: gems (chips in the track
+    drawer) and Genius line notes."""
+
+    def _seed_editorial_fact(self):
+        MetadataDB.add_song_fact(
+            "eminem-forgot-about-dre", _DERIVED,
+            "Recorded in a single night after a studio argument.",
+            source="songfacts.com",
+            artist_name="Eminem", title="Forgot About Dre",
+        )
+
+    def test_gems_never_reach_the_strip(self):
         _seed_gem()
+        self._seed_editorial_fact()
         app = _make_app()
         with TestClient(app) as c:
             resp = c.get("/api/v1/metadata/random-facts", params={"limit": 5})
             assert resp.status_code == 200
-            assert isinstance(resp.json(), list)
+            facts = [f["fact"] for f in resp.json()]
+            assert facts == ["Recorded in a single night after a studio argument."]
+
+    def test_genius_line_notes_never_reach_the_strip(self):
+        self._seed_editorial_fact()
+        MetadataDB.add_song_fact(
+            "eminem-stan", _DERIVED,
+            "Lyrics string: My tea's gone cold. Fact: the line opens Dido's «Thank You».",
+            source="genius.com", category="genius_annotation",
+            artist_name="Eminem", title="Stan",
+        )
+        app = _make_app()
+        with TestClient(app) as c:
+            resp = c.get("/api/v1/metadata/random-facts", params={"limit": 5})
+            facts = [f["fact"] for f in resp.json()]
+            assert facts == ["Recorded in a single night after a studio argument."]
 
 
 class TestLyricGemsRegistry:

@@ -296,52 +296,21 @@ def get_random_facts(
     Refined (AI-shortened) facts in the requested language are preferred;
     raw English facts only top up the remainder. Each fact carries an
     attribution image (album cover / artist photo) for the home strip.
+
+    The pool is editorial trivia ONLY: lyric gems and Genius line-note
+    rewrites are deliberately absent. Both are *about a line of the lyrics*
+    ("В тексте зовут Murphy Lee: «…»"), which reads as a quote-of-the-day
+    rather than a fact about the song — they stay on the track drawer, where
+    the listener is looking at that very song. See
+    :attr:`MetadataDB.STRIP_FACT_SOURCES` for the raw-source side of the same
+    rule; gems are served by ``/metadata/tracks/{id}/gems``.
     """
     derived = derive_collection_for_user(current_user)
 
-    # Lyric gems join the rotation (up to 2 slots) as regular song-type facts —
-    # same card shape, so the home strip needs no new rendering path.
-    gems_out: List[RandomFact] = []
-    db_client = getattr(request.app.state, "db_client", None)
-    if db_client is not None:
-        try:
-            gem_rows = MetadataDB.get_random_gems(derived, limit=6)
-        except Exception:
-            gem_rows = []
-        n_gems = min(2, max(0, limit - 1))
-        for g in gem_rows:
-            if len(gems_out) >= n_gems:
-                break
-            try:
-                pts = db_client.qdrant.retrieve(
-                    collection_name=derived, ids=[g["track_id"]],
-                    with_payload=["artist", "title"], with_vectors=False,
-                )
-            except Exception:
-                break
-            if not pts:
-                continue
-            pl = pts[0].payload or {}
-            g_artist = (pl.get("artist") or "").strip()
-            g_title = (pl.get("title") or "").strip()
-            if not g_artist or not g_title:
-                continue
-            g_image = (
-                _song_cover_and_id(request, derived, g_artist, g_title)[0]
-                or _artist_photo(_slugify_artist(g_artist), derived)
-                or _artist_any_cover(request, derived, g_artist)
-            )
-            gems_out.append(RandomFact(
-                fact=_gem_fact_text(g, lang),
-                context=f"{g_artist} — {g_title}",
-                type="song", artist=g_artist, title=g_title, image=g_image,
-                track_id=str(g["track_id"]),
-            ))
-
     raw = MetadataDB.get_random_facts(
-        collection_name=derived, limit=limit - len(gems_out), lang=lang,
+        collection_name=derived, limit=limit, lang=lang,
     )
-    out: List[RandomFact] = list(gems_out)
+    out: List[RandomFact] = []
     for r in raw:
         artist_slug = r.pop("artist_slug", None)
         image = None
@@ -359,7 +328,9 @@ def get_random_facts(
         out.append(RandomFact(**{k: v for k, v in r.items() if v is not None}
                               | {"image": image, "track_id": track_id,
                                  "artist_slug": artist_slug}))
-    _random.shuffle(out)  # gems were prepended — don't always lead the strip
+    # Refined picks come first and raw top-ups last — shuffle so the strip
+    # doesn't always lead with the same tier.
+    _random.shuffle(out)
     return out
 
 
@@ -384,36 +355,9 @@ def _localize_gem(g: dict, lang: str) -> dict:
     return g
 
 
-_GEM_FACT_TEMPLATES = {
-    "ru": {
-        "capsule": "Привет из другой эпохи — {display}: «{quote}»",
-        "namedrop": "В тексте зовут {display}: «{quote}»",
-        "popculture": "Отсылка: {display} — «{quote}»",
-        "songref": "Упоминает {label} «{display}»: «{quote}»",
-    },
-    "en": {
-        "capsule": "A relic of another era — {display}: “{quote}”",
-        "namedrop": "Name-drops {display}: “{quote}”",
-        "popculture": "Pop-culture nod — {display}: “{quote}”",
-        "songref": "Mentions the {label} “{display}”: “{quote}”",
-    },
-}
-_SONGREF_LABELS = {
-    "ru": {"album": "альбом", "track": "трек"},
-    "en": {"album": "album", "track": "track"},
-}
-
-
-def _gem_fact_text(g: dict, lang: str) -> str:
-    lng = lang if lang in _GEM_FACT_TEMPLATES else "en"
-    g = _localize_gem(g, lng)
-    label = ""
-    if g["kind"] == "songref":
-        ref_kind = (g.get("detail") or {}).get("ref_kind", "track")
-        label = _SONGREF_LABELS[lng].get(ref_kind, ref_kind)
-    return _GEM_FACT_TEMPLATES[lng][g["kind"]].format(
-        display=g["display"], quote=g["quote"], label=label,
-    )
+# NB: gems are rendered as chips by the client (kind + display + quote), so
+# there is no server-side sentence template for them any more — the one that
+# existed fed the home facts strip, which no longer mixes gems in.
 
 
 @router.get("/metadata/tracks/{track_id}/gems")

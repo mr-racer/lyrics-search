@@ -1,9 +1,11 @@
 """Library service — indexing tracks from a folder."""
 
 import asyncio
+import datetime as _dt
 import hashlib
 import logging
 import os
+import random
 import threading
 import time
 from collections import Counter
@@ -11,6 +13,8 @@ from pathlib import Path
 from typing import Optional
 
 from ..domain.models import (
+    AlbumCover,
+    AlbumCoversResponse,
     AlbumSummary,
     AlbumTrack,
     ArtistRef,
@@ -1554,6 +1558,46 @@ class LibraryService:
         )
 
     @classmethod
+    def get_weekly_album_covers(
+        cls, *, collection_name: str, limit: int = 3, today=None,
+    ) -> AlbumCoversResponse:
+        """A random-but-stable set of album covers for the home library card.
+
+        The pick is seeded with the ISO week (UTC) and the collection name, so
+        it is the SAME on every render, tab and device for a whole week and
+        rotates to a fresh set every Monday — a shelf that changes now and
+        then, not a slot machine that reshuffles on each visit.
+
+        SQLite-only: one grouped query over ``track_metadata`` (see
+        :meth:`MetadataDB.get_album_cover_options`). An empty library, or one
+        indexed before the metadata mirror existed, yields an empty list —
+        the card falls back to its placeholder gradients.
+        """
+        day = today or _dt.datetime.now(_dt.timezone.utc).date()
+        iso_year, iso_week, _ = day.isocalendar()
+        week = f"{iso_year}-W{iso_week:02d}"
+
+        try:
+            options = MetadataDB.get_album_cover_options(collection_name)
+        except Exception:
+            logger.warning(
+                "[LibraryService] album cover options failed for %s",
+                collection_name, exc_info=True,
+            )
+            options = []
+
+        k = min(limit, len(options))
+        picks = (
+            random.Random(f"{collection_name}:{week}").sample(options, k)
+            if k else []
+        )
+        return AlbumCoversResponse(
+            albums=[AlbumCover(**p) for p in picks],
+            week=week,
+            collection_name=collection_name,
+        )
+
+    @classmethod
     def get_liked_songs(
         cls, *, qdrant_client, collection_name: str,
     ):
@@ -1604,7 +1648,6 @@ class LibraryService:
     def get_rediscover(cls, *, qdrant_client, collection_name: str):
         """Pick a long-unplayed track to resurface. Never-played tracks win;
         otherwise the oldest-played ones (random among the top-N gap)."""
-        import random
         from app.domain.models import HomeTrack, RediscoverResponse
         from app.services._payload_coerce import coerce_float, coerce_year
 

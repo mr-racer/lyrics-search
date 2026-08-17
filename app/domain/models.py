@@ -472,6 +472,21 @@ class LibraryAlbumsResponse(BaseModel):
     qdrant_available: bool = True
 
 
+class AlbumCover(BaseModel):
+    """Just enough of an album to show its sleeve (home library card)."""
+    album: str
+    artist: str
+    cover_art_path: str
+
+
+class AlbumCoversResponse(BaseModel):
+    albums: list[AlbumCover]
+    # ISO week the pick is seeded with ("2026-W34") — the same week returns
+    # the same albums, so a client may cache the response until it changes.
+    week: str
+    collection_name: Optional[str] = None
+
+
 class ProducerCredit(BaseModel):
     """One name from a track's producer tag, resolved against the library."""
     name: str

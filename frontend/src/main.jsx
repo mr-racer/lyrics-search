@@ -2338,18 +2338,23 @@ function LyricsSearchPath({ isDark, lang, aiActive, onSubmit, compact=false }) {
   );
 }
 
-// ◉ Library — the "fan of covers" portal card: the three freshest album covers
-// peek from the right edge and fan out on hover; stats ride /library/stats.
+// ◉ Library — the "fan of covers" portal card: three album covers peek from
+// the right edge and fan out on hover; stats ride /library/stats.
+// The covers are a weekly reroll: /library/album-covers seeds its random pick
+// with the ISO week, so the shelf shows a different trio every Monday while
+// staying identical within a week (no reshuffle on every visit). It also
+// replaces the old `/library/albums?sort=year_desc` call, which downloaded
+// every album WITH its full tracklist just to read three image paths.
 function LibraryPathCard({ isDark, lang, stats, onClick }) {
   const c = useColors(isDark);
   const [covers, setCovers] = useState([]);
   useEffect(() => {
     let alive = true;
-    apiFetch(`/library/albums?sort=year_desc`)
+    apiFetch(`/library/album-covers?limit=3`)
       .then(d => {
         if (!alive) return;
         const cs = ((d && d.albums) || [])
-          .map(a => homeCoverUrl(a.cover_art_path)).filter(Boolean).slice(0, 3);
+          .map(a => homeCoverUrl(a.cover_art_path)).filter(Boolean);
         setCovers(cs);
       })
       .catch(() => {});
@@ -7871,13 +7876,16 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
     }
   }, [activeTab]);
 
-  // ── Entrance animation epoch ──────────────────────────────────────────
-  // The section stays mounted (visibility-toggled at App level), so CSS
-  // entrance animations would fire once while hidden and never replay.
-  // Bumping this key on every visible→true transition remounts the content
-  // subtree, replaying the staggered .lib-rise reveal on each visit.
-  const [enterEpoch, setEnterEpoch] = useState(0);
-  useEffect(() => { if (visible !== false) setEnterEpoch(e => e + 1); }, [visible]);
+  // ── Entrance animation ────────────────────────────────────────────────
+  // No epoch/remount here, on purpose. The section is mounted once and only
+  // visibility-toggled (App), and `.section-offstage *` pauses every CSS
+  // animation inside it — so the .lib-rise cascade sits frozen on its first
+  // keyframe until the tab is actually opened, and plays exactly once, on the
+  // first visit. Re-keying the subtree on each visible→true (what used to
+  // happen) replayed the cascade by REMOUNTING ~450 album rows: the browser
+  // had already painted the populated library, so the user saw it load, blink
+  // out and rise again half a second later. Returning to a tab must not look
+  // like a reload.
 
   // ── Effect 1: 4 endpoints unrelated to albumSort ─────────────────────
   // Re-fires when the user navigates back to Library (visible→true) so that
@@ -8001,7 +8009,7 @@ function LibrarySection({ isDark, lang, onPlayTrack, navigateToArtist, playerTra
       />
 
       <div style={{ flex:1, overflowY:'auto', padding:'clamp(36px, 7vh, 72px) 32px 100px' }}>
-        <div key={`lib-enter-${enterEpoch}`} style={{ maxWidth:'1180px', margin:'0 auto', display:'flex', flexDirection:'column', gap:'20px' }}>
+        <div style={{ maxWidth:'1180px', margin:'0 auto', display:'flex', flexDirection:'column', gap:'20px' }}>
 
           <div className="lib-rise">
             <LibraryHeroLine stats={stats} albumCount={albumsCount} isDark={isDark} lang={lang} />
@@ -16334,21 +16342,21 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
     [currentTrack, fetchedLyrics]
   );
 
-  // On-demand credits, same contract as the lyrics fallback above: producers /
-  // samples live in SQLite and are overlaid server-side, but a queue item can
-  // still reach the player bare (an endpoint that skipped the overlay, or a
-  // full shape whose real file_path made handlePlayTrack's slim-enrichment
-  // skip it — that's how AI playlists lost their credits). Fetching by
-  // track_id makes the chevron and the samples pill source-independent.
+  // Credits (producer / label / samples) for whatever is playing, ALWAYS
+  // fetched by track_id — never inferred from the shape the track arrived in.
+  // Queue items come from a dozen sources with a dozen shapes: an album row
+  // carries six fields, a playlist row a few more, a search hit everything.
+  // The player used to skip this fetch whenever the shape already had *any*
+  // credit, which made the panel depend on the entry point: a shape with a
+  // producer but no sample links never got its samples, and a shape with
+  // neither got both only if App's slim-enrichment happened to fire for it.
+  // One cached request per track (module-level, deduped) buys the guarantee
+  // that the same song shows the same credits opened from anywhere.
   const [fetchedCredits, setFetchedCredits] = useState(null);
   useEffect(() => {
     setFetchedCredits(null);
     const id = currentTrack?.track_id;
     if (!id) return;
-    const hasCredits = !!(currentTrack.producer
-      || (currentTrack.samples && currentTrack.samples.length)
-      || (currentTrack.sampled_by && currentTrack.sampled_by.length));
-    if (hasCredits) return;
     let alive = true;
     fetchTrackCredits(id).then(c => { if (alive) setFetchedCredits(c); });
     return () => { alive = false; };

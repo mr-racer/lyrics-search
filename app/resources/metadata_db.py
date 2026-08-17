@@ -1933,6 +1933,13 @@ class MetadataDB:
 
     # ── Random facts ──
 
+    # Raw-fact sources allowed into the ambient facts strip (home page, player
+    # fallback, assistant ideas). Genius is deliberately absent: its facts are
+    # per-line reader notes ("Lyrics string: … Fact: …") and long "About"
+    # paragraphs — both read as lyric commentary, not as trivia about the song.
+    # Editorial songfacts.com entries and hand-added ones are what belongs there.
+    STRIP_FACT_SOURCES = ("songfacts.com", "manual")
+
     @classmethod
     def get_random_facts(
         cls,
@@ -1949,6 +1956,16 @@ class MetadataDB:
         come from the same artist/song. Scoped to the collection via
         ``fact_visibility`` (per-account) — refined rows themselves are
         collection-independent (see :meth:`get_refined_facts`).
+
+        **Lyric commentary is excluded on both sides.** Refined items carry the
+        stream they came from (``src``, written by the v2 refine pipeline);
+        ``annotation`` ones are rewrites of Genius line notes and always quote
+        a lyric ("В строке «…» отсылка к…") — fine inside the track drawer,
+        wrong for a strip that promises facts about the song. Raw top-ups are
+        restricted to :attr:`STRIP_FACT_SOURCES` for the same reason. Items
+        without ``src`` predate the v2 pipeline and stay (they are editorial in
+        the overwhelming majority); an entity whose whole refined list is
+        annotations is treated as an explicit empty one — see below.
 
         Returns list of dicts:
         ``{"fact", "context", "type", "artist", "artist_slug", "title"}``
@@ -2017,13 +2034,17 @@ class MetadataDB:
                         }
                         for item in _json.loads(refined_json)
                         if isinstance(item, dict)
+                        # Lyric-line rewrites belong to the track drawer, not
+                        # to the facts strip (see the docstring).
+                        and item.get("src") != "annotation"
                     ]
                 except Exception:
                     texts = []
                 texts = [t for t in texts if t["text"]]
                 if not texts:
-                    # Explicit [] — AI ran and kept nothing for this entity.
-                    # Mark it consumed so the raw top-up below can't resurface
+                    # Explicit [] — AI ran and kept nothing for this entity —
+                    # or everything it kept was lyric commentary. Either way,
+                    # mark it consumed so the raw top-up below can't resurface
                     # the very facts the AI rejected (same semantics as
                     # get_track_facts honouring an explicit empty refined list).
                     seen.add(key)
@@ -2041,8 +2062,11 @@ class MetadataDB:
                 seen.add(key)
 
         if len(out) < limit:
+            # A NULL source is legacy/hand-seeded, not Genius — those rows
+            # predate the source column and stay eligible.
+            src_ph = ", ".join("?" for _ in cls.STRIP_FACT_SOURCES)
             rows = conn.execute(
-                """
+                f"""
                 SELECT fact, context, type, artist, artist_slug, title FROM (
                     SELECT
                         af.fact,
@@ -2055,6 +2079,7 @@ class MetadataDB:
                     JOIN artists a ON a.slug = af.artist_slug
                     JOIN fact_visibility fv ON fv.kind = 'artist' AND fv.slug = a.slug
                     WHERE fv.collection_name = ? AND af.lang = 'en'
+                      AND (af.source IS NULL OR af.source IN ({src_ph}))
 
                     UNION ALL
 
@@ -2070,11 +2095,16 @@ class MetadataDB:
                     JOIN artists a ON a.slug = s.artist_slug
                     JOIN fact_visibility fv ON fv.kind = 'song' AND fv.slug = s.slug
                     WHERE fv.collection_name = ? AND sf.lang = 'en'
+                      AND (sf.source IS NULL OR sf.source IN ({src_ph}))
                 )
                 ORDER BY RANDOM()
                 LIMIT ?
                 """,
-                (collection_name, collection_name, limit * 4),
+                (
+                    collection_name, *cls.STRIP_FACT_SOURCES,
+                    collection_name, *cls.STRIP_FACT_SOURCES,
+                    limit * 4,
+                ),
             ).fetchall()
             for fact, context, ftype, artist, artist_slug, title in rows:
                 if len(out) >= limit:
@@ -4647,6 +4677,48 @@ class MetadataDB:
 
         result.sort(key=lambda a: (-_year_key(a), a["album"]))
         return result
+
+    @classmethod
+    def get_album_cover_options(cls, collection_name: str) -> list[dict]:
+        """One row per album that HAS cover art: ``{album, artist, cover_art_path}``.
+
+        The home page's library card only needs a handful of covers, and
+        pulling them out of :meth:`get_library_albums_from_sqlite` meant
+        building every album's full track list first (hundreds of KB of JSON
+        for three thumbnails). This groups in SQL instead: one row per album,
+        the most common artist tag as ``artist``, the first non-empty cover.
+
+        Order is deterministic (album title) so a seeded pick is reproducible
+        — see ``LibraryService.get_weekly_album_covers``.
+        """
+        conn = cls._connect()
+        rows = conn.execute(
+            # MIN() rather than bare columns: with GROUP BY, SQLite may return
+            # ANY row's value for an ungrouped column, and this pick has to be
+            # reproducible for a whole week.
+            """SELECT MIN(album) AS album, artist,
+                      MIN(cover_art_path) AS cover, COUNT(*) AS n
+               FROM track_metadata
+               WHERE collection_name = ?
+                 AND album IS NOT NULL AND album != ''
+                 AND cover_art_path IS NOT NULL AND cover_art_path != ''
+               GROUP BY LOWER(album), artist
+               ORDER BY LOWER(album), n DESC, artist""",
+            (collection_name,),
+        ).fetchall()
+        out: list[dict] = []
+        seen: set[str] = set()
+        for album, artist, cover, _n in rows:
+            key = (album or "").lower()
+            if key in seen:
+                continue          # first row per album wins — most tracks, ties by artist
+            seen.add(key)
+            out.append({
+                "album": album,
+                "artist": artist or "—",
+                "cover_art_path": cover,
+            })
+        return out
 
     # ── Track metadata mirror (SQLite copy of Qdrant payload) ──
 
