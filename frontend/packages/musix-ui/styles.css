@@ -4947,6 +4947,18 @@
        animations, so the home orb/aurora (and the artist-page rays, player
        glows, …) kept burning GPU behind whichever section was actually on
        screen. App stamps this class on every inactive section wrapper. */
+    /* …and visibility:hidden only skips PAINT — the browser still runs layout
+       for the whole subtree, so five inactive sections (the player with its
+       queue, the library with 450+ album cards, the assistant, «Для тебя», the
+       artist atlas) took part in every reflow. content-visibility:hidden skips
+       layout AND paint for the subtree while keeping the DOM and React state
+       intact — which is exactly why visibility (not display:none) was chosen
+       here in the first place.
+       The animation-play-state rule below stays as the fallback for engines
+       without content-visibility (Safari < 15.4). */
+    .section-offstage {
+      content-visibility: hidden;
+    }
     .section-offstage *, .section-offstage *::before, .section-offstage *::after {
       animation-play-state: paused !important;
     }

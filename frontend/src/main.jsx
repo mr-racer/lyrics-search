@@ -5914,6 +5914,24 @@ function AlbumsGridTab({ albums, suggestions, suggestionsLoading, loading = fals
   // Which collapsible groups the user has opened; resets on grouping switch.
   const [openGroups, setOpenGroups] = useState({});
   useEffect(() => { setOpenGroups({}); }, [grouping]);
+
+  // Grouping walks + sorts the WHOLE album list (450+ on a real library), so it
+  // must not run on every render — opening a single spoiler only changes
+  // openGroups, and re-grouping the entire library for that was pure waste.
+  // Hooks live above the empty-state early return below: they have to run on
+  // every render, in the same order, or React throws.
+  const grouped = useMemo(
+    () => groupLibraryAlbums(albums, grouping, sort, lang),
+    [albums, grouping, sort, lang],
+  );
+  const openAlbum = useCallback((a) => (e) => {
+    // Capture the cover square's on-screen rect so the modal can
+    // fly out of this exact card/row (shared-element transition).
+    const coverEl = e?.currentTarget?.querySelector('.lib-album-cover, .lib-album-row-cover');
+    const r = (coverEl || e?.currentTarget)?.getBoundingClientRect?.();
+    onAlbumOpen(a, r ? { top: r.top, left: r.left, width: r.width, height: r.height } : null);
+  }, [onAlbumOpen]);
+
   if (!loading && (!albums || albums.length === 0)) {
     return <div style={{ padding:'64px 20px', textAlign:'center', color:c.textSubtle, fontSize:'14px' }}>{ru ? 'Нет треков с album-тегом в этой библиотеке' : 'No tracks with album tag in this library'}</div>;
   }
@@ -5932,7 +5950,6 @@ function AlbumsGridTab({ albums, suggestions, suggestionsLoading, loading = fals
     { id:'genre',  pill: ru ? 'жанры' : 'genres',    label: ru ? 'по жанрам' : 'by genre' },
   ];
   const activeGroupOpt = groupOpts.find(o => o.id === grouping) || groupOpts[0];
-  const grouped = groupLibraryAlbums(albums, grouping, sort, lang);
   // Heavy groupings (a decade / genre can hold hundreds of albums) collapse:
   // once ANY group crosses the threshold, ALL groups render as spoilers,
   // closed by default — the header rows become a one-screen table of contents
@@ -5943,13 +5960,6 @@ function AlbumsGridTab({ albums, suggestions, suggestionsLoading, loading = fals
   const allOpen = collapsible && grouped.every(g => openGroups[g.key]);
   const toggleGroup = (key) => setOpenGroups(o => ({ ...o, [key]: !o[key] }));
 
-  const openAlbum = (a) => (e) => {
-    // Capture the cover square's on-screen rect so the modal can
-    // fly out of this exact card/row (shared-element transition).
-    const coverEl = e?.currentTarget?.querySelector('.lib-album-cover, .lib-album-row-cover');
-    const r = (coverEl || e?.currentTarget)?.getBoundingClientRect?.();
-    onAlbumOpen(a, r ? { top: r.top, left: r.left, width: r.width, height: r.height } : null);
-  };
   const renderGrid = (list) => (
     <div className="lib-grid">
       {list.map((a, i) => (
@@ -6194,6 +6204,20 @@ function formatRelativeTime(iso, lang) {
 // ─── RECENTLY PLAYED TAB ──────────────────────────────────────────────────────
 function RecentlyPlayedTab({ tracks, sort, onSortChange, isDark, lang, onPlayTrack, navigateToArtist, onAlbumClick, currentTrackId, onAddToPlaylist, onQueueNext }) {
   const c = useColors(isDark);
+  // Sorting parsed a Date per comparison (so O(n log n) Date allocations) on
+  // every single render. Memoized, and the timestamps are parsed ONCE per track
+  // instead of once per comparison. Above the early return — hook order.
+  const sorted = useMemo(() => {
+    if (!tracks || tracks.length === 0) return [];
+    if (sort === 'play_count') {
+      return [...tracks].sort((a, b) => (b.play_count || 0) - (a.play_count || 0));
+    }
+    return [...tracks]
+      .map(t => ({ t, ts: t.last_played ? Date.parse(t.last_played) || 0 : 0 }))
+      .sort((a, b) => b.ts - a.ts)
+      .map(x => x.t);
+  }, [tracks, sort]);
+
   if (!tracks || tracks.length === 0) {
     return <div style={{ padding:'40px 20px', textAlign:'center', color:c.textSubtle, fontSize:'13px' }}>{lang==='ru' ? 'История пуста — выбери что-нибудь и сыграй' : 'No playback history yet — pick something and play'}</div>;
   }
@@ -6201,10 +6225,6 @@ function RecentlyPlayedTab({ tracks, sort, onSortChange, isDark, lang, onPlayTra
     {id:'last_played', label: lang==='ru' ? 'недавно' : 'recent'},
     {id:'play_count',  label: lang==='ru' ? 'плеи ↓' : 'plays ↓'},
   ];
-  const sorted = [...tracks].sort((a, b) => {
-    if (sort === 'play_count') return (b.play_count||0) - (a.play_count||0);
-    return new Date(b.last_played) - new Date(a.last_played);
-  });
   return (
     <>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'4px 0 10px', fontSize:'11px' }}>
@@ -14535,13 +14555,17 @@ function useAudioAnalyser(audioRef, isPlaying) {
 //      × proximity-to-ideal-luminance, pick the max
 //   3) If no pixel qualifies (very monochrome cover), average all opaque
 //      pixels as a fallback
-// Cached per URL in a ref so track-toggle doesn't re-decode.
+// Cached per URL at MODULE level (not in a ref): a ref-held cache dies with the
+// component instance, so every remount re-decoded the cover and re-ran
+// getImageData for a colour we had already computed. Module state survives
+// remounts and is shared by every caller — same pattern as _playingBlob /
+// fetchTrackCredits above.
+const _coverColorCache = new Map();
 function useCoverColor(coverUrl) {
-  const [color, setColor] = useState(null);
-  const cacheRef = useRef({});
+  const [color, setColor] = useState(() => (coverUrl && _coverColorCache.get(coverUrl)) || null);
   useEffect(() => {
     if (!coverUrl) { setColor(null); return; }
-    if (cacheRef.current[coverUrl]) { setColor(cacheRef.current[coverUrl]); return; }
+    if (_coverColorCache.has(coverUrl)) { setColor(_coverColorCache.get(coverUrl)); return; }
     let cancelled = false;
     const img = new Image();
     // Covers are served same-origin (/api/v1/covers/...), where canvas reads
@@ -14594,7 +14618,7 @@ function useCoverColor(coverUrl) {
         }
         if (!best) best = n ? { r: sr/n, g: sg/n, b: sb/n } : { r: 124, g: 91, b: 255 };
         const hsl = rgbToHsl(best.r, best.g, best.b);
-        cacheRef.current[coverUrl] = hsl;
+        _coverColorCache.set(coverUrl, hsl);
         setColor(hsl);
       } catch (e) {
         // CORS-tainted canvas (server didn't send ACAO) or decode failure
@@ -14773,7 +14797,7 @@ function useCoverPalette(urls) {
 // determines bin-to-bar mapping: BOTH sides anchor low-freq near the cover
 // so a beat thunders inward from both directions, and high-freq decays
 // outward toward the column edge.
-function SpectrumBars({ side, analyserRef, dataArrayRef, color, isPlaying, barCount = 40 }) {
+function SpectrumBars({ side, analyserRef, dataArrayRef, color, isPlaying, barCount = 40, visible = true }) {
   const pathRef = useRef(null);
   const rawRef = useRef(null);
   const targetsRef = useRef(null);
@@ -14853,6 +14877,15 @@ function SpectrumBars({ side, analyserRef, dataArrayRef, color, isPlaying, barCo
       // Global fade so the wave eases in/out when play state flips.
       const targetFade = isPlaying ? 1 : 0;
       fadeRef.current += (targetFade - fadeRef.current) * 0.06;
+      // Paused and fully faded out — the ribbon is a flat line and every
+      // further frame would redraw the identical path. Snap the residue to a
+      // true zero, paint that last frame, and STOP: the loop used to run at
+      // 60fps forever (getByteFrequencyData + a ~2N-point path string +
+      // setAttribute), including while paused and while the whole player sat
+      // off-stage behind another section. The effect re-runs on isPlaying, so
+      // pressing play starts it right back up.
+      const idle = !isPlaying && fadeRef.current < 0.001;
+      if (idle) fadeRef.current = 0;
       // DOM index `d` → data-bin lookup so left/right mirror around the cover.
       for (let d = 0; d < N; d++) {
         const dataBin = side === 'left' ? (N - 1 - d) : d;
@@ -14861,11 +14894,15 @@ function SpectrumBars({ side, analyserRef, dataArrayRef, color, isPlaying, barCo
       }
       const el = pathRef.current;
       if (el) el.setAttribute('d', buildPath());
+      if (idle) { frameId = null; return; }
       frameId = requestAnimationFrame(render);
     };
+    // Off-stage sections stay mounted (App only flips visibility), so without
+    // this gate the wave animated for a player nobody was looking at.
+    if (!visible) return undefined;
     frameId = requestAnimationFrame(render);
-    return () => cancelAnimationFrame(frameId);
-  }, [analyserRef, dataArrayRef, isPlaying, N, side]);
+    return () => { if (frameId != null) cancelAnimationFrame(frameId); };
+  }, [analyserRef, dataArrayRef, isPlaying, N, side, visible]);
 
   // Cover-color → wave tint (HSL). Clamp saturation/lightness so very dark or
   // very pale covers still produce a readable tint.
@@ -15381,8 +15418,18 @@ function VolumeControl({ volume, onChange, isDark, lang }) {
 // Driven by App.playerTrack, which stays in lockstep with the player's current
 // track via handleTrackChange.
 function PlayerAmbient({ track, isDark }) {
+  // Server thumbnail, NOT the original. This layer is drawn under
+  // `filter: blur(64px)` + scale(1.12) (see .player-bg-cover), so the source
+  // resolution is unrecoverable in the output: at the rendered size a 64px
+  // blur radius spans ~10 source pixels of a 320px image and ~32 of a 1000px
+  // one — the same ~30 surviving features either way. Feeding the blur pass a
+  // 10× smaller texture is pure savings, and ?w=320 is almost always already
+  // in the HTTP cache from the library grid / queue rows.
+  // (The hero AlbumCover keeps `eager` + the full-size original — that one IS
+  // displayed large, and it still warms the no-cors cache entry useCoverColor
+  // relies on.)
   const coverUrl = track?.cover_art_path
-    ? (track.cover_art_path.startsWith('http') ? track.cover_art_path : `${API}${track.cover_art_path}`)
+    ? thumbCoverUrl(track.cover_art_path.startsWith('http') ? track.cover_art_path : `${API}${track.cover_art_path}`)
     : null;
   const pBg    = isDark ? '#0B0E14' : '#f4f5fa';
   const pBgEnd = isDark ? '#0F111A' : '#eaeaf0';
@@ -16072,6 +16119,48 @@ function CoverCombustion({ kind = 'fire', playKey = 0 }) {
   );
 }
 
+// ─── PlayerProgressRow — the ONLY part of the player that ticks with the audio ─
+// useCurrentTime() re-renders whichever component calls it, so the cost of the
+// subscription is the size of the subtree beneath the call site. PlayerSection
+// used to hold it at the top, which meant every 'timeupdate' (~4×/sec, all the
+// time, because App keeps the section mounted behind every other screen)
+// re-rendered the entire player: the whole queue, FactsRail, SimilarityRail,
+// AIChatDrawer, VolumeControl, the lyrics face — none of which are memoized.
+// The playhead is needed in exactly three spots and they all live here, so the
+// subscription lives here too and the rest of the player sleeps.
+// (Same reasoning as OrbProgressArc on the home screen — see its comment.)
+function PlayerProgressRow({ duration, onSeek, subtleColor }) {
+  const currentTime = useCurrentTime();
+  const fmt = (s) => {
+    if (!s || isNaN(s)) return '0:00';
+    const m = Math.floor(s / 60), sec = Math.floor(s % 60);
+    return `${m}:${sec.toString().padStart(2, '0')}`;
+  };
+  const progressPct = duration ? (currentTime / duration * 100) : 0;
+  return (
+    <div className="player-progress-row">
+      <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
+        <span style={{ color:subtleColor, fontFamily:"'JetBrains Mono', monospace", minWidth:'38px', textAlign:'right', fontSize:'11px' }}>
+          {fmt(currentTime)}
+        </span>
+        {/* Fill is painted in CSS from --pct with half-knob
+            compensation, so the fill edge meets the knob center
+            instead of running past it. */}
+        <input
+          type="range" min={0} max={duration || 0} step={0.5}
+          value={currentTime}
+          onChange={e => onSeek(Number(e.target.value))}
+          className="player-progress"
+          style={{ flex:1, '--pct': progressPct }}
+        />
+        <span style={{ color:subtleColor, fontFamily:"'JetBrains Mono', monospace", minWidth:'38px', fontSize:'11px' }}>
+          {fmt(duration)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrack, onTrackChange, onRequestAutoplay, onStreamSignal, audio, visible, lyricsMode, onToggleLyrics, onCloseLyrics, showToast, navigateToArtist, aiStatus, onAddToPlaylist, onQueueNext, onReorderQueue, shuffleOn, onToggleShuffle, streamActive, streamAdapt }) {
   const [playlist, setPlaylist] = useState(initialPlaylist || []);
   const [currentIndex, setCurrentIndex] = useState(-1);
@@ -16186,9 +16275,11 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
   // Derive playback state from shared audio hook
   const isPlaying = audio?.isPlaying ?? false;
   const isBuffering = audio?.isBuffering ?? false;
-  // Subscribe to external time store — PlayerSection's progress UI rebuilds
-  // ~4×/sec, but the rest of the app no longer re-renders on each tick.
-  const currentTime = useCurrentTime();
+  // NOTE: no useCurrentTime() here on purpose. The playhead subscription lives
+  // in PlayerProgressRow (a leaf), so a 'timeupdate' repaints the seek bar
+  // alone instead of re-rendering this whole section ~4×/sec — which it did
+  // even while the player sat off-stage behind another screen. Handlers that
+  // need the live position read audio.audioRef.current.currentTime directly.
   const duration = audio?.duration ?? 0;
   const [volume, setVolume] = useState(0.85);
 
@@ -16903,14 +16994,6 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
     return () => window.removeEventListener('keydown', handler);
   }, [duration, audio]);
 
-  const fmt = (s) => {
-    if (!s || isNaN(s)) return '0:00';
-    const m = Math.floor(s / 60), sec = Math.floor(s % 60);
-    return `${m}:${sec.toString().padStart(2, '0')}`;
-  };
-
-  const progressPct = duration ? (currentTime / duration * 100) : 0;
-
   return (
     <div className="player-accent-scope" style={{
       flex:1, display:'flex', flexDirection:'column', overflow:'hidden',
@@ -16988,6 +17071,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                 color={coverColor}
                 isPlaying={isPlaying}
                 barCount={spectrumBarCount}
+                visible={visible}
               />
             )}
             {!isMobile && (
@@ -16998,6 +17082,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
                 color={coverColor}
                 isPlaying={isPlaying}
                 barCount={spectrumBarCount}
+                visible={visible}
               />
             )}
             {!isMobile && (
@@ -17293,27 +17378,9 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
               </div>
             )}
 
-            {/* Progress bar */}
-            <div className="player-progress-row">
-              <div style={{ display:'flex', alignItems:'center', gap:'12px' }}>
-                <span style={{ color:pTextSubtle, fontFamily:"'JetBrains Mono', monospace", minWidth:'38px', textAlign:'right', fontSize:'11px' }}>
-                  {fmt(currentTime)}
-                </span>
-                {/* Fill is painted in CSS from --pct with half-knob
-                    compensation, so the fill edge meets the knob center
-                    instead of running past it. */}
-                <input
-                  type="range" min={0} max={duration || 0} step={0.5}
-                  value={currentTime}
-                  onChange={e => seek(Number(e.target.value))}
-                  className="player-progress"
-                  style={{ flex:1, '--pct': progressPct }}
-                />
-                <span style={{ color:pTextSubtle, fontFamily:"'JetBrains Mono', monospace", minWidth:'38px', fontSize:'11px' }}>
-                  {fmt(duration)}
-                </span>
-              </div>
-            </div>
+            {/* Progress bar — isolated so its 4Hz playhead subscription can't
+                re-render the rest of the player (see PlayerProgressRow). */}
+            <PlayerProgressRow duration={duration} onSeek={seek} subtleColor={pTextSubtle} />
 
             {/* Action icons — like / dislike / lyrics / ask AI.
                 (No transport row on phones: play/pause = cover tap, prev/next =
