@@ -123,7 +123,7 @@ services:
     security_opt:
       - no-new-privileges:true
     volumes:
-      - ./searxng:/etc/searxng
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
       - searxng-cache:/var/cache/searxng
     environment:
       - SEARXNG_BASE_URL=http://searxng:8080/
