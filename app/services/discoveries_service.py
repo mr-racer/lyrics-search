@@ -166,7 +166,7 @@ def _relation_cards(collection_name: str, idx: dict, ru: bool) -> list[dict]:
                 f"“{src['title']}” by {src['artist']} {verb} “{dst['title']}” by {dst['artist']}")
         cards.append({
             "kind": "relation",
-            "intent": "facts",
+            "intent": "general",
             "prompt": (f"объясни: {fact}" if ru else f"explain this: {fact}"),
             "fact": fact,
             "headline": f"{src['title']} {verb} {dst['title']}",
@@ -236,7 +236,7 @@ def _sample_cards(collection_name: str, idx: dict, ru: bool) -> list[dict]:
             "sample" if count == 1 else "samples")
         cards.append({
             "kind": "samples",
-            "intent": "facts",
+            "intent": "general",
             "prompt": (f"какие сэмплы использованы в «{track['title']}»?" if ru
                        else f"what samples are used in “{track['title']}”?"),
             "headline": track["title"],
@@ -323,7 +323,7 @@ def _artist_cards(collection_name: str, idx: dict, ru: bool, lang: str) -> list[
             "track" if count == 1 else "tracks")
         cards.append({
             "kind": "artist",
-            "intent": "facts",
+            "intent": "general",
             "prompt": f"расскажи про {name}" if ru else f"tell me about {name}",
             "headline": name,
             "subline": (f"{count} {word} в библиотеке" if ru

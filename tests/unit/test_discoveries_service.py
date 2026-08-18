@@ -103,7 +103,7 @@ def test_self_link_and_duplicate_pair_are_dropped(stub_db):
 def test_relation_card_sends_a_facts_turn(stub_db):
     stub_db["links"] = [_link(POINTS[0], POINTS[1], "sample")]
     card = _cards("relation")[0]
-    assert card["intent"] == "facts"
+    assert card["intent"] == "general"
     assert "Runaway" in card["prompt"]
 
 
@@ -156,7 +156,7 @@ def test_sample_card_needs_two_links_and_counts_unresolved(stub_db):
     card = cards[0]
     assert card["count"] == 2
     assert card["badge"] == "2 сэмпла"
-    assert card["intent"] == "facts"
+    assert card["intent"] == "general"
     assert card["track_id"] == "t1"
     assert card["prompt"] == "какие сэмплы использованы в «Runaway»?"
 
