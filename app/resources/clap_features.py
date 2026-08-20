@@ -15,7 +15,12 @@ import os
 from pathlib import Path
 
 import numpy as np
-import torch
+
+# torch is imported inside the functions that need it: this module is pulled in
+# by app.resources.__init__, so a top-level import put the ML stack on the
+# critical path of every `import app.*` — including SQLite-only CLIs like
+# scripts/create_owner. See CLAUDE.md, "Heavy/optional imports go inside
+# functions".
 
 try:
     import librosa
@@ -29,11 +34,12 @@ _FORCE_CPU = os.environ.get("FORCE_CPU", "").strip().lower() in ("1", "true", "y
 # helpers derive the device from the model's own parameters (so input tensors
 # always land where the weights are); this constant is only the last-resort
 # fallback for exotic model objects without parameters().
-DEVICE = torch.device("cpu")
+DEVICE = "cpu"   # a plain string: torch accepts it wherever a device is taken
 
 
 def _model_device(model) -> "torch.device":
     """Device the model's weights live on; falls back to CPU."""
+    import torch
     try:
         return next(model.parameters()).device
     except Exception:
@@ -254,6 +260,7 @@ def get_clap_embedding_long(clap_model, y: np.ndarray, sr: int,
     with CLAP pinned to the CPU this keeps the input batch co-located with the
     weights instead of assuming a global CUDA device.
     """
+    import torch
     if device is None:
         device = _model_device(clap_model)
     chunk_len = sr * chunk_sec
@@ -315,6 +322,7 @@ def _encode_clap(
         model_clap: pre-loaded CLAP module. If None, ModelRegistry.load_clap() is called.
         progress_callback: optional callable(current, total).
     """
+    import torch
     # Build lookup file_path → (artist_lower, title_lower)
     path_to_key = {}
     for t in tracks:

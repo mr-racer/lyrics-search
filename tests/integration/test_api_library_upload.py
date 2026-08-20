@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from app.api.main import create_app
 from app.api.dependencies import get_current_user
 from app.domain.models import User
+from app.services.library_service import LibraryService
 
 
 def _sha(b: bytes) -> str:
@@ -46,6 +47,24 @@ def _login(app, uid: str, email: str = "x@example.com") -> None:
     app.dependency_overrides[get_current_user] = lambda: User(
         id=uid, email=email, role="member", created_at=0.0,
     )
+
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def _client_with_library(app):
+    """TestClient whose app.state carries a LibraryService.
+
+    The lifespan leaves ``library_service`` None whenever Qdrant is unreachable
+    — which it always is under test — and batch-commit 503s on that check before
+    it ever reaches the service. These tests are about the route's own ownership
+    filtering and hand-off, so give it something to hand off to. Installed after
+    __enter__ because the lifespan would otherwise overwrite it.
+    """
+    with TestClient(app) as c:
+        c.app.state.library_service = LibraryService()
+        yield c
 
 
 # ---- batch-commit helpers (merged from test_api_library_upload_batch_commit.py) ----
@@ -150,7 +169,16 @@ class TestUploadRejected:
             assert "too large" in resp.json()["detail"].lower() or \
                    "exceeds" in resp.json()["detail"].lower()
 
-    def test_non_audio_returns_400(self, _server_mode):
+    def test_non_audio_returns_400(self, _server_mode, monkeypatch):
+        # Stub the sniff rather than depend on libmagic being installed: what
+        # this test pins is the ROUTE's rule — a DEFINITE non-audio verdict
+        # rejects even when the filename claims .flac. Without the stub, a host
+        # without libmagic returns application/octet-stream, the documented
+        # inconclusive case, where the extension whitelist is trusted on purpose
+        # and the upload is accepted.
+        monkeypatch.setattr(
+            "app.api.routes.library.sniff_audio_mime", lambda head: "text/x-shellscript",
+        )
         app = create_app()
         _login(app, "acct_alice")
         with TestClient(app) as c:
@@ -236,7 +264,7 @@ class TestBatchCommit:
         _login_batch(app, "acct_alice")
         with patch("app.services.library_service.LibraryService.enqueue_upload_indexing") as enq:
             enq.return_value = "job_abc"
-            with TestClient(app) as c:
+            with _client_with_library(app) as c:
                 resp = c.post(
                     "/api/v1/library/upload/batch-commit",
                     json={"upload_ids": [u1, u2]},
@@ -255,7 +283,7 @@ class TestBatchCommit:
         _login_batch(app, "acct_alice")
         with patch("app.services.library_service.LibraryService.enqueue_upload_indexing") as enq:
             enq.return_value = "job_x"
-            with TestClient(app) as c:
+            with _client_with_library(app) as c:
                 resp = c.post(
                     "/api/v1/library/upload/batch-commit",
                     json={"upload_ids": [my, not_mine]},
@@ -276,7 +304,7 @@ class TestBatchCommit:
         not_mine = _mk("acct_bob", "c" * 64, "z.flac")
         app = create_app()
         _login_batch(app, "acct_alice")
-        with TestClient(app) as c:
+        with _client_with_library(app) as c:
             resp = c.post(
                 "/api/v1/library/upload/batch-commit",
                 json={"upload_ids": [not_mine]},
@@ -291,7 +319,7 @@ class TestBatchCommit:
         _login_batch(app, "acct_alice")
         with patch("app.services.library_service.LibraryService.enqueue_upload_indexing") as enq:
             enq.return_value = "job_tm"
-            with TestClient(app) as c:
+            with _client_with_library(app) as c:
                 resp = c.post(
                     "/api/v1/library/upload/batch-commit",
                     json={"upload_ids": [u1],

@@ -41,13 +41,31 @@ import gc
 import os
 import threading
 from pathlib import Path
-import torch
 from typing import Any, Optional
 
-try:
-    from sentence_transformers import SentenceTransformer
-except ImportError:
-    raise RuntimeError("Install: pip install sentence-transformers")
+# torch and sentence_transformers are imported INSIDE the functions that need
+# them. This module is reached by ``app/resources/__init__.py``, so importing
+# them here put the whole ML stack on the critical path of anything that merely
+# touches ``app.*`` — including ``scripts/create_owner``, a SQLite-only
+# bootstrap CLI that then could not run on a machine without torch installed.
+# See CLAUDE.md: "Heavy/optional imports go inside functions".
+
+# Bound on first load rather than at import. It stays a module-level NAME on
+# purpose: the loader is exercised by swapping this attribute for a fake class,
+# which needs something to swap.
+SentenceTransformer: Any = None
+
+
+def _sentence_transformer_cls():
+    """The SentenceTransformer class, imported the first time one is built."""
+    global SentenceTransformer
+    if SentenceTransformer is None:
+        try:
+            from sentence_transformers import SentenceTransformer as _ST
+        except ImportError as e:
+            raise RuntimeError("Install: pip install sentence-transformers") from e
+        SentenceTransformer = _ST
+    return SentenceTransformer
 
 # CLAP imports
 try:
@@ -72,6 +90,7 @@ def _resolve_device() -> tuple[str, str]:
     used to be silent, and a silent CPU fallback on a GPU box is the difference
     between 50 ms and several seconds per encode. Say which, and why.
     """
+    import torch
     if _FORCE_CPU:
         return "cpu", "FORCE_CPU is set"
     try:
@@ -186,6 +205,8 @@ class ModelRegistry:
         one ``SentenceTransformer(...)`` is ever instantiated — a duplicate load
         would double the VRAM footprint for nothing.
         """
+        import torch
+        SentenceTransformer = _sentence_transformer_cls()
         cached = cls._text_model
         if cached is not None:
             return cached
@@ -325,6 +346,7 @@ class ModelRegistry:
     @classmethod
     def load_sparse(cls) -> Optional[Any]:
         """The learned-sparse encoder, or None if it is unavailable."""
+        import torch
         if cls._sparse_model is not None or "sparse" in cls._failed:
             return cls._sparse_model
 
@@ -352,6 +374,7 @@ class ModelRegistry:
     @classmethod
     def load_reranker(cls) -> Optional[tuple[Any, Any]]:
         """``(tokenizer, model)`` for the cross-encoder, or None."""
+        import torch
         if cls._reranker is not None or "reranker" in cls._failed:
             return cls._reranker
 
@@ -387,6 +410,7 @@ class ModelRegistry:
         Asymmetric like the dense model: queries and documents go through
         different heads, so the side is named rather than inferred.
         """
+        import torch
         model = cls.load_sparse()
         if model is None or not texts:
             return None
@@ -411,6 +435,7 @@ class ModelRegistry:
         assistant is one number compared against this: logits are not comparable
         between model families, probabilities roughly are.
         """
+        import torch
         pair = cls.load_reranker()
         if pair is None or not docs:
             return None
@@ -464,6 +489,7 @@ class ModelRegistry:
         CLAP is pinned to the CPU by design (device policy 2026-07): it stays
         resident forever and never competes with text models for VRAM.
         """
+        import torch
         if cls._clap_model is not None:
             return cls._clap_model
 

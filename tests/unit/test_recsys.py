@@ -100,7 +100,8 @@ class TestEnrichProfile:
         with patch.object(svc.stream_service, "long_term_profile", return_value=profile), \
              patch.object(svc, "ask_llm", new=mock_llm):
             out = await enrich_profile(qdrant_client=object(), collection_name="col")
-        assert out == {"portrait": None, "island_names": {}, "islands": []}
+        assert out == {"portrait": None, "island_names": {}, "headline": None,
+                       "islands": []}
         mock_llm.assert_not_awaited()
 
 

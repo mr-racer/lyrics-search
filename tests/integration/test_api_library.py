@@ -687,6 +687,12 @@ class TestSharingIndexSanityCheck:
         app = create_app()
         _login_mode(app)
         with TestClient(app) as c:
+            # /library/index answers 503 while the library service is missing,
+            # and the lifespan leaves it missing whenever Qdrant is unreachable
+            # (always, under test). The rule being pinned here is the one AFTER
+            # that gate: a folder that is not on this host is a 400, not a job.
+            from app.services.library_service import LibraryService
+            c.app.state.library_service = LibraryService()
             resp = c.post(
                 "/api/v1/library/index",
                 json={"folder_path": "/nonexistent/path/xyz", "collection_name": "x"},

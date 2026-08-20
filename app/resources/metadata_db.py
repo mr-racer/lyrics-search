@@ -476,6 +476,19 @@ class MetadataDB:
     # use the per-thread map below and leave _instance as None.
     _instance: Optional[sqlite3.Connection] = None
 
+    # Database files whose schema init() has already built. init() is called
+    # from 23 places, several of them per-request (the upload route calls it on
+    # every file), and each call re-executed the whole _SCHEMA_SQL list plus
+    # every ALTER TABLE — the ALTERs raising "duplicate column" and being
+    # swallowed one at a time. That is ~50 ms of pure waste per call.
+    #
+    # Keyed by PATH, because the schema lives in the file: a second connection
+    # to the same database correctly finds the tables already there, while a
+    # test repointing DB_PATH gets a real init for its new file. close() drops
+    # the memo, so a fixture that recreates a database at a path it already
+    # used still rebuilds the schema.
+    _schema_ready: set = set()
+
     # One connection PER THREAD, keyed by thread ident. CPython's sqlite3
     # connections are NOT safe for concurrent use from multiple threads even
     # with check_same_thread=False: parallel requests through FastAPI's
@@ -561,8 +574,15 @@ class MetadataDB:
 
     @classmethod
     def init(cls) -> None:
-        """Create tables, indexes, and any new ALTER TABLE statements idempotently."""
+        """Create tables, indexes, and any new ALTER TABLE statements idempotently.
+
+        A no-op after the first call for a given connection — see
+        :attr:`_schema_ready`. Callers may keep calling it defensively.
+        """
         conn = cls._connect()
+        db_key = str(DB_PATH)
+        if db_key in cls._schema_ready:
+            return
         for sql in _SCHEMA_SQL:
             try:
                 conn.execute(sql)
@@ -665,6 +685,8 @@ class MetadataDB:
 
         conn.commit()
         logger.info("[MetadataDB] Schema initialised")
+
+        cls._schema_ready.add(db_key)
 
     @classmethod
     def _migrate_fact_visibility_backfill(
@@ -2156,6 +2178,7 @@ class MetadataDB:
         if cls._instance is not None:
             conns.append(cls._instance)
             cls._instance = None
+        cls._schema_ready.clear()
         for conn in conns:
             try:
                 conn.close()

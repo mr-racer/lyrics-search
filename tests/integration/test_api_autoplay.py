@@ -36,11 +36,18 @@ def client(tmp_path, monkeypatch):
     # query_points(...).points, not the removed legacy .search().
     qdrant = MagicMock()
     qdrant.retrieve.return_value = [_mk_point("seed", 1.0)]
-    qdrant.query_points.return_value.points = [
+    candidates = [
         _mk_point("t1", 0.9, artist="A"),
         _mk_point("t2", 0.85, artist="B"),
         _mk_point("t3", 0.8, artist="C"),
     ]
+    qdrant.query_points.return_value.points = candidates
+    # The candidate pool is read through qdrant_utils.light_points, which pages
+    # with scroll() and expects a (batch, next_offset) tuple. Left as a bare
+    # MagicMock it returns something unpackable into neither, the scroll is
+    # logged as failed, and every pool comes back empty.
+    qdrant.scroll.return_value = (candidates, None)
+    qdrant.count.return_value = MagicMock(count=len(candidates))
     db_stub = MagicMock()
     db_stub.qdrant = qdrant
     app.state.db_client = db_stub

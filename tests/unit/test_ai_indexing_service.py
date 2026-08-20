@@ -94,22 +94,32 @@ def test_get_latest_ai_job_distinct_per_task_type():
 
 @pytest.fixture(autouse=True)
 def _reset_service_state():
-    """Clear module-level job runner state between tests to avoid cross-test pollution."""
+    """Clear module-level job runner state between tests, then restore it.
+
+    Restoring matters: the registry is filled once by the side-effect import of
+    ``app.services.ai_tasks``, and a cleared-and-abandoned registry cannot be
+    rebuilt by a later import (the module is already in sys.modules). Tests in
+    other files that assert a task is registered would then fail on ordering
+    alone.
+    """
     try:
         from app.services import ai_indexing_service
-        ai_indexing_service._registry.clear()
-        ai_indexing_service._active.clear()
-        ai_indexing_service._running_tasks.clear()
     except ImportError:
-        pass  # Module doesn't exist yet during Step 1 (failing tests phase).
+        yield  # Module doesn't exist yet during Step 1 (failing tests phase).
+        return
+
+    registries = (
+        ai_indexing_service._registry,
+        ai_indexing_service._active,
+        ai_indexing_service._running_tasks,
+    )
+    saved = [dict(r) for r in registries]
+    for r in registries:
+        r.clear()
     yield
-    try:
-        from app.services import ai_indexing_service
-        ai_indexing_service._registry.clear()
-        ai_indexing_service._active.clear()
-        ai_indexing_service._running_tasks.clear()
-    except ImportError:
-        pass
+    for live, original in zip(registries, saved):
+        live.clear()
+        live.update(original)
 
 
 async def _noop_task(job, db_client, llm_client):

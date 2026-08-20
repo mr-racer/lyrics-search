@@ -191,7 +191,7 @@ class TestAudiodbService:
 
         captured_urls = []
 
-        def fake_get(url, timeout=None):
+        def fake_get(url, timeout=None, **kwargs):
             captured_urls.append(url)
             return img_response if "audiodb.com/cutout" in url or "audiodb.com/thumb" in url else json_response
 
@@ -309,7 +309,7 @@ class TestAudiodbService:
 
         captured = []
 
-        def fake_get(url, timeout=None):
+        def fake_get(url, timeout=None, **kwargs):
             captured.append(url)
             if "search.php" in url:
                 return audiodb_json
@@ -339,7 +339,7 @@ class TestAudiodbService:
         deezer_json = _deezer_json_response()
         img_response = _jpeg_response()
 
-        def fake_get(url, timeout=None):
+        def fake_get(url, timeout=None, **kwargs):
             if "search.php" in url:
                 return audiodb_json
             if "audiodb.com" in url:  # cutout + thumb downloads
@@ -369,7 +369,7 @@ class TestAudiodbService:
 
         captured = []
 
-        def fake_get(url, timeout=None):
+        def fake_get(url, timeout=None, **kwargs):
             captured.append(url)
             return audiodb_json if "search.php" in url else img_response
 
@@ -391,7 +391,7 @@ class TestAudiodbService:
 
         captured = []
 
-        def fake_get(url, timeout=None):
+        def fake_get(url, timeout=None, **kwargs):
             captured.append(url)
             return audiodb_json if "search.php" in url else img_response
 
@@ -414,7 +414,7 @@ class TestAudiodbService:
 
         captured = []
 
-        def fake_get(url, timeout=None):
+        def fake_get(url, timeout=None, **kwargs):
             captured.append(url)
             if "search.php" in url:
                 return audiodb_json
@@ -441,7 +441,7 @@ class TestAudiodbService:
         deezer_json = _deezer_json_response(name="KANYE WEST")
         img_response = _jpeg_response()
 
-        def fake_get(url, timeout=None):
+        def fake_get(url, timeout=None, **kwargs):
             if "search.php" in url:
                 return audiodb_json
             if "api.deezer.com" in url:
@@ -462,7 +462,7 @@ class TestAudiodbService:
         audiodb_json.json.return_value = {"artists": None}
         audiodb_json.raise_for_status.return_value = None
 
-        def fake_get(url, timeout=None):
+        def fake_get(url, timeout=None, **kwargs):
             if "search.php" in url:
                 return audiodb_json
             raise requests.ConnectionError("deezer down")
@@ -481,7 +481,7 @@ class TestAudiodbService:
         deezer_empty.json.return_value = {"data": [], "total": 0}
         deezer_empty.raise_for_status.return_value = None
 
-        def fake_get2(url, timeout=None):
+        def fake_get2(url, timeout=None, **kwargs):
             return audiodb_json if "search.php" in url else deezer_empty
 
         with patch("app.services.audiodb_service.requests.get", side_effect=fake_get2):
@@ -503,7 +503,7 @@ class TestAudiodbService:
 
         captured = []
 
-        def fake_get(url, timeout=None):
+        def fake_get(url, timeout=None, **kwargs):
             captured.append(url)
             return img_response if ("cutout" in url or "thumb" in url) else json_response
 
@@ -531,7 +531,7 @@ class TestAudiodbService:
         img_response.raise_for_status.return_value = None
         with patch(
             "app.services.audiodb_service.requests.get",
-            side_effect=lambda u, timeout=None: img_response if ("cutout" in u or "thumb" in u) else json_response,
+            side_effect=lambda u, timeout=None, **kwargs: img_response if ("cutout" in u or "thumb" in u) else json_response,
         ):
             with patch("app.services.audiodb_service.asyncio.sleep", return_value=None):
                 calls = []
@@ -557,7 +557,7 @@ class TestAudiodbService:
         good_json.json.return_value = _audiodb_response()
         good_json.raise_for_status.return_value = None
 
-        def fake_get(url, timeout=None):
+        def fake_get(url, timeout=None, **kwargs):
             if "good+artist" in url:
                 return good_json
             if "cutout" in url or "thumb" in url:

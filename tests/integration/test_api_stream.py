@@ -528,7 +528,14 @@ class TestProfileAndAxisPlaylist:
         # cluster a payloads sit at +0.5 on every axis → they match the target
         assert all(t["track_id"].startswith("a") for t in body["tracks"])
 
-    def test_axis_playlist_without_stats_is_empty(self, client):
+    def test_axis_playlist_without_stats_is_empty(self, client, monkeypatch):
+        # An empty stats table is no longer enough to reach this branch: the
+        # bundled norm reference in clap_features stands in for a collection
+        # that was never indexed. Take that away too, or the axis term stays
+        # live and the endpoint happily ranks.
+        monkeypatch.setattr(
+            "app.resources.clap_features.load_axis_norm_reference", lambda: None,
+        )
         resp = client.post("/api/v1/recommend/axis-playlist",
                            json={"targets": {}, "limit": 5})
         assert resp.status_code == 200
@@ -598,7 +605,10 @@ class TestAIEndpointsRegistered:
             resp = client.post("/api/v1/recommend/profile/ai-enrich",
                                json={"lang": "ru"})
         assert resp.status_code == 200
-        assert resp.json() == {"portrait": "П.", "island_names": {"x": "Имя"}}
+        # `headline` — the 2-4 word name for this taste — rides along with the
+        # portrait; the route passes the enrichment through untouched.
+        assert resp.json() == {"portrait": "П.", "island_names": {"x": "Имя"},
+                               "headline": None}
 
     def test_ai_playlist_llm_failure_returns_502(self, client):
         from unittest.mock import AsyncMock, patch

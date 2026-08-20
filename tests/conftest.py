@@ -15,6 +15,23 @@ sys.modules.setdefault("musicbrainzngs", types.ModuleType("musicbrainzngs"))
 # sentence-transformers and a reachable Qdrant. The docker runner exports
 # MUSIX_LIVE_STACK=1 (see scripts/run_docker_tests.sh).
 if not os.environ.get("MUSIX_LIVE_STACK"):
+    # Point Qdrant at a name that cannot resolve, BEFORE app.* imports read it.
+    #
+    # Every TestClient(create_app()) runs the lifespan, which opens a Qdrant
+    # connection. The suite expects that to fail — the tests assert limited-mode
+    # behaviour — but "fail" and "fail quickly" are not the same thing: a
+    # loopback port that is filtered rather than closed (a Windows firewall
+    # default) makes the connect sit until it times out. That was 2.2 s per
+    # client construction, paid by a few hundred function-scoped fixtures, and it
+    # was the whole reason this suite took ten minutes instead of seconds.
+    #
+    # 192.0.2.0/24 is TEST-NET-1 (RFC 5737): guaranteed unroutable, and an IP
+    # literal so nothing waits on DNS either. _block_outbound_network below
+    # refuses it at connect() the moment it is dialled. Set unconditionally, not
+    # setdefault: a developer with QDRANT_URL exported for the real app should
+    # still get fast, hermetic tests. tests/docker/ opts out via MUSIX_LIVE_STACK.
+    os.environ["QDRANT_URL"] = "http://192.0.2.1:6333"
+
     sys.modules.setdefault("laion_clap", types.ModuleType("laion_clap"))
 
     _torch_stub = types.ModuleType("torch")
@@ -51,6 +68,76 @@ def pytest_configure(config):
         original_setup(self)
 
     Package.setup = _patched_setup
+
+
+# Hosts a test may legitimately reach: the loopback services a developer might
+# have running (Qdrant, SearXNG, a local LLM). Everything else is the internet.
+_LOCAL_HOSTS = frozenset({
+    "localhost", "127.0.0.1", "0.0.0.0", "::1", "", None,
+})
+
+
+class OutboundNetworkBlocked(RuntimeError):
+    """Raised when a test tries to reach a host outside loopback."""
+
+
+def _is_local(host) -> bool:
+    if host in _LOCAL_HOSTS:
+        return True
+    h = str(host).strip("[]").lower()
+    return h in _LOCAL_HOSTS or h.startswith("127.") or h.endswith(".localhost")
+
+
+@pytest.fixture(autouse=True)
+def _block_outbound_network(monkeypatch):
+    """Fail fast instead of dialling the internet.
+
+    Two entire suites used to spend most of their wall clock on real outbound
+    calls: ``llm_client`` resolves to ``api.openai.com`` whenever LLM_BASE_URL is
+    unset (with the built-in ``lm-studio`` key, so every call was a TLS handshake
+    ending in 401), and the facts services hit TheAudioDB / Deezer / Genius. Each
+    of those is a DNS lookup plus a round trip per call, which is why the
+    integration suite ran for minutes and why its results depended on whether the
+    machine had a working uplink.
+
+    Blocking at ``getaddrinfo`` means no DNS wait and no connect timeout — the
+    call raises immediately, and the production code paths under test already
+    treat an unreachable endpoint as a state to degrade from. A test that WANTS a
+    remote response has to stub it, which is what these tests believed they were
+    doing all along.
+
+    The live-stack suite (tests/docker/) is exempt: it exists to talk to real
+    services.
+    """
+    if os.environ.get("MUSIX_LIVE_STACK"):
+        yield
+        return
+
+    import socket
+
+    real_getaddrinfo = socket.getaddrinfo
+    real_connect = socket.socket.connect
+
+    def guarded_getaddrinfo(host, port, *args, **kwargs):
+        if not _is_local(host):
+            raise OutboundNetworkBlocked(
+                f"outbound network blocked in tests: {host}:{port} — "
+                f"stub this call (see tests/conftest.py::_block_outbound_network)"
+            )
+        return real_getaddrinfo(host, port, *args, **kwargs)
+
+    def guarded_connect(self, address, *args, **kwargs):
+        # Backstop for a connection made to a literal IP, which never asks DNS.
+        if isinstance(address, tuple) and address and not _is_local(address[0]):
+            raise OutboundNetworkBlocked(
+                f"outbound network blocked in tests: {address[0]} — "
+                f"stub this call (see tests/conftest.py::_block_outbound_network)"
+            )
+        return real_connect(self, address, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", guarded_getaddrinfo)
+    monkeypatch.setattr(socket.socket, "connect", guarded_connect)
+    yield
 
 
 @pytest.fixture(autouse=True)

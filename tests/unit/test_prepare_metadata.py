@@ -25,16 +25,23 @@ class TestPrepareMetadata:
         assert "B" not in titles
         assert "D" in titles
 
-    def test_filters_by_lyrics_length(self, monkeypatch):
-        """Tracks with fewer than 50 chars of lyrics are excluded."""
+    def test_keeps_tracks_with_little_or_no_lyrics(self, monkeypatch):
+        """There is deliberately NO lyrics gate.
+
+        An instrumental, or a track whose lyrics were never found, still earns a
+        place in the index: it gets a CLAP audio vector and a text vector built
+        from title+artist. Dropping it here would make it unreachable by audio
+        search and invisible in the library, which is why the old
+        "fewer than 50 chars is not a track" rule was removed.
+        """
         data = {
             "A — B": {"title": "B", "artist": "A", "duration": 200, "lyrics": "short"},
-            "C — D": {"title": "D", "artist": "C", "duration": 200, "lyrics": "x " * 100},
+            "C — D": {"title": "D", "artist": "C", "duration": 200, "lyrics": ""},
+            "E — F": {"title": "F", "artist": "E", "duration": 200, "lyrics": "x " * 100},
         }
         result = utils_module.prepare_metadata(data)
         titles = [r["title"] for r in result]
-        assert "B" not in titles
-        assert "D" in titles
+        assert titles == ["B", "D", "F"]
 
     @pytest.mark.skip(reason="prepare_metadata() calls np.percentile on empty array — crashes")
     def test_empty_input(self):

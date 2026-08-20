@@ -19,13 +19,32 @@ _FIXED_COLLECTION = "acct_user-A"
 
 @pytest.fixture(autouse=True)
 def _reset_service_state():
+    """Isolate the module-level registries — and PUT THEM BACK.
+
+    These are process-wide dicts populated by the side-effect import of
+    ``app.services.ai_tasks``. Clearing them on teardown without restoring left
+    every later test in the session looking at an empty registry: the import is
+    already cached, so ``import app.services.ai_tasks`` could not repopulate it,
+    and the "task is registered" tests in other files failed purely because of
+    the order they ran in.
+    """
+    saved = (
+        dict(ai_indexing_service._registry),
+        dict(ai_indexing_service._active),
+        dict(ai_indexing_service._running_tasks),
+    )
     ai_indexing_service._registry.clear()
     ai_indexing_service._active.clear()
     ai_indexing_service._running_tasks.clear()
     yield
-    ai_indexing_service._registry.clear()
-    ai_indexing_service._active.clear()
-    ai_indexing_service._running_tasks.clear()
+    for live, original in zip(
+        (ai_indexing_service._registry,
+         ai_indexing_service._active,
+         ai_indexing_service._running_tasks),
+        saved,
+    ):
+        live.clear()
+        live.update(original)
 
 
 async def _instant_task(job, db_client, llm_client):

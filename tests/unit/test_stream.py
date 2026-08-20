@@ -697,7 +697,16 @@ class TestAxisPlaylist:
         )
         assert "calm" not in [c.track_id for c in out["tracks"]]
 
-    def test_no_axis_stats_returns_empty_with_reason(self):
+    def test_no_axis_stats_returns_empty_with_reason(self, monkeypatch):
+        """Truly statless — no collection stats AND no bundled reference.
+
+        The reference shipped in clap_features means an un-indexed collection
+        still normalises, so leaving the DB empty is no longer enough to reach
+        this branch; the fallback has to be removed too.
+        """
+        monkeypatch.setattr(
+            "app.resources.clap_features.load_axis_norm_reference", lambda: None,
+        )
         out = axis_playlist(
             qdrant_client=self._qdrant(), collection_name="col",
             axis_targets=_axes(0.0), limit=3,
@@ -997,8 +1006,15 @@ class TestSimilar:
         assert near.axis_match == pytest.approx(1.0)
         assert near.score == pytest.approx(SIMILAR_W_CLAP * 0.9 + SIMILAR_W_AXES * 1.0)
 
-    def test_no_axis_stats_degrades_to_pure_cosine(self):
-        """Without usable stats the axis term is 0 — order = CLAP order."""
+    def test_no_axis_stats_degrades_to_pure_cosine(self, monkeypatch):
+        """Without usable stats the axis term is 0 — order = CLAP order.
+
+        Same caveat as the axis-playlist case: the bundled norm reference has
+        to be taken away as well, or the axis term stays live.
+        """
+        monkeypatch.setattr(
+            "app.resources.clap_features.load_axis_norm_reference", lambda: None,
+        )
         hits = [
             _PointSimilar("second", score=0.8, payload={"sonic_axes": _axes(1.0)}),
             _PointSimilar("first", score=0.95, payload={"sonic_axes": _axes(-3.0)}),

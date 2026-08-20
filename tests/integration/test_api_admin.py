@@ -10,8 +10,8 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
+from app.api.dependencies import get_current_user
 from app.api.main import create_app
-from app.api.routes import admin as admin_route
 from app.resources.metadata_db import MetadataDB
 from app.services.auth_service import AuthService
 
@@ -59,9 +59,16 @@ def db(tmp_path, monkeypatch):
 
 def _app_as(user):
     """Build an app whose get_current_user resolves to `user` (so get_owner sees
-    its role). No lifespan needed — the override bypasses the JWT/auth_service."""
+    its role). No lifespan needed — the override bypasses the JWT/auth_service.
+
+    Override the dependency at its source, ``app.api.dependencies``: the admin
+    router imports ``get_owner``, which in turn Depends() on get_current_user,
+    and it never bound get_current_user into its own module namespace.
+    dependency_overrides keys on the function object, so the source is the only
+    place that is guaranteed to be the same object the router resolved.
+    """
     app = create_app()
-    app.dependency_overrides[admin_route.get_current_user] = lambda: user
+    app.dependency_overrides[get_current_user] = lambda: user
     return app
 
 
@@ -157,7 +164,12 @@ class TestAdminWipe:
         c = TestClient(app)
         r = c.post("/api/v1/admin/accounts/some-user/wipe")
         assert r.status_code == 200
-        fake_qdrant.delete_collection.assert_called_once_with("acct_some-user")
+        # The per-account facts index is a companion of the account collection
+        # and must go with it — an orphaned facts_acct_* would keep serving
+        # vectors for tracks that no longer exist.
+        assert [c.args[0] for c in fake_qdrant.delete_collection.call_args_list] == [
+            "acct_some-user", "facts_acct_some-user",
+        ]
         body = r.json()
         assert body["deleted"] is True
         assert body["user_id"] == "some-user"
