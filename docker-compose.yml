@@ -41,6 +41,9 @@ services:
       - http_proxy=
       - HTTPS_PROXY=
       - https_proxy=
+      # Where the SQLite DB lives. Defaults to its historical spot in cache/, so
+      # leaving MUSIX_DB_DIR unset changes nothing. See the /app/dbstore bind below.
+      - MUSIX_METADATA_DB=${MUSIX_METADATA_DB:-/app/cache/metadata.db}
       # Opt-in: allow non-owner MEMBERS to index the mounted music folder in place
       # (index-by-reference, no upload/copy). Must equal the CONTAINER side of the
       # music bind-mount below. Unset = owner-only folder indexing (default, safe).
@@ -50,6 +53,11 @@ services:
       # Bind mounts — visible/editable from the host (Windows project layout):
       - ./media:/app/media                      # client uploads (server mode)
       - ./cache:/app/cache                      # SQLite metadata.db, facts, transcoded
+      # Lets the SQLite DB live somewhere other than cache/ — e.g. keep the project
+      # on a slow disk but the DB on an SSD, since every playback event writes to it.
+      # Set MUSIX_DB_DIR in .env to use it; unset, this bind is inert because
+      # MUSIX_METADATA_DB still defaults to the historical cache/metadata.db.
+      - "${MUSIX_DB_DIR:-./cache/dbstore}:/app/dbstore"
       - ./weights:/app/weights                  # model weights
       - ./frontend/covers:/app/frontend/covers  # extracted album/artist art
       - ./.env:/app/.env:ro                     # proxy_config reads HTTP_PROXY directly from .env

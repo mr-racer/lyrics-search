@@ -40,10 +40,19 @@ services:
       - http_proxy=
       - HTTPS_PROXY=
       - https_proxy=
+      # Куда класть SQLite. Дефолт — историческое место в cache/, так что без
+      # MUSIX_DB_DIR в .env поведение не меняется. См. бинд /app/dbstore ниже.
+      - MUSIX_METADATA_DB=${MUSIX_METADATA_DB:-/app/cache/metadata.db}
       # - MEMBER_INDEX_ROOT=/music   # опционально: пустить участников индексировать /music
     volumes:
       - ./media:/app/media
       - ./cache:/app/cache
+      # SQLite отдельно от cache/, чтобы каталог проекта можно было держать на
+      # медленном диске (SMR/HDD), а базу — на SSD: в metadata.db пишется каждое
+      # событие проигрывания, а случайная запись — худший сценарий для SMR.
+      # Задаётся MUSIX_DB_DIR в .env; без него бинд инертен, потому что
+      # MUSIX_METADATA_DB по умолчанию продолжает указывать в cache/.
+      - "${MUSIX_DB_DIR:-./cache/dbstore}:/app/dbstore"
       - ./weights:/app/weights
       - ./frontend/covers:/app/frontend/covers
       - ./.env:/app/.env:ro
