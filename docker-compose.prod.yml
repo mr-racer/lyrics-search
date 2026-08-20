@@ -48,8 +48,12 @@ services:
       - ./frontend/covers:/app/frontend/covers
       - ./.env:/app/.env:ro
       - hf-cache:/app/.hf-cache
-      # Опционально (Windows): индексировать внешнюю папку по ссылке, read-only:
-      - "/mnt/music:/music"
+      # Библиотека, индексируемая ПО ССЫЛКЕ (файлы не копируются на сервер).
+      # Хостовый путь задаётся переменной MUSIX_MUSIC_DIR в .env; без неё берётся
+      # исторический /mnt/music, так что старые инсталляции не ломаются.
+      # КОНТЕЙНЕРНУЮ сторону (/music) менять нельзя: именно она записана в
+      # file_path у 5630 точек Qdrant и в track_metadata — правка = переиндексация.
+      - "${MUSIX_MUSIC_DIR:-/mnt/music}:/music"
     depends_on:
       qdrant:
         condition: service_healthy
