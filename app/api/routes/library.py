@@ -1185,6 +1185,11 @@ async def index_folder(
     to point the indexer (and the streamer) at arbitrary host paths, they
     upload via POST /library/upload instead.
 
+    ``append=false`` (the default) DROPS the account's collection and rebuilds
+    it from this folder — that is the onboarding contract. The settings-panel
+    "add music" button sends ``append=true``, which keeps everything already
+    indexed and adds only the files that are new.
+
     Returns {"status": "completed", "count": N, "message": "..."}
     """
     # Authorization before service availability: a member must see 403 even
@@ -1231,6 +1236,8 @@ async def index_folder(
         better_lyrics_quality=req.better_lyrics_quality,
         enhance_by_musicbrainz=req.enhance_by_musicbrainz,
         account_id=current_user.id,
+        append=req.append,
+        lang=(req.lang or "ru").strip().lower(),
     )
     return result
 

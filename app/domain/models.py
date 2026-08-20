@@ -137,6 +137,11 @@ class IndexRequest(BaseModel):
     better_lyrics_quality: bool = False
     text_model: Optional[str] = None
     enhance_by_musicbrainz: bool = False
+    # Дошить в существующую коллекцию вместо пересоздания. False — поведение
+    # первичной индексации (drop + recreate), на которое опирается онбординг.
+    append: bool = False
+    # Язык ИИ-обогащения, которое запускается после дошивания (append=True).
+    lang: str = "ru"
 
 
 class IndexProgress(BaseModel):

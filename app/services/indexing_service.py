@@ -156,6 +156,8 @@ class IndexingService:
     Wraps a ``LyricsSearchEngine`` instance for model + Qdrant access, but adds:
     - ``_create_collection`` — drop+recreate the target collection with the right
       vector schema (text + bm25 + optional clap)
+    - ``ensure_collection`` — the additive counterpart: create only when absent,
+      so "add music" extends a library instead of replacing it
     - ``_upsert_in_batches`` — chunked upsert with payload enrichment
     - ``fit`` / ``fit_with_progress`` — top-level entry that runs both passes
       (text encode + CLAP encode) and uploads
@@ -182,18 +184,74 @@ class IndexingService:
         """
         self.engine = engine
         self.collection_name = str(collection_name or engine.collection_name)
+        # Set by ensure_collection when appending into a collection that was
+        # built without a 'clap' vector — Qdrant can't add one after creation.
+        self._skip_clap = False
 
     def _vector_params(self) -> tuple[str, int]:
         """``(vector_name, vector_dim)`` — constants now, one model app-wide.
         Read off the engine so test fakes can still supply their own."""
         return self.engine.vector_name, self.engine.vector_dim
 
+    def _collection_exists(self) -> bool:
+        try:
+            existing = self.engine.qdrant_client.get_collections().collections
+        except Exception:
+            logger.exception("[IndexingService] get_collections failed for '%s'", self.collection_name)
+            raise
+        return any(c.name == self.collection_name for c in existing)
+
     def _create_collection(self, clap_paths: list) -> None:
+        """Drop the target collection if it exists, then build it from scratch.
+
+        DESTRUCTIVE — this is the first-index / full-rebuild path. Adding music
+        to a library that already has tracks must go through
+        :meth:`ensure_collection` instead.
+        """
+        if self._collection_exists():
+            self.engine.qdrant_client.delete_collection(self.collection_name)
+        self._build_collection(clap_paths)
+
+    def ensure_collection(self, clap_paths: list) -> None:
+        """Create the collection only when it is missing — the append entry point.
+
+        A collection built WITHOUT a ``clap`` vector (CLAP disabled at first
+        index) cannot gain one later: Qdrant fixes the named-vector set at
+        creation time. Rather than fail the whole append, note it and let the
+        upsert go text-only.
+        """
+        if not self._collection_exists():
+            self._build_collection(clap_paths)
+            return
+        if clap_paths and not self._collection_has_clap():
+            logger.warning(
+                "[IndexingService] '%s' has no 'clap' vector — appending without audio vectors",
+                self.collection_name,
+            )
+            self._skip_clap = True
+
+    def _collection_has_clap(self) -> bool:
+        """True unless the existing collection is provably clap-less.
+
+        Any probe failure answers True: a false negative would silently drop
+        audio vectors from a perfectly good collection, which is far worse than
+        letting the upsert raise a clear Qdrant error.
+        """
+        try:
+            vectors = self.engine.qdrant_client.get_collection(
+                self.collection_name,
+            ).config.params.vectors
+            return "clap" in vectors
+        except Exception:
+            logger.debug(
+                "[IndexingService] clap-vector probe failed for '%s' — assuming present",
+                self.collection_name, exc_info=True,
+            )
+            return True
+
+    def _build_collection(self, clap_paths: list) -> None:
         client = self.engine.qdrant_client
         coll = self.collection_name
-        existing = client.get_collections().collections
-        if any(c.name == coll for c in existing):
-            client.delete_collection(coll)
 
         vector_name, vector_dim = self._vector_params()
         vectors_config = {
@@ -267,7 +325,7 @@ class IndexingService:
                     song_info.get("artist", "").strip().lower(),
                     song_info.get("title", "").strip().lower(),
                 )
-                if clap_map:
+                if clap_map and not self._skip_clap:
                     clap_vec = clap_map.get(key)
                     if clap_vec is not None:
                         vector["clap"] = clap_vec
@@ -739,6 +797,38 @@ class IndexingService:
         except Exception:
             logger.exception("[IndexingService] sonic axes failed — indexing continues without them")
             return {}
+
+    def persist_axis_norm_stats_from_mirror(self) -> None:
+        """Recompute axis norm stats over the WHOLE collection (append path).
+
+        ``_persist_axis_norm_stats`` derives mean/std from the batch it is
+        handed — correct only when the batch IS the collection (the
+        drop-and-rebuild path). On an append the batch is a handful of tracks,
+        so writing its stats would replace the library's distribution with
+        noise (``n=5``). The SQLite mirror already carries ``sonic_axes`` per
+        track, so recompute from there: one indexed read, no Qdrant I/O.
+
+        Best-effort — an append that already upserted must not fail here.
+        """
+        try:
+            axes_map = {}
+            for point_id, payload in MetadataDB.get_light_points(self.collection_name):
+                axes = (payload or {}).get("sonic_axes")
+                if axes and all(a in axes for a in AXIS_NAMES):
+                    axes_map[point_id] = axes
+        except Exception:
+            logger.exception(
+                "[IndexingService] axis-stat mirror read failed for '%s'",
+                self.collection_name,
+            )
+            return
+        if not axes_map:
+            logger.info(
+                "[IndexingService] no sonic_axes in the mirror for '%s' — norm stats left as-is",
+                self.collection_name,
+            )
+            return
+        self._persist_axis_norm_stats(axes_map)
 
     def _persist_axis_norm_stats(self, sonic_axes_map: dict) -> None:
         """Write per-collection axis mean/std to collection_settings.

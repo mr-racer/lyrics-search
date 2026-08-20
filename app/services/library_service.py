@@ -301,8 +301,27 @@ class LibraryService:
                 job.overall_status = IndexStatus.COMPLETED
                 await self._notify_progress(job, {
                     "overall_status": IndexStatus.COMPLETED.value,
+                    "tracks_added": 0,
+                    "tracks_skipped": 0,
                     "message": "Нет треков для индексации",
                 })
+                return
+
+            # Adding music to a library that already holds these files must not
+            # duplicate them. The /library/upload SHA check only covers uploads
+            # that reached 'done'; this covers everything actually in Qdrant.
+            tracks, already = self._split_already_indexed(collection_name, tracks)
+            if already:
+                # Their pending_uploads rows were flipped to 'indexing' by the
+                # tag-read — point them back at the track that already exists.
+                self._apply_upload_track_ids(
+                    {k: upload_by_key[k] for k in already if k in upload_by_key}, already,
+                )
+            if not tracks:
+                logger.info(
+                    "[upload] every uploaded track is already in %s", collection_name,
+                )
+                await self._complete_with_nothing_new(job, len(already))
                 return
 
             # FACTS / bio / images run CONCURRENTLY with the encode pipeline — they
@@ -315,9 +334,13 @@ class LibraryService:
 
             # Encode pipeline: lyrics fetch ‖ (CLAP → dense) → upsert.
             pipeline = IndexPipeline(engine)
+            # append=True unconditionally: on a first upload the collection does
+            # not exist yet and ensure_collection creates it, so this is also the
+            # correct mode during onboarding — while a returning user's library
+            # is extended instead of being replaced by the new batch.
             _, track_ids = await pipeline.run(
                 tracks, collection_name, better_lyrics_quality=False,
-                progress=_pipeline_progress, resolve_track_ids=True,
+                progress=_pipeline_progress, resolve_track_ids=True, append=True,
             )
 
             # Wait for FACTS before AI (the AI tasks consume facts/bio as input).
@@ -341,6 +364,8 @@ class LibraryService:
             job.overall_status = IndexStatus.COMPLETED
             await self._notify_progress(job, {
                 "overall_status": IndexStatus.COMPLETED.value,
+                "tracks_added": len(tracks),
+                "tracks_skipped": len(already),
                 "message": f"Загружено {len(tracks)} треков",
             })
         except Exception as e:
@@ -550,6 +575,69 @@ class LibraryService:
             data[key] = info
             upload_by_key[key] = row["upload_id"]
         return data, upload_by_key
+
+    @staticmethod
+    def _split_already_indexed(collection_name: str, tracks: dict) -> tuple[dict, dict]:
+        """Partition a tag-read batch into (not yet indexed, already indexed).
+
+        Append-mode indexing assigns every upserted point a fresh ``uuid4``, so
+        re-running it over a file that is already in the collection produces a
+        DUPLICATE rather than an overwrite. The library's SQLite mirror already
+        knows every indexed ``file_path``, so filter against it up front.
+
+        Returns ``(fresh_tracks, {key: existing_point_id})``. A lookup failure
+        degrades to "nothing is indexed yet": re-indexing a track is recoverable,
+        silently dropping the user's new music is not.
+        """
+        try:
+            indexed: dict[str, str] = {}
+            for point_id, payload in MetadataDB.get_light_points(collection_name):
+                fp = (payload or {}).get("file_path")
+                if fp:
+                    indexed[str(fp)] = str(point_id)
+        except Exception:
+            logger.exception(
+                "[LibraryService] dedupe lookup failed for %s — indexing the whole batch",
+                collection_name,
+            )
+            return tracks, {}
+
+        if not indexed:
+            return tracks, {}
+
+        fresh: dict = {}
+        already: dict = {}
+        for key, meta in tracks.items():
+            fp = str((meta or {}).get("file_path") or "")
+            point_id = indexed.get(fp) if fp else None
+            if point_id:
+                already[key] = point_id
+            else:
+                fresh[key] = meta
+        if already:
+            logger.info(
+                "[LibraryService] %d/%d tracks already in %s — skipping",
+                len(already), len(tracks), collection_name,
+            )
+        return fresh, already
+
+    async def _complete_with_nothing_new(self, job, skipped: int) -> None:
+        """Finish a job whose whole batch was already in the library.
+
+        Every stage is closed explicitly — a stage left RUNNING keeps the client's
+        progress UI spinning forever on a job that will never emit again.
+        """
+        for stage in IndexStage:
+            sp = job.stages[stage]
+            sp.status = IndexStatus.COMPLETED
+            sp.completed_at = time.time()
+        job.overall_status = IndexStatus.COMPLETED
+        await self._notify_progress(job, {
+            "overall_status": IndexStatus.COMPLETED.value,
+            "tracks_added": 0,
+            "tracks_skipped": skipped,
+            "message": "Эти треки уже есть в библиотеке",
+        })
 
     def _apply_upload_track_ids(self, upload_by_key: dict, track_ids: dict) -> None:
         """Stamp pending_uploads.track_id from the pipeline's resolved point ids."""
@@ -831,10 +919,18 @@ class LibraryService:
         better_lyrics_quality: bool = False,
         enhance_by_musicbrainz: bool = False,
         account_id: str = "default",
+        append: bool = False,
+        lang: str = "ru",
     ) -> dict:
         """
         Index all audio files in folder with progress tracking.
         Returns dict with job_id for tracking progress via SSE.
+
+        ``append``: extend the existing library instead of rebuilding it — the
+        "add music" entry point. Default False keeps the first-index behaviour
+        (drop + recreate) the onboarding wizard relies on. When set, files
+        already in the collection are skipped and the AI-enrichment chain runs
+        for the newly added tracks, mirroring the upload flow.
 
         ``collection_name`` is REQUIRED — no silent default. Every collection
         this service creates must be the caller's derived account collection
@@ -887,7 +983,8 @@ class LibraryService:
         # Start indexing in background task to allow SSE progress updates
         task = asyncio.create_task(
             self._run_indexing_job(
-                job, better_lyrics_quality, enhance_by_musicbrainz, account_id
+                job, better_lyrics_quality, enhance_by_musicbrainz, account_id,
+                append=append, lang=lang,
             )
         )
         logger.info("[LibraryService] Background task created: %s", task)
@@ -901,6 +998,7 @@ class LibraryService:
     async def _run_indexing_job(
         self, job, better_lyrics_quality: bool,
         enhance_by_musicbrainz: bool = False, account_id: str = "default",
+        append: bool = False, lang: str = "ru",
     ):
         """Execute the indexing process with progress updates."""
         folder_path = job.folder_path
@@ -949,6 +1047,18 @@ class LibraryService:
             # rest — overlapped with CLAP/dense — and drives the LYRICS stage to
             # COMPLETED via its "scan" progress (see _on_index_progress).
             processed_files = await asyncio.to_thread(self._tagread_folder, audio_files)
+            skipped_existing = 0
+            if append:
+                # Re-scanning a folder that is mostly already indexed is the
+                # normal case for "add music" — only the new files should cost
+                # anything, and none of the old ones may be duplicated.
+                processed_files, already = self._split_already_indexed(
+                    collection_name, processed_files,
+                )
+                skipped_existing = len(already)
+                if not processed_files:
+                    await self._complete_with_nothing_new(job, skipped_existing)
+                    return
             track_count = len(processed_files)
             logger.info("[LibraryService] Tag-read done, %d identifiable tracks", track_count)
             stage_lyrics.message = f"Прочитано {track_count} треков"
@@ -1108,7 +1218,7 @@ class LibraryService:
                 _, track_ids = await pipeline.run(
                     processed_files, collection_name,
                     better_lyrics_quality=better_lyrics_quality,
-                    progress=_pipeline_cb, resolve_track_ids=True,
+                    progress=_pipeline_cb, resolve_track_ids=True, append=append,
                 )
                 logger.info("[LibraryService] IndexPipeline.run done")
 
@@ -1119,6 +1229,9 @@ class LibraryService:
                         await asyncio.to_thread(
                             self._run_sonic_descriptor_hook,
                             collection_name=collection_name,
+                            only_track_ids=(
+                                list(track_ids.values()) if append else None
+                            ),
                         )
                 except Exception as e:
                     logger.warning(
@@ -1188,11 +1301,25 @@ class LibraryService:
             # future searches load the matching model automatically and don't
             # accidentally hit Qdrant with a vector_name that doesn't exist.
 
+            # AI enrichment, but only on the "add music" path: the first-index
+            # flow drives these from the client's post-index wizard instead, and
+            # running them here too would double every task. Awaited so the job
+            # reports COMPLETED once the added tracks are fully enriched.
+            if append:
+                try:
+                    await self._run_ai_tasks(collection_name, track_count, lang, job=job)
+                except Exception:
+                    logger.exception(
+                        "[enrich] folder-append AI tasks failed (tracks already indexed)",
+                    )
+
             # Mark job as completed
             job.overall_status = IndexStatus.COMPLETED
             logger.info("[LibraryService] Job %s COMPLETED", job.job_id)
             await self._notify_progress(job, {
                 "overall_status": IndexStatus.COMPLETED.value,
+                "tracks_added": track_count,
+                "tracks_skipped": skipped_existing,
                 "message": f"Индексация завершена! {track_count} треков",
             })
 
@@ -1263,14 +1390,21 @@ class LibraryService:
             "eta_seconds": eta,
         })
 
-    def _run_sonic_descriptor_hook(self, collection_name: str) -> None:
+    def _run_sonic_descriptor_hook(
+        self, collection_name: str, only_track_ids: Optional[list] = None,
+    ) -> None:
         """Per-track Sonic Descriptor pass over a freshly indexed collection.
 
-        Scrolls the Qdrant collection once, pulling each point's ``audio`` (CLAP)
-        vector and ``slug`` payload, then invokes
-        :meth:`SonicDescriptorService.index_track_descriptor` per track. This emulates
-        a "per-track post-upsert hook" given that per-track upserts happen inside
-        ``LyricsDB._upsert_in_batches`` (not directly reachable from here).
+        Pulls each point's ``audio`` (CLAP) vector and ``slug`` payload, then
+        invokes :meth:`SonicDescriptorService.index_track_descriptor` per track.
+        This emulates a "per-track post-upsert hook" given that per-track upserts
+        happen inside ``LyricsDB._upsert_in_batches`` (not directly reachable
+        from here).
+
+        ``only_track_ids`` restricts the pass to specific points — the append
+        ("add music") path, where a full scroll would re-derive descriptors for
+        an entire library, transferring every CLAP vector in it, to serve the
+        handful of tracks just added.
 
         Runs in a worker thread (see ``asyncio.to_thread`` caller).
         """
@@ -1284,13 +1418,24 @@ class LibraryService:
         offset = None
         n_processed = 0
         while True:
-            points, next_offset = qdrant.scroll(
-                collection_name=collection_name,
-                offset=offset,
-                limit=500,
-                with_payload=["slug", "title", "artist"],
-                with_vectors=[audio_vector_name],
-            )
+            if only_track_ids is not None:
+                if not only_track_ids:
+                    return
+                points = qdrant.retrieve(
+                    collection_name=collection_name,
+                    ids=list(only_track_ids),
+                    with_payload=["slug", "title", "artist"],
+                    with_vectors=[audio_vector_name],
+                )
+                next_offset = None
+            else:
+                points, next_offset = qdrant.scroll(
+                    collection_name=collection_name,
+                    offset=offset,
+                    limit=500,
+                    with_payload=["slug", "title", "artist"],
+                    with_vectors=[audio_vector_name],
+                )
             if not points:
                 break
             for p in points:

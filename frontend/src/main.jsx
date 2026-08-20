@@ -9907,6 +9907,10 @@ function IndexingProgress({ stepStatus, stageProgress, lang, c, isDark, premiumN
   );
 }
 
+// Audio files the indexer accepts. A folder pick hands over covers, playlists
+// and .cue files too, so the browser filters before anything is uploaded.
+const AUDIO_FILE_RE = /\.(flac|mp3|m4a|aac|ogg|wav|opus)$/i;
+
 // ─── Shared indexing-job tracking (spec 2026-07-10-spa-routing, phase 2) ─────
 // One SSE consumer for /index/progress/{job_id} with the stage-merge semantics
 // SettingsPanel and OnboardingScreen used to duplicate inline: event-specific
@@ -9953,7 +9957,14 @@ function openIndexProgressStream(jobId, { onProgress, onComplete, onError }) {
         // Anything still pending when the job completes is implicitly done.
         stepStatus = Object.fromEntries(Object.entries(stepStatus).map(([k, v]) => [k, v === 'pending' ? 'done' : v]));
         onProgress({ stepStatus, stageProgress, aiStages });
-        onComplete(data.stages?.lyrics?.current || data.stages?.metadata?.current || 0);
+        // tracks_added is the server's own count of what landed in the
+        // collection. The stage counters are a fallback for a backend that
+        // predates it — they count files walked, not tracks added, so they
+        // over-report whenever anything was skipped as already indexed.
+        onComplete(
+          data.tracks_added ?? data.stages?.lyrics?.current ?? data.stages?.metadata?.current ?? 0,
+          data.tracks_skipped ?? 0,
+        );
       } else if (data.overall_status === 'failed') {
         close();
         onProgress({ stepStatus, stageProgress, aiStages });
@@ -9980,6 +9991,7 @@ function useIndexingJob({ onCompleted } = {}) {
   const [aiStages, setAiStages] = useState(null);  // guru AI tasks from the SSE stream (null until the AI phase)
   const [error, setError] = useState(null);
   const [trackCount, setTrackCount] = useState(null);
+  const [skippedCount, setSkippedCount] = useState(0);   // already-in-library tracks
   const closeRef = useRef(null);
   const onCompletedRef = useRef(onCompleted);
   onCompletedRef.current = onCompleted;
@@ -9990,7 +10002,7 @@ function useIndexingJob({ onCompleted } = {}) {
     closeRef.current = null;
     setJobInfo(null);
     setStatus('running');
-    setError(null); setTrackCount(null);
+    setError(null); setTrackCount(null); setSkippedCount(0);
     setStepStatus({ lyrics:'idle', facts:'idle', metadata:'idle', dense:'idle', audio:'idle', analysis:'idle' });
     setStageProgress({});
     setAiStages(null);
@@ -10001,10 +10013,13 @@ function useIndexingJob({ onCompleted } = {}) {
     closeRef.current?.();
     setJobInfo({ jobId, resumed });
     setStatus('running');
-    if (resumed) { setError(null); setTrackCount(null); setStepStatus({}); setStageProgress({}); setAiStages(null); }
+    if (resumed) { setError(null); setTrackCount(null); setSkippedCount(0); setStepStatus({}); setStageProgress({}); setAiStages(null); }
     closeRef.current = openIndexProgressStream(jobId, {
       onProgress: (p) => { setStepStatus(p.stepStatus); setStageProgress(p.stageProgress); setAiStages(p.aiStages ?? null); },
-      onComplete: (count) => { setStatus('completed'); setTrackCount(count); onCompletedRef.current?.(count); },
+      onComplete: (count, skipped) => {
+        setStatus('completed'); setTrackCount(count); setSkippedCount(skipped || 0);
+        onCompletedRef.current?.(count, skipped || 0);
+      },
       onError: (msg) => { setStatus('failed'); setError(msg); },
     });
   }, []);
@@ -10012,21 +10027,21 @@ function useIndexingJob({ onCompleted } = {}) {
   // Immediate-completion path: POST /library/index answered without a job_id.
   const completeSync = useCallback((count) => {
     setStepStatus({ lyrics:'done', facts:'done', metadata:'done', dense:'done', audio:'done', analysis:'done' });
-    setTrackCount(count); setStatus('completed');
-    onCompletedRef.current?.(count);
+    setTrackCount(count); setSkippedCount(0); setStatus('completed');
+    onCompletedRef.current?.(count, 0);
   }, []);
 
   const fail = useCallback((message) => { setStatus('failed'); setError(message); }, []);
 
   const reset = useCallback(() => {
     closeRef.current?.(); closeRef.current = null;
-    setJobInfo(null); setStatus('idle'); setError(null); setTrackCount(null);
+    setJobInfo(null); setStatus('idle'); setError(null); setTrackCount(null); setSkippedCount(0);
     setStepStatus({}); setStageProgress({}); setAiStages(null);
   }, []);
 
   useEffect(() => () => { closeRef.current?.(); }, []);
 
-  return { status, jobInfo, stepStatus, stageProgress, aiStages, error, trackCount, begin, attach, completeSync, fail, reset };
+  return { status, jobInfo, stepStatus, stageProgress, aiStages, error, trackCount, skippedCount, begin, attach, completeSync, fail, reset };
 }
 
 // Floating indicator for an indexing job running while its origin UI (settings
@@ -10309,286 +10324,6 @@ function IndexingModal({
           </button>
         )}
       </div>
-    </div>
-  );
-}
-
-// ─── AI Indexing card (inside SettingsPanel) ──────────────────────────────────
-// Pipeline order: tasks run back-to-back so a local LLM serves one job at a time.
-const AI_ENRICH_TASKS = ['sonic_vibe', 'refined_facts', 'artist_bio'];
-
-function AIIndexingCard({ isDark, lang, aiStatus }) {
-  const c = useColors(isDark);
-  const [status, setStatus] = useState({ sonic_vibe: null, refined_facts: null, artist_bio: null });
-  const [pipelineTask, setPipelineTask] = useState(null);  // task currently driven by the run-all pipeline
-  const [detailsOpen, setDetailsOpen] = useState(false);
-  const [error, setError] = useState(null);
-  const pollRef = useRef(null);
-  const cancelRef = useRef(false);
-
-  const refresh = useCallback(async () => {
-    try {
-      const data = await apiFetch(`/library/ai-index/status`);
-      setStatus(data);
-      return data;
-    } catch { return null; /* swallow — surface via error state only if Run/Reset fails */ }
-  }, []);
-
-  useEffect(() => {
-    refresh();
-    return () => {
-      cancelRef.current = true;
-      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
-    };
-  }, [refresh]);
-
-  const isRunning = (s) => s && s.status === 'running';
-  const someRunning = isRunning(status.sonic_vibe) || isRunning(status.refined_facts) || isRunning(status.artist_bio);
-
-  useEffect(() => {
-    if (someRunning && !pollRef.current) {
-      pollRef.current = setInterval(refresh, 3000);
-    } else if (!someRunning && pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-      // One last refresh to capture the final state.
-      refresh();
-    }
-  }, [someRunning, refresh]);
-
-  // One-button pipeline: POST each task in order, then poll its status until
-  // it leaves 'running' before starting the next. This replaces the old
-  // per-task Run buttons whose busy flags reset as soon as the POST returned
-  // (the job kept running server-side), leaving buttons in wrong states.
-  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-  const runAll = async () => {
-    setError(null);
-    try {
-      for (const taskType of AI_ENRICH_TASKS) {
-        if (cancelRef.current) return;
-        setPipelineTask(taskType);
-        await apiFetch(`/library/ai-index/${taskType}`, {
-          method: 'POST',
-          body: JSON.stringify({
-            lang,
-            llm_base_url: localStorage.getItem('llm_base_url') || undefined,
-            llm_model:    localStorage.getItem('llm_model')    || undefined,
-            ...(taskType === 'artist_bio' && { bio_source: 'web' }),
-          }),
-        });
-        let s;
-        do {
-          await sleep(3000);
-          if (cancelRef.current) return;
-          const data = await refresh();
-          s = data && data[taskType];
-        } while (s && s.status === 'running');
-      }
-    } catch (e) {
-      setError(e?.message || String(e));
-    } finally {
-      if (!cancelRef.current) setPipelineTask(null);
-    }
-  };
-
-  const resetCache = async (taskType) => {
-    const confirmMsg = lang === 'ru'
-      ? 'Сбросить кэш для этой задачи?'
-      : 'Reset cache for this task?';
-    if (!window.confirm(confirmMsg)) return;
-    setError(null);
-    try {
-      await apiFetch(
-        `/library/ai-index/${taskType}/cache`,
-        { method: 'DELETE' },
-      );
-      refresh();
-    } catch (e) {
-      setError(e?.message || String(e));
-    }
-  };
-
-  const fmtStatus = (s) => {
-    if (!s) return lang === 'ru' ? 'Никогда не запускалась' : 'Never run';
-    const skipped = s.n_skipped || 0;
-    const parts = [
-      `${lang === 'ru' ? 'Статус' : 'Status'}: ${s.status}`,
-      `${s.n_done}/${s.n_total} ${lang === 'ru' ? 'обработано' : 'processed'}`,
-    ];
-    if (skipped) {
-      parts.push(`${skipped} ${lang === 'ru' ? 'пропущено' : 'skipped'}`);
-    }
-    if (s.n_failed) {
-      parts.push(`${s.n_failed} ${lang === 'ru' ? 'ошибок' : 'failed'}`);
-    }
-    if (s.lang) parts.push(s.lang.toUpperCase());
-    return parts.join(' · ');
-  };
-
-  // Detect the "completed with zero real work" case so we can surface a
-  // distinct note instead of letting "done · 0/N processed · N skipped"
-  // get lost in the muted-mono line.
-  const isEmptyDone = (s) =>
-    s && s.status === 'done' && (s.n_done || 0) === 0 && (s.n_skipped || 0) > 0;
-
-  const skipReasonHint = (taskType) => {
-    if (taskType === 'sonic_vibe') {
-      return lang === 'ru'
-        ? 'Нет входных данных: ни sonic_tags, ни фактов. Сначала запусти SONIC PROMPT-PROBING и/или обогащение фактами в библиотеке.'
-        : 'No inputs available: neither sonic_tags nor song facts. Run sonic prompt-probing and/or facts enrichment in the library first.';
-    }
-    if (taskType === 'artist_bio') {
-      return lang === 'ru'
-        ? 'Веб-поиск не вернул результатов. Проверь подключение к интернету и настройки ИИ-ассистента.'
-        : 'Web search returned no results. Check your internet connection and AI assistant settings.';
-    }
-    return lang === 'ru'
-      ? 'Нет фактов о треках/артистах для уточнения. Сначала обогати библиотеку фактами.'
-      : 'No song or artist facts to refine. Enrich your library with facts first.';
-  };
-
-  const taskTitle = (t) => ({
-    sonic_vibe:    'Sonic Vibe',
-    refined_facts: lang === 'ru' ? 'Уточнённые факты' : 'Refined facts',
-    artist_bio:    lang === 'ru' ? 'Биографии артистов' : 'Artist bios',
-  })[t];
-
-  const busyAll = !!pipelineTask || someRunning;
-  const canRun = !busyAll && aiStatus?.aiAvailable && aiStatus?.aiEnabledForCollection !== false;
-
-  // Aggregate line across tasks that have ever run.
-  const agg = AI_ENRICH_TASKS.reduce((acc, t) => {
-    const s = status[t];
-    if (s) { acc.ran += 1; acc.done += s.n_done || 0; acc.total += s.n_total || 0; acc.failed += s.n_failed || 0; }
-    return acc;
-  }, { ran: 0, done: 0, total: 0, failed: 0 });
-
-  return (
-    <div style={{ marginTop: 16, paddingTop: 16, borderTop: `1px solid ${c.border}` }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
-        <div className="mono-label" style={{ color: c.textMuted }}>
-          {lang === 'ru' ? 'ИИ-ОБОГАЩЕНИЕ' : 'AI ENRICHMENT'}
-        </div>
-        <div style={{ fontSize: 11, color: c.textSubtle }}>
-          {lang === 'ru' ? 'Язык' : 'Language'}: {lang.toUpperCase()}
-        </div>
-      </div>
-
-      {aiStatus?.aiEnabledForCollection === false && (
-        <div style={{
-          margin: '0 0 12px', padding: '9px 12px', borderRadius: 10,
-          fontSize: 12, lineHeight: 1.5,
-          background: isDark ? 'rgba(255,160,40,0.10)' : 'rgba(255,160,40,0.08)',
-          border: '1px solid rgba(255,160,40,0.35)',
-          color: isDark ? '#f4c08a' : '#a06010',
-          display: 'flex', alignItems: 'center', gap: 10,
-        }}>
-          <span style={{ flex: 1 }}>
-            ⚠ {lang==='ru'
-              ? 'ИИ отключён для этой библиотеки.'
-              : 'AI is disabled for this library.'}
-          </span>
-          <button
-            onClick={async () => {
-              try {
-                await apiFetch(`/library/ai-enabled`, {
-                  method: 'PATCH', body: JSON.stringify({ enabled: true }),
-                });
-                aiStatus?.setAiEnabledForCollection?.(true);
-              } catch (e) { console.error(e); }
-            }}
-            style={{
-              padding: '5px 12px', borderRadius: 999, fontSize: 12, fontWeight: 600,
-              background: 'rgba(255,160,40,0.20)', color: 'inherit',
-              border: '1px solid rgba(255,160,40,0.50)', cursor: 'pointer',
-            }}
-          >{lang==='ru'?'Включить':'Enable'}</button>
-        </div>
-      )}
-
-      <div style={{ fontSize: 12, color: c.textMuted, lineHeight: 1.55, marginBottom: 12 }}>
-        {lang === 'ru'
-          ? 'Sonic vibe, уточнённые факты и биографии артистов. Три задачи выполняются по очереди с вашим ИИ-ассистентом.'
-          : 'Sonic vibe, refined facts and artist bios. The three tasks run back to back with your AI assistant.'}
-      </div>
-
-      <button className="cta-v3" disabled={!canRun} onClick={runAll}
-        title={!aiStatus?.aiAvailable ? (lang==='ru'?'ИИ-ассистент не подключён':'Connect AI assistant to enable') : undefined}
-        style={{ width: '100%', opacity: canRun ? 1 : 0.45, cursor: canRun ? 'pointer' : 'not-allowed' }}>
-        {busyAll
-          ? `⏳ ${pipelineTask ? taskTitle(pipelineTask) : (lang==='ru'?'Идёт обработка':'Processing')}…`
-          : (lang === 'ru' ? '▶ Запустить обогащение' : '▶ Run enrichment')}
-      </button>
-
-      <div style={{
-        marginTop: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
-        fontSize: 11, color: c.textMuted, fontFamily: "'Geist', 'Inter', system-ui, sans-serif",
-      }}>
-        <span>
-          {agg.ran === 0
-            ? (lang === 'ru' ? 'Ещё не запускалось' : 'Never run')
-            : `${agg.done}/${agg.total} ${lang==='ru'?'обработано':'processed'}${agg.failed ? ` · ${agg.failed} ${lang==='ru'?'ошибок':'failed'}` : ''}`}
-        </span>
-        <button className="pill-v3" onClick={() => setDetailsOpen(o => !o)}
-          style={{ padding: '4px 12px', fontSize: 11 }}>
-          {lang === 'ru' ? 'Детали' : 'Details'} {detailsOpen ? '▴' : '▾'}
-        </button>
-      </div>
-
-      {detailsOpen && AI_ENRICH_TASKS.map(t => {
-        const s = status[t];
-        return (
-          <div key={t} style={{ padding: '10px 0 0', marginTop: 10, borderTop: `1px solid ${c.border}` }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-              <div style={{ fontWeight: 600, color: c.text, fontSize: 13 }}>
-                {taskTitle(t)}
-                {(pipelineTask === t || isRunning(s)) && <span style={{ color: c.textMuted, fontWeight: 400 }}> · {lang==='ru'?'идёт':'running'}…</span>}
-              </div>
-              <button onClick={() => resetCache(t)} disabled={busyAll}
-                title={lang==='ru'?'Сбросить кэш задачи':'Reset task cache'}
-                style={{
-                  padding: '3px 10px', borderRadius: 999, fontSize: 11,
-                  background: 'transparent', color: c.textMuted,
-                  border: `1px solid ${c.border}`,
-                  cursor: (busyAll) ? 'not-allowed' : 'pointer',
-                  opacity: (busyAll) ? 0.45 : 1,
-                }}>
-                ↻ {lang === 'ru' ? 'Сброс' : 'Reset'}
-              </button>
-            </div>
-            <div style={{ marginTop: 4, fontSize: 11, color: c.textMuted, fontFamily: "'Geist', 'Inter', system-ui, sans-serif" }}>
-              {fmtStatus(s)}
-            </div>
-            {isEmptyDone(s) && (
-              <div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.5, color: 'oklch(70% 0.13 75)' }}>
-                ⚠ {lang === 'ru'
-                  ? 'Завершено без реальной работы — все треки пропущены.'
-                  : 'Completed with no real work — every track was skipped.'}
-                <br />{skipReasonHint(t)}
-              </div>
-            )}
-            {s && s.error && (
-              <div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.5, color: 'oklch(62% 0.18 25)' }}>
-                ✗ {s.error}
-              </div>
-            )}
-          </div>
-        );
-      })}
-
-      {detailsOpen && (
-        <div style={{ fontSize: 11, color: c.textSubtle, marginTop: 10, lineHeight: 1.5 }}>
-          {lang === 'ru'
-            ? 'Результат генерируется на текущем языке интерфейса. Смени язык и запусти повторно для другого.'
-            : 'Output is generated in the current UI language. Switch language and re-run for another.'}
-        </div>
-      )}
-
-      {error && (
-        <div style={{ marginTop: 10, fontSize: 12, color: 'oklch(62% 0.18 25)' }}>
-          {error}
-        </div>
-      )}
     </div>
   );
 }
@@ -11189,50 +10924,202 @@ function OwnerAdminDashboard({ onLogout }) {
   );
 }
 
+// ─── Add music to a library that already exists (settings → account block) ──
+// ServerOnboardingScreen covers the FIRST load; this is its counterpart for a
+// returning user. The server path is identical (POST /library/upload per file →
+// batch-commit → one SSE job), so the only state owned here is the browser-side
+// upload phase: indexing progress comes from the App-level useIndexingJob,
+// which is what makes it survive closing the panel or reloading the page.
+//
+// Sharing mode has no upload endpoint (/library/upload is server-mode only) —
+// there the library IS a folder on this host, so it is indexed in place.
+function AddMusicCard({ isDark, lang, instanceMode, indexingJob }) {
+  const c = useColors(isDark);
+  const ru = lang === 'ru';
+  const [choosing, setChoosing] = useState(false);   // folder/files choice row open
+  const [upload, setUpload] = useState(null);        // { done, total, name } while files stream up
+  const [error, setError] = useState(null);
+  const serverMode = instanceMode === 'server';
+
+  const running = indexingJob.status === 'running';
+  const busy = running || !!upload;
+
+  // webkitdirectory isn't a React prop (it gets dropped), and this input mounts
+  // only once the choice row is revealed — so a callback ref, not a mount
+  // effect, which would fire once against a null node and never re-run.
+  const attachFolderInput = useCallback((node) => {
+    if (node) { node.setAttribute('webkitdirectory', ''); node.setAttribute('directory', ''); }
+  }, []);
+
+  const onPicked = async (e) => {
+    const picked = Array.from(e.target.files || []).filter(f => AUDIO_FILE_RE.test(f.name));
+    e.target.value = '';        // reset so picking the same folder again re-fires change
+    setChoosing(false);
+    if (!picked.length) { setError(ru ? 'Аудиофайлов не найдено' : 'No audio files found'); return; }
+    setError(null);
+
+    // Sequential — a parallel pool would need a server-side memory bound.
+    const ids = [];
+    for (let i = 0; i < picked.length; i++) {
+      setUpload({ done: i, total: picked.length, name: picked[i].name });
+      try {
+        const fd = new FormData();
+        fd.append('file', picked[i], picked[i].name);
+        const res = await apiFetch('/library/upload', { method: 'POST', body: fd });
+        if (res?.upload_id) ids.push(res.upload_id);
+      } catch (err) {
+        // One rejected file (too large, not audio) must not sink the batch.
+        console.warn('upload failed for', picked[i].name, err);
+      }
+    }
+    setUpload(null);
+    if (!ids.length) { setError(ru ? 'Не удалось загрузить файлы' : 'Upload failed'); return; }
+
+    indexingJob.begin();
+    try {
+      const res = await apiFetch('/library/upload/batch-commit', {
+        method: 'POST', body: JSON.stringify({ upload_ids: ids, lang }),
+      });
+      indexingJob.attach(res.job_id);
+    } catch (err) { indexingJob.fail(String(err.message || err)); }
+  };
+
+  const addHostFolder = async () => {
+    setChoosing(false); setError(null);
+    let path = '';
+    try { path = (await apiFetch('/library/pick-folder')).path || ''; }
+    catch (err) { setError(String(err.message || err)); return; }
+    if (!path) return;          // dialog cancelled
+    indexingJob.begin();
+    try {
+      // append:true — extend the library instead of rebuilding it from this folder.
+      const res = await apiFetch('/library/index', {
+        method: 'POST', body: JSON.stringify({ folder_path: path, append: true, lang }),
+      });
+      if (res.status === 'failed') { indexingJob.fail(res.message); return; }
+      if (!res.job_id) { indexingJob.completeSync(res.count || 0); return; }
+      indexingJob.attach(res.job_id);
+    } catch (err) { indexingJob.fail(String(err.message || err)); }
+  };
+
+  const divider = {
+    marginTop: 16, paddingTop: 16,
+    borderTop: `1px solid ${isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)'}`,
+  };
+
+  // ── Phase 1: files streaming to the server ────────────────────────────────
+  if (upload) {
+    const pct = upload.total ? Math.round(100 * upload.done / upload.total) : 0;
+    return (
+      <div style={divider}>
+        <OBStageBar c={c} label={ru ? 'Загрузка на сервер' : 'Uploading to the server'}
+          state="running" pct={pct} count={`${upload.done}/${upload.total}`} />
+        <div style={{ fontSize: 11.5, color: c.textSubtle, marginTop: 4,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {upload.name}
+        </div>
+        <div style={{ fontSize: 11.5, color: c.textSubtle, marginTop: 8, lineHeight: 1.5 }}>
+          {ru ? 'Не закрывайте вкладку, пока файлы загружаются.'
+              : 'Keep this tab open while the files upload.'}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Phase 2: the server is indexing them ──────────────────────────────────
+  if (running) {
+    const coreKeys = Object.keys(WIZ_STAGE_LABELS);
+    const coreDone = coreKeys.every(k => indexingJob.stepStatus[k] === 'done');
+    return (
+      <div style={divider}>
+        <div className="mono-label" style={{ color: c.textSubtle, marginBottom: 12 }}>
+          {ru ? 'ДОБАВЛЕНИЕ МУЗЫКИ' : 'ADDING MUSIC'}
+        </div>
+        {coreKeys.map(k => {
+          const st = indexingJob.stepStatus[k] || 'pending';
+          const pr = indexingJob.stageProgress[k] || { current: 0, total: 0 };
+          const pct = st === 'done' ? 100 : pr.total > 0 ? Math.round(100 * (pr.current || 0) / pr.total) : 0;
+          const count = (st === 'running' && pr.total > 1) ? `${pr.current || 0}/${pr.total}` : null;
+          return (
+            <OBStageBar key={k} c={c} label={ru ? WIZ_STAGE_LABELS[k].ru : WIZ_STAGE_LABELS[k].en}
+              state={st} pct={pct} count={count}
+              indeterminate={st === 'running' && !pr.total} />
+          );
+        })}
+        {(indexingJob.aiStages || coreDone) && (
+          <>
+            <div className="mono" style={{ display: 'flex', alignItems: 'center', gap: 9,
+              margin: '14px 0 10px', fontSize: 11, letterSpacing: '0.2em',
+              textTransform: 'uppercase', color: '#c3b8ff' }}>
+              ✨ {ru ? 'С помощью гуру' : 'With the guru'}
+            </div>
+            <GuruStagesFromSse ru={ru} c={c} aiStages={indexingJob.aiStages} />
+          </>
+        )}
+        <div style={{ fontSize: 11.5, color: c.textSubtle, marginTop: 10, lineHeight: 1.5 }}>
+          {ru ? 'Можно закрыть настройки или обновить страницу — обработка продолжится.'
+              : 'You can close settings or reload the page — processing continues.'}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Phase 3 (also the resting state): the entry point ─────────────────────
+  const failed = indexingJob.status === 'failed';
+  const failMsg = indexingJob.error === 'connection_lost'
+    ? (ru ? 'Соединение потеряно' : 'Connection lost') : indexingJob.error;
+  const pickAccept = 'audio/*,.flac,.mp3,.m4a,.aac,.ogg,.wav,.opus';
+  return (
+    <div style={divider}>
+      {!choosing ? (
+        <button onClick={() => (serverMode ? setChoosing(true) : addHostFolder())}
+          disabled={busy} className="cta-v3"
+          style={{ padding: '10px 18px', fontSize: 13.5, display: 'flex', alignItems: 'center', gap: 9 }}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            strokeWidth="2" strokeLinecap="round">
+            <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
+          </svg>
+          {ru ? 'Добавить музыку' : 'Add music'}
+        </button>
+      ) : (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <label className="pill-v3" style={{ padding: '7px 15px', fontSize: 13, cursor: 'pointer' }}>
+            {ru ? 'Папка' : 'Folder'}
+            <input ref={attachFolderInput} type="file" multiple accept={pickAccept}
+              onChange={onPicked} style={{ display: 'none' }} />
+          </label>
+          <label className="pill-v3" style={{ padding: '7px 15px', fontSize: 13, cursor: 'pointer' }}>
+            {ru ? 'Файлы' : 'Files'}
+            <input type="file" multiple accept={pickAccept}
+              onChange={onPicked} style={{ display: 'none' }} />
+          </label>
+          <button className="pill-v3" style={{ padding: '7px 15px', fontSize: 13 }}
+            onClick={() => { setChoosing(false); setError(null); }}>
+            {ru ? 'Отмена' : 'Cancel'}
+          </button>
+        </div>
+      )}
+      {(error || failed) && (
+        <div style={{ marginTop: 10, fontSize: 12, color: c.red }}>
+          {error || failMsg}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, onTheme, onLang, collections, userPoints, onLogout, instanceMode, showToast, indexingJob }) {
   const c = useColors(isDark);
   const isMobile = useIsMobile();  // full-screen panel + tighter gutters on phones
   const [closing, setClosing] = useState(false);
   const requestClose = () => { setClosing(true); setTimeout(onClose, 260); };
   const [guideOpen, setGuideOpen] = useState(false);  // «Как пользоваться» re-open
-  const [collName, setCollName] = useState('');
-  const [folderPath, setFolderPath] = useState('');
-  const [betterLyrics, setBetterLyrics] = useState(false);
-  const [refineMetadata, setRefineMetadata] = useState(false);
-  // Progress state comes from the App-level indexingJob hook (spec phase 2):
-  // the SSE subscription lives above this panel, so closing it or navigating
-  // sections no longer loses the running job. Opening the panel while a job
-  // is already running (started earlier / resumed after F5) surfaces the
-  // staged modal immediately, past the AI-setup step.
-  const indexing = indexingJob.status === 'running';
-  const stepStatus = indexingJob.stepStatus;
-  const stageProgress = indexingJob.stageProgress;
-  const modalTrackCount = indexingJob.trackCount;
-  const modalError = indexingJob.error === 'connection_lost'
-    ? (lang === 'ru' ? 'Соединение потеряно' : 'Connection lost')
-    : indexingJob.error;
-  const [showModal, setShowModal] = useState(() => indexingJob.status === 'running');
-  const [indexPhase, setIndexPhase] = useState(() =>  // 'ai-setup' | 'indexing' | 'ai-bootstrap' | 'ai-running'
-    indexingJob.status === 'running' ? 'indexing' : 'ai-setup');
-  const [enabledForNewCollection, setEnabledForNewCollection] = useState(true);
-  // Which AI choice the CURRENT run was started with — read on completion.
-  // A ref (not state): the completion effect below must see the value the run
-  // began with even if the component re-rendered in between.
-  const aiEnabledRef = useRef(true);
-
-  // Job completion → phase transition (mirrors the old inline SSE handler).
-  // Gated on showModal so a background job that finishes while this panel
-  // shows only the form doesn't flip phases behind the scenes.
-  const prevJobStatusRef = useRef(indexingJob.status);
-  useEffect(() => {
-    const prev = prevJobStatusRef.current;
-    prevJobStatusRef.current = indexingJob.status;
-    if (prev !== 'running' || indexingJob.status !== 'completed' || !showModal) return;
-    // (collections refresh happens in useIndexingJob's onCompleted at App level)
-    if (aiStatus?.aiAvailable && aiEnabledRef.current) setIndexPhase('ai-bootstrap');
-    else setIndexPhase('indexing');  // stay in 'indexing' phase showing Done UI
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [indexingJob.status, showModal]);
+  // Indexing progress is rendered inline by AddMusicCard in the account block
+  // and comes from the App-level indexingJob hook, so it survives closing this
+  // panel and a page reload. The staged full-screen modal this panel used to
+  // pop for the same job is gone: the folder form that started it was removed
+  // in Phase D, leaving the modal reachable only as a surprise overlay on a job
+  // the user started elsewhere.
 
   const [llmBaseUrl, setLlmBaseUrl] = useState(() => localStorage.getItem('llm_base_url') || '');
   const [llmModel, setLlmModel] = useState(() => localStorage.getItem('llm_model') || '');
@@ -11250,28 +11137,6 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
 
   // One embedding model app-wide now; drop the stale per-browser override.
   useEffect(() => { localStorage.removeItem('text_model'); }, []);
-
-  // `aiEnabledArg` is passed explicitly by the caller because React state
-  // updates batched in the same tick won't have flushed yet — reading
-  // `enabledForNewCollection` from the closure here would see the *previous*
-  // render's value (stale), causing the post-indexing phase transition to
-  // misroute (e.g. "Skip AI" would still land on ai-bootstrap).
-  const startIndexing = async (aiEnabledArg = enabledForNewCollection) => {
-    aiEnabledRef.current = aiEnabledArg;
-    indexingJob.begin();
-    try {
-      const res = await apiFetch('/library/index', { method:'POST',
-        body: JSON.stringify({ folder_path:folderPath, better_lyrics_quality:betterLyrics, enhance_by_musicbrainz:refineMetadata }) });
-      if (res.status === 'failed') { indexingJob.fail(res.message); return; }
-      if (!res.job_id) {
-        // Immediate completion — the completion effect above handles the
-        // phase transition and the collections refresh.
-        indexingJob.completeSync(res.count || 0);
-        return;
-      }
-      indexingJob.attach(res.job_id);
-    } catch (e) { indexingJob.fail(e.message); }
-  };
 
   // Save + probe in one step: trim, sync state with what we persist (so a
   // later save can't desync from what was tested), then re-probe the LLM.
@@ -11379,14 +11244,17 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
                 {lang==='ru'?'Выйти':'Log out'}
               </button>
             </div>
+            <AddMusicCard isDark={isDark} lang={lang}
+              instanceMode={instanceMode} indexingJob={indexingJob} />
           </section>
 
-          {/* ─── Intelligence: LLM status + advanced fields + one-button enrichment ─── */}
-          <section className="panel-v3" style={{ padding:'18px 20px' }}>
-            <div className="mono-label" style={{ color:c.textSubtle, marginBottom:14 }}>
-              {lang==='ru'?'ИНТЕЛЛЕКТ':'INTELLIGENCE'}
-            </div>
-
+          {/* ─── Intelligence: a status strip, nothing to run ───────────────────
+              AI enrichment is no longer startable from here. It runs by itself
+              after every index (LibraryService chains the tasks onto the same
+              job), so a manual "Run enrichment" button only ever offered a way
+              to duplicate work that was already scheduled. What's left is the
+              one thing a user acts on: is the assistant reachable or not. */}
+          <section className="panel-v3" style={{ padding:'14px 20px' }}>
             <div style={{ display:'flex', alignItems:'center', gap:10, fontSize:12, color:c.text }}>
               <span style={{
                 display:'inline-block', width:8, height:8, borderRadius:'50%', flexShrink:0,
@@ -11397,11 +11265,9 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
               }} />
               <span style={{ flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
                 {aiStatus?.aiAvailable === true && (lang === 'ru'
-                  ? `ИИ-ассистент подключён${aiStatus.llmInfo?.model ? ` · ${aiStatus.llmInfo.model}` : ''}`
-                  : `AI assistant connected${aiStatus.llmInfo?.model ? ` · ${aiStatus.llmInfo.model}` : ''}`)}
+                  ? 'ИИ-ассистент подключён' : 'AI assistant connected')}
                 {aiStatus?.aiAvailable === false && (lang === 'ru'
-                  ? `ИИ-ассистент офлайн · ${aiStatus.llmError || 'не отвечает'}`
-                  : `AI assistant offline · ${aiStatus.llmError || 'no response'}`)}
+                  ? 'ИИ-ассистент недоступен' : 'AI assistant unavailable')}
                 {aiStatus?.aiAvailable === null && (lang === 'ru' ? 'Проверка ИИ-ассистента…' : 'Probing AI assistant…')}
               </span>
               <button className="pill-v3" style={{ padding:'4px 12px', fontSize:11 }}
@@ -11446,8 +11312,6 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
                 </div>
               </div>
             )}
-
-            <AIIndexingCard isDark={isDark} lang={lang} aiStatus={aiStatus} />
           </section>
 
           {/* ─── Appearance ─── */}
@@ -11485,53 +11349,6 @@ function SettingsPanel({ isDark, lang, onClose, onCollectionsUpdate, aiStatus, o
           </div>
         </div>
 
-
-        {showModal && (
-          <IndexingModal isDark={isDark} lang={lang} collectionName={collName||'my_collection'}
-            stepStatus={stepStatus} trackCount={modalTrackCount} errorMessage={modalError}
-            onClose={() => { setShowModal(false); indexingJob.reset(); }}
-            stageProgress={stageProgress}
-            phase={indexPhase}
-            aiStatus={aiStatus}
-            onAiConfirm={async (enabled) => {
-              setEnabledForNewCollection(enabled);
-              const colName = collName.trim() || 'my_collection';
-              try {
-                await apiFetch(`/library/ai-enabled`, {
-                  method: 'PATCH', body: JSON.stringify({ enabled }),
-                });
-              } catch (e) { console.error('failed to persist ai_enabled', e); }
-              if (enabled) {
-                localStorage.setItem('llm_base_url', llmBaseUrl.trim());
-                localStorage.setItem('llm_model', llmModel.trim());
-                await aiStatus?.refresh?.();
-              }
-              setIndexPhase('indexing');
-              await startIndexing(enabled);  // pass explicitly — state hasn't flushed
-            }}
-            onAiSkip={() => { setEnabledForNewCollection(false); setIndexPhase('indexing'); startIndexing(false); }}
-            onAiBootstrapRun={async () => {
-              const lang2 = lang || 'en';
-              const tasks = ['sonic_vibe', 'refined_facts', 'artist_bio'];
-              const llmBaseUrl = localStorage.getItem('llm_base_url') || undefined;
-              const llmModel   = localStorage.getItem('llm_model')    || undefined;
-              // Switch to the live AI-progress view first, then fire the tasks.
-              // allSettled (not all) so one task's failure doesn't abort the others;
-              // AiEnrichProgress then polls /library/ai-index/status for the counts.
-              setIndexPhase('ai-running');
-              const results = await Promise.allSettled(tasks.map(t =>
-                apiFetch(`/library/ai-index/${t}`, { method:'POST', body: JSON.stringify({
-                  lang: lang2, llm_base_url: llmBaseUrl, llm_model: llmModel,
-                  ...(t === 'artist_bio' && { bio_source: 'web' }),
-                }) })
-              ));
-              results.forEach((r, i) => {
-                if (r.status === 'rejected') console.error(`AI indexing task '${tasks[i]}' failed:`, r.reason);
-              });
-            }}
-            onAiBootstrapLater={() => setShowModal(false)}
-          />
-        )}
       </div>
 
       {/* z 1200 — above the settings sheet (z 91), so the guide reads as a
@@ -20181,9 +19998,32 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
       setUserPoints(data.user_points || 0);
     }).catch(() => {}), []);
 
+  // Bottom-right notice for a finished "add music" run — { added, skipped, id }.
+  const [libraryNotice, setLibraryNotice] = useState(null);
+
+  // Read inside the completion callback, which is created once: the FIRST index
+  // (onboarding) also completes through this hook, and announcing "N tracks were
+  // added to your library" to someone who just built that library is noise.
+  const appStateRef = useRef(appState);
+  useEffect(() => { appStateRef.current = appState; }, [appState]);
+
   // Indexing job tracking lives at App level (spec phase 2): the SSE
   // subscription survives closing the settings panel and section navigation.
-  const indexingJob = useIndexingJob({ onCompleted: loadCollections });
+  const indexingJob = useIndexingJob({
+    onCompleted: (count, skipped) => {
+      loadCollections();
+      if (appStateRef.current !== 'ready') return;
+      setLibraryNotice({ added: count || 0, skipped: skipped || 0, id: Date.now() });
+    },
+  });
+
+  // Auto-dismiss. Longer than the ordinary toast (2.4 s): this lands at the end
+  // of a job that may have run for minutes, so the user is likely looking away.
+  useEffect(() => {
+    if (!libraryNotice) return;
+    const t = setTimeout(() => setLibraryNotice(null), 8000);
+    return () => clearTimeout(t);
+  }, [libraryNotice]);
 
   // Resume after a reload / navigation away: the server keeps the per-account
   // job slot, and the SSE stream replays a full progress snapshot to late
@@ -20849,6 +20689,53 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
         <IndexingStatusDock isDark={isDark} lang={lang}
           stepStatus={indexingJob.stepStatus} stageProgress={indexingJob.stageProgress}
           aiStages={indexingJob.aiStages} />
+      )}
+
+      {/* «N tracks were added» — bottom right, where the indexing dock the user
+          was watching just disappeared from. The ordinary toast stays top-right
+          so a burst of them can't fight this one for the same corner. */}
+      {libraryNotice && (
+        <div
+          role="status"
+          aria-live="polite"
+          onClick={() => setLibraryNotice(null)}
+          style={{
+            position: 'fixed', right: 18,
+            bottom: isMobile ? 'calc(env(safe-area-inset-bottom, 0px) + 132px)' : 18,
+            zIndex: 9999, maxWidth: 320, cursor: 'pointer',
+            padding: '13px 17px', borderRadius: 14,
+            display: 'flex', alignItems: 'center', gap: 12,
+            background: isDark
+              ? 'linear-gradient(180deg, rgba(30,30,38,0.95), rgba(22,22,28,0.95))'
+              : 'linear-gradient(180deg, rgba(255,255,255,0.96), rgba(245,244,250,0.96))',
+            color: isDark ? '#fff' : '#161620',
+            border: `1px solid ${isDark ? 'rgba(255,255,255,0.10)' : 'rgba(22,22,32,0.10)'}`,
+            boxShadow: isDark
+              ? '0 12px 34px rgba(0,0,0,0.5), 0 0 40px oklch(65% 0.18 145 / 0.14)'
+              : '0 12px 34px rgba(40,30,60,0.18)',
+            backdropFilter: 'blur(12px) saturate(1.1)',
+            WebkitBackdropFilter: 'blur(12px) saturate(1.1)',
+            animation: 'fadeInUp 0.28s cubic-bezier(0.22, 0.9, 0.3, 1)',
+          }}
+        >
+          <span aria-hidden style={{ fontSize: 20, lineHeight: 1 }}>✨</span>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 13.5, lineHeight: 1.4 }}>
+              {libraryNotice.added > 0
+                ? (lang === 'ru'
+                    ? `${libraryNotice.added} ${plural(libraryNotice.added, 'ru', ['трек','трека','треков'], [])} ${plural(libraryNotice.added, 'ru', ['добавлен','добавлены','добавлены'], [])} в твою библиотеку`
+                    : `${libraryNotice.added} ${plural(libraryNotice.added, 'en', [], ['track was','tracks were'])} added to your library`)
+                : (lang === 'ru' ? 'Новых треков не нашлось' : 'No new tracks to add')}
+            </div>
+            {libraryNotice.skipped > 0 && (
+              <div style={{ fontSize: 11.5, opacity: 0.62, marginTop: 3 }}>
+                {lang === 'ru'
+                  ? `${libraryNotice.skipped} ${plural(libraryNotice.skipped, 'ru', ['был','были','были'], [])} в библиотеке и так`
+                  : `${libraryNotice.skipped} already in the library`}
+              </div>
+            )}
+          </div>
+        </div>
       )}
 
       {toast && (

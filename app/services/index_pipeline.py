@@ -31,7 +31,7 @@ from typing import Callable, Optional
 
 from app.indexing.folder_scanner import fetch_online_lyrics
 from app.resources.metadata_db import MetadataDB
-from app.resources.qdrant_utils import scroll_all
+from app.resources.qdrant_utils import invalidate_light_cache, scroll_all
 
 from .indexing_service import IndexingService
 
@@ -56,19 +56,28 @@ class IndexPipeline:
         better_lyrics_quality: bool = False,
         progress: Optional[Callable] = None,
         resolve_track_ids: bool = False,
+        append: bool = False,
     ) -> tuple[int, dict[str, str]]:
         """Index a tag-read batch into ``collection_name``.
 
         Args:
             tracks: ``"Artist — Title" -> meta`` (tags already read; ``meta["lyrics"]``
                 is the embedded text or empty when an online fetch is still needed).
-            collection_name: target Qdrant collection (drop + recreate).
+            collection_name: target Qdrant collection. Dropped and recreated
+                unless ``append`` is set.
             better_lyrics_quality: pass-through to the lyrics fetcher (1 worker upstream).
             progress: thread-safe ``(stage, current, total, message, **kw)`` callback.
                 Stages: ``"scan"`` (lyrics fetch), ``"audio"`` (CLAP), ``"lyrics"`` (dense).
             resolve_track_ids: when True, scroll the collection after upsert and
                 return ``{"Artist — Title": point_id}`` (the upload flow needs it to
                 stamp ``pending_uploads.track_id``).
+            append: extend an existing collection instead of rebuilding it — the
+                "add music to my library" path. Keeps the collection, keeps the
+                SQLite mirror, and recomputes the axis norm stats over the whole
+                collection rather than this batch. Callers MUST pre-filter tracks
+                that are already indexed (see
+                ``LibraryService._split_already_indexed``): point ids are fresh
+                uuid4s, so a re-upsert would duplicate rather than overwrite.
 
         Returns ``(upserted_count, track_ids_by_key)``.
         """
@@ -157,19 +166,37 @@ class IndexPipeline:
         def _create_and_upsert():
             # The IndexingService instance was constructed with this run's
             # collection_name — no shared-engine mutation, safe under parallel jobs.
-            indexing.create_collection(clap_paths)
-            try:
-                MetadataDB.clear_track_metadata(str(collection_name))
-            except Exception:
-                logger.warning("[IndexPipeline] clear_track_metadata failed — non-fatal")
+            if append:
+                indexing.ensure_collection(clap_paths)
+            else:
+                indexing.create_collection(clap_paths)
+                try:
+                    MetadataDB.clear_track_metadata(str(collection_name))
+                except Exception:
+                    logger.warning("[IndexPipeline] clear_track_metadata failed — non-fatal")
             indexing.upsert(
                 filtered, text_vecs, clap_map or None, chunks or None,
                 sonic_axes_map=axes or None,
             )
-            indexing.finalize_norms_and_prune(axes or None)
+            if append:
+                # This batch is NOT the collection, so the batch-scoped stats in
+                # finalize_norms_and_prune would be wrong; and its orphan prune
+                # scans the whole collection to find deletions that an append
+                # never makes.
+                indexing.persist_axis_norm_stats_from_mirror()
+            else:
+                indexing.finalize_norms_and_prune(axes or None)
 
         await loop.run_in_executor(None, _create_and_upsert)
-        logger.info("[IndexPipeline] upserted %d tracks into %s", total, collection_name)
+        # New rows are in Qdrant + the SQLite mirror, but every catalog surface
+        # (browse, albums, search pools, stream) reads through the 90 s-TTL
+        # light cache — without this the tracks just added stay invisible for up
+        # to a minute and a half.
+        invalidate_light_cache(str(collection_name))
+        logger.info(
+            "[IndexPipeline] %s %d tracks into %s",
+            "appended" if append else "upserted", total, collection_name,
+        )
 
         track_ids: dict[str, str] = {}
         if resolve_track_ids:
