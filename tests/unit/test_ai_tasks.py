@@ -508,6 +508,53 @@ class TestRefinedFacts:
         assert meta[0]["labels"] == ["creation"]
 
     @pytest.mark.asyncio
+    async def test_song_fact_about_the_artist_lands_on_the_artist_page(self):
+        """The move is written where the listener will look for it.
+
+        The store callback fires DURING processing, so the artist name it needs
+        must be bound before the run starts — attaching it to the records
+        afterwards left the fact on the song's page with an `about_artist`
+        label, which is where it came from and not where it belongs.
+        """
+        from app.services.song_facts_service import get_song_facts_key
+
+        slug = get_song_facts_key("Travis Scott", "Sicko Mode")
+        MetadataDB.add_song_facts_batch(
+            slug, "c", ["Scott appeared at WWE's Elimination Chamber in 2025 "
+                        "and slapped the champion."],
+            source="songfacts.com")
+        points = [FakePoint("p9", {"artist": "Travis Scott", "title": "Sicko Mode"})]
+
+        classify = json.dumps({"items": [{
+            "id": "M1", "labels": ["about_artist"],
+            "move": {"scope": "artist", "labels": ["personal"]}}]})
+        refine = json.dumps({"text": "Появился на Elimination Chamber в 2025 году."})
+
+        async def _fake_llm(user, **kwargs):
+            return classify if "NOTES TO SORT" in user else refine
+
+        with patch("app.services.ai_tasks.refined_facts.ask_llm",
+                   side_effect=_fake_llm):
+            await refined_facts.run(
+                _make_job(collection="c", lang="ru"), FakeDb(points), None)
+
+        # Nothing is left under the song, so the reader sees None — "never
+        # processed" — and falls back to the raw facts. That is the honest
+        # answer for a song whose every fact turned out to be about the
+        # artist: the UNIQUE key stores one row per raw fact, so a moved fact
+        # cannot also leave a marker behind. It only bites when EVERY fact
+        # moves, which is why the fallback is a tolerable outcome and not a
+        # silent loss.
+        assert MetadataDB.get_refined_facts(
+            scope="song", scope_key=slug, collection_name="c", lang="ru") is None
+        on_artist = MetadataDB.get_refined_facts_meta(
+            scope="artist", scope_key="travis-scott", collection_name="c",
+            lang="ru")
+        assert on_artist and "Elimination Chamber" in on_artist[0]["text"]
+        # and under the destination's label, not "about_artist"
+        assert on_artist[0]["labels"] == ["personal"]
+
+    @pytest.mark.asyncio
     async def test_rerun_does_not_call_the_model_again(self):
         """Resume, end to end: a second run over processed facts is free."""
         from app.services.song_facts_service import get_song_facts_key
