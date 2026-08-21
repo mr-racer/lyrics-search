@@ -29,7 +29,10 @@ def track(i, *, artist=None, album=None, year=2010, genre="rock",
         "album": album or f"Album {i}",
         "year": year,
         "genre": genre,
-        "duration_sec": duration,
+        # The real payload key, in Qdrant (LIGHT_PAYLOAD_FIELDS) and in the
+        # SQLite mirror alike, is "duration" — not "duration_sec", which only
+        # exists on the TrackMetadata API model.
+        "duration": duration,
         "cover_art_path": f"/covers/t{i}.jpg",
         "sonic_axes": dict(zip(AXES, (0.05 * i, 0.2, 0.3, 0.4, 0.5, 0.6))),
     }
@@ -159,11 +162,11 @@ def test_snippet_length_is_what_was_asked_for():
 def test_snippet_never_runs_past_the_end_of_the_track():
     c = ctx()
     for t in c.tracks:
-        t["duration_sec"] = 12.0
+        t["duration"] = 12.0
     for seed in range(20):
         c2 = ctx(seed=seed)
         for t in c2.tracks:
-            t["duration_sec"] = 12.0
+            t["duration"] = 12.0
         spec = track_snippet.build(c2, snippet_sec=5)
         assert spec.start_sec + spec.length_sec <= 12.0 + 1e-9
 

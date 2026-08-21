@@ -1394,3 +1394,64 @@ class DiscoveryCard(BaseModel):
 
 class DiscoveriesResponse(BaseModel):
     cards: List[DiscoveryCard] = Field(default_factory=list)
+
+
+# ── Library quiz (spec 2026-08-21) ────────────────────────────────────────────
+# Note what is absent from QuizRoundOut: no track_id and no correct_option_id.
+# A round travels to the client before it is answered, so anything identifying
+# the answer would hand the game away.
+
+class QuizModeInfo(BaseModel):
+    key: str
+    pool_size: int
+    # False when the library cannot yet support 20 rounds of this mode (I-5).
+    # The mode is still listed so the UI can say why, instead of the menu
+    # silently changing shape as the library grows.
+    available: bool
+
+
+class QuizModesResponse(BaseModel):
+    modes: List[QuizModeInfo] = Field(default_factory=list)
+
+
+class QuizRoundRequest(BaseModel):
+    mode: str = "track_snippet"
+    snippet_sec: int = 3
+
+
+class QuizOption(BaseModel):
+    option_id: str
+    title: str
+    artist: str
+    cover_art_path: Optional[str] = None
+
+
+class QuizRoundOut(BaseModel):
+    round_id: str
+    mode: str
+    options: List[QuizOption] = Field(default_factory=list)
+    start_sec: float
+    length_sec: float
+    expires_at: float
+
+
+class QuizAnswerIn(BaseModel):
+    option_id: Optional[str] = None
+
+
+class QuizTruth(BaseModel):
+    track_id: str
+    title: str
+    artist: str
+    album: Optional[str] = None
+    year: Optional[int] = None
+    cover_art_path: Optional[str] = None
+
+
+class QuizAnswerOut(BaseModel):
+    correct: bool
+    score: float
+    # True when the round timed out: scored wrong, but skill is left untouched.
+    expired: bool = False
+    correct_option_id: Optional[str] = None
+    truth: QuizTruth

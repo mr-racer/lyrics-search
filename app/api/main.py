@@ -37,7 +37,7 @@ from ..services.auth_service import AuthService
 # because the routes find the type in _TASK_TYPES but the service registry
 # is empty.
 from ..services import ai_tasks  # noqa: F401
-from .routes import search_router, stream_router, library_router, chat_router, assistant_router, metadata_router, playback_router, recommend_router, ai_indexing_router, artists_router, system_router, playlists_router, instance_router, auth_router, admin_router, imports_router
+from .routes import search_router, stream_router, library_router, chat_router, assistant_router, metadata_router, playback_router, recommend_router, ai_indexing_router, artists_router, system_router, playlists_router, instance_router, auth_router, admin_router, imports_router, quiz_router, quiz_stream_router
 from .dependencies import get_current_user
 from .sse_utils import event_stream
 
@@ -386,6 +386,10 @@ def create_app() -> FastAPI:
     app.include_router(playlists_router,    prefix="/api/v1", dependencies=auth_gate)
     # Yandex import — auth-gated; each route also carries require_mode("server").
     app.include_router(imports_router,       prefix="/api/v1", dependencies=auth_gate)
+    app.include_router(quiz_router,          prefix="/api/v1", dependencies=auth_gate)
+    # Snippet audio: outside auth_gate because <audio> can't send headers; the
+    # route carries its own get_user_for_stream dependency (Bearer or ?st=).
+    app.include_router(quiz_stream_router,   prefix="/api/v1")
     # Admin routes carry their own stricter gate (get_owner = JWT + role=owner),
     # so they don't need the blanket get_current_user dependency.
     app.include_router(admin_router,        prefix="/api/v1")

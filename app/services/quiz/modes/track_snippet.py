@@ -115,8 +115,14 @@ def _option(track: Dict) -> Dict:
 
 
 def _start_point(track: Dict, length_sec: float, rng) -> float:
-    """Pick where the snippet starts, never running past the end of the file."""
-    duration = float(track.get("duration_sec") or 0.0)
+    """Pick where the snippet starts, never running past the end of the file.
+
+    The payload key is ``duration`` — that is what both the Qdrant light
+    payload (``LIGHT_PAYLOAD_FIELDS``) and the SQLite ``track_metadata`` mirror
+    carry. ``duration_sec`` exists only on the ``TrackMetadata`` API model, and
+    reading it here silently pinned every snippet to 0.0.
+    """
+    duration = float(track.get("duration") or track.get("duration_sec") or 0.0)
     if duration <= 0.0:
         return 0.0
     low = _START_LO * duration

@@ -32,7 +32,7 @@ def _tracks(n=30):
             "album": f"Album {i}",
             "year": 2000 + (i % 20),
             "genre": "rock" if i % 2 else "pop",
-            "duration_sec": 200.0,
+            "duration": 200.0,
             "cover_art_path": f"/covers/t{i}.jpg",
             "sonic_axes": dict(zip(AXES, (0.03 * i, 0.2, 0.3, 0.4, 0.5, 0.6))),
         }
