@@ -265,7 +265,10 @@ def build_artist_aggregate(db, collection: str, canonical_slug: str, lang: str) 
     else:
         facts = MetadataDB.get_artist_facts(canonical_slug, collection)
         facts_meta = []
-    bio = MetadataDB.get_artist_bio(canonical_slug, collection, lang)
+    bio_row = MetadataDB.get_artist_bio_full(canonical_slug, collection, lang) or {}
+    bio = bio_row.get("bio_text")
+    bio_facets = {k: v for k, v in bio_row.items()
+                  if k not in ("bio_text", "source_url") and v is not None}
     primary_genre = next((t.genre for t in artist_tracks if t.genre), None)
 
     audiodb = MetadataDB.get_artist_audiodb(canonical_slug, collection) or {}
@@ -278,6 +281,8 @@ def build_artist_aggregate(db, collection: str, canonical_slug: str, lang: str) 
         album_count=len(albums),
         decade_range=_decade_range([t.year for t in artist_tracks if t.year]),
         bio=bio,
+        bio_facets=bio_facets,
+        bio_source_url=bio_row.get("source_url"),
         facts=facts,
         facts_meta=facts_meta,
         albums=albums,

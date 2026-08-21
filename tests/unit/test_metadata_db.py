@@ -277,6 +277,12 @@ class TestArtistBios(_IsolatedDB):
         assert full["formed_year"] == 1999 and full["status"] == "active"
         assert full["source_kind"] == "wikipedia"
 
+        # the API shape: everything except the text, with nulls dropped
+        facets = {k: v for k, v in full.items()
+                  if k not in ("bio_text", "source_url") and v is not None}
+        assert facets["grammy_nominations"] == 1
+        assert "grammy_wins" not in facets      # unknown stays absent, not zero
+
         MetadataDB.set_artist_bio("m83", "col_f", "ru", "переписанное био")
         again = MetadataDB.get_artist_bio_full("m83", "col_f", "ru")
         assert again["bio_text"] == "переписанное био"
