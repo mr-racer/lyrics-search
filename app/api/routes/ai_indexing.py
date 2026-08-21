@@ -36,9 +36,19 @@ class StartJobResponse(BaseModel):
 
 
 class StatusResponse(BaseModel):
+    """One entry per task type the client can start.
+
+    Every member of ``_TASK_TYPES`` needs a field here. When one was missing —
+    `lyric_gems` was — the whole endpoint answered 500 as soon as a job of that
+    type existed, because the handler assigns by name. That takes the progress
+    readout down for every OTHER task too, which is how a gap in a response
+    model turns into "indexing looks stuck".
+    """
     sonic_vibe: Optional[AIJobStatus] = None
     refined_facts: Optional[AIJobStatus] = None
     artist_bio: Optional[AIJobStatus] = None
+    lyric_gems: Optional[AIJobStatus] = None
+    fact_relations: Optional[AIJobStatus] = None
 
 
 class CacheResetResponse(BaseModel):
@@ -163,6 +173,9 @@ def status(
     derived = derive_collection_for_user(current_user)
     out = StatusResponse()
     for tt in _TASK_TYPES:
+        if tt not in StatusResponse.model_fields:
+            continue                 # a task the response cannot carry is skipped,
+                                     # never allowed to fail the whole readout
         row = MetadataDB.get_latest_ai_job(derived, tt)
         if row:
             setattr(out, tt, AIJobStatus(**{
