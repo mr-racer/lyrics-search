@@ -126,6 +126,14 @@ def test_options_do_not_leak_track_ids():
         assert "track_id" not in option
 
 
+def test_options_carry_no_cover_art():
+    """The mode's whole design: in a library the cover IS the answer, so the
+    question must not even transmit artwork — not merely decline to draw it."""
+    spec = track_snippet.build(ctx(), snippet_sec=3)
+    for option in spec.options:
+        assert "cover_art_path" not in option
+
+
 def test_the_answer_is_not_always_in_the_same_position():
     positions = set()
     for seed in range(30):

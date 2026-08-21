@@ -100,16 +100,22 @@ def _familiar_ids(ctx: RoundContext) -> Set[str]:
 
 
 def _option(track: Dict) -> Dict:
-    """One rendered option.
+    """One rendered option — text only, and deliberately so.
 
     Carries no ``track_id``: the option list travels to the client before the
     answer is known, and an id there would let anyone look the answer up.
+
+    Carries no ``cover_art_path`` either, which is the mode's whole design: in
+    a music library the cover IS the answer, so this round withholds artwork
+    and the reveal hands it back. Sending covers the UI is trusted not to draw
+    would put the discipline in the wrong place — the question payload simply
+    must not contain them. Modes that legitimately show art (M2) put it in
+    their own options.
     """
     return {
         "option_id": uuid.uuid4().hex[:12],
         "title": track.get("title_display") or track.get("title") or "—",
         "artist": track.get("artist") or "—",
-        "cover_art_path": track.get("cover_art_path"),
     }
 
 
