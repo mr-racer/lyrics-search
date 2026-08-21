@@ -53,6 +53,10 @@ class RoundSpec:
     # three tracks those were, the year that was being guessed. Kept out of the
     # question payload entirely: anything here would give the answer away.
     reveal: Dict = field(default_factory=dict)
+    # Question-side extras that are safe to send with the round: the scale
+    # bounds a year picker needs, for instance. The split from `reveal` is the
+    # whole point — one travels with the question, the other cannot.
+    meta: Dict = field(default_factory=dict)
 
     def to_stored(self) -> Dict:
         """The shape persisted in ``quiz_rounds.spec_json``."""
@@ -63,4 +67,5 @@ class RoundSpec:
             "start_sec": self.start_sec,
             "length_sec": self.length_sec,
             "reveal": self.reveal,
+            "meta": self.meta,
         }

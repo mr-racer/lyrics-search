@@ -80,6 +80,8 @@ def list_modes(*, qdrant_client, collection_name: str) -> List[Dict]:
             # Whether the round has anything to listen to. The client needs it
             # up front so it does not draw a play key for a knowledge round.
             "has_audio": bool(getattr(mode, "HAS_AUDIO", True)),
+            # "options" or "year": which control the round is answered with.
+            "input_kind": str(getattr(mode, "INPUT_KIND", "options")),
         })
     return out
 
@@ -122,6 +124,10 @@ def build_round(
         "length_sec": spec.length_sec,
         "expires_at": expires_at,
         "has_audio": bool(getattr(mode_module, "HAS_AUDIO", True)),
+        "input_kind": str(getattr(mode_module, "INPUT_KIND", "options")),
+        # Safe question-side extras (year-scale bounds and the like). `reveal`
+        # is the other half of this split and never travels with the question.
+        "meta": spec.meta,
     }
 
 

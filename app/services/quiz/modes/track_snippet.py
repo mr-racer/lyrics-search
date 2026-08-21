@@ -17,6 +17,7 @@ from app.services.quiz.context import RoundContext, RoundSpec
 from app.services.quiz.distractors import pick_distractors
 from app.services.quiz.errors import NoRoundAvailable
 from app.services.quiz.selection import pick_answer_track
+from app.services.quiz.snippet import start_point
 
 KEY = "track_snippet"
 
@@ -25,11 +26,6 @@ HAS_AUDIO = True
 
 OPTION_COUNT = 4
 
-# The window a snippet may start in, as a fraction of the track. Not the
-# opening — intros are recognised instantly and would collapse the difficulty
-# curve — and not the tail, where fades and outros carry little information.
-_START_LO = 0.15
-_START_HI = 0.70
 
 # Familiarity percentile at or above which a track counts as "one you know",
 # used for the third distractor slot.
@@ -84,7 +80,7 @@ def build(ctx: RoundContext, *, snippet_sec: int) -> RoundSpec:
         track_id=answer_id,
         options=options,
         correct_option_id=correct_option_id,
-        start_sec=_start_point(answer, snippet_sec, ctx.rng),
+        start_sec=start_point(answer, snippet_sec, ctx.rng),
         length_sec=float(snippet_sec),
     )
 
@@ -117,21 +113,5 @@ def _option(track: Dict) -> Dict:
     }
 
 
-def _start_point(track: Dict, length_sec: float, rng) -> float:
-    """Pick where the snippet starts, never running past the end of the file.
-
-    The payload key is ``duration`` — that is what both the Qdrant light
-    payload (``LIGHT_PAYLOAD_FIELDS``) and the SQLite ``track_metadata`` mirror
-    carry. ``duration_sec`` exists only on the ``TrackMetadata`` API model, and
-    reading it here silently pinned every snippet to 0.0.
-    """
-    duration = float(track.get("duration") or track.get("duration_sec") or 0.0)
-    if duration <= 0.0:
-        return 0.0
-    low = _START_LO * duration
-    # On a short track the "70%" ceiling can sit past the last playable start,
-    # so clamp to whatever leaves room for the whole snippet.
-    high = min(_START_HI * duration, max(low, duration - float(length_sec)))
-    if high <= low:
-        return round(low, 3)
-    return round(rng.uniform(low, high), 3)
+# The window rules live in quiz.snippet — M3 listens to the same three seconds
+# under the same constraints, and two copies would drift.
