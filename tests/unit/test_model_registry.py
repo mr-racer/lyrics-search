@@ -9,6 +9,7 @@ import threading
 import time
 
 import numpy as np
+import pytest
 import torch
 
 from app.resources.model_registry import (
@@ -180,6 +181,34 @@ class TestLoading:
                             lambda: ("cuda", "cuda:0 = fake"))
         model, _, _ = ModelRegistry.get_text_model()
         assert model is not None
+        _reset_registry()
+
+
+    def test_a_loader_failure_is_not_disguised_as_a_kwargs_problem(self, monkeypatch):
+        """A TypeError raised INSIDE the loader is not our kwargs' fault.
+
+        sentence-transformers 6.0.0 feeds every module's own config.json to its
+        constructor, and Octen ships ``2_Normalize/config.json`` with a key
+        ``Normalize.__init__`` does not take. Retrying without model_kwargs only
+        repeats that failure — while logging "model_kwargs unsupported", which
+        blames the wrong thing and hides a total outage of the text model.
+        """
+        attempts: list = []
+
+        class _BrokenLoader(_FakeSentenceTransformer):
+            def __init__(self, name, device=None, **kwargs):
+                attempts.append(kwargs)
+                raise TypeError("Normalize.__init__() got an unexpected "
+                                "keyword argument 'normalize_embeddings'")
+
+        _reset_registry()
+        monkeypatch.setattr("app.resources.model_registry.SentenceTransformer",
+                            _BrokenLoader)
+        monkeypatch.setattr("app.resources.model_registry._resolve_device",
+                            lambda: ("cuda", "cuda:0 = fake"))
+        with pytest.raises(TypeError, match="normalize_embeddings"):
+            ModelRegistry.get_text_model()
+        assert len(attempts) == 1, "a retry that cannot help must not be made"
         _reset_registry()
 
 

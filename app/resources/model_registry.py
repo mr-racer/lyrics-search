@@ -238,9 +238,15 @@ class ModelRegistry:
                 kwargs["model_kwargs"] = {"torch_dtype": torch.float16}
             try:
                 model = SentenceTransformer(TEXT_MODEL_NAME, device=device, **kwargs)
-            except TypeError:
-                # Older sentence-transformers has neither kwarg. fp32 on the
-                # GPU still beats fp16 on the CPU by a wide margin.
+            except TypeError as e:
+                # ONLY our own kwargs may send us down this path: an older
+                # sentence-transformers has neither, and fp32 on the GPU still
+                # beats fp16 on the CPU by a wide margin. A TypeError from
+                # deeper in the loader is a different failure — the retry
+                # cannot fix it, repeats it, and files it under a warning that
+                # blames the wrong thing. Let that one out as itself.
+                if not any(name in str(e) for name in kwargs):
+                    raise
                 logger.warning("[ModelRegistry] model_kwargs/tokenizer_kwargs "
                                "unsupported — loading fp32 on %s", device)
                 model = SentenceTransformer(TEXT_MODEL_NAME, device=device)

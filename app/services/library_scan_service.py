@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Callable, Iterable, Optional
 
 # What LibraryService.index_folder is actually able to ingest. Reporting
 # anything else as "new" would make every rescan rediscover the same file
@@ -47,12 +47,20 @@ def discover_new_files(
     known_paths: Iterable[str],
     *,
     suffixes: tuple[str, ...] = INDEXABLE_SUFFIXES,
+    on_progress: Optional[Callable[[int], None]] = None,
+    progress_every: int = 200,
 ) -> ScanResult:
     """Walk ``root`` and return the indexable files absent from ``known_paths``.
 
     ``known_paths`` holds container-side ``file_path`` values straight out of
     the library's SQLite mirror; comparison is exact-string, matching how
     ``_split_already_indexed`` dedupes downstream.
+
+    ``on_progress`` receives the running count of indexable files seen, every
+    ``progress_every`` of them and once more at the end. The walk is the slow
+    half of a rescan on a spinning disk, and a UI that can show "4213 files"
+    instead of a spinner is the difference between "working" and "hung". The
+    final call is skipped when it would only repeat the previous number.
     """
     known = set(known_paths)
 
@@ -68,6 +76,7 @@ def discover_new_files(
 
     new_files: list[str] = []
     seen = 0
+    reported = -1
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames.sort()
         for name in filenames:
@@ -77,6 +86,12 @@ def discover_new_files(
             full = os.path.join(dirpath, name)
             if full not in known:
                 new_files.append(full)
+            if on_progress is not None and seen % progress_every == 0:
+                on_progress(seen)
+                reported = seen
+
+    if on_progress is not None and seen != reported:
+        on_progress(seen)
 
     new_files.sort()
     return ScanResult(new_files=new_files, seen=seen)

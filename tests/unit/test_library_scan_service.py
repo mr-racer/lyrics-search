@@ -96,3 +96,41 @@ def test_result_is_ordered_so_progress_is_stable(tmp_path):
     result = discover_new_files(str(tmp_path), known_paths=set())
 
     assert result.new_files == sorted(result.new_files)
+
+
+# ── Live progress ────────────────────────────────────────────────────────────
+# The walk is the slow half of a rescan on a spinning disk, so the UI shows a
+# running file count instead of a frozen spinner while it happens.
+
+def test_progress_is_reported_while_walking(tmp_path):
+    for i in range(7):
+        _touch(tmp_path, f"Album/{i:02d} - Song.mp3")
+    seen_at: list[int] = []
+
+    result = discover_new_files(str(tmp_path), known_paths=set(),
+                                on_progress=seen_at.append, progress_every=2)
+
+    assert seen_at == [2, 4, 6, 7]
+    assert seen_at[-1] == result.seen
+
+
+def test_the_final_count_is_not_reported_twice(tmp_path):
+    """A walk that ends exactly on a batch boundary must not emit the same
+    number again — the UI would render a duplicate frame for nothing."""
+    for i in range(4):
+        _touch(tmp_path, f"Album/{i:02d} - Song.mp3")
+    seen_at: list[int] = []
+
+    discover_new_files(str(tmp_path), known_paths=set(),
+                       on_progress=seen_at.append, progress_every=2)
+
+    assert seen_at == [2, 4]
+
+
+def test_an_empty_root_still_reports_a_zero(tmp_path):
+    """Nothing found is a result, not silence: the UI needs a number to show."""
+    seen_at: list[int] = []
+
+    discover_new_files(str(tmp_path), known_paths=set(), on_progress=seen_at.append)
+
+    assert seen_at == [0]

@@ -11035,6 +11035,9 @@ function AddMusicCard({ isDark, lang, instanceMode, indexingJob }) {
   // from the authenticated /auth/me, so an account without the grant never sees
   // the path — nor the rescan control it unlocks.
   const [indexRoot, setIndexRoot] = useState('');
+  // Step one of a rescan, before any job exists:
+  // { phase: 'walking', seen } | { phase: 'result', seen, newCount } | { phase: 'error', code }
+  const [scan, setScan] = useState(null);
 
   useEffect(() => {
     let alive = true;
@@ -11045,7 +11048,8 @@ function AddMusicCard({ isDark, lang, instanceMode, indexingJob }) {
   }, []);
 
   const running = indexingJob.status === 'running';
-  const busy = running || !!upload;
+  const scanning = scan?.phase === 'walking';
+  const busy = running || !!upload || scanning;
 
   // webkitdirectory isn't a React prop (it gets dropped), and this input mounts
   // only once the choice row is revealed — so a callback ref, not a mount
@@ -11105,12 +11109,33 @@ function AddMusicCard({ isDark, lang, instanceMode, indexingJob }) {
     } catch (err) { indexingJob.fail(String(err.message || err)); }
   };
 
-  // Rescan the granted folder in place. No folder picker: the account may only
-  // index its own grant, so there is nothing to choose. append:true means the
-  // backend diffs by path first and reads tags only for genuinely new files —
-  // a rescan that finds nothing costs one directory walk, not a re-index.
-  const rescanLibrary = async () => {
+  // Rescan, step one: find out what an index run would actually pick up. No
+  // folder picker (the account may only scan its own grant) and, deliberately,
+  // no job — /library/scan diffs by path and touches neither Qdrant nor the
+  // models. On a settled library the answer is "nothing new", which used to
+  // cost a full indexing panel and a GPU model load to discover.
+  const scanLibrary = async () => {
     setError(null);
+    setScan({ phase: 'walking', seen: 0 });
+    try {
+      let last = null;
+      await apiStreamNdjson('/library/scan', { folder_path: indexRoot }, (evt) => {
+        last = evt;
+        if (evt.type === 'progress') setScan({ phase: 'walking', seen: evt.seen });
+        else if (evt.type === 'done') setScan({ phase: 'result', seen: evt.seen, newCount: evt.new_count });
+        else if (evt.type === 'error') setScan({ phase: 'error', code: evt.code });
+      });
+      // A stream that ended without a terminal frame is a dropped connection,
+      // not an empty library — never report it as "nothing new".
+      if (!last || last.type === 'progress') setScan({ phase: 'error', code: 'scan_failed' });
+    } catch (err) { setScan(null); setError(String(err.message || err)); }
+  };
+
+  // Step two: the user saw the count and said yes. append:true keeps everything
+  // already indexed; the backend re-derives the diff itself, so the scan's
+  // numbers are advisory and a file that appeared in between is still caught.
+  const indexScanned = async () => {
+    setScan(null);
     indexingJob.begin();
     try {
       const res = await apiFetch('/library/index', {
@@ -11126,6 +11151,82 @@ function AddMusicCard({ isDark, lang, instanceMode, indexingJob }) {
     marginTop: 16, paddingTop: 16,
     borderTop: `1px solid ${isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)'}`,
   };
+  const ghostBtn = {
+    padding: '9px 15px', fontSize: 13, borderRadius: 9, cursor: 'pointer',
+    background: 'transparent', color: c.textSubtle,
+    border: `1px solid ${isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.14)'}`,
+  };
+
+  // ── Phase 0: scanning the granted folder, and its verdict ─────────────────
+  // Shown INSTEAD of the indexing panel, because at this point there is no job
+  // and possibly no work: the whole point of the step is to say so before the
+  // server spends anything.
+  if (scan) {
+    const nf = (n) => (n || 0).toLocaleString(ru ? 'ru-RU' : 'en-US');
+
+    if (scan.phase === 'walking') {
+      return (
+        <div style={divider}>
+          <OBStageBar c={c} label={ru ? 'Сканирование' : 'Scanning'} state="running"
+            indeterminate count={ru ? `${nf(scan.seen)} файлов` : `${nf(scan.seen)} files`} />
+          <div style={{ fontSize: 11.5, color: c.textSubtle, marginTop: 8, lineHeight: 1.5 }}>
+            {ru
+              ? <>Обход <code>{indexRoot}</code>. Файлы не открываются — сверяются только пути.</>
+              : <>Walking <code>{indexRoot}</code>. Nothing is opened — only paths are compared.</>}
+          </div>
+        </div>
+      );
+    }
+
+    if (scan.phase === 'result') {
+      const nothingNew = !scan.newCount;
+      return (
+        <div style={divider}>
+          <div className="mono-label" style={{ color: c.textSubtle, marginBottom: 10 }}>
+            {ru ? 'СКАНИРОВАНИЕ ЗАВЕРШЕНО' : 'SCAN COMPLETE'}
+          </div>
+          <div style={{ fontSize: 14, color: c.text, lineHeight: 1.5 }}>
+            {nothingNew
+              ? (ru ? <>Новых файлов нет · {nf(scan.seen)} уже в библиотеке</>
+                    : <>Nothing new · {nf(scan.seen)} already in the library</>)
+              : (ru ? <>Найдено <b>{nf(scan.newCount)}</b> новых из {nf(scan.seen)}</>
+                    : <>Found <b>{nf(scan.newCount)}</b> new out of {nf(scan.seen)}</>)}
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 13 }}>
+            {!nothingNew && (
+              <button onClick={indexScanned} className="cta-v3"
+                style={{ padding: '9px 17px', fontSize: 13.5 }}>
+                {ru ? 'Проиндексировать' : 'Index them'}
+              </button>
+            )}
+            <button onClick={() => setScan(null)} style={ghostBtn}>
+              {nothingNew ? (ru ? 'Готово' : 'Done') : (ru ? 'Отмена' : 'Cancel')}
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // phase === 'error'. mount_empty is the one worth spelling out: the library
+    // disk is mounted with nofail, so a boot-order race leaves an empty folder
+    // that looks exactly like "the user deleted everything".
+    return (
+      <div style={divider}>
+        <div style={{ fontSize: 13, color: '#e0a0a0', lineHeight: 1.55 }}>
+          {scan.code === 'mount_empty'
+            ? (ru
+                ? <>Каталог <code>{indexRoot}</code> пуст, но в библиотеке есть треки — похоже,
+                    диск не примонтирован. Сканирование остановлено, чтобы ничего не потерять.</>
+                : <>Folder <code>{indexRoot}</code> is empty while the library still holds
+                    tracks — the disk looks unmounted. Scanning stopped to avoid data loss.</>)
+            : (ru ? 'Не удалось просканировать каталог.' : 'Could not scan the folder.')}
+        </div>
+        <button onClick={() => setScan(null)} style={{ ...ghostBtn, marginTop: 13 }}>
+          {ru ? 'Закрыть' : 'Close'}
+        </button>
+      </div>
+    );
+  }
 
   // ── Phase 1: files streaming to the server ────────────────────────────────
   if (upload) {
@@ -11196,7 +11297,7 @@ function AddMusicCard({ isDark, lang, instanceMode, indexingJob }) {
         // files" is the wrong verb — the music is already there, it just has to
         // be noticed. One button, no picker.
         <div>
-          <button onClick={rescanLibrary} disabled={busy} className="cta-v3"
+          <button onClick={scanLibrary} disabled={busy} className="cta-v3"
             style={{ padding: '10px 18px', fontSize: 13.5, display: 'flex', alignItems: 'center', gap: 9 }}>
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
               strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -11206,8 +11307,10 @@ function AddMusicCard({ isDark, lang, instanceMode, indexingJob }) {
           </button>
           <div style={{ fontSize: 11.5, color: c.textSubtle, marginTop: 8, lineHeight: 1.5 }}>
             {ru
-              ? <>Найдёт новые файлы в <code>{indexRoot}</code>. Уже проиндексированные пропускаются.</>
-              : <>Picks up new files under <code>{indexRoot}</code>. Already-indexed ones are skipped.</>}
+              ? <>Сверит <code>{indexRoot}</code> с библиотекой и покажет, сколько файлов новых.
+                  Индексация запустится только после подтверждения.</>
+              : <>Compares <code>{indexRoot}</code> against the library and reports how many files
+                  are new. Indexing starts only once you confirm.</>}
           </div>
         </div>
       ) : !choosing ? (

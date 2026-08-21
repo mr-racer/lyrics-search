@@ -144,6 +144,11 @@ class IndexRequest(BaseModel):
     lang: str = "ru"
 
 
+class ScanRequest(BaseModel):
+    """Запрос на разведку папки: что даст пересканирование, без индексации."""
+    folder_path: str
+
+
 class IndexProgress(BaseModel):
     """Прогресс индексации."""
     status: Literal["pending", "running", "completed", "failed"]

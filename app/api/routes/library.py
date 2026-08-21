@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import json
 import heapq
 import logging
 import random
@@ -10,14 +11,16 @@ from datetime import date as _date
 from pathlib import Path
 from typing import Optional
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-from app.domain.models import ArtistAggregate, IndexRequest, IndexProgress, AIEnabledRequest, AlbumCoversResponse, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RhythmResponse, WeeklyPulseResponse, EngagementResponse, TasteMapResponse, RediscoverResponse, User, ProducerResolveResponse, ProducerTracksResponse, SamplesResolveRequest, SamplesResolveResponse, DiscoveryCard, DiscoveriesResponse
+from app.domain.models import ArtistAggregate, IndexRequest, IndexProgress, ScanRequest, AIEnabledRequest, AlbumCoversResponse, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RhythmResponse, WeeklyPulseResponse, EngagementResponse, TasteMapResponse, RediscoverResponse, User, ProducerResolveResponse, ProducerTracksResponse, SamplesResolveRequest, SamplesResolveResponse, DiscoveryCard, DiscoveriesResponse
 from app.api.dependencies import get_current_user, require_mode
 from app.api.helpers import derive_collection_for_user, index_grant_allows
 from app.services.library_service import LibraryService
+from app.services.library_scan_service import MountLooksEmpty, discover_new_files
 from app.services import track_credits_service
 from app.services import uploads_service
 from app.services._magic_sniff import sniff_audio_mime
@@ -1242,6 +1245,117 @@ async def index_folder(
         lang=(req.lang or "ru").strip().lower(),
     )
     return result
+
+
+# ── Rescan, step one: what would an index run actually pick up? ───────────────
+
+# How often the walk reports its running count. Every 200 files is several
+# frames a second even on a spinning disk — often enough to look alive, rare
+# enough that the stream never becomes the bottleneck.
+_SCAN_PROGRESS_EVERY = 200
+
+
+@router.post("/scan")
+async def scan_folder(
+    req: ScanRequest,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> StreamingResponse:
+    """Count what a rescan of ``folder_path`` would pick up, and nothing more.
+
+    Streams NDJSON: ``{"type": "progress", "seen": N}`` while the walk runs,
+    then exactly one terminal frame — ``{"type": "done", "seen": M,
+    "new_count": K}`` or ``{"type": "error", "code": ...}``.
+
+    Creates NO indexing job and touches NO model. On a settled library the
+    answer is almost always "nothing new", and paying tens of seconds of GPU
+    model load to find that out is what made pressing rescan feel like a
+    re-index. The client decides whether to POST /library/index afterwards.
+
+    Gated exactly like /library/index: a scan reports what sits on the host
+    disk, so an account that may not index a path may not count it either.
+    """
+    from app.resources.metadata_db import MetadataDB
+    cfg = MetadataDB.get_instance_config()
+    if cfg is not None and cfg.get("mode") == "server":
+        # Same refusal text as /index, and just as deliberately path-free: this
+        # endpoint is reachable by any authenticated account.
+        if not index_grant_allows(
+            role=current_user.role,
+            index_root=getattr(current_user, "index_root", None),
+            candidate=req.folder_path,
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="folder indexing is not enabled for this account — upload files instead",
+            )
+
+    if not Path(req.folder_path).is_dir():
+        raise HTTPException(
+            status_code=400,
+            detail=f"folder does not exist on this host: {req.folder_path}",
+        )
+
+    derived = derive_collection_for_user(current_user)
+
+    def _known_paths() -> set:
+        return {
+            str(fp)
+            for _pid, payload in MetadataDB.get_light_points(derived)
+            if (fp := (payload or {}).get("file_path"))
+        }
+
+    try:
+        known = await asyncio.to_thread(_known_paths)
+    except Exception as e:
+        # The indexer treats a lost mirror as "nothing is indexed yet" and
+        # re-reads everything — wasteful but recoverable. A SCAN cannot: it
+        # would answer "9088 new files" and invite the user to rebuild a
+        # library that is already there. Refuse rather than guess.
+        logger.exception("[scan] known-path lookup failed for %s", derived)
+        raise HTTPException(
+            status_code=503,
+            detail="library index is unavailable — cannot tell which files are new",
+        ) from e
+
+    async def _frames():
+        queue: asyncio.Queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def _on_progress(seen: int) -> None:
+            # Runs on the walker thread — hand the count back to the loop.
+            loop.call_soon_threadsafe(
+                queue.put_nowait, {"type": "progress", "seen": seen})
+
+        async def _walk() -> None:
+            try:
+                result = await asyncio.to_thread(
+                    discover_new_files, req.folder_path, known,
+                    on_progress=_on_progress,
+                    progress_every=_SCAN_PROGRESS_EVERY,
+                )
+            except MountLooksEmpty:
+                logger.warning("[scan] %s looks unmounted — refusing to report 0",
+                               req.folder_path)
+                await queue.put({"type": "error", "code": "mount_empty"})
+            except Exception:
+                logger.exception("[scan] walk of %s failed", req.folder_path)
+                await queue.put({"type": "error", "code": "scan_failed"})
+            else:
+                await queue.put({"type": "done", "seen": result.seen,
+                                 "new_count": len(result.new_files)})
+            await queue.put(None)
+
+        walker = asyncio.create_task(_walk())
+        try:
+            while (frame := await queue.get()) is not None:
+                yield json.dumps(frame) + "\n"
+        finally:
+            # A client that navigated away mid-walk must not leave the thread
+            # pushing into a queue nobody reads.
+            walker.cancel()
+
+    return StreamingResponse(_frames(), media_type="application/x-ndjson")
 
 
 # ── Server-mode uploads (Phase C) ──────────────────────────────────────────────

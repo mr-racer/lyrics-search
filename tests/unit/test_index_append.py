@@ -305,3 +305,34 @@ def test_upload_job_reports_added_and_skipped(monkeypatch):
     final = sent[-1]
     assert final["tracks_added"] == 1
     assert final["tracks_skipped"] == 1
+
+
+def test_a_rescan_with_nothing_new_never_warms_the_gpu(monkeypatch):
+    """Loading the text model is tens of seconds of blocking work.
+
+    A rescan whose path diff comes back empty — the usual outcome on a settled
+    library — has to establish that FIRST and stop. Warming a GPU model it will
+    never use is what turned "0 new files" into a long wait, and, when the
+    model itself could not load, into a failed job for a no-op.
+    """
+    from app.services import library_service as ls
+    from app.services.job_tracker import IndexStatus, JobTracker
+
+    loaded: list = []
+    monkeypatch.setattr(ls.ModelRegistry, "get_text_model",
+                        staticmethod(lambda: loaded.append(1)))
+
+    svc = ls.LibraryService(db_client=MagicMock())
+    sent = _frames(svc)
+    job = JobTracker().create_job("/music", "acct_acc1")
+    monkeypatch.setattr(
+        type(svc), "_files_to_index",
+        lambda self, folder, coll, *, append: ([], 9088, 9088),
+    )
+
+    _run(svc._run_indexing_job(job, False, account_id="acc1", append=True))
+
+    assert loaded == [], "the diff decides whether the model is needed at all"
+    assert job.overall_status == IndexStatus.COMPLETED
+    assert sent[-1]["tracks_skipped"] == 9088
+    assert all(sp.status == IndexStatus.COMPLETED for sp in job.stages.values())

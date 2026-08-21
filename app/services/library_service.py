@@ -1052,10 +1052,6 @@ class LibraryService:
         # to_thread keeps the event loop responsive while this job waits its turn.
         await asyncio.to_thread(_INDEX_SEMAPHORE.acquire)
         try:
-            # Cold load = tens of seconds of blocking work; keep it off the
-            # event loop or every request (login included) hangs meanwhile.
-            await asyncio.to_thread(ModelRegistry.get_text_model)
-
             loop = asyncio.get_event_loop()
 
             # ── Stage LYRICS: tag-read (online lyrics fetched by the pipeline) ──
@@ -1079,6 +1075,14 @@ class LibraryService:
                 )
                 await self._complete_with_nothing_new(job, skipped_known)
                 return
+
+            # Cold load = tens of seconds of blocking work; keep it off the
+            # event loop or every request (login included) hangs meanwhile.
+            # AFTER the diff on purpose: on a settled library the diff is
+            # usually empty, and a rescan must not pay for a GPU model it will
+            # never use — nor fail a no-op job when that model cannot load.
+            await asyncio.to_thread(ModelRegistry.get_text_model)
+
             stage_lyrics.total = len(audio_files)
             await self._notify_progress(job, {
                 "stage": IndexStage.LYRICS.value,

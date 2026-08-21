@@ -7,7 +7,13 @@ qdrant-client
 # Genius.com scraping (app/services/genius_service.py): curl-based HTTP client
 # (no browser impersonation — the spoofed fingerprint got blocked by Genius).
 curl_cffi
-sentence-transformers
+# Cap below 6.0: 6.0.0 hands each module's own config.json straight to that
+# module's constructor, and Octen ships 2_Normalize/config.json =
+# {"normalize_embeddings": true} — a key Normalize.__init__ does not take. The
+# text model then fails to load AT ALL (every index run and every search dies
+# on a TypeError). 5.x ignores that file, and stays on transformers>=4.41,<6 so
+# nothing else in the stack moves.
+sentence-transformers<6
 mutagen
 tqdm
 numpy
