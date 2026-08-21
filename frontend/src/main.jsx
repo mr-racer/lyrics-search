@@ -1254,6 +1254,43 @@ function sampleN(arr, n) {
 
 const ARTIST_SAMPLE_SIZE = 5;
 
+// ─── Fact labels ────────────────────────────────────────────────────────────
+// The indexer sorts every fact into a kind. Naming that kind in the interface
+// is the whole point of having sorted them: a listener scanning a shelf can
+// tell "who directed the video" from "who sued whom" without reading either.
+//
+// Names are what a listener would say, never what the pipeline calls it. One
+// label per fact — the most specific one it carries — because a card wearing
+// three labels stops being scannable, which is the only reason to show any.
+const FACT_LABELS = {
+  sample:       { ru: 'сэмпл',     en: 'sample' },
+  video:        { ru: 'клип',      en: 'video' },
+  title_origin: { ru: 'название',  en: 'title' },
+  name_origin:  { ru: 'название',  en: 'name' },
+  record:       { ru: 'рекорд',    en: 'record' },
+  award:        { ru: 'награда',   en: 'award' },
+  trouble:      { ru: 'спор',      en: 'dispute' },
+  placement:    { ru: 'где звучит', en: 'heard in' },
+  sound:        { ru: 'звук',      en: 'sound' },
+  creation:     { ru: 'создание',   en: 'making' },
+  personal:     { ru: 'личное',    en: 'personal' },
+  band_history: { ru: 'история',   en: 'history' },
+};
+
+// Most specific first — the same order the indexer ranks them by, so the label
+// a card shows is the one that says the most about it.
+const FACT_LABEL_ORDER = [
+  'sample', 'name_origin', 'title_origin', 'trouble', 'record', 'award',
+  'video', 'placement', 'sound', 'creation', 'personal', 'band_history',
+];
+
+function factLabel(labels, lang) {
+  if (!Array.isArray(labels) || !labels.length) return null;
+  const key = FACT_LABEL_ORDER.find(k => labels.includes(k));
+  return key ? (FACT_LABELS[key][lang === 'ru' ? 'ru' : 'en']) : null;
+}
+
+
 // ─── FactsRail (right-side panel: per-track "Did you know" facts) ─────────────
 // Two variants:
 //   - landing: combined song+artist items, random-collection fallback, type chips
@@ -1307,12 +1344,18 @@ function FactsRail({ trackId, isDark, lang, accent, variant = "landing" }) {
         // song_facts_meta (v2 server) carries per-fact confirmed flags for
         // the «фан-версия» marker; plain song_facts is the legacy fallback.
         const songs = Array.isArray(res.song_facts_meta)
-          ? res.song_facts_meta.map(m => ({ text: m.text || '', unconfirmed: m.confirmed === false }))
-          : (res.song_facts || []).map(f => ({ text: f, unconfirmed: false }));
-        const artists = res.artist_facts || [];
+          ? res.song_facts_meta.map(m => ({ text: m.text || '', unconfirmed: m.confirmed === false,
+                                            labels: m.labels || [] }))
+          : (res.song_facts || []).map(f => ({ text: f, unconfirmed: false, labels: [] }));
+        // artist_facts_meta arrives from the labelled indexer; the bare list is
+        // what a library that has not been re-indexed yet still returns.
+        const artists = Array.isArray(res.artist_facts_meta)
+          ? res.artist_facts_meta.map(m => ({ text: m.text || '', unconfirmed: m.confirmed === false,
+                                              labels: m.labels || [] }))
+          : (res.artist_facts || []).map(f => ({ text: f, unconfirmed: false, labels: [] }));
         setSongFacts(songs.filter(s => s.text));
-        setArtistFactsAll(artists);
-        setArtistFactsSampled(sampleN(artists, ARTIST_SAMPLE_SIZE));
+        setArtistFactsAll(artists.filter(a => a.text));
+        setArtistFactsSampled(sampleN(artists.filter(a => a.text), ARTIST_SAMPLE_SIZE));
 
         if (songs.length || artists.length) {
           setStatus('loaded');
@@ -1361,14 +1404,14 @@ function FactsRail({ trackId, isDark, lang, accent, variant = "landing" }) {
   let items;
   if (isPlayer) {
     items = effectiveScope === 'song'
-      ? songFacts.map(f => ({ text: f.text, unconfirmed: f.unconfirmed, type: 'song' }))
-      : artistFactsSampled.map(f => ({ text: f, type: 'artist' }));
+      ? songFacts.map(f => ({ text: f.text, unconfirmed: f.unconfirmed, labels: f.labels, type: 'song' }))
+      : artistFactsSampled.map(f => ({ text: f.text, unconfirmed: f.unconfirmed, labels: f.labels, type: 'artist' }));
   } else if (fallbackItems.length) {
     items = fallbackItems;
   } else {
     items = [
-      ...songFacts.map(f => ({ text: f.text, unconfirmed: f.unconfirmed, type: 'song' })),
-      ...artistFactsAll.map(f => ({ text: f, type: 'artist' })),
+      ...songFacts.map(f => ({ text: f.text, unconfirmed: f.unconfirmed, labels: f.labels, type: 'song' })),
+      ...artistFactsAll.map(f => ({ text: f.text, unconfirmed: f.unconfirmed, labels: f.labels, type: 'artist' })),
     ];
   }
 
@@ -1473,14 +1516,26 @@ function FactsRail({ trackId, isDark, lang, accent, variant = "landing" }) {
             fontSize:factFontSize, lineHeight:1.55, color:c.text, letterSpacing:'-0.005em',
             fontWeight:400,
           }}><MarkdownText text={cur.text} /></div>
-          {/* Fan-theory marker: refined facts the AI flagged as unconfirmed
-              (hedged fan annotations). Quiet label, no tech jargon. */}
-          {cur.unconfirmed && (
-            <span style={{
-              alignSelf:'flex-start', fontSize:9.5, letterSpacing:'0.14em',
-              textTransform:'uppercase', color:c.textSubtle,
-              border:`1px solid ${c.border}`, borderRadius:99, padding:'2px 8px',
-            }}>{lang==='ru' ? 'фан-версия' : 'fan theory'}</span>
+          {/* What kind of fact this is, and whether it is a fan's reading
+              rather than something established. Both are quiet by design: they
+              orient a glance, they do not compete with the sentence. */}
+          {(factLabel(cur.labels, lang) || cur.unconfirmed) && (
+            <div style={{ display:'flex', gap:6, alignSelf:'flex-start', flexWrap:'wrap' }}>
+              {factLabel(cur.labels, lang) && (
+                <span className="mono" style={{
+                  fontSize:9.5, letterSpacing:'0.14em', textTransform:'uppercase',
+                  color:c.textSubtle, border:`1px solid ${c.border}`,
+                  borderRadius:99, padding:'2px 8px',
+                }}>{factLabel(cur.labels, lang)}</span>
+              )}
+              {cur.unconfirmed && (
+                <span className="mono" style={{
+                  fontSize:9.5, letterSpacing:'0.14em', textTransform:'uppercase',
+                  color:c.textSubtle, border:`1px solid ${c.border}`,
+                  borderRadius:99, padding:'2px 8px',
+                }}>{lang==='ru' ? 'фан-версия' : 'fan theory'}</span>
+              )}
+            </div>
           )}
         </div>
 
@@ -18534,7 +18589,7 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere }) {
   );
 }
 
-function AtlasBio({ bio, isDark, lang }) {
+function AtlasBio({ bio, facets, sourceUrl, isDark, lang }) {
   const c = useColors(isDark);
   const [expanded, setExpanded] = useState(false);
   const [overflowing, setOverflowing] = useState(false);
@@ -18572,6 +18627,100 @@ function AtlasBio({ bio, isDark, lang }) {
         }}>
           {expanded ? (lang==='ru'?'свернуть ↑':'collapse ↑') : (lang==='ru'?'читать дальше ↓':'read more ↓')}
         </button>
+      )}
+      <BioFacets facets={facets} sourceUrl={sourceUrl} isDark={isDark} lang={lang} />
+    </div>
+  );
+}
+
+// ─── Facts shown beside the biography ───────────────────────────────────────
+// Three of the four are short data — years, a place, a count — and the fourth
+// is a sentence. Setting them all as identical pills would misdescribe that:
+// a row of equals invites scanning, and a story is read, not scanned. So the
+// data sits in a values row and the naming story gets its own line.
+//
+// A value the open web supplied is a weaker claim than one the artist's own
+// article did, and the interface says so quietly: a dotted underline, and the
+// source on hover. It never presents the two as equals.
+function BioFacets({ facets, sourceUrl, isDark, lang }) {
+  const c = useColors(isDark);
+  const ru = lang === 'ru';
+  if (!facets || !Object.keys(facets).length) return null;
+
+  const soft = (src) => src === 'web';
+  const items = [];
+
+  if (facets.formed_year || facets.formed_place) {
+    items.push({
+      key: 'formed',
+      label: ru ? 'начало' : 'started',
+      value: [facets.formed_year, facets.formed_place].filter(Boolean).join(' · '),
+      web: soft(facets.formed_source),
+    });
+  }
+  if (facets.active_from) {
+    const dash = ' — ';
+    const tail = facets.status === 'active' || !facets.active_to
+      ? (facets.status === 'deceased' || facets.status === 'disbanded' ? '' : (ru ? 'сейчас' : 'now'))
+      : facets.active_to;
+    items.push({
+      key: 'active',
+      label: ru ? 'годы' : 'years',
+      value: tail ? `${facets.active_from}${dash}${tail}` : String(facets.active_from),
+      web: soft(facets.status_source),
+    });
+  }
+  if (facets.grammy_wins || facets.grammy_nominations) {
+    const parts = [];
+    if (facets.grammy_wins) parts.push(ru ? `${facets.grammy_wins} побед` : `${facets.grammy_wins} won`);
+    if (facets.grammy_nominations) {
+      parts.push(ru ? `${facets.grammy_nominations} номинаций`
+                    : `${facets.grammy_nominations} nominations`);
+    }
+    items.push({ key: 'grammy', label: 'Grammy', value: parts.join(' · '),
+                 web: soft(facets.grammy_source) });
+  }
+
+  const origin = facets.name_origin;
+  if (!items.length && !origin) return null;
+
+  return (
+    <div style={{ marginTop: 18, maxWidth: 720 }}>
+      {items.length > 0 && (
+        <div style={{ display:'flex', flexWrap:'wrap', gap:'18px 26px', marginBottom: origin ? 16 : 0 }}>
+          {items.map(it => (
+            <div key={it.key}>
+              <div className="mono" style={{
+                fontSize:9, letterSpacing:'0.2em', textTransform:'uppercase',
+                color:c.textSubtle, marginBottom:4,
+              }}>{it.label}</div>
+              <div
+                title={it.web ? (ru ? 'из открытых источников' : 'from the open web') : undefined}
+                style={{
+                  fontSize:15.5, color:c.text, letterSpacing:'-0.01em',
+                  borderBottom: it.web ? `1px dotted ${c.border}` : 'none',
+                }}>{it.value}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {origin && (
+        <div>
+          <div className="mono" style={{
+            fontSize:9, letterSpacing:'0.2em', textTransform:'uppercase',
+            color:c.textSubtle, marginBottom:5,
+          }}>{ru ? 'откуда название' : 'where the name came from'}</div>
+          <div className="serif" style={{ fontSize:15, lineHeight:1.62, color:c.textMuted }}>
+            {origin}
+          </div>
+        </div>
+      )}
+      {sourceUrl && (
+        <a href={sourceUrl} target="_blank" rel="noreferrer" className="mono" style={{
+          display:'inline-block', marginTop:14, fontSize:9, letterSpacing:'0.18em',
+          textTransform:'uppercase', color:c.textSubtle, textDecoration:'none',
+          borderBottom:`1px solid ${c.border}`, paddingBottom:1,
+        }}>{ru ? 'источник' : 'source'}</a>
       )}
     </div>
   );
@@ -18646,9 +18795,10 @@ function AtlasFactsShelf({ facts, isDark, lang }) {
             }}>
               <span className="atlas-fact-grain" aria-hidden="true" />
               <span className="atlas-fact-stamp mono">
-                {lang==='ru'?'ФАКТ':'FACT'} · {String(i+1).padStart(2,'0')}
+                {factLabel(f.labels, lang)
+                  || `${lang==='ru'?'ФАКТ':'FACT'} · ${String(i+1).padStart(2,'0')}`}
               </span>
-              <div className="serif" style={{ marginTop:13, fontSize:16, lineHeight:1.68, color:c.text }}>{f}</div>
+              <div className="serif" style={{ marginTop:13, fontSize:16, lineHeight:1.68, color:c.text }}>{f.text}</div>
             </div>
           ))}
         </div>
@@ -19034,12 +19184,17 @@ function ArtistAtlasSection({
           <div style={{ maxWidth:1120, margin:'0 auto', padding: isMobile ? '24px 16px 110px' : '34px 32px 110px', display:'flex', flexDirection:'column', gap:46, position:'relative', zIndex:2 }}>
             {data.bio && (
               <section ref={bioRef} className="lib-rise" style={{ '--lib-d':'0.08s', scrollMarginTop:84 }}>
-                <AtlasBio bio={data.bio} isDark={isDark} lang={lang} />
+                <AtlasBio bio={data.bio} facets={data.bio_facets}
+                  sourceUrl={data.bio_source_url} isDark={isDark} lang={lang} />
               </section>
             )}
             {(data.facts || []).length > 0 && (
               <section ref={factsRef} className="lib-rise" style={{ '--lib-d':'0.16s', scrollMarginTop:84 }}>
-                <AtlasFactsShelf facts={data.facts} isDark={isDark} lang={lang} />
+                <AtlasFactsShelf
+                  facts={(data.facts_meta && data.facts_meta.length)
+                    ? data.facts_meta
+                    : (data.facts || []).map(t => ({ text: t, labels: [] }))}
+                  isDark={isDark} lang={lang} />
               </section>
             )}
             {(data.albums || []).length > 0 && (() => {
