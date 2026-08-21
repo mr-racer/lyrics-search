@@ -5194,3 +5194,56 @@
       .ld-chip { transition: none !important; }
       .ld-car-slide { transition: none !important; }
     }
+
+    /* ═══ Quiz — «Что играет» ═══════════════════════════════════════════════
+       The screen turns on one fact about a music collection: the cover IS the
+       answer. So the question shows none — the four options are purely
+       typographic — and the reveal hands the artwork back. That bloom is the
+       only orchestrated motion here; everything else is a state change.
+
+       Every animation below is single-shot. Nothing loops, nothing runs while
+       the listener is reading, and `.section-offstage *` pauses whatever is
+       left when the section goes away. Surfaces come from the skeuomorphic
+       library (.ske-*), so there is not one `border` in here — depth is inset
+       shadow, which is what keeps the blocks airy. */
+    .quiz-drain { transform-origin: left center; animation: quizDrain var(--quiz-dur, 3s) linear forwards; }
+    @keyframes quizDrain { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+
+    .quiz-bloom { animation: quizBloom .42s cubic-bezier(.22,.9,.3,1) both; }
+    @keyframes quizBloom {
+      from { opacity: 0; transform: scale(.94) translateY(8px); }
+      to   { opacity: 1; transform: none; }
+    }
+
+    /* The pulse marks "a snippet is playing" without a second moving element:
+       one soft ring on the play key, three beats, then still.
+
+       It rides a pseudo-element, NOT the button's own box-shadow — the key is
+       a .ske-btn-* surface whose depth IS its box-shadow, and animating that
+       property would flatten the physical key for the duration of the pulse. */
+    .quiz-live { position: relative; }
+    .quiz-live::after {
+      content: ''; position: absolute; inset: 0; border-radius: 50%;
+      pointer-events: none; animation: quizLive 1s ease-out 3;
+    }
+    @keyframes quizLive {
+      0%   { box-shadow: 0 0 0 0 oklch(60% 0.18 270 / .45); }
+      100% { box-shadow: 0 0 0 14px oklch(60% 0.18 270 / 0); }
+    }
+
+    .quiz-opt { transition: transform .14s ease, opacity .18s ease, filter .18s ease; }
+    .quiz-opt:hover:not(:disabled) { transform: translateY(-1px); }
+    .quiz-opt:active:not(:disabled) { transform: translateY(1px); }
+    .quiz-opt:disabled { cursor: default; }
+    /* The options that were not the answer recede rather than disappear — the
+       reveal should show what you chose between, not erase it. */
+    .quiz-opt--dim { opacity: .38; filter: saturate(.6); }
+
+    @media (prefers-reduced-motion: reduce) {
+      .quiz-bloom { animation: none; }
+      .quiz-live::after { animation: none; }
+      /* The drain bar carries information (time left), so it is not animated
+         away — it simply stops moving and reads as a full bar. */
+      .quiz-drain { animation: none; transform: none; }
+      .quiz-opt { transition: none; }
+    }

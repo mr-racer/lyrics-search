@@ -305,6 +305,18 @@ function buildStreamUrl(trackId, { forPrefetch = false } = {}) {
   return _streamToken ? `${base}?st=${encodeURIComponent(_streamToken)}` : base;
 }
 
+// Quiz snippets are addressed by ROUND, never by track: the URL must not say
+// which track is playing, because the player can read it before answering.
+// No prefetch and no blob caching here either — a round is heard once, and a
+// cached blob would just hold a file the listener is not going to replay.
+function buildQuizAudioUrl(roundId) {
+  if (!_streamToken || Date.now() > _streamTokenExpMs - 5 * 60 * 1000) {
+    refreshStreamToken();
+  }
+  const base = `${API}/quiz/rounds/${roundId}/audio`;
+  return _streamToken ? `${base}?st=${encodeURIComponent(_streamToken)}` : base;
+}
+
 // ─── Phase D — one-time localStorage migration ──────────────────────────────
 // Pre-Phase-D keys carried the collection name (acct_<id>) in their suffix;
 // post-Phase-D every per-user store is keyed by the JWT user.id (the server is
@@ -3152,6 +3164,10 @@ function FloatingIconNav({ section, onNav, isDark, lang, onSettings, currentTrac
       icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2 15 8l6 1-4.5 4.5L18 20l-6-3-6 3 1.5-6.5L3 9l6-1z"/></svg> },
     { id:'assistant', label: lang==='ru'?'ИИ':'AI',
       icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="7"/><path d="M8.6 13.4c1.6 1.1 3.4-.7 4.8.4"/><path d="M9.2 9.6c1.3.9 2.6-.4 3.9.2"/><path d="M19.6 5.2 20 4l.4 1.2 1.2.4-1.2.4-.4 1.2-.4-1.2-1.2-.4z"/></svg> },
+    // A speech mark, not a question mark: the round asks you to name a track,
+    // and the quotation shape reads as "say it" rather than "help".
+    { id:'quiz', label: lang==='ru'?'ИГРА':'QUIZ',
+      icon: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a8 8 0 1 1-3.1-6.3"/><path d="M9.6 9.4a2.6 2.6 0 1 1 3.3 3.1c-.7.3-1.1.9-1.1 1.7"/><circle cx="11.8" cy="17.4" r="1" fill="currentColor" stroke="none"/></svg> },
   ];
 
   // Geometry shared by tabs and the sliding glass blob.
@@ -19848,6 +19864,8 @@ function BottomTabBar({ section, onNav, isDark, lang }) {
       icon:(a)=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={a?2.1:1.8} strokeLinecap="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4.03 3 9 3s9-1.34 9-3"/></svg> },
     { id:'recommend', label: lang==='ru'?'Рекомендации':'For You',
       icon:(a)=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={a?2.1:1.8} strokeLinecap="round" strokeLinejoin="round"><path d="M12 2 15 8l6 1-4.5 4.5L18 20l-6-3-6 3 1.5-6.5L3 9l6-1z"/></svg> },
+    { id:'quiz', label: lang==='ru'?'Игра':'Quiz',
+      icon:(a)=><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={a?2.1:1.8} strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a8 8 0 1 1-3.1-6.3"/><path d="M9.6 9.4a2.6 2.6 0 1 1 3.3 3.1c-.7.3-1.1.9-1.1 1.7"/><circle cx="11.8" cy="17.4" r="1" fill="currentColor" stroke="none"/></svg> },
   ];
   const barBg = isDark
     ? 'linear-gradient(180deg, rgba(22,22,28,0.97), rgba(14,14,19,0.98))'
@@ -20011,6 +20029,311 @@ function useHistoryOverlay(isOpen, onClose, key) {
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, [key]);
+}
+
+// ─── Quiz — «Что играет» ─────────────────────────────────────────────────────
+// A quiz about the listener's OWN collection. The whole screen turns on one
+// fact: in a music library the cover IS the answer. So the question shows no
+// artwork at all — the four options are purely typographic — and the reveal
+// hands the cover back. That bloom is the single orchestrated moment; the rest
+// of the screen stays quiet on purpose.
+//
+// Nothing here reports listening. The snippet fires no playback event and the
+// score never reaches recommendations (server invariants I-1/I-2); this
+// component simply has no code that would.
+function QuizSection({ isDark, lang, visible, onPlayTrack }) {
+  const c = useColors(isDark);
+  const ru = lang === 'ru';
+  const MODE = 'track_snippet';
+
+  const [modes, setModes] = useState(null);
+  const [round, setRound] = useState(null);
+  const [result, setResult] = useState(null);
+  const [picked, setPicked] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState('');
+  const [playing, setPlaying] = useState(false);
+  const [playSeq, setPlaySeq] = useState(0);   // remounts the drain bar
+  const audioRef = useRef(null);
+  const stopRef = useRef(null);
+
+  const modeInfo = useMemo(
+    () => (modes || []).find(m => m.key === MODE) || null, [modes]);
+
+  const stopSnippet = useCallback(() => {
+    clearTimeout(stopRef.current);
+    const el = audioRef.current;
+    if (el) { try { el.pause(); } catch (_) { /* not started */ } }
+    setPlaying(false);
+  }, []);
+
+  // Sections are hidden, not unmounted — without this the snippet would keep
+  // playing under the next screen.
+  useEffect(() => { if (!visible) stopSnippet(); }, [visible, stopSnippet]);
+  useEffect(() => () => clearTimeout(stopRef.current), []);
+
+  useEffect(() => {
+    if (!visible || modes) return;
+    let alive = true;
+    apiFetch('/quiz/modes')
+      .then(d => { if (alive) setModes(d.modes || []); })
+      .catch(() => { if (alive) setModes([]); });
+    return () => { alive = false; };
+  }, [visible, modes]);
+
+  const playSnippet = useCallback((forRound) => {
+    const el = audioRef.current;
+    const cur = forRound || round;
+    if (!el || !cur) return;
+    clearTimeout(stopRef.current);
+    const src = buildQuizAudioUrl(cur.round_id);
+    if (el.src !== src) el.src = src;
+    const begin = () => {
+      // Seeking before metadata lands throws; readyState guards the normal
+      // path and this catch covers the race.
+      try { el.currentTime = cur.start_sec || 0; } catch (_) { /* seek later */ }
+      el.play().then(() => {
+        setPlaying(true);
+        setPlaySeq(n => n + 1);
+        stopRef.current = setTimeout(() => {
+          try { el.pause(); } catch (_) { /* already stopped */ }
+          setPlaying(false);
+        }, Math.max(500, (cur.length_sec || 3) * 1000));
+      }).catch(() => setPlaying(false));   // autoplay blocked — the key is there
+    };
+    if (el.readyState >= 1) begin();
+    else el.addEventListener('loadedmetadata', begin, { once: true });
+  }, [round]);
+
+  const nextRound = useCallback(async () => {
+    setBusy(true); setNote(''); setResult(null); setPicked(null); stopSnippet();
+    try {
+      const data = await apiFetch('/quiz/rounds', {
+        method: 'POST', body: JSON.stringify({ mode: MODE, snippet_sec: 3 }),
+      });
+      setRound(data);
+      playSnippet(data);
+    } catch (e) {
+      setRound(null);
+      const thin = String((e && e.message) || '').includes('409');
+      setNote(thin
+        ? (ru ? 'Пока мало треков, которые ты действительно слушал. Послушай что-нибудь и возвращайся.'
+              : 'Not enough tracks you have actually played yet. Listen a little and come back.')
+        : (ru ? 'Не удалось начать раунд.' : 'Could not start a round.'));
+    } finally { setBusy(false); }
+  }, [playSnippet, ru, stopSnippet]);
+
+  const submit = useCallback(async (optionId) => {
+    if (!round || result || busy) return;
+    setPicked(optionId); setBusy(true); stopSnippet();
+    try {
+      const data = await apiFetch(`/quiz/rounds/${round.round_id}/answer`, {
+        method: 'POST', body: JSON.stringify({ option_id: optionId }),
+      });
+      setResult(data);
+    } catch (_) {
+      setNote(ru ? 'Ответ не засчитан.' : 'The answer did not register.');
+      setPicked(null);
+    } finally { setBusy(false); }
+  }, [round, result, busy, ru, stopSnippet]);
+
+  const label = { letterSpacing: '0.1em', textTransform: 'uppercase',
+                  fontSize: 10.5, color: c.textSubtle };
+
+  const playKey = (
+    <button
+      onClick={() => (playing ? stopSnippet() : playSnippet())}
+      disabled={!round || !!result}
+      className={`${ske('btn', isDark)}${playing ? ' quiz-live' : ''}`}
+      aria-label={playing ? (ru ? 'Остановить' : 'Stop') : (ru ? 'Слушать отрывок' : 'Play the snippet')}
+      style={{
+        width: 66, height: 66, borderRadius: '50%', display: 'grid',
+        placeItems: 'center', color: c.text,
+        opacity: (!round || result) ? 0.4 : 1,
+        cursor: (!round || result) ? 'default' : 'pointer',
+      }}>
+      {playing ? (
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+          <rect x="6" y="5" width="4" height="14" rx="1.2" />
+          <rect x="14" y="5" width="4" height="14" rx="1.2" />
+        </svg>
+      ) : (
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M8 5.5v13l10-6.5z" />
+        </svg>
+      )}
+    </button>
+  );
+
+  return (
+    <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', background: c.bg }}>
+      <audio ref={audioRef} preload="none" />
+      <div style={{
+        maxWidth: 620, margin: '0 auto', padding: '48px 22px 64px',
+        display: 'flex', flexDirection: 'column', gap: 26,
+      }}>
+
+        {/* ── Heading. No kicker: this codebase dropped section kickers app-wide
+             because the nav already says which section is open (see
+             SectionHeader). ── */}
+        <div style={{ textAlign: 'center' }}>
+          <div className="vibe-serif" style={{
+            fontSize: 30, lineHeight: 1.15, color: c.text,
+          }}>
+            {ru ? 'Что играет' : "What's playing"}
+          </div>
+          <div style={{ fontSize: 13.5, color: c.textMuted, marginTop: 8, lineHeight: 1.5 }}>
+            {ru ? 'Три секунды из твоей фонотеки. Узнаешь?'
+                : 'Three seconds from your own library. Recognise it?'}
+          </div>
+        </div>
+
+        {/* ── The snippet well ── */}
+        <div className={ske('inset', isDark)} style={{
+          borderRadius: 20, padding: '26px 22px 22px',
+          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 18,
+        }}>
+          {playKey}
+          {/* The drain bar is the only clock on screen: one CSS animation the
+              length of the snippet, remounted per play. No timer in JS. */}
+          <div style={{
+            width: '100%', maxWidth: 300, height: 3, borderRadius: 999,
+            background: isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.08)',
+            overflow: 'hidden',
+          }}>
+            {playing && (
+              <div key={playSeq} className="quiz-drain" style={{
+                height: '100%', borderRadius: 999, background: c.accent,
+                ['--quiz-dur']: `${(round && round.length_sec) || 3}s`,
+              }} />
+            )}
+          </div>
+          {/* A hint, not a caption: the drain bar already says how long the
+              snippet is, so this slot only earns its place when it tells you
+              something you cannot see — that the snippet can be replayed. */}
+          <div className="mono" style={{ ...label, fontSize: 10, minHeight: 13 }}>
+            {round && !result && !playing
+              ? (ru ? 'Можно послушать ещё раз' : 'You can hear it again')
+              : ''}
+          </div>
+        </div>
+
+        {/* ── Options, or the invitation to start ── */}
+        {!round && (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
+            {note && (
+              <div style={{ fontSize: 13, color: c.textMuted, textAlign: 'center',
+                            lineHeight: 1.55, maxWidth: 420 }}>{note}</div>
+            )}
+            {modes === null ? <Spinner size={18} color={c.accent} /> : (
+              <button onClick={nextRound} disabled={busy || (modeInfo && !modeInfo.available)}
+                className="asn-go" style={{ opacity: busy ? 0.6 : 1 }}>
+                {busy ? (ru ? 'Готовим…' : 'Getting ready…') : (ru ? 'Начать' : 'Start')}
+              </button>
+            )}
+            {modeInfo && !modeInfo.available && (
+              <div style={{ fontSize: 12.5, color: c.textSubtle, textAlign: 'center', maxWidth: 420 }}>
+                {ru ? 'Пока мало данных для игры — нужно, чтобы ты успел послушать хотя бы два десятка треков.'
+                    : 'Not enough here yet — the game needs a couple of dozen tracks you have actually played.'}
+              </div>
+            )}
+          </div>
+        )}
+
+        {round && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {round.options.map(opt => {
+              const isAnswer = result && opt.option_id === result.correct_option_id;
+              const isPicked = opt.option_id === picked;
+              const dim = result && !isAnswer && !isPicked;
+              const wrongPick = result && isPicked && !isAnswer;
+              return (
+                <button key={opt.option_id}
+                  onClick={() => submit(opt.option_id)}
+                  disabled={!!result || busy}
+                  className={`quiz-opt ${ske('btn', isDark)}${dim ? ' quiz-opt--dim' : ''}`}
+                  style={{
+                    position: 'relative', overflow: 'hidden',
+                    borderRadius: 15, padding: '13px 16px', textAlign: 'left',
+                    display: 'flex', alignItems: 'center', gap: 13, color: c.text,
+                  }}>
+                  {/* The verdict is a wash laid OVER the key, never a change to
+                      its background: .ske-btn-* paints itself with the
+                      `background` shorthand, so setting backgroundImage inline
+                      would replace the skeuomorphic gradient and leave the key
+                      sitting on nothing. An overlay keeps the surface intact —
+                      and it means no outline, which nothing here has. */}
+                  {(isAnswer || wrongPick) && (
+                    <div aria-hidden="true" style={{
+                      position: 'absolute', inset: 0, pointerEvents: 'none',
+                      background: `linear-gradient(180deg, ${isAnswer ? c.greenBg : c.redBg}, transparent)`,
+                    }} />
+                  )}
+                  {/* The cover arrives only for the answer, only once it is
+                      known — withholding it is the whole point of the round. */}
+                  {isAnswer && (
+                    // position:relative on the content, so it paints above the
+                    // absolutely-positioned wash rather than under it.
+                    <div className="quiz-bloom" style={{ flexShrink: 0, position: 'relative' }}>
+                      <AlbumCover title={result.truth.title} artist={result.truth.artist}
+                                  coverPath={result.truth.cover_art_path}
+                                  size={46} isDark={isDark} />
+                    </div>
+                  )}
+                  <div style={{ minWidth: 0, flex: 1, position: 'relative' }}>
+                    <div style={{ fontSize: 14.5, fontWeight: 600, lineHeight: 1.3,
+                                  overflow: 'hidden', textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap' }}>{opt.title}</div>
+                    <div style={{ fontSize: 12, color: c.textMuted, marginTop: 3,
+                                  overflow: 'hidden', textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap' }}>{opt.artist}</div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* ── Reveal ── */}
+        {result && (
+          <div className="quiz-bloom" style={{
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16,
+          }}>
+            <div className="vibe-serif" style={{
+              fontSize: 24, color: result.correct ? c.green : c.text,
+            }}>
+              {result.correct ? (ru ? 'Узнал' : 'Got it')
+                              : (ru ? 'Не узнал' : 'Missed it')}
+            </div>
+            {!result.correct && (
+              <div style={{ fontSize: 13.5, color: c.textMuted, textAlign: 'center', lineHeight: 1.5 }}>
+                {ru ? 'Это' : 'It was'} <span style={{ color: c.text, fontWeight: 600 }}>
+                  {result.truth.title}
+                </span>{result.truth.year ? ` · ${result.truth.year}` : ''}
+              </div>
+            )}
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
+              <button onClick={() => onPlayTrack && onPlayTrack(result.truth, [])}
+                className="asn-go">
+                {ru ? 'Слушать целиком' : 'Listen in full'}
+              </button>
+              <button onClick={nextRound} disabled={busy}
+                className={ske('btn', isDark)}
+                style={{ borderRadius: 999, padding: '11px 24px', fontSize: 12.5,
+                         fontWeight: 700, letterSpacing: '.07em', color: c.text,
+                         opacity: busy ? 0.6 : 1 }}>
+                {ru ? 'Дальше' : 'Next'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {note && round && (
+          <div style={{ fontSize: 12.5, color: c.textMuted, textAlign: 'center' }}>{note}</div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function App({ instanceMode = 'sharing', onLogout = () => {} }) {
@@ -20813,6 +21136,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     library:   LibrarySection,
     player:    PlayerSection,
     artist:    ArtistAtlasSection,
+    quiz:      QuizSection,
   };
   const ActiveSection = sectionMap[section];
 
