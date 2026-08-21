@@ -29,6 +29,10 @@ class RoundContext:
     # {producer_key: {"name": display, "tracks": [track_id, ...]}} over every
     # effectively-credited track. Built once per snapshot; M2 reads it.
     producers: Dict[str, Dict] = field(default_factory=dict)
+    # "This track took its sound from that one" claims, with the source track
+    # already resolved to a ``track_id`` so the mode never touches slugs.
+    # [{"src_track_id", "dst_title", "dst_artist", "dst_slug", "relation"}]
+    sample_links: List[Dict] = field(default_factory=list)
     rng: object = _random
     now: float = 0.0
 

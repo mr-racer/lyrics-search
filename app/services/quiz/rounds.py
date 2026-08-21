@@ -61,6 +61,7 @@ class _Snapshot:
     percentiles: Dict[str, float]
     axis_stats: Optional[Dict]
     producers: Dict[str, Dict]
+    sample_links: List[Dict]
     now: float
 
 
@@ -230,6 +231,7 @@ def _snapshot(qdrant_client, collection_name: str) -> _Snapshot:
             load_axis_norm_reference(),
         ),
         producers=_producer_index(collection_name),
+        sample_links=_sample_links(collection_name, tracks),
         now=now,
     )
 
@@ -243,6 +245,48 @@ def _producer_index(collection_name: str) -> Dict[str, Dict]:
         logger.warning("[quiz] producer index unavailable for %s",
                        collection_name, exc_info=True)
         return {}
+
+
+def _sample_links(collection_name: str, tracks: List[Dict]) -> List[Dict]:
+    """Sample claims with their source track resolved to a ``track_id``.
+
+    ``sample_links`` is keyed by song slug, and the slug is built by
+    ``get_song_facts_key(artist, title)`` — so the same function rebuilds the
+    mapping from the library snapshot, and the mode never has to know slugs
+    exist. Links whose track is not in this collection are dropped.
+    """
+    try:
+        from app.services.song_facts_service import get_song_facts_key
+        rows = MetadataDB.get_outgoing_sample_links(collection_name)
+    except Exception:
+        logger.warning("[quiz] sample links unavailable for %s",
+                       collection_name, exc_info=True)
+        return []
+
+    by_slug: Dict[str, str] = {}
+    for track in tracks:
+        artist, title = track.get("artist"), track.get("title")
+        track_id = track.get("track_id")
+        if not (artist and title and track_id):
+            continue
+        try:
+            by_slug.setdefault(get_song_facts_key(artist, title), track_id)
+        except Exception:
+            continue
+
+    out: List[Dict] = []
+    for row in rows:
+        track_id = by_slug.get(row.get("src_slug"))
+        if not track_id:
+            continue
+        out.append({
+            "src_track_id": track_id,
+            "dst_title": row.get("dst_title"),
+            "dst_artist": row.get("dst_artist"),
+            "dst_slug": row.get("dst_slug"),
+            "relation": row.get("relation"),
+        })
+    return out
 
 
 def _context_for(
@@ -267,6 +311,7 @@ def _context_for(
         ),
         axis_stats=snapshot.axis_stats,
         producers=snapshot.producers,
+        sample_links=snapshot.sample_links,
         rng=rng or _random,
         now=snapshot.now,
     )
