@@ -98,6 +98,23 @@ class MetadataFactSource:
         ``collection_name`` column but its own comment marks it as provenance
         only, NOT part of the key, so it cannot be used as a gate.
         """
+        # Per-item rows first, blob second — the same order every reader uses,
+        # so a library part-way through re-processing answers from whichever it
+        # has. `other` is excluded here rather than downstream: it is kept only
+        # so that "dropped" is countable, and it must never reach an answer.
+        try:
+            items = self._rows(
+                "SELECT i.text FROM refined_fact_items i "
+                "JOIN fact_visibility v ON v.kind = ? AND v.slug = i.scope_key "
+                " AND v.collection_name = ? "
+                "WHERE i.scope = ? AND i.scope_key = ? AND i.lang = ? "
+                "  AND i.text IS NOT NULL AND i.labels_json NOT LIKE '%\"other\"%'",
+                (kind, self.collection_name, kind, slug, self.lang))
+        except Exception:  # noqa: BLE001
+            items = []
+        if items:
+            return [str(t).strip() for (t,) in items if t and str(t).strip()]
+
         try:
             rows = self._rows(
                 "SELECT r.refined_json FROM refined_facts r "

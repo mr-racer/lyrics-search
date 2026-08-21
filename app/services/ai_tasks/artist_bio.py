@@ -1,10 +1,18 @@
-"""Artist Bio task — one-paragraph bio per artist via web search + LLM.
+"""Artist Bio task — a biography written from the artist's Wikipedia article.
 
-For each distinct artist in the collection, runs a pydantic_ai agent loop
-(search → evaluate → refine) via llm_web_search.web_research_bio and
-persists the result to MetadataDB.
+The previous version handed the whole job to an agent that chose its own
+searches, and the result read like a Wikipedia lead paragraph — when it was not
+worse. Of 836 production bios the one for Андрей Губин invented his death
+("трагическая гибель в 2011 году"; he is alive) and several rendered performer
+names in Cyrillic against an explicit instruction.
 
-Cache key is (artist_slug, collection, lang).
+Now the article is found in Wikipedia's own index, fetched once, and asked five
+questions whose answers are fused into one biography; four more questions
+produce the facts shown beside it. The agent survives as the fallback for an
+artist Wikipedia does not cover.
+
+Cache key is (artist_slug, collection, lang). This module walks the collection;
+``services/bio_v2`` does the work.
 """
 
 from __future__ import annotations
@@ -12,13 +20,43 @@ from __future__ import annotations
 import logging
 
 from app.resources.metadata_db import MetadataDB
+from app.services.llm_client import ask_llm
+from app.services.proxy_config import get_proxy
 from app.services import ai_indexing_service
 from app.services.artist_split import (
     artist_slugs, display_name_for_slug,
 )
+from app.services.bio_v2 import pipeline as bio2
 from app.services.llm_web_search import web_research_bio
 
 logger = logging.getLogger(__name__)
+
+_LANG_NAME = {"ru": "Russian", "en": "English"}
+
+
+def _asker(job):
+    """`ask(prompt, temperature) -> str` bound to this job's model."""
+    async def ask(prompt: str, temperature: float = 0.3) -> str:
+        return await ask_llm(prompt, temperature=temperature,
+                             base_url=job.llm_base_url, model=job.llm_model)
+    return ask
+
+
+def _web_rows(query: str) -> list:
+    """Open-web rows for the last-resort widen, in the shape bio_v2 expects.
+
+    Kept behind a function so the pipeline never imports the search stack —
+    and so a probe or a test can pass its own.
+    """
+    from app.services.assistant.config import AgentConfig
+    from app.services.assistant.web_sources import SearchSources
+
+    try:
+        hits = SearchSources(AgentConfig()).web(query)
+    except Exception:                               # noqa: BLE001
+        return []
+    return [{"url": h.url, "title": h.title, "snippet": h.snippet}
+            for h in hits]
 
 
 async def run(job, db_client, llm) -> None:
@@ -47,21 +85,41 @@ async def run(job, db_client, llm) -> None:
             artist_name, artist_slug,
             "yes" if seed_bio else "no",
         )
+        logger.info("[artist_bio] %s (slug=%s, seed_bio=%s)",
+                    artist_name, artist_slug, "yes" if seed_bio else "no")
+        bio, facets = "", {}
         try:
-            bio = await web_research_bio(
-                artist_name=artist_name,
-                lang=job.lang,
-                base_url=job.llm_base_url,
-                model_name=job.llm_model,
-                seed_bio=seed_bio,
+            result = await bio2.build(
+                _asker(job), artist_name,
+                lang_name=_LANG_NAME.get(job.lang, "Russian"),
+                lang_code=job.lang, proxies=get_proxy(),
+                web_search=_web_rows,
             )
-        except Exception as e:
-            logger.warning(
-                "[artist_bio] web search failed for %s: %s", artist_name, e,
-            )
-            n_failed += 1
-            MetadataDB.update_ai_job(job_id=job.job_id, n_failed=n_failed)
-            return
+            bio, facets = result.get("bio") or "", result.get("facets") or {}
+            if result.get("error"):
+                logger.info("[artist_bio] %s: %s", artist_name, result["error"])
+        except Exception as e:                       # noqa: BLE001
+            logger.warning("[artist_bio] wiki pipeline failed for %s: %s",
+                           artist_name, e, exc_info=True)
+
+        if not bio:
+            # No article, or nothing cleared the chunk gate. The agent that used
+            # to do the whole job is a reasonable last resort for exactly this
+            # case — an artist Wikipedia does not cover.
+            try:
+                bio = await web_research_bio(
+                    artist_name=artist_name, lang=job.lang,
+                    base_url=job.llm_base_url, model_name=job.llm_model,
+                    seed_bio=seed_bio,
+                )
+                if bio:
+                    facets = {"source_kind": "web"}
+            except Exception as e:                   # noqa: BLE001
+                logger.warning("[artist_bio] web fallback failed for %s: %s",
+                               artist_name, e)
+                n_failed += 1
+                MetadataDB.update_ai_job(job_id=job.job_id, n_failed=n_failed)
+                return
 
         if not bio:
             logger.warning("[artist_bio] empty result for %s", artist_name)
@@ -69,7 +127,8 @@ async def run(job, db_client, llm) -> None:
             MetadataDB.update_ai_job(job_id=job.job_id, n_skipped=n_skipped)
             return
 
-        MetadataDB.set_artist_bio(artist_slug, job.collection_name, job.lang, bio)
+        MetadataDB.set_artist_bio(artist_slug, job.collection_name, job.lang,
+                                  bio, facets=facets)
         n_done += 1
         MetadataDB.update_ai_job(job_id=job.job_id, n_done=n_done)
 

@@ -70,6 +70,56 @@ def prefers_api(url: str, hosts=API_FIRST_HOSTS) -> bool:
                               for h in (hosts or ()))
 
 
+def search(term: str, lang: str = "en", *, limit: int = 6,
+           timeout: float = 15.0,
+           proxies: Optional[dict] = None) -> list:
+    """Wikipedia's own search index — ``[{"url", "title", "snippet"}, …]``.
+
+    Used instead of a general web engine for the one question where the target
+    catalogue is known in advance: which article is about this artist. Measured
+    on this box, the web route answered that correctly for one artist in five —
+    brave sits in a rate-limit suspension, duckduckgo serves CAPTCHAs, and the
+    pool collapses to bing, which does not honour ``site:``. Varying the query
+    cannot fix a failure that lives in the engine. This index always answers.
+
+    The term should be the BARE artist name. Appending English words to a
+    Cyrillic query is not harmless: ``Андрей Губин band musician`` returns
+    "Умершие в декабре 2022 года" — a list of December 2022 deaths — while the
+    name alone returns his article.
+    """
+    import httpx
+
+    try:
+        resp = httpx.get(
+            f"https://{lang}.wikipedia.org/w/api.php",
+            params={"action": "query", "list": "search", "srsearch": term,
+                    "srlimit": limit, "srnamespace": 0,
+                    "format": "json", "formatversion": "2"},
+            timeout=timeout, headers={"User-Agent": _UA},
+            proxy=(proxies or {}).get("https") or (proxies or {}).get("http"),
+        )
+        resp.raise_for_status()
+        hits = resp.json().get("query", {}).get("search", []) or []
+    except Exception as exc:  # noqa: BLE001 — the caller falls back to the web
+        logger.info("[mediawiki] search %s %r failed: %s: %s", lang, term,
+                    type(exc).__name__, exc)
+        return []
+
+    out = []
+    for hit in hits:
+        title = hit.get("title") or ""
+        if not title:
+            continue
+        out.append({
+            "url": f"https://{lang}.wikipedia.org/wiki/"
+                   f"{title.replace(' ', '_')}",
+            "title": title,
+            "snippet": _strip_tags(hit.get("snippet") or ""),
+        })
+    logger.info("[mediawiki] search %s %r -> %d", lang, term, len(out))
+    return out
+
+
 def fetch_html(url: str, *, timeout: float = 30.0,
                proxies: Optional[dict] = None) -> Optional[tuple[str, dict]]:
     """The article's rendered HTML from the API, or None.

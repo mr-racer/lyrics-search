@@ -15,6 +15,7 @@ from app.resources.metadata_db import MetadataDB
 from app.services import ai_indexing_service
 from app.services.ai_indexing_service import JobState
 from app.services.ai_tasks import artist_bio, refined_facts, sonic_vibe
+from app.services.facts_v2 import pipeline as fv2
 
 
 @pytest.fixture(autouse=True)
@@ -181,35 +182,63 @@ class TestArtistBio:
 class TestRefinedFacts:
     """Tests for the Refined Facts AI task — accessors, parser, batching."""
 
-    def test_parse_llm_response_accepts_valid_dict(self):
-        raw = json.dumps({
-            "selected_facts": [
-                {"reasoning": "interesting", "short_fact": "Hello"},
-                {"reasoning": "weird", "short_fact": "World"},
-            ]
-        })
-        parsed = refined_facts._parse_llm_response(raw)
-        assert parsed == [
-            {"refined_text": "Hello"},
-            {"refined_text": "World"},
-        ]
+    def test_classify_response_maps_ids_to_labels(self):
+        raw = json.dumps({"items": [
+            {"id": "M1", "labels": ["creation"], "move": None},
+            {"id": "M2", "labels": ["other"], "move": None},
+        ]})
+        out = fv2._parse_labels(fv2.parse_json(raw), fv2.SONG_LABELS)
+        assert out["M1"]["labels"] == ["creation"]
+        assert out["M2"]["labels"] == ["other"]
 
-    def test_parse_llm_response_accepts_empty_selected_facts(self):
-        raw = json.dumps({"selected_facts": []})
-        parsed = refined_facts._parse_llm_response(raw)
-        assert parsed == []
+    def test_classify_response_drops_unknown_labels(self):
+        raw = json.dumps({"items": [{"id": "M1", "labels": ["creation", "nope"]}]})
+        out = fv2._parse_labels(fv2.parse_json(raw), fv2.SONG_LABELS)
+        assert out["M1"]["labels"] == ["creation"]
 
-    def test_parse_llm_response_rejects_malformed_json(self):
-        with pytest.raises(ValueError):
-            refined_facts._parse_llm_response("not json")
+    def test_other_never_survives_beside_a_real_label(self):
+        """Code overrules the model here: 'other' means nothing else applied."""
+        raw = json.dumps({"items": [{"id": "M1", "labels": ["other", "video"]}]})
+        out = fv2._parse_labels(fv2.parse_json(raw), fv2.SONG_LABELS)
+        assert out["M1"]["labels"] == ["video"]
 
-    def test_parse_llm_response_rejects_non_dict(self):
-        with pytest.raises(ValueError):
-            refined_facts._parse_llm_response(json.dumps([{"id": 1}]))
+    def test_classify_response_survives_garbage(self):
+        assert fv2._parse_labels(fv2.parse_json("not json"), fv2.SONG_LABELS) == {}
+        assert fv2._parse_labels(fv2.parse_json('{"wrong": []}'),
+                                 fv2.SONG_LABELS) == {}
 
-    def test_parse_llm_response_rejects_missing_selected_facts(self):
-        with pytest.raises(ValueError):
-            refined_facts._parse_llm_response(json.dumps({"facts": []}))
+    def test_sample_is_orthogonal_and_never_eats_the_text_prompt(self):
+        """A `creation + sample` fact yields BOTH a link and prose.
+
+        Routing it to the sample branch alone threw the creation story away —
+        seven times in the 1199-fact validation run.
+        """
+        plan = fv2.route(["creation", "sample"], None)
+        assert plan["extract"] is True
+        assert plan["primary"] == "creation"
+
+    def test_sample_alone_produces_no_text(self):
+        plan = fv2.route(["sample"], None)
+        assert plan["extract"] is True and plan["primary"] is None
+
+    def test_multi_label_order_does_not_decide_the_prompt(self):
+        """The same pair listed either way must take the same prompt."""
+        a = fv2.route(["name_origin", "band_history"], None)
+        b = fv2.route(["band_history", "name_origin"], None)
+        assert a["primary"] == b["primary"] == "name_origin"
+        assert set(a["focus"]) == set(b["focus"]) == {"name_origin", "band_history"}
+
+    def test_moved_fact_uses_the_destination_label(self):
+        plan = fv2.route(["about_artist"],
+                         {"scope": "artist", "labels": ["award"]})
+        assert plan["moved_to"] == "artist" and plan["primary"] == "award"
+
+    def test_roster_dump_is_gated_before_the_model(self):
+        roster = ("1987-2002 Layne Staley Vocals, guitar 1987-2002 Jerry "
+                  "Cantrell Guitar 1987- Mike Starr Bass")
+        assert fv2.gate({"fact": roster}) == "roster"
+        assert fv2.gate({"fact": "Recorded in a single night in a garage "
+                                 "after their gear was stolen."}) is None
 
     def test_get_refined_facts_returns_none_when_absent(self):
         assert MetadataDB.get_refined_facts(
@@ -382,56 +411,62 @@ class TestRefinedFacts:
 
     # ── v2: dedup ────────────────────────────────────────────────────────────
 
-    def test_dedupe_keeps_longer_of_near_duplicates(self):
-        a = {"text": "The chorus references Andy Warhol's fifteen minutes of fame."}
-        b = {"text": "The chorus references Andy Warhol's fifteen minutes of fame, comparing reality TV to a disease."}
-        out = refined_facts._dedupe_refined([a, b])
-        assert out == [b]
+    def test_processed_ids_make_a_rerun_skip_finished_facts(self):
+        """The resume key. A ten-hour run gets interrupted; it must not restart."""
+        MetadataDB.set_refined_fact_item(
+            scope="song", scope_key="s-1", lang="ru", origin_kind="song_facts",
+            origin_id=41, labels=["creation"], text="уже сделано",
+        )
+        done = MetadataDB.processed_origin_ids("song_facts", "ru", [41, 42])
+        assert done == {41}
 
-    def test_dedupe_absorbs_entity_subset(self):
-        # Dedup runs on refined texts in the target language (ru), where the
-        # Latin tokens are genuinely names — the entity-subset rule collapses
-        # the songfacts and genius versions of the same reference.
-        a = {"text": "Упоминает песню Dum Maro Dum 1971 года."}
-        b = {"text": "Отсылка к Dum Maro Dum — хиту 1971 года из фильма Hare "
-                     "Krishna Hare Ram в исполнении Asha Bhosle."}
-        out = refined_facts._dedupe_refined([a, b])
-        assert out == [b]
+    def test_reprocessing_one_fact_replaces_its_row(self):
+        MetadataDB.set_refined_fact_item(
+            scope="song", scope_key="s-2", lang="ru", origin_kind="song_facts",
+            origin_id=77, labels=["creation"], text="первая версия",
+        )
+        MetadataDB.set_refined_fact_item(
+            scope="song", scope_key="s-2", lang="ru", origin_kind="song_facts",
+            origin_id=77, labels=["video"], text="вторая версия",
+        )
+        got = MetadataDB.get_refined_facts_meta(
+            scope="song", scope_key="s-2", collection_name="c", lang="ru")
+        assert got == [{"text": "вторая версия", "confirmed": True,
+                        "labels": ["video"]}]
 
-    def test_dedupe_keeps_distinct_facts(self):
-        a = {"text": "Written after a boat nearly sank at a festival in Canada."}
-        b = {"text": "The drum part was recorded on a leather chair in the studio."}
-        assert refined_facts._dedupe_refined([a, b]) == [a, b]
+    def test_hidden_labels_are_stored_but_never_returned(self):
+        """`other` is kept for statistics and must not reach a reader."""
+        MetadataDB.set_refined_fact_item(
+            scope="song", scope_key="s-3", lang="ru", origin_kind="song_facts",
+            origin_id=88, labels=["other"], text=None,
+        )
+        MetadataDB.set_refined_fact_item(
+            scope="song", scope_key="s-3", lang="ru", origin_kind="song_facts",
+            origin_id=89, labels=["sound"], text="видимый факт",
+        )
+        assert MetadataDB.get_refined_facts(
+            scope="song", scope_key="s-3", collection_name="c",
+            lang="ru") == ["видимый факт"]
 
-    # ── v2: annotation classifier response parsing ──────────────────────────
-
-    def test_parse_annotation_response_valid(self):
-        raw = json.dumps({"items": [
-            {"id": "M1", "keep": True, "confirmed": False, "fact": "«цитата» — факт"},
-            {"id": "M2", "keep": False},
-            {"id": "M9", "keep": True, "fact": "unknown id ignored"},
-        ]})
-        out = refined_facts._parse_annotation_response(raw, {"M1", "M2"})
-        assert out["M1"]["keep"] is True
-        assert out["M1"]["confirmed"] is False
-        assert out["M2"]["keep"] is False
-        assert "M9" not in out
-
-    def test_parse_annotation_response_rejects_garbage(self):
-        with pytest.raises(ValueError):
-            refined_facts._parse_annotation_response("not json", {"M1"})
-        with pytest.raises(ValueError):
-            refined_facts._parse_annotation_response(
-                json.dumps({"wrong": []}), {"M1"},
-            )
+    def test_legacy_blob_still_read_when_no_items_exist(self):
+        """A library mid-migration keeps showing what it already had."""
+        MetadataDB.set_refined_facts(
+            scope="song", scope_key="s-legacy", collection_name="c", lang="ru",
+            refined=[{"text": "старый факт"}])
+        assert MetadataDB.get_refined_facts(
+            scope="song", scope_key="s-legacy", collection_name="c",
+            lang="ru") == ["старый факт"]
 
     # ── v2: song-scope split pipeline ────────────────────────────────────────
 
     @pytest.mark.asyncio
-    async def test_song_scope_splits_streams_and_stores_meta(self):
-        """Editorial facts go through the refine prompt, annotations through
-        the classifier; the stored refined row carries confirmed/src and
-        get_refined_facts_meta surfaces the confirmed flag."""
+    async def test_run_labels_both_fact_kinds_and_stores_per_fact(self):
+        """One classifier over both kinds, one rewrite per kept fact.
+
+        The editorial fact and the Genius line note used to travel through two
+        different prompts; now the classifier judges both, and what separates
+        them is the LABEL it assigns, not the stream they arrived on.
+        """
         from app.services.song_facts_service import get_song_facts_key
 
         slug = get_song_facts_key("Bar", "Foo")
@@ -442,22 +477,20 @@ class TestRefinedFacts:
         )
         MetadataDB.add_song_facts_batch(
             slug, "c",
-            ["Lyrics string: feeling froggish, leap. Fact: Possibly a shot at "
-             "Canibus and his freestyle for DJ Clue, per fan interpretation."],
+            ["Lyrics string: feeling froggish, leap. Fact: The narrator simply "
+             "feels bold here, and the frog is a metaphor for that boldness."],
             source="genius.com", category="genius_annotation",
         )
         points = [FakePoint("p1", {"artist": "Bar", "title": "Foo"})]
 
-        editorial_json = json.dumps({"selected_facts": [
-            {"reasoning": "creation", "short_fact": "Записана за одну ночь в отеле в Berlin."},
+        classify = json.dumps({"items": [
+            {"id": "M1", "labels": ["creation"], "move": None},
+            {"id": "M2", "labels": ["other"], "move": None},
         ]})
-        annotation_json = json.dumps({"items": [
-            {"id": "M1", "keep": True, "confirmed": False,
-             "fact": "Строчка «feeling froggish, leap» — выпад в сторону Canibus и его фристайла для DJ Clue."},
-        ]})
+        refine = json.dumps({"text": "Записана за одну ночь в отеле в Berlin."})
 
         async def _fake_llm(user, **kwargs):
-            return annotation_json if "NOTES:" in user else editorial_json
+            return classify if "NOTES TO SORT" in user else refine
 
         with patch("app.services.ai_tasks.refined_facts.ask_llm",
                    side_effect=_fake_llm):
@@ -468,10 +501,40 @@ class TestRefinedFacts:
         meta = MetadataDB.get_refined_facts_meta(
             scope="song", scope_key=slug, collection_name="c", lang="ru",
         )
-        assert meta is not None and len(meta) == 2
-        by_conf = {m["confirmed"]: m["text"] for m in meta}
-        assert "Canibus" in by_conf[False]      # annotation, hedged → unconfirmed
-        assert "Berlin" in by_conf[True]        # editorial → confirmed
+        # Only the labelled fact is visible; the lyric reading is stored as
+        # `other` and never returned.
+        assert meta is not None and len(meta) == 1
+        assert "Berlin" in meta[0]["text"]
+        assert meta[0]["labels"] == ["creation"]
+
+    @pytest.mark.asyncio
+    async def test_rerun_does_not_call_the_model_again(self):
+        """Resume, end to end: a second run over processed facts is free."""
+        from app.services.song_facts_service import get_song_facts_key
+
+        slug = get_song_facts_key("Baz", "Qux")
+        MetadataDB.add_song_facts_batch(
+            slug, "c", ["Recorded in a garage after their gear was stolen"],
+            source="songfacts.com",
+        )
+        points = [FakePoint("p2", {"artist": "Baz", "title": "Qux"})]
+        classify = json.dumps({"items": [{"id": "M1", "labels": ["creation"]}]})
+        refine = json.dumps({"text": "Записана в гараже после кражи аппаратуры."})
+
+        async def _fake_llm(user, **kwargs):
+            return classify if "NOTES TO SORT" in user else refine
+
+        with patch("app.services.ai_tasks.refined_facts.ask_llm",
+                   side_effect=_fake_llm) as first:
+            await refined_facts.run(
+                _make_job(collection="c", lang="ru"), FakeDb(points), None)
+        assert first.call_count > 0
+
+        with patch("app.services.ai_tasks.refined_facts.ask_llm",
+                   side_effect=_fake_llm) as second:
+            await refined_facts.run(
+                _make_job(collection="c", lang="ru"), FakeDb(points), None)
+        assert second.call_count == 0
 
 
 class TestSonicVibe:

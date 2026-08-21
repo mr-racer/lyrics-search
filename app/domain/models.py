@@ -414,6 +414,9 @@ class ArtistAggregate(BaseModel):
     decade_range: Optional[str] = None  # e.g. "2010s-2020s"
     bio: Optional[str] = None           # None when artist_bio not yet indexed
     facts: list[str] = Field(default_factory=list)
+    # Same facts with their labels, so the page can group and hide. Empty when
+    # the library still holds only legacy unlabelled rows.
+    facts_meta: list[dict] = Field(default_factory=list)
     albums: list[ArtistAlbum] = Field(default_factory=list)
     # AudioDB-derived (out-of-band shipment 2026-05-20)
     mood: Optional[str] = None
