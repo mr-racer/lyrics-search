@@ -4632,35 +4632,69 @@ class MetadataDB:
         """Return list of {slug, name, track_count, album_count} for all artists
         in a collection, read from track_artist_slugs + track_metadata.
 
+        ``name`` is resolved PER SLUG from the aligned ``artists`` participant
+        list, not aggregated out of the raw ``artist`` tags. Grouping used to
+        take ``MAX(tm.artist)`` — the lexicographically largest raw tag among
+        the slug's tracks — which names a DIFFERENT artist whenever this one is
+        credited in a title («Kanye West — FML (ft. The Weeknd)» made
+        ``the-weeknd`` display as "Kanye West") or merely shares a track with a
+        later-sorting collaboration tag. The artist_bio task fed that name to
+        the LLM, so a quarter of a real library got biographies of the wrong
+        artist. Aggregating in Python is what lets the name come from the row
+        that actually mentions this participant.
+
         Returns [] if the tables are empty (pre-backfill).
         """
+        from app.services.artist_split import canonical_slug, name_for_slug
+
         conn = cls._connect()
         rows = conn.execute(
             """
-            SELECT
-                tas.artist_slug,
-                MAX(tm.artist) AS artist_name,
-                COUNT(DISTINCT tas.track_id) AS track_count,
-                COUNT(DISTINCT tm.album) AS album_count
+            SELECT tas.artist_slug, tas.track_id, tm.artist, tm.artists, tm.album
             FROM track_artist_slugs tas
             JOIN track_metadata tm
                 ON tas.collection_name = tm.collection_name
                AND tas.track_id = tm.track_id
             WHERE tas.collection_name = ?
-            GROUP BY tas.artist_slug
-            ORDER BY track_count DESC
             """,
             (collection_name,),
         ).fetchall()
-        return [
+
+        names: dict[str, str] = {}
+        tracks: dict[str, set] = {}
+        albums: dict[str, set] = {}
+        for slug, track_id, artist, artists_json, album in rows:
+            if not slug:
+                continue
+            tracks.setdefault(slug, set()).add(track_id)
+            if album is not None:
+                albums.setdefault(slug, set()).add(album)
+            if slug in names:
+                continue
+            try:
+                participants = json.loads(artists_json or "[]")
+            except (TypeError, ValueError):
+                participants = []
+            found = next(
+                (n for n in participants if n and canonical_slug(n) == slug),
+                None,
+            ) or name_for_slug(artist, slug)
+            if found:
+                names[slug] = found
+
+        out = [
             {
-                "slug": r[0],
-                "name": r[1] or r[0],
-                "track_count": r[2],
-                "album_count": r[3],
+                "slug": slug,
+                # Title-cased slug, never another artist's tag: a wrong name is
+                # worse than a stylistically imperfect one.
+                "name": names.get(slug) or slug.replace("-", " ").title(),
+                "track_count": len(tids),
+                "album_count": len(albums.get(slug, ())),
             }
-            for r in rows
+            for slug, tids in tracks.items()
         ]
+        out.sort(key=lambda a: (-a["track_count"], a["slug"]))
+        return out
 
     @classmethod
     def get_library_albums_from_sqlite(cls, collection_name: str) -> list[dict]:

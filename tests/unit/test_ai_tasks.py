@@ -37,6 +37,9 @@ class FakeQdrant:
         if offset is None:
             return list(self._points), None
         return [], None
+    def retrieve(self, collection_name, ids, with_payload, with_vectors):
+        wanted = set(ids)
+        return [p for p in self._points if p.id in wanted]
 
 
 class FakePoint:
@@ -103,6 +106,68 @@ class TestArtistBio:
                    return_value="bio") as mock_bio:
             await artist_bio.run(_make_job(), FakeDb(points), None)
         assert mock_bio.call_count == 1  # one LLM call per artist, not per track
+
+    @pytest.mark.asyncio
+    async def test_title_feat_guest_is_researched_under_own_name(self):
+        """A guest credited only in the TITLE must not inherit the tag artist.
+
+        «Kanye West — FML (ft. The Weeknd)» puts `the-weeknd` in artist_slugs
+        while the raw tag says only «Kanye West». Researching the-weeknd as
+        «Kanye West» produced bios about the wrong artist (and, seeded with the
+        slug's own AudioDB text, LLM apologies inside the stored bio).
+        """
+        points = [FakePoint("p1", {
+            "artist": "Kanye West", "title": "FML (ft. The Weeknd)",
+            "artists": ["Kanye West", "The Weeknd"],
+            "artist_slugs": ["kanye-west", "the-weeknd"],
+        })]
+        with patch("app.services.ai_tasks.artist_bio.web_research_bio",
+                   return_value="bio") as mock_bio:
+            await artist_bio.run(_make_job(), FakeDb(points), None)
+        names = sorted(c.kwargs["artist_name"] for c in mock_bio.call_args_list)
+        assert names == ["Kanye West", "The Weeknd"]
+
+    @pytest.mark.asyncio
+    async def test_incremental_branch_uses_the_slug_own_name(self):
+        points = [FakePoint("p1", {
+            "artist": "Kanye West", "title": "FML (ft. The Weeknd)",
+            "artists": ["Kanye West", "The Weeknd"],
+            "artist_slugs": ["kanye-west", "the-weeknd"],
+        })]
+        job = _make_job()
+        job.new_track_ids = ("p1",)
+        with patch("app.services.ai_tasks.artist_bio.web_research_bio",
+                   return_value="bio") as mock_bio:
+            await artist_bio.run(job, FakeDb(points), None)
+        names = sorted(c.kwargs["artist_name"] for c in mock_bio.call_args_list)
+        assert names == ["Kanye West", "The Weeknd"]
+
+    @pytest.mark.asyncio
+    async def test_sqlite_mirror_branch_uses_the_slug_own_name(self):
+        """The mirror fast-path is what prod actually hits (tables populated)."""
+        MetadataDB.upsert_track_metadata("c", "t1", {
+            "title": "FML (ft. The Weeknd)", "artist": "Kanye West",
+            "artists": ["Kanye West", "The Weeknd"],
+            "artist_slugs": ["kanye-west", "the-weeknd"], "album": "TLOP",
+        })
+        with patch("app.services.ai_tasks.artist_bio.web_research_bio",
+                   return_value="bio") as mock_bio:
+            await artist_bio.run(_make_job(), FakeDb([]), None)
+        names = sorted(c.kwargs["artist_name"] for c in mock_bio.call_args_list)
+        assert names == ["Kanye West", "The Weeknd"]
+
+    @pytest.mark.asyncio
+    async def test_never_passes_a_foreign_collaboration_tag(self):
+        """Worst case (no participant list): a slug-derived name, never a stranger."""
+        points = [FakePoint("p1", {
+            "artist": "Kanye West", "title": "x",
+            "artist_slugs": ["kanye-west", "the-weeknd"],
+        })]
+        with patch("app.services.ai_tasks.artist_bio.web_research_bio",
+                   return_value="bio") as mock_bio:
+            await artist_bio.run(_make_job(), FakeDb(points), None)
+        names = sorted(c.kwargs["artist_name"] for c in mock_bio.call_args_list)
+        assert names == ["Kanye West", "The Weeknd"]
 
     @pytest.mark.asyncio
     async def test_run_skips_empty_bio_result(self):

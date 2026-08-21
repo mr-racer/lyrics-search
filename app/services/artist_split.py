@@ -106,13 +106,23 @@ def split_artists(raw: str | None) -> list[str]:
     return out or [norm]
 
 
+def canonical_slug(name: str | None) -> str:
+    """Canonical, alias-resolved slug for a SINGLE participant name.
+
+    The one place that pairs ``_slugify`` with the alias table, so every
+    name->slug comparison in the codebase agrees ("Ye" and "Kanye West" both
+    land on ``kanye-west``).
+    """
+    slug = _slugify(name or "")
+    return _ALIASES.get(slug, slug)
+
+
 def artist_slugs(raw: str | None) -> list[str]:
     """Canonical slugs for each participant, alias-resolved, deduped in order."""
     out: list[str] = []
     seen: set[str] = set()
     for name in split_artists(raw):
-        slug = _slugify(name)
-        slug = _ALIASES.get(slug, slug)
+        slug = canonical_slug(name)
         if not slug or slug in seen:
             continue
         seen.add(slug)
@@ -135,9 +145,37 @@ def name_for_slug(raw: str | None, slug: str) -> str | None:
     (``_slugify`` + alias resolution). Returns None when no participant maps.
     """
     for name in split_artists(raw):
-        if _ALIASES.get(_slugify(name), _slugify(name)) == slug:
+        if canonical_slug(name) == slug:
             return name
     return None
+
+
+def display_name_for_slug(
+    slug: str,
+    *,
+    participants: list[str] | None = None,
+    raw: str | None = None,
+) -> str:
+    """A display name that is guaranteed to name THIS slug's artist.
+
+    ``participants`` is the aligned name list stored beside ``artist_slugs``
+    (payload ``artists`` / ``track_metadata.artists``); it is the only source
+    that also covers guests credited in the TITLE, whose name appears nowhere
+    in the raw ``artist`` tag. ``raw`` is that tag, used when no participant
+    list survives (legacy payloads).
+
+    The last resort is a title-cased slug, NEVER the raw tag: for a track
+    tagged «Kanye West» with «(ft. The Weeknd)» in the title, the tag would
+    label the-weeknd as "Kanye West" — and the bio task would then research,
+    and store under this slug, a biography of the wrong artist.
+    """
+    for name in participants or []:
+        if name and canonical_slug(name) == slug:
+            return name
+    from_raw = name_for_slug(raw, slug)
+    if from_raw:
+        return from_raw
+    return slug.replace("-", " ").title() if slug else ""
 
 
 # ─── Feat-in-title parsing ───────────────────────────────────────────────────

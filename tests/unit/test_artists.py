@@ -3,6 +3,7 @@
 from app.services.artist_split import (
     split_artists, artist_slugs, primary_artist, name_for_slug, artist_refs,
     parse_title_feat, artist_refs_for_track, display_title_for_track,
+    display_name_for_slug,
 )
 from app.services.indexing_service import _build_payload_for_upsert
 from app.api.routes.artists import _track_from_payload
@@ -441,3 +442,45 @@ class TestFeaturedOnlyAlbum:
                   {"name": "Dua Lipa", "slug": "dua-lipa", "role": "main"}],
         )]
         assert _featured_only(tracks, "dua-lipa") is False
+
+
+class TestDisplayNameForSlug:
+    """display_name_for_slug never labels a slug with ANOTHER artist's name.
+
+    The failure it guards: a track tagged «Kanye West» whose TITLE credits a
+    guest («FML (ft. The Weeknd)») puts `the-weeknd` into artist_slugs while
+    the raw tag names only Kanye. Falling back to that raw tag hands the guest
+    a foreign name — and downstream the bio task researches the wrong person.
+    """
+
+    def test_participant_list_wins(self):
+        assert display_name_for_slug(
+            "the-weeknd",
+            participants=["Kanye West", "The Weeknd"],
+            raw="Kanye West",
+        ) == "The Weeknd"
+
+    def test_keeps_source_casing(self):
+        assert display_name_for_slug(
+            "babytron", participants=["Eminem", "BabyTron"], raw="Eminem",
+        ) == "BabyTron"
+
+    def test_falls_back_to_raw_tag_participant(self):
+        assert display_name_for_slug(
+            "dua-lipa", participants=None, raw="Dua Lipa x Angele",
+        ) == "Dua Lipa"
+
+    def test_never_returns_a_foreign_name(self):
+        # Neither the participants nor the raw tag mention this slug's artist:
+        # a title-cased slug is correct, the other artist's name never is.
+        assert display_name_for_slug(
+            "the-weeknd", participants=["Kanye West"], raw="Kanye West",
+        ) == "The Weeknd"
+
+    def test_alias_resolves_to_the_canonical_slug(self):
+        assert display_name_for_slug(
+            "kanye-west", participants=["Ye"], raw="Ye",
+        ) == "Ye"
+
+    def test_no_signal_at_all_titlecases_the_slug(self):
+        assert display_name_for_slug("agents-of-time") == "Agents Of Time"

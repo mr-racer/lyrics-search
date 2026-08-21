@@ -14,7 +14,7 @@ import logging
 from app.resources.metadata_db import MetadataDB
 from app.services import ai_indexing_service
 from app.services.artist_split import (
-    artist_slugs, name_for_slug,
+    artist_slugs, display_name_for_slug,
 )
 from app.services.llm_web_search import web_research_bio
 
@@ -83,7 +83,10 @@ async def run(job, db_client, llm) -> None:
         points = qdrant.retrieve(
             collection_name=job.collection_name,
             ids=list(job.new_track_ids),
-            with_payload=["artist", "artist_slugs"],
+            # ``artists`` rides along because it is the ONLY payload field that
+            # names a guest credited in the title — the raw ``artist`` tag does
+            # not mention them at all.
+            with_payload=["artist", "artists", "artist_slugs"],
             with_vectors=False,
         )
         for p in points:
@@ -94,7 +97,9 @@ async def run(job, db_client, llm) -> None:
                 if not artist_slug or artist_slug in seen_new_slugs:
                     continue
                 seen_new_slugs.add(artist_slug)
-                artist_name = name_for_slug(raw, artist_slug) or raw or artist_slug
+                artist_name = display_name_for_slug(
+                    artist_slug, participants=p.get("artists"), raw=raw,
+                )
                 await _process(artist_slug, artist_name)
         logger.info(
             "[artist_bio] done (incremental, %d new artists): %d written, "
@@ -112,7 +117,11 @@ async def run(job, db_client, llm) -> None:
             slug = row.get("slug")
             if not slug:
                 continue
-            name = name_for_slug(row.get("name"), slug) or row.get("name") or slug
+            # The mirror already resolves the name per slug; the guard keeps a
+            # stale/legacy row from re-introducing a foreign name here.
+            name = display_name_for_slug(
+                slug, participants=[row.get("name")], raw=row.get("name"),
+            )
             await _process(slug, name)
     else:
         qdrant = db_client.qdrant
@@ -146,11 +155,14 @@ async def run(job, db_client, llm) -> None:
                         continue
                     seen_artist_slugs.add(artist_slug)
 
-                    # Display name for search/logging — prefer the canonical name
-                    # stored alongside this slug, fall back to the raw artist tag.
-                    artist_name = name_for_slug(p.get("artist"), artist_slug)
-                    if not artist_name:
-                        artist_name = (p.get("artist") or "").strip() or artist_slug
+                    # Display name for the web search — taken from the aligned
+                    # participant list, so a title-credited guest is researched
+                    # as themselves and not as the tag's headline artist.
+                    artist_name = display_name_for_slug(
+                        artist_slug,
+                        participants=p.get("artists"),
+                        raw=p.get("artist"),
+                    )
 
                     await _process(artist_slug, artist_name)
 

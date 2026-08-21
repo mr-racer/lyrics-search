@@ -2434,19 +2434,23 @@ class LibraryService:
             )
 
         # ── Fallback: scroll Qdrant (pre-backfill or error) ──
-        from app.services.artist_split import artist_slugs, split_artists
+        from app.services.artist_split import artist_slugs, display_name_for_slug
         from app.resources.qdrant_utils import light_points
         seen: dict[str, str] = {}  # slug -> name (first seen)
         for _tid, payload in light_points(qdrant_client, collection_name):
-            name = (payload.get("artist") or "").strip()
-            if not name:
+            raw = (payload.get("artist") or "").strip()
+            if not raw:
                 continue
-            slugs = payload.get("artist_slugs")
-            names = payload.get("artists")
-            if not slugs or not names:
-                slugs = artist_slugs(name)
-                names = split_artists(name)
-            for i, slug in enumerate(slugs):
-                display = names[i] if i < len(names) else slug
-                seen.setdefault(slug, display)
+            slugs = payload.get("artist_slugs") or artist_slugs(raw)
+            participants = payload.get("artists")
+            for slug in slugs:
+                if not slug or slug in seen:
+                    continue
+                # Pairing names with slugs BY POSITION misaligns the moment an
+                # alias collapses two names onto one slug ("Ye, Kanye West" ->
+                # 2 names, 1 slug) — from there every later participant wears
+                # the wrong name. Match by slug identity instead.
+                seen[slug] = display_name_for_slug(
+                    slug, participants=participants, raw=raw,
+                )
         return sorted(seen.items())

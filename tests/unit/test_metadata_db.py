@@ -290,6 +290,65 @@ class TestArtistBios(_IsolatedDB):
         assert MetadataDB.get_artist_bio("c", "col_b", "en") == "z"
 
 
+class TestDistinctArtistSlugs(_IsolatedDB):
+    """get_distinct_artist_slugs_from_sqlite: name must belong to the slug.
+
+    Regression: the query used MAX(tm.artist) — the lexicographically largest
+    RAW tag among the slug's tracks. For an artist credited only in a title
+    («Kanye West — FML (ft. The Weeknd)») that tag names somebody else, and the
+    artist_bio task then researched the wrong person under this slug.
+    """
+
+    @staticmethod
+    def _track(track_id, *, artist, artists, slugs, album="Album", title="Song"):
+        MetadataDB.upsert_track_metadata("c", track_id, {
+            "title": title, "artist": artist, "artists": artists,
+            "artist_slugs": slugs, "album": album,
+        })
+
+    def test_title_feat_guest_keeps_own_name(self):
+        self._track("t1", artist="Kanye West",
+                    artists=["Kanye West", "The Weeknd"],
+                    slugs=["kanye-west", "the-weeknd"],
+                    title="FML (ft. The Weeknd)")
+        by_slug = {r["slug"]: r["name"]
+                   for r in MetadataDB.get_distinct_artist_slugs_from_sqlite("c")}
+        assert by_slug["kanye-west"] == "Kanye West"
+        assert by_slug["the-weeknd"] == "The Weeknd"
+
+    def test_name_is_never_a_collaboration_tag(self):
+        self._track("t1", artist="The Weeknd & Swedish House Mafia",
+                    artists=["The Weeknd", "Swedish House Mafia"],
+                    slugs=["the-weeknd", "swedish-house-mafia"],
+                    title="Moth To A Flame")
+        by_slug = {r["slug"]: r["name"]
+                   for r in MetadataDB.get_distinct_artist_slugs_from_sqlite("c")}
+        assert by_slug["the-weeknd"] == "The Weeknd"
+        assert by_slug["swedish-house-mafia"] == "Swedish House Mafia"
+
+    def test_counts_are_preserved(self):
+        self._track("t1", artist="Eminem", artists=["Eminem"], slugs=["eminem"],
+                    album="The Eminem Show")
+        self._track("t2", artist="Eminem", artists=["Eminem"], slugs=["eminem"],
+                    album="Recovery")
+        rows = MetadataDB.get_distinct_artist_slugs_from_sqlite("c")
+        row = next(r for r in rows if r["slug"] == "eminem")
+        assert row["track_count"] == 2
+        assert row["album_count"] == 2
+
+    def test_other_collections_are_isolated(self):
+        self._track("t1", artist="Eminem", artists=["Eminem"], slugs=["eminem"])
+        MetadataDB.upsert_track_metadata("other", "t2", {
+            "title": "x", "artist": "Sia", "artists": ["Sia"],
+            "artist_slugs": ["sia"], "album": "A",
+        })
+        slugs = {r["slug"] for r in MetadataDB.get_distinct_artist_slugs_from_sqlite("c")}
+        assert slugs == {"eminem"}
+
+    def test_empty_collection_returns_empty(self):
+        assert MetadataDB.get_distinct_artist_slugs_from_sqlite("nope") == []
+
+
 class TestAudiodb:
     """init() migrates the artists table to add audiodb columns."""
 
