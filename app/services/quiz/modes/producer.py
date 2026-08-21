@@ -5,9 +5,12 @@ producer off one album is not a discovery, it is the definition of an album;
 three by one artist asks about the artist rather than about the production.
 Strip either constraint and the round can be won without hearing a thing.
 
-No snippet here: the question is about who shaped a sound across records, which
-is a knowledge round, so the covers stay visible. That is the opposite choice
-from M1 — and for the opposite reason.
+The audio works differently from the recognition modes. There is no single
+snippet, because the round is four records rather than one: each option plays
+its own five seconds, taken a third of the way in where the production shows
+rather than at a point chosen to make the track recognisable. Covers stay
+visible here too — this mode asks who shaped a sound, not what the track is,
+and hiding art buys nothing.
 
 Spec: docs/superpowers/specs/2026-08-21-music-quiz-design.md §7 M2.
 """
@@ -19,13 +22,21 @@ from typing import Dict, List, Optional, Tuple
 from app.services.quiz.context import RoundContext, RoundSpec
 from app.services.quiz.distractors import shares_artist_or_album
 from app.services.quiz.errors import NoRoundAvailable
+from app.services.quiz.snippet import BODY_HI, BODY_LO, start_point
 
 KEY = "producer"
 
-# This round shows four covers and asks a question about them; there is
-# nothing to listen to. The client reads this to decide whether to draw a
-# play key at all.
+# There is no single thing to hear: the round is four records, not one. So no
+# round-level snippet well...
 HAS_AUDIO = False
+
+# ...but every option is playable on its own. You cannot hear a producer's hand
+# without hearing the records, and reading four titles teaches nothing.
+OPTION_AUDIO = True
+
+# Longer than the recognition modes: five seconds is about the least you need
+# to hear how something was built rather than merely what it is.
+OPTION_SNIPPET_SEC = 5.0
 
 # Tracks by the shared producer in one round.
 GROUP_SIZE = 3
@@ -52,7 +63,7 @@ def build(ctx: RoundContext, *, snippet_sec: int = 0) -> RoundSpec:
         if odd is None:
             continue
 
-        options = [_option(track) for track in group + [odd]]
+        options = [_option(track, ctx.rng) for track in group + [odd]]
         correct_option_id = options[-1]["option_id"]
         ctx.rng.shuffle(options)
         return RoundSpec(
@@ -139,15 +150,21 @@ def _pick_odd_one_out(
     return ctx.rng.choice(preferred or fallback)
 
 
-def _option(track: Dict) -> Dict:
-    """One rendered option — cover included, unlike M1.
+def _option(track: Dict, rng) -> Dict:
+    """One rendered option, with its own playable window.
 
-    Still no ``track_id``: the option list reaches the client before the answer
-    is known, in every mode.
+    ``track_id`` is stripped by :func:`quiz.context.public_options` before the
+    round is sent — it exists here so the per-option audio route can resolve a
+    file without the client ever holding an id.
     """
     return {
         "option_id": uuid.uuid4().hex[:12],
+        "track_id": track.get("track_id"),
         "title": track.get("title_display") or track.get("title") or "—",
         "artist": track.get("artist") or "—",
         "cover_art_path": track.get("cover_art_path"),
+        "year": track.get("year"),
+        "start_sec": start_point(track, OPTION_SNIPPET_SEC, rng,
+                                 lo=BODY_LO, hi=BODY_HI),
+        "length_sec": OPTION_SNIPPET_SEC,
     }

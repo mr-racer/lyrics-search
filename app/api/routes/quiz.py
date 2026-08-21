@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 
 from app.api.dependencies import get_current_user, get_user_for_stream
@@ -124,6 +124,12 @@ def answer_quiz_round(
 async def stream_quiz_snippet(
     round_id: str,
     request: Request,
+    option: str | None = Query(
+        None,
+        description="Play one OPTION of the round instead of the round's own "
+                    "snippet. The producer round has four playable records "
+                    "rather than a single thing to hear.",
+    ),
     current_user: User = Depends(get_user_for_stream),
 ):
     """Serve the round's audio, addressed by ``round_id`` rather than track id.
@@ -143,7 +149,7 @@ async def stream_quiz_snippet(
     collection = derive_collection_for_user(current_user)
     try:
         track_id, _start_sec, _length_sec = quiz_rounds.resolve_round_audio(
-            collection_name=collection, round_id=round_id,
+            collection_name=collection, round_id=round_id, option_id=option,
         )
     except RoundNotFound:
         raise HTTPException(status_code=404, detail="Round not found")

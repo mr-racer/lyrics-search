@@ -43,6 +43,18 @@ class RoundContext:
         return self._index.get(track_id)
 
 
+def public_options(options: List[Dict]) -> List[Dict]:
+    """The option list as the CLIENT may see it.
+
+    Options carry a ``track_id`` server-side because per-option audio has to
+    resolve to a file, but that id must never travel with the question: it
+    would let anyone look the answer up before answering. Stripping happens
+    here, in one place, rather than being remembered at each call site.
+    """
+    return [{k: v for k, v in option.items() if k != "track_id"}
+            for option in options]
+
+
 @dataclass
 class RoundSpec:
     """A built round. ``correct_option_id`` never leaves the server."""

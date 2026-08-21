@@ -18,7 +18,7 @@ from typing import Dict, List, Optional, Tuple
 
 from app.resources.clap_features import blend_axis_stats, load_axis_norm_reference
 from app.resources.metadata_db import MetadataDB
-from app.services.quiz.context import RoundContext
+from app.services.quiz.context import RoundContext, public_options
 from app.services.quiz.errors import (
     AlreadyAnswered,
     NoRoundAvailable,
@@ -81,6 +81,7 @@ def list_modes(*, qdrant_client, collection_name: str) -> List[Dict]:
             # Whether the round has anything to listen to. The client needs it
             # up front so it does not draw a play key for a knowledge round.
             "has_audio": bool(getattr(mode, "HAS_AUDIO", True)),
+            "option_audio": bool(getattr(mode, "OPTION_AUDIO", False)),
             # "options" or "year": which control the round is answered with.
             "input_kind": str(getattr(mode, "INPUT_KIND", "options")),
         })
@@ -116,15 +117,16 @@ def build_round(
         created_at=snapshot.now,
     )
     # No track_id and no correct_option_id: the client learns the answer only
-    # by submitting one.
+    # by submitting one. public_options() does the stripping in one place.
     return {
         "round_id": round_id,
         "mode": mode,
-        "options": spec.options,
+        "options": public_options(spec.options),
         "start_sec": spec.start_sec,
         "length_sec": spec.length_sec,
         "expires_at": expires_at,
         "has_audio": bool(getattr(mode_module, "HAS_AUDIO", True)),
+        "option_audio": bool(getattr(mode_module, "OPTION_AUDIO", False)),
         "input_kind": str(getattr(mode_module, "INPUT_KIND", "options")),
         # Safe question-side extras (year-scale bounds and the like). `reveal`
         # is the other half of this split and never travels with the question.
@@ -191,18 +193,39 @@ def submit_answer(
 
 
 def resolve_round_audio(
-    *, collection_name: str, round_id: str,
+    *, collection_name: str, round_id: str, option_id: Optional[str] = None,
 ) -> Tuple[str, float, float]:
     """``(track_id, start_sec, length_sec)`` for a round the caller owns.
+
+    Without ``option_id`` this is the round's own snippet (the recognition
+    modes). With one it is that option's track — the producer round has four
+    playable records rather than a single thing to hear, and addressing them
+    by option id means the client never has to hold a track id.
 
     Returns the track id rather than a path so this layer stays free of file
     I/O and Qdrant; the router resolves the file exactly as the normal stream
     route does.
     """
     row = MetadataDB.get_quiz_round(round_id)
-    if row is None or row["collection_name"] != collection_name or not row["track_id"]:
+    if row is None or row["collection_name"] != collection_name:
         raise RoundNotFound(round_id)
     spec = json.loads(row["spec_json"])
+
+    if option_id:
+        option = next((o for o in spec.get("options") or []
+                       if o.get("option_id") == option_id), None)
+        # Same error for "no such option" as for "no such round": an id that
+        # is not in this round is not the caller's business either way.
+        if option is None or not option.get("track_id"):
+            raise RoundNotFound(round_id)
+        return (
+            str(option["track_id"]),
+            float(option.get("start_sec") or spec.get("start_sec") or 0.0),
+            float(option.get("length_sec") or spec.get("length_sec") or 0.0),
+        )
+
+    if not row["track_id"]:
+        raise RoundNotFound(round_id)
     return (
         str(row["track_id"]),
         float(spec.get("start_sec") or 0.0),

@@ -100,22 +100,25 @@ def _familiar_ids(ctx: RoundContext) -> Set[str]:
 
 
 def _option(track: Dict) -> Dict:
-    """One rendered option — text only, and deliberately so.
+    """One rendered option.
 
-    Carries no ``track_id``: the option list travels to the client before the
-    answer is known, and an id there would let anyone look the answer up.
+    Carries cover art and a year. This reverses the original design, which hid
+    both on the grounds that in a library the cover IS the answer — but four
+    covers do not say which one is playing, and a bare column of names read as
+    a wall of grey text. The recognition help is a deliberate product call
+    (2026-08-22).
 
-    Carries no ``cover_art_path`` either, which is the mode's whole design: in
-    a music library the cover IS the answer, so this round withholds artwork
-    and the reveal hands it back. Sending covers the UI is trusted not to draw
-    would put the discipline in the wrong place — the question payload simply
-    must not contain them. Modes that legitimately show art (M2) put it in
-    their own options.
+    ``track_id`` is here for per-option audio to resolve against and is
+    stripped by :func:`quiz.context.public_options` before the round is sent:
+    it must exist server-side and must not travel with the question.
     """
     return {
         "option_id": uuid.uuid4().hex[:12],
+        "track_id": track.get("track_id"),
         "title": track.get("title_display") or track.get("title") or "—",
         "artist": track.get("artist") or "—",
+        "cover_art_path": track.get("cover_art_path"),
+        "year": track.get("year"),
     }
 
 

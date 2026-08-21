@@ -256,3 +256,29 @@ def test_audio_for_another_accounts_round_is_refused():
 def test_audio_for_an_unknown_round_is_refused():
     with pytest.raises(RoundNotFound):
         rounds.resolve_round_audio(collection_name=COLL, round_id="nope")
+
+
+def test_audio_can_be_asked_for_one_option_of_the_round():
+    """Producer rounds have four playable tracks, addressed by option id."""
+    import json
+    _all_played()
+    out = _build()
+    stored = json.loads(MetadataDB.get_quiz_round(out["round_id"])["spec_json"])
+    option = stored["options"][0]
+
+    track_id, start_sec, length_sec = rounds.resolve_round_audio(
+        collection_name=COLL, round_id=out["round_id"],
+        option_id=option["option_id"],
+    )
+    assert track_id == option["track_id"]
+    assert length_sec == float(option.get("length_sec") or out["length_sec"])
+
+
+def test_audio_for_an_unknown_option_is_refused():
+    _all_played()
+    out = _build()
+    with pytest.raises(RoundNotFound):
+        rounds.resolve_round_audio(
+            collection_name=COLL, round_id=out["round_id"],
+            option_id="no-such-option",
+        )

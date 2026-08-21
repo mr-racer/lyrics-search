@@ -68,9 +68,42 @@ def test_registry_lists_the_producer_mode():
     assert get_mode(producer_mode.KEY) is producer_mode
 
 
-def test_producer_mode_declares_no_audio():
-    """There is no snippet here — the client must not draw a play key."""
+def test_producer_mode_has_no_round_level_snippet():
+    """There is no single thing to hear — the round is four tracks, not one."""
     assert producer_mode.HAS_AUDIO is False
+
+
+def test_producer_mode_offers_audio_per_option():
+    """You cannot hear a producer's hand without hearing the records."""
+    assert producer_mode.OPTION_AUDIO is True
+
+
+def test_every_option_carries_its_own_five_second_window():
+    tracks, producers = _healthy()
+    spec = producer_mode.build(ctx(tracks, producers), snippet_sec=3)
+    for option in spec.options:
+        assert option["length_sec"] == producer_mode.OPTION_SNIPPET_SEC == 5.0
+        # A third of the way in: past the intro, into the body of the track,
+        # where the production actually shows.
+        assert 0.28 * 200.0 <= option["start_sec"] <= 0.40 * 200.0
+
+
+def test_option_windows_vary_between_rounds():
+    """A fixed offset would make every round of this mode sound the same."""
+    starts = set()
+    for seed in range(12):
+        tracks, producers = _healthy()
+        spec = producer_mode.build(ctx(tracks, producers, seed=seed), snippet_sec=3)
+        starts.update(o["start_sec"] for o in spec.options)
+    assert len(starts) > 1
+
+
+def test_a_track_without_a_duration_still_yields_a_playable_option():
+    tracks, producers = _healthy()
+    for t in tracks:
+        t["duration"] = 0.0
+    spec = producer_mode.build(ctx(tracks, producers), snippet_sec=3)
+    assert all(o["start_sec"] == 0.0 for o in spec.options)
 
 
 # ── Pool ─────────────────────────────────────────────────────────────────────
@@ -141,10 +174,14 @@ def test_options_carry_covers_unlike_the_snippet_mode():
     assert all("cover_art_path" in o for o in spec.options)
 
 
-def test_options_never_leak_track_ids():
+def test_public_options_never_leak_track_ids():
+    """The id has to exist server-side for per-option audio to resolve a file;
+    it just must not travel with the question."""
+    from app.services.quiz.context import public_options
     tracks, producers = _healthy()
     spec = producer_mode.build(ctx(tracks, producers), snippet_sec=3)
-    assert all("track_id" not in o for o in spec.options)
+    assert all(o.get("track_id") for o in spec.options)
+    assert all("track_id" not in o for o in public_options(spec.options))
 
 
 def test_the_producer_name_is_withheld_until_the_answer():

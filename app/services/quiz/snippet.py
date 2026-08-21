@@ -28,15 +28,25 @@ def track_duration(track: Dict) -> float:
     return float(track.get("duration") or track.get("duration_sec") or 0.0)
 
 
-def start_point(track: Dict, length_sec: float, rng) -> float:
+# A narrow window a third of the way in, used where the point is to hear how a
+# record was MADE rather than to recognise it: past the intro, inside the body
+# of the arrangement, before anything winds down.
+BODY_LO = 0.28
+BODY_HI = 0.40
+
+
+def start_point(
+    track: Dict, length_sec: float, rng, *,
+    lo: float = START_LO, hi: float = START_HI,
+) -> float:
     """Pick where the snippet starts, never running past the end of the file."""
     duration = track_duration(track)
     if duration <= 0.0:
         return 0.0
-    low = START_LO * duration
-    # On a short track the "70%" ceiling can sit past the last playable start,
-    # so clamp to whatever leaves room for the whole snippet.
-    high = min(START_HI * duration, max(low, duration - float(length_sec)))
+    low = lo * duration
+    # On a short track the ceiling can sit past the last playable start, so
+    # clamp to whatever leaves room for the whole snippet.
+    high = min(hi * duration, max(low, duration - float(length_sec)))
     if high <= low:
         return round(low, 3)
     return round(rng.uniform(low, high), 3)

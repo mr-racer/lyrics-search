@@ -1411,6 +1411,8 @@ class QuizModeInfo(BaseModel):
     # Whether the round has anything to listen to. Knowledge rounds (the
     # producer mode) have none, and the client must not draw a play key.
     has_audio: bool = True
+    # True when each OPTION is playable rather than the round as a whole.
+    option_audio: bool = False
     # Which control answers the round: "options" (four keys) or "year" (a
     # scale). The blind-year mode has no option list at all.
     input_kind: str = "options"
@@ -1430,6 +1432,11 @@ class QuizOption(BaseModel):
     title: str
     artist: str
     cover_art_path: Optional[str] = None
+    year: Optional[int] = None
+    # Present only where each option is playable on its own (the producer
+    # round). The round-level start/length cover every other mode.
+    start_sec: Optional[float] = None
+    length_sec: Optional[float] = None
 
 
 class QuizRoundOut(BaseModel):
@@ -1440,6 +1447,7 @@ class QuizRoundOut(BaseModel):
     length_sec: float
     expires_at: float
     has_audio: bool = True
+    option_audio: bool = False
     input_kind: str = "options"
     # Question-side extras, e.g. {"year_min": 1968, "year_max": 2024} for the
     # scale the blind-year round is answered on.

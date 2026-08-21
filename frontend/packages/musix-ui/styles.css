@@ -5239,9 +5239,80 @@
        reveal should show what you chose between, not erase it. */
     .quiz-opt--dim { opacity: .38; filter: saturate(.6); }
 
+    /* Colour comes from ONE number per mode. Everything below derives its hue
+       from --qh, so a mode cannot end up with a clashing accent and adding a
+       mode means picking a single value. Lightness and chroma are fixed, which
+       is what keeps every variant equally quiet in both themes. */
+    .quiz-hue                { --qh: 270; }   /* «Что играет» — the app accent */
+    .quiz-hue--producer      { --qh: 75;  }   /* amber, the console's own warm */
+    .quiz-hue--blind_year    { --qh: 215; }   /* cool blue, a dial reading */
+    .quiz-hue--lineage       { --qh: 335; }   /* magenta, a lineage line */
+
+    /* A single soft wash at the top of the screen, in the current mode's hue.
+       It is the whole answer to "everything is grey": one gradient, behind
+       everything, that recolours as you change mode. No moving parts. */
+    .quiz-wash::before {
+      content: ''; position: absolute; inset: 0 0 auto; height: 460px;
+      background: radial-gradient(58% 100% at 50% 0%,
+        oklch(62% 0.15 var(--qh) / .20), transparent 72%);
+      pointer-events: none;
+    }
+    body[data-theme="light"] .quiz-wash::before {
+      background: radial-gradient(58% 100% at 50% 0%,
+        oklch(62% 0.15 var(--qh) / .13), transparent 72%);
+    }
+
+    /* The mode card's own colour, carried by a hairline at the top edge rather
+       than a border — the block itself stays open on every side. */
+    .quiz-mode::before {
+      content: ''; position: absolute; left: 18px; right: 18px; top: 0; height: 2px;
+      border-radius: 0 0 2px 2px;
+      background: linear-gradient(90deg,
+        oklch(66% 0.16 var(--qh) / .85), oklch(66% 0.16 var(--qh) / 0));
+    }
+
+    /* Answer feedback. Two shapes, both over in half a second: a hit swells
+       once and rings; a miss shakes the key you actually pressed. Neither
+       moves anything else on the screen. */
+    .quiz-hit  { animation: quizHit .5s cubic-bezier(.22,.9,.3,1) both; }
+    .quiz-miss { animation: quizMiss .42s ease both; }
+    @keyframes quizHit {
+      0%   { transform: scale(1); }
+      38%  { transform: scale(1.028); }
+      100% { transform: scale(1); }
+    }
+    @keyframes quizMiss {
+      0%, 100% { transform: translateX(0); }
+      18% { transform: translateX(-6px); }
+      44% { transform: translateX(5px); }
+      72% { transform: translateX(-3px); }
+    }
+    /* Both classes sit on the ROW, not on the key itself, for two reasons: the
+       key clips its corners (overflow:hidden, for the verdict wash) and would
+       cut the ring off, and animating transform on the key would fight the
+       :hover lift .quiz-opt already puts there. */
+    .quiz-hit::after {
+      content: ''; position: absolute; inset: 0; border-radius: 15px;
+      pointer-events: none; animation: quizRing .6s ease-out both;
+    }
+    @keyframes quizRing {
+      0%   { box-shadow: 0 0 0 0 oklch(63% 0.17 142 / .5); }
+      100% { box-shadow: 0 0 0 12px oklch(63% 0.17 142 / 0); }
+    }
+
+    /* The one word the producer round exists to deliver. */
+    .quiz-name {
+      font-weight: 700;
+      color: oklch(66% 0.16 var(--qh));
+      background: linear-gradient(180deg, transparent 62%, oklch(66% 0.16 var(--qh) / .22) 62%);
+      padding: 0 2px;
+    }
+
     @media (prefers-reduced-motion: reduce) {
       .quiz-bloom { animation: none; }
       .quiz-live::after { animation: none; }
+      .quiz-hit, .quiz-miss { animation: none; }
+      .quiz-hit::after { animation: none; }
       /* The drain bar carries information (time left), so it is not animated
          away — it simply stops moving and reads as a full bar. */
       .quiz-drain { animation: none; transform: none; }

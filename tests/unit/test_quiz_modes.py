@@ -119,19 +119,31 @@ def test_the_correct_option_describes_the_answer_track():
     assert correct["artist"] == answer["artist"]
 
 
-def test_options_do_not_leak_track_ids():
-    """A track_id in the options would let a client look the answer up."""
+def test_public_options_do_not_leak_track_ids():
+    """A track_id in the question payload would let a client look the answer up."""
+    from app.services.quiz.context import public_options
     spec = track_snippet.build(ctx(), snippet_sec=3)
-    for option in spec.options:
+    for option in public_options(spec.options):
         assert "track_id" not in option
 
 
-def test_options_carry_no_cover_art():
-    """The mode's whole design: in a library the cover IS the answer, so the
-    question must not even transmit artwork — not merely decline to draw it."""
+def test_options_carry_cover_and_year():
+    """Product call (2026-08-22): four covers do not say which one is playing,
+    and a bare list of names read as a wall of grey text. The recognition help
+    is deliberate."""
     spec = track_snippet.build(ctx(), snippet_sec=3)
     for option in spec.options:
-        assert "cover_art_path" not in option
+        assert "cover_art_path" in option
+        assert "year" in option
+
+
+def test_stored_options_keep_the_track_id_the_client_never_sees():
+    """The id has to exist server-side to resolve per-option audio; it just
+    must not travel with the question."""
+    spec = track_snippet.build(ctx(), snippet_sec=3)
+    assert all(o.get("track_id") for o in spec.options)
+    from app.services.quiz.context import public_options
+    assert all("track_id" not in o for o in public_options(spec.options))
 
 
 def test_the_answer_is_not_always_in_the_same_position():
