@@ -63,8 +63,13 @@ def _slugify(text: str) -> str:
     return "-".join(cleaned_title.lower().split())
 
 
-def _fetch_song_facts_html(artist: str, song: str) -> Optional[str]:
-    """GET songfacts.com/facts/{artist}/{song} and return text, or None."""
+def _fetch_song_facts_html(artist: str, song: str) -> Tuple[Optional[str], bool]:
+    """GET songfacts.com/facts/{artist}/{song}.
+
+    Returns ``(html, definitive)`` — see ``artist_facts_service`` for why the
+    two kinds of failure must not be conflated: a 404 is an answer worth
+    remembering, an unreachable site is not.
+    """
     slug_artist = _slugify(_artist_query(artist))
     slug_song = _slugify(song)
     url = f"https://www.songfacts.com/facts/{slug_artist}/{slug_song}"
@@ -72,10 +77,14 @@ def _fetch_song_facts_html(artist: str, song: str) -> Optional[str]:
         logger.info("[SongFacts] Fetching facts for '%s — %s' (%s)", artist, song, url)
         resp = requests.get(url, timeout=REQUEST_TIMEOUT, proxies=get_proxy())
         resp.raise_for_status()
-        return resp.text
+        return resp.text, True
+    except requests.HTTPError as e:
+        status = getattr(e.response, "status_code", None)
+        logger.warning("[SongFacts] Failed to fetch facts for '%s — %s': %s", artist, song, e)
+        return None, bool(status and 400 <= status < 500)
     except requests.RequestException as e:
         logger.warning("[SongFacts] Failed to fetch facts for '%s — %s': %s", artist, song, e)
-        return None
+        return None, False
 
 
 def _parse_song_facts(html_string: str) -> List[str]:
@@ -187,20 +196,37 @@ async def fetch_song_facts(
     artist: str,
     song: str,
     collection_name: str,
-) -> Optional[str]:
-    """Fetch facts for a single song. Returns cached text or None."""
+) -> Tuple[Optional[str], bool]:
+    """Fetch facts for a single song.
+
+    Returns ``(facts text or None, hit_network)``; see
+    ``artist_facts_service.fetch_artist_facts`` for what the flag buys.
+    """
     cached = get_cached_song_facts(collection_name, artist, song)
     if cached:
-        return cached
+        return cached, False
 
-    html = await asyncio.to_thread(_fetch_song_facts_html, artist, song)
-    if not html:
-        return None
+    key = get_song_facts_key(artist, song)
+    # Most tracks in a real library have no songfacts page at all, so this is
+    # the branch that carried the traffic: without it, every rescan re-asked
+    # for every one of them.
+    try:
+        if MetadataDB.has_fact_miss("song", key):
+            return None, False
+    except Exception:  # noqa: BLE001 — a lost cache costs a request, not a run
+        logger.debug("[SongFacts] miss lookup failed for %s", key)
 
-    facts = _parse_song_facts(html)
+    html, definitive = await asyncio.to_thread(_fetch_song_facts_html, artist, song)
+    facts = _parse_song_facts(html) if html else []
     if not facts:
         logger.info("[SongFacts] No facts found for '%s — %s'", artist, song)
-        return None
+        # Only a real answer is remembered — an unreachable site is retried.
+        if definitive:
+            try:
+                MetadataDB.mark_fact_miss("song", key)
+            except Exception:  # noqa: BLE001 — enrichment degrades, never raises
+                logger.debug("[SongFacts] could not record miss for %s", key)
+        return None, True
 
     _save_song_facts_to_sqlite(collection_name, artist, song, facts)
     logger.info("[SongFacts] Cached %d facts for '%s — %s'", len(facts), artist, song)
@@ -210,7 +236,7 @@ async def fetch_song_facts(
     # `library_service._run_ai_tasks` after facts + upsert, with its own
     # progress bar. Songs whose facts were fetched outside indexing are picked
     # up by `MetadataDB.get_songs_needing_relations` on the next run.
-    return "\n\n".join(facts)
+    return "\n\n".join(facts), True
 
 
 async def fetch_facts_for_songs(
@@ -233,13 +259,15 @@ async def fetch_facts_for_songs(
     total = len(songs)
     for idx, (artist, song) in enumerate(songs, 1):
         key = f"{artist} — {song}"
-        text = await fetch_song_facts(artist, song, collection_name)
+        text, hit_network = await fetch_song_facts(artist, song, collection_name)
         found = bool(text)
         if found:
             results[key] = text
         if progress_callback:
             progress_callback(idx, total, f"{artist} — {song}", found)
-        await asyncio.sleep(delay)
+        # Owed to songfacts.com, not to SQLite — see fetch_facts_for_artists.
+        if hit_network:
+            await asyncio.sleep(delay)
     return results
 
 

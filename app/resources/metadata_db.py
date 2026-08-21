@@ -18,6 +18,7 @@ import logging
 import re
 import sqlite3
 import threading
+import time
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Tuple
 
@@ -100,6 +101,19 @@ _SCHEMA_SQL: Tuple[str, ...] = (
         slug            TEXT NOT NULL,
         collection_name TEXT NOT NULL,
         PRIMARY KEY (kind, slug, collection_name)
+    )""",
+    # Negative cache for the songfacts.com fetchers. Facts themselves are a
+    # shared pool keyed by slug, and so is their ABSENCE: if the site has no
+    # page for this artist/song, it has none for any account. Without this,
+    # every rescan re-asked for every entity that has no page — which on a
+    # settled library is most of them — and collected the same 404 forever.
+    # A row is written ONLY when the server actually answered (see
+    # `_fetch_facts_html`); a timeout must stay retryable.
+    """CREATE TABLE IF NOT EXISTS fact_fetch_misses (
+        kind       TEXT NOT NULL,          -- 'artist' | 'song'
+        slug       TEXT NOT NULL,
+        fetched_at REAL NOT NULL,
+        PRIMARY KEY (kind, slug)
     )""",
     """CREATE TABLE IF NOT EXISTS track_reactions (
         collection_name TEXT NOT NULL,
@@ -923,6 +937,33 @@ class MetadataDB:
         conn = cls._connect()
         cls._mark_visible(conn, kind, slug, collection_name)
         conn.commit()
+
+    @classmethod
+    def mark_fact_miss(cls, kind: str, slug: str) -> None:
+        """Remember that the upstream source answered and had nothing.
+
+        Only for answers, never for failures to reach the site — see
+        ``fact_fetch_misses`` in the schema. The row is inert once real facts
+        exist, because every reader consults the facts pool first.
+        """
+        conn = cls._connect()
+        conn.execute(
+            """INSERT INTO fact_fetch_misses (kind, slug, fetched_at)
+               VALUES (?, ?, ?)
+               ON CONFLICT(kind, slug) DO UPDATE SET fetched_at=excluded.fetched_at""",
+            (kind, slug, time.time()),
+        )
+        conn.commit()
+
+    @classmethod
+    def has_fact_miss(cls, kind: str, slug: str) -> bool:
+        """Has the source already told us there is nothing for this slug?"""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT 1 FROM fact_fetch_misses WHERE kind = ? AND slug = ?",
+            (kind, slug),
+        ).fetchone()
+        return row is not None
 
     @classmethod
     def upsert_artist(cls, slug: str, name: str, collection_name: str, mbid: Optional[str] = None) -> None:
