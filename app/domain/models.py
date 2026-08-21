@@ -1,6 +1,6 @@
 """Domain models for Music Explorer."""
 
-from typing import Literal, List, Optional, Dict
+from typing import Any, Literal, List, Optional, Dict
 from pydantic import BaseModel, ConfigDict, Field, model_validator, field_validator
 
 
@@ -1408,6 +1408,9 @@ class QuizModeInfo(BaseModel):
     # The mode is still listed so the UI can say why, instead of the menu
     # silently changing shape as the library grows.
     available: bool
+    # Whether the round has anything to listen to. Knowledge rounds (the
+    # producer mode) have none, and the client must not draw a play key.
+    has_audio: bool = True
 
 
 class QuizModesResponse(BaseModel):
@@ -1433,6 +1436,7 @@ class QuizRoundOut(BaseModel):
     start_sec: float
     length_sec: float
     expires_at: float
+    has_audio: bool = True
 
 
 class QuizAnswerIn(BaseModel):
@@ -1454,4 +1458,7 @@ class QuizAnswerOut(BaseModel):
     # True when the round timed out: scored wrong, but skill is left untouched.
     expired: bool = False
     correct_option_id: Optional[str] = None
+    # Facts the round could only show once answered — e.g. {"producer": "..."}
+    # for the producer mode. Empty for modes that reveal nothing extra.
+    reveal: Dict[str, Any] = Field(default_factory=dict)
     truth: QuizTruth

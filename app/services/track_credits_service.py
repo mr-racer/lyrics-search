@@ -179,6 +179,31 @@ def _credited_rows(collection_name: str) -> list[dict]:
     return credited
 
 
+def producer_index(collection_name: str) -> dict[str, dict]:
+    """``{producer_key: {"name": display, "tracks": [track_id, ...]}}``.
+
+    One entry per EFFECTIVE producer across the collection, keyed by the
+    normalised name so "Kanye West" and "kanye west" are one person. Built on
+    top of the same cached ``_credited_rows`` view the player overlay uses, so
+    asking for it repeatedly costs a dict build, not a scan.
+
+    The display name is whichever spelling was seen first — the credits data
+    has no canonical form, and picking one arbitrarily beats showing a key.
+    """
+    index: dict[str, dict] = {}
+    for row in _credited_rows(collection_name):
+        track_id = row.get("track_id")
+        if not track_id:
+            continue
+        for name in split_credit_names(row.get("producer")):
+            key = _name_key(name)
+            if not key:
+                continue
+            entry = index.setdefault(key, {"name": name, "tracks": []})
+            entry["tracks"].append(track_id)
+    return index
+
+
 def resolve_producers(collection_name: str, track_id: str) -> list[ProducerCredit]:
     """Resolve a track's producer names against the user's library.
 

@@ -8,6 +8,7 @@ Spec: docs/superpowers/specs/2026-08-21-music-quiz-design.md §6, §12.
 from __future__ import annotations
 
 import json
+import logging
 import random as _random
 import time
 import uuid
@@ -47,6 +48,8 @@ ALLOWED_SNIPPET_SEC = (3, 5, 10)
 
 _SECONDS_PER_DAY = 86400.0
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass
 class _Snapshot:
@@ -57,6 +60,7 @@ class _Snapshot:
     last_played: Dict[str, Optional[float]]
     percentiles: Dict[str, float]
     axis_stats: Optional[Dict]
+    producers: Dict[str, Dict]
     now: float
 
 
@@ -71,7 +75,12 @@ def list_modes(*, qdrant_client, collection_name: str) -> List[Dict]:
     for key, mode in MODES.items():
         ctx = _context_for(snapshot, collection_name, key)
         size = int(mode.pool_size(ctx))
-        out.append({"key": key, "pool_size": size, "available": size >= MIN_POOL})
+        out.append({
+            "key": key, "pool_size": size, "available": size >= MIN_POOL,
+            # Whether the round has anything to listen to. The client needs it
+            # up front so it does not draw a play key for a knowledge round.
+            "has_audio": bool(getattr(mode, "HAS_AUDIO", True)),
+        })
     return out
 
 
@@ -112,6 +121,7 @@ def build_round(
         "start_sec": spec.start_sec,
         "length_sec": spec.length_sec,
         "expires_at": expires_at,
+        "has_audio": bool(getattr(mode_module, "HAS_AUDIO", True)),
     }
 
 
@@ -159,6 +169,9 @@ def submit_answer(
         "score": score,
         "expired": expired,
         "correct_option_id": spec.get("correct_option_id"),
+        # Only now: the producer whose three tracks those were, the year that
+        # was being guessed. Withheld from the question payload entirely.
+        "reveal": spec.get("reveal") or {},
         "truth": {
             "track_id": row["track_id"],
             "title": track.get("title_display") or track.get("title") or "—",
@@ -210,8 +223,20 @@ def _snapshot(qdrant_client, collection_name: str) -> _Snapshot:
             MetadataDB.get_axis_norm_stats(collection_name),
             load_axis_norm_reference(),
         ),
+        producers=_producer_index(collection_name),
         now=now,
     )
+
+
+def _producer_index(collection_name: str) -> Dict[str, Dict]:
+    """Credits are optional data: a collection with none must still play M1."""
+    try:
+        from app.services.track_credits_service import producer_index
+        return producer_index(collection_name)
+    except Exception:
+        logger.warning("[quiz] producer index unavailable for %s",
+                       collection_name, exc_info=True)
+        return {}
 
 
 def _context_for(
@@ -235,6 +260,7 @@ def _context_for(
             since_ts=snapshot.now - ANTI_REPEAT_DAYS * _SECONDS_PER_DAY,
         ),
         axis_stats=snapshot.axis_stats,
+        producers=snapshot.producers,
         rng=rng or _random,
         now=snapshot.now,
     )

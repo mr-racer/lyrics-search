@@ -26,6 +26,9 @@ class RoundContext:
     skill: Dict                              # MetadataDB.get_quiz_skill row
     exclude: Set[str] = field(default_factory=set)   # anti-repeat
     axis_stats: Optional[Dict] = None
+    # {producer_key: {"name": display, "tracks": [track_id, ...]}} over every
+    # effectively-credited track. Built once per snapshot; M2 reads it.
+    producers: Dict[str, Dict] = field(default_factory=dict)
     rng: object = _random
     now: float = 0.0
 
@@ -44,8 +47,12 @@ class RoundSpec:
     track_id: str
     options: List[Dict]          # {option_id, title, artist, cover_art_path}
     correct_option_id: str
-    start_sec: float
-    length_sec: float
+    start_sec: float = 0.0
+    length_sec: float = 0.0
+    # Facts the round can only show AFTER it is answered — the producer whose
+    # three tracks those were, the year that was being guessed. Kept out of the
+    # question payload entirely: anything here would give the answer away.
+    reveal: Dict = field(default_factory=dict)
 
     def to_stored(self) -> Dict:
         """The shape persisted in ``quiz_rounds.spec_json``."""
@@ -55,4 +62,5 @@ class RoundSpec:
             "correct_option_id": self.correct_option_id,
             "start_sec": self.start_sec,
             "length_sec": self.length_sec,
+            "reveal": self.reveal,
         }

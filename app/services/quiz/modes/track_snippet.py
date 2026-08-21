@@ -20,6 +20,9 @@ from app.services.quiz.selection import pick_answer_track
 
 KEY = "track_snippet"
 
+# This round IS a listening round; the client draws a play key for it.
+HAS_AUDIO = True
+
 OPTION_COUNT = 4
 
 # The window a snippet may start in, as a fraction of the track. Not the

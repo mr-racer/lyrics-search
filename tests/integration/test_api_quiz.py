@@ -84,14 +84,28 @@ def test_modes_requires_a_token():
 # ── Registry reachability ────────────────────────────────────────────────────
 
 def test_modes_lists_every_registered_mode():
-    """The registry check a unit test cannot make: is the mode wired into the
-    running app, not merely importable?"""
+    """The registry check a unit test cannot make: is every mode wired into the
+    RUNNING app, not merely importable?
+
+    Compared against the registry itself rather than a hand-written list, so
+    adding a mode without exposing it fails here instead of shipping silently.
+    """
+    from app.services.quiz.modes import MODES
     _seed_library()
     with TestClient(_make_app()) as client:
         resp = client.get("/api/v1/quiz/modes")
         assert resp.status_code == 200
         keys = {m["key"] for m in resp.json()["modes"]}
-        assert "track_snippet" in keys
+        assert keys == set(MODES)
+
+
+def test_modes_declare_whether_they_have_audio():
+    """A knowledge round must not make the client draw a play key."""
+    _seed_library()
+    with TestClient(_make_app()) as client:
+        modes = {m["key"]: m for m in client.get("/api/v1/quiz/modes").json()["modes"]}
+        assert modes["track_snippet"]["has_audio"] is True
+        assert modes["producer"]["has_audio"] is False
 
 
 def test_modes_reports_pool_and_availability():

@@ -15,10 +15,11 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 
-from app.services.quiz.modes import track_snippet
+from app.services.quiz.modes import producer, track_snippet
 
 MODES: Dict[str, object] = {
     track_snippet.KEY: track_snippet,
+    producer.KEY: producer,
 }
 
 
