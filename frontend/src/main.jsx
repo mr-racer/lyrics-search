@@ -18672,10 +18672,14 @@ function BioFacets({ facets, sourceUrl, isDark, lang }) {
   }
   if (facets.grammy_wins || facets.grammy_nominations) {
     const parts = [];
-    if (facets.grammy_wins) parts.push(ru ? `${facets.grammy_wins} побед` : `${facets.grammy_wins} won`);
+    if (facets.grammy_wins) {
+      parts.push(`${facets.grammy_wins} ${plural(facets.grammy_wins, lang,
+        ['победа', 'победы', 'побед'], ['win', 'wins'])}`);
+    }
     if (facets.grammy_nominations) {
-      parts.push(ru ? `${facets.grammy_nominations} номинаций`
-                    : `${facets.grammy_nominations} nominations`);
+      const n = facets.grammy_nominations;
+      parts.push(`${n} ${plural(n, lang, ['номинация', 'номинации', 'номинаций'],
+        ['nomination', 'nominations'])}`);
     }
     items.push({ key: 'grammy', label: 'Grammy', value: parts.join(' · '),
                  web: soft(facets.grammy_source) });
