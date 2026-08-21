@@ -143,6 +143,9 @@ function clearStoredAuth() {
   // the next account's session (module state, declared below).
   _streamToken = '';
   _streamTokenExpMs = 0;
+  // Same for the cached /auth/me: it carries this account's folder-index grant,
+  // and the next account must not inherit it.
+  _mePromise = null;
   // And the prefetched media blobs — another account's audio must not sit in
   // memory (or get promoted to the player) after the account switch.
   dropMediaPrefetch();
@@ -9595,6 +9598,20 @@ function fetchInstanceConfigCached() {
   return _instanceCfgPromise;
 }
 
+// Module-cached /auth/me. This is where the folder-indexing grant lives now:
+// /instance/config is UNAUTHENTICATED, so it must never carry an account's
+// index root (it used to, which published the server's music path to anyone).
+// Resolves to null rather than throwing — every caller treats "no grant" and
+// "could not ask" identically, by hiding the server-folder controls.
+let _mePromise = null;
+function fetchMeCached() {
+  if (!_mePromise) {
+    _mePromise = apiFetch('/auth/me').catch(() => null);
+  }
+  return _mePromise;
+}
+function invalidateMeCache() { _mePromise = null; }
+
 // Persistent "where does the processing run" indicator for every indexing
 // surface. sharing == the whole stack lives on the user's machine → local
 // processing (green); server == a hosted instance the member uploads to →
@@ -10490,6 +10507,79 @@ function InvitesPanel({ lang, showToast, hideHeader, reloadKey }) {
 // Owner-only roster (server mode). Presentational: members + loading come from
 // the parent (OwnerAdminDashboard owns the fetch so the stats summary can read
 // the same data). Per-row stats + a guarded delete flow live here.
+// Where ONE account's library comes from: uploads through the browser (the
+// default for everybody) or a folder that already sits on the server, which the
+// account then indexes by reference and rescans on demand.
+//
+// This is the only place the grant is handed out. It replaced the instance-wide
+// MEMBER_INDEX_ROOT env var, which granted the same folder to every member at
+// once — meaning any of them could pull another account's library into their
+// own, and the path was published through the unauthenticated /instance/config.
+function MemberLibrarySource({ member, ru, showToast, onReload }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(member.index_root || '');
+  const [saving, setSaving] = useState(false);
+  const granted = !!member.index_root;
+
+  const save = async (root) => {
+    setSaving(true);
+    try {
+      await apiFetch(`/admin/accounts/${member.id}/index-root`, {
+        method: 'PATCH', body: JSON.stringify({ index_root: root }),
+      });
+      setEditing(false);
+      onReload();
+    } catch (e) {
+      showToast(String(e.message || e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const tinyBtn = {
+    fontSize: 10.5, padding: '3px 9px', borderRadius: 6, background: 'transparent',
+    color: '#9a9aa4', border: '1px solid rgba(255,255,255,0.14)', cursor: 'pointer',
+  };
+
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={{ fontSize: 11, color: '#8a8a93', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ color: '#666' }}>{ru ? 'источник:' : 'source:'}</span>
+        {granted
+          ? <code style={{ color: '#9fd8a8' }}>{member.index_root}</code>
+          : <span>{ru ? 'загрузка с фронта' : 'browser uploads'}</span>}
+        {!editing && (
+          <button style={tinyBtn} onClick={() => { setValue(member.index_root || ''); setEditing(true); }}>
+            {ru ? 'изменить' : 'change'}
+          </button>
+        )}
+      </div>
+      {editing && (
+        <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          <input value={value} onChange={e => setValue(e.target.value)} placeholder="/music"
+            style={{ flex: '1 1 160px', minWidth: 0, padding: '5px 9px', borderRadius: 6, fontSize: 11.5,
+              background: 'rgba(255,255,255,0.05)', color: '#eee',
+              border: '1px solid rgba(255,255,255,0.12)', boxSizing: 'border-box' }} />
+          <button style={{ ...tinyBtn, color: '#9fd8a8', borderColor: 'rgba(120,220,140,0.3)' }}
+            disabled={saving || !value.trim()} onClick={() => save(value.trim())}>
+            {ru ? 'выдать' : 'grant'}
+          </button>
+          {granted && (
+            <button style={{ ...tinyBtn, color: '#ff9090', borderColor: 'rgba(255,80,80,0.25)' }}
+              disabled={saving} onClick={() => save(null)}>
+              {ru ? 'отозвать' : 'revoke'}
+            </button>
+          )}
+          <button style={tinyBtn} disabled={saving} onClick={() => setEditing(false)}>
+            {ru ? 'отмена' : 'cancel'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 function MembersPanel({ members, loading, onReload, lang, showToast, hideHeader }) {
   const ru = lang === 'ru';
   const [confirmId, setConfirmId] = useState('');   // member row showing the confirm box
@@ -10548,6 +10638,7 @@ function MembersPanel({ members, loading, onReload, lang, showToast, hideHeader 
                   <span>⏱ {fmtListenDuration(m.listened_sec, ru)}</span>
                   <span>♥ {m.likes || 0}</span>
                 </div>
+                <MemberLibrarySource member={m} ru={ru} showToast={showToast} onReload={onReload} />
               </div>
               <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
                 {m.invite_code && (
@@ -10940,6 +11031,18 @@ function AddMusicCard({ isDark, lang, instanceMode, indexingJob }) {
   const [upload, setUpload] = useState(null);        // { done, total, name } while files stream up
   const [error, setError] = useState(null);
   const serverMode = instanceMode === 'server';
+  // Folder-index grant for THIS account (null for everyone without one). Comes
+  // from the authenticated /auth/me, so an account without the grant never sees
+  // the path — nor the rescan control it unlocks.
+  const [indexRoot, setIndexRoot] = useState('');
+
+  useEffect(() => {
+    let alive = true;
+    fetchMeCached().then(me => {
+      if (alive && me && me.index_root) setIndexRoot(me.index_root);
+    });
+    return () => { alive = false; };
+  }, []);
 
   const running = indexingJob.status === 'running';
   const busy = running || !!upload;
@@ -10995,6 +11098,23 @@ function AddMusicCard({ isDark, lang, instanceMode, indexingJob }) {
       // append:true — extend the library instead of rebuilding it from this folder.
       const res = await apiFetch('/library/index', {
         method: 'POST', body: JSON.stringify({ folder_path: path, append: true, lang }),
+      });
+      if (res.status === 'failed') { indexingJob.fail(res.message); return; }
+      if (!res.job_id) { indexingJob.completeSync(res.count || 0); return; }
+      indexingJob.attach(res.job_id);
+    } catch (err) { indexingJob.fail(String(err.message || err)); }
+  };
+
+  // Rescan the granted folder in place. No folder picker: the account may only
+  // index its own grant, so there is nothing to choose. append:true means the
+  // backend diffs by path first and reads tags only for genuinely new files —
+  // a rescan that finds nothing costs one directory walk, not a re-index.
+  const rescanLibrary = async () => {
+    setError(null);
+    indexingJob.begin();
+    try {
+      const res = await apiFetch('/library/index', {
+        method: 'POST', body: JSON.stringify({ folder_path: indexRoot, append: true, lang }),
       });
       if (res.status === 'failed') { indexingJob.fail(res.message); return; }
       if (!res.job_id) { indexingJob.completeSync(res.count || 0); return; }
@@ -11071,7 +11191,26 @@ function AddMusicCard({ isDark, lang, instanceMode, indexingJob }) {
   const pickAccept = 'audio/*,.flac,.mp3,.m4a,.aac,.ogg,.wav,.opus';
   return (
     <div style={divider}>
-      {!choosing ? (
+      {indexRoot ? (
+        // Granted account: its library lives in a server folder, so "upload
+        // files" is the wrong verb — the music is already there, it just has to
+        // be noticed. One button, no picker.
+        <div>
+          <button onClick={rescanLibrary} disabled={busy} className="cta-v3"
+            style={{ padding: '10px 18px', fontSize: 13.5, display: 'flex', alignItems: 'center', gap: 9 }}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 12a9 9 0 1 1-2.64-6.36"/><polyline points="21 3 21 9 15 9"/>
+            </svg>
+            {ru ? 'Сканировать библиотеку' : 'Rescan library'}
+          </button>
+          <div style={{ fontSize: 11.5, color: c.textSubtle, marginTop: 8, lineHeight: 1.5 }}>
+            {ru
+              ? <>Найдёт новые файлы в <code>{indexRoot}</code>. Уже проиндексированные пропускаются.</>
+              : <>Picks up new files under <code>{indexRoot}</code>. Already-indexed ones are skipped.</>}
+          </div>
+        </div>
+      ) : !choosing ? (
         <button onClick={() => (serverMode ? setChoosing(true) : addHostFolder())}
           disabled={busy} className="cta-v3"
           style={{ padding: '10px 18px', fontSize: 13.5, display: 'flex', alignItems: 'center', gap: 9 }}>
@@ -12232,13 +12371,16 @@ function ServerOnboardingScreen({ isDark, lang, onDone, onLang, onTheme }) {
   const uploadBusy = uploadStarted || anyUploading || committing;
   const busy = (showWizard && !!jobId) || uploadBusy || yandexImporting;
 
-  // Server-mode opt-in (MEMBER_INDEX_ROOT): if the operator mounted a trusted
-  // folder and exposed it via /instance/config, members may index it in place
-  // instead of uploading. Fetch once; the button below renders only when set.
+  // Per-account grant: an account the owner has pointed at a server folder may
+  // index it in place instead of uploading. It arrives on /auth/me, which is
+  // authenticated — an account without the grant never learns the path exists,
+  // and the block below renders only when it is set.
   useEffect(() => {
-    apiFetch('/instance/config')
-      .then(cfg => { if (cfg && cfg.mode === 'server' && cfg.member_index_root) setMemberIndexRoot(cfg.member_index_root); })
-      .catch(() => {});
+    let alive = true;
+    fetchMeCached().then(me => {
+      if (alive && me && me.index_root) setMemberIndexRoot(me.index_root);
+    });
+    return () => { alive = false; };
   }, []);
 
   // Reload / navigation away mid-indexing: the server keeps the per-account job

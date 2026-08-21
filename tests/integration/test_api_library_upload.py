@@ -84,9 +84,10 @@ def _server_mode_batch(clean_metadata_db, tmp_path):
     return tmp_path
 
 
-def _login_batch(app, uid: str) -> None:
+def _login_batch(app, uid: str, index_root: str | None = None) -> None:
     app.dependency_overrides[get_current_user] = lambda: User(
         id=uid, email=f"{uid}@x.y", role="member", created_at=0.0,
+        index_root=index_root,
     )
 
 
@@ -340,9 +341,10 @@ class TestFolderIndexEmbedModel:
         from unittest.mock import AsyncMock
 
         root = _server_mode_batch  # tmp_path — a real dir, passes the is_dir() check
-        monkeypatch.setenv("MEMBER_INDEX_ROOT", str(root))
         app = create_app()
-        _login_batch(app, "acct_alice")
+        # Folder indexing is a per-account grant now — MEMBER_INDEX_ROOT only caps
+        # what the owner may grant, it no longer authorizes anyone by itself.
+        _login_batch(app, "acct_alice", index_root=str(root))
         with patch(
             "app.services.library_service.LibraryService.index_folder",
             new_callable=AsyncMock,

@@ -1,24 +1,25 @@
-"""Unit tests for the MEMBER_INDEX_ROOT opt-in helpers (app/api/helpers.py).
+"""Unit tests for the folder-index confinement helpers (app/api/helpers.py).
 
-These guard the security boundary that lets server-mode MEMBERS index a single
-operator-approved mounted folder by reference, without being able to escape it
-to arbitrary host paths.
+MEMBER_INDEX_ROOT used to GRANT: setting it let every server-mode member index
+that folder. It now only CONFINES what the owner may grant per account, and is
+read through ``index_root_ceiling``. ``path_within_root`` is unchanged and is
+still what keeps a granted account from escaping to arbitrary host paths.
 """
 import pytest
 
-from app.api.helpers import member_index_root, path_within_root
+from app.api.helpers import index_root_ceiling, path_within_root
 
 pytestmark = pytest.mark.unit
 
 
-def test_member_index_root_unset_is_empty(monkeypatch):
+def test_ceiling_unset_is_empty(monkeypatch):
     monkeypatch.delenv("MEMBER_INDEX_ROOT", raising=False)
-    assert member_index_root() == ""
+    assert index_root_ceiling() == ""
 
 
-def test_member_index_root_trims_whitespace(monkeypatch):
+def test_ceiling_trims_whitespace(monkeypatch):
     monkeypatch.setenv("MEMBER_INDEX_ROOT", "  /music  ")
-    assert member_index_root() == "/music"
+    assert index_root_ceiling() == "/music"
 
 
 def test_within_allows_root_and_children(tmp_path):

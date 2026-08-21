@@ -253,6 +253,13 @@ _SCHEMA_SQL: Tuple[str, ...] = (
     # Premium tier flag (display-only; no server-side gating). Idempotent —
     # the duplicate-column catch in init() skips it on already-migrated DBs.
     "ALTER TABLE users ADD COLUMN premium INTEGER NOT NULL DEFAULT 0",
+    # Per-account grant to point the host indexer at a server-side folder
+    # (index-by-reference). NULL = not allowed, which is the default for every
+    # account including the owner — the owner is unrestricted by role, not by
+    # this column. Replaces the instance-wide MEMBER_INDEX_ROOT env var, which
+    # granted the same root to EVERY member and leaked the path through the
+    # unauthenticated GET /config.
+    "ALTER TABLE users ADD COLUMN index_root TEXT",
     """CREATE TABLE IF NOT EXISTS invites (
         code         TEXT PRIMARY KEY,
         created_by   TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -3939,7 +3946,8 @@ class MetadataDB:
         stored rows are already canonical)."""
         conn = cls._connect()
         row = conn.execute(
-            "SELECT id, email, password_hash, role, created_at, last_login_at, premium "
+            "SELECT id, email, password_hash, role, created_at, last_login_at, premium, "
+            "index_root "
             "FROM users WHERE email = ?",
             (email,),
         ).fetchone()
@@ -3948,7 +3956,7 @@ class MetadataDB:
         return {
             "id": row[0], "email": row[1], "password_hash": row[2],
             "role": row[3], "created_at": row[4], "last_login_at": row[5],
-            "premium": row[6],
+            "premium": row[6], "index_root": row[7],
         }
 
     @classmethod
@@ -3956,7 +3964,8 @@ class MetadataDB:
         """Return user row dict or None."""
         conn = cls._connect()
         row = conn.execute(
-            "SELECT id, email, password_hash, role, created_at, last_login_at, premium "
+            "SELECT id, email, password_hash, role, created_at, last_login_at, premium, "
+            "index_root "
             "FROM users WHERE id = ?",
             (user_id,),
         ).fetchone()
@@ -3965,7 +3974,7 @@ class MetadataDB:
         return {
             "id": row[0], "email": row[1], "password_hash": row[2],
             "role": row[3], "created_at": row[4], "last_login_at": row[5],
-            "premium": row[6],
+            "premium": row[6], "index_root": row[7],
         }
 
     @classmethod
@@ -3975,6 +3984,23 @@ class MetadataDB:
         cur = conn.execute(
             "UPDATE users SET last_login_at = ? WHERE id = ?",
             (ts, user_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+    @classmethod
+    def set_index_root(cls, user_id: str, root: str | None) -> bool:
+        """Grant or revoke server-folder indexing for one account.
+
+        An empty or whitespace-only ``root`` REVOKES (stores NULL) rather than
+        storing a blank string, so ``index_root`` has exactly one falsy shape
+        for the gate to reason about. Returns True if a user row was updated.
+        """
+        value = (root or "").strip() or None
+        conn = cls._connect()
+        cur = conn.execute(
+            "UPDATE users SET index_root = ? WHERE id = ?",
+            (value, user_id),
         )
         conn.commit()
         return cur.rowcount > 0
@@ -4102,7 +4128,8 @@ class MetadataDB:
         None. Ordered oldest-first. Powers the owner 'Members' admin view."""
         conn = cls._connect()
         rows = conn.execute(
-            """SELECT u.id, u.email, u.role, u.created_at, u.last_login_at, i.code
+            """SELECT u.id, u.email, u.role, u.created_at, u.last_login_at, i.code,
+                      u.index_root
                FROM users u
                LEFT JOIN invites i ON i.consumed_by = u.id
                ORDER BY u.created_at ASC"""
@@ -4111,6 +4138,7 @@ class MetadataDB:
             {
                 "id": r[0], "email": r[1], "role": r[2], "created_at": r[3],
                 "last_login_at": r[4], "invite_code": r[5],
+                "index_root": r[6] or None,
             }
             for r in rows
         ]

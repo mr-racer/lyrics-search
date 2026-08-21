@@ -576,6 +576,46 @@ class LibraryService:
             upload_by_key[key] = row["upload_id"]
         return data, upload_by_key
 
+    def _files_to_index(
+        self, folder_path: str, collection_name: str, *, append: bool
+    ) -> tuple[list, int, int]:
+        """Walk ``folder_path`` and decide which files actually need a tag read.
+
+        Returns ``(files, seen, skipped_known)``. In append mode the paths that
+        are already in the collection are subtracted HERE, before anything is
+        opened — the old order tag-read the whole folder and discarded the known
+        ones afterwards, which on a 220 GB by-reference library meant thousands
+        of pointless file opens on a spinning disk every time the user pressed
+        "add music".
+
+        ``_split_already_indexed`` still runs downstream as a second line of
+        defence; this only makes the common case cheap, it does not replace the
+        dedupe.
+        """
+        from app.services.library_scan_service import discover_new_files
+
+        known: set[str] = set()
+        if append:
+            try:
+                known = {
+                    str(fp)
+                    for _pid, payload in MetadataDB.get_light_points(collection_name)
+                    if (fp := (payload or {}).get("file_path"))
+                }
+            except Exception:
+                # Same contract as _split_already_indexed: losing the mirror means
+                # "nothing is indexed yet". Re-indexing a track is recoverable,
+                # silently dropping the user's new music is not.
+                logger.exception(
+                    "[LibraryService] known-path lookup failed for %s — scanning all",
+                    collection_name,
+                )
+                known = set()
+
+        result = discover_new_files(folder_path, known)
+        files = [Path(p) for p in result.new_files]
+        return files, result.seen, result.seen - len(files)
+
     @staticmethod
     def _split_already_indexed(collection_name: str, tracks: dict) -> tuple[dict, dict]:
         """Partition a tag-read batch into (not yet indexed, already indexed).
@@ -1025,19 +1065,28 @@ class LibraryService:
             stage_lyrics.started_at = time.time()
             stage_lyrics.message = "Чтение тегов..."
 
-            # rglob walks the whole tree synchronously — on a big/network
-            # folder that's seconds of blocked event loop, so off-thread it.
-            audio_files = await asyncio.to_thread(
-                lambda: [
-                    p for p in Path(folder_path).rglob("*")
-                    if p.suffix.lower() in (".flac", ".m4a", ".mp3")
-                ]
+            # Walking the tree is synchronous — on a big/network folder that's
+            # seconds of blocked event loop, so off-thread it. In append mode
+            # this ALSO subtracts the already-indexed paths, so a rescan that
+            # finds nothing new costs one directory walk and zero file opens.
+            audio_files, seen_total, skipped_known = await asyncio.to_thread(
+                self._files_to_index, folder_path, collection_name, append=append,
             )
+            if append and not audio_files:
+                logger.info(
+                    "[LibraryService] rescan found nothing new (%d files already indexed)",
+                    skipped_known,
+                )
+                await self._complete_with_nothing_new(job, skipped_known)
+                return
             stage_lyrics.total = len(audio_files)
             await self._notify_progress(job, {
                 "stage": IndexStage.LYRICS.value,
                 "stage_status": IndexStatus.RUNNING.value,
-                "message": f"Найдено {len(audio_files)} файлов",
+                "message": (
+                    f"Новых файлов: {len(audio_files)} из {seen_total}"
+                    if append else f"Найдено {len(audio_files)} файлов"
+                ),
                 "current": 0, "total": len(audio_files),
             })
 
@@ -1047,15 +1096,15 @@ class LibraryService:
             # rest — overlapped with CLAP/dense — and drives the LYRICS stage to
             # COMPLETED via its "scan" progress (see _on_index_progress).
             processed_files = await asyncio.to_thread(self._tagread_folder, audio_files)
-            skipped_existing = 0
+            skipped_existing = skipped_known
             if append:
-                # Re-scanning a folder that is mostly already indexed is the
-                # normal case for "add music" — only the new files should cost
-                # anything, and none of the old ones may be duplicated.
+                # Second line of defence behind the path prefilter above: catches
+                # a file whose path is new but whose point already exists (moved
+                # or renamed on disk), which the path diff cannot see.
                 processed_files, already = self._split_already_indexed(
                     collection_name, processed_files,
                 )
-                skipped_existing = len(already)
+                skipped_existing += len(already)
                 if not processed_files:
                     await self._complete_with_nothing_new(job, skipped_existing)
                     return

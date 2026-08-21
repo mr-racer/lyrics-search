@@ -996,6 +996,11 @@ class User(BaseModel):
     # metadata/cover sources). Set directly in SQLite by the operator; no
     # endpoint mutates it and nothing is gated server-side.
     premium: bool = False
+    # Host folder this account may hand to the indexer (index-by-reference).
+    # None = not allowed, the default. Owners are unrestricted regardless.
+    # Returned by GET /auth/me — which is authenticated — so the frontend can
+    # show the rescan control to exactly the accounts that have the grant.
+    index_root: Optional[str] = None
 
 
 class Invite(BaseModel):
@@ -1015,10 +1020,10 @@ class InstanceConfigResponse(BaseModel):
     # working LLM endpoint is configured). Exposed publicly so a member's
     # frontend can decide UI without ever seeing the endpoint/key.
     ai_available: bool = False
-    # Server mode only: the mounted path (MEMBER_INDEX_ROOT) that members may
-    # index by reference, or null when the opt-in is off. Lets the member UI
-    # show/hide the "index mounted folder" action without exposing host details.
-    member_index_root: str | None = None
+    # NOTE: this body is UNAUTHENTICATED, so nothing account-specific or
+    # host-specific belongs here. It used to carry `member_index_root`, which
+    # published the server's music path to anonymous callers; the folder-index
+    # grant is per-account now and travels on GET /auth/me instead.
 
 
 class SetupRequest(BaseModel):
@@ -1104,6 +1109,10 @@ class MemberResponse(BaseModel):
     invite_code: Optional[str] = None
     songs: int = 0
     listened_sec: float = 0.0
+    # Host folder this account may hand to the indexer, or None when it may not
+    # index at all (the default). Drives the "library source" control in the
+    # members view: upload-only vs server folder + rescan.
+    index_root: Optional[str] = None
     likes: int = 0
 
 
@@ -1112,6 +1121,15 @@ class DeleteAccountRequest(BaseModel):
     target's email — a defense-in-depth guard so a UI bug can't wipe the wrong
     account on a bare path id."""
     confirm_email: str
+
+
+class SetIndexRootRequest(BaseModel):
+    """Body of PATCH /admin/accounts/{user_id}/index-root.
+
+    Grants that account the right to point the host indexer at ``index_root``
+    and anything beneath it. ``None`` or an empty string REVOKES the grant.
+    """
+    index_root: Optional[str] = None
 
 
 # ── Unified AI assistant ──────────────────────────────────────────────────────

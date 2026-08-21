@@ -36,15 +36,18 @@ def derive_collection_for_user(user) -> str:
     return f"acct_{user_id}"
 
 
-def member_index_root() -> str:
-    """Allowed root path that MEMBERS may index in server mode (index-by-reference).
+def index_root_ceiling() -> str:
+    """Upper bound on the folder-index grants the owner may hand out.
 
-    Read from the ``MEMBER_INDEX_ROOT`` env var. Empty/unset = feature OFF, which
-    preserves the default owner-only folder-indexing boundary. When set (e.g.
-    ``/music``, typically a read-only bind-mount of a trusted disk), members may
-    index that directory and anything beneath it — but never an arbitrary host
-    path (the streamer serves whatever ``file_path`` lands in their collection, so
-    confining the indexer is what keeps the boundary). See ``path_within_root``.
+    Still read from ``MEMBER_INDEX_ROOT`` so existing deployments need no config
+    change, but the meaning is now strictly narrower. It used to GRANT: setting
+    it let every member index that root, which meant any member could clone the
+    whole by-reference library into their own collection, and the path leaked
+    through the unauthenticated ``GET /instance/config``.
+
+    It now only CONFINES: the grant itself lives per-account in
+    ``users.index_root``, and this caps what may be granted. Empty/unset means
+    no ceiling — grants are unrestricted, since the owner runs the host anyway.
     """
     return os.getenv("MEMBER_INDEX_ROOT", "").strip()
 
@@ -64,6 +67,39 @@ def path_within_root(candidate: str, root: str) -> bool:
     except (OSError, ValueError):
         return False
     return cand_real == root_real or root_real in cand_real.parents
+
+
+def index_grant_allows(*, role: str, index_root: str | None, candidate: str) -> bool:
+    """True iff this account may point the host indexer at ``candidate``.
+
+    The grant is PER-ACCOUNT (``users.index_root``), not an instance-wide flag:
+    the streamer serves whatever ``file_path`` lands in a collection, so the
+    indexer is the boundary, and it has to be drawn per caller. An owner runs
+    the host machine and is unrestricted; everyone else needs an explicit grant
+    and stays inside it.
+    """
+    if role == "owner":
+        return True
+    if not index_root:
+        return False
+    return path_within_root(candidate, index_root)
+
+
+def grant_within_ceiling(grant_root: str, *, ceiling: str) -> bool:
+    """True iff the owner is allowed to hand out ``grant_root``.
+
+    Defence in depth against a fat-fingered grant: with ``MEMBER_INDEX_ROOT``
+    set, a mistyped ``/`` in the admin panel would otherwise pour the whole
+    host filesystem into a member's collection. An unset ceiling means the
+    operator has not asked for one, so any grant is allowed. An empty grant is
+    a REVOCATION, not a grant, and callers must handle it as such — it never
+    passes this check.
+    """
+    if not grant_root:
+        return False
+    if not ceiling:
+        return True
+    return path_within_root(grant_root, ceiling)
 
 
 def deprecated_collection_warning(supplied: str | None, derived: str, endpoint: str) -> None:

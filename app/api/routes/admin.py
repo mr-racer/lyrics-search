@@ -16,8 +16,12 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from app.api.dependencies import get_owner, require_mode
-from app.api.helpers import derive_collection_for_user
-from app.domain.models import DeleteAccountRequest, MemberResponse, User
+from app.api.helpers import (
+    derive_collection_for_user, grant_within_ceiling, index_root_ceiling,
+)
+from app.domain.models import (
+    DeleteAccountRequest, MemberResponse, SetIndexRootRequest, User,
+)
 from app.resources.metadata_db import MetadataDB
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
@@ -41,6 +45,47 @@ def list_members(_owner: User = Depends(get_owner)) -> List[MemberResponse]:
         stats = MetadataDB.account_stats(collection)
         out.append(MemberResponse(**r, **stats))
     return out
+
+
+@router.patch(
+    "/accounts/{user_id}/index-root",
+    dependencies=[Depends(require_mode("server"))],
+)
+def set_account_index_root(
+    user_id: str,
+    req: SetIndexRootRequest,
+    owner: User = Depends(get_owner),  # 403 if the requester is not an owner
+) -> dict:
+    """Grant or revoke server-folder indexing for ONE account.
+
+    This is the whole authorization story for index-by-reference: an account
+    with a grant may hand the indexer that path and anything under it, an
+    account without one may not index at all. The previous instance-wide
+    ``MEMBER_INDEX_ROOT`` env var granted the same root to every member, which
+    let any of them clone another account's by-reference library.
+
+    An empty/absent ``index_root`` revokes. The path is NOT required to exist
+    yet — a disk that mounts later is a legitimate target, and the indexer
+    checks existence at index time anyway.
+    """
+    if MetadataDB.get_user_by_id(user_id) is None:
+        raise HTTPException(status_code=404, detail=f"unknown user_id: {user_id}")
+
+    root = (req.index_root or "").strip()
+    if root:
+        ceiling = index_root_ceiling()
+        if not grant_within_ceiling(root, ceiling=ceiling):
+            raise HTTPException(
+                status_code=400,
+                detail=f"index root must be inside {ceiling}",
+            )
+
+    MetadataDB.set_index_root(user_id, root)
+    logger.info(
+        "[admin] owner %s set index_root=%r for account %s",
+        owner.id, root or None, user_id,
+    )
+    return {"user_id": user_id, "index_root": root or None}
 
 
 @router.post("/accounts/{user_id}/wipe")

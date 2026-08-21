@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 from app.domain.models import ArtistAggregate, IndexRequest, IndexProgress, AIEnabledRequest, AlbumCoversResponse, LibraryAlbumsResponse, LikedSongsResponse, ListeningStatsResponse, RhythmResponse, WeeklyPulseResponse, EngagementResponse, TasteMapResponse, RediscoverResponse, User, ProducerResolveResponse, ProducerTracksResponse, SamplesResolveRequest, SamplesResolveResponse, DiscoveryCard, DiscoveriesResponse
 from app.api.dependencies import get_current_user, require_mode
-from app.api.helpers import derive_collection_for_user, member_index_root, path_within_root
+from app.api.helpers import derive_collection_for_user, index_grant_allows
 from app.services.library_service import LibraryService
 from app.services import track_credits_service
 from app.services import uploads_service
@@ -1196,20 +1196,22 @@ async def index_folder(
     # while Qdrant is down (don't leak service state to unauthorized callers).
     from app.resources.metadata_db import MetadataDB
     cfg = MetadataDB.get_instance_config()
-    if cfg is not None and cfg.get("mode") == "server" and current_user.role != "owner":
-        # Members are owner-only for folder indexing UNLESS the operator opted in
-        # by setting MEMBER_INDEX_ROOT (a trusted, usually read-only mount). Then a
-        # member may index that root or any path beneath it — but nothing else, so
-        # they still can't point the indexer/streamer at arbitrary host files.
-        root = member_index_root()
-        if not root or not path_within_root(req.folder_path, root):
+    if cfg is not None and cfg.get("mode") == "server":
+        # The grant is PER-ACCOUNT (``users.index_root``), handed out by the owner
+        # in the admin panel. It used to be the instance-wide MEMBER_INDEX_ROOT env
+        # var, which meant setting it let EVERY member index that root — i.e. clone
+        # the whole by-reference library into their own collection.
+        #
+        # The refusal deliberately names no path: this endpoint is reachable by any
+        # authenticated account, and an error message is a disclosure channel.
+        if not index_grant_allows(
+            role=current_user.role,
+            index_root=getattr(current_user, "index_root", None),
+            candidate=req.folder_path,
+        ):
             raise HTTPException(
                 status_code=403,
-                detail=(
-                    f"members may only index {root} in server mode"
-                    if root else
-                    "folder indexing is owner-only in server mode — upload files instead"
-                ),
+                detail="folder indexing is not enabled for this account — upload files instead",
             )
 
     # Service availability next — if Qdrant/the whole library service is down,
