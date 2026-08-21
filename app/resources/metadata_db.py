@@ -433,6 +433,58 @@ _SCHEMA_SQL: Tuple[str, ...] = (
     "ON sample_links (collection_name, dst_slug)",
     "CREATE INDEX IF NOT EXISTS idx_sample_links_src "
     "ON sample_links (collection_name, src_slug)",
+    # ── Library quiz. Rounds are server-authoritative: the correct answer
+    #    lives here and never travels to the client before it answers, so
+    #    ``round_id`` can be handed out (and used to fetch audio) without
+    #    revealing which track is playing. ``daily_date`` marks rounds that
+    #    belong to a daily set; it is NULL for free play.
+    #
+    #    Nothing in these tables feeds the recommender: the quiz writes no
+    #    taste_signals and no playback_events, so a score can never move the
+    #    taste profile. ──
+    """CREATE TABLE IF NOT EXISTS quiz_rounds (
+        round_id        TEXT PRIMARY KEY,
+        collection_name TEXT NOT NULL,
+        mode            TEXT NOT NULL,
+        track_id        TEXT,
+        spec_json       TEXT NOT NULL,
+        daily_date      TEXT,
+        created_at      REAL NOT NULL,
+        expires_at      REAL NOT NULL,
+        answered_at     REAL,
+        answer_json     TEXT,
+        correct         INTEGER,
+        score           REAL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_quiz_rounds_coll "
+    "ON quiz_rounds (collection_name, mode, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_quiz_rounds_track "
+    "ON quiz_rounds (collection_name, track_id, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_quiz_rounds_daily "
+    "ON quiz_rounds (collection_name, daily_date)",
+    # Per-(collection, mode) difficulty state. ``band_lo``/``band_hi`` are
+    # percentiles of track familiarity, and ``out_of_band`` counts consecutive
+    # answers outside the current band — the hysteresis that stops one lucky
+    # guess from moving the difficulty.
+    """CREATE TABLE IF NOT EXISTS quiz_skill (
+        collection_name TEXT NOT NULL,
+        mode            TEXT NOT NULL,
+        skill           REAL NOT NULL DEFAULT 0.5,
+        n_answered      INTEGER NOT NULL DEFAULT 0,
+        band_lo         REAL NOT NULL DEFAULT 60.0,
+        band_hi         REAL NOT NULL DEFAULT 100.0,
+        out_of_band     INTEGER NOT NULL DEFAULT 0,
+        updated_at      REAL NOT NULL,
+        PRIMARY KEY (collection_name, mode)
+    )""",
+    # Daily-set streak. Deliberately separate from the listening streak in
+    # get_rhythm(): one counts days played, this counts daily sets completed.
+    """CREATE TABLE IF NOT EXISTS quiz_streak (
+        collection_name TEXT PRIMARY KEY,
+        current         INTEGER NOT NULL DEFAULT 0,
+        best            INTEGER NOT NULL DEFAULT 0,
+        last_date       TEXT
+    )""",
 )
 
 
@@ -3097,6 +3149,127 @@ class MetadataDB:
             (collection_name,),
         ).fetchone()
         return float(row[0]) if row and row[0] is not None else None
+
+    # ── Library quiz (spec 2026-08-21 §5) ──
+    #
+    # Deliberately inert with respect to taste: nothing here writes
+    # taste_signals or playback_events, so a quiz score can never reach the
+    # recommender. That is invariant I-1 of the spec, and the integration
+    # suite asserts it by counting rows either side of a full round.
+
+    @classmethod
+    def create_quiz_round(
+        cls, *, round_id: str, collection_name: str, mode: str,
+        track_id: Optional[str], spec_json: str, expires_at: float,
+        daily_date: Optional[str] = None, created_at: Optional[float] = None,
+    ) -> None:
+        """Insert a fresh, unanswered round.
+
+        ``created_at`` is injectable so anti-repeat windows are testable
+        deterministically; production callers omit it and get wall clock.
+        """
+        conn = cls._connect()
+        conn.execute(
+            "INSERT INTO quiz_rounds "
+            "(round_id, collection_name, mode, track_id, spec_json, daily_date, "
+            " created_at, expires_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (round_id, collection_name, mode, track_id, spec_json, daily_date,
+             float(created_at if created_at is not None else time.time()),
+             float(expires_at)),
+        )
+        conn.commit()
+
+    _QUIZ_ROUND_COLS = (
+        "round_id", "collection_name", "mode", "track_id", "spec_json",
+        "daily_date", "created_at", "expires_at", "answered_at",
+        "answer_json", "correct", "score",
+    )
+
+    @classmethod
+    def get_quiz_round(cls, round_id: str) -> Optional[Dict]:
+        """One round by id, or None. Callers must still check the collection."""
+        conn = cls._connect()
+        row = conn.execute(
+            f"SELECT {', '.join(cls._QUIZ_ROUND_COLS)} "
+            "FROM quiz_rounds WHERE round_id = ?",
+            (round_id,),
+        ).fetchone()
+        return dict(zip(cls._QUIZ_ROUND_COLS, row)) if row is not None else None
+
+    @classmethod
+    def answer_quiz_round(
+        cls, *, round_id: str, answer_json: str, correct: bool, score: float,
+    ) -> bool:
+        """Record the verdict; False when the round was already answered.
+
+        The ``answered_at IS NULL`` guard sits inside the UPDATE rather than in
+        a read-then-write, so two concurrent submissions cannot both win: the
+        loser updates zero rows instead of overwriting the first verdict.
+        """
+        conn = cls._connect()
+        cur = conn.execute(
+            "UPDATE quiz_rounds "
+            "SET answered_at = ?, answer_json = ?, correct = ?, score = ? "
+            "WHERE round_id = ? AND answered_at IS NULL",
+            (time.time(), answer_json, 1 if correct else 0,
+             float(score), round_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+    @classmethod
+    def get_quiz_skill(cls, collection_name: str, mode: str) -> Dict:
+        """Difficulty state, or the starter defaults when the pair is new."""
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT skill, n_answered, band_lo, band_hi, out_of_band "
+            "FROM quiz_skill WHERE collection_name = ? AND mode = ?",
+            (collection_name, mode),
+        ).fetchone()
+        if row is None:
+            return {"skill": 0.5, "n_answered": 0, "band_lo": 60.0,
+                    "band_hi": 100.0, "out_of_band": 0}
+        return {"skill": float(row[0]), "n_answered": int(row[1]),
+                "band_lo": float(row[2]), "band_hi": float(row[3]),
+                "out_of_band": int(row[4])}
+
+    @classmethod
+    def save_quiz_skill(
+        cls, *, collection_name: str, mode: str, skill: float, n_answered: int,
+        band_lo: float, band_hi: float, out_of_band: int,
+    ) -> None:
+        conn = cls._connect()
+        conn.execute(
+            "INSERT INTO quiz_skill "
+            "(collection_name, mode, skill, n_answered, band_lo, band_hi, "
+            " out_of_band, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(collection_name, mode) DO UPDATE SET "
+            "  skill = excluded.skill, n_answered = excluded.n_answered, "
+            "  band_lo = excluded.band_lo, band_hi = excluded.band_hi, "
+            "  out_of_band = excluded.out_of_band, "
+            "  updated_at = excluded.updated_at",
+            (collection_name, mode, float(skill), int(n_answered),
+             float(band_lo), float(band_hi), int(out_of_band), time.time()),
+        )
+        conn.commit()
+
+    @classmethod
+    def recent_quiz_track_ids(
+        cls, collection_name: str, mode: str, *,
+        limit: int = 50, since_ts: float,
+    ) -> set:
+        """Track ids recently used in this mode — the anti-repeat exclusion set."""
+        conn = cls._connect()
+        rows = conn.execute(
+            "SELECT track_id FROM quiz_rounds "
+            "WHERE collection_name = ? AND mode = ? AND created_at >= ? "
+            "  AND track_id IS NOT NULL "
+            "ORDER BY created_at DESC LIMIT ?",
+            (collection_name, mode, float(since_ts), int(limit)),
+        ).fetchall()
+        return {r[0] for r in rows}
 
     # ── AI Indexing jobs (Plan 3 Task 11) ──
 
