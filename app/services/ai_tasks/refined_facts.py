@@ -528,26 +528,48 @@ async def _process_song_scope(
 
 async def run(job, db_client, llm) -> None:
     """Iterate songs in the collection; for each, refine its song facts and
-    (one pass per artist) its artist facts."""
+    (one pass per artist) its artist facts.
+
+    When ``job.new_track_ids`` is set (auto run after an append/upload) only
+    those tracks' song facts — and the participant slugs of exactly those
+    tracks — are processed; the rest were enriched by an earlier run.
+    """
 
     qdrant = db_client.qdrant
     n_done = 0
     n_failed = 0
     n_skipped = 0
-    offset = None
     seen_artist_slugs: set[str] = set()
 
-    while True:
-        points, offset = qdrant.scroll(
+    if job.new_track_ids:
+        # Auto run: a small batch — one batched retrieve instead of a
+        # whole-collection scroll (the scroll loop below is the legacy
+        # manual path).
+        points = qdrant.retrieve(
             collection_name=job.collection_name,
-            limit=64,
-            offset=offset,
+            ids=list(job.new_track_ids),
             with_payload=True,
             with_vectors=False,
         )
-        if not points:
-            break
+        batches = [points] if points else []
+    else:
+        batches = []
+        offset = None
+        while True:
+            points, offset = qdrant.scroll(
+                collection_name=job.collection_name,
+                limit=64,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+            if not points:
+                break
+            batches.append(points)
+            if offset is None:
+                break
 
+    for points in batches:
         for pt in points:
             p = pt.payload or {}
             # Compute slugs from artist+title — see sonic_vibe.run for the
@@ -645,9 +667,6 @@ async def run(job, db_client, llm) -> None:
                 job_id=job.job_id,
                 n_done=n_done, n_failed=n_failed, n_skipped=n_skipped,
             )
-
-        if offset is None:
-            break
 
     if n_done == 0 and n_skipped > 0 and n_failed == 0:
         logger.warning(

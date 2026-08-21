@@ -357,7 +357,10 @@ class LibraryService:
 
             # AI tasks (after facts + upsert); awaited so COMPLETED gates player entry.
             try:
-                await self._run_ai_tasks(collection_name, len(tracks), lang, job=job)
+                await self._run_ai_tasks(
+                    collection_name, len(tracks), lang, job=job,
+                    track_ids=track_ids,
+                )
             except Exception:
                 logger.exception("[enrich] upload AI tasks failed (tracks already indexed)")
 
@@ -847,6 +850,7 @@ class LibraryService:
 
     async def _run_ai_tasks(
         self, collection_name: str, n_total: int, lang: str = "ru", job=None,
+        track_ids: dict | None = None,
     ) -> None:
         """Auto AI-indexing (see ``task_types`` below) for a
         just-indexed batch — only when the LLM is reachable. Awaited by the runner
@@ -858,6 +862,12 @@ class LibraryService:
         on each event + the late-subscriber snapshot via get_progress_summary),
         so the frontend never has to poll /library/ai-index/status and can't
         confuse this run with a previous one's rows.
+
+        ``track_ids``: the ``"Artist — Title" -> point_id`` map of the tracks
+        this run just upserted. When given, every task is restricted to exactly
+        those tracks (``new_track_ids`` on the JobState) — a rescan that added
+        three songs must NOT re-walk the 2,000 it already enriched. ``None``
+        (manual entry points) keeps the whole-collection walk.
         """
         from app.services import ai_indexing_service
         from app.services.llm_client import (
@@ -916,6 +926,12 @@ class LibraryService:
             }
 
         await _publish()
+        # Incremental scope: when this run has an explicit batch (append /
+        # upload), hand the task its point ids so it only enriches the new
+        # tracks. ``track_ids`` is empty/None when the batch upserted nothing
+        # (defensive — the runner returns before reaching this point) or on
+        # the manual entry point (whole-collection walk).
+        new_ids = tuple(track_ids.values()) if track_ids else None
         for task_type in task_types:
             try:
                 job_id = ai_indexing_service.start_job(
@@ -928,6 +944,7 @@ class LibraryService:
                     llm_base_url=base_url,
                     llm_model=model,
                     bio_source=("web" if task_type == "artist_bio" else "facts"),
+                    new_track_ids=new_ids,
                 )
                 waiter = asyncio.create_task(ai_indexing_service.wait_for_job(job_id))
                 while not waiter.done():
@@ -1360,7 +1377,10 @@ class LibraryService:
             # reports COMPLETED once the added tracks are fully enriched.
             if append:
                 try:
-                    await self._run_ai_tasks(collection_name, track_count, lang, job=job)
+                    await self._run_ai_tasks(
+                        collection_name, track_count, lang, job=job,
+                        track_ids=track_ids,
+                    )
                 except Exception:
                     logger.exception(
                         "[enrich] folder-append AI tasks failed (tracks already indexed)",

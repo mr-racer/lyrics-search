@@ -239,6 +239,9 @@ async def run(job, db_client, llm) -> None:
     the slot empty — no vibe persisted. Also skip if a vibe is already cached
     for this (track, collection, lang).
 
+    When ``job.new_track_ids`` is set (auto run after an append/upload) only
+    those tracks are touched — the rest were enriched by an earlier run.
+
     The ``llm`` parameter is accepted for framework compatibility but unused —
     the module-level ask_llm() is called directly so it can be patched in tests.
     """
@@ -249,19 +252,36 @@ async def run(job, db_client, llm) -> None:
     n_done = 0
     n_failed = 0
     n_skipped = 0
-    offset = None
 
-    while True:
-        points, offset = qdrant.scroll(
+    if job.new_track_ids:
+        # Auto run after an append/upload: the batch is small, so one batched
+        # retrieve instead of a whole-collection scroll (the scroll loop below
+        # is the legacy manual path).
+        points = qdrant.retrieve(
             collection_name=job.collection_name,
-            limit=64,
-            offset=offset,
+            ids=list(job.new_track_ids),
             with_payload=True,
             with_vectors=False,
         )
-        if not points:
-            break
+        batches = [points] if points else []
+    else:
+        batches = []
+        offset = None
+        while True:
+            points, offset = qdrant.scroll(
+                collection_name=job.collection_name,
+                limit=64,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+            if not points:
+                break
+            batches.append(points)
+            if offset is None:
+                break
 
+    for points in batches:
         for pt in points:
             tid = str(pt.id)
             p = pt.payload or {}
@@ -369,9 +389,6 @@ async def run(job, db_client, llm) -> None:
             MetadataDB.update_ai_job(
                 job_id=job.job_id, n_done=n_done, n_failed=n_failed,
             )
-
-        if offset is None:
-            break
 
     if n_done == 0 and n_skipped > 0 and n_failed == 0:
         # The whole collection lacks the inputs sonic_vibe needs — surface

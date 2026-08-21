@@ -73,12 +73,40 @@ def _extract_spans(model, chunk: str) -> list[tuple[str, str, float]]:
     return spans
 
 
-async def _scroll_tracks(qdrant, collection_name: str) -> list[dict]:
-    """Full payload scroll (lyrics included) off the event loop."""
+async def _scroll_tracks(
+    qdrant, collection_name: str, only_track_ids: list[str] | None = None,
+) -> list[dict]:
+    """Full payload scroll (lyrics included) off the event loop.
+
+    ``only_track_ids`` (auto run after an append/upload): a batched retrieve
+    of exactly those tracks instead of a whole-collection scroll.
+    """
     fields = ["lyrics", "artist", "artists", "title", "album", "year", "artist_slugs"]
 
     def _scroll_sync():
-        tracks, offset = [], None
+        tracks: list[dict] = []
+        if only_track_ids:
+            points = qdrant.retrieve(
+                collection_name=collection_name,
+                ids=list(only_track_ids),
+                with_payload=fields,
+                with_vectors=False,
+            )
+            for pt in points:
+                p = pt.payload or {}
+                tracks.append({
+                    "track_id": str(pt.id),
+                    "lyrics": p.get("lyrics") or "",
+                    "artist": p.get("artist") or "",
+                    "artists": p.get("artists") or [],
+                    "title": p.get("title") or "",
+                    "album": p.get("album") or "",
+                    "year": p.get("year"),
+                    "artist_slugs": p.get("artist_slugs") or [],
+                })
+            return tracks
+
+        offset = None
         while True:
             points, next_offset = qdrant.scroll(
                 collection_name=collection_name,
@@ -212,9 +240,16 @@ async def _verify_with_cache(*, kind, candidate, quote, track, target=None, cont
 
 
 async def run(job, db_client, llm) -> None:
-    """Process every track of the collection; persist gems + marker rows."""
+    """Process every track of the collection; persist gems + marker rows.
+
+    When ``job.new_track_ids`` is set (auto run after an append/upload) only
+    those tracks are processed; the matching context (artist index, song
+    catalog) is still built from the batch itself — cheap and sufficient for
+    name-drops within the new songs.
+    """
     qdrant = db_client.qdrant
-    tracks = await _scroll_tracks(qdrant, job.collection_name)
+    only_ids = list(job.new_track_ids) if job.new_track_ids else None
+    tracks = await _scroll_tracks(qdrant, job.collection_name, only_track_ids=only_ids)
 
     artists, artist_counts = _collect_library_artists(tracks)
     await _ensure_aliases(artists, job)

@@ -73,6 +73,36 @@ async def run(job, db_client, llm) -> None:
         n_done += 1
         MetadataDB.update_ai_job(job_id=job.job_id, n_done=n_done)
 
+    # Incremental auto-run (append/upload): only the artists of the tracks
+    # this run just indexed. A brand-new artist gets a web-researched bio; an
+    # artist already in the library hits the bio-cache skip in _process and
+    # costs nothing. A payload retrieve is enough — no collection-wide walk.
+    if job.new_track_ids:
+        qdrant = db_client.qdrant
+        seen_new_slugs: set[str] = set()
+        points = qdrant.retrieve(
+            collection_name=job.collection_name,
+            ids=list(job.new_track_ids),
+            with_payload=["artist", "artist_slugs"],
+            with_vectors=False,
+        )
+        for p in points:
+            p = (p.payload or {}) if hasattr(p, "payload") else p
+            raw = (p.get("artist") or "").strip()
+            slugs = p.get("artist_slugs") or (artist_slugs(raw) if raw else [])
+            for artist_slug in slugs:
+                if not artist_slug or artist_slug in seen_new_slugs:
+                    continue
+                seen_new_slugs.add(artist_slug)
+                artist_name = name_for_slug(raw, artist_slug) or raw or artist_slug
+                await _process(artist_slug, artist_name)
+        logger.info(
+            "[artist_bio] done (incremental, %d new artists): %d written, "
+            "%d skipped, %d failed — collection=%s",
+            len(seen_new_slugs), n_done, n_skipped, n_failed, job.collection_name,
+        )
+        return
+
     # SQLite mirror first: one indexed query for {slug, name} instead of
     # scrolling every Qdrant payload. Empty result (pre-backfill) falls back
     # to the payload scan below.

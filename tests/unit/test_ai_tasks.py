@@ -665,3 +665,163 @@ class TestSonicVibe:
             mock_llm.assert_not_called()
 
         assert MetadataDB.get_sonic_vibe("t1", "music", "en") is None
+
+
+# --- Incremental scoping: auto (append/upload) vs manual (full walk) ----------
+#
+# The core bug this fix removes: after "Сканировать библиотеку" added a few new
+# files, the auto AI-enrichment walked the WHOLE collection instead of only the
+# new batch. These tests pin the contract that a job carrying `new_track_ids`
+# touches exactly those tracks (a batched retrieve), never the rest (no scroll).
+
+class TestIncrementalScoping:
+    """Auto-run jobs (new_track_ids set) must enrich ONLY the new tracks."""
+
+    def test_jobstate_defaults_to_full_walk(self):
+        """No new_track_ids → legacy whole-collection behaviour (manual entry)."""
+        job = JobState(
+            job_id="j", task_type="sonic_vibe", collection_name="c",
+            lang="en", n_total=0,
+        )
+        assert job.new_track_ids is None
+
+    async def test_start_job_carries_new_track_ids(self):
+        """start_job threads new_track_ids onto the JobState it runs."""
+        from app.services import ai_indexing_service as svc
+
+        captured = {}
+
+        async def _noop(job, db_client, llm_client):
+            captured["ids"] = job.new_track_ids
+
+        svc.register_task("inc_probe", _noop)
+        try:
+            job_id = svc.start_job(
+                task_type="inc_probe", collection_name="c", lang="en",
+                db_client=MagicMock(), llm_client=MagicMock(), n_total=2,
+                new_track_ids=("p1", "p2"),
+            )
+            await svc._wait_for_job(job_id)
+        finally:
+            svc._registry.pop("inc_probe", None)
+            svc._active.clear()
+            svc._running_tasks.clear()
+
+        assert captured["ids"] == ("p1", "p2")
+
+    def test_sonic_vibe_incremental_uses_retrieve_not_scroll(self):
+        """With new_track_ids the task fetches exactly those ids (retrieve) and
+        never falls through to a whole-collection scroll."""
+        from app.services.song_facts_service import get_song_facts_key
+
+        MetadataDB.add_song_facts_batch(
+            get_song_facts_key("B", "A"), "music",
+            ["Recorded in one night in a hotel room before a flight"], source="test",
+        )
+        job = JobState(
+            job_id="job-inc", task_type="sonic_vibe", collection_name="music",
+            lang="en", n_total=1, new_track_ids=("t1",),
+        )
+        qdrant = MagicMock()
+        # Only the NEW track is available via retrieve; the full scroll would
+        # also expose a stale track that must NOT be re-processed.
+        new_pt = MagicMock()
+        new_pt.id = "t1"
+        new_pt.payload = {
+            "track_id": "t1", "title": "A", "artist": "B",
+            "sonic_tags_json": json.dumps(["dreamy"]),
+        }
+        qdrant.retrieve.return_value = [new_pt]
+        stale_pt = MagicMock()
+        stale_pt.id = "t-old"
+        stale_pt.payload = {"track_id": "t-old", "title": "Old", "artist": "B"}
+        qdrant.scroll.return_value = ([stale_pt], None)
+        db_client = MagicMock()
+        db_client.qdrant = qdrant
+
+        with patch(
+            "app.services.ai_tasks.sonic_vibe.ask_llm", new_callable=AsyncMock,
+            return_value=json.dumps({
+                "best": "M1", "category": "A",
+                "line": "Recorded in one night, hours before a flight.",
+            }),
+        ):
+            asyncio.run(sonic_vibe.run(job, db_client, llm=None))
+
+        qdrant.retrieve.assert_called_once()
+        qdrant.scroll.assert_not_called()
+        assert MetadataDB.get_sonic_vibe("t1", "music", "en") is not None
+        # The stale track from the (never-called) scroll must be untouched.
+        assert MetadataDB.get_sonic_vibe("t-old", "music", "en") is None
+
+    def test_refined_facts_incremental_uses_retrieve_not_scroll(self):
+        """refined_facts with new_track_ids refines only the new tracks' facts."""
+        _seed_facts("calvin-harris", "c", [
+            "Recorded his first hit in a single weekend",
+            "His studio had a treadmill in the middle of the room",
+        ])
+        job = JobState(
+            job_id="job-inc", task_type="refined_facts", collection_name="c",
+            lang="en", n_total=1, new_track_ids=("p1",),
+        )
+        qdrant = MagicMock()
+        new_pt = MagicMock()
+        new_pt.id = "p1"
+        new_pt.payload = {
+            "artist": "Calvin Harris", "title": "How Deep Is Your Love",
+            "artist_slugs": ["calvin-harris"],
+        }
+        qdrant.retrieve.return_value = [new_pt]
+        stale_pt = MagicMock()
+        stale_pt.id = "p-stale"
+        stale_pt.payload = {
+            "artist": "Calvin Harris", "title": "One Kiss",
+            "artist_slugs": ["calvin-harris"],
+        }
+        qdrant.scroll.return_value = ([stale_pt], None)
+        db_client = MagicMock()
+        db_client.qdrant = qdrant
+
+        with patch(
+            "app.services.ai_tasks.refined_facts.ask_llm", new_callable=AsyncMock,
+            return_value=json.dumps({"selected_facts": [
+                {"reasoning": "weird", "short_fact": "A refined, interesting fact."},
+            ]}),
+        ):
+            asyncio.run(refined_facts.run(job, db_client, llm=None))
+
+        qdrant.retrieve.assert_called_once()
+        qdrant.scroll.assert_not_called()
+        assert MetadataDB.get_refined_facts(
+            scope="artist", scope_key="calvin-harris",
+            collection_name="c", lang="en",
+        ) is not None
+
+    def test_artist_bio_incremental_derives_artists_from_retrieved_payloads(self):
+        """artist_bio with new_track_ids builds its artist list from the
+        retrieved payloads (no collection walk) and dedupes by slug."""
+        job = JobState(
+            job_id="job-inc", task_type="artist_bio", collection_name="c",
+            lang="en", n_total=2, new_track_ids=("p1", "p2"),
+        )
+        qdrant = MagicMock()
+        p1 = MagicMock(); p1.id = "p1"
+        p1.payload = {"artist": "Dua Lipa", "artist_slugs": ["dua-lipa"]}
+        p2 = MagicMock(); p2.id = "p2"
+        p2.payload = {"artist": "Dua Lipa", "artist_slugs": ["dua-lipa"]}
+        qdrant.retrieve.return_value = [p1, p2]
+        db_client = MagicMock()
+        db_client.qdrant = qdrant
+
+        with patch(
+            "app.services.ai_tasks.artist_bio.web_research_bio",
+            return_value="From London, indie-pop.",
+        ) as mock_bio:
+            asyncio.run(artist_bio.run(job, db_client, None))
+
+        qdrant.retrieve.assert_called_once()
+        # The SQLite-mirror full walk must NOT be consulted in incremental mode.
+        MetadataDB.get_artist_bio  # (attribute access, not a call, to be explicit)
+        # Two tracks, same artist → exactly ONE web-research call.
+        assert mock_bio.call_count == 1
+        assert MetadataDB.get_artist_bio("dua-lipa", "c", "en") == "From London, indie-pop."
