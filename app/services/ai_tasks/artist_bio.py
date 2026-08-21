@@ -26,7 +26,9 @@ from app.services import ai_indexing_service
 from app.services.artist_split import (
     artist_slugs, display_name_for_slug,
 )
+from app.services import text_quality as tq
 from app.services.bio_v2 import pipeline as bio2
+from app.services.bio_v2.pipeline import parse_json
 from app.services.llm_web_search import web_research_bio
 
 logger = logging.getLogger(__name__)
@@ -40,6 +42,51 @@ def _asker(job):
         return await ask_llm(prompt, temperature=temperature,
                              base_url=job.llm_base_url, model=job.llm_model)
     return ask
+
+
+async def _guard_fallback(job, bio: str, artist_name: str) -> str:
+    """The web agent writes without any of the script control the wiki path has.
+
+    It shows: one run turned the band Lowood into «Низкий уровень (Lowood)» —
+    the NAME translated — and rendered Phoenix's founders in Cyrillic. The agent
+    has its own name rule in the prompt and follows it about half the time,
+    which is exactly why the wiki path stopped relying on prompts alone.
+
+    Only the checks that work without source passages apply here: there are no
+    passages to check invention against. What is left still catches the two
+    failures that reach a reader — the artist's own name rewritten, and an
+    answer in the wrong language.
+    """
+    lang_name = _LANG_NAME.get(job.lang, "Russian")
+    issues = tq.check(bio, source=artist_name, lang=job.lang)
+    # `invented` is meaningless without sources: everything the agent found on
+    # the web is "absent from the source" by construction.
+    issues.pop("invented", None)
+    if not issues:
+        return bio
+
+    if issues.get("translit"):
+        bio, swaps = tq.restore_latin(bio, artist_name)
+        if swaps:
+            logger.info("[artist_bio] fallback names restored: %s",
+                        [(a, b) for a, b, _ in swaps])
+            issues = tq.check(bio, source=artist_name, lang=job.lang)
+            issues.pop("invented", None)
+
+    if not issues:
+        return bio
+    try:
+        fixed = ((parse_json(await _asker(job)(tq.REPAIR_PROMPT.format(
+            text=bio, complaints=tq.complaints(issues, lang_name)), 0.2))
+            or {}).get("text") or "").strip()
+    except Exception:                            # noqa: BLE001
+        return bio
+    if fixed and tq.repair_is_safe(bio, fixed):
+        after = tq.check(fixed, source=artist_name, lang=job.lang)
+        after.pop("invented", None)
+        if len(after) < len(issues):
+            return fixed
+    return bio
 
 
 def _web_rows(query: str) -> list:
@@ -113,6 +160,7 @@ async def run(job, db_client, llm) -> None:
                     seed_bio=seed_bio,
                 )
                 if bio:
+                    bio = await _guard_fallback(job, bio, artist_name)
                     facets = {"source_kind": "web"}
             except Exception as e:                   # noqa: BLE001
                 logger.warning("[artist_bio] web fallback failed for %s: %s",

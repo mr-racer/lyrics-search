@@ -120,6 +120,65 @@ def search(term: str, lang: str = "en", *, limit: int = 6,
     return out
 
 
+# Wikipedia's own vocabulary for telling same-named things apart. Probing these
+# titles finds articles a relevance search does not: "Merk (musician)" was
+# invisible to every search phrasing tried, and a search for "Phoenix band
+# musician" answers with Rain, Summer and Liberty Phoenix — people named
+# Phoenix who are musicians — while the band's article ranks nowhere.
+DISAMBIGUATORS = ("(band)", "(musician)", "(singer)", "(rapper)", "(group)",
+                  "(duo)", "(DJ)", "(producer)")
+DISAMBIGUATORS_RU = ("(группа)", "(певец)", "(певица)", "(музыкант)")
+
+
+def probe_titles(name: str, lang: str = "en", *,
+                 timeout: float = 15.0,
+                 proxies: Optional[dict] = None) -> list:
+    """Articles at the disambiguated titles for ``name``, as search-shaped rows.
+
+    Candidates, not answers: a probe for "Bullet (musician)" finds a Ghanaian
+    artist who is not the Swedish band someone actually has in their library.
+    What comes back joins the pool the relevance gate ranks; it never wins by
+    itself.
+
+    A redirect that lands on a disambiguation page is not an article, and
+    Wikipedia says so in ``pageprops`` — which is the only reliable way to tell,
+    since such a page reads like a normal one.
+    """
+    import httpx
+
+    suffixes = DISAMBIGUATORS_RU + DISAMBIGUATORS if lang == "ru" else DISAMBIGUATORS
+    proxy = (proxies or {}).get("https") or (proxies or {}).get("http")
+    out = []
+    for suffix in suffixes:
+        title = f"{name} {suffix}"
+        try:
+            resp = httpx.get(
+                f"https://{lang}.wikipedia.org/w/api.php",
+                params={"action": "query", "titles": title,
+                        "prop": "extracts|pageprops", "exintro": 1,
+                        "explaintext": 1, "redirects": 1,
+                        "format": "json", "formatversion": "2"},
+                timeout=timeout, proxy=proxy, headers={"User-Agent": _UA})
+            resp.raise_for_status()
+            pages = resp.json().get("query", {}).get("pages", []) or []
+        except Exception as exc:  # noqa: BLE001 — a probe that fails is just a miss
+            logger.debug("[mediawiki] probe %r failed: %s", title, exc)
+            continue
+        page = pages[0] if pages else {}
+        if page.get("missing") or "disambiguation" in (page.get("pageprops") or {}):
+            continue
+        real = page.get("title") or title
+        out.append({
+            "url": f"https://{lang}.wikipedia.org/wiki/{real.replace(' ', '_')}",
+            "title": real,
+            "snippet": " ".join((page.get("extract") or "").split())[:300],
+        })
+        break                       # one disambiguated title per name is enough
+    if out:
+        logger.info("[mediawiki] probe %s %r -> %s", lang, name, out[0]["title"])
+    return out
+
+
 def fetch_html(url: str, *, timeout: float = 30.0,
                proxies: Optional[dict] = None) -> Optional[tuple[str, dict]]:
     """The article's rendered HTML from the API, or None.

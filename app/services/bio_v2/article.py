@@ -117,6 +117,22 @@ def find(artist: str, *, proxies: Optional[dict] = None,
     seen: set = set()
     rejected: list = []
 
+    # Rung zero: the disambiguated title. Relevance search answers "Merk" with a
+    # coin, a Hungarian village and a football referee and never reaches
+    # "Merk (musician)"; the title probe goes straight there. It contributes
+    # candidates like any other rung — the gate still decides.
+    for lang in [want] + (["en"] if want != "en" else []):
+        probed = [c for c in candidates(mediawiki.probe_titles(artist, lang,
+                                                               proxies=proxies), want)
+                  if c["url"] not in seen]
+        seen.update(c["url"] for c in probed)
+        pool += probed
+        if pool:
+            best, rej = gate(artist, sorted(pool, key=lambda c: c["rank"]), list(rejected))
+            if best is not None:
+                return best, rej
+            rejected = rej
+
     for lang in [want] + (["en"] if want != "en" else []):
         for term in (artist, f"{artist} {_SUFFIX.get(lang, '')}".strip()):
             fresh = [c for c in candidates(mediawiki.search(term, lang,
