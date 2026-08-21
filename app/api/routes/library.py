@@ -1265,7 +1265,14 @@ async def scan_folder(
 
     Streams NDJSON: ``{"type": "progress", "seen": N}`` while the walk runs,
     then exactly one terminal frame — ``{"type": "done", "seen": M,
-    "new_count": K}`` or ``{"type": "error", "code": ...}``.
+    "new_count": K, "rejected": {reason: count}}`` or
+    ``{"type": "error", "code": ...}``.
+
+    ``new_count`` is what indexing can actually ingest, not what the directory
+    holds: files over the indexer's duration cap are counted under ``rejected``
+    instead. Promising them was what made a rescan offer the same 93 files
+    every single time — the run dropped them again, silently, and the diff had
+    no memory of it.
 
     Creates NO indexing job and touches NO model. On a settled library the
     answer is almost always "nothing new", and paying tens of seconds of GPU
@@ -1333,6 +1340,7 @@ async def scan_folder(
                     discover_new_files, req.folder_path, known,
                     on_progress=_on_progress,
                     progress_every=_SCAN_PROGRESS_EVERY,
+                    screen_durations=True,
                 )
             except MountLooksEmpty:
                 logger.warning("[scan] %s looks unmounted — refusing to report 0",
@@ -1343,7 +1351,8 @@ async def scan_folder(
                 await queue.put({"type": "error", "code": "scan_failed"})
             else:
                 await queue.put({"type": "done", "seen": result.seen,
-                                 "new_count": len(result.new_files)})
+                                 "new_count": len(result.new_files),
+                                 "rejected": result.rejected})
             await queue.put(None)
 
         walker = asyncio.create_task(_walk())

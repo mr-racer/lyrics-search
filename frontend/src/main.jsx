@@ -11060,7 +11060,7 @@ function AddMusicCard({ isDark, lang, instanceMode, indexingJob }) {
   // the path — nor the rescan control it unlocks.
   const [indexRoot, setIndexRoot] = useState('');
   // Step one of a rescan, before any job exists:
-  // { phase: 'walking', seen } | { phase: 'result', seen, newCount } | { phase: 'error', code }
+  // { phase: 'walking', seen } | { phase: 'result', seen, newCount, rejected } | { phase: 'error', code }
   const [scan, setScan] = useState(null);
 
   useEffect(() => {
@@ -11146,7 +11146,7 @@ function AddMusicCard({ isDark, lang, instanceMode, indexingJob }) {
       await apiStreamNdjson('/library/scan', { folder_path: indexRoot }, (evt) => {
         last = evt;
         if (evt.type === 'progress') setScan({ phase: 'walking', seen: evt.seen });
-        else if (evt.type === 'done') setScan({ phase: 'result', seen: evt.seen, newCount: evt.new_count });
+        else if (evt.type === 'done') setScan({ phase: 'result', seen: evt.seen, newCount: evt.new_count, rejected: evt.rejected || {} });
         else if (evt.type === 'error') setScan({ phase: 'error', code: evt.code });
       });
       // A stream that ended without a terminal frame is a dropped connection,
@@ -11204,6 +11204,10 @@ function AddMusicCard({ isDark, lang, instanceMode, indexingJob }) {
 
     if (scan.phase === 'result') {
       const nothingNew = !scan.newCount;
+      // Files that are new on disk but that the indexer will not take. Saying
+      // so is the whole point: without it the same files are offered as "new"
+      // on every rescan and the run quietly adds nothing.
+      const tooLong = (scan.rejected || {}).too_long || 0;
       return (
         <div style={divider}>
           <div className="mono-label" style={{ color: c.textSubtle, marginBottom: 10 }}>
@@ -11216,6 +11220,12 @@ function AddMusicCard({ isDark, lang, instanceMode, indexingJob }) {
               : (ru ? <>Найдено <b>{nf(scan.newCount)}</b> новых из {nf(scan.seen)}</>
                     : <>Found <b>{nf(scan.newCount)}</b> new out of {nf(scan.seen)}</>)}
           </div>
+          {tooLong > 0 && (
+            <div style={{ fontSize: 12.5, color: c.textSubtle, lineHeight: 1.5, marginTop: 6 }}>
+              {ru ? <>Ещё {nf(tooLong)} пропущено — длиннее 7 минут</>
+                  : <>{nf(tooLong)} more skipped — longer than 7 minutes</>}
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8, marginTop: 13 }}>
             {!nothingNew && (
               <button onClick={indexScanned} className="cta-v3"

@@ -754,6 +754,57 @@ class TestIncrementalScoping:
         # The stale track from the (never-called) scroll must be untouched.
         assert MetadataDB.get_sonic_vibe("t-old", "music", "en") is None
 
+    @pytest.mark.parametrize("task,name", [
+        (sonic_vibe, "sonic_vibe"),
+        (refined_facts, "refined_facts"),
+        (artist_bio, "artist_bio"),
+    ])
+    def test_an_empty_batch_processes_nothing(self, task, name):
+        """``()`` means "this run touched no track" and must NOT be read as
+        "walk everything".
+
+        This was the bug behind the whole-library re-enrichment: a rescan whose
+        candidates were all rejected by the duration/lyrics gates upserted
+        nothing, handed an empty batch down, and every task took the falsy
+        value as "no scope given" — so the cheapest possible run turned into
+        the most expensive one, 5,600 tracks through the LLM.
+        """
+        job = JobState(
+            job_id="job-empty", task_type=name, collection_name="c",
+            lang="en", n_total=0, new_track_ids=(),
+        )
+        qdrant = MagicMock()
+        qdrant.retrieve.return_value = []
+        stale = MagicMock()
+        stale.id = "p-stale"
+        stale.payload = {"artist": "Calvin Harris", "title": "One Kiss",
+                         "artist_slugs": ["calvin-harris"]}
+        qdrant.scroll.return_value = ([stale], None)
+        db_client = MagicMock()
+        db_client.qdrant = qdrant
+
+        asyncio.run(task.run(job, db_client, llm=None))
+
+        qdrant.scroll.assert_not_called()
+        assert job.n_done == 0
+
+    def test_lyric_gems_empty_batch_does_not_scroll(self):
+        from app.services.ai_tasks import lyric_gems
+
+        job = JobState(
+            job_id="job-empty", task_type="lyric_gems", collection_name="c",
+            lang="en", n_total=0, new_track_ids=(),
+        )
+        qdrant = MagicMock()
+        qdrant.retrieve.return_value = []
+        qdrant.scroll.return_value = ([], None)
+        db_client = MagicMock()
+        db_client.qdrant = qdrant
+
+        asyncio.run(lyric_gems.run(job, db_client, llm=None))
+
+        qdrant.scroll.assert_not_called()
+
     def test_refined_facts_incremental_uses_retrieve_not_scroll(self):
         """refined_facts with new_track_ids refines only the new tracks' facts."""
         _seed_facts("calvin-harris", "c", [

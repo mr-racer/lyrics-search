@@ -41,6 +41,7 @@ class _LLM:
     def __init__(self, queries):
         self.queries = queries
         self.calls = 0
+        self.last_raw = ""
 
     async def ask_list(self, messages, **kw):
         self.calls += 1
@@ -91,12 +92,42 @@ class TestRephrasing:
         assert all("Sade" not in c["query"] and "Сейд" not in c["query"]
                    for c in service.calls)
 
-    async def test_a_failed_rephrasing_still_searches(self):
-        """One prompt is worse than four; no answer is worse than one."""
+    async def test_prompts_wrapped_in_objects_are_not_thrown_away(self):
+        """The production failure: a 9b model answers the rephrasing with
+        ``[{"prompt": "This song is a ..."}]`` about a quarter of the time.
+        Those are four good prompts under a key we did not happen to read —
+        dropping them cost the whole search and fell back to one bad query."""
+        service = _Service({"*": [_hit("t1", "A", "Sade")]})
+        agent = _Agent(service, _LLM([{"prompt": p} for p in PROMPTS]))
+        result = await AudioBranch(agent).run("спокойные песни", _plan())
+        assert result.queries == PROMPTS
+        assert len(service.calls) == 4
+
+    async def test_an_unusable_reply_gets_one_repair_round(self):
+        llm = _LLM(None)
+        agent = _Agent(_Service({"*": [_hit("t1", "A", "Sade")]}), llm)
+        await AudioBranch(agent).run("спокойные", _plan())
+        assert llm.calls == 2, "the first unusable answer must be challenged once"
+
+    async def test_a_failed_rephrasing_never_sends_cyrillic_to_clap(self):
+        """CLAP's text tower is English-only, so "This song is a спокойное" is
+        not a weak query — it is noise, and its ten hits are indistinguishable
+        from random. Saying so beats searching."""
         service = _Service({"*": [_hit("t1", "A", "Sade")]})
         agent = _Agent(service, _LLM(None))
         result = await AudioBranch(agent).run("спокойные", _plan())
+        assert service.calls == []
+        assert result.tracks == []
+        assert "clap rephrasing failed" in result.notes
+
+    async def test_a_failed_rephrasing_still_searches_english_words(self):
+        """One prompt is worse than four; for an English description it still
+        beats no answer at all."""
+        service = _Service({"*": [_hit("t1", "A", "Sade")]})
+        agent = _Agent(service, _LLM(None))
+        result = await AudioBranch(agent).run("calm", _plan(style="calm"))
         assert len(service.calls) == 1
+        assert service.calls[0]["query"] == "This song is a calm"
         assert result.tracks
 
     async def test_the_count_is_configurable(self):

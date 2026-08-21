@@ -54,7 +54,18 @@ def extract_json_object(text: str) -> Optional[dict]:
 
 
 def extract_json_array(text: str) -> Optional[list]:
-    """The first JSON array in ``text``, or None. Used by the CLAP rephrasing."""
+    """The first JSON array in ``text``, or None. Used by the CLAP rephrasing.
+
+    Scans for a BALANCED ``[...]`` the same way ``extract_json_object`` scans
+    for a balanced ``{...}``. The previous version took everything between the
+    first ``[`` and the last ``]``, which is correct only when the array is the
+    single bracketed thing in the reply: a reasoning preamble that mentions
+    "Variant 1: [tempo]" or a closing "see rule [7]" made the slice unparseable
+    and the whole answer was lost.
+
+    An array wrapped in an object (``{"prompts": [...]}``) is accepted too —
+    the wrapper is a formatting choice, not a different answer.
+    """
     if not text:
         return None
     stripped = text.strip()
@@ -65,12 +76,48 @@ def extract_json_array(text: str) -> Optional[list]:
             continue
         if isinstance(value, list):
             return value
-    start, end = stripped.find("["), stripped.rfind("]")
-    if 0 <= start < end:
+        if isinstance(value, dict):
+            inner = _first_list_in(value)
+            if inner is not None:
+                return inner
+
+    # Every balanced region, then the BEST of them rather than the first. A
+    # preamble like "Step [1]: acoustic mapping." yields a perfectly valid
+    # ``[1]`` that would otherwise win over the real answer further down.
+    parsed: list[list] = []
+    for candidate in _scan_balanced(stripped, "[", "]"):
         try:
-            value = json.loads(stripped[start:end + 1])
+            value = json.loads(candidate)
         except (ValueError, TypeError):
-            return None
+            continue
+        if isinstance(value, list):
+            parsed.append(value)
+    if parsed:
+        def _rank(items: list) -> tuple:
+            payload = sum(
+                1 for it in items if isinstance(it, (str, dict)) and it
+            )
+            return (payload, len(items))
+        best = max(parsed, key=_rank)
+        if _rank(best)[0] or not any(_rank(p)[0] for p in parsed):
+            return best
+
+    # Last resort: a bare object holding the list, found by the brace scanner.
+    for candidate in _candidates(stripped):
+        try:
+            value = json.loads(candidate)
+        except (ValueError, TypeError):
+            continue
+        if isinstance(value, dict):
+            inner = _first_list_in(value)
+            if inner is not None:
+                return inner
+    return None
+
+
+def _first_list_in(obj: dict) -> Optional[list]:
+    """The first list value of ``obj``, or None. ``{"prompts": [...]}``."""
+    for value in obj.values():
         if isinstance(value, list):
             return value
     return None
@@ -81,8 +128,17 @@ def _candidates(text: str):
     yield stripped
     for match in _FENCE_RE.findall(stripped):
         yield match.strip()
+    yield from _scan_balanced(stripped, "{", "}")
+
+
+def _scan_balanced(text: str, open_ch: str, close_ch: str):
+    """Every balanced ``open_ch``…``close_ch`` region of ``text``, outermost first.
+
+    String-aware: a bracket inside a JSON string literal does not open or close
+    a region, so a prompt containing "[" cannot unbalance the scan.
+    """
     depth, start, in_string, escaped = 0, None, False, False
-    for i, ch in enumerate(stripped):
+    for i, ch in enumerate(text):
         if in_string:
             if escaped:
                 escaped = False
@@ -93,14 +149,16 @@ def _candidates(text: str):
             continue
         if ch == '"':
             in_string = True
-        elif ch == "{":
+        elif ch == open_ch:
             if depth == 0:
                 start = i
             depth += 1
-        elif ch == "}":
+        elif ch == close_ch:
+            if depth == 0:
+                continue          # a stray closer, e.g. prose "see rule 7]"
             depth -= 1
             if depth == 0 and start is not None:
-                yield stripped[start:i + 1]
+                yield text[start:i + 1]
                 start = None
 
 
@@ -214,13 +272,30 @@ class LLMClient:
 
 
 def as_str(value: Any, limit: int = 300) -> str:
-    """A model field coerced to a trimmed string. Lists collapse to their head."""
+    """A model field coerced to a trimmed string. Lists collapse to their head.
+
+    A dict is unwrapped by ANY string it carries, not just ``text``/``value``.
+    Small models name the field after whatever the prompt talked about — the
+    CLAP rephrasing asks for prompts and gets ``[{"prompt": "This song is a
+    slow piano piece..."}]`` about a quarter of the time on a 9b local model.
+    Keying the unwrap to two blessed names threw those answers away whole and
+    the branch then fell back to a one-line query, which is a far worse search
+    than the four prompts the model had actually written. There is nothing here
+    for code to validate — a CLAP prompt is a CLAP prompt — so the rule is to
+    keep what the model produced rather than to discard it over a key name.
+    """
     if value is None:
         return ""
     if isinstance(value, (list, tuple)):
         value = value[0] if value else ""
     if isinstance(value, dict):
-        value = value.get("text") or value.get("value") or ""
+        picked = value.get("text") or value.get("value")
+        if not isinstance(picked, str) or not picked.strip():
+            picked = next(
+                (v for v in value.values() if isinstance(v, str) and v.strip()),
+                "",
+            )
+        value = picked
     return str(value).strip()[:limit]
 
 

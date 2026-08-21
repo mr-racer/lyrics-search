@@ -115,7 +115,7 @@ class TestResult:
         with TestClient(_as(_member(index_root=str(root)))) as c:
             frames = _frames(_scan(c, root))
 
-        assert frames[-1] == {"type": "done", "seen": 3, "new_count": 2}
+        assert frames[-1] == {"type": "done", "seen": 3, "new_count": 2, "rejected": {}}
 
     def test_nothing_new_is_a_result_not_an_error(self, tmp_path, known):
         root = tmp_path / "music"
@@ -125,7 +125,7 @@ class TestResult:
         with TestClient(_as(_member(index_root=str(root)))) as c:
             frames = _frames(_scan(c, root))
 
-        assert frames[-1] == {"type": "done", "seen": 1, "new_count": 0}
+        assert frames[-1] == {"type": "done", "seen": 1, "new_count": 0, "rejected": {}}
 
     def test_the_count_streams_while_the_walk_runs(self, tmp_path, known, monkeypatch):
         monkeypatch.setattr("app.api.routes.library._SCAN_PROGRESS_EVERY", 2)

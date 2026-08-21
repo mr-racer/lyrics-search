@@ -134,3 +134,68 @@ def test_an_empty_root_still_reports_a_zero(tmp_path):
     discover_new_files(str(tmp_path), known_paths=set(), on_progress=seen_at.append)
 
     assert seen_at == [0]
+
+
+class TestDurationScreen:
+    """A file over the indexer's cap is not "new music" — it is a file the run
+    will drop again, and the diff has no memory of having dropped it before."""
+
+    def _patch_mutagen(self, monkeypatch, lengths):
+        import app.services.library_scan_service as mod
+
+        class _Info:
+            def __init__(self, length):
+                self.length = length
+
+        class _Audio:
+            def __init__(self, length):
+                self.info = _Info(length)
+
+        def _open(path):
+            value = lengths[path]
+            if value is None:
+                raise OSError("unreadable header")
+            return _Audio(value)
+
+        import sys
+        import types
+        fake = types.ModuleType("mutagen")
+        fake.File = _open
+        monkeypatch.setitem(sys.modules, "mutagen", fake)
+        return mod
+
+    def test_a_long_file_is_rejected_not_offered(self, monkeypatch):
+        mod = self._patch_mutagen(monkeypatch, {"/a.mp3": 200.0, "/b.mp3": 900.0})
+        keep, rejected = mod.screen_by_duration(["/a.mp3", "/b.mp3"])
+        assert keep == ["/a.mp3"]
+        assert rejected == {"too_long": 1}
+
+    def test_an_unreadable_header_is_kept(self, monkeypatch):
+        """Guessing here would hide real music; the indexer has its own gate."""
+        mod = self._patch_mutagen(monkeypatch, {"/a.mp3": None})
+        keep, rejected = mod.screen_by_duration(["/a.mp3"])
+        assert keep == ["/a.mp3"]
+        assert rejected == {}
+
+    def test_the_screen_is_off_unless_asked_for(self, tmp_path, monkeypatch):
+        """A first index tag-reads every file straight after, so paying for a
+        second header read there buys nothing."""
+        mod = self._patch_mutagen(monkeypatch, {})
+        called = []
+        monkeypatch.setattr(mod, "screen_by_duration",
+                            lambda paths: (called.append(paths), (paths, {}))[1])
+        (tmp_path / "song.mp3").write_bytes(b"x")
+        result = mod.discover_new_files(str(tmp_path), [])
+        assert called == []
+        assert len(result.new_files) == 1
+        assert result.rejected == {}
+
+    def test_the_screen_runs_when_asked_for(self, tmp_path, monkeypatch):
+        mod = self._patch_mutagen(monkeypatch, {})
+        monkeypatch.setattr(mod, "screen_by_duration",
+                            lambda paths: ([], {"too_long": len(paths)}))
+        (tmp_path / "song.mp3").write_bytes(b"x")
+        result = mod.discover_new_files(str(tmp_path), [], screen_durations=True)
+        assert result.new_files == []
+        assert result.rejected == {"too_long": 1}
+        assert result.seen == 1, "seen still counts what is on disk"

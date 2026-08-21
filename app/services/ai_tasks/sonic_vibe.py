@@ -253,7 +253,7 @@ async def run(job, db_client, llm) -> None:
     n_failed = 0
     n_skipped = 0
 
-    if job.new_track_ids:
+    if job.new_track_ids is not None:
         # Auto run after an append/upload: the batch is small, so one batched
         # retrieve instead of a whole-collection scroll (the scroll loop below
         # is the legacy manual path).

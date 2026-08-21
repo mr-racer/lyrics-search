@@ -85,7 +85,7 @@ async def _scroll_tracks(
 
     def _scroll_sync():
         tracks: list[dict] = []
-        if only_track_ids:
+        if only_track_ids is not None:
             points = qdrant.retrieve(
                 collection_name=collection_name,
                 ids=list(only_track_ids),
@@ -248,7 +248,8 @@ async def run(job, db_client, llm) -> None:
     name-drops within the new songs.
     """
     qdrant = db_client.qdrant
-    only_ids = list(job.new_track_ids) if job.new_track_ids else None
+    only_ids = (list(job.new_track_ids)
+                if job.new_track_ids is not None else None)
     tracks = await _scroll_tracks(qdrant, job.collection_name, only_track_ids=only_ids)
 
     artists, artist_counts = _collect_library_artists(tracks)

@@ -133,6 +133,23 @@ def _label_peak_hour(hour: int, lang: str) -> str:
     return "ночи" if lang == "ru" else "late nights"
 
 
+def _rejection_message(seen: int, reasons: dict) -> str:
+    """Why a batch produced no indexed tracks, in the user's language.
+
+    ``reasons`` comes from ``indexing_service.explain_rejections``.
+    """
+    if not reasons:
+        return f"Новых треков нет ({seen} уже в библиотеке)"
+    parts = []
+    if reasons.get("too_long"):
+        parts.append(f"{reasons['too_long']} длиннее 7 минут")
+    if reasons.get("lyrics_too_long"):
+        parts.append(f"{reasons['lyrics_too_long']} со слишком длинным текстом")
+    if reasons.get("no_duration"):
+        parts.append(f"{reasons['no_duration']} без читаемой длительности")
+    return "Пропущено %d из %d: %s" % (sum(reasons.values()), seen, ", ".join(parts))
+
+
 class LibraryService:
     """Index music files, extract metadata + lyrics, and upsert to Qdrant."""
 
@@ -615,7 +632,11 @@ class LibraryService:
                 )
                 known = set()
 
-        result = discover_new_files(folder_path, known)
+        # screen_durations only in append mode, and for the same reason the
+        # path diff itself lives here: it must agree with what /library/scan
+        # just promised the user. A first index tag-reads every file straight
+        # afterwards, so the extra header read would be pure cost there.
+        result = discover_new_files(folder_path, known, screen_durations=append)
         files = [Path(p) for p in result.new_files]
         return files, result.seen, result.seen - len(files)
 
@@ -927,11 +948,25 @@ class LibraryService:
 
         await _publish()
         # Incremental scope: when this run has an explicit batch (append /
-        # upload), hand the task its point ids so it only enriches the new
-        # tracks. ``track_ids`` is empty/None when the batch upserted nothing
-        # (defensive — the runner returns before reaching this point) or on
-        # the manual entry point (whole-collection walk).
-        new_ids = tuple(track_ids.values()) if track_ids else None
+        # upload), hand the task its point ids so it only enriches those
+        # tracks. ``None`` — and ONLY None — means "walk the whole
+        # collection"; that is the manual backfill entry point.
+        #
+        # An EMPTY dict is not the same thing, and conflating the two was a
+        # real bug: a rescan whose batch upserted nothing (every candidate file
+        # dropped by the duration/lyrics gates) handed None to every task and
+        # re-enriched all 5,600 tracks. The most common append outcome ran the
+        # most expensive job in the system.
+        new_ids = tuple(track_ids.values()) if track_ids is not None else None
+        if new_ids is not None and not new_ids:
+            logger.info(
+                "[enrich] auto AI-indexing skipped for %s — this run touched "
+                "no track", collection_name,
+            )
+            for task_type in task_types:
+                ai_stages[task_type]["status"] = "skipped"
+            await _publish()
+            return
         for task_type in task_types:
             try:
                 job_id = ai_indexing_service.start_job(
@@ -1265,6 +1300,7 @@ class LibraryService:
             })
 
             track_ids: dict = {}
+            upserted = 0
             if self.db_client and processed_files:
                 # The shared engine is never mutated, so parallel jobs can't
                 # cross-contaminate; the collection is per-run.
@@ -1285,12 +1321,43 @@ class LibraryService:
                 # resolve_track_ids=True: needed to apply Genius producer/label
                 # (collected by the concurrent FACTS stage) onto track_metadata
                 # once point ids exist post-upsert — see _apply_producer_label.
-                _, track_ids = await pipeline.run(
+                upserted, track_ids = await pipeline.run(
                     processed_files, collection_name,
                     better_lyrics_quality=better_lyrics_quality,
                     progress=_pipeline_cb, resolve_track_ids=True, append=append,
                 )
-                logger.info("[LibraryService] IndexPipeline.run done")
+                logger.info("[LibraryService] IndexPipeline.run done (%d upserted)",
+                            upserted)
+
+                if not upserted:
+                    # The pipeline's own gates (duration cap, lyrics cap)
+                    # rejected the whole batch, so it returned before emitting
+                    # any progress. Three stages were opened as RUNNING just
+                    # above and nothing else will ever close them: the UI shows
+                    # LYRICS/DENSE/AUDIO frozen at 0 while FACTS — which runs as
+                    # its own concurrent task — completes normally. Close them
+                    # here, and say WHY, because the path diff will keep
+                    # offering these same files on every future rescan.
+                    from app.services.indexing_service import explain_rejections
+
+                    reasons = explain_rejections(processed_files)
+                    stage_msg = _rejection_message(len(processed_files), reasons)
+                    logger.info(
+                        "[LibraryService] nothing indexed из %d файлов — %s",
+                        len(processed_files), reasons,
+                    )
+                    for stage in (IndexStage.LYRICS, IndexStage.DENSE, IndexStage.AUDIO):
+                        sp = job.stages[stage]
+                        sp.status = IndexStatus.COMPLETED
+                        sp.completed_at = time.time()
+                        sp.message = stage_msg
+                        await self._notify_progress(job, {
+                            "stage": stage.value,
+                            "stage_status": IndexStatus.COMPLETED.value,
+                            "current": sp.total or 0,
+                            "total": sp.total or 0,
+                            "message": stage_msg,
+                        })
 
                 # ── Sonic Descriptor hook: per-track tags + class for new tracks.
                 # Scrolls the collection once; wrapped so a bug never fails the index.
@@ -1343,7 +1410,7 @@ class LibraryService:
             stage_analysis.message = "Анализ схожих и разных треков..."
 
             try:
-                if self.db_client and processed_files:
+                if self.db_client and processed_files and upserted:
                     await analyze_collection(
                         qdrant_client=self.db_client.qdrant,
                         collection_name=collection_name,

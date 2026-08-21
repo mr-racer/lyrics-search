@@ -41,11 +41,15 @@ class JobState:
     llm_base_url: str | None = None
     llm_model: str | None = None
     bio_source: str = "facts"  # "facts" | "web" — used by artist_bio task
-    # When set, the task must ONLY process these tracks (the batch that was
-    # just indexed/uploaded). None = process the whole collection (the
-    # manual /library/ai-index/{task_type} entry point keeps that behaviour).
-    # Tasks that are inherently per-entity (artist_bio) derive their entity
-    # list from these ids instead of the full collection.
+    # Three states, and the difference between the last two is the whole point:
+    #   None    -> process the WHOLE collection (manual
+    #              /library/ai-index/{task_type}, a deliberate backfill);
+    #   (a, b)  -> process exactly these tracks (the batch just indexed);
+    #   ()      -> process NOTHING — this run touched no track.
+    # An empty tuple used to be falsy-tested together with None, so a rescan
+    # that added nothing re-enriched all 5,600 tracks: the single most common
+    # append outcome triggered the most expensive possible job. Test with
+    # ``is not None``, never for truthiness.
     new_track_ids: tuple[str, ...] | None = None
     n_done: int = 0       # actually processed (LLM called OR served from cache)
     n_failed: int = 0     # LLM call / validation / persistence error

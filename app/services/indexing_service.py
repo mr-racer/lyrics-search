@@ -150,6 +150,33 @@ def _build_payload_for_upsert(song_info: dict, slug: str | None = None) -> dict:
 
 # ─── IndexingService ─────────────────────────────────────────────────────────
 
+MAX_LYRICS_WORDS = 1500  # a text longer than this is a transcript, not a song
+
+
+def explain_rejections(tracks: dict) -> dict:
+    """``{reason: count}`` for the tracks ``prepare`` would silently drop.
+
+    The two gates below are hard and quiet: a track over ``MAX_DURATION`` or
+    with more than ``MAX_LYRICS_WORDS`` of text never reaches Qdrant, and the
+    path diff that offered it has no idea, so the next rescan offers it again.
+    Reporting the reason is what breaks that loop — the user can then shorten
+    the cap, split the file, or accept the skip, instead of pressing "add
+    music" a fourth time.
+    """
+    from app.resources.qdrant_payload import MAX_DURATION
+
+    reasons: dict[str, int] = {}
+    for meta in (tracks or {}).values():
+        duration = meta.get("duration")
+        if not isinstance(duration, (int, float)):
+            reasons["no_duration"] = reasons.get("no_duration", 0) + 1
+        elif duration > MAX_DURATION:
+            reasons["too_long"] = reasons.get("too_long", 0) + 1
+        elif len((meta.get("lyrics") or "").split()) >= MAX_LYRICS_WORDS:
+            reasons["lyrics_too_long"] = reasons.get("lyrics_too_long", 0) + 1
+    return reasons
+
+
 class IndexingService:
     """Owns the Qdrant collection lifecycle for batch indexing.
 
@@ -602,7 +629,7 @@ class IndexingService:
         and dense passes without any (artist, title) key drift.
         """
         prepared = prepare_metadata(data)
-        filtered = [s for s in prepared if len(s["lyrics"].split()) < 1500]
+        filtered = [s for s in prepared if len(s["lyrics"].split()) < MAX_LYRICS_WORDS]
 
         # CLAP paths: explicit folder override OR from per-track metadata.
         if path:

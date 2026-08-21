@@ -541,7 +541,7 @@ async def run(job, db_client, llm) -> None:
     n_skipped = 0
     seen_artist_slugs: set[str] = set()
 
-    if job.new_track_ids:
+    if job.new_track_ids is not None:
         # Auto run: a small batch — one batched retrieve instead of a
         # whole-collection scroll (the scroll loop below is the legacy
         # manual path).

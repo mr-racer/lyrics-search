@@ -77,7 +77,7 @@ async def run(job, db_client, llm) -> None:
     # this run just indexed. A brand-new artist gets a web-researched bio; an
     # artist already in the library hits the bio-cache skip in _process and
     # costs nothing. A payload retrieve is enough — no collection-wide walk.
-    if job.new_track_ids:
+    if job.new_track_ids is not None:
         qdrant = db_client.qdrant
         seen_new_slugs: set[str] = set()
         points = qdrant.retrieve(

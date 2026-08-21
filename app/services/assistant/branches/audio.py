@@ -52,6 +52,11 @@ class AudioBranch:
         self.sink.put("clap_rephrase", queries=queries)
         logger.info("[audio] %r -> %s", style, queries)
 
+        if not queries:
+            return AudioResult(title=_title(message),
+                               comment=_no_prompt(self.cfg.lang),
+                               notes=["clap rephrasing failed"])
+
         # Deeper per query when a filter is on, for the same reason as in the
         # lyrics branch: the artist filter runs here rather than in Qdrant, whose
         # payload filter is an exact match and would drop "Sade feat. …".
@@ -103,19 +108,49 @@ class AudioBranch:
         """
         hint = f"{style} (the listener also named the artist {artist})" if artist \
             else style
-        raw = await self.agent.llm.ask_list([
+        messages = [
             {"role": "system",
              "content": CLAP_REPHRASE_SYSTEM.format(user_query=hint)},
             {"role": "user", "content": hint},
-        ])
-        queries = [q for q in as_str_list(raw, limit=self.cfg.clap_queries,
-                                          item_limit=200) if q]
+        ]
+
+        def _usable(value) -> list:
+            return [q for q in as_str_list(value, limit=self.cfg.clap_queries,
+                                           item_limit=200) if q]
+
+        queries = _usable(await self.agent.llm.ask_list(messages))
         if not queries:
-            # A deterministic fallback rather than a second call: one prompt is
-            # worse than four, and "no answer" is worse than one.
-            logger.info("[audio] rephrasing produced nothing — searching the "
-                        "user's own words")
-            return [f"This song is a {style}"]
+            # One repair round before giving up. ``ask_list`` skips the repair
+            # on the theory that every caller has a cheap deterministic
+            # fallback — which is true here only for a listener who wrote in
+            # English, and these failures are formatting rather than
+            # capability: the model writes four good prompts and names the
+            # field something the coercion did not read.
+            last_raw = getattr(self.agent.llm, "last_raw", "") or ""
+            logger.info("[audio] rephrasing unusable (%r) — one repair round",
+                        last_raw[:160])
+            queries = _usable(await self.agent.llm.ask_list(messages + [
+                {"role": "assistant", "content": last_raw[:2000]},
+                {"role": "user",
+                 "content": "Reply with the JSON array of 4 plain strings and "
+                            "nothing else. No objects, no keys, no prose, no "
+                            "markdown fence."},
+            ]))
+
+        if not queries:
+            # The old fallback pasted the style straight into the template and
+            # searched that. It only works when the style is already English:
+            # CLAP's text tower is trained on English audio captions, so
+            # "This song is a спокойное" is not a weak query, it is noise, and
+            # the ten tracks it returns are indistinguishable from random. An
+            # empty list makes the branch say so instead of pretending.
+            if _is_latin(style):
+                logger.info("[audio] rephrasing failed — falling back to the "
+                            "listener's own words")
+                return [f"This song is a {style}"]
+            logger.warning("[audio] rephrasing failed and %r is not usable as a "
+                           "CLAP prompt — no audio search", style)
+            return []
         return queries[:self.cfg.clap_queries]
 
     def _narrow(self, hits: list, *, artist: Optional[str],
@@ -155,6 +190,27 @@ def _caption(count: int, artist: Optional[str], lang: str) -> str:
         return f"Подобрал {count} трек(ов) по звучанию{who}."
     who = f" by {artist}" if artist else ""
     return f"{count} tracks picked by how they sound{who}."
+
+
+def _is_latin(text: str) -> bool:
+    """True when ``text`` carries at least one Latin letter and no other script.
+
+    The gate for "may this go into a CLAP prompt": the model is English-only,
+    so a Cyrillic (or CJK, or Greek) style word is out-of-distribution noise
+    rather than a weak query. Digits and punctuation are neutral.
+    """
+    letters = [ch for ch in (text or "") if ch.isalpha()]
+    if not letters:
+        return False
+    return all("A" <= ch <= "Z" or "a" <= ch <= "z" for ch in letters)
+
+
+def _no_prompt(lang: str) -> str:
+    return ("Не получилось перевести описание звучания в запрос для поиска по "
+            "звуку — попробуй переформулировать."
+            if (lang or "").lower().startswith("ru") else
+            "Could not turn that description into an audio-search prompt — "
+            "try rephrasing.")
 
 
 def _nothing(lang: str) -> str:
