@@ -53,7 +53,15 @@ def _title_case_slug(text: str) -> str:
     lowercase the rest — matching real Genius URLs like
     ``genius.com/Dr-dre-still-dre-lyrics``.
     """
-    cleaned = re.sub(r"[‐‑‒–—―−]", "-", text)
+    # Genius spells the ampersand out everywhere in a slug, not just in the
+    # artist part: genius.com/Coldplay-death-and-all-his-friends-lyrics. Doing
+    # it here rather than at one call site keeps both halves consistent — a
+    # title like "Death & All His Friends" used to build a URL Genius 404s on,
+    # costing that song its description, annotations and producer credits.
+    # Padded with spaces so "Me&You" splits into words too; .split() below
+    # collapses the runs.
+    cleaned = text.replace("&", " and ")
+    cleaned = re.sub(r"[‐‑‒–—―−]", "-", cleaned)
     cleaned = re.sub("['`,?!''‚‛""„‟′″ʼ«».]", "", cleaned)
     cleaned = re.sub(r"\s*\(.+?\)\s*", " ", cleaned)
     words = cleaned.split()
@@ -64,10 +72,9 @@ def build_genius_url(artist: str, title: str) -> str:
     """Build the Genius lyrics-page URL for a (primary artist, title) pair.
 
     Feat./collab artists are dropped (Genius pages are keyed by primary
-    performer); ``&`` is replaced with ``and`` only in the artist portion.
+    performer); ``&`` becomes ``and`` in both halves (see ``_title_case_slug``).
     """
     artist_primary = primary_artist(normalize_artist_name(artist))
-    artist_primary = artist_primary.replace("&", "and")
     artist_slug = _title_case_slug(artist_primary)
     title_slug = _title_case_slug(normalize_artist_name(title))
     # Genius capitalizes only the very first word of the whole slug.

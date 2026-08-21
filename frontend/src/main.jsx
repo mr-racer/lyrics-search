@@ -10006,6 +10006,11 @@ function useIndexingJob({ onCompleted } = {}) {
   const [stepStatus, setStepStatus] = useState({});
   const [stageProgress, setStageProgress] = useState({});
   const [aiStages, setAiStages] = useState(null);  // guru AI tasks from the SSE stream (null until the AI phase)
+  // Remaining ms per stage, raw. Computed here rather than in each view so the
+  // rate is anchored once per stage — two views computing it independently
+  // would each restart their own average when they mount.
+  const [stageEta, setStageEta] = useState({});
+  const etaStoreRef = useRef({});
   const [error, setError] = useState(null);
   const [trackCount, setTrackCount] = useState(null);
   const [skippedCount, setSkippedCount] = useState(0);   // already-in-library tracks
@@ -10023,6 +10028,7 @@ function useIndexingJob({ onCompleted } = {}) {
     setStepStatus({ lyrics:'idle', facts:'idle', metadata:'idle', dense:'idle', audio:'idle', analysis:'idle' });
     setStageProgress({});
     setAiStages(null);
+    setStageEta({}); etaStoreRef.current = {};
   }, []);
 
   const attach = useCallback((jobId, { resumed = false } = {}) => {
@@ -10030,9 +10036,25 @@ function useIndexingJob({ onCompleted } = {}) {
     closeRef.current?.();
     setJobInfo({ jobId, resumed });
     setStatus('running');
-    if (resumed) { setError(null); setTrackCount(null); setSkippedCount(0); setStepStatus({}); setStageProgress({}); setAiStages(null); }
+    if (resumed) {
+      setError(null); setTrackCount(null); setSkippedCount(0); setStepStatus({});
+      setStageProgress({}); setAiStages(null);
+      setStageEta({}); etaStoreRef.current = {};
+    }
     closeRef.current = openIndexProgressStream(jobId, {
-      onProgress: (p) => { setStepStatus(p.stepStatus); setStageProgress(p.stageProgress); setAiStages(p.aiStages ?? null); },
+      onProgress: (p) => {
+        setStepStatus(p.stepStatus); setStageProgress(p.stageProgress); setAiStages(p.aiStages ?? null);
+        // Shape the two parallel maps into what the estimator wants. Identity
+        // status map: these values are already 'running'/'done'/'pending'.
+        const shaped = {};
+        for (const [k, pr] of Object.entries(p.stageProgress || {})) {
+          shaped[k] = { status: p.stepStatus?.[k], total: pr?.total, current: pr?.current };
+        }
+        setStageEta(prev => ({
+          ...prev,
+          ...computeStageEtaMs(shaped, etaStoreRef.current, {}, Date.now()),
+        }));
+      },
       onComplete: (count, skipped) => {
         setStatus('completed'); setTrackCount(count); setSkippedCount(skipped || 0);
         onCompletedRef.current?.(count, skipped || 0);
@@ -10054,11 +10076,12 @@ function useIndexingJob({ onCompleted } = {}) {
     closeRef.current?.(); closeRef.current = null;
     setJobInfo(null); setStatus('idle'); setError(null); setTrackCount(null); setSkippedCount(0);
     setStepStatus({}); setStageProgress({}); setAiStages(null);
+    setStageEta({}); etaStoreRef.current = {};
   }, []);
 
   useEffect(() => () => { closeRef.current?.(); }, []);
 
-  return { status, jobInfo, stepStatus, stageProgress, aiStages, error, trackCount, skippedCount, begin, attach, completeSync, fail, reset };
+  return { status, jobInfo, stepStatus, stageProgress, stageEta, aiStages, error, trackCount, skippedCount, begin, attach, completeSync, fail, reset };
 }
 
 // Floating indicator for an indexing job running while its origin UI (settings
@@ -10068,7 +10091,7 @@ function useIndexingJob({ onCompleted } = {}) {
 // long-finished stages. Percent mirrors JobTracker.get_progress_summary's
 // stage weights; once every core stage is done the label switches to the AI
 // task counter so the pill doesn't sit at a lying "100%".
-function IndexingStatusDock({ isDark, lang, stepStatus, stageProgress, aiStages }) {
+function IndexingStatusDock({ isDark, lang, stepStatus, stageProgress, stageEta, aiStages }) {
   const c = useColors(isDark);
   const isMobile = useIsMobile();
   const ru = lang === 'ru';
@@ -10136,6 +10159,7 @@ function IndexingStatusDock({ isDark, lang, stepStatus, stageProgress, aiStages 
             return (
               <OBStageBar key={k} c={c} label={ru ? WIZ_STAGE_LABELS[k].ru : WIZ_STAGE_LABELS[k].en}
                 state={st} pct={stagePct} count={count}
+                eta={stageEta?.[k] != null ? fmtEta(stageEta[k], ru) : undefined}
                 indeterminate={st === 'running' && !pr.total} />
             );
           })}
@@ -11264,6 +11288,8 @@ function AddMusicCard({ isDark, lang, instanceMode, indexingJob }) {
           return (
             <OBStageBar key={k} c={c} label={ru ? WIZ_STAGE_LABELS[k].ru : WIZ_STAGE_LABELS[k].en}
               state={st} pct={pct} count={count}
+              eta={indexingJob.stageEta?.[k] != null
+                ? fmtEta(indexingJob.stageEta[k], ru) : undefined}
               indeterminate={st === 'running' && !pr.total} />
           );
         })}
@@ -11620,6 +11646,16 @@ function fmtEta(ms, ru) {
 // bar with no granular progress, so no ETA is computed for it.
 function computeStageEtas(stages, store, statusMap, ru, now) {
   const delta = {};
+  for (const [k, ms] of Object.entries(computeStageEtaMs(stages, store, statusMap, now))) {
+    delta[k] = ms == null ? null : fmtEta(ms, ru);
+  }
+  return delta;
+}
+// The estimator itself, without the formatting: returns { key: msRemaining | null }.
+// Split out so the app-level indexing hook — which has no idea what language the
+// views around it render in — can hold the raw number and let each view format.
+function computeStageEtaMs(stages, store, statusMap, now) {
+  const delta = {};
   for (const [k, v] of Object.entries(stages)) {
     if (k === 'dense') continue;
     const status = statusMap[v.status] || v.status;
@@ -11627,7 +11663,7 @@ function computeStageEtas(stages, store, statusMap, ru, now) {
     if (status === 'running' && total > 0 && current > 0 && current < total) {
       const m = store[k] || (store[k] = { t0: now, c0: current });
       const dc = current - m.c0, dt = now - m.t0;
-      delta[k] = (dc > 0 && dt > 800) ? fmtEta((total - current) * dt / dc, ru) : null;
+      delta[k] = (dc > 0 && dt > 800) ? (total - current) * dt / dc : null;
     } else {
       delete store[k];
       delta[k] = null;
@@ -20933,7 +20969,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
       {indexingJob.status === 'running' && !settingsOpen && (
         <IndexingStatusDock isDark={isDark} lang={lang}
           stepStatus={indexingJob.stepStatus} stageProgress={indexingJob.stageProgress}
-          aiStages={indexingJob.aiStages} />
+          stageEta={indexingJob.stageEta} aiStages={indexingJob.aiStages} />
       )}
 
       {/* «N tracks were added» — bottom right, where the indexing dock the user

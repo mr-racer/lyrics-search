@@ -1287,6 +1287,20 @@ class MetadataDB:
         ).fetchall()
         return [r[0] for r in rows]
 
+    @classmethod
+    def get_song_facts_any(cls, slug: str) -> List[str]:
+        """Like :meth:`get_song_facts` but WITHOUT the per-account visibility
+        gate — reads the shared pool directly. For fetch skip-logic only
+        ("has ANY account already fetched facts for this song?"); UI reads must
+        keep going through the visibility-gated variant."""
+        conn = cls._connect()
+        rows = conn.execute(
+            """SELECT fact FROM song_facts
+               WHERE song_slug = ? AND lang = 'en' ORDER BY id""",
+            (slug,),
+        ).fetchall()
+        return [r[0] for r in rows]
+
     @staticmethod
     def _join_facts_by_slug(rows) -> Dict[str, str]:
         """Group ``(slug, fact)`` rows into ``{slug: facts joined by \\n\\n}``,

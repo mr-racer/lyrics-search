@@ -207,6 +207,18 @@ async def fetch_song_facts(
         return cached, False
 
     key = get_song_facts_key(artist, song)
+
+    # Shared-pool short-circuit, same as artist facts: song facts are keyed by
+    # slug and the same real-world song has the same facts for everyone, so
+    # once ANY account has fetched them the rest only need visibility.
+    try:
+        shared = MetadataDB.get_song_facts_any(key)
+    except Exception:  # noqa: BLE001 — enrichment degrades, never raises
+        shared = []
+    if shared:
+        MetadataDB.mark_visible("song", key, collection_name)
+        return "\n\n".join(shared), False
+
     # Most tracks in a real library have no songfacts page at all, so this is
     # the branch that carried the traffic: without it, every rescan re-asked
     # for every one of them.
