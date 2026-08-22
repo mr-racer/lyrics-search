@@ -128,7 +128,7 @@ def find(artist: str, *, proxies: Optional[dict] = None,
         seen.update(c["url"] for c in probed)
         pool += probed
         if pool:
-            best, rej = gate(artist, sorted(pool, key=lambda c: c["rank"]), list(rejected))
+            best, rej = gate(artist, sorted(pool, key=lambda c: c["rank"]))
             if best is not None:
                 return best, rej
             rejected = rej
