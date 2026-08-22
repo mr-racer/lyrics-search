@@ -14,6 +14,7 @@ The shape of the run, and why each part is there:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -72,7 +73,7 @@ async def write_bio(ask, artist: str, chunks: list, retriever, *,
                     lang_name: str = "Russian",
                     lang_code: str = "ru") -> tuple:
     """(text, notes) — the biography, script-checked. Empty text means none."""
-    order = R.bio_chunks(retriever, artist)
+    order = await asyncio.to_thread(R.bio_chunks, retriever, artist)
     if not order:
         return "", {"why": f"no chunk cleared p>={R.CE_CHUNK_GATE}"}
     ctx = R.passages(chunks, order)
@@ -133,14 +134,15 @@ async def read_facets(ask, artist: str, chunks: list, sents: tuple, *,
     """
     out: dict = {}
     for name, question in FACETS.items():
-        order, _best = R.facet_chunks(artist, question, sents)
+        order, _best = await asyncio.to_thread(R.facet_chunks, artist, question, sents)
         source = "wiki"
         if not order and widen is not None:
             fresh = await widen(question)
             if fresh:
                 chunks.extend(fresh)
-                sents = R.sentence_index(chunks)
-                order, _best = R.facet_chunks(artist, question, sents)
+                sents = await asyncio.to_thread(R.sentence_index, chunks)
+                order, _best = await asyncio.to_thread(
+                    R.facet_chunks, artist, question, sents)
                 source = "web"
         if not order:
             continue
@@ -151,8 +153,9 @@ async def read_facets(ask, artist: str, chunks: list, sents: tuple, *,
             fresh = await widen(question)
             if fresh:
                 chunks.extend(fresh)
-                sents = R.sentence_index(chunks)
-                more, _ = R.facet_chunks(artist, question, sents)
+                sents = await asyncio.to_thread(R.sentence_index, chunks)
+                more, _ = await asyncio.to_thread(
+                    R.facet_chunks, artist, question, sents)
                 if more:
                     source = "web"
                     obj = parse_json(await ask(P.FACET_PROMPTS[name].format(
@@ -205,7 +208,12 @@ async def build(ask, artist: str, *, lang_name: str = "Russian",
     cfg = config or AgentConfig()
     fetcher = fetcher or PageFetcher(cfg)
 
-    found, rejected = art.find(artist, proxies=proxies, web_search=web_search)
+    # Всё, что ниже уходит в поток НЕ ради скорости, а ради отзывчивости: эта
+    # корутина живёт на главном event loop (задача запускается через
+    # asyncio.create_task), и любая синхронная ступень останавливает весь
+    # сервис. `find` — это поход в Википедию и кросс-энкодер, вместе секунды.
+    found, rejected = await asyncio.to_thread(
+        art.find, artist, proxies=proxies, web_search=web_search)
     if found is None:
         return {"error": "no wikipedia article passed the gate",
                 "rejected": rejected}
@@ -215,10 +223,13 @@ async def build(ask, artist: str, *, lang_name: str = "Russian",
     if not page.ok or not page.markdown:
         return {"error": f"fetch failed: {page.error}", "rejected": rejected}
 
-    chunks = R.chunk_page(page, cfg)
+    chunks = await asyncio.to_thread(R.chunk_page, page, cfg)
     if not chunks:
         return {"error": "no chunks", "rejected": rejected}
-    retriever = R.build_index(chunks)
+    # Самая долгая ступень: dense + sparse кодирование кусков статьи. На проде
+    # держала loop по 18 секунд — в логе ровно столько тишины, а следом залп из
+    # накопившихся ответов.
+    retriever = await asyncio.to_thread(R.build_index, chunks)
 
     bio, notes = await write_bio(ask, artist, chunks, retriever,
                                  lang_name=lang_name, lang_code=lang_code)
@@ -228,7 +239,7 @@ async def build(ask, artist: str, *, lang_name: str = "Russian",
         if web_search is None:
             return []
         try:
-            rows = web_search(f"{artist} {question}")
+            rows = await asyncio.to_thread(web_search, f"{artist} {question}")
         except Exception:                        # noqa: BLE001
             return []
         fresh: list = []
@@ -236,10 +247,11 @@ async def build(ask, artist: str, *, lang_name: str = "Russian",
             page2 = await fetcher.fetch(row.get("url") or "", source="web",
                                         title=row.get("title") or "")
             if page2.ok and page2.markdown:
-                fresh += R.chunk_page(page2, cfg)
+                fresh += await asyncio.to_thread(R.chunk_page, page2, cfg)
         if not fresh:
             return []
-        probs = ModelRegistry.ce_probabilities(
+        probs = await asyncio.to_thread(
+            ModelRegistry.ce_probabilities,
             f"{artist} is a musical artist or band: their music, albums and "
             f"career.", [c.text[:1200] for c in fresh])
         if probs is not None:
@@ -248,7 +260,7 @@ async def build(ask, artist: str, *, lang_name: str = "Russian",
         return fresh
 
     facets = await read_facets(ask, artist, chunks,
-                               R.sentence_index(chunks),
+                               await asyncio.to_thread(R.sentence_index, chunks),
                                lang_name=lang_name, widen=widen)
     facets.update({"source_url": found["url"], "source_kind": "wikipedia"})
     return {"bio": bio, "facets": facets, "article": found,

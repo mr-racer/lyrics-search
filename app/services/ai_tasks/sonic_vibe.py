@@ -25,6 +25,7 @@ config from environment variables.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -265,21 +266,30 @@ async def run(job, db_client, llm) -> None:
         )
         batches = [points] if points else []
     else:
-        batches = []
-        offset = None
-        while True:
-            points, offset = qdrant.scroll(
-                collection_name=job.collection_name,
-                limit=64,
-                offset=offset,
-                with_payload=True,
-                with_vectors=False,
-            )
-            if not points:
-                break
-            batches.append(points)
-            if offset is None:
-                break
+        def _scroll_sync() -> list:
+            """Обойти коллекцию, не занимая event loop — см. тот же приём в
+            `lyric_gems`. Синхронный обход из корутины держит весь сервис на
+            паузе, пока не кончится; проекция payload убирает из ответа тексты
+            песен, которых этой задаче не нужно.
+            """
+            out: list = []
+            offset = None
+            while True:
+                points, offset = qdrant.scroll(
+                    collection_name=job.collection_name,
+                    limit=64,
+                    offset=offset,
+                    with_payload=["artist", "title", "sonic_tags_json"],
+                    with_vectors=False,
+                )
+                if not points:
+                    break
+                out.append(points)
+                if offset is None:
+                    break
+            return out
+
+        batches = await asyncio.to_thread(_scroll_sync)
 
     for points in batches:
         for pt in points:

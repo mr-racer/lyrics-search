@@ -22,6 +22,7 @@ and the unit tests patch ``refined_facts.ask_llm``.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import Optional
@@ -216,18 +217,33 @@ async def run(job, db_client, llm) -> None:
         )
         batches = [points] if points else []
     else:
-        batches = []
-        offset = None
-        while True:
-            points, offset = qdrant.scroll(
-                collection_name=job.collection_name, limit=64, offset=offset,
-                with_payload=True, with_vectors=False,
-            )
-            if not points:
-                break
-            batches.append(points)
-            if offset is None:
-                break
+        def _scroll_sync() -> list:
+            """Обойти коллекцию, не занимая event loop.
+
+            Клиент Qdrant синхронный, а `run` живёт корутиной на главном цикле:
+            обход библиотеки — это под сотню round-trip'ов подряд, и всё это
+            время uvicorn не отвечает НИ НА ОДИН запрос. Снаружи выглядит как
+            «сервис завис на обращениях к Qdrant» — так оно и есть.
+
+            Заодно проекция payload: `with_payload=True` тянул на каждый трек
+            весь текст песни, который здесь не нужен ни разу.
+            """
+            out: list = []
+            offset = None
+            while True:
+                points, offset = qdrant.scroll(
+                    collection_name=job.collection_name, limit=64, offset=offset,
+                    with_payload=["artist", "title", "artist_slugs"],
+                    with_vectors=False,
+                )
+                if not points:
+                    break
+                out.append(points)
+                if offset is None:
+                    break
+            return out
+
+        batches = await asyncio.to_thread(_scroll_sync)
 
     for points in batches:
         for pt in points:
