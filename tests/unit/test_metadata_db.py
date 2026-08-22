@@ -253,9 +253,41 @@ class TestArtistBios(_IsolatedDB):
     """artist_bios table + accessors."""
 
     def test_artist_bios_table_exists(self):
+        """The identity columns, and every facet the writer knows how to fill.
+
+        A superset assertion rather than an equality one: the facet list grows,
+        and pinning the exact set turns "we added a column" into a test failure
+        that says nothing about correctness.
+        """
         conn = MetadataDB.get()
-        cols = [r[1] for r in conn.execute("PRAGMA table_info(artist_bios)")]
-        assert set(cols) == {"artist_slug", "collection_name", "lang", "bio_text", "generated_at"}
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(artist_bios)")}
+        assert {"artist_slug", "collection_name", "lang", "bio_text",
+                "generated_at"} <= cols
+        assert set(MetadataDB.BIO_FACET_COLUMNS) <= cols
+
+    def test_bio_facets_round_trip_and_survive_a_text_only_rerun(self):
+        """A re-run that only regenerates prose must not wipe the numbers."""
+        MetadataDB.set_artist_bio(
+            "m83", "col_f", "ru", "био",
+            facets={"formed_year": 1999, "formed_place": "Antibes",
+                    "grammy_nominations": 1, "status": "active",
+                    "source_url": "https://en.wikipedia.org/wiki/M83_(band)",
+                    "source_kind": "wikipedia"})
+        full = MetadataDB.get_artist_bio_full("m83", "col_f", "ru")
+        assert full["formed_year"] == 1999 and full["status"] == "active"
+        assert full["source_kind"] == "wikipedia"
+
+        # the API shape: everything except the text, with nulls dropped
+        facets = {k: v for k, v in full.items()
+                  if k not in ("bio_text", "source_url") and v is not None}
+        assert facets["grammy_nominations"] == 1
+        assert "grammy_wins" not in facets      # unknown stays absent, not zero
+
+        MetadataDB.set_artist_bio("m83", "col_f", "ru", "переписанное био")
+        again = MetadataDB.get_artist_bio_full("m83", "col_f", "ru")
+        assert again["bio_text"] == "переписанное био"
+        assert again["formed_year"] == 1999          # facets untouched
+        assert again["grammy_nominations"] == 1
 
     def test_artist_bios_pk(self):
         """PRIMARY KEY is (artist_slug, collection_name, lang) — same shape as sonic_vibes."""

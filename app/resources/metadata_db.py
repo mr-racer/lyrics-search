@@ -196,6 +196,50 @@ _SCHEMA_SQL: Tuple[str, ...] = (
         generated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (track_id, collection_name, lang)
     )""",
+    # Refined fact ITEMS — one row per fact, replacing the JSON blob below.
+    #
+    # The blob cannot carry the labelled pipeline for three reasons. Labels have
+    # to be queryable, because the drawer, the artist page and the random-facts
+    # strip all filter on them. A fact that moves scope (a song note that turns
+    # out to be about the artist) is written by a different pass than the one
+    # that owns the destination row, and a whole-row rewrite loses the other
+    # pass's work. And a run over 64k facts gets interrupted, so it must resume
+    # per fact rather than per entity.
+    #
+    # UNIQUE (origin_kind, origin_id, lang) is what makes it resumable: a fact
+    # already processed is skipped, and reprocessing replaces exactly one row.
+    """CREATE TABLE IF NOT EXISTS refined_fact_items (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        scope           TEXT NOT NULL,       -- 'song' | 'artist'
+        scope_key       TEXT NOT NULL,       -- song_slug | artist_slug
+        lang            TEXT NOT NULL,
+        origin_kind     TEXT NOT NULL,       -- 'song_facts' | 'artist_facts'
+        origin_id       INTEGER NOT NULL,    -- rowid of the raw fact
+        labels_json     TEXT NOT NULL,       -- ["creation","sound"]
+        text            TEXT,                -- NULL for label 'other'
+        confirmed       INTEGER NOT NULL DEFAULT 1,
+        src             TEXT,                -- 'editorial' | 'annotation'
+        collection_name TEXT,                -- provenance only
+        generated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (origin_kind, origin_id, lang)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_rfi_scope "
+    "ON refined_fact_items (scope, scope_key, lang)",
+    # Cached MusicBrainz verdicts for sampling links. Kept out of the process so
+    # a re-run — or an incremental one after new tracks arrive — costs only the
+    # new links: their limit is a per-IP budget of about one request a second,
+    # so a full pass is ~30-60 minutes and must not be paid twice.
+    """CREATE TABLE IF NOT EXISTS sample_link_verdicts (
+        artist_key   TEXT NOT NULL,
+        title_key    TEXT NOT NULL,
+        verified     INTEGER NOT NULL,
+        score        INTEGER,
+        mb_artist    TEXT,
+        mb_title     TEXT,
+        mbid         TEXT,
+        checked_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (artist_key, title_key)
+    )""",
     # Refined Facts cache (added in Plan 3 Task 15)
     # Key is (scope, scope_key, lang) — collection-INDEPENDENT. scope_key is a
     # stable slug (song_slug from artist+title, or artist_slug), so the same
@@ -221,6 +265,27 @@ _SCHEMA_SQL: Tuple[str, ...] = (
         generated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (artist_slug, collection_name, lang)
     )""",
+    # The source as DATA, not as a tail glued onto the prose. Today's bios carry
+    # "Источник: [Wikipedia](…)" about half the time and nothing the rest.
+    "ALTER TABLE artist_bios ADD COLUMN source_url TEXT",
+    "ALTER TABLE artist_bios ADD COLUMN source_kind TEXT",
+    # Facets, as typed columns rather than a JSON blob: the artist page filters
+    # and orders on them, and a chip row cannot be built by parsing prose.
+    # `*_source` records whether a value came from the article or from a web
+    # fallback, because a web-sourced number is a softer claim — an unguarded
+    # fallback once returned four Grammys for an artist who has none.
+    "ALTER TABLE artist_bios ADD COLUMN grammy_wins INTEGER",
+    "ALTER TABLE artist_bios ADD COLUMN grammy_nominations INTEGER",
+    "ALTER TABLE artist_bios ADD COLUMN grammy_source TEXT",
+    "ALTER TABLE artist_bios ADD COLUMN formed_year INTEGER",
+    "ALTER TABLE artist_bios ADD COLUMN formed_place TEXT",
+    "ALTER TABLE artist_bios ADD COLUMN formed_source TEXT",
+    "ALTER TABLE artist_bios ADD COLUMN name_origin TEXT",
+    "ALTER TABLE artist_bios ADD COLUMN name_origin_source TEXT",
+    "ALTER TABLE artist_bios ADD COLUMN active_from INTEGER",
+    "ALTER TABLE artist_bios ADD COLUMN active_to INTEGER",
+    "ALTER TABLE artist_bios ADD COLUMN status TEXT",
+    "ALTER TABLE artist_bios ADD COLUMN status_source TEXT",
     # Custom Playlists (Plan 19)
     """CREATE TABLE IF NOT EXISTS playlists (
         id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1532,6 +1597,50 @@ class MetadataDB:
         ).fetchall()
         return [{"fact": r[0], "category": r[1]} for r in rows]
 
+    @classmethod
+    def get_song_facts_for_refine(
+        cls, slug: str, collection_name: str,
+    ) -> List[Dict[str, object]]:
+        """Raw song facts with their row ids — the refine pipeline's input.
+
+        The id is the resume key: results are stored per raw fact, so a run
+        interrupted anywhere restarts from where it stopped instead of
+        reprocessing the corpus. ``get_song_facts_with_meta`` cannot be reused
+        for that because it drops the id.
+        """
+        conn = cls._connect()
+        rows = conn.execute(
+            """SELECT sf.id, sf.fact, sf.category, sf.source FROM song_facts sf
+               WHERE sf.song_slug = ? AND sf.lang = 'en' AND EXISTS (
+                   SELECT 1 FROM fact_visibility fv
+                   WHERE fv.kind = 'song' AND fv.slug = sf.song_slug
+                     AND fv.collection_name = ?
+               )
+               ORDER BY sf.id""",
+            (slug, collection_name),
+        ).fetchall()
+        return [{"id": r[0], "fact": r[1], "category": r[2], "source": r[3]}
+                for r in rows]
+
+    @classmethod
+    def get_artist_facts_for_refine(
+        cls, slug: str, collection_name: str,
+    ) -> List[Dict[str, object]]:
+        """Raw artist facts with their row ids. See get_song_facts_for_refine."""
+        conn = cls._connect()
+        rows = conn.execute(
+            """SELECT af.id, af.fact, af.category, af.source FROM artist_facts af
+               WHERE af.artist_slug = ? AND af.lang = 'en' AND EXISTS (
+                   SELECT 1 FROM fact_visibility fv
+                   WHERE fv.kind = 'artist' AND fv.slug = af.artist_slug
+                     AND fv.collection_name = ?
+               )
+               ORDER BY af.id""",
+            (slug, collection_name),
+        ).fetchall()
+        return [{"id": r[0], "fact": r[1], "category": r[2], "source": r[3]}
+                for r in rows]
+
     # ── Raw facts, keyed by row id (the vector index over facts) ─────────────
     # These three deliberately do NOT filter by fact_visibility: the vector
     # index is one shared collection over the shared fact pool, so it is built
@@ -2116,6 +2225,60 @@ class MetadataDB:
         seen: set = set()   # (type, context) — one fact per entity
 
         langs = [lang] + (["en"] if lang != "en" else [])
+
+        # The labelled table first. It answers the strip's question directly —
+        # `other` is excluded in SQL rather than by parsing a blob — and it lets
+        # an annotation-sourced fact through when its LABEL says it is worth
+        # showing, which the blob path could only judge by where it came from.
+        for lng in langs:
+            if len(out) >= limit:
+                break
+            hidden = " AND ".join(
+                "rfi.labels_json NOT LIKE ?" for _ in cls.HIDDEN_LABELS)
+            hide_args = [f'%"{lbl}"%' for lbl in cls.HIDDEN_LABELS]
+            rows = conn.execute(
+                f"""
+                SELECT text, confirmed, context, type, artist, artist_slug, title FROM (
+                    SELECT rfi.text, rfi.confirmed,
+                           a.name AS context, 'artist' AS type, a.name AS artist,
+                           a.slug AS artist_slug, NULL AS title
+                    FROM refined_fact_items rfi
+                    JOIN artists a ON a.slug = rfi.scope_key
+                    JOIN fact_visibility fv ON fv.kind = 'artist' AND fv.slug = a.slug
+                    WHERE rfi.scope = 'artist' AND rfi.lang = ?
+                      AND fv.collection_name = ? AND rfi.text IS NOT NULL
+                      AND {hidden}
+
+                    UNION ALL
+
+                    SELECT rfi.text, rfi.confirmed,
+                           a.name || ' — ' || s.title AS context, 'song' AS type,
+                           a.name AS artist, a.slug AS artist_slug, s.title AS title
+                    FROM refined_fact_items rfi
+                    JOIN songs s ON s.slug = rfi.scope_key
+                    JOIN artists a ON a.slug = s.artist_slug
+                    JOIN fact_visibility fv ON fv.kind = 'song' AND fv.slug = s.slug
+                    WHERE rfi.scope = 'song' AND rfi.lang = ?
+                      AND fv.collection_name = ? AND rfi.text IS NOT NULL
+                      AND {hidden}
+                )
+                ORDER BY RANDOM()
+                LIMIT ?
+                """,
+                (lng, collection_name, *hide_args,
+                 lng, collection_name, *hide_args, limit * 4),
+            ).fetchall()
+            for text, confirmed, context, ftype, artist, artist_slug, title in rows:
+                if len(out) >= limit:
+                    break
+                key = (ftype, context)
+                if key in seen or not text:
+                    continue
+                out.append({"fact": text, "confirmed": bool(confirmed),
+                            "context": context, "type": ftype, "artist": artist,
+                            "artist_slug": artist_slug, "title": title})
+                seen.add(key)
+
         for lng in langs:
             if len(out) >= limit:
                 break
@@ -3696,17 +3859,45 @@ class MetadataDB:
 
     # ── Refined Facts cache (Plan 3 Task 15) ──
 
+    # Labels whose facts are kept for statistics and never shown.
+    HIDDEN_LABELS = ("other",)
+
+    @classmethod
+    def _items_rows(cls, scope: str, scope_key: str, lang: str) -> Optional[list]:
+        """Rows from refined_fact_items, or None when this entity has none.
+
+        None means "the v2 pipeline has not seen this entity", which is what
+        lets every reader fall back to the legacy blob while the corpus is
+        being re-processed. An entity the pipeline HAS seen but found nothing
+        showable in returns an empty list, and that is a real answer.
+        """
+        conn = cls._connect()
+        rows = conn.execute(
+            "SELECT text, confirmed, labels_json, src FROM refined_fact_items "
+            "WHERE scope = ? AND scope_key = ? AND lang = ?",
+            (scope, scope_key, lang),
+        ).fetchall()
+        return rows if rows else None
+
     @classmethod
     def get_refined_facts(
         cls, *, scope: str, scope_key: str, collection_name: str, lang: str,
     ) -> Optional[list[str]]:
         """Return refined facts as a plain text list, or None if no refined row exists.
 
-        Note: an EXPLICIT empty list (set_refined_facts(refined=[])) is a valid
-        signal — "AI indexed, judged nothing interesting". The caller should
-        respect that by returning [] instead of falling back to originals.
+        Note: an EXPLICIT empty list is a valid signal — "AI indexed, judged
+        nothing interesting". The caller should respect that by returning []
+        instead of falling back to originals.
+
+        Reads the per-item table first and the legacy blob second, so a library
+        that has not been re-processed yet keeps showing what it has.
         """
         import json as _json
+        rows = cls._items_rows(scope, scope_key, lang)
+        if rows is not None:
+            return [r[0] for r in rows
+                    if r[0] and not (set(_json.loads(r[2] or "[]"))
+                                     & set(cls.HIDDEN_LABELS))]
         conn = cls._connect()
         # collection_name is accepted for signature stability but intentionally
         # ignored: refined facts are keyed by (scope, scope_key, lang) so a
@@ -3730,11 +3921,22 @@ class MetadataDB:
     ) -> Optional[list[dict]]:
         """Like :meth:`get_refined_facts` but keeps per-item metadata.
 
-        Returns ``[{"text": str, "confirmed": bool}, ...]`` (``confirmed``
-        defaults to True for legacy ``{"text"}``-only rows), or None when no
-        refined row exists. The explicit-[] semantics match get_refined_facts.
+        Returns ``[{"text", "confirmed", "labels"}, ...]`` (``confirmed``
+        defaults to True and ``labels`` to [] for legacy blob rows), or None
+        when no refined row exists. The explicit-[] semantics match
+        get_refined_facts.
         """
         import json as _json
+        rows = cls._items_rows(scope, scope_key, lang)
+        if rows is not None:
+            out = []
+            for text, confirmed, labels_json, _src in rows:
+                labels = _json.loads(labels_json or "[]")
+                if not text or set(labels) & set(cls.HIDDEN_LABELS):
+                    continue
+                out.append({"text": text, "confirmed": bool(confirmed),
+                            "labels": labels})
+            return out
         conn = cls._connect()
         row = conn.execute(
             "SELECT refined_json FROM refined_facts "
@@ -3749,11 +3951,117 @@ class MetadataDB:
                 {
                     "text": item.get("text", ""),
                     "confirmed": bool(item.get("confirmed", True)),
+                    "labels": [],
                 }
                 for item in arr if isinstance(item, dict)
             ]
         except Exception:
             return []
+
+    # ── per-item writers, used by the v2 refine pipeline ──────────────────
+
+    @classmethod
+    def set_refined_fact_item(
+        cls, *, scope: str, scope_key: str, lang: str, origin_kind: str,
+        origin_id: int, labels: list, text: Optional[str],
+        confirmed: bool = True, src: Optional[str] = None,
+        collection_name: Optional[str] = None,
+    ) -> None:
+        """Upsert ONE processed fact. Idempotent per (origin fact, language).
+
+        Called for every classified fact, including the ones that land in
+        `other` and are never shown: knowing what was dropped is the only way
+        to tell "nothing interesting here" from "never processed", and it is
+        what makes a re-run skip work instead of redoing it.
+        """
+        import json as _json
+        conn = cls._connect()
+        conn.execute(
+            "INSERT INTO refined_fact_items (scope, scope_key, lang, origin_kind,"
+            " origin_id, labels_json, text, confirmed, src, collection_name) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(origin_kind, origin_id, lang) DO UPDATE SET "
+            "scope = excluded.scope, scope_key = excluded.scope_key, "
+            "labels_json = excluded.labels_json, text = excluded.text, "
+            "confirmed = excluded.confirmed, src = excluded.src, "
+            "collection_name = excluded.collection_name, "
+            "generated_at = CURRENT_TIMESTAMP",
+            (scope, scope_key, lang, origin_kind, origin_id,
+             _json.dumps(labels, ensure_ascii=False), text,
+             1 if confirmed else 0, src, collection_name),
+        )
+        conn.commit()
+
+    @classmethod
+    def processed_origin_ids(cls, origin_kind: str, lang: str,
+                             origin_ids: list) -> set:
+        """Which of these raw facts already have a result in this language.
+
+        The resume check. A 64k-fact run is interrupted as a matter of course,
+        and without this every restart pays for the whole corpus again.
+        """
+        if not origin_ids:
+            return set()
+        conn = cls._connect()
+        out: set = set()
+        for i in range(0, len(origin_ids), 500):     # SQLite variable limit
+            chunk = origin_ids[i:i + 500]
+            marks = ",".join("?" * len(chunk))
+            rows = conn.execute(
+                f"SELECT origin_id FROM refined_fact_items "
+                f"WHERE origin_kind = ? AND lang = ? AND origin_id IN ({marks})",
+                (origin_kind, lang, *chunk),
+            ).fetchall()
+            out.update(r[0] for r in rows)
+        return out
+
+    @classmethod
+    def get_library_song_index(cls, collection_name: str) -> list:
+        """(artist, title, slug) for every song visible to this collection.
+
+        Feeds the sampling-link resolver: a link that matches a track the user
+        owns needs no external verification at all.
+        """
+        conn = cls._connect()
+        return conn.execute(
+            """SELECT a.name, s.title, s.slug FROM songs s
+               JOIN artists a ON a.slug = s.artist_slug
+               JOIN fact_visibility fv ON fv.kind = 'song' AND fv.slug = s.slug
+               WHERE fv.collection_name = ?""",
+            (collection_name,),
+        ).fetchall()
+
+    @classmethod
+    def get_sample_link_verdict(cls, artist_key: str, title_key: str) -> Optional[dict]:
+        conn = cls._connect()
+        row = conn.execute(
+            "SELECT verified, score, mb_artist, mb_title, mbid "
+            "FROM sample_link_verdicts WHERE artist_key = ? AND title_key = ?",
+            (artist_key, title_key),
+        ).fetchone()
+        if not row:
+            return None
+        return {"verified": bool(row[0]), "score": row[1], "mb_artist": row[2],
+                "mb_title": row[3], "mbid": row[4]}
+
+    @classmethod
+    def set_sample_link_verdict(cls, artist_key: str, title_key: str, *,
+                                verified: bool, score: Optional[int] = None,
+                                mb_artist: Optional[str] = None,
+                                mb_title: Optional[str] = None,
+                                mbid: Optional[str] = None) -> None:
+        conn = cls._connect()
+        conn.execute(
+            "INSERT INTO sample_link_verdicts (artist_key, title_key, verified,"
+            " score, mb_artist, mb_title, mbid) VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(artist_key, title_key) DO UPDATE SET "
+            "verified = excluded.verified, score = excluded.score, "
+            "mb_artist = excluded.mb_artist, mb_title = excluded.mb_title, "
+            "mbid = excluded.mbid, checked_at = CURRENT_TIMESTAMP",
+            (artist_key, title_key, 1 if verified else 0, score, mb_artist,
+             mb_title, mbid),
+        )
+        conn.commit()
 
     @classmethod
     def set_refined_facts(
@@ -3841,6 +4149,34 @@ class MetadataDB:
             (collection_name,),
         )
         total += cur.rowcount
+
+        # The same three targets against the per-item table. Missing this is
+        # what would make "reset the cache" look like it did nothing: readers
+        # prefer refined_fact_items, so leaving those rows behind keeps the old
+        # answers alive no matter how much of the blob table is cleared.
+        cur = conn.execute(
+            """DELETE FROM refined_fact_items
+               WHERE scope = 'artist' AND scope_key IN (
+                   SELECT DISTINCT artist_slug FROM track_artist_slugs
+                   WHERE collection_name = ?
+               )""",
+            (collection_name,),
+        )
+        total += cur.rowcount
+        for i in range(0, len(song_keys or []), 500):
+            batch = song_keys[i: i + 500]
+            ph = ",".join("?" * len(batch))
+            cur = conn.execute(
+                f"DELETE FROM refined_fact_items WHERE scope = 'song' "
+                f"AND scope_key IN ({ph})",
+                batch,
+            )
+            total += cur.rowcount
+        cur = conn.execute(
+            "DELETE FROM refined_fact_items WHERE collection_name = ?",
+            (collection_name,),
+        )
+        total += cur.rowcount
         conn.commit()
         return int(total)
 
@@ -3869,10 +4205,27 @@ class MetadataDB:
         ).fetchone()
         return row[0] if row else None
 
+    # Facet columns the bio pipeline fills. Listed once so the writer and the
+    # reader cannot drift apart.
+    BIO_FACET_COLUMNS = (
+        "source_url", "source_kind",
+        "grammy_wins", "grammy_nominations", "grammy_source",
+        "formed_year", "formed_place", "formed_source",
+        "name_origin", "name_origin_source",
+        "active_from", "active_to", "status", "status_source",
+    )
+
     @classmethod
     def set_artist_bio(
         cls, artist_slug: str, collection_name: str, lang: str, bio_text: str,
+        facets: Optional[dict] = None,
     ) -> None:
+        """Store the bio and, optionally, the facts shown beside it.
+
+        ``facets`` is a subset of :attr:`BIO_FACET_COLUMNS`; anything absent is
+        left as it was, so a re-run that only regenerates prose does not wipe
+        numbers a previous pass established.
+        """
         conn = cls._connect()
         conn.execute(
             "INSERT INTO artist_bios (artist_slug, collection_name, lang, bio_text) "
@@ -3881,7 +4234,38 @@ class MetadataDB:
             "bio_text = excluded.bio_text, generated_at = CURRENT_TIMESTAMP",
             (artist_slug, collection_name, lang, bio_text),
         )
+        cols = [c for c in (facets or {}) if c in cls.BIO_FACET_COLUMNS]
+        if cols:
+            assignments = ", ".join(f"{c} = ?" for c in cols)
+            conn.execute(
+                f"UPDATE artist_bios SET {assignments} WHERE artist_slug = ? "
+                "AND collection_name = ? AND lang = ?",
+                (*[facets[c] for c in cols], artist_slug, collection_name, lang),
+            )
         conn.commit()
+
+    @classmethod
+    def get_artist_bio_full(
+        cls, artist_slug: str, collection_name: str, lang: str,
+    ) -> Optional[dict]:
+        """The bio text plus its facets, or None."""
+        conn = cls._connect()
+        cols = ", ".join(cls.BIO_FACET_COLUMNS)
+        try:
+            row = conn.execute(
+                f"SELECT bio_text, {cols} FROM artist_bios "
+                "WHERE artist_slug = ? AND collection_name = ? AND lang = ?",
+                (artist_slug, collection_name, lang),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            # A database from before the facet columns existed.
+            text = cls.get_artist_bio(artist_slug, collection_name, lang)
+            return {"bio_text": text} if text else None
+        if not row:
+            return None
+        out = {"bio_text": row[0]}
+        out.update(dict(zip(cls.BIO_FACET_COLUMNS, row[1:])))
+        return out
 
     @classmethod
     def delete_artist_bios(cls, collection_name: str) -> int:

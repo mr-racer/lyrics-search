@@ -256,14 +256,19 @@ def build_artist_aggregate(db, collection: str, canonical_slug: str, lang: str) 
     # is critical — an explicit [] from refined (AI ran, kept nothing) must
     # short-circuit instead of falling back. Keyed by the same slug the
     # refined_facts task writes under (_slugify_artist of the artist name).
-    refined_facts = MetadataDB.get_refined_facts(
+    refined_meta = MetadataDB.get_refined_facts_meta(
         scope="artist", scope_key=canonical_slug, collection_name=collection, lang=lang,
     )
-    facts = (
-        refined_facts if refined_facts is not None
-        else MetadataDB.get_artist_facts(canonical_slug, collection)
-    )
-    bio = MetadataDB.get_artist_bio(canonical_slug, collection, lang)
+    if refined_meta is not None:
+        facts = [item["text"] for item in refined_meta]
+        facts_meta = refined_meta
+    else:
+        facts = MetadataDB.get_artist_facts(canonical_slug, collection)
+        facts_meta = []
+    bio_row = MetadataDB.get_artist_bio_full(canonical_slug, collection, lang) or {}
+    bio = bio_row.get("bio_text")
+    bio_facets = {k: v for k, v in bio_row.items()
+                  if k not in ("bio_text", "source_url") and v is not None}
     primary_genre = next((t.genre for t in artist_tracks if t.genre), None)
 
     audiodb = MetadataDB.get_artist_audiodb(canonical_slug, collection) or {}
@@ -276,7 +281,10 @@ def build_artist_aggregate(db, collection: str, canonical_slug: str, lang: str) 
         album_count=len(albums),
         decade_range=_decade_range([t.year for t in artist_tracks if t.year]),
         bio=bio,
+        bio_facets=bio_facets,
+        bio_source_url=bio_row.get("source_url"),
         facts=facts,
+        facts_meta=facts_meta,
         albums=albums,
         mood=audiodb.get("mood"),
         country_code=audiodb.get("country_code"),
