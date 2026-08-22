@@ -1289,10 +1289,19 @@ const FACT_LABEL_ORDER = [
   'video', 'placement', 'sound', 'creation', 'personal', 'band_history',
 ];
 
-function factLabel(labels, lang) {
+// The class a fact is filed under: the most specific of its labels, or null.
+// Elements carry it as `data-fc="<class>"` — the colour itself lives in CSS
+// (musix-ui/styles.css, the fact-class palette block), never in JS.
+function factClassKey(labels) {
   if (!Array.isArray(labels) || !labels.length) return null;
-  const key = FACT_LABEL_ORDER.find(k => labels.includes(k));
-  return key ? (FACT_LABELS[key][lang === 'ru' ? 'ru' : 'en']) : null;
+  return FACT_LABEL_ORDER.find(k => labels.includes(k)) || null;
+}
+function factClassName(key, lang) {
+  const m = key && FACT_LABELS[key];
+  return m ? m[lang === 'ru' ? 'ru' : 'en'] : null;
+}
+function factLabel(labels, lang) {
+  return factClassName(factClassKey(labels), lang);
 }
 
 
@@ -1321,6 +1330,8 @@ function FactsRail({ trackId, isDark, lang, accent, variant = "landing" }) {
   const [scope, setScope] = useState('song');
   const [idx, setIdx] = useState(0);
   const [paused, setPaused] = useState(false);
+  // Player only: a fact class the listener pinned in the class line (null = all).
+  const [classFilter, setClassFilter] = useState(null);
 
   const intervalMs = isPlayer ? 12000 : 6500;
   const factFontSize = isPlayer ? 14 : 15;
@@ -1405,12 +1416,32 @@ function FactsRail({ trackId, isDark, lang, accent, variant = "landing" }) {
     (scope === 'artist' && !haveArtist && haveSong)   ? 'song'   :
     scope;
 
+  // Player: the classes present in the current scope — the song's facts, or ALL
+  // of the artist's facts (not the ≤5 sample, so a pinned class can draw from
+  // the whole pool). The class line earns its row only when there is a choice.
+  const scopePool = effectiveScope === 'song' ? songFacts : artistFactsAll;
+  const classCounts = {};
+  if (isPlayer) scopePool.forEach(f => { const k = factClassKey(f.labels); if (k) classCounts[k] = (classCounts[k] || 0) + 1; });
+  const classKeys = Object.keys(classCounts).sort((a, b) =>
+    classCounts[b] - classCounts[a] || FACT_LABEL_ORDER.indexOf(a) - FACT_LABEL_ORDER.indexOf(b));
+  const showClassLine = isPlayer && classKeys.length >= 2;
+  const activeFilter = (showClassLine && classFilter && classCounts[classFilter]) ? classFilter : null;
+  // Artist scope under a pinned class: a fresh ≤5 sample from that class,
+  // memoised on the pool so the pick holds for the life of the track.
+  const artistClassSample = useMemo(
+    () => activeFilter
+      ? sampleN(artistFactsAll.filter(f => factClassKey(f.labels) === activeFilter), ARTIST_SAMPLE_SIZE)
+      : null,
+    [artistFactsAll, activeFilter],
+  );
+
   // Items used for rotation/render. Player: single-scope; landing: combined.
   let items;
   if (isPlayer) {
-    items = effectiveScope === 'song'
-      ? songFacts.map(f => ({ text: f.text, unconfirmed: f.unconfirmed, labels: f.labels, type: 'song' }))
-      : artistFactsSampled.map(f => ({ text: f.text, unconfirmed: f.unconfirmed, labels: f.labels, type: 'artist' }));
+    const pool = effectiveScope === 'song'
+      ? (activeFilter ? songFacts.filter(f => factClassKey(f.labels) === activeFilter) : songFacts)
+      : (activeFilter ? (artistClassSample || []) : artistFactsSampled);
+    items = pool.map(f => ({ text: f.text, unconfirmed: f.unconfirmed, labels: f.labels, type: effectiveScope }));
   } else if (fallbackItems.length) {
     items = fallbackItems;
   } else {
@@ -1420,8 +1451,16 @@ function FactsRail({ trackId, isDark, lang, accent, variant = "landing" }) {
     ];
   }
 
-  // Reset idx whenever the source list changes (scope flip or new track)
-  useEffect(() => { setIdx(0); }, [effectiveScope, trackId]);
+  // The fact on screen and its class — the class line highlights it.
+  const curItem = items[idx] || items[0] || null;
+  const curKey = curItem ? factClassKey(curItem.labels) : null;
+
+  // Reset idx whenever the source list changes (scope flip, new track, class pin)
+  useEffect(() => { setIdx(0); }, [effectiveScope, trackId, activeFilter]);
+  // A pinned class is per track and per scope — NOT sticky like the scope: the
+  // median song has one fact per class, so a sticky pin would keep landing on
+  // an empty (auto-cleared) filter.
+  useEffect(() => { setClassFilter(null); }, [trackId, effectiveScope]);
 
   // Auto-rotate (paused on hover)
   useEffect(() => {
@@ -1505,7 +1544,7 @@ function FactsRail({ trackId, isDark, lang, accent, variant = "landing" }) {
             on EVERY transition, not just idx changes. Without scope in the key,
             toggling tabs while at idx=0 reused the same React node and the
             new fact text appeared silently with no transition. */}
-        <div key={`${trackId}-${effectiveScope}-${idx}`}
+        <div key={`${trackId}-${effectiveScope}-${activeFilter || 'all'}-${idx}`}
           onMouseEnter={() => setPaused(true)}
           onMouseLeave={() => setPaused(false)}
           style={{
@@ -1523,22 +1562,18 @@ function FactsRail({ trackId, isDark, lang, accent, variant = "landing" }) {
           }}><MarkdownText text={cur.text} /></div>
           {/* What kind of fact this is, and whether it is a fan's reading
               rather than something established. Both are quiet by design: they
-              orient a glance, they do not compete with the sentence. */}
-          {(factLabel(cur.labels, lang) || cur.unconfirmed) && (
-            <div style={{ display:'flex', gap:6, alignSelf:'flex-start', flexWrap:'wrap' }}>
-              {factLabel(cur.labels, lang) && (
-                <span className="mono" style={{
-                  fontSize:9.5, letterSpacing:'0.14em', textTransform:'uppercase',
-                  color:c.textSubtle, border:`1px solid ${c.border}`,
-                  borderRadius:99, padding:'2px 8px',
-                }}>{factLabel(cur.labels, lang)}</span>
+              orient a glance, they do not compete with the sentence. The class
+              is named here only when the class line above is absent — naming
+              it twice on a 400px rail was pure noise. */}
+          {((curKey && !showClassLine) || cur.unconfirmed) && (
+            <div style={{ display:'flex', gap:12, alignItems:'center', alignSelf:'flex-start', flexWrap:'wrap' }}>
+              {curKey && !showClassLine && (
+                <span className="fc-dotlabel" data-fc={curKey}>
+                  <i className="fc-dot" />{factClassName(curKey, lang)}
+                </span>
               )}
               {cur.unconfirmed && (
-                <span className="mono" style={{
-                  fontSize:9.5, letterSpacing:'0.14em', textTransform:'uppercase',
-                  color:c.textSubtle, border:`1px solid ${c.border}`,
-                  borderRadius:99, padding:'2px 8px',
-                }}>{lang==='ru' ? 'фан-версия' : 'fan theory'}</span>
+                <span className="fact-fan">{lang==='ru' ? 'фан-версия' : 'fan theory'}</span>
               )}
             </div>
           )}
@@ -1636,6 +1671,28 @@ function FactsRail({ trackId, isDark, lang, accent, variant = "landing" }) {
           </span>
         )}
       </div>
+      {/* Class line — the classes of the current scope. Items never change
+          size with state (colour + glow only), so pinning a class cannot
+          shift the header or the rule beneath it. */}
+      {showClassLine && status === 'loaded' && (
+        <div className="fact-classline" role="group" aria-label={lang==='ru' ? 'Класс факта' : 'Fact class'}>
+          {classKeys.map((k, i) => (
+            <Fragment key={k}>
+              {i > 0 && <span className="cl-sep">·</span>}
+              <button type="button" data-fc={k}
+                className={`cl-item${curKey === k ? ' is-current' : ''}`}
+                aria-pressed={activeFilter === k}
+                title={activeFilter === k
+                  ? (lang==='ru' ? 'Снять фильтр' : 'Clear filter')
+                  : (lang==='ru' ? 'Только этот класс' : 'Only this class')}
+                onClick={() => setClassFilter(f => (f === k ? null : k))}>
+                <i className="fc-dot" />{factClassName(k, lang)}
+                {classCounts[k] > 1 && <span className="n">{classCounts[k]}</span>}
+              </button>
+            </Fragment>
+          ))}
+        </div>
+      )}
       {body}
     </aside>
   );
@@ -18127,30 +18184,8 @@ const atlasGlass = (isDark) => ({
     : 'inset 0 1px 0 rgba(255,255,255,0.95), inset 0 -1px 0 rgba(0,0,0,0.05), 0 14px 30px rgba(40,30,70,0.14)',
 });
 
-function AtlasAnchorPills({ sections, activeId, onAnchor, isDark, compact }) {
-  const c = useColors(isDark);
-  return (
-    <div style={{ display:'flex', gap:6, minWidth:0 }}>
-      {sections.map(s => {
-        const active = activeId === s.id;
-        return (
-          <button key={s.id} onClick={() => onAnchor(s.id)} className="mono"
-            style={{
-              padding: compact ? '4px 11px' : '6px 14px', borderRadius:99,
-              fontSize: compact ? 9 : 10, letterSpacing:'0.18em', cursor:'pointer',
-              border:`1px solid ${active ? 'oklch(60% 0.18 270 / 0.55)' : (isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)')}`,
-              background: active ? 'oklch(60% 0.18 270 / 0.16)' : 'transparent',
-              color: active ? c.text : c.textMuted,
-              transition:'all 180ms ease', whiteSpace:'nowrap',
-            }}>{s.label}</button>
-        );
-      })}
-    </div>
-  );
-}
-
 // Writes the cursor position (px) as CSS vars for the .atlas-glare highlight —
-// the liquid-glass glint that follows the pointer on the docks and play button.
+// the liquid-glass glint that follows the pointer on the play capsule.
 const atlasGlareMove = (e) => {
   const el = e.currentTarget;
   const r = el.getBoundingClientRect();
@@ -18158,27 +18193,72 @@ const atlasGlareMove = (e) => {
   el.style.setProperty('--gy', `${e.clientY - r.top}px`);
 };
 
-function AtlasSpinButton({ onSpin, lang, compact }) {
-  // On phones the full label never fits the hero dock — icon-only everywhere there.
-  const isMobile = useIsMobile();
-  const iconOnly = compact || isMobile;
+// ▶ «Включить артиста» — a glass capsule with a lit violet key set into a dark
+// socket; the key sinks when pressed. While this artist is what's playing the
+// key shows EQ bars and the label says so (the click still restarts the queue).
+function AtlasSpinButton({ onSpin, lang, playing, block }) {
+  const ru = lang === 'ru';
+  const label = playing ? (ru ? 'Сейчас играет' : 'Now playing') : (ru ? 'Включить артиста' : 'Play artist');
   return (
-    <button onClick={onSpin} className="atlas-glare atlas-play-btn" onMouseMove={atlasGlareMove}
-      title={lang==='ru'?'Включить артиста':'Play artist'}
-      aria-label={lang==='ru'?'Включить артиста':'Play artist'}
-      style={{
-        padding: iconOnly ? '7px 13px' : '9px 18px', borderRadius:99, flexShrink:0,
-        background:'linear-gradient(135deg, oklch(67% 0.18 270), oklch(52% 0.22 285))',
-        color:'#fff', fontSize: iconOnly ? 11 : 13, fontWeight:600, letterSpacing:'0.04em',
-        border:'1px solid oklch(50% 0.2 275 / 0.4)', cursor:'pointer',
-        // box-shadow lives in .atlas-play-btn (inline would beat the :hover lift)
-      }}>
-      ▶{iconOnly ? '' : ` ${lang==='ru'?'Включить артиста':'Play artist'}`}
+    <button type="button" onClick={onSpin} onMouseMove={atlasGlareMove}
+      className={`atlas-glare atlas-play-cap${playing ? ' is-playing' : ''}${block ? ' is-block' : ''}`}
+      title={label} aria-label={label} aria-pressed={playing || undefined}>
+      <span className="atlas-play-socket"><span className="atlas-play-key">
+        {playing
+          ? <span className="atlas-eq" aria-hidden="true"><i /><i /><i /><i /></span>
+          : <svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true" style={{ marginLeft:2 }}><path d="M3 1.8v8.4L10 6z" fill="#fff" /></svg>}
+      </span></span>
+      <span className="atlas-play-label">{label}</span>
     </button>
   );
 }
 
-function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere }) {
+// Gold liquid-glass Grammy chip for the hero. Wins are the badge; nominations
+// alone get the quieter outline variant. Colour comes from data-fc="award".
+function GrammyChip({ wins, noms, lang }) {
+  const w = Number(wins) || 0, n = Number(noms) || 0;
+  if (!w && !n) return null;
+  const ru = lang === 'ru';
+  const winsTxt = `${w} ${plural(w, lang, ['победа', 'победы', 'побед'], ['win', 'wins'])}`;
+  const nomsTxt = `${n} ${plural(n, lang, ['номинация', 'номинации', 'номинаций'], ['nomination', 'nominations'])}`;
+  const title = [w ? winsTxt : null, n ? nomsTxt : null].filter(Boolean).join(' · ');
+  const icon = (filled) => (
+    <svg viewBox="0 0 20 20" width="13" height="13" aria-hidden="true">
+      <polygon points="6.3,1.7 12.85,11.15 11.15,12.85 1.7,6.3" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+      <circle cx="4" cy="4" r="3.2" fill={filled ? 'currentColor' : 'none'} opacity={filled ? .45 : 1} stroke="currentColor" strokeWidth="1.1" />
+      <path d="M12 12 L13.6 14.2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <rect x="9" y="14" width="9.5" height="4.2" rx="1.2" fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  );
+  if (w) {
+    return (
+      <span className="chip-grammy" data-fc="award" title={title}>
+        {icon(true)}<strong>{w}</strong> Grammy
+      </span>
+    );
+  }
+  return (
+    <span className="chip-grammy chip-grammy--nom" data-fc="award" title={title}>
+      {icon(false)}Grammy · {nomsTxt}
+    </span>
+  );
+}
+
+// "1996 — сейчас" / "1994 — 2009" / "1996 — пауза": the years-active line the
+// hero shows instead of the library decades once the bio knows them.
+function atlasYearsLine(f, lang) {
+  const ru = lang === 'ru';
+  const from = f.active_from || f.formed_year;
+  if (!from) return null;
+  const to = f.active_to, st = f.status;
+  if (to) return `${from} — ${to}${st === 'hiatus' ? (ru ? ' · пауза' : ' · hiatus') : ''}`;
+  if (st === 'disbanded') return `${from} — ${ru ? 'распались' : 'disbanded'}`;
+  if (st === 'hiatus') return `${from} — ${ru ? 'пауза' : 'hiatus'}`;
+  if (st === 'deceased') return `${ru ? 'с' : 'since'} ${from}`;
+  return `${from} — ${ru ? 'сейчас' : 'now'}`;
+}
+
+function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere, onSpin }) {
   const c = useColors(isDark);
   const hue = atlasHue(data.name, data.name.slice(1));
   // Only a real artist photo counts as a backdrop. Album covers are NO LONGER
@@ -18187,15 +18267,19 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere }) {
   const cutout = atlasImgUrl(data.cutout_path);
   const flag = atlasFlag(data.country_code);
 
-  // Identity line: genre + where the artist is from.
+  // Identity line: genre + where the artist is from — the most specific place
+  // we know: the bio's formation city first, the AudioDB country otherwise.
+  const facets = data.bio_facets || {};
+  const place = facets.formed_place || data.country || data.country_code || '';
   const originLine = [
     data.genre,
-    flag
-      ? `${flag} ${(data.country || data.country_code || '').toUpperCase()}`
-      : (data.country ? data.country.toUpperCase() : null),
+    place ? (flag ? `${flag} ${place.toUpperCase()}` : place.toUpperCase()) : null,
   ].filter(Boolean).join(' · ');
 
-  // Library-derived lines: which decades this listener owns + the catalogue size.
+  // Years active (bio facets) replaces "decades in your library"; the decades
+  // line stays as the fallback for the artists whose bio has not been built.
+  const yearsLine = atlasYearsLine(facets, lang);
+  const hasAward = !!(facets.grammy_wins || facets.grammy_nominations);
   const decadeLabel = lang==='ru' ? 'Десятилетия в твоей библиотеке' : 'Decades in your library';
   const countsLine = [
     data.album_count ? `${data.album_count} ${lang==='ru' ? atlasRuPlural(data.album_count,'АЛЬБОМ','АЛЬБОМА','АЛЬБОМОВ') : (data.album_count===1?'ALBUM':'ALBUMS')}` : null,
@@ -18219,6 +18303,14 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere }) {
   const { colors: sampledColors } = useCoverPalette(coverUrls);
   const auroraCss = auroraStops(padPalette(sampledColors, hue, 3), isDark);
   const isMobile = useIsMobile();
+  // One muted line: years active + catalogue size ("1996 — СЕЙЧАС · 3 АЛЬБОМА · 41 ТРЕК").
+  const metaLine = yearsLine ? [yearsLine, countsLine].filter(Boolean).join(' · ') : null;
+  const metaStyle = {
+    fontSize: isMobile ? 12 : 13, letterSpacing:'0.14em', textTransform:'uppercase',
+    color: isDark ? 'rgba(210,202,228,0.7)' : 'oklch(46% 0.05 282)',
+    textShadow: (isDark && !isMobile) ? '0 1px 9px rgba(0,0,0,0.5)' : 'none',
+    whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
+  };
 
   // Cursor parallax — same refraction move as the home orb: --hx/--hy ∈
   // [-0.5, 0.5] are written straight on the hero node (no state → no
@@ -18323,26 +18415,28 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere }) {
               whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
             }}>{originLine}</div>
           )}
-          {(data.decade_range || countsLine) && (
+          {(metaLine || data.decade_range || countsLine) && (
             <div style={{ marginTop:10, display:'flex', flexDirection:'column', gap:4 }}>
-              {data.decade_range && (
-                <div className="mono" style={{
-                  fontSize:12, letterSpacing:'0.12em',
-                  color: isDark ? 'rgba(210,202,228,0.7)' : 'oklch(46% 0.05 282)',
-                  whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
-                }}>
-                  <span style={{ opacity:0.78 }}>{decadeLabel}</span>
-                  {' · '}
-                  <span style={{ textTransform:'uppercase' }}>{data.decade_range}</span>
-                </div>
+              {metaLine ? (
+                <div className="mono" style={metaStyle}>{metaLine}</div>
+              ) : (
+                <Fragment>
+                  {data.decade_range && (
+                    <div className="mono" style={{ ...metaStyle, letterSpacing:'0.12em', textTransform:'none' }}>
+                      <span style={{ opacity:0.78 }}>{decadeLabel}</span>
+                      {' · '}
+                      <span style={{ textTransform:'uppercase' }}>{data.decade_range}</span>
+                    </div>
+                  )}
+                  {countsLine && <div className="mono" style={metaStyle}>{countsLine}</div>}
+                </Fragment>
               )}
-              {countsLine && (
-                <div className="mono" style={{
-                  fontSize:12, letterSpacing:'0.14em', textTransform:'uppercase',
-                  color: isDark ? 'rgba(210,202,228,0.7)' : 'oklch(46% 0.05 282)',
-                  whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
-                }}>{countsLine}</div>
-              )}
+            </div>
+          )}
+          {(hasAward || onSpin) && (
+            <div style={{ marginTop:16, display:'flex', flexDirection:'column', alignItems:'flex-start', gap:14 }}>
+              {hasAward && <GrammyChip wins={facets.grammy_wins} noms={facets.grammy_nominations} lang={lang} />}
+              {onSpin && <AtlasSpinButton onSpin={onSpin} lang={lang} playing={playingHere} block />}
             </div>
           )}
         </div>
@@ -18352,7 +18446,7 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere }) {
 
   return (
     <div ref={heroRef} onMouseMove={heroMove} onMouseLeave={heroLeave}
-      style={{ position:'relative', height: mode==='aurora' ? (isMobile ? 'clamp(190px, 26vh, 240px)' : 'clamp(250px, 32vh, 320px)') : (isMobile ? 'clamp(280px, 42vh, 360px)' : 'clamp(420px, 56vh, 600px)'), overflow:'visible' }}>
+      style={{ position:'relative', height: mode==='aurora' ? (isMobile ? 'clamp(190px, 26vh, 240px)' : 'clamp(330px, 42vh, 420px)') : (isMobile ? 'clamp(280px, 42vh, 360px)' : 'clamp(420px, 56vh, 600px)'), overflow:'visible' }}>
       {/* Light field: every colour layer lives here, not in the hero. The field
           runs ~58% past the hero's bottom and dissolves with one long mask
           (.atlas-field), so no mode has a horizontal colour cutoff — the dock
@@ -18563,29 +18657,35 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere }) {
             }}>{originLine}</div>
           )}
 
-          {/* Library-derived block — decades you own + catalogue counts (muted) */}
-          {(data.decade_range || countsLine) && (
+          {/* Muted block — years active (or the decades you own) + catalogue counts */}
+          {(metaLine || data.decade_range || countsLine) && (
             <div style={{ marginTop:12, display:'flex', flexDirection:'column', gap:4 }}>
-              {data.decade_range && (
-                <div className="mono" style={{
-                  fontSize:13, letterSpacing:'0.12em',
-                  color: isDark ? 'rgba(210,202,228,0.7)' : 'oklch(46% 0.05 282)',
-                  textShadow: isDark ? '0 1px 9px rgba(0,0,0,0.5)' : 'none',
-                  whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
-                }}>
-                  <span style={{ opacity:0.78 }}>{decadeLabel}</span>
-                  {' · '}
-                  <span style={{ textTransform:'uppercase' }}>{data.decade_range}</span>
-                </div>
+              {metaLine ? (
+                <div className="mono" style={metaStyle}>{metaLine}</div>
+              ) : (
+                <Fragment>
+                  {data.decade_range && (
+                    <div className="mono" style={{ ...metaStyle, letterSpacing:'0.12em', textTransform:'none' }}>
+                      <span style={{ opacity:0.78 }}>{decadeLabel}</span>
+                      {' · '}
+                      <span style={{ textTransform:'uppercase' }}>{data.decade_range}</span>
+                    </div>
+                  )}
+                  {countsLine && <div className="mono" style={metaStyle}>{countsLine}</div>}
+                </Fragment>
               )}
-              {countsLine && (
-                <div className="mono" style={{
-                  fontSize:13, letterSpacing:'0.14em', textTransform:'uppercase',
-                  color: isDark ? 'rgba(210,202,228,0.7)' : 'oklch(46% 0.05 282)',
-                  textShadow: isDark ? '0 1px 9px rgba(0,0,0,0.5)' : 'none',
-                  whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis',
-                }}>{countsLine}</div>
-              )}
+            </div>
+          )}
+          {/* Badge + the play capsule — the old glass dock with section anchors
+              is gone; this is the only control the page ever used. */}
+          {hasAward && (
+            <div style={{ marginTop:18, display:'flex', alignItems:'center', gap:14, flexWrap:'wrap' }}>
+              <GrammyChip wins={facets.grammy_wins} noms={facets.grammy_nominations} lang={lang} />
+            </div>
+          )}
+          {onSpin && (
+            <div style={{ marginTop: hasAward ? 18 : 22 }}>
+              <AtlasSpinButton onSpin={onSpin} lang={lang} playing={playingHere} />
             </div>
           )}
         </div>
@@ -18594,7 +18694,82 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere }) {
   );
 }
 
-function AtlasBio({ bio, facets, sourceUrl, isDark, lang }) {
+// ─── Biography + «Досье» ────────────────────────────────────────────────────
+// The dossier sits to the LEFT of the prose on desktop (under it on phones)
+// and holds only what the hero's one-liners cannot: Grammy nominations, a
+// non-active status, and the story of the name. Years, place and the win
+// count already live in the hero, so they are not repeated here. No rows →
+// no card, and the prose takes the full width.
+function atlasDossierRows(f, lang) {
+  const ru = lang === 'ru';
+  const rows = [];
+  const w = Number(f.grammy_wins) || 0, n = Number(f.grammy_nominations) || 0;
+  if (w && n) {
+    rows.push({
+      key: 'grammy', label: 'Grammy',
+      value: `${w} ${plural(w, lang, ['победа', 'победы', 'побед'], ['win', 'wins'])}`,
+      tail: `${n} ${plural(n, lang, ['номинация', 'номинации', 'номинаций'], ['nomination', 'nominations'])}`,
+    });
+  }
+  if (f.status === 'disbanded') {
+    rows.push({ key: 'status', label: ru ? 'статус' : 'status',
+      value: f.active_to ? (ru ? `распались в ${f.active_to}` : `disbanded in ${f.active_to}`) : (ru ? 'распались' : 'disbanded') });
+  } else if (f.status === 'hiatus') {
+    rows.push({ key: 'status', label: ru ? 'статус' : 'status',
+      value: f.active_to ? (ru ? `пауза с ${f.active_to}` : `on hiatus since ${f.active_to}`) : (ru ? 'пауза' : 'on hiatus') });
+  }
+  return rows;
+}
+function atlasDossierHasContent(facets, nameFacts) {
+  const f = facets || {};
+  return !!(atlasDossierRows(f, 'ru').length || f.name_origin || (nameFacts && nameFacts.length));
+}
+
+function AtlasDossier({ facets, nameFacts, sourceUrl, lang }) {
+  const ru = lang === 'ru';
+  const f = facets || {};
+  const rows = atlasDossierRows(f, lang);
+  // The naming story: the Wikipedia facet sentence first, then every fact the
+  // indexer labelled name_origin (they leave the shelf for this card).
+  const story = [];
+  if (f.name_origin) {
+    story.push({ text: f.name_origin,
+      src: f.name_origin_source === 'web' ? (ru ? 'из открытых источников' : 'open web') : (ru ? 'википедия' : 'wikipedia') });
+  }
+  (nameFacts || []).forEach(nf => story.push({ text: nf.text, src: ru ? 'из фактов' : 'from the facts' }));
+  if (!rows.length && !story.length) return null;
+  return (
+    <aside className="atlas-dossier">
+      <div className="atlas-dossier-title">{ru ? 'Досье' : 'Dossier'}</div>
+      {rows.map(r => (
+        <div key={r.key} className="atlas-dossier-row">
+          <span className="atlas-dossier-key">{r.label}</span>
+          <span className="atlas-dossier-val">
+            {r.value}{r.tail && <Fragment><span className="sep">·</span>{r.tail}</Fragment>}
+          </span>
+        </div>
+      ))}
+      {story.length > 0 && (
+        <div className="atlas-dossier-block">
+          <span className="atlas-dossier-key" data-fc="name_origin">
+            <i className="fc-dot" />{ru ? 'Откуда название' : 'Where the name came from'}
+          </span>
+          {story.map((s, i) => (
+            <div key={i} className="atlas-dossier-sent">
+              <span className="atlas-dossier-src">· {s.src}</span>
+              <p className="serif">{s.text}</p>
+            </div>
+          ))}
+        </div>
+      )}
+      {sourceUrl && (
+        <a href={sourceUrl} target="_blank" rel="noreferrer" className="atlas-dossier-link">{ru ? 'источник' : 'source'}</a>
+      )}
+    </aside>
+  );
+}
+
+function AtlasBio({ bio, facets, nameFacts, sourceUrl, isDark, lang, isMobile }) {
   const c = useColors(isDark);
   const [expanded, setExpanded] = useState(false);
   const [overflowing, setOverflowing] = useState(false);
@@ -18605,132 +18780,57 @@ function AtlasBio({ bio, facets, sourceUrl, isDark, lang }) {
     if (el) setOverflowing(el.scrollHeight > COLLAPSED_PX + 24);
   }, [bio]);
   const clamped = overflowing && !expanded;
+  const hasDossier = atlasDossierHasContent(facets, nameFacts);
+  const dossier = hasDossier
+    ? <AtlasDossier facets={facets} nameFacts={nameFacts} sourceUrl={sourceUrl} lang={lang} />
+    : null;
   return (
-    <div>
-      <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:14 }}>
-        <span className="mono" style={{ fontSize:10, letterSpacing:'0.24em', color:c.textSubtle, textTransform:'uppercase' }}>
-          {lang==='ru'?'БИОГРАФИЯ':'BIOGRAPHY'}
-        </span>
-        <span className="mono" style={{
-          fontSize:8.5, letterSpacing:'0.18em', padding:'2px 7px', borderRadius:8,
-          color:c.accentLight, border:`1px solid ${isDark?'rgba(160,130,255,0.4)':'rgba(110,80,220,0.35)'}`,
-          background: isDark?'rgba(124,91,255,0.12)':'rgba(124,91,255,0.08)',
-        }}>AI</span>
-      </div>
-      <div ref={boxRef} className="serif" style={{
-        maxWidth:720, fontSize:16, lineHeight:1.7, color:c.text, letterSpacing:'-0.005em',
-        maxHeight: clamped ? COLLAPSED_PX : 'none', overflow:'hidden',
-        WebkitMaskImage: clamped ? 'linear-gradient(180deg, #000 58%, transparent 100%)' : 'none',
-        maskImage: clamped ? 'linear-gradient(180deg, #000 58%, transparent 100%)' : 'none',
-      }}>
-        <MarkdownText text={bio} />
-      </div>
-      {overflowing && (
-        <button onClick={() => setExpanded(e => !e)} style={{
-          marginTop:10, background:'transparent', border:'none', cursor:'pointer',
-          color:c.accentLight, fontSize:12.5, fontFamily:'inherit', padding:0, letterSpacing:'0.02em',
-        }}>
-          {expanded ? (lang==='ru'?'свернуть ↑':'collapse ↑') : (lang==='ru'?'читать дальше ↓':'read more ↓')}
-        </button>
-      )}
-      <BioFacets facets={facets} sourceUrl={sourceUrl} isDark={isDark} lang={lang} />
-    </div>
-  );
-}
-
-// ─── Facts shown beside the biography ───────────────────────────────────────
-// Three of the four are short data — years, a place, a count — and the fourth
-// is a sentence. Setting them all as identical pills would misdescribe that:
-// a row of equals invites scanning, and a story is read, not scanned. So the
-// data sits in a values row and the naming story gets its own line.
-//
-// A value the open web supplied is a weaker claim than one the artist's own
-// article did, and the interface says so quietly: a dotted underline, and the
-// source on hover. It never presents the two as equals.
-function BioFacets({ facets, sourceUrl, isDark, lang }) {
-  const c = useColors(isDark);
-  const ru = lang === 'ru';
-  if (!facets || !Object.keys(facets).length) return null;
-
-  const soft = (src) => src === 'web';
-  const items = [];
-
-  if (facets.formed_year || facets.formed_place) {
-    items.push({
-      key: 'formed',
-      label: ru ? 'начало' : 'started',
-      value: [facets.formed_year, facets.formed_place].filter(Boolean).join(' · '),
-      web: soft(facets.formed_source),
-    });
-  }
-  if (facets.active_from) {
-    const dash = ' — ';
-    const tail = facets.status === 'active' || !facets.active_to
-      ? (facets.status === 'deceased' || facets.status === 'disbanded' ? '' : (ru ? 'сейчас' : 'now'))
-      : facets.active_to;
-    items.push({
-      key: 'active',
-      label: ru ? 'годы' : 'years',
-      value: tail ? `${facets.active_from}${dash}${tail}` : String(facets.active_from),
-      web: soft(facets.status_source),
-    });
-  }
-  if (facets.grammy_wins || facets.grammy_nominations) {
-    const parts = [];
-    if (facets.grammy_wins) {
-      parts.push(`${facets.grammy_wins} ${plural(facets.grammy_wins, lang,
-        ['победа', 'победы', 'побед'], ['win', 'wins'])}`);
-    }
-    if (facets.grammy_nominations) {
-      const n = facets.grammy_nominations;
-      parts.push(`${n} ${plural(n, lang, ['номинация', 'номинации', 'номинаций'],
-        ['nomination', 'nominations'])}`);
-    }
-    items.push({ key: 'grammy', label: 'Grammy', value: parts.join(' · '),
-                 web: soft(facets.grammy_source) });
-  }
-
-  const origin = facets.name_origin;
-  if (!items.length && !origin) return null;
-
-  return (
-    <div style={{ marginTop: 18, maxWidth: 720 }}>
-      {items.length > 0 && (
-        <div style={{ display:'flex', flexWrap:'wrap', gap:'18px 26px', marginBottom: origin ? 16 : 0 }}>
-          {items.map(it => (
-            <div key={it.key}>
-              <div className="mono" style={{
-                fontSize:9, letterSpacing:'0.2em', textTransform:'uppercase',
-                color:c.textSubtle, marginBottom:4,
-              }}>{it.label}</div>
-              <div
-                title={it.web ? (ru ? 'из открытых источников' : 'from the open web') : undefined}
-                style={{
-                  fontSize:15.5, color:c.text, letterSpacing:'-0.01em',
-                  borderBottom: it.web ? `1px dotted ${c.border}` : 'none',
-                }}>{it.value}</div>
-            </div>
-          ))}
-        </div>
-      )}
-      {origin && (
-        <div>
-          <div className="mono" style={{
-            fontSize:9, letterSpacing:'0.2em', textTransform:'uppercase',
-            color:c.textSubtle, marginBottom:5,
-          }}>{ru ? 'откуда название' : 'where the name came from'}</div>
-          <div className="serif" style={{ fontSize:15, lineHeight:1.62, color:c.textMuted }}>
-            {origin}
+    <div style={{
+      position:'relative', display:'grid', alignItems:'start',
+      gridTemplateColumns: (hasDossier && !isMobile) ? '320px minmax(0, 1fr)' : 'minmax(0, 1fr)',
+      gap: isMobile ? 28 : 56,
+    }}>
+      {/* a blurred lamp behind the glass — over a flat page background the
+          blur has nothing to refract, and the card reads as a tinted panel */}
+      {hasDossier && <div className="atlas-dossier-lamp" aria-hidden="true" />}
+      {hasDossier && !isMobile && dossier}
+      {bio && (
+        <div style={{ position:'relative', zIndex:1, minWidth:0 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:14 }}>
+            <span className="mono" style={{ fontSize:10, letterSpacing:'0.24em', color:c.textSubtle, textTransform:'uppercase' }}>
+              {lang==='ru'?'БИОГРАФИЯ':'BIOGRAPHY'}
+            </span>
+            <span className="mono" style={{
+              fontSize:8.5, letterSpacing:'0.18em', padding:'2px 7px', borderRadius:8,
+              color:c.accentLight, border:`1px solid ${isDark?'rgba(160,130,255,0.4)':'rgba(110,80,220,0.35)'}`,
+              background: isDark?'rgba(124,91,255,0.12)':'rgba(124,91,255,0.08)',
+            }}>AI</span>
           </div>
+          <div ref={boxRef} className="serif" style={{
+            maxWidth:720, fontSize:16, lineHeight:1.7, color:c.text, letterSpacing:'-0.005em',
+            maxHeight: clamped ? COLLAPSED_PX : 'none', overflow:'hidden',
+            WebkitMaskImage: clamped ? 'linear-gradient(180deg, #000 58%, transparent 100%)' : 'none',
+            maskImage: clamped ? 'linear-gradient(180deg, #000 58%, transparent 100%)' : 'none',
+          }}>
+            <MarkdownText text={bio} />
+          </div>
+          {overflowing && (
+            <button onClick={() => setExpanded(e => !e)} style={{
+              marginTop:10, background:'transparent', border:'none', cursor:'pointer',
+              color:c.accentLight, fontSize:12.5, fontFamily:'inherit', padding:0, letterSpacing:'0.02em',
+            }}>
+              {expanded ? (lang==='ru'?'свернуть ↑':'collapse ↑') : (lang==='ru'?'читать дальше ↓':'read more ↓')}
+            </button>
+          )}
+          {/* with no dossier the source link has nowhere else to live */}
+          {!hasDossier && sourceUrl && (
+            <div>
+              <a href={sourceUrl} target="_blank" rel="noreferrer" className="atlas-dossier-link">{lang==='ru' ? 'источник' : 'source'}</a>
+            </div>
+          )}
         </div>
       )}
-      {sourceUrl && (
-        <a href={sourceUrl} target="_blank" rel="noreferrer" className="mono" style={{
-          display:'inline-block', marginTop:14, fontSize:9, letterSpacing:'0.18em',
-          textTransform:'uppercase', color:c.textSubtle, textDecoration:'none',
-          borderBottom:`1px solid ${c.border}`, paddingBottom:1,
-        }}>{ru ? 'источник' : 'source'}</a>
-      )}
+      {hasDossier && isMobile && dossier}
     </div>
   );
 }
@@ -18739,7 +18839,13 @@ function BioFacets({ facets, sourceUrl, isDark, lang }) {
 // "hand-stamped" without true randomness (stable across re-renders).
 const ATLAS_STAMP_TILT = [-4, 3, -2, 5, -5, 2];
 
-function AtlasFactsShelf({ facts, isDark, lang }) {
+// Facts shelf, filed by class. A chip row above it is legend and filter in
+// one: each chip wears its class colour, so the colour is learnt by reading the
+// word next to it, and from then on the stamp colour alone says what kind of
+// fact a card is. Under «все» the cards are grouped by class so the colours
+// come in runs. Switching the filter crossfades the whole shelf and rewinds it —
+// removing cards one by one made the survivors jump into the holes.
+function AtlasFactsShelf({ facts, resetKey, isDark, lang }) {
   const c = useColors(isDark);
   const isMobile = useIsMobile();
   const shelfRef = useRef(null);
@@ -18754,22 +18860,57 @@ function AtlasFactsShelf({ facts, isDark, lang }) {
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
   }, [isMobile]);
+  // `filter` is the class the shelf shows (null = all); `swapping` is the
+  // crossfade in flight (fade out → swap + rewind → fade in).
+  const [filter, setFilter] = useState(null);
+  const [swapping, setSwapping] = useState(false);
+  const swapTimer = useRef(null);
+  useEffect(() => () => { if (swapTimer.current) clearTimeout(swapTimer.current); }, []);
+  // Reset on a stable key (the artist slug), not on `facts` — the parent
+  // derives that array per render, so keying on it would drop the filter on
+  // every unrelated re-render (play/pause flips playingHere, for one).
+  useEffect(() => { setFilter(null); }, [resetKey]);
+
+  const counts = {};
+  facts.forEach(f => { const k = factClassKey(f.labels); if (k) counts[k] = (counts[k] || 0) + 1; });
+  const classKeys = Object.keys(counts).sort((a, b) =>
+    counts[b] - counts[a] || FACT_LABEL_ORDER.indexOf(a) - FACT_LABEL_ORDER.indexOf(b));
+  const rank = (k) => { const i = classKeys.indexOf(k); return i < 0 ? 999 : i; };
+  const ordered = facts
+    .map((f, i) => ({ f, i, k: factClassKey(f.labels) }))
+    .sort((a, b) => rank(a.k) - rank(b.k) || a.i - b.i);
+  const activeFilter = (filter && counts[filter]) ? filter : null;
+  const visible = activeFilter ? ordered.filter(x => x.k === activeFilter) : ordered;
+  const showChips = classKeys.length >= 2;
+
   const GAP = 14;
   const CARD_W = isMobile ? Math.max(220, shelfW - 4) : 300;
   const recompute = () => {
     const el = shelfRef.current; if (!el) return;
     const idx = Math.round(el.scrollLeft / (CARD_W + GAP));
     setPos({
-      idx: Math.max(0, Math.min(idx, facts.length - 1)),
+      idx: Math.max(0, Math.min(idx, visible.length - 1)),
       atStart: el.scrollLeft <= 4,
       atEnd: el.scrollLeft + el.clientWidth >= el.scrollWidth - 6,
     });
+  };
+  // After a swap the shelf is a different width — re-read the nav state.
+  useEffect(() => { recompute(); }, [activeFilter, visible.length]);   // eslint-disable-line react-hooks/exhaustive-deps
+  const pick = (k) => {
+    if (k === activeFilter || swapping) return;
+    setSwapping(true);
+    swapTimer.current = setTimeout(() => {
+      setFilter(k);
+      const el = shelfRef.current; if (el) el.scrollLeft = 0;
+      setSwapping(false);
+      swapTimer.current = null;
+    }, 170);
   };
   const nudge = (dir) => {
     const el = shelfRef.current; if (!el) return;
     el.scrollBy({ left: dir * (CARD_W + GAP) * (isMobile ? 1 : 2), behavior:'smooth' });
   };
-  const showNav = facts.length > (isMobile ? 1 : 3);
+  const showNav = visible.length > (isMobile ? 1 : 3);
   const arrowStyle = (off) => ({
     width: isMobile ? 40 : 30, height: isMobile ? 40 : 30, borderRadius:'50%', display:'grid', placeItems:'center',
     cursor: off ? 'default' : 'pointer', fontSize:14, color:c.textMuted,
@@ -18788,40 +18929,51 @@ function AtlasFactsShelf({ facts, isDark, lang }) {
           </div>
         )}
       </div>
+      {showChips && (
+        <div className="fc-chips" role="group" aria-label={lang==='ru' ? 'Класс факта' : 'Fact class'}>
+          <button type="button" className="fc-chip" data-fc="all" aria-pressed={!activeFilter} onClick={() => pick(null)}>
+            {lang==='ru' ? 'все' : 'all'} <span className="n">{facts.length}</span>
+          </button>
+          {classKeys.map(k => (
+            <button key={k} type="button" className="fc-chip" data-fc={k} aria-pressed={activeFilter === k} onClick={() => pick(k)}>
+              <i className="fc-dot" />{factClassName(k, lang)} <span className="n">{counts[k]}</span>
+            </button>
+          ))}
+        </div>
+      )}
       <div style={{ position:'relative' }}>
-        <div ref={shelfRef} className="atlas-shelf" onScroll={recompute} style={{
+        <div ref={shelfRef} className={`atlas-shelf${swapping ? ' is-swapping' : ''}`} onScroll={recompute} style={{
           display:'flex', gap:GAP, overflowX:'auto', scrollSnapType:'x mandatory',
-          padding:'4px 2px 6px',
+          padding:'6px 2px 8px',
         }}>
-          {facts.map((f, i) => (
-            // Archive index card: perforated spine + a hand-stamped number that
-            // lies at its own pseudo-random tilt and straightens on hover. The
-            // card itself never rotates (rotated text rasterizes blurry); the
-            // hover lift is a pure translate — see .atlas-fact-card.
-            <div key={i} className="atlas-fact-card" style={{
+          {visible.map((x, i) => (
+            // Archive index card: perforated spine + a hand-stamped class name
+            // that lies at its own pseudo-random tilt and straightens on hover.
+            // Colour comes from data-fc — see the palette block in styles.css.
+            <div key={x.i} className="atlas-fact-card" data-fc={x.k || 'none'} style={{
               flex:`0 0 ${CARD_W}px`, scrollSnapAlign:'start',
               '--stamp-tilt': `${ATLAS_STAMP_TILT[i % ATLAS_STAMP_TILT.length]}deg`,
             }}>
               <span className="atlas-fact-grain" aria-hidden="true" />
               <span className="atlas-fact-stamp mono">
-                {factLabel(f.labels, lang)
+                {factClassName(x.k, lang)
                   || `${lang==='ru'?'ФАКТ':'FACT'} · ${String(i+1).padStart(2,'0')}`}
               </span>
-              <div className="serif" style={{ marginTop:13, fontSize:16, lineHeight:1.68, color:c.text }}>{f.text}</div>
+              <div className="serif" style={{ marginTop:13, fontSize:16, lineHeight:1.68, color:c.text }}>{x.f.text}</div>
             </div>
           ))}
         </div>
         {showNav && !pos.atEnd && (
           <div aria-hidden="true" style={{
-            position:'absolute', right:0, top:0, bottom:6, width:64, pointerEvents:'none',
+            position:'absolute', right:0, top:0, bottom:8, width:64, pointerEvents:'none',
             background:`linear-gradient(90deg, transparent, ${c.bg})`,
           }} />
         )}
       </div>
       {showNav && (
         <div style={{ display:'flex', gap:4, justifyContent:'center', marginTop:12 }}>
-          {facts.map((_, i) => (
-            <span key={i} style={{
+          {visible.map((x, i) => (
+            <span key={x.i} style={{
               width: i === pos.idx ? 16 : 7, height:2.5, borderRadius:2,
               background: i === pos.idx ? c.accentLight : (isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.15)'),
               transition:'all .25s ease',
@@ -19047,8 +19199,6 @@ function ArtistAtlasSection({
   const [status, setStatus] = useState('idle');  // 'idle'|'loading'|'loaded'|'error'
   const [albumModal, setAlbumModal] = useState(null);  // { album, originRect }
   const [enterEpoch, setEnterEpoch] = useState(0);
-  const [condensed, setCondensed] = useState(false);
-  const [activeId, setActiveId] = useState(null);
   const scrollRef = useRef(null);
   const heroRef = useRef(null);
   const bioRef = useRef(null);
@@ -19063,8 +19213,6 @@ function ArtistAtlasSection({
     let cancelled = false;
     setStatus('loading');
     setAlbumModal(null);
-    setCondensed(false);
-    setActiveId(null);
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
     apiFetch(`/artists/${encodeURIComponent(artistSlug)}?lang=${encodeURIComponent(lang)}`)
       .then(res => { if (!cancelled) { setData(res); setStatus('loaded'); } })
@@ -19072,24 +19220,15 @@ function ArtistAtlasSection({
     return () => { cancelled = true; };
   }, [visible, artistSlug, lang]);
 
-  // Scroll plumbing: condensed dock past the hero + active anchor highlight.
+  // Scroll plumbing: scroll-parallax feed for the hero cutout (.atlas-scroll-plx):
+  // the px scrolled goes straight onto the hero node as --sy — no state, so no
+  // re-renders at scroll rate (same trick as the cursor --hx/--hy).
   const handleScroll = () => {
     const sc = scrollRef.current;
     if (!sc) return;
-    const heroH = heroRef.current ? heroRef.current.offsetHeight : 340;
-    // Scroll-parallax feed for the hero cutout (.atlas-scroll-plx): the px
-    // scrolled goes straight onto the hero node as --sy — no state, so no
-    // re-renders at scroll rate (same trick as the cursor --hx/--hy).
     if (heroRef.current && !(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)) {
       heroRef.current.style.setProperty('--sy', String(Math.max(0, sc.scrollTop)));
     }
-    setCondensed(sc.scrollTop > heroH - 70);
-    const probe = sc.scrollTop + 170;
-    let act = null;
-    [['bio', bioRef], ['facts', factsRef], ['albums', albumsRef]].forEach(([id, r]) => {
-      if (r.current && r.current.offsetTop <= probe) act = id;
-    });
-    if (act) setActiveId(act);
   };
 
   const shell = (msg) => (
@@ -19101,18 +19240,15 @@ function ArtistAtlasSection({
   if (status === 'loading' || status === 'idle') return shell(lang==='ru'?'Загрузка…':'Loading…');
   if (status === 'error' || !data) return shell(lang==='ru'?'Не удалось загрузить артиста':'Could not load artist');
 
-  const sectionsCfg = [
-    data.bio ? { id:'bio', label: lang==='ru'?'БИО':'BIO' } : null,
-    (data.facts || []).length ? { id:'facts', label: lang==='ru'?'ФАКТЫ':'FACTS' } : null,
-    (data.albums || []).length ? { id:'albums', label: lang==='ru'?'АЛЬБОМЫ':'ALBUMS' } : null,
-  ].filter(Boolean);
-  const sectionRefMap = { bio: bioRef, facts: factsRef, albums: albumsRef };
-  const prefersReduced = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
-  const scrollToSection = (id) => {
-    const el = sectionRefMap[id] && sectionRefMap[id].current;
-    if (el) el.scrollIntoView({ behavior: prefersReduced ? 'auto' : 'smooth', block:'start' });
-  };
-  const effectiveActive = activeId || (sectionsCfg[0] && sectionsCfg[0].id) || null;
+  // Labelled facts: the name-origin ones move into the dossier beside the bio;
+  // everything else goes to the shelf.
+  const factsMeta = (data.facts_meta && data.facts_meta.length)
+    ? data.facts_meta
+    : (data.facts || []).map(t => ({ text: t, labels: [] }));
+  const nameFacts = factsMeta.filter(f => factClassKey(f.labels) === 'name_origin');
+  const shelfFacts = factsMeta.filter(f => factClassKey(f.labels) !== 'name_origin');
+  const showBio = !!data.bio || atlasDossierHasContent(data.bio_facets, nameFacts);
+  const hasAnything = showBio || shelfFacts.length > 0 || (data.albums || []).length > 0;
 
   // Breadcrumb mini-EQ: is the track playing right now by THIS artist?
   const playingHere = !!(audioPlaying && playerTrack && playerTrack.artist && data.name &&
@@ -19148,62 +19284,25 @@ function ArtistAtlasSection({
 
   return (
     <div style={{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', position:'relative', background:c.bg }}>
-      {/* Condensed glass dock — fades in once the hero scrolls away */}
-      <div className="atlas-glare" onMouseMove={atlasGlareMove} style={{
-        position:'absolute', top:12, left:26, right:26, zIndex:40,
-        display:'flex', alignItems:'center', gap:16, padding:'8px 12px 8px 18px', borderRadius:14,
-        ...atlasGlass(isDark),
-        opacity: condensed ? 1 : 0,
-        transform: condensed ? 'translateY(0)' : 'translateY(-14px)',
-        pointerEvents: condensed ? 'auto' : 'none',
-        transition:'opacity .28s ease, transform .28s ease',
-      }}>
-        <span className="serif" style={{
-          fontSize:17, color:c.text, letterSpacing:'-0.01em',
-          whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', minWidth:0,
-        }}>{data.name}</span>
-        <div style={{ flex:1 }} />
-        <AtlasAnchorPills sections={sectionsCfg} activeId={effectiveActive} onAnchor={scrollToSection} isDark={isDark} compact />
-        <AtlasSpinButton onSpin={onSpin} lang={lang} compact />
-      </div>
-
       <div ref={scrollRef} onScroll={handleScroll} style={{ flex:1, overflowY:'auto', position:'relative' }}>
         <div key={`atlas-${enterEpoch}`}>
-          <AtlasHero data={data} isDark={isDark} lang={lang} onNav={onNav} heroRef={heroRef} playingHere={playingHere} />
-
-          {/* Floating glass dock overlapping the hero's bottom edge */}
-          <div className="lib-rise" style={{ maxWidth:1120, margin:'0 auto', padding: isMobile ? '0 16px' : '0 32px', position:'relative', zIndex:6 }}>
-            <div className="atlas-glare" onMouseMove={atlasGlareMove} style={{
-              marginTop: isMobile ? 0 : -34,
-              borderRadius:16,
-              padding: isMobile ? '12px 14px' : '10px 14px',
-              display:'flex',
-              alignItems:'center',
-              justifyContent:'space-between',
-              gap:14,
-              ...atlasGlass(isDark),
-            }}>
-              <AtlasAnchorPills sections={sectionsCfg} activeId={effectiveActive} onAnchor={scrollToSection} isDark={isDark} />
-              <AtlasSpinButton onSpin={onSpin} lang={lang} />
-            </div>
-          </div>
+          {/* The play capsule lives inside the hero now — the two glass docks
+              (floating + condensed) and their section anchors are gone. */}
+          <AtlasHero data={data} isDark={isDark} lang={lang} onNav={onNav} heroRef={heroRef}
+            playingHere={playingHere} onSpin={onSpin} />
 
           {/* position+z lift the column's text above the light field's tail
               (a positioned z-auto hero paints over later static siblings) */}
-          <div style={{ maxWidth:1120, margin:'0 auto', padding: isMobile ? '24px 16px 110px' : '34px 32px 110px', display:'flex', flexDirection:'column', gap:46, position:'relative', zIndex:2 }}>
-            {data.bio && (
-              <section ref={bioRef} className="lib-rise" style={{ '--lib-d':'0.08s', scrollMarginTop:84 }}>
-                <AtlasBio bio={data.bio} facets={data.bio_facets}
-                  sourceUrl={data.bio_source_url} isDark={isDark} lang={lang} />
+          <div style={{ maxWidth:1120, margin:'0 auto', padding: isMobile ? '28px 16px 110px' : '40px 32px 110px', display:'flex', flexDirection:'column', gap:46, position:'relative', zIndex:2 }}>
+            {showBio && (
+              <section ref={bioRef} className="lib-rise" style={{ '--lib-d':'0.08s' }}>
+                <AtlasBio bio={data.bio} facets={data.bio_facets} nameFacts={nameFacts}
+                  sourceUrl={data.bio_source_url} isDark={isDark} lang={lang} isMobile={isMobile} />
               </section>
             )}
-            {(data.facts || []).length > 0 && (
-              <section ref={factsRef} className="lib-rise" style={{ '--lib-d':'0.16s', scrollMarginTop:84 }}>
-                <AtlasFactsShelf
-                  facts={(data.facts_meta && data.facts_meta.length)
-                    ? data.facts_meta
-                    : (data.facts || []).map(t => ({ text: t, labels: [] }))}
-                  isDark={isDark} lang={lang} />
+            {shelfFacts.length > 0 && (
+              <section ref={factsRef} className="lib-rise" style={{ '--lib-d':'0.16s' }}>
+                <AtlasFactsShelf facts={shelfFacts} resetKey={data.slug} isDark={isDark} lang={lang} />
               </section>
             )}
             {(data.albums || []).length > 0 && (() => {
@@ -19235,7 +19334,7 @@ function ArtistAtlasSection({
                 </section>
               );
             })()}
-            {sectionsCfg.length === 0 && (
+            {!hasAnything && (
               <div style={{ color:c.textMuted, fontSize:13 }}>
                 {lang==='ru' ? 'Пока пусто — обогатите библиотеку, чтобы здесь появились факты и альбомы.' : 'Nothing here yet — enrich your library to fill this page.'}
               </div>

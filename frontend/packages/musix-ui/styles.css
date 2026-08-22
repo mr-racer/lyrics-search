@@ -1774,28 +1774,245 @@
       box-shadow: inset 0 1px 0 rgba(255,255,255,.4), 0 8px 24px rgba(124,91,255,.5);
     }
 
+    /* ══════════════════════════════════════════════════════════════════════
+       Fact classes — the ONLY place a class hue is written.
+       Every surface (chip, stamp, dot-label, card tint, Grammy chip) takes its
+       colour from `data-fc="<class>"` on the element via the --fc* tokens
+       below. The theme moves lightness/chroma, never the hue. The UI violet
+       (270) is deliberately absent: it stays the colour of buttons and active
+       states, so a fact class can never be mistaken for a control.
+       ══════════════════════════════════════════════════════════════════════ */
+    :root {
+      --h-creation:   75;   /* создание   · amber   */
+      --h-sound:     215;   /* звук       · cyan    */
+      --h-video:     335;   /* клип       · magenta */
+      --h-sample:    170;   /* сэмпл      · teal    */
+      --h-placement: 140;   /* где звучит · green   */
+      --h-record:     45;   /* рекорд     · orange  */
+      --h-trouble:    15;   /* спор       · red     */
+      --h-title:     125;   /* название   · lime  (title_origin + name_origin) */
+      --h-award:      90;   /* награда    · gold    */
+      --h-history:    55;   /* история    · sepia (low chroma) */
+      --h-personal:  350;   /* личное     · rose    */
+      --fc-l: 78%; --fc-c: 0.13; --fc-c-soft: 0.09;
+      --fc-a-tint: .12; --fc-a-soft: .07; --fc-a-line: .42; --fc-a-glow: .28; --fc-a-top: .11;
+      --fc-none: rgba(255,255,255,.42); --fc-none-tint: rgba(255,255,255,.16); --fc-none-soft: rgba(255,255,255,.07);
+      /* neutral atlas tokens the class-free chrome below shares */
+      --atl-hair: rgba(255,255,255,.07); --atl-hair-strong: rgba(255,255,255,.16);
+      --atl-border: rgba(255,255,255,.1);
+      --atl-text: #fff; --atl-muted: rgba(255,255,255,.62); --atl-subtle: rgba(255,255,255,.42);
+      --atl-glass-bg: rgba(21,18,33,.55); --atl-glass-border: rgba(255,255,255,.13);
+      --atl-glass-shadow: inset 0 1px 0 rgba(255,255,255,.16), inset 0 -1px 0 rgba(0,0,0,.25), 0 14px 38px rgba(0,0,0,.42);
+      --atl-socket: radial-gradient(circle at 50% 35%, rgba(0,0,0,.62), rgba(0,0,0,.38));
+      --atl-socket-shadow: inset 0 2px 4px rgba(0,0,0,.7), inset 0 -1px 0 rgba(255,255,255,.14);
+      --atl-lamp-opacity: .55;
+    }
+    body[data-theme='light'] {
+      --fc-l: 48%; --fc-c: 0.15; --fc-c-soft: 0.10;
+      --fc-a-tint: .11; --fc-a-soft: .06; --fc-a-line: .38; --fc-a-glow: .18; --fc-a-top: .09;
+      --fc-none: rgba(22,22,32,.46); --fc-none-tint: rgba(22,22,32,.14); --fc-none-soft: rgba(22,22,32,.07);
+      --atl-hair: rgba(22,22,32,.07); --atl-hair-strong: rgba(22,22,32,.14);
+      --atl-border: rgba(22,22,32,.1);
+      --atl-text: #161620; --atl-muted: rgba(22,22,32,.64); --atl-subtle: rgba(22,22,32,.46);
+      --atl-glass-bg: rgba(255,255,255,.62); --atl-glass-border: rgba(255,255,255,.7);
+      --atl-glass-shadow: inset 0 1px 0 rgba(255,255,255,.95), inset 0 -1px 0 rgba(0,0,0,.05), 0 14px 30px rgba(40,30,70,.14);
+      --atl-socket: radial-gradient(circle at 50% 35%, rgba(0,0,0,.26), rgba(0,0,0,.12));
+      --atl-socket-shadow: inset 0 2px 4px rgba(0,0,0,.35), inset 0 -1px 0 rgba(255,255,255,.7);
+      --atl-lamp-opacity: .45;
+    }
+    [data-fc] { --fc-l-this: var(--fc-l); --fc-c-this: var(--fc-c); }
+    [data-fc="creation"]     { --fc-h: var(--h-creation); }
+    [data-fc="sound"]        { --fc-h: var(--h-sound); }
+    [data-fc="video"]        { --fc-h: var(--h-video); }
+    [data-fc="sample"]       { --fc-h: var(--h-sample); }
+    [data-fc="placement"]    { --fc-h: var(--h-placement); }
+    [data-fc="record"]       { --fc-h: var(--h-record); }
+    [data-fc="trouble"]      { --fc-h: var(--h-trouble); }
+    [data-fc="title_origin"],
+    [data-fc="name_origin"]  { --fc-h: var(--h-title); }
+    [data-fc="award"]        { --fc-h: var(--h-award); }
+    [data-fc="band_history"] { --fc-h: var(--h-history); --fc-c-this: var(--fc-c-soft); }
+    [data-fc="personal"]     { --fc-h: var(--h-personal); }
+    /* Gold at 48% lightness reads as brass on the light page — the one
+       per-class exception, kept inside this block so it can't drift. */
+    body[data-theme='light'] [data-fc="award"] { --fc-l-this: 52%; --fc-c-this: 0.17; }
+    [data-fc] {
+      --fc:      oklch(var(--fc-l-this) var(--fc-c-this) var(--fc-h));
+      --fc-tint: oklch(var(--fc-l-this) var(--fc-c-this) var(--fc-h) / var(--fc-a-tint));
+      --fc-soft: oklch(var(--fc-l-this) var(--fc-c-this) var(--fc-h) / var(--fc-a-soft));
+      --fc-line: oklch(var(--fc-l-this) var(--fc-c-this) var(--fc-h) / var(--fc-a-line));
+      --fc-glow: oklch(var(--fc-l-this) var(--fc-c-this) var(--fc-h) / var(--fc-a-glow));
+      --fc-top:  oklch(var(--fc-l-this) var(--fc-c-this) var(--fc-h) / var(--fc-a-top));
+    }
+    /* No class known → neutral grey, no glow, no top tint */
+    [data-fc="none"], [data-fc="all"] {
+      --fc: var(--fc-none); --fc-tint: var(--fc-none-tint); --fc-soft: var(--fc-none-soft);
+      --fc-line: var(--fc-none-tint); --fc-glow: transparent; --fc-top: transparent;
+    }
+    /* Shared class primitives */
+    .fc-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--fc); box-shadow: 0 0 6px var(--fc-glow); flex: none; }
+    .fc-dotlabel {
+      display: inline-flex; align-items: center; gap: 7px;
+      font-family: 'Geist', 'Inter', system-ui, sans-serif; font-weight: 500; font-size: 10.5px;
+      letter-spacing: .08em; text-transform: lowercase; color: var(--fc); white-space: nowrap;
+    }
+    /* «фан-версия» — a quiet word, no underline (the dotted underline already
+       means "from the open web" in the dossier) */
+    .fact-fan {
+      font-family: 'Geist', 'Inter', system-ui, sans-serif; font-weight: 500; font-size: 10px;
+      letter-spacing: .1em; text-transform: lowercase; color: var(--atl-subtle); white-space: nowrap;
+    }
+
+    /* ── Grammy chip (hero): gold liquid glass, colour via data-fc="award" ── */
+    .chip-grammy {
+      display: inline-flex; align-items: center; gap: 8px; padding: 6px 13px 6px 10px; border-radius: 99px;
+      font-family: 'Geist', 'Inter', system-ui, sans-serif; font-weight: 600; font-size: 10.5px;
+      letter-spacing: .18em; text-transform: uppercase; color: var(--fc); white-space: nowrap; cursor: default;
+      background: linear-gradient(160deg, oklch(var(--fc-l-this) var(--fc-c-this) var(--fc-h) / .3) 0%, oklch(var(--fc-l-this) var(--fc-c-this) var(--fc-h) / .08) 55%, oklch(var(--fc-l-this) var(--fc-c-this) var(--fc-h) / .16) 100%);
+      backdrop-filter: blur(12px) saturate(1.3); -webkit-backdrop-filter: blur(12px) saturate(1.3);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.38), inset 0 -1px 0 rgba(0,0,0,.22), 0 0 0 1px var(--fc-line), 0 6px 18px rgba(0,0,0,.3), 0 0 22px var(--fc-glow);
+    }
+    body[data-theme='light'] .chip-grammy {
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.9), inset 0 -1px 0 rgba(0,0,0,.06), 0 0 0 1px var(--fc-line), 0 6px 16px rgba(40,30,70,.12), 0 0 18px var(--fc-glow);
+    }
+    .chip-grammy strong { font-weight: 700; font-size: 12.5px; letter-spacing: .1em; }
+    .chip-grammy svg { filter: drop-shadow(0 1px 1px rgba(0,0,0,.35)); flex: none; }
+    .chip-grammy--nom {
+      background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none; opacity: .78;
+      box-shadow: inset 0 0 0 1px var(--fc-line);
+    }
+    .chip-grammy--nom svg { opacity: .8; filter: none; }
+
+    /* ── «Включить артиста»: glass capsule + a lit violet key set into a socket ── */
+    .atlas-play-cap {
+      display: inline-flex; align-items: center; gap: 12px; padding: 5px 20px 5px 5px; border-radius: 99px;
+      background: var(--atl-glass-bg); border: 1px solid var(--atl-glass-border); box-shadow: var(--atl-glass-shadow);
+      backdrop-filter: blur(18px) saturate(1.35); -webkit-backdrop-filter: blur(18px) saturate(1.35);
+      color: var(--atl-text); cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent;
+      transition: transform .2s ease, box-shadow .2s ease;
+    }
+    .atlas-play-cap:hover { transform: translateY(-1px); }
+    .atlas-play-cap:active { transform: translateY(0); }
+    .atlas-play-cap.is-block { display: flex; width: 100%; justify-content: center; padding-right: 28px; }
+    .atlas-play-socket { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; background: var(--atl-socket); box-shadow: var(--atl-socket-shadow); flex: none; }
+    .atlas-play-key {
+      width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: #fff;
+      background: radial-gradient(circle at 35% 28%, oklch(82% .13 275) 0%, oklch(63% .2 272) 42%, oklch(48% .2 283) 100%);
+      box-shadow: inset 0 1px 1px rgba(255,255,255,.6), inset 0 -2px 3px rgba(0,0,0,.42), 0 1px 2px rgba(0,0,0,.6), 0 3px 8px rgba(0,0,0,.45), 0 0 16px oklch(60% .18 270 / .6);
+      transition: transform .12s ease, box-shadow .12s ease;
+    }
+    .atlas-play-key svg { filter: drop-shadow(0 1px 1px rgba(0,0,0,.5)); }
+    .atlas-play-cap:active .atlas-play-key {
+      transform: translateY(1.5px) scale(.97);
+      box-shadow: inset 0 1px 1px rgba(255,255,255,.3), inset 0 -1px 2px rgba(0,0,0,.45), 0 0 0 rgba(0,0,0,0), 0 1px 3px rgba(0,0,0,.4), 0 0 8px oklch(60% .18 270 / .4);
+    }
+    .atlas-play-label { font-family: 'Geist', 'Inter', system-ui, sans-serif; font-weight: 600; font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: var(--atl-text); white-space: nowrap; }
+    .atlas-play-cap.is-playing .atlas-play-key { animation: atlasKeyPulse 2.6s ease-in-out infinite; }
+    .atlas-eq { display: flex; align-items: flex-end; gap: 2px; height: 12px; }
+    .atlas-eq i { display: block; width: 2px; border-radius: 1px; background: #fff; box-shadow: 0 0 4px rgba(255,255,255,.7); height: 4px; animation: atlasEq 1.15s ease-in-out infinite; }
+    .atlas-eq i:nth-child(1) { animation-delay: -.15s; --hi: 9px;  }
+    .atlas-eq i:nth-child(2) { animation-delay: -.6s;  --hi: 12px; }
+    .atlas-eq i:nth-child(3) { animation-delay: -.9s;  --hi: 7px;  }
+    .atlas-eq i:nth-child(4) { animation-delay: -.35s; --hi: 11px; }
+    @keyframes atlasEq { 0%, 100% { height: 3px; } 50% { height: var(--hi, 10px); } }
+    @keyframes atlasKeyPulse {
+      0%, 100% { box-shadow: inset 0 1px 1px rgba(255,255,255,.6), inset 0 -2px 3px rgba(0,0,0,.42), 0 1px 2px rgba(0,0,0,.6), 0 3px 8px rgba(0,0,0,.45), 0 0 14px oklch(60% .18 270 / .5); }
+      50%      { box-shadow: inset 0 1px 1px rgba(255,255,255,.6), inset 0 -2px 3px rgba(0,0,0,.42), 0 1px 2px rgba(0,0,0,.6), 0 3px 8px rgba(0,0,0,.45), 0 0 24px oklch(66% .18 270 / .85); }
+    }
+
+    /* ── «Досье» beside the biography: airy glass, dividers are inset hairlines,
+       never borders; no hover treatment by design ─────────────────────────── */
+    .atlas-dossier-lamp {
+      position: absolute; left: -120px; top: -110px; width: 520px; height: 460px; z-index: 0; pointer-events: none;
+      filter: blur(64px); opacity: var(--atl-lamp-opacity);
+      background:
+        radial-gradient(45% 50% at 45% 40%, oklch(58% .17 285 / .6), transparent 70%),
+        radial-gradient(35% 40% at 70% 70%, oklch(70% .14 215 / .4), transparent 70%),
+        radial-gradient(30% 35% at 25% 75%, oklch(80% .12 90 / .3), transparent 70%);
+    }
+    .atlas-dossier {
+      position: relative; z-index: 1; border-radius: 22px; padding: 22px 24px 24px;
+      background: var(--atl-glass-bg); box-shadow: var(--atl-glass-shadow);
+      backdrop-filter: blur(18px) saturate(1.35); -webkit-backdrop-filter: blur(18px) saturate(1.35);
+    }
+    .atlas-dossier-title {
+      display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+      font-family: 'Geist', 'Inter', system-ui, sans-serif; font-weight: 600; font-size: 12px;
+      letter-spacing: .24em; text-transform: uppercase; color: var(--atl-subtle);
+    }
+    .atlas-dossier-title::after { content: ''; flex: 1; height: 1px; background: linear-gradient(90deg, var(--atl-hair-strong), transparent); }
+    .atlas-dossier-row { display: grid; grid-template-columns: 86px 1fr; gap: 14px; align-items: baseline; padding: 10px 0; }
+    .atlas-dossier-row + .atlas-dossier-row { box-shadow: inset 0 1px 0 var(--atl-hair); }
+    .atlas-dossier-key {
+      font-family: 'Geist', 'Inter', system-ui, sans-serif; font-weight: 600; font-size: 10.5px;
+      letter-spacing: .2em; text-transform: uppercase; color: var(--atl-subtle);
+    }
+    .atlas-dossier-val { font-size: 15px; letter-spacing: -.01em; color: var(--atl-text); }
+    .atlas-dossier-val .sep { color: var(--atl-subtle); margin: 0 4px; }
+    .atlas-dossier-block { margin-top: 6px; padding-top: 14px; box-shadow: inset 0 1px 0 var(--atl-hair); }
+    .atlas-dossier-title + .atlas-dossier-block { margin-top: 0; padding-top: 8px; box-shadow: none; }
+    .atlas-dossier-block > .atlas-dossier-key { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+    .atlas-dossier-sent + .atlas-dossier-sent { margin-top: 12px; }
+    .atlas-dossier-src {
+      display: block; margin-bottom: 4px;
+      font-family: 'Geist', 'Inter', system-ui, sans-serif; font-weight: 500; font-size: 10.5px;
+      letter-spacing: .1em; text-transform: lowercase; color: var(--atl-subtle);
+    }
+    .atlas-dossier-sent p { margin: 0; font-size: 14.5px; line-height: 1.6; color: var(--atl-muted); }
+    .atlas-dossier-link {
+      display: inline-block; margin-top: 16px; padding-bottom: 1px; text-decoration: none;
+      font-family: 'Geist', 'Inter', system-ui, sans-serif; font-weight: 600; font-size: 11px;
+      letter-spacing: .18em; text-transform: uppercase; color: var(--atl-subtle);
+      border-bottom: 1px solid var(--atl-hair-strong);
+    }
+    .atlas-dossier-link:hover { color: var(--atl-text); }
+
+    /* ── Class chips above the facts shelf: legend and filter in one ──────── */
+    .fc-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 18px; }
+    .fc-chip {
+      display: inline-flex; align-items: center; gap: 8px; padding: 6px 13px 6px 11px; border-radius: 99px; cursor: pointer;
+      font-family: 'Geist', 'Inter', system-ui, sans-serif; font-weight: 600; font-size: 10px;
+      letter-spacing: .16em; text-transform: uppercase; color: var(--atl-muted);
+      background: transparent; border: 1px solid var(--atl-border);
+      transition: color .2s ease, background .2s ease, border-color .2s ease, box-shadow .2s ease;
+    }
+    .fc-chip .n { font-weight: 500; letter-spacing: .06em; opacity: .55; }
+    .fc-chip:hover { color: var(--atl-text); border-color: var(--fc-line); }
+    .fc-chip[aria-pressed="true"] { color: var(--fc); background: var(--fc-tint); border-color: var(--fc-line); box-shadow: inset 0 1px 0 rgba(255,255,255,.12), 0 0 18px var(--fc-glow); }
+    .fc-chip[aria-pressed="true"] .n { opacity: .7; }
+    .fc-chip[data-fc="all"][aria-pressed="true"] { color: var(--atl-text); }
+    /* Filter change = crossfade of the whole shelf (no per-card reflow jumps) */
+    .atlas-shelf { transition: opacity .22s ease, transform .22s ease; }
+    .atlas-shelf.is-swapping { opacity: 0; transform: translateY(4px); }
+
     /* ── Atlas facts: archive index cards ─────────────────────── */
     /* The card itself never rotates (rotated text rasterizes blurry, especially
-       on Windows) — the hover lift is a pure translate; only the small stamp
-       carries the hand-filed tilt and straightens out on hover. */
+       on Windows); only the small stamp carries the hand-filed tilt and
+       straightens out on hover. The lift animates `top` rather than a
+       transform on purpose: a transform transition promotes the card to its
+       own compositor layer and drops it again when the transition ends, and
+       that demotion re-rasterises the blurred shadow + grain in one frame — the
+       "highlight snaps off half a second after the cursor leaves" effect.
+       `top` stays on the main thread, so the fade-out is one continuous paint.
+       Both shadow lists keep the same number of layers so the ring interpolates. */
     .atlas-fact-card {
-      position: relative; border-radius: 4px 14px 14px 4px; padding: 17px 19px 20px 30px;
-      background: linear-gradient(180deg, rgba(255,255,255,.065), rgba(255,255,255,.028));
+      position: relative; top: 0; border-radius: 4px 14px 14px 4px; padding: 17px 19px 20px 30px;
+      background: linear-gradient(180deg, var(--fc-top, transparent) 0%, transparent 44%), linear-gradient(180deg, rgba(255,255,255,.065), rgba(255,255,255,.028));
       border: 1px solid rgba(255,255,255,.1); border-left: 0;
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.09), 0 6px 18px rgba(0,0,0,.3);
-      transition: translate .4s cubic-bezier(.22,.9,.3,1), box-shadow .4s ease;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.09), 0 6px 18px rgba(0,0,0,.3), 0 0 0 1px transparent;
+      transition: top .45s cubic-bezier(.22,.9,.3,1), box-shadow .45s ease;
     }
     .atlas-fact-card:hover {
-      translate: 0 -5px;
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.13), 0 18px 36px rgba(0,0,0,.44), 0 0 0 1px rgba(151,120,255,.22);
+      top: -5px;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.13), 0 18px 36px rgba(0,0,0,.44), 0 0 0 1px var(--fc-line, rgba(151,120,255,.22));
     }
     body[data-theme='light'] .atlas-fact-card {
-      background: linear-gradient(180deg, rgba(255,255,255,.9), rgba(255,255,255,.6));
+      background: linear-gradient(180deg, var(--fc-top, transparent) 0%, transparent 44%), linear-gradient(180deg, rgba(255,255,255,.9), rgba(255,255,255,.6));
       border-color: rgba(0,0,0,.09);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.95), 0 6px 16px rgba(40,30,70,.1);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.95), 0 6px 16px rgba(40,30,70,.1), 0 0 0 1px transparent;
     }
     body[data-theme='light'] .atlas-fact-card:hover {
-      box-shadow: inset 0 1px 0 #fff, 0 16px 30px rgba(40,30,70,.16), 0 0 0 1px rgba(124,91,255,.25);
+      box-shadow: inset 0 1px 0 #fff, 0 16px 30px rgba(40,30,70,.16), 0 0 0 1px var(--fc-line, rgba(124,91,255,.25));
     }
     /* Perforated spine: punched holes are painted in the page bg colour */
     .atlas-fact-card::before {
@@ -1811,20 +2028,50 @@
     .atlas-fact-stamp {
       display: inline-block; padding: 3px 9px; border-radius: 5px;
       font-size: 9.5px; letter-spacing: .2em; text-transform: uppercase;
-      color: oklch(70% 0.16 270); border: 1px solid oklch(60% 0.18 270 / .45);
-      background: oklch(60% 0.18 270 / .08);
+      color: var(--fc, oklch(70% 0.16 270)); border: 1px solid var(--fc-line, oklch(60% 0.18 270 / .45));
+      background: var(--fc-soft, oklch(60% 0.18 270 / .08));
       transform: rotate(var(--stamp-tilt, -4deg));
       transition: transform .4s cubic-bezier(.22,.9,.3,1);
     }
     .atlas-fact-card:hover .atlas-fact-stamp { transform: rotate(0deg); }
-    body[data-theme='light'] .atlas-fact-stamp { color: oklch(48% 0.18 275); }
     .atlas-fact-grain {
       position: absolute; inset: 0; opacity: .05; pointer-events: none; border-radius: inherit; mix-blend-mode: overlay;
       background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
     }
+
+    /* ── Player facts: class line under the header ──────────────────────────
+       Every item has the SAME box in every state — state is colour and glow,
+       never padding — so pinning a class cannot shift the header or the rule
+       below it. Overflow scrolls sideways without a scrollbar. */
+    .fact-classline {
+      display: flex; align-items: center; gap: 2px; min-height: 30px; padding: 0 0 4px;
+      overflow-x: auto; white-space: nowrap; scrollbar-width: none; -ms-overflow-style: none;
+      -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent);
+      mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent);
+    }
+    .fact-classline::-webkit-scrollbar { display: none; }
+    .cl-item {
+      display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 99px; border: 0; background: transparent; cursor: pointer; flex: none;
+      font-family: 'Geist', 'Inter', system-ui, sans-serif; font-weight: 500; font-size: 11px;
+      letter-spacing: .06em; text-transform: lowercase; color: var(--atl-subtle);
+      transition: background .22s ease, color .22s ease, box-shadow .22s ease;
+    }
+    .cl-item .fc-dot { box-shadow: none; transition: box-shadow .22s ease; }
+    .cl-item .n { opacity: .6; font-size: 10px; }
+    .cl-item:hover { color: var(--atl-muted); }
+    /* current = the class of the fact on screen (follows the rotation);
+       pressed = the listener pinned this class as a filter */
+    .cl-item.is-current { color: var(--fc); }
+    .cl-item.is-current .fc-dot { box-shadow: 0 0 6px var(--fc-glow); }
+    .cl-item[aria-pressed="true"] { color: var(--fc); background: var(--fc-tint); box-shadow: inset 0 1px 0 rgba(255,255,255,.1), 0 0 12px var(--fc-glow); }
+    .cl-item[aria-pressed="true"] .fc-dot { box-shadow: 0 0 6px var(--fc-glow); }
+    .cl-sep { font-size: 9px; color: var(--atl-subtle); opacity: .45; padding: 0 1px; flex: none; }
+
     @media (prefers-reduced-motion: reduce) {
       .atlas-plx-far, .atlas-plx-dust, .atlas-plx-mid, .atlas-plx-near,
-      .atlas-fact-card, .atlas-fact-stamp, .atlas-glare::after, .atlas-play-btn { transition: none !important; }
+      .atlas-fact-card, .atlas-fact-stamp, .atlas-glare::after, .atlas-play-btn, .atlas-play-cap, .atlas-shelf, .fc-chip, .cl-item { transition: none !important; }
+      .atlas-play-cap.is-playing .atlas-play-key, .atlas-eq i { animation: none !important; }
+      .atlas-eq i:nth-child(1) { height: 8px; } .atlas-eq i:nth-child(2) { height: 12px; } .atlas-eq i:nth-child(3) { height: 5px; } .atlas-eq i:nth-child(4) { height: 10px; }
     }
 
     /* ── Album gatefold modal (vinyl flip) ────────────────────── */
@@ -2437,12 +2684,13 @@
       display: inline-flex;
       border-radius: 99px;
       padding: 2px;
-      background: rgba(255,255,255,0.04);
-      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(255,255,255,0.045);
+      border: 0;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.07), inset 0 -1px 0 rgba(0,0,0,.35);
     }
     body[data-theme="light"] .facts-scope-toggle {
-      background: rgba(22,22,32,0.04);
-      border-color: rgba(22,22,32,0.10);
+      background: rgba(22,22,32,0.05);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.6), inset 0 -1px 0 rgba(0,0,0,.05);
     }
     .facts-scope-toggle > button {
       padding: 4px 11px;
