@@ -505,3 +505,25 @@ Do not add any detail that is absent from your answer above.
 
 Answer with STRICT JSON and nothing else — no markdown fence, no text around it.
 {{"text":"..."}}"""
+
+
+# ── "I have nothing to say" ──────────────────────────────────────────────────
+
+# The one word a model is asked to answer with when it found nothing. Exact on
+# purpose, and the exactness is the lesson: this check was first written as a
+# dozen Russian and English phrasings that a refusal tends to use. A list of
+# surface forms needs a new entry for every model, every language and every
+# rewording, and while it is being tuned it reads as validation without
+# validating anything — the same approach applied to a second fault counted zero
+# faults in a sample that plainly had four.
+#
+# So the text is checked for exactly what the prompt asked for, and the case the
+# prompt cannot guarantee is covered where the FACTS are rather than where the
+# words are: no biography is written at all when no search returned anything.
+# See ``llm_web_search.web_research_bio``.
+NO_DATA = "NO_DATA"
+
+
+def is_refusal(text: str) -> bool:
+    """True when the answer is the sentinel, or nothing at all."""
+    return (text or "").strip().strip('.*"\'`* \t\n') in ("", NO_DATA)

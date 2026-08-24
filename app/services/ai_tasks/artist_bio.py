@@ -159,6 +159,15 @@ async def run(job, db_client, llm) -> None:
                     base_url=job.llm_base_url, model_name=job.llm_model,
                     seed_bio=seed_bio,
                 )
+                # The agent, given nothing, writes about having nothing: all 21
+                # such answers in the production corpus came from this path and
+                # every one was stored and shown as a biography. An artist with
+                # no article and no web trail gets no biography, and the page
+                # simply does not show one.
+                if bio and tq.is_refusal(bio):
+                    logger.info("[artist_bio] %s: web fallback refused, no bio",
+                                artist_name)
+                    bio = ""
                 if bio:
                     bio = await _guard_fallback(job, bio, artist_name)
                     facets = {"source_kind": "web"}

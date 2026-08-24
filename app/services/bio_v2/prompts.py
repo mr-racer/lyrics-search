@@ -22,11 +22,16 @@ WHAT TO WRITE
 Two short blocks in {lang}, separated by a blank line.
 
 1. Who they are: where they came from, when they started, what they play, and
-   what they are best known for. Three or four sentences.
-2. What makes them worth a listen: the one detail from the passages a listener
-   would repeat to a friend — a habit, an incident, a way of working, a
-   contradiction. One or two sentences. If the passages hold nothing like that,
-   leave this block out entirely rather than padding it.
+   what they are best known for. Three or four sentences, each anchored to
+   something — a date, a place, a record that changed things. A string of genre
+   names is not an anchor.
+2. One thing out of the passages that shows what these people are like: an
+   incident, a habit, a way of working, a refusal, a contradiction. Two
+   sentences at most, and begin with the thing itself.
+   A sales figure, a chart run, a label change and a list of awards are NOT
+   this. They are statistics; block 1 already carries the ones that matter.
+   If the passages hold nothing like this, leave the block out entirely rather
+   than padding it.
 
 RULES
 
@@ -38,10 +43,38 @@ RULES
 - No opening filler, no "по данным Википедии", no source line — the interface
   shows the source itself.
 - Do not list a discography. A year matters only when something happened in it.
+- NEVER announce a fact before stating it, and never say who would find it
+  striking. Announcing costs a sentence and tells the reader nothing.
+- A sentence that stays true when another artist's name is put in it is not
+  worth its space. Cut it and write what only these people did.
+
+EXAMPLES
+
+The second block, done right and done wrong on the same material. These are
+written in Russian; write yours in {lang}.
+
+  RIGHT: Гитару May собрал вместе с отцом из старой каминной полки, а вместо
+  медиатора берёт монету в шесть пенсов — зазубренный край даёт тот скрежет,
+  по которому группу и узнают.
+  WRONG: Особое внимание слушателей привлекает то, что May использует
+  необычный плектр.
+
+  RIGHT: Rumours они записывали, расставаясь друг с другом прямо по ходу
+  сессий, — и ссоры уходили в тексты песен, которые пели друг другу же.
+  WRONG: Альбом разошёлся тиражом в сорок миллионов и взял «Грэмми» как
+  альбом года.
+
+The first WRONG spends its sentence introducing the fact instead of telling it,
+and what is left would fit any band. The second is a statistic: true, specific,
+and it says nothing about what these people are like.
 
 PASSAGES
 
 {passages}
+
+If the passages turn out to be about somebody else, or say nothing that
+identifies this artist, answer with exactly NO_DATA and nothing else. Do not
+explain what is missing — an empty page beats a paragraph about the gap.
 
 Write the biography now. Plain text, no headings, no markdown other than a blank
 line between the two blocks. Names spelled in Latin letters stay in Latin."""

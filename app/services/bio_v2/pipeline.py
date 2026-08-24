@@ -120,6 +120,11 @@ async def write_bio(ask, artist: str, chunks: list, retriever, *,
     if issues.get("wrong_language"):
         notes["dropped"] = "wrong_language"
         return "", notes
+    # Nothing to say is said by saying nothing: the page simply shows no
+    # biography, which beats a paragraph about how the search went.
+    if tq.is_refusal(bio):
+        notes["dropped"] = "refusal"
+        return "", notes
     return bio.strip(), notes
 
 

@@ -70,6 +70,11 @@ SEARXNG_PLAYLIST_ENGINES = os.environ.get(
 # same weight — so this has to live in code.
 RANK_POOL_SIZE = 30
 
+# Ровно эта строка возвращается инструментом, когда искать было нечего. Она
+# сравнивается кодом (см. `web_research_bio`), а не читается глазами, поэтому
+# литерал один на весь модуль.
+NO_RESULTS = "No results found"
+
 # Hard junk for LIST queries: individual-song / lyric / annotation / artist
 # landing pages and non-editorial noise. genius.com/albums/… is deliberately NOT
 # matched here — real tracklists live there.
@@ -640,7 +645,7 @@ def smart_web_search(
         results = rank_playlist_results(pool, query)
         if not results:
             logger.warning("[web_search] no results for query=%r", query)
-            return "No results found"
+            return NO_RESULTS
         logger.info("[web_search] playlist re-rank: pool=%d → kept %d: %s",
                     len(pool), len(results), _describe_results(results[:8]))
         # Больше страниц-списков за поиск: библиотечное пересечение делает код
@@ -722,7 +727,7 @@ def smart_web_search(
     results = search_searxng(query, max_results)
     if not results:
         logger.warning("[web_search] no results for query=%r", query)
-        return "No results found"
+        return NO_RESULTS
     output = []
     for r in results:
         url = r.get("url", "")
@@ -756,9 +761,10 @@ Strategy:
 - Search for the artist's biography, origin, and genre.
 - Use fetch_content=True only when snippets are not enough.
 - If the first search is insufficient, search again with a refined query.
-- HARD LIMIT: you may call web_search at most 3 times. After that, write the best biography you can from what you already have — even if information is incomplete.
+- HARD LIMIT: you may call web_search at most 3 times. After that, write the biography from what you already have.
 - Always cite the source URL in your final answer.
 - Lead with origin + genre. Keep it journalistic, no clichés.
+- If the searches never establish who this artist is, answer with exactly NO_DATA and nothing else. Do not describe the search, do not guess a genre or a hometown, do not ask for clarification, do not fall back to a different artist with a similar name. NO_DATA is a correct answer; a plausible paragraph about an artist you did not find is the worst one.
 {artist_name_rule}"""
 
 _AGENT_SYSTEM_PROMPT_WITH_SEED_TEMPLATE = """CRITICAL RULE: The artist name must appear in your response EXACTLY as given in the user message — character for character. Do not translate, transliterate, or alter it in any way.
@@ -801,7 +807,12 @@ def _create_agent(
 
     # Per-run search budget: the agent is created fresh for every
     # web_research_bio() call, so this closure counter is per-artist.
+    #
+    # `hits` is what the caller acts on. Whether the run had ANYTHING to write
+    # from is a fact the code owns — it handed the tool's answers over itself —
+    # so it is read here rather than guessed from the wording of the answer.
     search_calls = 0
+    stats = {"searches": 0, "hits": 0}
 
     @agent.tool_plain
     def web_search(query: str, fetch_content: bool = False) -> str:  # noqa: F841
@@ -820,8 +831,9 @@ def _create_agent(
             return (
                 f"SEARCH LIMIT REACHED: all {_MAX_WEB_SEARCHES} allowed web searches "
                 "are already used. Do NOT call web_search again. Write the final "
-                "biography NOW from the information you already have; if it is "
-                "scarce, write a shorter, more general paragraph."
+                "biography NOW from the information you already have. If none of "
+                "it actually identified this artist, answer with exactly NO_DATA "
+                "and nothing else — do not pad it out into a general paragraph."
             )
         search_calls += 1
         logger.info(
@@ -829,10 +841,13 @@ def _create_agent(
             search_calls, _MAX_WEB_SEARCHES, query, fetch_content,
         )
         result = smart_web_search(query, fetch_content)
+        stats["searches"] += 1
+        if result and result != NO_RESULTS:
+            stats["hits"] += 1
         logger.info("[agent→tool] web_search result length: %d chars", len(result))
         return result
 
-    return agent
+    return agent, stats
 
 
 # ─────────────────────────────────────────
@@ -854,7 +869,8 @@ async def web_research_bio(
     только при обнаружении фактических пробелов.
     Возвращает пустую строку при любой ошибке.
     """
-    agent = _create_agent(base_url, model_name, artist_name=artist_name, seed_bio=seed_bio)
+    agent, stats = _create_agent(base_url, model_name, artist_name=artist_name,
+                                 seed_bio=seed_bio)
     if seed_bio:
         prompt = (
             f'You are refining the biography of the music artist: "{artist_name}".\n\n'
@@ -869,6 +885,8 @@ async def web_research_bio(
         prompt = (
             f'Write a 2-3 sentence biographical paragraph about the music artist: "{artist_name}".\n'
             f"Write the biography in {lang}.\n"
+            f"If the searches do not establish who this artist is, answer with "
+            f"exactly NO_DATA and nothing else — no explanation, no guess.\n"
             f'IMPORTANT: The artist name must appear EXACTLY as "{artist_name}" — do not translate or modify it.'
         )
     try:
@@ -878,7 +896,18 @@ async def web_research_bio(
         result = await agent.run(
             prompt, usage_limits=UsageLimits(request_limit=_MAX_LLM_REQUESTS),
         )
-        return (result.output or "").strip()
     except Exception as e:
         logger.warning("[web_research_bio] agent error for %s: %s", artist_name, e)
         return ""
+
+    # Nothing was found, so there is nothing to write. Twenty-one production
+    # biographies were the model explaining that at length — every one of them
+    # from this path, and every one stored and shown as a biography. Whether the
+    # run had a source is a fact this code holds: either an AudioDB seed came
+    # in, or a search came back with something. Checking that beats reading the
+    # answer's wording, which changes with the model and the language.
+    if not seed_bio and not stats["hits"]:
+        logger.info("[web_research_bio] %s: %d searches, nothing found — no bio",
+                    artist_name, stats["searches"])
+        return ""
+    return (result.output or "").strip()
