@@ -493,7 +493,8 @@ class ModelRegistry:
         failed ``load_ckpt`` never leaves a broken instance permanently cached.
 
         CLAP is pinned to the CPU by design (device policy 2026-07): it stays
-        resident forever and never competes with text models for VRAM.
+        resident forever and never competes with text models for VRAM. The pin
+        is applied in the CLAP_Module constructor — see the comment below.
         """
         import torch
         if cls._clap_model is not None:
@@ -522,9 +523,18 @@ class ModelRegistry:
                 torch.hub.download_url_to_file(CLAP_WEIGHTS_URL, str(CLAP_WEIGHTS_PATH))
                 logger.info("[CLAP] download complete: %s", CLAP_WEIGHTS_PATH)
 
+            # device="cpu" is LOAD-BEARING, not a formality. Left at its
+            # default (None), laion_clap resolves the device itself as
+            # "cuda:0 if torch.cuda.is_available() else cpu" and create_model()
+            # runs model.to(device) INSIDE the constructor — so the whole CLAP
+            # stack is materialised in VRAM before this line returns. On a box
+            # where the text model, the sparse/rerank pair and the LLM already
+            # hold the card, that constructor is where audio search died with
+            # "CUDA out of memory", and the .to("cpu") below never got its turn.
             model = laion_clap.CLAP_Module(
                 enable_fusion=False,
-                amodel='HTSAT-base'
+                amodel='HTSAT-base',
+                device="cpu",
             )
             model.load_ckpt(str(CLAP_WEIGHTS_PATH))
             model.eval()

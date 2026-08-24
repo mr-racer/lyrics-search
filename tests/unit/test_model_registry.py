@@ -282,9 +282,13 @@ class TestEncodeFallback:
 
 class _FakeClapModule:
     instance_count = 0
+    last_device = "<unset>"
 
-    def __init__(self, enable_fusion=False, amodel=""):
+    def __init__(self, enable_fusion=False, amodel="", device=None):
         type(self).instance_count += 1
+        # Mirrors laion_clap: device=None means "cuda:0 if it is there", and
+        # create_model() does model.to(device) INSIDE the constructor.
+        type(self).last_device = "cuda:0" if device is None else str(device)
 
     def load_ckpt(self, path):
         time.sleep(0.02)  # widen the race window for the concurrency test
@@ -331,4 +335,31 @@ class TestClapSingleLoad:
         assert not errors, errors
         assert _FakeClapModule.instance_count == 1
         assert all(r is results[0] for r in results)
+        monkeypatch.setattr(ModelRegistry, "_clap_model", None)
+
+    def test_clap_is_constructed_on_the_cpu(self, monkeypatch, tmp_path):
+        """The device must be pinned in the CONSTRUCTOR, not after the fact.
+
+        laion_clap's CLAP_Module defaults to cuda:0 whenever CUDA is visible
+        and materialises the whole model there before returning, so a later
+        ``.to("cpu")`` cannot save us: on a box whose VRAM is already spoken
+        for by the text model and the LLM, the constructor itself raises
+        "CUDA out of memory" and audio search dies.
+        """
+        import types as _types
+        weights = tmp_path / "w.pt"
+        weights.write_bytes(b"stub")
+        monkeypatch.setattr("app.resources.model_registry.CLAP_AVAILABLE", True)
+        monkeypatch.setattr("app.resources.model_registry.CLAP_WEIGHTS_PATH", weights)
+        monkeypatch.setattr(
+            "app.resources.model_registry.laion_clap",
+            _types.SimpleNamespace(CLAP_Module=_FakeClapModule),
+            raising=False,
+        )
+        monkeypatch.setattr(ModelRegistry, "_clap_model", None)
+        _FakeClapModule.last_device = "<unset>"
+
+        ModelRegistry.load_clap()
+
+        assert _FakeClapModule.last_device == "cpu"
         monkeypatch.setattr(ModelRegistry, "_clap_model", None)
