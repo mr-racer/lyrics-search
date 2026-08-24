@@ -33,10 +33,17 @@ class PageFetcher:
     once.
     """
 
-    def __init__(self, config: Optional[AgentConfig] = None, sink=None):
+    def __init__(self, config: Optional[AgentConfig] = None, sink=None,
+                 shared=None):
         self.cfg = config or AgentConfig()
         self.sink = sink
         self._cache: dict = {}
+        # The cross-turn layer. This instance dies with the message; that one
+        # outlives it by a minute, which is what makes a tapped follow-up cheap.
+        # Injectable so a test can run without it.
+        from app.services.assistant.page_store import PAGES
+
+        self._shared = PAGES if shared is None else shared
         self._semaphore = asyncio.Semaphore(self.cfg.fetch_concurrency)
         # Resolved once per run, not per page: it reads a file off disk.
         from app.services.proxy_config import get_proxy
@@ -60,6 +67,13 @@ class PageFetcher:
         cached = self._cache.get(key)
         if cached is not None:
             return cached
+        shared = self._shared_get(url)
+        if shared is not None:
+            # Read by another turn — or another listener — inside the TTL. Kept
+            # in the local cache too so the rest of this run treats it as read.
+            self._cache[key] = shared
+            self._emit("fetch_cached", url=url)
+            return shared
 
         keep_html = source_for_url(url) == "apple"
         raw_html = ""
@@ -156,13 +170,39 @@ class PageFetcher:
             logger.info("[fetch] %s failed: %s", url, page.error)
 
         self._cache[key] = page
+        # Only successes reach the shared layer — PageStore.put drops the rest.
+        # A 403 is a property of the moment, not of the URL, and caching one
+        # would poison every turn for a full minute over one unlucky request.
+        self._shared_put(page)
         return page
+
+    def _shared_get(self, url: str) -> Optional[Page]:
+        if self._shared is None:
+            return None
+        try:
+            return self._shared.get(url)
+        except Exception:  # noqa: BLE001 — a cache must never break a fetch
+            logger.warning("[fetch] shared page store unreadable", exc_info=True)
+            return None
+
+    def _shared_put(self, page: Page) -> None:
+        if self._shared is None:
+            return
+        try:
+            self._shared.put(page)
+        except Exception:  # noqa: BLE001
+            logger.warning("[fetch] shared page store unwritable", exc_info=True)
 
     async def fetch(self, url: str, *, source: str = "web",
                     title: str = "") -> Page:
         key = canonical_url(url)
         if key in self._cache:
             return self._cache[key]
+        shared = self._shared_get(url)
+        if shared is not None:
+            self._cache[key] = shared
+            self._emit("fetch_cached", url=url)
+            return shared
         async with self._semaphore:
             try:
                 # A hard ceiling over the whole cascade. Each fetcher has its own

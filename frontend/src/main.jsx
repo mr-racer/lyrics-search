@@ -7315,9 +7315,18 @@ function asxHost(url) {
 // The answer card. Deliberately not the old facts card with a hidden header: a
 // web-sourced answer has no library subject, and a card built around one shows
 // an empty frame whenever the question was not about something you own.
-function AsxAnswerCard({ payload, c, isDark, lang, navigateToArtist, onAsk }) {
+function AsxAnswerCard({ payload, query, contextId, c, isDark, lang, navigateToArtist,
+                         onAsk, onPlayTrack, onQueueNext, onAddToPlaylist }) {
   const ru = lang === 'ru';
   const evidence = payload.evidence || [];
+  // Records this one is built from that the listener actually owns. Only the
+  // samples answer fills this.
+  const related = payload.related_tracks || [];
+  const relatedHits = related.map(t => ({ track: t, score: 0, matched_on: 'sample' }));
+  // Nothing was downloaded for this answer — so offer to go and look. True for
+  // the samples card, which never searches, and for any turn the library
+  // answered on its own.
+  const offline = evidence.length > 0 && !evidence.some(e => e.kind === 'chunk');
   const [openSrc, setOpenSrc] = useState(null);
   const srcRefs = useRef({});
   // Explain mode: the turn was "what does THIS line mean", so the line itself is
@@ -7438,13 +7447,54 @@ function AsxAnswerCard({ payload, c, isDark, lang, navigateToArtist, onAsk }) {
             {ru ? 'нашёл в интернете' : 'found on the web'}
           </span>
         )}
+        {offline && (
+          <span className="asx-pill" style={{ cursor: 'default' }}>
+            {ru ? 'из твоей библиотеки' : 'from your library'}
+          </span>
+        )}
         {!focus && payload.grounded === false && (
           <span className="asx-pill" style={{ cursor: 'default' }}>
             {ru ? 'только найденные источники, без формулировки ИИ'
                 : 'sources only, not written by the AI'}
           </span>
         )}
+        {/* The answer came out of the library alone. Offer the web as a
+            deliberate second step rather than spending a minute on it that
+            nobody asked for. */}
+        {offline && onAsk && query && (
+          <button className="asx-pill" type="button"
+            onClick={() => onAsk(query, {
+              intent: 'general',
+              allowWeb: true,
+              focusKind: payload.focus_kind || undefined,
+              focusFact: payload.focus_fact || undefined,
+              subjectTrackId: (subject && subject.track_id) || undefined,
+              subjectArtistSlug: (subject && !subject.track_id && subject.artist_slug)
+                || undefined,
+            })}>
+            {ru ? 'Поискать в сети' : 'Search the web'}
+          </button>
+        )}
       </div>
+
+      {/* The records this track is built from, when they are in the library.
+          An answer about sampling invites playing them — that is the one place
+          a track list under a prose answer is not filler. */}
+      {related.length > 0 && onPlayTrack && (
+        <div style={{ marginTop: 16 }}>
+          <AsxLabel c={c} style={{ marginBottom: 8 }}>
+            {ru ? 'ЕСТЬ У ТЕБЯ' : 'IN YOUR LIBRARY'}
+          </AsxLabel>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {related.map((t, i) => (
+              <AsxTrackRow key={t.track_id || i} track={t} index={i + 1}
+                c={c} isDark={isDark} lang={lang}
+                onPlay={() => onPlayTrack(relatedHits[i], relatedHits)}
+                onQueueNext={onQueueNext} onAddToPlaylist={onAddToPlaylist} />
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Follow-up chips: written by the model in the same answer call (its own
           next-question ideas), sanitized server-side. Tapping one asks it with
@@ -7457,6 +7507,10 @@ function AsxAnswerCard({ payload, c, isDark, lang, navigateToArtist, onAsk }) {
             <button key={q} className="asx-pill" type="button"
               onClick={() => onAsk(q, {
                 intent: 'general',
+                // The pages this answer was built from are still warm on the
+                // server for a minute. The chip was written FROM that material,
+                // so it is the one place reusing it is exactly right.
+                contextId: contextId || undefined,
                 subjectTrackId: (subject && subject.track_id) || undefined,
                 subjectArtistSlug: (subject && !subject.track_id && subject.artist_slug)
                   || undefined,
@@ -7536,6 +7590,10 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [cards, setCards] = useState(null);   // «samples» hooks; null = not fetched yet
   const [ideas, setIdeas] = useState(null);   // random facts strip; null = not fetched yet
+  // Server-side handle on the current turn's material, so a follow-up reuses
+  // the pages instead of re-downloading them. Session state, not history: it
+  // expires in a minute and a reopened turn must not send a dead one.
+  const [contextId, setContextId] = useState(null);
 
   const llmKw = () => ({
     llm_base_url: localStorage.getItem('llm_base_url') || undefined,
@@ -7602,6 +7660,20 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
       // backend narrows the pack to the statement and stays silent when it
       // finds nothing that actually explains it.
       focus_fact: opts.focusFact || undefined,
+      // The listener tapped a card rather than typing. The backend answers
+      // "what samples are in this" straight out of the database and does not
+      // go to the web at all — the list is already verified, and searching
+      // only invites the model to hedge it.
+      focus_kind: opts.focusKind || undefined,
+      // A previous turn's material, so a follow-up reuses the pages that turn
+      // already read instead of downloading them again. Only the follow-up
+      // chips pass this: a `clarify` re-ask is a NEW question about the same
+      // words and must not inherit the last answer's context.
+      context_id: opts.contextId || undefined,
+      // Only ever true, and only from the «Поискать в сети» chip. Left
+      // undefined the backend picks per mode, which is what should normally
+      // happen.
+      allow_web: opts.allowWeb ? true : undefined,
       now_playing_track_id: playerTrack?.track_id || undefined,
       limit: 15, lang, ...llmKw(),
     };
@@ -7633,6 +7705,10 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
     if (!payload) { setFailed(true); setIntent(null); return; }
     setTurn(payload);
     setIntent(payload.intent || null);
+    // The handle on this turn's downloaded material. Lives a minute on the
+    // server; deliberately NOT saved with the turn, because a turn reopened
+    // from history is older than that and its id points at nothing.
+    setContextId(payload.context_id || null);
     if (payload.slots) setSlots(payload.slots);
     if (!asxTurnEmpty(payload) && !payload.clarify && !payload.disambiguate) {
       setTurnId(saveTurn({ message: text, intent: payload.intent, result: payload,
@@ -7646,6 +7722,17 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
   // and the entry-point sections come back. Slots survive on purpose — «а
   // побыстрее?» after a reset still means what it meant.
   const resetTurn = () => {
+    // Dismissing the answer is the listener saying they are done with it, so
+    // the pages it read go now rather than in a minute. Fire-and-forget, and
+    // the catch is NOT dead code: the route answers 204 and `apiFetch` ends in
+    // res.json(), which throws on an empty body. The request has already been
+    // delivered by then — and a failed release is not worth interrupting
+    // anybody about, since the context expires on its own regardless.
+    if (contextId) {
+      apiFetch(`/assistant/context/${encodeURIComponent(contextId)}`,
+               { method: 'DELETE' }).catch(() => {});
+      setContextId(null);
+    }
     setTurn(null); setTurnId(null); setFailed(false);
     setIntent(null); setQuery(''); setStage('');
   };
@@ -7657,6 +7744,9 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
     setIntent(t.result?.intent || null);
     setSlots(t.slots || {});
     setSavedId(t.saved_playlist_id || null);
+    // A turn out of history is older than the context TTL by definition. Its
+    // follow-ups still work — they just pay for their own pages.
+    setContextId(null);
     setFailed(false);
   };
 
@@ -7876,8 +7966,11 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
               onQueueNext={onQueueNext} onAddToPlaylist={onAddToPlaylist} />
           )}
           {turn && turn.answer && (
-            <AsxAnswerCard payload={turn.answer} c={c} isDark={isDark} lang={lang}
-              navigateToArtist={navigateToArtist} onAsk={send} />
+            <AsxAnswerCard payload={turn.answer} query={query} contextId={contextId}
+              c={c} isDark={isDark} lang={lang}
+              navigateToArtist={navigateToArtist} onAsk={send}
+              onPlayTrack={onPlayTrack} onQueueNext={onQueueNext}
+              onAddToPlaylist={onAddToPlaylist} />
           )}
 
           {/* ── Idle entry points. Every section is a pre-written turn, and
@@ -7913,6 +8006,10 @@ function AssistantSection({ isDark, lang, aiStatus, onPlayTrack, onQueueNext, on
                       <AsxNebulaSample key={card.track_id || i} card={card} isDark={isDark}
                         onSend={(cd) => send(cd.prompt, {
                           intent: cd.intent || 'general',
+                          // Answered straight from the sample links in the
+                          // database — the card was built from them, and the
+                          // web was only ever re-deriving what we already knew.
+                          focusKind: 'samples',
                           subjectTrackId: cd.track_id || undefined,
                         })} />
                     ))}

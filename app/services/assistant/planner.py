@@ -411,6 +411,35 @@ def plan_for_focus(fact: str, subject, message: str = "") -> Plan:
                 rationale=f"Объясняю факт про {head}" if head else "Объясняю факт")
 
 
+def plan_for_followup(question: str, subject) -> Plan:
+    """The plan for a follow-up chip, built without asking the model.
+
+    Nothing here is a judgement either. The branch is known (the chip carries
+    it), the subject is pinned by id, and the question itself is the best
+    cross-encoder query available — it was WRITTEN by a model reading the very
+    material this run starts from, so it is specific in a way a rephrasing
+    would not be.
+
+    Spending a planner call here bought nothing: the intent it returned was
+    overwritten by the chip's own a few lines later, and its filters were
+    re-derived from a sentence that has no era, no style and no work in it.
+    """
+    artist = (getattr(subject, "artist_name", None) or "").strip()
+    song = (getattr(subject, "song_title", None) or "").strip()
+    head = " ".join(p for p in (artist, song) if p)
+    text = " ".join((question or "").split())[:160]
+
+    queries = [f"{head} {text}".strip() if head else text]
+    if head:
+        queries.append(f"{head} {' '.join(text.split()[:6])}".strip())
+    queries = _dedupe_queries([q for q in queries if q])
+
+    return Plan(intent="general",
+                filters=Filters(artist=artist or None, song=song or None),
+                web_queries=queries, ce_query=text or (question or "").strip(),
+                rationale=f"Уточняю про {head}" if head else "Уточняю")
+
+
 def _valid_count(value: Optional[int]) -> Optional[int]:
     if value is None:
         return None

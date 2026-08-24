@@ -267,6 +267,13 @@ class GeneralResult:
     follow_ups: list = field(default_factory=list)
     clarify: Optional[ClarifyRequest] = None
     notes: list = field(default_factory=list)
+    # In-library counterparts of the subject's sample links. Filled by the
+    # samples mode only — under any other answer a track list is filler.
+    related_tracks: list = field(default_factory=list)
+    # Which tap-through mode produced this, echoed so the client can offer the
+    # same turn again with the web switched on rather than guessing the mode
+    # back out of the payload.
+    focus_kind: Optional[str] = None
 
 
 @dataclass(slots=True)

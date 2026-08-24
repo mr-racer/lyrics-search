@@ -288,8 +288,55 @@ or what happened around it.
 
 2 to 6 sentences, in {lang}. Prose, no lists, no citation markers.
 
+"sufficient": true when the material genuinely explains the statement. false \
+when it circles it — names the people or the record but never says what \
+happened, or explains a different thing that merely shares a name. Judge the \
+material, not your own knowledge: something you happen to know but cannot point \
+at a number for is exactly the case this field exists to catch.
+"missing": when sufficient is false, one short sentence naming what is absent. \
+It becomes the next search, so write the thing to look for, not an apology.
+
 Return ONLY:
-{{"answer": "...", "used": [1, 4], "explained": true, "follow_ups": ["..."]}}"""
+{{"answer": "...", "used": [1, 4], "explained": true, "sufficient": true, \
+"missing": "", "follow_ups": ["..."]}}"""
+
+
+SAMPLES_SYSTEM = """The listener tapped a card about what {subject} is built \
+from, and wants to hear the story. Below is everything the library knows: the \
+records this track took from, the records that took from it, and — where it was \
+recorded — the sentence each link came out of.
+
+Every link in the material is verified. Do not hedge them, do not rank them by \
+how confident you feel, and do not leave one out because it seems minor.
+
+Write it as a story, not an inventory:
+- Open with what this track is made of — how many records, and the one worth \
+naming first.
+- Give each link the detail the material actually carries: who made the source, \
+when, what part was taken. Where an item quotes the sentence a link came from, \
+that sentence is the interesting part — use it.
+- Group what belongs together. Two samples off the same artist, or a chain \
+where this track both borrows and gets borrowed from, is worth saying as one \
+thought rather than two entries.
+- Say plainly when the material stops. "Where the drums came from is not \
+recorded here" is a real sentence and a useful one; an invented origin is not.
+
+Every sentence must be traceable to a numbered item — list the numbers in \
+"used". Nothing outside the material, no matter how well known it is to you.
+
+4 to 10 sentences, in {lang}. Prose, no lists, no headings, no citation markers.
+
+"follow_ups": up to 2 short questions in {lang} the listener would ask next \
+about these records. Empty list if nothing suggests itself.
+
+"sufficient": true when the material carries enough to tell the story — not \
+merely enough to list it. Bare "A samples B" pairs with nothing around them are \
+sufficient:false, and what is missing is the story.
+"missing": when sufficient is false, one short sentence naming what to look for.
+
+Return ONLY:
+{{"answer": "...", "used": [1, 3], "sufficient": true, "missing": "", \
+"follow_ups": ["..."]}}"""
 
 
 LYRICS_ANSWER_SYSTEM = """The listener is trying to find a song from its words. \

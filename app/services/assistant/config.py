@@ -150,6 +150,34 @@ MAX_WEB_SEARCHES = 8
 # only for the iterate/stop veto, never to drop material.
 WEAK_CONTEXT_PROB = 0.45
 
+# ── local-first context ─────────────────────────────────────────────────────
+# The library answers first and the web is the fallback. Iteration 0 builds a
+# pack out of SQLite alone — facts, the facts of structurally related songs,
+# sample links, credits, gems — and the run stops there when the model says the
+# question came out answered. Only then does anything get downloaded.
+#
+# The failure this is defending against: a tapped follow-up, fact or samples
+# card spending a minute on SearXNG and page fetches to re-derive material that
+# was already on the machine, or was downloaded by the previous turn.
+LOCAL_FIRST = True
+# The iteration-0 twin of WEAK_CONTEXT_PROB, and it has to be its own number.
+# Fact probabilities live on the ``CE_THRESHOLD_FACTS`` scale, not the chunk
+# one, so judging a pack of facts against 0.45 would send every local iteration
+# to the web and quietly undo the whole thing.
+WEAK_LOCAL_PROB = 0.25
+# Seconds a downloaded page stays reusable across turns. Keyed by canonical URL
+# and shared by the whole instance: a Wikipedia article is the same page for
+# every account, and this is public content, not library data.
+PAGE_CACHE_TTL = 60.0
+# Pages held before the oldest are evicted. The TTL alone bounds nothing —
+# concurrent turns can fill the store arbitrarily fast inside one minute.
+PAGE_CACHE_MAX = 200
+# Seconds a TURN CONTEXT lives, counted from the terminal frame. Distinct from
+# the page layer because it is a different thing: what is private is not the
+# page but the link between a page and who searched for it, so this layer is
+# bound to one account where the page layer is not.
+CONTEXT_TTL = 60.0
+
 # ── playlist assembly ───────────────────────────────────────────────────────
 DEFAULT_TARGET_COUNT = 15
 # How many tracks a soundtrack request may RETURN. Not a second target: the run
@@ -291,6 +319,13 @@ class AgentConfig:
     playlist_max_iterations: int = PLAYLIST_MAX_ITERATIONS
     max_web_searches: int = MAX_WEB_SEARCHES
     weak_context_prob: float = WEAK_CONTEXT_PROB
+
+    # local-first
+    local_first: bool = LOCAL_FIRST
+    weak_local_prob: float = WEAK_LOCAL_PROB
+    page_cache_ttl: float = PAGE_CACHE_TTL
+    page_cache_max: int = PAGE_CACHE_MAX
+    context_ttl: float = CONTEXT_TTL
 
     # playlist
     default_target_count: int = DEFAULT_TARGET_COUNT

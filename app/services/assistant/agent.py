@@ -28,7 +28,8 @@ from app.services.assistant.facts_source import (FactsRetriever,
                                                  MetadataFactSource)
 from app.services.assistant.fetcher import PageFetcher
 from app.services.assistant.llm import LLMClient, as_str
-from app.services.assistant.planner import Planner, plan_for_focus, quote_work
+from app.services.assistant.planner import (Planner, plan_for_focus,
+                                            plan_for_followup, quote_work)
 from app.services.assistant.timing import Timings
 from app.services.assistant.web_sources import SearchSources
 from app.services.retrieval import DEFAULT_HUB
@@ -72,6 +73,9 @@ class Assistant:
         # The subject the last run settled on, so the route can echo it back to
         # the card without resolving it a second time.
         self.last_subject: Optional[Subject] = None
+        # The branch that ran, so the caller can save its chunks as a turn
+        # context without reaching back through the result contract.
+        self.last_branch = None
 
         self.catalog = None
         try:
@@ -91,38 +95,75 @@ class Assistant:
     # ── entry point ───────────────────────────────────────────────────────
 
     async def run(self, message: str, *, focus_fact: Optional[str] = None,
+                  focus_kind: Optional[str] = None,
                   subject_track_id: Optional[str] = None,
                   subject_artist_slug: Optional[str] = None,
-                  forced_intent: Optional[str] = None):
+                  forced_intent: Optional[str] = None,
+                  allow_web: Optional[bool] = None,
+                  context=None, context_id: Optional[str] = None):
         """Answer ``message``. Returns one of the four result contracts."""
         with self.timings.measure():
             result = await self._run(message, focus_fact=focus_fact,
+                                     focus_kind=focus_kind,
                                      subject_track_id=subject_track_id,
                                      subject_artist_slug=subject_artist_slug,
-                                     forced_intent=forced_intent)
+                                     forced_intent=forced_intent,
+                                     allow_web=allow_web, context=context,
+                                     context_id=context_id)
         logger.info("[assistant] %s", self.timings.report())
         return result
 
     async def _run(self, message: str, *, focus_fact: Optional[str],
                    subject_track_id: Optional[str],
                    subject_artist_slug: Optional[str],
-                   forced_intent: Optional[str] = None):
+                   forced_intent: Optional[str] = None,
+                   focus_kind: Optional[str] = None,
+                   allow_web: Optional[bool] = None,
+                   context=None, context_id: Optional[str] = None):
         self.sink.put("start", message=message)
 
         pinned = self._pinned_subject(subject_track_id, subject_artist_slug)
 
+        # ── the tap-through entries ───────────────────────────────────────
+        # None of these is a question to classify: the branch is known, the
+        # subject is pinned by id, and the request text itself is the best
+        # cross-encoder query there is. Asking the planner would spend a call to
+        # re-derive facts the caller already supplied — and its intent would be
+        # overwritten a few lines later anyway.
+        #
+        # Note what is NOT here: a `clarify` frame re-asks the user's original
+        # free-text query with a forced intent, and genuinely needs a plan for
+        # its era/style/work filters. It carries no focus and no context, so it
+        # falls through to the planner as before.
+        if focus_kind == "samples":
+            plan = plan_for_followup(message, pinned)
+            self.sink.put("plan", intent="general", focus="samples",
+                          queries=plan.web_queries)
+            return await self._general(message, plan, subject=pinned,
+                                       focus_kind="samples",
+                                       allow_web=allow_web)
+
         if focus_fact:
-            # "Explain THIS statement" is not a question to classify. The intent
-            # is known, the subject is pinned by id, and the statement itself is
-            # the best cross-encoder query there is — it is the exact text a
-            # useful passage has to be about. Asking the planner here would spend
-            # a call to re-derive facts the caller already supplied, and would
-            # occasionally get them wrong.
+            # "Explain THIS statement": the statement is the exact text a useful
+            # passage has to be about.
             plan = plan_for_focus(focus_fact, pinned, message)
             self.sink.put("plan", intent="general", focus=True,
                           queries=plan.web_queries)
             return await self._general(message, plan, focus_fact=focus_fact,
-                                       subject=pinned)
+                                       subject=pinned, allow_web=allow_web,
+                                       context=context)
+
+        if context_id:
+            # A follow-up chip. The rule is about the field being PRESENT, not
+            # about the lookup succeeding: an expired context still means the
+            # caller knew the branch, so an expired tab degrades into today's
+            # behaviour minus one wasted planner call.
+            plan = plan_for_followup(message, pinned)
+            self.sink.put("plan", intent="general", followup=True,
+                          carried=bool(context is not None),
+                          queries=plan.web_queries)
+            return await self._general(message, plan, subject=pinned,
+                                       allow_web=allow_web, context=context)
 
         with self.timings.span("llm.plan"):
             plan = await self.planner.plan(message)
@@ -171,18 +212,23 @@ class Assistant:
 
             return await PlaylistBranch(self, sources, fetcher).run(message, plan)
         return await self._general(message, plan, subject=pinned,
-                                   sources=sources, fetcher=fetcher)
+                                   sources=sources, fetcher=fetcher,
+                                   allow_web=allow_web)
 
     async def _general(self, message: str, plan: Plan, *,
                        focus_fact: Optional[str] = None,
                        subject: Optional[Subject] = None,
-                       sources=None, fetcher=None):
+                       focus_kind: Optional[str] = None,
+                       allow_web: Optional[bool] = None,
+                       context=None, sources=None, fetcher=None):
         from app.services.assistant.branches.general import GeneralBranch
 
         branch = GeneralBranch(self, sources or SearchSources(self.cfg, self.sink),
                                fetcher or PageFetcher(self.cfg, self.sink))
+        self.last_branch = branch
         return await branch.run(message, plan, focus_fact=focus_fact,
-                                subject=subject)
+                                subject=subject, focus_kind=focus_kind,
+                                allow_web=allow_web, context=context)
 
     # ── shared machinery ──────────────────────────────────────────────────
 
@@ -226,39 +272,55 @@ class Assistant:
                           song=subject.song_slug)
         return subject
 
-    async def subject_facts(self, plan: Plan, message: str, query: str, *,
-                            subject: Optional[Subject] = None) -> list:
-        """The subject's own facts, ranked. Empty when the subject is unclear.
+    async def resolve_subject(self, plan: Plan, message: str, *,
+                              subject: Optional[Subject] = None):
+        """Who the question is about, as far as the library can tell.
 
-        Empty is a perfectly good outcome. The web branch answers either way, and
-        loading the wrong artist's biography is a worse failure than loading none:
-        it is invisible, and it makes the answer confidently about someone else.
+        ``None`` is a perfectly good outcome. The web branch answers either way,
+        and loading the wrong artist's biography is a worse failure than loading
+        none: it is invisible, and it makes the answer confidently about someone
+        else.
+
+        Split out of the old ``subject_facts`` because the two halves have
+        different callers now — the material comes from ``local_material``, which
+        reads more than facts, while resolution is still one decision made once.
         """
+        if subject is not None:
+            self.last_subject = subject
+            return subject
         if self.catalog is None:
-            return []
+            return None
 
-        if subject is None:
-            artist, song = plan.filters.artist, plan.filters.song
-            if not artist and not song:
-                return []
-            subject = self.catalog.resolve_subject(song=song, artist=artist)
-            if subject.how == "shortlist":
-                subject = await self._pick_from_shortlist(subject, message)
-            self.sink.put("subject", how=subject.how, artist=subject.artist_slug,
-                          song=subject.song_slug)
-
+        artist, song = plan.filters.artist, plan.filters.song
+        if not artist and not song:
+            return None
+        subject = self.catalog.resolve_subject(song=song, artist=artist)
+        if subject.how == "shortlist":
+            subject = await self._pick_from_shortlist(subject, message)
+        self.sink.put("subject", how=subject.how, artist=subject.artist_slug,
+                      song=subject.song_slug)
         self.last_subject = subject
         if not subject.resolved:
             logger.info("[assistant] no confident subject — answering from the "
                         "web alone")
-            return []
+        return subject
 
-        with self.timings.span("facts.retrieve"):
-            found = await asyncio.to_thread(
-                self.facts.retrieve, query, song_slug=subject.song_slug,
-                artist_slug=subject.artist_slug)
-        self.sink.put("facts_done", kept=len(found))
-        return found
+    async def local_material(self, subject: Optional[Subject], query: str):
+        """Everything the library has about ``subject``, ranked and numbered.
+
+        SQLite only — facts, the facts of structurally related songs, sample
+        links, credits, gems. Off the event loop because every one of those is a
+        blocking read, and a blocking read inside a coroutine is what "the
+        assistant hangs on Qdrant" has meant every previous time.
+        """
+        from app.services.assistant import local_pack
+
+        with self.timings.span("facts.local"):
+            pack = await asyncio.to_thread(
+                local_pack.build, self.collection_name, subject, query,
+                lang=self.cfg.lang, ranker=self.facts.rank)
+        self.sink.put("facts_done", kept=len(pack.items), links=len(pack.links))
+        return pack
 
     async def _pick_from_shortlist(self, subject: Subject,
                                    message: str) -> Subject:

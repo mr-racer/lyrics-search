@@ -1207,6 +1207,19 @@ class AssistantRequest(BaseModel):
     # prompt, and an honest silence when nothing explains it. See
     # ``assistant/facts_executor.explain``.
     focus_fact: Optional[str] = Field(None, max_length=600)
+    # The listener tapped a card of this kind rather than typing a question.
+    # Deliberately NOT a fifth AssistantIntent: the intent decides which payload
+    # comes back, and this changes only how one general answer is sourced.
+    focus_kind: Optional[Literal["samples"]] = None
+    # A previous turn's material, returned by the client so this one can reuse
+    # it. Bound server-side to the account that produced it; an expired or
+    # unknown id is ignored, never refused — a stale tab must degrade into a
+    # slow turn, not an error.
+    context_id: Optional[str] = Field(None, max_length=64)
+    # Three-valued on purpose. None means "the mode decides" (general: yes,
+    # samples: no); True is the «Поискать в сети» chip. A plain False default
+    # here would silently mute the web for every ordinary turn.
+    allow_web: Optional[bool] = None
     # What the player is on right now — lets "расскажи про этот трек" resolve
     # with no entity in the message at all.
     now_playing_track_id: Optional[str] = None
@@ -1342,6 +1355,16 @@ class AssistantAnswerPayload(BaseModel):
     explained: Optional[bool] = None
     follow_ups: List[str] = Field(default_factory=list)
     notes: List[str] = Field(default_factory=list)
+    # In-library counterparts of the subject's sample / interpolation / cover
+    # links. Filled by the samples mode and empty everywhere else: an answer
+    # about what a track is built from obviously invites playing those records,
+    # and under any other answer a track list is filler.
+    related_tracks: List[TrackMetadata] = Field(default_factory=list)
+    # Which tap-through mode produced this. Echoed so the client can re-run the
+    # SAME turn with the web switched on — without it the card would have to
+    # infer the mode from the shape of the payload, and infer it wrong the first
+    # time a mode grows a second use.
+    focus_kind: Optional[str] = None
 
 
 class AssistantResponse(BaseModel):
@@ -1356,6 +1379,10 @@ class AssistantResponse(BaseModel):
     intent: Optional[AssistantIntent] = None
     human: str = ""
     slots: AssistantSlots = Field(default_factory=AssistantSlots)
+    # Handle on this turn's material, for a follow-up to reuse. Lives for
+    # ``CONTEXT_TTL`` seconds; the client echoes it back and releases it when the
+    # answer is dismissed. None when the turn read nothing worth keeping.
+    context_id: Optional[str] = None
 
     search: Optional[Dict] = None                      # shape of _run_chat_core
     playlist: Optional[AIPlaylistResponse] = None

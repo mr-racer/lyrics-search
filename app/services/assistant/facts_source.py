@@ -183,6 +183,21 @@ class FactsRetriever:
         Returns ``[]`` only when the subject genuinely has no facts.
         """
         facts = self.pool(song_slug=song_slug, artist_slug=artist_slug)
+        return self.rank(facts, query, min_prob=min_prob,
+                         song_slug=song_slug, artist_slug=artist_slug)
+
+    def rank(self, facts: list, query: str, *,
+             min_prob: Optional[float] = None,
+             song_slug: Optional[str] = None,
+             artist_slug: Optional[str] = None) -> list:
+        """Rank an ALREADY-ASSEMBLED pool. Same rules as :meth:`retrieve`.
+
+        Split out because the pool is not always this subject's own facts:
+        ``local_pack`` widens it with the facts of the songs the subject is
+        structurally tied to, and the ranking of that wider pool has to be the
+        same ranking — same threshold, same fusion, same logging — or the two
+        paths drift apart in exactly the way nobody notices.
+        """
         if not facts or not (query or "").strip():
             return facts
 

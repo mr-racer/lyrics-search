@@ -23,7 +23,7 @@ import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from app.api.dependencies import get_current_user
 from app.api.helpers import derive_collection_for_user
@@ -63,6 +63,23 @@ async def assistant(
         logger.exception("[assistant] failed")
         raise HTTPException(status_code=502, detail=f"Assistant failed: {exc}")
     return AssistantResponse(**result)
+
+
+@router.delete("/context/{context_id}", status_code=204)
+async def release_assistant_context(
+    context_id: str,
+    current_user: User = Depends(get_current_user),
+) -> Response:
+    """Drop a turn context the listener dismissed.
+
+    204 whether or not anything went away, and a context belonging to another
+    account is simply not found. There is nothing here worth telling a caller
+    about: the alternative is an endpoint that reports whether some id exists,
+    which is a question no client needs answered.
+    """
+    assistant_service.release_context(context_id,
+                                      getattr(current_user, "id", None))
+    return Response(status_code=204)
 
 
 @router.post("/stream")

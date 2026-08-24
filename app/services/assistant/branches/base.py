@@ -123,6 +123,47 @@ class WebBranch:
                 prose_hits, limit=self.cfg.max_pages_per_iteration)
         return structured_pages, prose_pages
 
+    def seed(self, chunks: list, used_queries: Optional[list] = None) -> int:
+        """Adopt a previous turn's chunks instead of downloading them again.
+
+        The pages behind these were read a minute ago and the passages were cut
+        out of them then; only the ranking is per-question, and the ranking is
+        the cheap half. What this skips is the search pacing and the fetches,
+        which are the slow half by an order of magnitude.
+
+        ``used_queries`` comes with them so the next-queries call does not
+        re-issue searches that context already spent.
+
+        Ids are reassigned: they index into ``self.chunks`` and the previous
+        turn's numbering means nothing here.
+        """
+        if not chunks:
+            return 0
+        fresh: list = []
+        for chunk in chunks:
+            digest = _text_hash(chunk.body)
+            if digest in self._chunk_hashes:
+                continue
+            self._chunk_hashes.add(digest)
+            chunk.id = len(self.chunks) + len(fresh)
+            fresh.append(chunk)
+        if not fresh:
+            return 0
+        with self.timings.span("index.embed"):
+            texts = [c.text for c in fresh]
+            if self.retriever is None:
+                self.retriever = HybridRetriever(texts, hub=self.agent.hub)
+            else:
+                self.retriever.extend(texts)
+        self.chunks.extend(fresh)
+        for query in used_queries or ():
+            if query not in self.used_queries:
+                self.used_queries.append(query)
+        logger.info("[branch] seeded %d chunks from a previous turn", len(fresh))
+        self.sink.put("seeded", chunks=len(fresh),
+                      queries=len(used_queries or []))
+        return len(fresh)
+
     def index(self, pages: list) -> int:
         """Chunk ``pages`` and add them to the retriever. Returns new chunks."""
         with self.timings.span("index.embed"):

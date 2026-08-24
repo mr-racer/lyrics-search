@@ -20,6 +20,7 @@ import logging
 from typing import Optional
 
 from app.services.assistant.humanize import clarify_labels, human
+from app.services.assistant.page_store import CONTEXTS
 
 logger = logging.getLogger(__name__)
 
@@ -119,10 +120,20 @@ async def run_assistant(req, *, search_service, qdrant, collection_name: str,
     agent = Assistant(collection_name, config=cfg, sink=agent_sink,
                       search_service=search_service)
 
+    user_id = getattr(current_user, "id", None)
+    context_id = getattr(req, "context_id", None)
+    context = CONTEXTS.load(context_id, user_id) if context_id else None
+    if context_id and context is None:
+        logger.info("[assistant] context %s is gone — answering without it",
+                    str(context_id)[:8])
+
     result = await agent.run(req.message, focus_fact=req.focus_fact,
+                             focus_kind=getattr(req, "focus_kind", None),
                              subject_track_id=req.subject_track_id,
                              subject_artist_slug=req.subject_artist_slug,
-                             forced_intent=req.intent)
+                             forced_intent=req.intent,
+                             allow_web=getattr(req, "allow_web", None),
+                             context=context, context_id=context_id)
 
     slots = _merge_slots(req.slots)
     if isinstance(result, LyricsResult):
@@ -132,12 +143,42 @@ async def run_assistant(req, *, search_service, qdrant, collection_name: str,
     if isinstance(result, AudioResult):
         return _audio_payload(result, slots, lang)
     if isinstance(result, GeneralResult):
-        return _answer_payload(result, slots, lang, sink=sink,
-                               collection_name=collection_name,
-                               catalog=agent.catalog)
+        payload = _answer_payload(result, slots, lang, sink=sink,
+                                  collection_name=collection_name,
+                                  catalog=agent.catalog)
+        payload["context_id"] = _save_context(agent, result, user_id)
+        return payload
     logger.error("[assistant] unknown result type %s", type(result))
     return {"intent": None, "human": human("error", lang),
             "slots": slots.model_dump(), "clarify": _clarify_options(lang)}
+
+
+def _save_context(agent, result, user_id) -> Optional[str]:
+    """Keep this turn's material for a minute, so a follow-up can reuse it.
+
+    Only worth doing when something was actually READ: a turn answered out of
+    SQLite has nothing a later question could not read again just as cheaply,
+    and handing back an id for an empty context would only make the client
+    believe it saved something.
+    """
+    branch = getattr(agent, "last_branch", None)
+    chunks = list(getattr(branch, "chunks", None) or [])
+    if not chunks:
+        return None
+    try:
+        return CONTEXTS.save(user_id=user_id, chunks=chunks,
+                             used_queries=list(getattr(branch, "used_queries", [])),
+                             evidence=list(result.evidence or []),
+                             subject=result.subject)
+    except Exception:  # noqa: BLE001 — a cache must never cost an answer
+        logger.warning("[assistant] could not save the turn context",
+                       exc_info=True)
+        return None
+
+
+def release_context(context_id: str, user_id) -> bool:
+    """Drop a turn context the listener dismissed. Route-facing."""
+    return CONTEXTS.release(context_id, user_id)
 
 
 # ── payload builders ────────────────────────────────────────────────────────
@@ -281,7 +322,41 @@ def _answer_payload(result, slots, lang: str, *, sink=None,
             "explained": result.explained,
             "follow_ups": result.follow_ups,
             "notes": result.notes,
+            "related_tracks": [_related_track(r)
+                               for r in (result.related_tracks or [])],
+            "focus_kind": result.focus_kind,
         },
+    }
+
+
+def _related_track(row) -> dict:
+    """A ``track_store`` row in the shape ``TrackMetadata`` validates.
+
+    Two names have to be reconciled, and getting either wrong is a 502 on every
+    samples answer rather than a missing field: the mirror column is
+    ``duration`` while the model field is ``duration_sec``, and both
+    ``duration_sec`` and ``file_path`` are REQUIRED — a row that lacks them
+    fails validation at the route, long past anywhere useful to debug it.
+    """
+    from app.services._payload_coerce import coerce_float
+
+    if not isinstance(row, dict):
+        row = row.model_dump() if hasattr(row, "model_dump") else {}
+    row = dict(row or {})
+    return {
+        "track_id": str(row.get("track_id") or ""),
+        "title": row.get("title") or "",
+        "title_display": row.get("title_display"),
+        "artist": row.get("artist") or "",
+        "album": row.get("album"),
+        "year": row.get("year"),
+        "genre": row.get("genre"),
+        "duration_sec": coerce_float(row.get("duration_sec")
+                                     or row.get("duration")) or 0.0,
+        "file_path": row.get("file_path") or "",
+        "cover_art_path": row.get("cover_art_path"),
+        "artists": row.get("artists"),
+        "primary_artist_slug": row.get("primary_artist_slug"),
     }
 
 

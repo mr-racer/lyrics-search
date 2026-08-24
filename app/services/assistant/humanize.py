@@ -143,7 +143,21 @@ def human(stage: str, lang: str | None = None, **kw) -> str:
         n = int(kw.get("duplicates") or 0)
         return (f"Схлопнул {n} " + plural_ru(n, "повтор", "повтора", "повторов")
                 if ru else f"Collapsed {n} near-duplicate{'' if n == 1 else 's'}")
+    if stage == "seeded":
+        n = int(kw.get("chunks") or 0)
+        return (f"Беру {n} " + plural_ru(n, "фрагмент", "фрагмента", "фрагментов")
+                + " из прошлого ответа"
+                if ru else f"Reusing {n} passage{'' if n == 1 else 's'} "
+                           f"from the last answer")
     if stage == "verdict":
+        if kw.get("local"):
+            # The whole point of the local iteration is that the listener sees
+            # it stop here — an answer with no "going to the web" line is the
+            # visible difference between the two paths.
+            return (("Ответил по библиотеке" if ru else "Answered from your library")
+                    if kw.get("stop") else
+                    ("В библиотеке этого нет — иду в интернет"
+                     if ru else "Your library doesn't cover it — going to the web"))
         if kw.get("stop"):
             return "Материала достаточно" if ru else "That's enough material"
         return "Материала мало — ищу ещё" if ru else "Not enough yet — searching again"
