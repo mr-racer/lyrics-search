@@ -1661,6 +1661,12 @@
     @media (prefers-reduced-motion: reduce) {
       .atlas-cutout { animation: none !important; opacity: 1 !important; }
     }
+    /* Light-podium under the cutout's feet — fades in once the figure lands */
+    @keyframes atlasPedestalIn { from { opacity: 0; } to { opacity: 1; } }
+    .atlas-pedestal { animation: atlasPedestalIn 0.9s ease 0.4s both; }
+    @media (prefers-reduced-motion: reduce) {
+      .atlas-pedestal { animation: none !important; opacity: 1 !important; }
+    }
 
     /* Cutout hero backdrop: a burst of light rays + a drifting particle field
        behind the figure, replacing the flat colour wash. Hue/intensity are
@@ -1730,15 +1736,20 @@
     /* the echo hides with the figure on narrow viewports (it has no entry
        animation — atlasCutoutIn's fill-mode would override its inline opacity) */
     @media (max-width: 880px) { .atlas-cutout-echo { display: none; } }
-    /* Scroll parallax: the cutout figure lags the page scroll (×0.35) so it
-       glides behind the liquid-glass docks, then dissolves once it would start
-       hanging over the bio. --sy (px scrolled, unitless) is written on the hero
-       node by the Atlas scroll handler; no transition — scroll-linked movement
-       must track the finger/wheel directly. */
+    /* Scroll recede: the cutout vignette (figure + echo + pedestal) used to
+       LAG the scroll (+0.35×sy), which slid it down onto the bio text. Now it
+       lifts slightly ahead of the page and shrinks toward the light-burst
+       flare (transform-origin sits at the flare), dissolving before it can
+       touch anything below. --sy (px scrolled, unitless) is written on the
+       hero node by the Atlas scroll handler; no transition — scroll-linked
+       movement must track the finger/wheel directly. min() caps keep the
+       far-scrolled state finite. */
     .atlas-scroll-plx {
-      transform: translateY(calc(var(--sy, 0) * 0.35px));
-      opacity: clamp(0, calc(1 - (var(--sy, 0) - 160) / 420), 1);
-      will-change: transform;
+      transform: translateY(calc(min(var(--sy, 0), 520) * -0.22px))
+                 scale(calc(1 - min(var(--sy, 0), 520) * 0.00028));
+      transform-origin: 78% 26%;
+      opacity: clamp(0, calc(1 - (var(--sy, 0) - 40) / 300), 1);
+      will-change: transform, opacity;
     }
     @media (prefers-reduced-motion: reduce) {
       .atlas-scroll-plx { transform: none !important; opacity: 1 !important; }

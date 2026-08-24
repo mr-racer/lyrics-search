@@ -18327,6 +18327,40 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere, onSpin }) 
     if (el) { el.style.setProperty('--hx', '0'); el.style.setProperty('--hy', '0'); }
   };
 
+  // Pedestal metrics for the cutout figure. The PNG renders with contain +
+  // top-right anchoring, so its drawn box can be smaller than the inset
+  // container — measure the real drawn bottom/centre (offset metrics, immune
+  // to the wrapper's scroll transform) and park them in state so the light
+  // podium lands exactly under the feet. Runs on image load and hero resize
+  // only, never at scroll rate.
+  const cutImgRef = useRef(null);
+  const [ped, setPed] = useState(null);
+  useEffect(() => {
+    if (mode !== 'cutout' || isMobile) { setPed(null); return; }
+    const img = cutImgRef.current;
+    if (!img) return;
+    setPed(null);
+    const measure = () => {
+      if (!img.naturalWidth || !img.naturalHeight) return;
+      const boxW = img.offsetWidth, boxH = img.offsetHeight;
+      if (!boxW || !boxH) return;
+      const ar = img.naturalWidth / img.naturalHeight;
+      const drawnH = Math.min(boxH, boxW / ar);
+      const drawnW = Math.min(boxW, boxH * ar);
+      const parentW = img.offsetParent ? img.offsetParent.clientWidth : 0;
+      const rightOff = parentW ? (parentW - img.offsetLeft - boxW) : 36;
+      const next = { y: img.offsetTop + drawnH, cxr: rightOff + drawnW / 2, w: drawnW };
+      setPed(p => (p && Math.abs(p.y - next.y) < 1 && Math.abs(p.cxr - next.cxr) < 1 && Math.abs(p.w - next.w) < 1) ? p : next);
+    };
+    if (img.complete) measure();
+    img.addEventListener('load', measure);
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    if (ro) ro.observe(img);
+    return () => { img.removeEventListener('load', measure); if (ro) ro.disconnect(); };
+  }, [mode, isMobile, cutout]);
+  const pedW = ped ? ped.w * 0.88 : 0;
+  const pedH = pedW ? Math.max(30, Math.min(62, pedW * 0.2)) : 0;
+
   // ── Mobile: a stacked hero instead of the desktop left/right split. ──────
   // A phone has no width to share between the name column and the figure —
   // the pinned-right cutout ended up masked/parallaxed out of view entirely.
@@ -18453,16 +18487,25 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere, onSpin }) 
           (z6) and the content column (z2) render over its fading tail. */}
       <div className="atlas-field" aria-hidden="true">
         {mode === 'photo' ? (
-          // blurred backdrop — the photo's glow melting into the content. Heavy
-          // blur + its own vertical fade: at 28px the tail below the crisp photo
-          // still read as a second (mirrored-looking) copy of the image under
-          // the header — now it dissolves into pure colour before the bio.
+          // Constrained glow — a blurred twin of the crisp photo instead of a
+          // full-bleed smear. Same height-scaled geometry (width follows the
+          // intrinsic ratio), scaled up ~12% for bleed, masked on all 4 edges:
+          // the halo hugs the photo's footprint left/right and dies right at
+          // the hero's bottom edge, so no mirrored-looking tail survives under
+          // the header and the page margins stay clean.
           <img src={backdrop} alt="" className="atlas-plx-far" style={{
-            position:'absolute', top:'-6%', left:'-6%', width:'112%', height:'112%',
+            position:'absolute', top:'-3%', left:'50%', height:'70%', width:'auto', maxWidth:'150%',
             objectFit:'cover', objectPosition:'50% 40%',
-            filter:`blur(56px) ${isDark ? 'brightness(0.7) saturate(1.1)' : 'brightness(0.85) saturate(1.05)'}`,
-            WebkitMaskImage:'linear-gradient(180deg, #000 0%, #000 52%, transparent 82%)',
-            maskImage:'linear-gradient(180deg, #000 0%, #000 52%, transparent 82%)',
+            transform:'translateX(-50%) scale(1.12)',
+            filter:`blur(48px) ${isDark ? 'brightness(0.72) saturate(1.12)' : 'brightness(0.9) saturate(1.06)'}`,
+            WebkitMaskImage:
+              'linear-gradient(180deg, #000 0%, #000 42%, transparent 90%), ' +
+              'linear-gradient(90deg, transparent 0%, #000 16%, #000 84%, transparent 100%)',
+            WebkitMaskComposite: 'source-in intersect',
+            maskImage:
+              'linear-gradient(180deg, #000 0%, #000 42%, transparent 90%), ' +
+              'linear-gradient(90deg, transparent 0%, #000 16%, #000 84%, transparent 100%)',
+            maskComposite: 'intersect',
           }} />
         ) : mode === 'cutout' ? (
           <div className="atlas-plx-far" style={{ position:'absolute', inset:0 }}>
@@ -18540,12 +18583,12 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere, onSpin }) 
             height:'100%', width:'auto', maxWidth:'none',
             filter: isDark ? 'brightness(0.92) saturate(1.04)' : 'saturate(1.02)',
             WebkitMaskImage:
-              'linear-gradient(180deg, transparent 0%, #000 10%, #000 84%, transparent 100%), ' +
-              'linear-gradient(90deg, transparent 0%, #000 12%, #000 88%, transparent 100%)',
+              'linear-gradient(180deg, transparent 0%, #000 8%, #000 88%, transparent 100%), ' +
+              'linear-gradient(90deg, transparent 0%, #000 7%, #000 93%, transparent 100%)',
             WebkitMaskComposite: 'source-in intersect',
             maskImage:
-              'linear-gradient(180deg, transparent 0%, #000 10%, #000 84%, transparent 100%), ' +
-              'linear-gradient(90deg, transparent 0%, #000 12%, #000 88%, transparent 100%)',
+              'linear-gradient(180deg, transparent 0%, #000 8%, #000 88%, transparent 100%), ' +
+              'linear-gradient(90deg, transparent 0%, #000 7%, #000 93%, transparent 100%)',
             maskComposite: 'intersect',
           }} />
         </div>
@@ -18597,9 +18640,9 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere, onSpin }) 
             same PNG glows behind the figure, and the main image gets a 4-edge
             mask, so AudioDB's hard crop lines dissolve into light instead of
             ending at a rectangle. Both ride the mid (cursor) parallax layer AND
-            a shared scroll-parallax wrapper: .atlas-scroll-plx lags the page
-            scroll (×0.35 via --sy, fed by the Atlas scroll handler), so the
-            figure glides behind the liquid-glass docks before dissolving. The
+            a shared scroll wrapper: .atlas-scroll-plx lifts and shrinks the
+            whole vignette toward the flare as --sy grows (fed by the Atlas
+            scroll handler), dissolving it before it reaches the content. The
             wrapper uses `transform` (the imgs can't — atlasCutoutIn's fill-mode
             would pin theirs) and fills the padding box, so the imgs' inset
             coordinates are unchanged. */}
@@ -18613,18 +18656,43 @@ function AtlasHero({ data, isDark, lang, onNav, heroRef, playingHere, onSpin }) 
               opacity: isDark ? 0.5 : 0.42,
               transform:'scale(1.07)',
             }} />
-            <img src={cutout} alt="" className="atlas-cutout atlas-plx-mid" style={{
+            {/* Light podium — the elliptical pool of light the figure stands
+                in, in the same language as the burst behind it: glow pool +
+                a thin glass rim that sells the floor plane + a contact shadow
+                under the feet. Positioned from the measured drawn box (ped),
+                rides the same cursor-parallax layer as the figure. */}
+            {ped && (
+              <div className="atlas-pedestal atlas-plx-mid" aria-hidden="true" style={{
+                position:'absolute', top: ped.y - pedH / 2 + 4, right: ped.cxr - pedW / 2,
+                width: pedW, height: pedH, pointerEvents:'none',
+              }}>
+                <div style={{ position:'absolute', inset:0, borderRadius:'50%',
+                  background: isDark
+                    ? `radial-gradient(50% 50% at 50% 50%, oklch(80% 0.1 ${hue} / 0.5) 0%, oklch(66% 0.12 ${hue} / 0.2) 45%, transparent 72%)`
+                    : `radial-gradient(50% 50% at 50% 50%, rgba(255,255,255,0.95) 0%, oklch(82% 0.09 ${hue} / 0.55) 42%, transparent 72%)`,
+                }} />
+                <div style={{ position:'absolute', inset:'8% 2%', borderRadius:'50%',
+                  background: `radial-gradient(50% 50% at 50% 50%, transparent 60%, ${isDark ? 'rgba(255,255,255,0.34)' : 'rgba(120,92,220,0.38)'} 67%, transparent 75%)`,
+                }} />
+                <div style={{ position:'absolute', left:'20%', right:'20%', top:'30%', bottom:'26%', borderRadius:'50%',
+                  background: isDark
+                    ? 'radial-gradient(50% 50% at 50% 50%, rgba(0,0,0,0.5) 0%, transparent 70%)'
+                    : 'radial-gradient(50% 50% at 50% 50%, rgba(40,30,70,0.26) 0%, transparent 70%)',
+                }} />
+              </div>
+            )}
+            <img ref={cutImgRef} src={cutout} alt="" className="atlas-cutout atlas-plx-mid" style={{
               position:'absolute', right: isMobile ? 10 : 36, top: isMobile ? 30 : 44, bottom: isMobile ? 14 : 34, maxWidth: isMobile ? '48%' : '44%',
               objectFit:'contain', objectPosition:'top right',
               // No drop-shadow: it would paint a blurred black silhouette into the
               // cutout's transparent margins, graying the otherwise-clear backdrop.
               // Depth comes from the light-burst and the blurred echo instead.
               WebkitMaskImage:
-                'linear-gradient(180deg, transparent 0%, #000 4%, #000 90%, transparent 100%), ' +
+                'linear-gradient(180deg, transparent 0%, #000 4%, #000 94%, transparent 100%), ' +
                 'linear-gradient(90deg, transparent 0%, #000 6%, #000 94%, transparent 100%)',
               WebkitMaskComposite: 'source-in intersect',
               maskImage:
-                'linear-gradient(180deg, transparent 0%, #000 4%, #000 90%, transparent 100%), ' +
+                'linear-gradient(180deg, transparent 0%, #000 4%, #000 94%, transparent 100%), ' +
                 'linear-gradient(90deg, transparent 0%, #000 6%, #000 94%, transparent 100%)',
               maskComposite: 'intersect',
             }} />
