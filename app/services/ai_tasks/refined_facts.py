@@ -90,10 +90,11 @@ def _persist(job, scope: str, scope_key: str, origin_kind: str,
              artist_name: str = ""):
     """Callback that writes one finished fact, as soon as it is finished.
 
-    ``artist_name`` is bound HERE rather than read off the record: this fires
-    DURING processing, so anything the caller means to attach afterwards is not
-    there yet — a fact that should move to the artist page stayed on the song's
-    because the name it needed to resolve a slug was still empty.
+    A fact is always stored under the entity it was READ from. An earlier
+    version relocated a fact to the other page when the model said it belonged
+    there, and that is gone — see ``facts_v2.pipeline.route`` for the measured
+    damage. ``artist_name`` stays in the signature because the roster of
+    callers passes it and the sample-link writer alongside this one needs it.
     """
     def store(rec: dict) -> None:
         fact = rec["fact"]
@@ -101,27 +102,9 @@ def _persist(job, scope: str, scope_key: str, origin_kind: str,
         if not labels:
             labels = rec.get("labels", [])       # keep the gate reason as the label
         text = rec.get("refined") or None
-        dest_scope, dest_key = scope, scope_key
-
-        # A fact that moved scope is stored under the page it belongs to — and
-        # under the DESTINATION's labels, because "about_artist" describes where
-        # it came from and says nothing a reader could group by.
-        if rec.get("moved_to") == "artist" and scope == "song":
-            primary = (artist_slugs(artist_name) or [None])[0]
-            if primary:
-                dest_scope, dest_key = "artist", primary
-                labels = rec.get("focus_labels") or labels
-        elif rec.get("moved_to") == "song" and scope == "artist":
-            # The destination song has to be resolvable; when it is not, the
-            # fact stays where it is rather than landing on the wrong page.
-            title = ((rec.get("move") or {}).get("title") or "").strip()
-            if title and artist_name:
-                dest_scope = "song"
-                dest_key = get_song_facts_key(artist_name, title)
-                labels = rec.get("focus_labels") or labels
 
         MetadataDB.set_refined_fact_item(
-            scope=dest_scope, scope_key=dest_key, lang=job.lang,
+            scope=scope, scope_key=scope_key, lang=job.lang,
             origin_kind=origin_kind, origin_id=int(fact["id"]),
             labels=labels, text=text,
             confirmed=not rec.get("unconfirmed", False),

@@ -39,6 +39,31 @@ what it means carries no fact at all.
 A note earns a real label only if it is about THIS song. A note about a
 different song, or about nothing in particular, is "other".
 
+NEVER A FACT
+
+Read this list FIRST, before you reach for a label. When everything a note
+carries is one of these, the answer is "other" — however specific it sounds and
+whatever else it resembles. It applies to the WHOLE note: one real fact buried
+in three sentences of this is still that fact, and it keeps its label.
+
+  a. what a lyric means, what an image stands for, who a line is aimed at, or a
+     translation of a line — unless the phrase being explained is the TITLE,
+     which is "title_origin" however figurative the explanation gets;
+  b. a nickname, an alias or a slang word merely explained, with no story of
+     where it came from;
+  c. praise, an opinion, or a critic's verdict, with nothing checkable in it;
+  d. a chart position, a release date, a sales figure or a certification
+     standing on its own — but a superlative built on one is a real fact and
+     not this: first, only, oldest, youngest, longest, biggest, best-selling,
+     or a previous record it beat;
+  e. a concert, a tour date or a television appearance merely mentioned, with
+     nothing happening in it;
+  f. where somebody was born, grew up or went to school, on its own;
+  g. anything whose SUBJECT is a different song, a different recording, or a
+     person who had nothing to do with this one. Judge the subject, not the
+     cast: a note about this song that also names other people is still about
+     this song.
+
 LABELS
 
 "sample" — the recording contains a sample or an interpolation of another
@@ -47,8 +72,12 @@ another song's words are not a sample. A producer credit is not a sample.
   · "The drum break is lifted from The Winstons' 'Amen, Brother'." → sample
   · "He raps the same line Nas used on 'The World Is Yours'." → other
 
-"video" — the music video for this song: who directed it, how and where it was
-shot, what happens in it, how it was received.
+"video" — the music video for THIS song: who directed it, how and where it was
+shot, what happens in it, how it was received. A record sleeve, a live
+performance and an awards-show appearance are not music videos, and neither is
+another song's video.
+  · "Shot in one take on a Steadicam in an abandoned hospital." → video
+  · "He opened the 2024 MTV Video Music Awards with it." → other
 
 "creation" — how the song came to exist: writing, recording, studio incidents,
 who it was written for, why it was released the way it was, and what the people
@@ -64,40 +93,40 @@ lyrics are about.
 "trouble" — a lawsuit, a plagiarism claim, a ban, a withdrawal, a formal
 complaint, a boycott, over THIS song.
 
-"about_artist" — the note's subject is the artist, and this song is only where
-the note happens to sit.
+"about_artist" — the note's subject is the artist's own life or career, and this
+song is only where the note happens to sit.
 
-"sound" — how the record sounds and how that was achieved: instruments, playing
+"sound" — how the record SOUNDS and how that was achieved: instruments, playing
 technique, arrangement, production choices, time signature, vocal treatment.
+The test: the note must explain a moment you could go and HEAR. A note that
+still makes sense with the sound muted is not "sound".
+  · "Jonny Greenwood ran the guitar through an Ondes Martenot, which gives the
+     wavering high line in the chorus." → sound
+  · "Critics called the production the finest of the decade." → other
 
-"placement" — where this recording has been heard OUTSIDE its own release:
+"placement" — where THIS recording has been heard OUTSIDE its own release:
 films, television, series, video games, adverts, sports broadcasts, political
-campaigns. A cover version by another artist is NOT this label.
+campaigns. Somebody else's recording of the song is not this label, and neither
+is the act playing it themselves on a stage or a show.
+  · "Rockstar licensed it for a radio station in Grand Theft Auto V." → placement
+  · "She sang it at a surprise street show in New Orleans." → other
 
-"record" — a record or a first that this song holds: an award it won, a chart
-feat stated as a record, an entry in a book of records. A plain chart position
-is not this label; a record is.
+"record" — an award this song won, a record it holds, or a first it achieved.
+A CHART feat counts only with a superlative — first, only, oldest, youngest,
+longest, biggest, best-selling — or the previous record it beat. A chart number
+on its own is never a record; an award needs no superlative at all.
   · "Its debut at #42 made 98-year-old Marjorie Grande the oldest credited
      artist ever to appear on the Hot 100." → record
-  · "It reached number 4 on the Billboard Hot 100." → other
+  · "It reached number 4 on the Billboard Hot 100 and went platinum." → other
 
-"other" — everything else, and it is the honest answer far more often than the
-labels above. In particular: a retelling of what the lyrics mean, a metaphor
-explained, a general reflection on life, love, money or fame, a release date or
-chart position standing on its own, a cover version by another artist, a slang
-or nickname gloss with no story behind it, and anything about a different song.
+"other" — everything on the NEVER A FACT list, and everything else that is left.
+It is the honest answer far more often than any label above.
   · "The 'heart' is a symbol of determination, so he is saying he is still
      resilient." → other
   · "It was covered by Brenda Lee and by Hall & Oates." → other
 
 A note may carry more than one label — "sample" and "sound" often travel
 together. "other" never combines with anything.
-
-MOVING A NOTE
-
-When you label a note "about_artist", also say where it belongs on the artist's
-own page, using the artist labels: "band_history", "personal", "name_origin",
-"award", "sound", "other". Put that in `move`. Otherwise `move` is null.
 
 EXAMPLES
 
@@ -108,28 +137,33 @@ M3. Recorded in a single night in a Hollywood garage after their gear was stolen
 M4. Bono has won 22 Grammy Awards across his career.
 M5. Line: "Two for no" | Note: A way of communicating used by patients with locked-in syndrome, the illness portrayed in the film The Diving Bell and the Butterfly.
 M6. The title comes from the Magnolia Projects in New Orleans, the housing project where the rapper grew up.
+M7. Line: "Young Hov' in the house" | Note: Hov is one of his nicknames, short for Jehovah.
+M8. He performed the song at Glastonbury in 2008 and again at Coachella.
 
 {{"items":[
-  {{"id":"M1","labels":["sample","sound"],"move":null}},
-  {{"id":"M2","labels":["other"],"move":null}},
-  {{"id":"M3","labels":["creation"],"move":null}},
-  {{"id":"M4","labels":["about_artist"],"move":{{"scope":"artist","labels":["award"]}}}},
-  {{"id":"M5","labels":["other"],"move":null}},
-  {{"id":"M6","labels":["title_origin"],"move":null}}
+  {{"id":"M1","labels":["sample","sound"]}},
+  {{"id":"M2","labels":["other"]}},
+  {{"id":"M3","labels":["creation"]}},
+  {{"id":"M4","labels":["about_artist"]}},
+  {{"id":"M5","labels":["other"]}},
+  {{"id":"M6","labels":["title_origin"]}},
+  {{"id":"M7","labels":["other"]}},
+  {{"id":"M8","labels":["other"]}}
 ]}}
 
 (M5 is "other" on purpose: the note explains an image inside the lyric. It names
-a real film, and that still does not make it a fact ABOUT THE SONG.)
+a real film, and that still does not make it a fact ABOUT THE SONG. M7 is rule
+b and M8 is rule e.)
 
 NOTES TO SORT
 
 {items}
 
 Answer with STRICT JSON and nothing else — no markdown fence, no text around it.
-Echo every id exactly as given. Allowed labels: "sample", "video", "creation",
-"title_origin", "trouble", "about_artist", "sound", "placement", "record",
-"other".
-{{"items":[{{"id":"M1","labels":["..."],"move":null}}]}}"""
+Echo every id exactly as given. Every item has exactly two keys, "id" and
+"labels". Allowed labels: "sample", "video", "creation", "title_origin",
+"trouble", "about_artist", "sound", "placement", "record", "other".
+{{"items":[{{"id":"M1","labels":["..."]}}]}}"""
 
 
 ARTIST_CLASSIFY = """You sort raw notes about ONE artist into labels. You do not rewrite them.
@@ -137,7 +171,33 @@ ARTIST_CLASSIFY = """You sort raw notes about ONE artist into labels. You do not
 The artist is {artist}.
 
 A note earns a real label only if it is about this artist. A note about somebody
-else, or about nothing in particular, is "other".
+else, or about nothing in particular, is "other". "This artist" means the person or
+group named above, and the people IN that group. Not a guest, not a producer,
+not a relative, not another artist they mention.
+
+NEVER A FACT
+
+Read this list FIRST, before you reach for a label. When everything a note
+carries is one of these, the answer is "other" — however specific it sounds and
+whatever else it resembles. It applies to the WHOLE note: one real fact buried
+in three sentences of this is still that fact, and it keeps its label.
+
+  a. what a lyric means, what an image stands for, who a line is aimed at, or a
+     translation of a line;
+  b. a nickname, an alias or a slang word merely explained, with no story of
+     where it came from;
+  c. praise, an opinion, or a critic's verdict, with nothing checkable in it;
+  d. a chart position, a release date, a sales figure or a certification
+     standing on its own — but a superlative built on one is a real fact and
+     not this: first, only, oldest, youngest, longest, biggest, best-selling,
+     or a previous record it beat;
+  e. a concert, a tour date or a television appearance merely mentioned, with
+     nothing happening in it;
+  f. where somebody was born, grew up or went to school, on its own;
+  g. anything whose SUBJECT is a person outside this act — a guest, a producer,
+     another artist. Somebody who plays IN this group is not an outsider, and
+     neither is what happened to them. Judge the subject, not the cast: a note
+     about this artist that also names other people is still about this artist.
 
 LABELS
 
@@ -145,19 +205,23 @@ LABELS
 was made, what it samples, its video, where it has been heard. The song must be
 the note's SUBJECT, not a passing mention.
 
-"award" — a Grammy, a chart record, a hall-of-fame induction, a certification, a
-national or festival prize, or a notable anti-prize.
+"award" — a Grammy, a chart record, a hall-of-fame induction, a national or
+festival prize, or a notable anti-prize. A gold or platinum certification on its
+own is not an award; a chart position on its own is not a chart record.
 
 "band_history" — how the group formed, split, reformed, changed members, moved
 city, signed or left a label; the events that make up the group's story.
 It is about the GROUP. A thing that happened to one person, and would still be
-worth telling if the group did not exist, is "personal".
+worth telling if the group did not exist, is "personal". The making of one
+particular song is neither: that is "about_song".
 
 "personal" — a concrete, specific thing about the PERSON behind the music: a job
 they did before music, an illness or diagnosis, an arrest or conviction, a
 tattoo and how they got it, military service, a phobia, a collection, a family
 tie, a near-miss that changed their life. It must carry a specific detail or a
-story. A taste, a preference, a diet or a compliment is not this.
+story, and it must be about the artist named above — a note this concrete about
+somebody else is still "other". A taste, a preference, a diet or a compliment is
+not this.
   · "He tattooed O,Z,Z,Y across his own knuckles with a needle and graphite
      while in jail for burglary." → personal
   · "He spent nine years in the Navy, where speech therapy cured his stutter,
@@ -165,26 +229,27 @@ story. A taste, a preference, a diet or a compliment is not this.
   · "Cuomo has a thing for female newscasters." → other
   · "Ariana Grande is a vegan and loves animals more than most people." → other
 
-"name_origin" — where the artist's or band's name came from, and who chose it.
+"name_origin" — where the name this artist RECORDS UNDER came from, and who
+chose it. An alter ego, a nickname, or a name another artist goes by is not this
+label, and neither is how the name is pronounced.
+  · "Mike Kroeger handed back change at Starbucks saying 'here's your nickel
+     back', and the band took it." → name_origin
+  · "One of his nicknames is Hova, short for Jehovah." → other
 
 "sound" — the artist's signature sound and how it is made: instruments,
 production habits, arrangement tics, vocal approach, influences on their style.
-It must describe THE MUSIC. A life event that later fed into a record is
-"personal", not "sound".
+The test: the note must be about THE MUSIC — how they make it, or how it comes
+out. A remark about luck, character, ambition or what a lyric means is not.
+A life event that later fed into a record is "personal", not "sound".
+  · "She sings the chords to her co-writers instead of playing them, because she
+     plays no instrument." → sound
+  · "Fans call him the hardest-working man in the studio." → other
 
-"other" — everything else, and it is the honest answer often: opinions, tastes,
-vague praise, plain discography chronology with nothing behind it, a fact about
-a completely different artist, and a bare roster or release listing with no
-event in it.
+"other" — everything on the NEVER A FACT list, and everything else that is left:
+plain discography chronology with nothing behind it, and a bare roster or
+release listing with no event in it. It is the honest answer often.
 
 A note may carry more than one label. "other" never combines with anything.
-
-MOVING A NOTE
-
-When you label a note "about_song", also give the song's title exactly as the
-note spells it, and where it belongs on that song's page, using the song labels:
-"sample", "video", "creation", "title_origin", "trouble", "sound", "placement",
-"record", "other". Put that in `move`. Otherwise `move` is null.
 
 EXAMPLES
 
@@ -195,24 +260,32 @@ M3. "Lonely Boy" got its video by accident: they scrapped the shoot and kept an 
 M4. Formed in Antibes in 2001 by Anthony Gonzalez and Nicolas Fromageau; Fromageau left after the second album.
 M5. At 21, after his band broke up and his girlfriend left him, he drank furniture polish in a suicide attempt.
 M6. 1979- Paul Dean Guitar, vocals 1979- Doug Johnson Keyboards 1979- Mike Reno Lead vocals
+M7. GLC started rapping to get through the death of his parents in a car crash.
+M8. The album reached number one in Belgium and Israel and was certified gold.
 
 {{"items":[
-  {{"id":"M1","labels":["name_origin"],"move":null}},
-  {{"id":"M2","labels":["other"],"move":null}},
-  {{"id":"M3","labels":["about_song"],"move":{{"scope":"song","title":"Lonely Boy","labels":["video"]}}}},
-  {{"id":"M4","labels":["band_history"],"move":null}},
-  {{"id":"M5","labels":["personal"],"move":null}},
-  {{"id":"M6","labels":["other"],"move":null}}
+  {{"id":"M1","labels":["name_origin"]}},
+  {{"id":"M2","labels":["other"]}},
+  {{"id":"M3","labels":["about_song"]}},
+  {{"id":"M4","labels":["band_history"]}},
+  {{"id":"M5","labels":["personal"]}},
+  {{"id":"M6","labels":["other"]}},
+  {{"id":"M7","labels":["other"]}},
+  {{"id":"M8","labels":["other"]}}
 ]}}
+
+(M7 is "other" because GLC is not the artist this page is about, however
+personal the note is. M8 is rule d.)
 
 NOTES TO SORT
 
 {items}
 
 Answer with STRICT JSON and nothing else — no markdown fence, no text around it.
-Echo every id exactly as given. Allowed labels: "about_song", "award",
-"band_history", "personal", "name_origin", "sound", "other".
-{{"items":[{{"id":"M1","labels":["..."],"move":null}}]}}"""
+Echo every id exactly as given. Every item has exactly two keys, "id" and
+"labels". Allowed labels: "about_song", "award", "band_history", "personal",
+"name_origin", "sound", "other".
+{{"items":[{{"id":"M1","labels":["..."]}}]}}"""
 
 
 # ── stage 2 ──────────────────────────────────────────────────────────────────

@@ -3859,8 +3859,11 @@ class MetadataDB:
 
     # ── Refined Facts cache (Plan 3 Task 15) ──
 
-    # Labels whose facts are kept for statistics and never shown.
-    HIDDEN_LABELS = ("other",)
+    # Labels whose facts are kept for statistics and never shown. The two
+    # off-scope labels already carry no text, so this is belt and braces — but
+    # they are the labels a re-run is most likely to attach to a row that once
+    # held prose, and a stale text under them would surface on the wrong page.
+    HIDDEN_LABELS = ("other", "about_artist", "about_song")
 
     @classmethod
     def _items_rows(cls, scope: str, scope_key: str, lang: str) -> Optional[list]:

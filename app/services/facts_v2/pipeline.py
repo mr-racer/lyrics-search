@@ -29,6 +29,13 @@ CLASSIFY_BATCH = 6
 MIN_FACT_CHARS = 30
 MAX_FACT_CHARS = 1500
 
+# Labels that mean "the subject of this note is the OTHER page". They are kept
+# as labels rather than folded into `other` because a small model that has no
+# correct bucket for a note leaks it into the nearest label instead — and
+# because counting them is the only way to see how much raw material sits on
+# the wrong entity. Nothing is written for them; see ``route``.
+OFF_SCOPE = {"about_artist", "about_song"}
+
 _ANNOTATION_RE = re.compile(r"^Lyrics string:\s*(.*?)\.?\s*Fact:\s*(.*)$", re.S)
 _ROSTER_WORD = re.compile(r"(?i)\b(guitar|bass|drums|vocals|keyboards|piano|"
                           r"sax|saxophone|harmonica|percussion)\b")
@@ -122,12 +129,18 @@ def _parse_labels(obj, allowed: set) -> dict:
             labels = [str(x) for x in (it.get("labels") or []) if str(x) in allowed]
             if "other" in labels and len(labels) > 1:
                 labels = [x for x in labels if x != "other"]     # code overrules
-            out[str(it["id"])] = {"labels": labels, "move": it.get("move")}
+            # An off-scope note is not about this entity, so no other label it
+            # picked up describes anything here. A model that answers
+            # ["about_artist","personal"] otherwise gets a `personal` fact
+            # written onto the song's page.
+            if any(x in OFF_SCOPE for x in labels):
+                labels = [x for x in labels if x in OFF_SCOPE][:1]
+            out[str(it["id"])] = {"labels": labels}
     return out
 
 
 async def classify_entity(ask, entity: dict, scope: str, facts: list) -> list:
-    """Label every fact of one entity. Returns [{fact, labels, move}].
+    """Label every fact of one entity. Returns [{fact, labels}].
 
     Batched, with a per-fact fallback when a batch will not parse. That fallback
     is not defensive decoration: in the validation run 18 facts came back
@@ -158,17 +171,17 @@ async def classify_entity(ask, entity: dict, scope: str, facts: list) -> list:
             if parsed.get(f"M{i + 1}"):
                 continue
             solo = _parse_labels(parse_json(await ask(build([f]), 0.2)), allowed)
-            got = solo.get("M1") or {"labels": ["other"], "move": None}
+            got = solo.get("M1") or {"labels": ["other"]}
             out.append({"fact": f, **got, "solo": True})
     return out
 
 
 # ── routing ──────────────────────────────────────────────────────────────────
 
-def route(labels: list, move: Optional[dict]) -> dict:
+def route(labels: list) -> dict:
     """Which prompts a fact goes through.
 
-    Two rules, both of which cost real data when they were absent.
+    Three rules, each of which cost real data when it was absent.
 
     `sample` is ORTHOGONAL: it produces a row in ``sample_links``, not prose, so
     it must not displace a text prompt. Routing a `creation + sample` fact to
@@ -179,20 +192,23 @@ def route(labels: list, move: Optional[dict]) -> dict:
     the list" is not a rule at all: the same pair arrived as
     ['name_origin','band_history'] and ['band_history','name_origin'] in one run
     and took different prompts purely because of the order the model listed them.
+
+    An OFF-SCOPE note is set aside, never relocated. The pipeline used to carry
+    a fact to the other page, and the destination has no room for what the fact
+    was anchored to: the rewrite for an artist page is given no song title, so
+    "Geri plays on this track" arrived on the band's page still saying "this
+    track", pointing at nothing. Measured on the production run, 1968 of 4880
+    facts on artist pages had been carried over that way — 209 of Jay-Z's 217,
+    231 of Kanye West's 245 — and the class they landed in was overwhelmingly
+    `personal`. Setting them aside costs the handful that would have survived
+    the trip and removes a failure mode that cannot be fixed by prompting.
     """
     labels = list(labels or [])
-    plan = {"extract": "sample" in labels, "primary": None, "focus": [],
-            "moved_to": None}
+    plan = {"extract": "sample" in labels, "primary": None, "focus": []}
+    if any(x in OFF_SCOPE for x in labels):
+        return plan
 
-    movers = {"about_artist": "artist", "about_song": "song"}
-    mover = next((x for x in labels if x in movers), None)
-    if mover:
-        plan["moved_to"] = movers[mover]
-        text_labels = [x for x in ((move or {}).get("labels") or []) if x in P.FOCUS]
-    else:
-        text_labels = [x for x in labels if x in P.FOCUS]
-
-    ordered = sorted(text_labels,
+    ordered = sorted([x for x in labels if x in P.FOCUS],
                      key=lambda x: P.SPECIFICITY.index(x)
                      if x in P.SPECIFICITY else 99)
     if ordered:
@@ -206,9 +222,8 @@ def route(labels: list, move: Optional[dict]) -> dict:
 async def refine_one(ask, rec: dict, entity: dict, scope: str, *,
                      lang_name: str = "Russian", lang_code: str = "ru") -> dict:
     """Rewrite one fact, or extract its sampling link, and validate the result."""
-    plan = route(rec["labels"], rec.get("move"))
-    rec.update({"primary": plan["primary"], "focus_labels": plan["focus"],
-                "moved_to": plan["moved_to"]})
+    plan = route(rec["labels"])
+    rec.update({"primary": plan["primary"], "focus_labels": plan["focus"]})
     fact_text = for_refine(rec["fact"])
 
     if plan["extract"]:
@@ -221,8 +236,7 @@ async def refine_one(ask, rec: dict, entity: dict, scope: str, *,
     if not plan["primary"]:
         return rec
 
-    eff_scope = plan["moved_to"] or scope
-    if eff_scope == "song":
+    if scope == "song":
         subject = P.SONG_SUBJECT.format(lang=lang_name)
         title, artist = entity.get("title", ""), entity.get("artist", "")
     else:
@@ -241,7 +255,7 @@ async def refine_one(ask, rec: dict, entity: dict, scope: str, *,
         return rec
 
     src = f"{fact_text} {artist} {title}"
-    forbid = title if eff_scope == "song" else ""
+    forbid = title if scope == "song" else ""
     text, issues, notes = await _repair(ask, text, src=src, cap=cap,
                                         forbid=forbid, lang_name=lang_name,
                                         lang_code=lang_code)
@@ -325,8 +339,7 @@ async def process_entity(ask: Callable, entity: dict, scope: str, facts: list,
     for fact in facts:
         why = gate(fact)
         if why:
-            rec = {"fact": fact, "labels": [f"gate:{why}"], "move": None,
-                   "gated": why}
+            rec = {"fact": fact, "labels": [f"gate:{why}"], "gated": why}
             out.append(rec)
             if on_result:
                 on_result(rec)

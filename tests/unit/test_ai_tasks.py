@@ -213,25 +213,65 @@ class TestRefinedFacts:
         Routing it to the sample branch alone threw the creation story away —
         seven times in the 1199-fact validation run.
         """
-        plan = fv2.route(["creation", "sample"], None)
+        plan = fv2.route(["creation", "sample"])
         assert plan["extract"] is True
         assert plan["primary"] == "creation"
 
     def test_sample_alone_produces_no_text(self):
-        plan = fv2.route(["sample"], None)
+        plan = fv2.route(["sample"])
         assert plan["extract"] is True and plan["primary"] is None
 
     def test_multi_label_order_does_not_decide_the_prompt(self):
         """The same pair listed either way must take the same prompt."""
-        a = fv2.route(["name_origin", "band_history"], None)
-        b = fv2.route(["band_history", "name_origin"], None)
+        a = fv2.route(["name_origin", "band_history"])
+        b = fv2.route(["band_history", "name_origin"])
         assert a["primary"] == b["primary"] == "name_origin"
         assert set(a["focus"]) == set(b["focus"]) == {"name_origin", "band_history"}
 
-    def test_moved_fact_uses_the_destination_label(self):
-        plan = fv2.route(["about_artist"],
-                         {"scope": "artist", "labels": ["award"]})
-        assert plan["moved_to"] == "artist" and plan["primary"] == "award"
+    def test_off_scope_fact_is_set_aside_not_rewritten(self):
+        """`about_artist` on a song produces no prose at all.
+
+        It used to be carried to the artist's page, which is where 1968 of the
+        4880 facts on production artist pages came from — and the rewrite there
+        is given no song title, so anything anchored to the song arrived
+        pointing at nothing.
+        """
+        plan = fv2.route(["about_artist"])
+        assert plan["primary"] is None and plan["focus"] == []
+
+    def test_both_classify_prompts_still_format(self):
+        """A stray unescaped brace breaks EVERY fact, not one.
+
+        These prompts are mostly JSON, so every literal brace has to be
+        doubled; miss one and `.format` raises KeyError on the first call of a
+        ten-hour run.
+        """
+        from app.services.facts_v2 import prompts as P
+
+        song = P.SONG_CLASSIFY.format(title="T", artist="A", items="M1. x")
+        artist = P.ARTIST_CLASSIFY.format(artist="A", items="M1. x")
+        for text in (song, artist):
+            assert '{"items":[{"id":"M1","labels":["..."]}]}' in text
+            assert '"move"' not in text          # the field is gone for good
+            assert "{{" not in text and "}}" not in text
+
+    def test_a_legacy_move_field_in_the_answer_is_ignored(self):
+        """A model still echoing the old shape must not resurrect the move.
+
+        Worth pinning: the answer format lived in prompt caches and in the
+        model's habits long after the prompt changed.
+        """
+        got = fv2._parse_labels(
+            {"items": [{"id": "M1", "labels": ["creation"],
+                        "move": {"scope": "artist", "labels": ["personal"]}}]},
+            fv2.SONG_LABELS)
+        assert got == {"M1": {"labels": ["creation"]}}
+
+    def test_off_scope_label_swallows_the_labels_beside_it(self):
+        """A model answering ["about_artist","personal"] writes nothing here."""
+        assert fv2._parse_labels(
+            {"items": [{"id": "M1", "labels": ["about_artist", "personal"]}]},
+            fv2.SONG_LABELS) == {"M1": {"labels": ["about_artist"]}}
 
     def test_roster_dump_is_gated_before_the_model(self):
         roster = ("1987-2002 Layne Staley Vocals, guitar 1987-2002 Jerry "
@@ -508,13 +548,13 @@ class TestRefinedFacts:
         assert meta[0]["labels"] == ["creation"]
 
     @pytest.mark.asyncio
-    async def test_song_fact_about_the_artist_lands_on_the_artist_page(self):
-        """The move is written where the listener will look for it.
+    async def test_song_fact_about_the_artist_is_set_aside(self):
+        """An `about_artist` note stays put, unwritten, and reaches no page.
 
-        The store callback fires DURING processing, so the artist name it needs
-        must be bound before the run starts — attaching it to the records
-        afterwards left the fact on the song's page with an `about_artist`
-        label, which is where it came from and not where it belongs.
+        It used to be relocated to the artist's page. That is what filled
+        production artist pages with facts anchored to songs they no longer
+        named — 209 of Jay-Z's 217 rows, 231 of Kanye West's 245 — so the
+        relocation is gone and the note is simply not written out.
         """
         from app.services.song_facts_service import get_song_facts_key
 
@@ -525,9 +565,8 @@ class TestRefinedFacts:
             source="songfacts.com")
         points = [FakePoint("p9", {"artist": "Travis Scott", "title": "Sicko Mode"})]
 
-        classify = json.dumps({"items": [{
-            "id": "M1", "labels": ["about_artist"],
-            "move": {"scope": "artist", "labels": ["personal"]}}]})
+        classify = json.dumps({"items": [
+            {"id": "M1", "labels": ["about_artist"]}]})
         refine = json.dumps({"text": "Появился на Elimination Chamber в 2025 году."})
 
         async def _fake_llm(user, **kwargs):
@@ -538,21 +577,13 @@ class TestRefinedFacts:
             await refined_facts.run(
                 _make_job(collection="c", lang="ru"), FakeDb(points), None)
 
-        # Nothing is left under the song, so the reader sees None — "never
-        # processed" — and falls back to the raw facts. That is the honest
-        # answer for a song whose every fact turned out to be about the
-        # artist: the UNIQUE key stores one row per raw fact, so a moved fact
-        # cannot also leave a marker behind. It only bites when EVERY fact
-        # moves, which is why the fallback is a tolerable outcome and not a
-        # silent loss.
+        # The row exists, so the song counts as processed and does NOT fall
+        # back to its raw facts — it just has nothing showable.
         assert MetadataDB.get_refined_facts(
-            scope="song", scope_key=slug, collection_name="c", lang="ru") is None
-        on_artist = MetadataDB.get_refined_facts_meta(
+            scope="song", scope_key=slug, collection_name="c", lang="ru") == []
+        assert MetadataDB.get_refined_facts_meta(
             scope="artist", scope_key="travis-scott", collection_name="c",
-            lang="ru")
-        assert on_artist and "Elimination Chamber" in on_artist[0]["text"]
-        # and under the destination's label, not "about_artist"
-        assert on_artist[0]["labels"] == ["personal"]
+            lang="ru") is None
 
     @pytest.mark.asyncio
     async def test_rerun_does_not_call_the_model_again(self):

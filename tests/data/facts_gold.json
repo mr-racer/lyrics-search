@@ -1,0 +1,981 @@
+[
+ {
+  "id": "s01",
+  "scope": "song",
+  "artist": "Dr. Dre",
+  "title": "What's the Difference",
+  "category": "genius_annotation",
+  "fact": "Lyrics string: Fuck blood, I wanna see some lungs coughed up Get shot up in the hot tub 'til the bubbles pop up. Fact: A little bit of a production note here, there are ad-libs in the background that pan between your left and right ears respectively. The ad-libs include coughing and bubbles popping up. Also, can we appreciate the quality of Eminem’s adlibs throughout his career?",
+  "gold": [
+   "sound"
+  ],
+  "why": "production note you can hear",
+  "was": {
+   "labels": [
+    "sound"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "s02",
+  "scope": "song",
+  "artist": "Coldplay",
+  "title": "Strawberry Swing",
+  "category": null,
+  "fact": "This song features twinkling Afro-pop guitars. Lead singer Chris Martin explained to Rolling Stone magazine: \"My Mum comes from Zimbabwe, so I spent a lot of time there. I used to work in a studio where people played that.\"",
+  "gold": [
+   "sound",
+   "creation"
+  ],
+  "why": "afro-pop guitars + why",
+  "was": {
+   "labels": [
+    "sound",
+    "creation"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "s03",
+  "scope": "song",
+  "artist": "Kanye West",
+  "title": "Bad News",
+  "category": null,
+  "fact": "West created the piano arrangement himself.",
+  "gold": [
+   "sound",
+   "creation"
+  ],
+  "why": "who played the arrangement",
+  "was": {
+   "labels": [
+    "creation",
+    "sound"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "s04",
+  "scope": "song",
+  "artist": "Moby",
+  "title": "Lift Me Up",
+  "category": null,
+  "fact": "Broadway performer Shayna Steele ( Rent , Jesus Christ Superstar ), provided backing vocals.",
+  "gold": [
+   "sound",
+   "creation"
+  ],
+  "why": "who sang on it",
+  "was": {
+   "labels": [
+    "sound"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "s05",
+  "scope": "song",
+  "artist": "Metallica",
+  "title": "Sad But True",
+  "category": null,
+  "fact": "This is one of Lars Ulrich's favorite tracks to play live. \"I love the feel of that song and the kind of the stomp and the size of it,\" he told SiriusXM's Mandatory Metallica channel. \"There's some of the songs that are really rigid and some of the other songs that are a little more freeform. 'Sad But True' falls kind of on the far end of the freeform scale. Every night you play sort of different drum fills and push, pull, all that stuff. So that one I love playing.\"",
+  "gold": [
+   "sound"
+  ],
+  "why": "how the drums are played live",
+  "was": {
+   "labels": [
+    "sound"
+   ],
+   "moved": true
+  }
+ },
+ {
+  "id": "s06",
+  "scope": "song",
+  "artist": "Snoop Dogg",
+  "title": "Drop It Like It's Hot",
+  "category": "genius_annotation",
+  "fact": "Lyrics string: Killer with the beat,. Fact: Pharrell is responsible for countless popular beats (this one included) along with his Neptunes co-star Chad Hugo",
+  "gold": "other",
+  "why": "bare credit + praise (c)",
+  "was": {
+   "labels": [
+    "sound"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "s07",
+  "scope": "song",
+  "artist": "Kendrick Lamar",
+  "title": "Black Panther",
+  "category": "genius_description",
+  "fact": "Kendrick kicks off the Black Panther soundtrack with a solitary verse speaking from the perspective of T'Challa, the main character, and alter ego of Black Panther. This is a full contrast to Kendrick’s second verse on “King’s Dead,” (appears later on the album) which speaks from the perspective of Erik Killmonger, who is Black Panther’s rival and is learned to be T'Challa’s cousin. The song also parallels Kendrick’s own perspective and responsibilities in society. The song bears a calm, peaceful, hopeful, and uplifting vibe from the instrumentation throughout the song, down to Kendrick’s verse. This is to exemplify the heroic nature exhibited by T’Challa. Throughout the song, the beat switches to a darker key-laden sound, which expresses T'Challa’s Black Panther side. On the other hand, Kendrick’s portrayal of antagonist, Erik Killmonger in “King’s Dead,” is rapped in an aggressive and violent manner, while the beat is more dark and grim.",
+  "gold": "other",
+  "why": "lyric perspective retold (a)",
+  "was": {
+   "labels": [
+    "creation",
+    "sound"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "s08",
+  "scope": "song",
+  "artist": "The Killers",
+  "title": "Wonderful Wonderful",
+  "category": null,
+  "fact": "Wonderful Wonderful also earned The Killers their first #1 album in the US. Despite having scored five chart-topping LPs in the UK, this was the first time the Las Vegas quartet had reached top spot in the home country. Their previous highest charting record was Sam's Town , which peaked at #2.",
+  "gold": [
+   "record"
+  ],
+  "why": "first #1 album in the US",
+  "was": {
+   "labels": [
+    "record"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "s09",
+  "scope": "song",
+  "artist": "Adele",
+  "title": "Someone Like You",
+  "category": null,
+  "fact": "This was the first single of the 2010s to sell over one million copies in the UK. The previous million seller was \" I Gotta Feeling ,\" which achieved the feat in 2009.",
+  "gold": [
+   "record"
+  ],
+  "why": "first single of the 2010s to sell 1M",
+  "was": {
+   "labels": [
+    "record"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "s10",
+  "scope": "song",
+  "artist": "Taylor Swift",
+  "title": "I Knew You Were Trouble",
+  "category": null,
+  "fact": "This won the YouTube Phenomenon award at the first ever YouTube Awards. Nominees were chosen by taking into account the YouTube views, likes and subscription figures for different artists.",
+  "gold": [
+   "record"
+  ],
+  "why": "first ever YouTube Awards",
+  "was": {
+   "labels": [
+    "record"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "s11",
+  "scope": "song",
+  "artist": "Bad Meets Evil",
+  "title": "Lighters",
+  "category": null,
+  "fact": "Hell: The Sequel topped the Billboard 200 in its debut week, having sold 171,000 copies. Though Eminem has reached the summit many times previously, Royce's previous best chart position had been the #110 ranking of 2009's Street Hop .",
+  "gold": "other",
+  "why": "chart position, no superlative (d)",
+  "was": {
+   "labels": [
+    "record"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "s12",
+  "scope": "song",
+  "artist": "Moby",
+  "title": "In My Heart",
+  "category": "genius_description",
+  "fact": "The lead single from 18, Moby explained during a performance of the song at the 2003 Glastonbury festival that he wrote it in New York after the September 11 attacks to express a sense of hopefulness. The lyrics were inspired by the scientific principle that all matter in the universe is essentially made up of stardust. During a Reddit AMA session, Moby said the song is relatively accurate, scientifically speaking. “Apart from two elements (hydrogen and helium?) everything else on the periodic table of elements (with which we’re comprised) came from the furnace of a star somewhere,” he wrote. “Just remember: there’s not a single part of you that wasn’t present in the first ½ second of the big bang. Technically, we’re all 13,600,000,000 years old.” Inspired by the 1968 novel and film 2001: A Space Odyssey, the music video has Moby playing a spaceman who observes Hollywood celebrities. Several celebs make cameo appearances to help Moby lip-synch the song, including ‘80s stars Corey Feldman, Todd Bridges, and Gary Coleman, musicians J.C. Chasez, Dave Navarro, and Tommy Lee, and actors Sean Bean, Leelee Sobieski and Thora Birch, among others. The clip was directed by Joseph Kahn, who was also behind the singer’s “South Side” video. Moby on why he chose this as the album’s lead single: “The reason is very simple. I know how a lot of people choose work songs, with record label bosses in meetings with a lot of people. But as I have creative control, at the end of the day I make these decisions. And I chose this song because every time I listen to this song, it makes me smile. I made the song, I’ve heard it a million times, but every time the chorus comes, it makes me smile. So there’s no marketing reason behind this, it was just my decision.” Brad Rushing took the prize for Best Cinematography at the 2002 MTV Video Music Awards for his work on the clip. The cinematographer also worked on the videos for Britney Spears’ “Toxic” and Eminem’s “Without Me” (a song that takes a jab at Moby). Peaking at #11, this was the album’s highest-charting single in the UK, where 18 also landed at #1 on the albums chart. Moby became an international pop sensation when his previous album, Play, became a surprise hit. Moby performed this on Saturday Night Live on May 18, 2002.",
+  "gold": [
+   "creation"
+  ],
+  "why": "written in NY after 9/11",
+  "was": {
+   "labels": [
+    "creation"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "s13",
+  "scope": "song",
+  "artist": "Stevie Nicks",
+  "title": "Leather and Lace",
+  "category": null,
+  "fact": "In the liner notes to her TimeSpace album, Nicks explained: \"I wrote this song because Waylon Jennings called me up and asked me to write a song called 'Leather and Lace.' It was to be a duet for him and his wife (Jessi Colter), and I worked very hard trying to explain what it was like to be in love with someone in the same business, and how to approach dealing with each other. It's probably the hardest thing in the world to do because it falls out of your hands and into the hands of the world, which tends to want you to not be able to handle it. I have to tell you now that Mr. Don Henley was pretty much responsible for this song because he came over every day and told me to either start over, or that I was on the right track, and he made me finish it (because I almost gave up many times). When it was finally finished, Don and I made a very simple demo of it - he sang it with me, and it was truly wonderful. And then I found out that Waylon and Jessi were breaking up, and Waylon wanted to just sing it by himself. After all the work I had put into the philosophy of two people dealing with this problem, I told Waylon that only 4 people in this world could sing this song: he and his wife, or myself and Don Henley. Don and I had been going out for quite awhile, and, bless his heart, he did sing it with me, and again, as fate would have it, it became one of the most special love songs that I would ever write... and remains that, even today, after all these years. All in all, it was an unforgettable experience, as was he. Blame it on my wild heart.\"",
+  "gold": [
+   "creation"
+  ],
+  "why": "Waylon Jennings commissioned it",
+  "was": {
+   "labels": [
+    "creation"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "s14",
+  "scope": "song",
+  "artist": "Jay-Z",
+  "title": "Kill Jay-Z",
+  "category": null,
+  "fact": "4:44 was produced entirely by Chicago beatsmith No I.D., whose previous collaborations with Jay-Z include the Blueprint 3 hit tunes \" D.O.A. (Death of Auto-Tune) \" and \" Run This Town .\"",
+  "gold": [
+   "creation"
+  ],
+  "why": "producer credit with history",
+  "was": {
+   "labels": [
+    "creation"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "s15",
+  "scope": "song",
+  "artist": "Coldplay",
+  "title": "Speed of Sound",
+  "category": "genius_description",
+  "fact": "The song was inspired by Martin’s daughter, Apple, and English alternative rock singer Kate Bush. That’s a song where we were listening to a lot of Kate Bush last summer, and we wanted a song which had a lot of tom-toms in it. I just had my daughter up also, and was kind of feeling in a sense of awe and wonderment, so the song is kind of a Kate Bush song about miracles. — Chris Martin for Yahoo! Music 5/31/2005",
+  "gold": [
+   "creation",
+   "sound"
+  ],
+  "why": "Kate Bush + tom-toms",
+  "was": {
+   "labels": [
+    "creation"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "s16",
+  "scope": "song",
+  "artist": "Stevie Nicks",
+  "title": "Two Kinds of Love",
+  "category": null,
+  "fact": "Jon Bon Jovi wrote this for Nicks and sang it with her. In the liner notes to her TimeSpace album, Nicks said: \"When I first heard this song, I really did not quite understand what Jon was trying to say, but over the 2 weeks that we sang it together (at my mike), I started to realize that Jon, without knowing it, had sort of taken a time machine back 18 years and watched my life, the good parts and the bad. It was not a love song, which of course, I had expected it to be; it was much more than that to me. Bon Jovi had picked up on the fact, before meeting me, that there was no way he could know what I had lived through without having lived through it with me, so he dreamed. He dreamed about what the notorious Stevie Nicks had been like and what it had all done to her... the indulgences, the lifestyle. I felt that if he knew nothing else about me, he knew I had a strong instinct to survive. Someday, maybe all the people who did not go through this with us will understand; that considering the generation we come from, we are very lucky to be alive.\" >>> Suggestion credit : Shawna - Phoenix, AZ",
+  "gold": [
+   "creation"
+  ],
+  "why": "Bon Jovi wrote it for her",
+  "was": {
+   "labels": [
+    "personal"
+   ],
+   "moved": true
+  }
+ },
+ {
+  "id": "s17",
+  "scope": "song",
+  "artist": "Maroon 5",
+  "title": "Makes Me Wonder",
+  "category": null,
+  "fact": "Adam Levine got so good at spinning heartbreak into Gold records that his bandmate Jesse Carmichael quipped, \"We need to get Adam back in a dysfunctional relationship pronto.\" Carmichael and Maroon 5's bass player, Mickey Madden, are credited as writers on \"Makes Me Wonder\" along with Adam Levine.",
+  "gold": [
+   "creation"
+  ],
+  "why": "bandmate quip + writing credits",
+  "was": {
+   "labels": [
+    "sound"
+   ],
+   "moved": true
+  }
+ },
+ {
+  "id": "s18",
+  "scope": "song",
+  "artist": "Fall Out Boy",
+  "title": "Sophomore Slump or Comeback of the Year",
+  "category": "genius_description",
+  "fact": "“Sophomore Slump or Comeback of the Year” is a self-referential title that alludes to the general expectation that an artist’s second album is usually among the worst (especially after a successful debut). The song is also an anthem to a generation that is often told that we’ll amount to nothing, though we have a different sort of wisdom that comes from experiencing a world of alternative communication, depression, poverty, and deferred adulthood. The narrator is battling with the feeling that growing up doesn’t always necessarily feel like you’re advancing. Sometimes you just feel like you’re faking it and gaining nothing in order to move forward in life. The title also confirms Fall Out Boy’s stance on Evening Out With Your Girlfriend: even though it technically qualifies as one, it should not be considered a studio album (which makes Take This To Your Grave the first album). The track features vocals by William Beckett, the then-frontman of Chicago band The Academy Is… that were labelmates with Fall Out Boy.",
+  "gold": [
+   "title_origin"
+  ],
+  "why": "self-referential title explained",
+  "was": {
+   "labels": [
+    "title_origin"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "s19",
+  "scope": "song",
+  "artist": "Radiohead",
+  "title": "Faust Arp",
+  "category": null,
+  "fact": "\"Arp\" may refer to Jean Arp, the founder of the Dadaist movement, or to the ARP synthesizer manufacturer. A third alternative is that, like the fourth track on the album \" Weird Fishes / Arpeggi ,\" it is a reference to the musical term \"arpeggio.\"",
+  "gold": [
+   "title_origin"
+  ],
+  "why": "Jean Arp / ARP / arpeggio",
+  "was": {
+   "labels": [
+    "title_origin"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "s20",
+  "scope": "song",
+  "artist": "The Weeknd",
+  "title": "Starboy",
+  "category": null,
+  "fact": "The \"Starboy\" is an alter ego The Weeknd created. He told Zane Lowe: \"He's a more braggadocios character that we all have inside of us.\"",
+  "gold": [
+   "title_origin"
+  ],
+  "why": "title is an alter ego he made",
+  "was": {
+   "labels": [
+    "title_origin"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "s21",
+  "scope": "song",
+  "artist": "Jay-Z",
+  "title": "Jay Z Blue",
+  "category": "genius_annotation",
+  "fact": "Lyrics string: Let's do this for these babies. Fact: Maybe for the first time in his career (minus a hypothetical child on “New Day” and the first track devoted to Blue Ivy, “Glory”), Jay-Z doesn’t talk about babes but about babies. Hova’s daughter’s name is Blue Ivy, hence the song name. This song is sort of a prayer for all the kids in the world, Jay hopes that the kids won’t have to live the same childhood he lived.",
+  "gold": [
+   "title_origin"
+  ],
+  "why": "named for Blue Ivy",
+  "was": {
+   "labels": [
+    "title_origin"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "s22",
+  "scope": "song",
+  "artist": "Depeche Mode",
+  "title": "Suffer Well",
+  "category": null,
+  "fact": "They appear in the video game The Sims 2 Open For Business . In addition to being characters, they recorded a new version of their song \"Suffer Well\" in Simlish, which is the language spoken in the game.",
+  "gold": [
+   "placement"
+  ],
+  "why": "re-recorded in Simlish for The Sims 2",
+  "was": {
+   "labels": [
+    "placement"
+   ],
+   "moved": true
+  }
+ },
+ {
+  "id": "s23",
+  "scope": "song",
+  "artist": "Bon Jovi",
+  "title": "Runaway",
+  "category": null,
+  "fact": "This was used in the season 2 Stranger Things episode \"The Lost Sister\" when Eleven runs away to Chicago to find her \"sister.\"",
+  "gold": [
+   "placement"
+  ],
+  "why": "Stranger Things S2",
+  "was": {
+   "labels": [
+    "placement"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "s24",
+  "scope": "song",
+  "artist": "Lorde",
+  "title": "Glory and Gore",
+  "category": "genius_description",
+  "fact": "“Glory and Gore” is the fifth single from Lorde’s debut LP. The fantasy from “Team” darkens as Lorde channels the celebrity’s mindset in a Hunger Games-like satire. This song gained popularity after it was featured in a commercial for Vikings.",
+  "gold": [
+   "placement",
+   "creation"
+  ],
+  "why": "Vikings commercial",
+  "was": {
+   "labels": [
+    "creation",
+    "placement"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "s25",
+  "scope": "song",
+  "artist": "Gorillaz",
+  "title": "Clint Eastwood",
+  "category": null,
+  "fact": "\"Clint Eastwood\" garnered the band three MTV Video Music Award nominations, so Gorillaz created an animated acceptance speech to continue the theme of cartoon band members. Unfortunately, they spent tens of thousands of dollars on a speech they never used, because they lost in all three categories.",
+  "gold": [
+   "video"
+  ],
+  "why": "animated acceptance speech, never used",
+  "was": {
+   "labels": [
+    "video"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "s26",
+  "scope": "song",
+  "artist": "Dua Lipa",
+  "title": "Illusion",
+  "category": null,
+  "fact": "The music video, directed by Tanu Muino (Lil Nas X, Harry Styles, Cardi B), takes place at Barcelona's Piscina Municipal de Montjuïc sports complex. In the clip, Dua hangs with divers and synchronized swimmers before climbing a Castell-inspired tower, referencing the famous Catalonian tradition.",
+  "gold": [
+   "video"
+  ],
+  "why": "director + Barcelona pool + Castell",
+  "was": {
+   "labels": [
+    "video"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "s27",
+  "scope": "song",
+  "artist": "Calvin Harris",
+  "title": "This Is What You Came For",
+  "category": null,
+  "fact": "During a radio interview with Ryan Seacrest, shortly after the song's release, Harris was asked if he planned to collaborate with Swift. \"You know we haven't even spoken about it,\" he replied. \"I can't see it happening though.\" According to TMZ , this exchange was the breaking point in their relationship, as Swift felt disrespected, and they broke up shortly afterwards.",
+  "gold": [
+   "about_artist"
+  ],
+  "why": "the note is his break-up, not the record",
+  "was": {
+   "labels": [
+    "personal"
+   ],
+   "moved": true
+  }
+ },
+ {
+  "id": "s28",
+  "scope": "song",
+  "artist": "Jay-Z",
+  "title": "Adnis",
+  "category": "genius_annotation",
+  "fact": "Lyrics string: Just remember one thing now: you're not to blame You was newly separated tryin' to escape ya world. Fact: From O Magazine: Oprah: I’ve read that when you were 12, you shot your brother in the shoulder. Did your father’s leaving have anything to do with that? Did it turn you into the kind of angry kid who would end up shooting his brother? Jay-Z: Yes",
+  "gold": [
+   "about_artist"
+  ],
+  "why": "Oprah interview about his childhood",
+  "was": {
+   "labels": [
+    "personal"
+   ],
+   "moved": true
+  }
+ },
+ {
+  "id": "s29",
+  "scope": "song",
+  "artist": "Lana Del Rey",
+  "title": "Shades of Cool",
+  "category": "genius_annotation",
+  "fact": "Lyrics string: But you are unfixable I can't break through your world 'Cause you live in shades of cool Your heart is unbreakable. Fact: Del Rey has a history of falling for “broken” men throughout her discography. In the beginning of her relationships, the singer starts off being attracted to the mysterious aura around these hopeless men, thinking that her love will be enough to change him later down the road, only to find out she doesn’t have the aptitude. These types of relationships the singer ends up finding herself in can also be noted on the 2010 song “Afraid”: And I’ve had it up to here With the panic and the fear There’s nothing in your heart Thought that I could make you change I’m so afraid However, even though Lana can quickly indentify that the relationship cannot go on with these emotionally unavailable men, she usually doesn’t have the strength to leave them and stays in these drainign relationships until their tragic end.",
+  "gold": "other",
+  "why": "what the lyric means (a)",
+  "was": {
+   "labels": [
+    "personal"
+   ],
+   "moved": true
+  }
+ },
+ {
+  "id": "s30",
+  "scope": "song",
+  "artist": "Kanye West",
+  "title": "Selfish",
+  "category": "genius_annotation",
+  "fact": "Lyrics string: I put me first I put me first, Lucien What was it worth? What was it worth in the end?. Fact: The overarching theme of Ye’s Selfish is the demise of a relationship, most likely his most recent one with ex-girlfriend Julia Fox. In these lines Kanye is saying that he put himself first in the relationship and wonders whether it was worth it or not in the end. The reference, “Lucien”, is to the famous French restaurant, Lucien, in the East Village of New York City. This is where Kanye celebrated Julia’s birthday right before they broke up.",
+  "gold": "other",
+  "why": "what the lyric means (a)",
+  "was": {
+   "labels": [
+    "personal"
+   ],
+   "moved": true
+  }
+ },
+ {
+  "id": "s31",
+  "scope": "song",
+  "artist": "Kanye West",
+  "title": "Pt. 2",
+  "category": "genius_annotation",
+  "fact": "Lyrics string: I can, I can see it, yeah. Fact: Although Desiigner is from Brooklyn, New York, he echoes Kanye and reps the Chi in this hook. “Pie” refers to cocaine—Kanye alluded to cocaine earlier in the song.",
+  "gold": "other",
+  "why": "slang gloss on a lyric line (a,b)",
+  "was": {
+   "labels": [
+    "sound"
+   ],
+   "moved": true
+  }
+ },
+ {
+  "id": "s32",
+  "scope": "song",
+  "artist": "Dr. Dre",
+  "title": "Still D.R.E.",
+  "category": "genius_annotation",
+  "fact": "Lyrics string: Still ain't trippin', love to see young blacks get money. Fact: Jay Z said in his verse on Drake’s song Pound Cake. I’ve done made more millionaires than the lotto did This line fits Dr.Dre perfectly. Since his early days Dre helped dozens of rappers launch their careers. You may never heard artists like Snoop Dogg, Kurupt, Nate Dogg, 50 cent, Game and Kendrick Lamar if Doc didn’t influence, guide and produce them. Of course the biggest of them all is Eminem who isn’t black, but is a creation of Dre.",
+  "gold": "other",
+  "why": "another rapper's line quoted (a,g)",
+  "was": {
+   "labels": [
+    "sound"
+   ],
+   "moved": true
+  }
+ },
+ {
+  "id": "s33",
+  "scope": "song",
+  "artist": "Eminem",
+  "title": "Till I Collapse",
+  "category": "genius_annotation",
+  "fact": "Lyrics string: Shady Records. Fact: Shady Records is a record label owned by Eminem, founded in 1999.",
+  "gold": "other",
+  "why": "label gloss off a lyric line (b)",
+  "was": {
+   "labels": [
+    "band_history"
+   ],
+   "moved": true
+  }
+ },
+ {
+  "id": "s34",
+  "scope": "song",
+  "artist": "Kendrick Lamar",
+  "title": "Element.",
+  "category": "genius_annotation",
+  "fact": "Lyrics string: Dot. Fact: “K-Dot” or just “Dot” is one of many nicknames of Kendrick Lamar.",
+  "gold": "other",
+  "why": "nickname gloss — the Jay-Z failure (b)",
+  "was": {
+   "labels": [
+    "name_origin"
+   ],
+   "moved": true
+  }
+ },
+ {
+  "id": "s35",
+  "scope": "song",
+  "artist": "Nelly",
+  "title": "Country Grammar",
+  "category": "genius_annotation",
+  "fact": "Lyrics string: Cornell Haynes. Fact: Nelly was born Cornell Haynes http://en.wikipedia.org/wiki/Nelly",
+  "gold": "other",
+  "why": "real-name gloss, no story (b)",
+  "was": {
+   "labels": [
+    "name_origin"
+   ],
+   "moved": true
+  }
+ },
+ {
+  "id": "s36",
+  "scope": "song",
+  "artist": "The Weeknd",
+  "title": "The Hills",
+  "category": "genius_annotation",
+  "fact": "Lyrics string: XO. Fact: This intro is taken from The Weeknd’s 2011 song “XO/The Host.” XO is The Weeknd’s iconic label and fan collective, representing more than just a record label—it’s a reflection of his moody, emotional sound and dark, atmospheric imagery. While some see “XO” short for “hugs and kisses,” because of its meaning in online texting, it is also a nod to the drugs ecstasy (X) and oxycontin (O). The latter has become a popular aesthetic that is strictly from The Weeknd’s fanbase.",
+  "gold": "other",
+  "why": "XO gloss off a lyric line (a,b)",
+  "was": {
+   "labels": [
+    "name_origin",
+    "sound"
+   ],
+   "moved": true
+  }
+ },
+ {
+  "id": "a37",
+  "scope": "artist",
+  "artist": "Stevie Nicks",
+  "title": null,
+  "category": null,
+  "fact": "She was gifted a Goya guitar on her 16th birthday and promptly wrote her first song, entitled \"I've Loved and I've Lost, and I'm Sad but Not Blue.\"",
+  "gold": [
+   "personal"
+  ],
+  "why": "Goya guitar at 16, first song",
+  "was": {
+   "labels": [
+    "personal"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "a38",
+  "scope": "artist",
+  "artist": "Gorillaz",
+  "title": null,
+  "category": null,
+  "fact": "Jamie Hewlett met his French wife, actress Emma de Caunes, at a Gorillaz gig. She's best known for playing Sabine in Mr. Bean's Holiday .",
+  "gold": [
+   "personal"
+  ],
+  "why": "Hewlett met his wife at a gig",
+  "was": {
+   "labels": [
+    "personal"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "a39",
+  "scope": "artist",
+  "artist": "Christina Aguilera",
+  "title": null,
+  "category": null,
+  "fact": "Among the backstage demands at her early concerts: four candles, a tray of organic vegetables, chocolate Nesquik, and a bottle of Flintstones vitamins.",
+  "gold": [
+   "personal"
+  ],
+  "why": "backstage rider, named items",
+  "was": {
+   "labels": [
+    "personal"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "a40",
+  "scope": "artist",
+  "artist": "Sia",
+  "title": null,
+  "category": null,
+  "fact": "She is one of the most efficient pop songwriters in the business, known for delivering lyrics and melody in minutes. \"It happens in one motion,\" producer Greg Kurstin says.",
+  "gold": [
+   "sound",
+   "personal"
+  ],
+  "why": "writes melody in minutes, producer quote",
+  "was": {
+   "labels": [
+    "sound"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "a41",
+  "scope": "artist",
+  "artist": "Chris Rea",
+  "title": null,
+  "category": null,
+  "fact": "He was a top slide guitarist, but didn't start playing the instrument until he was 22.",
+  "gold": [
+   "sound",
+   "personal"
+  ],
+  "why": "slide guitar, started at 22",
+  "was": {
+   "labels": [
+    "sound"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "a42",
+  "scope": "artist",
+  "artist": "Tate McRae",
+  "title": null,
+  "category": null,
+  "fact": "While writing a song, McRae tunes into the beat and drums to figure out how to move to it. But with the lyrics, it's all about being emotionally driven rather than thinking about dance moves. Even though she's a dancer, she won't let choreography dictate the essence of the song.",
+  "gold": [
+   "sound",
+   "personal"
+  ],
+  "why": "how she writes to the beat",
+  "was": {
+   "labels": [
+    "sound"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "a43",
+  "scope": "artist",
+  "artist": "Bruno Mars",
+  "title": null,
+  "category": null,
+  "fact": "He's a meticulous songwriter, constantly refining the tracks. He says the challenge is coming up with something original. \"I'm competing with billions of other songs,\" he told Rolling Stone. \"It's like winning the lottery - you just gotta get lucky.\"",
+  "gold": "other",
+  "why": "platitude about luck (c)",
+  "was": {
+   "labels": [
+    "sound"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "a44",
+  "scope": "artist",
+  "artist": "Travis Scott",
+  "title": null,
+  "category": null,
+  "fact": "He's really into architecture, and will note structural details of any building he enters. \"When you start seeing how odd things can be shaped and then see how they can structurally work, it's interesting,\" he told Rolling Stone. \"I'm always trying to be like an ultimate problem solver.\"",
+  "gold": "other",
+  "why": "a hobby, and not `sound` at all (c)",
+  "was": {
+   "labels": [
+    "sound"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "a45",
+  "scope": "artist",
+  "artist": "Twenty One Pilots",
+  "title": null,
+  "category": null,
+  "fact": "They are from Columbus, Ohio, home of Ohio State University. Students there made up much of their early fanbase.",
+  "gold": "other",
+  "why": "hometown, nothing happens (f)",
+  "was": {
+   "labels": [
+    "band_history"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "a46",
+  "scope": "artist",
+  "artist": "Eminem",
+  "title": null,
+  "category": null,
+  "fact": "His real name is Marshall Mathers. \"Eminem\" comes from his initials, M.M.",
+  "gold": [
+   "name_origin"
+  ],
+  "why": "initials M.M.",
+  "was": {
+   "labels": [
+    "name_origin"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "a47",
+  "scope": "artist",
+  "artist": "Duran Duran",
+  "title": null,
+  "category": null,
+  "fact": "They are named after the bad guy in the 1967 Jane Fonda movie Barbarella . It's a very campy film that spoofs more serious sci-fi movies. John Taylor came up with the idea for the name after watching the film on BBC TV.",
+  "gold": [
+   "name_origin"
+  ],
+  "why": "Barbarella villain",
+  "was": {
+   "labels": [
+    "name_origin"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "a48",
+  "scope": "artist",
+  "artist": "Coldplay",
+  "title": null,
+  "category": null,
+  "fact": "The group was originally called Pectoralz, then Starfish, before finally settling on Coldplay in 1998. They are named after a British psychology book called Child's Reflections, Cold Play .",
+  "gold": [
+   "name_origin",
+   "band_history"
+  ],
+  "why": "Pectoralz → Starfish → Coldplay",
+  "was": {
+   "labels": [
+    "band_history",
+    "name_origin"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "a49",
+  "scope": "artist",
+  "artist": "Lady A",
+  "title": null,
+  "category": null,
+  "fact": "Known as \"Lady Antebellum\" for their first 14 years, on June 11, 2020, the trio changed their name to \"Lady A\" as part of a movement to renounce imagery associated with slavery (a day earlier, NASCAR banned Confederate flags at races). They explained in a statement: \"When we set out together almost 14 years ago, we named our band after the southern 'antebellum' style home where we took our first photos. As musicians, it reminded us of all the music born in the south that influenced us... Southern Rock, Blues, R&B, Gospel and of course Country. But we are regretful and embarrassed to say that we did not take into account the associations that weigh down this word referring to the period of history before The Civil War, which includes slavery.\"",
+  "gold": [
+   "name_origin",
+   "band_history"
+  ],
+  "why": "renamed in 2020, with the reason",
+  "was": {
+   "labels": [
+    "band_history",
+    "name_origin"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "a50",
+  "scope": "artist",
+  "artist": "Starship",
+  "title": null,
+  "category": null,
+  "fact": "Thomas formed \"Starship with Mickey Thomas\" after this group disbanded. The only similarity to the original group other than Thomas was Bloomfield.",
+  "gold": [
+   "band_history"
+  ],
+  "why": "formed after the split",
+  "was": {
+   "labels": [
+    "band_history"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "a51",
+  "scope": "artist",
+  "artist": "Linkin Park",
+  "title": null,
+  "category": null,
+  "fact": "Linkin Park took some time off after Chester Bennington's death in 2017 but returned in 2024 with two new members: singer Emily Armstrong and drummer Colin Brittain. Armstrong started working on songs with the band in 2019 and kept coming around. \"You just can't feed stray cats, you know - they'll never leave,\" she joked. She and Brittain made their debut on the single \" The Emptiness Machine .\"",
+  "gold": [
+   "band_history"
+  ],
+  "why": "2024 return with two new members",
+  "was": {
+   "labels": [
+    "band_history"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "a52",
+  "scope": "artist",
+  "artist": "Katy Perry",
+  "title": null,
+  "category": null,
+  "fact": "Perry was dropped by both Island and Columbia before going on to sign with Capitol Music Group, who released her major-label debut album, One of the Boys , on June 17, 2008. The album's lead single, \" I Kissed a Girl ,\" was released May 6, 2009 and topped the US chart for seven consecutive weeks. Perry revealed to Q Magazine that the track's lyrics are inspired by an old friend: \"The song was inspired by a friendship I had with a girl when I was 15, but I didn't kiss her. I was totally obsessed with her. She was beautiful-porcelain skin, perfect lips - and I still talk to her, but I've never told her the song is about her.\"",
+  "gold": [
+   "band_history"
+  ],
+  "why": "dropped by two labels, signed by Capitol",
+  "was": {
+   "labels": [
+    "band_history"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "a53",
+  "scope": "artist",
+  "artist": "Beyoncé",
+  "title": null,
+  "category": null,
+  "fact": "Beyoncé took Dolly Parton's title as the most-nominated woman in Grammy history in December 2014 when she took her total nominations total to 52. At the 2023 Grammy Awards, Beyoncé took home four Grammys, bringing her total wins to 32. She broke the previous record for the most Grammy Awards won by an individual, held by Georg Solti. The Hungarian-British conductor Solti won 31 Grammys between 1963 and 1998.",
+  "gold": [
+   "award"
+  ],
+  "why": "broke Solti's Grammy record",
+  "was": {
+   "labels": [
+    "award"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "a54",
+  "scope": "artist",
+  "artist": "Bad Meets Evil",
+  "title": null,
+  "category": null,
+  "fact": "In 2011, Bad Meets Evil's EP Hell: The Sequel became only the third EP in history to hit #1 on Billboard's Top 200 chart. The only other two EP's to reach the top spot were Alice in Chains' Jar of Flies in 1994 and Jay-Z and Linkin Park's Collision Course in 2004.",
+  "gold": [
+   "award"
+  ],
+  "why": "third EP ever to hit #1",
+  "was": {
+   "labels": [
+    "award"
+   ],
+   "moved": false
+  }
+ },
+ {
+  "id": "a55",
+  "scope": "artist",
+  "artist": "Justin Timberlake",
+  "title": null,
+  "category": null,
+  "fact": "He is a huge hit on Saturday Night Live , where he is a frequent host. He earned Emmy Awards for his work on the show for Outstanding Guest Actor In A Comedy Series and for Outstanding Original Music And Lyrics for his song/skits \"Dick In A Box\" and \"Motherlover.\"",
+  "gold": [
+   "award"
+  ],
+  "why": "two Emmys for SNL",
+  "was": {
+   "labels": [
+    "award"
+   ],
+   "moved": false
+  }
+ }
+]
