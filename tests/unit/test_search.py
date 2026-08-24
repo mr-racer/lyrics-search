@@ -75,6 +75,22 @@ class TestBuildQdrantFilterModels:
         assert isinstance(f, models.Filter)
         assert len(f.must) == 1
 
+    def test_artist_slug_matches_the_multi_valued_slug_field(self):
+        """The slug is the EXACT artist filter; the raw tag is not.
+
+        ``artist`` holds the tag as written, so MatchValue on it misses
+        "Eminem feat. Dido" — which is why the audio branch used to filter in
+        Python over the whole library's top-K. ``artist_slugs`` carries every
+        participant and is indexed as a keyword at upsert time.
+        """
+        svc = SearchService.__new__(SearchService)
+        f = svc._build_qdrant_filter_models(SearchFilters(artist_slug="eminem"))
+
+        assert isinstance(f, models.Filter)
+        assert len(f.must) == 1
+        assert f.must[0].key == "artist_slugs"
+        assert f.must[0].match.value == "eminem"
+
     def test_multiple_conditions(self):
         svc = SearchService.__new__(SearchService)
         f = svc._build_qdrant_filter_models(

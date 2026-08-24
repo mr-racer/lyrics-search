@@ -23,6 +23,7 @@ import asyncio
 import logging
 from typing import Optional
 
+from app.domain.models import SearchFilters
 from app.services.assistant.contracts import AudioResult, Plan
 from app.services.assistant.llm import as_str_list
 from app.services.assistant.prompts import CLAP_REPHRASE_SYSTEM
@@ -44,7 +45,7 @@ class AudioBranch:
             return AudioResult(title=message[:80], comment="",
                                notes=["search service unavailable"])
 
-        artist = self.agent.library_artist(plan.filters.artist)
+        artist, artist_slug = self.agent.library_artist_ref(plan.filters.artist)
         style = plan.filters.style or message
 
         with self.timings.span("llm.clap_rephrase"):
@@ -57,23 +58,36 @@ class AudioBranch:
                                comment=_no_prompt(self.cfg.lang),
                                notes=["clap rephrasing failed"])
 
-        # Deeper per query when a filter is on, for the same reason as in the
-        # lyrics branch: the artist filter runs here rather than in Qdrant, whose
-        # payload filter is an exact match and would drop "Sade feat. …".
-        limit = self.cfg.clap_limit_per_query * (2 if (artist or plan.filters.era)
-                                                 else 1)
+        # A resolved artist is a filter Qdrant can apply itself: every point
+        # carries artist_slugs for all of its participants, keyword-indexed, so
+        # "Sade feat. …" matches on the same footing as "Sade" and CLAP ranks
+        # WITHIN the artist. What that replaces was a funnel — top-K over the
+        # whole library, then keep the few tracks that happened to belong to the
+        # artist — and on a real library it ended with two tracks out of fifteen.
+        #
+        # Only what still runs after the search needs a deeper pool: the era, and
+        # an artist whose name did not resolve to a slug (ambiguous, or spelled
+        # in a way the catalog cannot pin), which falls back to matching names.
+        post_filters = bool(plan.filters.era or (artist and not artist_slug))
+        limit = self.cfg.clap_limit_per_query * (2 if post_filters else 1)
+        filters = SearchFilters(artist_slug=artist_slug) if artist_slug else None
         rankings: list = []
         by_id: dict = {}
         with self.timings.span("search.clap"):
             for query in queries:
                 try:
                     hits = await service.search(
-                        query, mode="audio", limit=limit,
+                        query, mode="audio", limit=limit, filters=filters,
                         collection_name=self.agent.collection_name)
                 except Exception as exc:  # noqa: BLE001 — one prompt of four
                     logger.warning("[audio] search failed for %r: %s", query, exc)
                     continue
-                hits = self._narrow(hits, artist=artist, era=plan.filters.era)
+                # Qdrant already answered the artist question when it had a
+                # slug; re-checking the display name here could only drop a
+                # track it was right about (a compilation credit, a group whose
+                # tag names its members).
+                hits = self._narrow(hits, era=plan.filters.era,
+                                    artist=None if artist_slug else artist)
                 order = []
                 for hit in hits:
                     track_id = hit.track.track_id

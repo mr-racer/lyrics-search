@@ -245,11 +245,24 @@ class Assistant:
         the name is used as a FILTER, so a wrong guess yields no tracks rather
         than the wrong ones.
         """
+        return self.library_artist_ref(raw)[0]
+
+    def library_artist_ref(self, raw: Optional[str]) -> tuple:
+        """``(name, slug)`` — how the library spells the artist, and its identity.
+
+        The name is for captions and for filters that can only compare strings.
+        The slug is worth more: every Qdrant point carries ``artist_slugs`` for
+        all of its participants, so a caller holding a slug can narrow the SEARCH
+        to that artist rather than search the whole library and discard what did
+        not belong to them. ``None`` when the name did not resolve structurally —
+        an ambiguous shortlist is not an identity, and guessing one here would
+        silently return another artist's tracks.
+        """
         if not raw or self.catalog is None:
-            return raw
+            return raw, None
         subject = self.catalog.resolve_subject(artist=raw)
         best = subject.candidates[0]["artist"] if subject.candidates else None
-        return subject.artist_name or best or raw
+        return (subject.artist_name or best or raw), subject.artist_slug
 
     def _pinned_subject(self, track_id: Optional[str],
                         artist_slug: Optional[str]) -> Optional[Subject]:

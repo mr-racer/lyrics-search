@@ -84,6 +84,12 @@ class SearchFilters(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     artist: str | None = None
+    # The artist as an identity rather than as a string. ``artist`` is the raw
+    # tag and matching it exactly misses "Eminem feat. Dido"; every point also
+    # carries ``artist_slugs`` — the slug of every participant, keyword-indexed
+    # at upsert — so a caller that resolved the name can narrow the search
+    # itself instead of trimming its results afterwards.
+    artist_slug: str | None = None
     album: str | None = None
     genre: str | None = None
 

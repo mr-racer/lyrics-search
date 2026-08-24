@@ -61,6 +61,12 @@ class _Agent:
         # The playlist branch's resolution, stubbed: «Сейд» → the library spelling.
         return {"Сейд": "Sade"}.get(raw, raw)
 
+    def library_artist_ref(self, raw):
+        # (name, slug). «Эминем» resolves all the way to a slug; «Сейд» only to
+        # a spelling — the ambiguous case the library cannot pin structurally.
+        return ({"Сейд": "Sade", "Эминем": "Eminem"}.get(raw, raw),
+                {"Эминем": "eminem"}.get(raw))
+
 
 def _plan(style="спокойные", artist=None, era=None):
     return Plan(intent="audio_search",
@@ -169,7 +175,10 @@ class TestFusion:
 
 
 class TestFilters:
-    async def test_the_artist_filter_keeps_a_feat_credit(self):
+    async def test_an_unresolved_artist_still_narrows_in_python(self):
+        """«Сейд» resolves to a spelling but not to a slug, so there is nothing
+        to hand Qdrant and the old post-filter is still what keeps the feat
+        credit in and everyone else out."""
         service = _Service({"*": [_hit("t1", "A", "Sade feat. Nas"),
                                   _hit("t2", "B", "Radiohead")]})
         agent = _Agent(service, _LLM(PROMPTS))
@@ -183,15 +192,57 @@ class TestFilters:
         result = await AudioBranch(agent).run("q", _plan(era=(2020, 2029)))
         assert [h.track.track_id for h in result.tracks] == ["t2"]
 
-    async def test_a_filtered_run_asks_for_a_deeper_pool(self):
-        """The filter runs after the search, so a pool cut to size first would
-        come back empty the moment a filter is set."""
+    async def test_a_python_side_filter_asks_for_a_deeper_pool(self):
+        """A filter that runs after the search would empty a pool cut to size
+        first — so the era filter, which has no Qdrant counterpart here, buys
+        itself headroom."""
         service = _Service({"*": [_hit("t1", "A", "Sade")]})
         agent = _Agent(service, _LLM(PROMPTS))
-        await AudioBranch(agent).run("q", _plan(artist="Sade"))
+        await AudioBranch(agent).run("q", _plan(era=(1980, 1989)))
         plain = _Service({"*": [_hit("t1", "A", "Sade")]})
         await AudioBranch(_Agent(plain, _LLM(PROMPTS))).run("q", _plan())
         assert service.calls[0]["limit"] > plain.calls[0]["limit"]
+
+    async def test_a_resolved_artist_is_filtered_inside_qdrant(self):
+        """The whole point: CLAP must rank WITHIN the artist, not be trimmed to
+        the artist afterwards.
+
+        Every point carries ``artist_slugs``, indexed as a keyword, so once the
+        name resolves to a slug the search itself is narrowed and the branch
+        gets a full pool of that artist's tracks. Filtering afterwards meant
+        asking for the whole library's top-20 and keeping whatever few tracks
+        of the artist happened to be in it — two, on a real library.
+        """
+        service = _Service({"*": [_hit("t1", "A", "Eminem")]})
+        agent = _Agent(service, _LLM(PROMPTS))
+
+        await AudioBranch(agent).run("q", _plan(artist="Эминем"))
+
+        assert service.calls[0]["filters"].artist_slug == "eminem"
+
+    async def test_a_qdrant_filtered_run_needs_no_deeper_pool(self):
+        """Headroom pays for what the search throws away. Qdrant throws nothing
+        away here, so the doubling is dead weight — and on CLAP it is a second
+        vector query over the collection."""
+        service = _Service({"*": [_hit("t1", "A", "Eminem")]})
+        await AudioBranch(_Agent(service, _LLM(PROMPTS))).run(
+            "q", _plan(artist="Эминем"))
+        plain = _Service({"*": [_hit("t1", "A", "Eminem")]})
+        await AudioBranch(_Agent(plain, _LLM(PROMPTS))).run("q", _plan())
+
+        assert service.calls[0]["limit"] == plain.calls[0]["limit"]
+
+    async def test_a_qdrant_filtered_run_keeps_what_qdrant_returned(self):
+        """No second guessing. The slug filter already matched every
+        participant, so re-checking the display name in Python could only
+        drop a track Qdrant was right about."""
+        service = _Service({"*": [_hit("t1", "A", "D12"),
+                                  _hit("t2", "B", "Eminem")]})
+        agent = _Agent(service, _LLM(PROMPTS))
+
+        result = await AudioBranch(agent).run("q", _plan(artist="Эминем"))
+
+        assert {h.track.track_id for h in result.tracks} == {"t1", "t2"}
 
 
 class TestNoJudgement:

@@ -128,8 +128,8 @@ class SearchService:
         col = collection_name or self.lyrics_db.collection_name
         qdrant_filter = self._build_qdrant_filter_models(filters)
         
-        logger.info("[SearchService] Querying Qdrant collection='%s', using='clap', limit=%d",
-                    col, limit * 2)
+        logger.info("[SearchService] Querying Qdrant collection='%s', using='clap', limit=%d, artist_slug=%s",
+                    col, limit * 2, (filters.artist_slug if filters else None) or "-")
 
         try:
             results = await asyncio.get_running_loop().run_in_executor(
@@ -149,17 +149,18 @@ class SearchService:
 
         logger.info("[SearchService] Qdrant returned %d points", len(results.points) if results else 0)
         
+        # No score threshold here, whatever the log used to claim: CLAP similarities
+        # are not calibrated across prompts, so a cutoff would mean something different
+        # for every rephrasing. The pool is simply the top `limit` of what came back.
         hits = self._points_to_hits(results.points[:limit], matched_on="audio", collection_name=collection_name)
-        filtered_hits = hits
-        
-        logger.info("[SearchService] After score filter (>=0.1): %d hits", len(filtered_hits))
-        if filtered_hits:
+
+        logger.info("[SearchService] %d hits (top %d of %d returned)",
+                    len(hits), limit, len(results.points) if results else 0)
+        if hits:
             logger.debug("[SearchService] Top hit: '%s' by '%s' (score=%.3f)",
-                        filtered_hits[0].track.title,
-                        filtered_hits[0].track.artist,
-                        filtered_hits[0].score)
-        
-        return filtered_hits
+                        hits[0].track.title, hits[0].track.artist, hits[0].score)
+
+        return hits
 
     # ── Hybrid search (dense+BM25 0.5 + CLAP 0.5) ──
 
@@ -328,6 +329,14 @@ class SearchService:
             return None
 
         conditions = []
+        if filters.artist_slug:
+            # Multi-valued keyword field: MatchValue means "one of the slugs is
+            # this one", so a guest credit matches on the same footing as the
+            # headliner. Prefer it over `artist` whenever the caller has a slug.
+            conditions.append(models.FieldCondition(
+                key="artist_slugs",
+                match=models.MatchValue(value=filters.artist_slug),
+            ))
         if filters.artist:
             conditions.append(models.FieldCondition(
                 key="artist", match=models.MatchValue(value=filters.artist)
