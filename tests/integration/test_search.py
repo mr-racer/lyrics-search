@@ -167,6 +167,22 @@ class TestSearchAPI:
             assert "text_models" in data
             assert "clap_available" in data
 
+    def test_search_models_loaded_reports_the_retrieval_legs(self):
+        """``retrieval_status()`` documents itself as "surfaced by
+        GET /search/models/loaded" — and for a while it simply was not, so a
+        stack that had lost its sparse leg answered this endpoint as healthy.
+        The counters matter as much as the booleans: a leg whose weights are
+        resident but whose every encode dies is invisible without them."""
+        app = create_app()
+        with TestClient(app) as c:
+            authenticate_test_client(c, app)
+            data = c.get("/api/v1/search/models/loaded").json()
+            assert "retrieval" in data
+            legs = data["retrieval"]
+            assert {"dense", "sparse", "cross_encoder", "failed",
+                    "encode_failures", "sparse_oom_retries"} <= set(legs)
+            assert {"sparse", "cross_encoder"} <= set(legs["encode_failures"])
+
 
 # ── Phase D-soft tests ────────────────────────────────────────────────────────
 

@@ -104,6 +104,13 @@ async def get_loaded_models():
         # fallback on a GPU box is the failure that looks like success.
         "text_device": ModelRegistry.text_device(),
         "clap_available": ModelRegistry.is_clap_available(),
+        # The assistant ranks on three legs and degrades quietly to fewer. That
+        # is the right behaviour and the wrong thing to be silent about: the
+        # sparse leg once failed every encode for hours while its weights sat
+        # resident, and the only visible symptom was worse answers. The
+        # booleans say what is loaded; the counters say what is actually
+        # working.
+        "retrieval": ModelRegistry.retrieval_status(),
     }
 
 
