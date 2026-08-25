@@ -1,5 +1,6 @@
 """Unit tests for Yandex: metadata enrichment + token store + yandex_* CRUD."""
 
+import time
 import types
 
 import pytest
@@ -279,3 +280,95 @@ class TestYandexImportsCrud(_TokenStoreTest):
             account_id="u1", yandex_track_id="t1", status="indexed",
         )
         assert MetadataDB.get_imported_yandex_track_ids("u2") == set()
+
+
+class TestDeviceLoginSurvivesABlip:
+    """The host reaches the internet over Wi-Fi behind a VPN, and a route
+    rebuild there surfaces as a one-second ``[Errno 101] Network is
+    unreachable`` — measured against nine different hosts, Yandex among them.
+
+    ``device_auth`` blocks for up to ten minutes waiting for the person to type
+    a code, so a single blip anywhere in that window used to end the login and
+    put a urllib3 stack trace in the dialog. Neither half of that is something
+    the user can act on.
+    """
+
+    @staticmethod
+    def _run_worker(monkeypatch, attempts):
+        """Drive one login through a fake Client and return the final session."""
+        from app.services.yandex import auth
+
+        calls = {"n": 0}
+
+        class _FakeClient:
+            def device_auth(self, on_code=None, timeout=None):
+                calls["n"] += 1
+                on_code(types.SimpleNamespace(
+                    verification_url="https://ya.ru/device",
+                    user_code="CODE%d" % calls["n"]))
+                outcome = attempts[calls["n"] - 1]
+                if isinstance(outcome, Exception):
+                    raise outcome
+                return outcome
+
+        monkeypatch.setattr(auth, "_build_yandex_client", lambda: _FakeClient())
+        monkeypatch.setattr(auth, "_NET_RETRY_PAUSE", 0.0)
+        monkeypatch.setattr(auth, "token_store",
+                            types.SimpleNamespace(save_token=lambda *a, **kw: None))
+        monkeypatch.setattr(auth, "build_client",
+                            lambda token: (_ for _ in ()).throw(RuntimeError("skip")))
+
+        started = auth.start_session("acct-1")
+        # The worker is a daemon thread; wait for it to reach a terminal state.
+        for _ in range(200):
+            s = auth.get_session(started["session_id"])
+            if s["status"] in ("authorized", "expired", "error"):
+                return s, calls["n"]
+            time.sleep(0.02)
+        raise AssertionError("worker never finished: %r" % (s,))
+
+    def test_a_transient_network_error_is_retried(self, monkeypatch):
+        from app.services.yandex import auth
+
+        token = types.SimpleNamespace(access_token="tok", refresh_token=None,
+                                      expires_in=3600)
+        session, tries = self._run_worker(
+            monkeypatch, [auth._network_error("boom"), token])
+        assert session["status"] == "authorized"
+        assert tries == 2
+
+    def test_it_gives_up_after_the_retry_budget(self, monkeypatch):
+        from app.services.yandex import auth
+
+        boom = auth._network_error("boom")
+        session, tries = self._run_worker(
+            monkeypatch, [boom] * (auth._NET_RETRIES + 2))
+        assert session["status"] == "error"
+        assert tries == auth._NET_RETRIES
+
+    def test_the_user_gets_a_cause_not_a_stack_trace(self, monkeypatch):
+        """The frontend localises off ``reason``; the urllib3 text belongs in
+        the log, where it is useful, and nowhere else."""
+        from app.services.yandex import auth
+
+        boom = auth._network_error(
+            "HTTPSConnectionPool(host='oauth.yandex.ru', port=443): Max retries")
+        session, _ = self._run_worker(monkeypatch, [boom] * (auth._NET_RETRIES + 1))
+        assert session["reason"] == "network"
+        assert "HTTPSConnectionPool" not in (session.get("error") or "")
+        assert "urllib3" not in (session.get("error") or "")
+
+    def test_a_non_network_failure_is_not_retried(self, monkeypatch):
+        """Retrying a bad request just makes the user wait three times as long
+        for the same answer."""
+        session, tries = self._run_worker(
+            monkeypatch, [ValueError("malformed response")] * 4)
+        assert session["status"] == "error"
+        assert session["reason"] == "unknown"
+        assert tries == 1
+
+    def test_a_timeout_is_expiry_not_an_error(self, monkeypatch):
+        """``device_auth`` returns None when the person never typed the code."""
+        session, tries = self._run_worker(monkeypatch, [None])
+        assert session["status"] == "expired"
+        assert tries == 1

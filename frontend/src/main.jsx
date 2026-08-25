@@ -12118,6 +12118,27 @@ function MemberIndexing({ ru, c, isDark, jobId, onDone }) {
   );
 }
 
+// What to tell someone whose Yandex login did not finish. The backend sends a
+// `reason` code rather than a sentence, because it cannot know the UI language
+// and because what it used to send was the raw urllib3 text — a stack trace in
+// a login dialog names nothing the person can act on, and a dropped route is
+// usually not their fault anyway. Every branch ends in the next step to take.
+function ymAuthMessage(s, ru) {
+  if (s?.reason === 'network') {
+    return ru
+      ? 'Связь с Яндексом оборвалась. Проверьте интернет и начните вход заново — код будет новый.'
+      : 'The connection to Yandex dropped. Check your internet and start the login again — you will get a new code.';
+  }
+  if (s?.status === 'expired') {
+    return ru
+      ? 'Код истёк. Начните вход заново и введите новый код.'
+      : 'The code expired. Start the login again and enter the new code.';
+  }
+  return ru
+    ? 'Войти не удалось. Попробуйте ещё раз — если повторится, загляните в журнал сервера.'
+    : 'Login failed. Try again — if it keeps happening, check the server log.';
+}
+
 // Compact Yandex account link used INSIDE the "Your files" upload block: linking
 // the account lets indexing enrich manual uploads with higher-quality album art
 // and metadata from the Yandex catalog (the backend enrichment uses the account
@@ -12171,10 +12192,13 @@ function YandexEnhanceLink({ isDark, lang }) {
         if (stop) return;
         if (s.status === 'authorized') { setLinked(true); setSession(null); setBusy(false); refreshLogin(); return; }
         if (s.status === 'expired' || s.status === 'error') {
-          setErr(s.error || (s.status === 'expired' ? (ru ? 'Код истёк' : 'Code expired') : (ru ? 'Ошибка входа' : 'Login error')));
+          setErr(ymAuthMessage(s, ru));
           setSession(null); setBusy(false); return;
         }
-        if (s.user_code && !session.user_code) setSession(prev => ({ ...prev, ...s }));
+        // Compare, don't just check for absence: a retry after a dropped route
+        // asks Yandex for a FRESH device code, and a dialog still showing the
+        // previous one sends the user to type something already invalid.
+        if (s.user_code && s.user_code !== session.user_code) setSession(prev => ({ ...prev, ...s }));
       } catch (e) { /* transient — keep polling */ }
     };
     const id = setInterval(tick, 2000);
@@ -12316,10 +12340,13 @@ function YandexImportFlow({ isDark, lang, onDone, onBack, onPhase }) {
         if (stop) return;
         if (s.status === 'authorized') { setStep('sources'); return; }
         if (s.status === 'expired' || s.status === 'error') {
-          setAuthErr(s.error || (s.status === 'expired' ? (ru ? 'Код истёк' : 'Code expired') : (ru ? 'Ошибка входа' : 'Login error')));
+          setAuthErr(ymAuthMessage(s, ru));
           return;
         }
-        if (s.user_code && !session.user_code) setSession(prev => ({ ...prev, ...s }));
+        // Compare, don't just check for absence: a retry after a dropped route
+        // asks Yandex for a FRESH device code, and a dialog still showing the
+        // previous one sends the user to type something already invalid.
+        if (s.user_code && s.user_code !== session.user_code) setSession(prev => ({ ...prev, ...s }));
       } catch (e) { /* transient — keep polling */ }
     };
     const id = setInterval(tick, 2000);

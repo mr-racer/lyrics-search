@@ -31,8 +31,94 @@ _CODE_WAIT_TIMEOUT = 20.0
 # Overall device-auth timeout (s) — how long the user has to confirm.
 _DEVICE_AUTH_TIMEOUT = 600.0
 
+# A blip on the way out must not end a login that waits ten minutes for a human.
+# This host reaches the internet over Wi-Fi behind a VPN, and a route rebuild
+# there surfaces as a one-second ``[Errno 101] Network is unreachable`` — seen
+# against nine different hosts, Yandex among them. Three attempts, because the
+# failure lasts about a second and anything that outlives three tries is not a
+# blip and should be reported rather than waited out.
+_NET_RETRIES = 3
+_NET_RETRY_PAUSE = 3.0
+
+# What the CLIENT is told. Codes, not sentences: the frontend already localises
+# ``expired`` off the status and has both languages, so a Russian string sent
+# from here would reach an English user untranslated. The exception text stays
+# in the log, where it helps — a urllib3 stack trace in a login dialog names
+# nothing the person can act on, and this failure is usually not theirs.
+_REASON_NETWORK = "network"
+_REASON_UNKNOWN = "unknown"
+
 _SESSIONS: dict[str, dict] = {}
 _LOCK = threading.Lock()
+
+
+def _network_error_types() -> tuple:
+    """Exception types that mean "the route went away", resolved lazily.
+
+    Lazily for the same reason ``Client`` is imported inside the worker: this
+    module sits on import paths that must not pull the Yandex stack in. Only
+    genuine transport failures belong here — a malformed response retried three
+    times just makes the user wait three times as long for the same answer.
+    """
+    types_: list = []
+    try:
+        from yandex_music.exceptions import NetworkError
+        types_.append(NetworkError)
+    except Exception:  # noqa: BLE001 - an older/absent client is not fatal here
+        pass
+    try:
+        from requests.exceptions import ConnectionError as _ConnErr
+        from requests.exceptions import Timeout as _Timeout
+        types_.extend((_ConnErr, _Timeout))
+    except Exception:  # noqa: BLE001
+        pass
+    return tuple(types_)
+
+
+def _network_error(message: str) -> Exception:
+    """Build the error the transport raises — the type the tests need to throw."""
+    kinds = _network_error_types()
+    return kinds[0](message) if kinds else ConnectionError(message)
+
+
+def _build_yandex_client():
+    """A fresh ``yandex_music.Client``. Seam: the tests replace this."""
+    from yandex_music import Client
+
+    return Client()
+
+
+def _device_auth_with_retries(on_code) -> object | None:
+    """``device_auth``, surviving a transient loss of route.
+
+    Each attempt asks Yandex for a NEW device code, so ``on_code`` fires again
+    and the session's code is replaced — the frontend polls status every two
+    seconds and shows the new one, which is the honest thing to do because the
+    old device session really is gone.
+
+    The overall deadline is CARRIED, not restarted: three retries that each got
+    a fresh ten minutes would turn a ten-minute login into half an hour of a
+    dialog the user stopped looking at.
+    """
+    deadline = time.monotonic() + _DEVICE_AUTH_TIMEOUT
+    transient = _network_error_types()
+
+    for attempt in range(1, _NET_RETRIES + 1):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        try:
+            return _build_yandex_client().device_auth(
+                on_code=on_code, timeout=remaining)
+        except transient as e:
+            logger.warning(
+                "[yandex/auth] transport failed on attempt %d/%d: %s",
+                attempt, _NET_RETRIES, e)
+            if attempt == _NET_RETRIES:
+                raise
+            time.sleep(min(_NET_RETRY_PAUSE,
+                           max(0.0, deadline - time.monotonic())))
+    return None
 
 
 def _set(session_id: str, **fields) -> None:
@@ -43,12 +129,18 @@ def _set(session_id: str, **fields) -> None:
 
 
 def _public(session: dict) -> dict:
-    """Strip internals (events, account_id) before returning to the route."""
+    """Strip internals (events, account_id) before returning to the route.
+
+    ``reason`` is what the client renders from; ``error`` stays a short,
+    non-technical line for anything that reads it raw. The exception text is
+    deliberately not in either — it goes to the log.
+    """
     return {
         "session_id": session["session_id"],
         "status": session["status"],
         "verification_url": session.get("verification_url"),
         "user_code": session.get("user_code"),
+        "reason": session.get("reason"),
         "error": session.get("error"),
     }
 
@@ -63,6 +155,7 @@ def start_session(account_id: str) -> dict:
         "status": "starting",
         "verification_url": None,
         "user_code": None,
+        "reason": None,
         "error": None,
         "created_at": time.time(),
     }
@@ -80,12 +173,7 @@ def start_session(account_id: str) -> dict:
 
     def run() -> None:
         try:
-            from yandex_music import Client
-
-            client = Client()
-            token = client.device_auth(
-                on_code=on_code, timeout=_DEVICE_AUTH_TIMEOUT,
-            )
+            token = _device_auth_with_retries(on_code)
             if token is None:
                 _set(session_id, status="expired",
                      error="device authorization timed out")
@@ -119,7 +207,18 @@ def start_session(account_id: str) -> dict:
             _set(session_id, status="authorized", yandex_uid=yandex_uid)
         except Exception as e:  # noqa: BLE001 - report to the poller, don't crash
             logger.warning("[yandex/auth] device_auth failed: %s", e, exc_info=True)
-            _set(session_id, status="error", error=str(e))
+            transient = _network_error_types()
+            is_network = bool(transient) and isinstance(e, transient)
+            _set(
+                session_id,
+                status="error",
+                reason=_REASON_NETWORK if is_network else _REASON_UNKNOWN,
+                # Short and non-technical: the client localises from ``reason``,
+                # and ``str(e)`` here is what put a urllib3 stack trace in the
+                # login dialog.
+                error=("could not reach Yandex" if is_network
+                       else "Yandex login failed"),
+            )
             code_ready.set()
 
     threading.Thread(target=run, name=f"ym-auth-{session_id[:8]}", daemon=True).start()
