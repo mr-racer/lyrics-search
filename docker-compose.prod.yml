@@ -40,6 +40,12 @@ services:
       - http_proxy=
       - HTTPS_PROXY=
       - https_proxy=
+      # Карта делится с llama-server, и его свободная память гуляет под нами.
+      # Аллокатор по умолчанию нарезает пул фиксированными сегментами, и при
+      # 150-600 МиБ свободных «зарезервировано, но не занято» доходило до 600 МиБ
+      # — память, которая у процесса есть, но в которую очередная аллокация не
+      # влезает. expandable_segments отдаёт её обратно вместо фрагментации.
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
       # Куда класть SQLite. Дефолт — историческое место в cache/, так что без
       # MUSIX_DB_DIR в .env поведение не меняется. См. бинд /app/dbstore ниже.
       - MUSIX_METADATA_DB=${MUSIX_METADATA_DB:-/app/cache/metadata.db}

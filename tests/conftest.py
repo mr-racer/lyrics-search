@@ -1,5 +1,6 @@
 """Shared fixtures for the MusiX test suite."""
 
+import contextlib
 import os
 import pytest
 import sys
@@ -35,9 +36,21 @@ if not os.environ.get("MUSIX_LIVE_STACK"):
     sys.modules.setdefault("laion_clap", types.ModuleType("laion_clap"))
 
     _torch_stub = types.ModuleType("torch")
+
+    class _OutOfMemoryError(RuntimeError):
+        """Stand-in for ``torch.OutOfMemoryError`` (a RuntimeError there too).
+
+        Named here because the registry's sparse leg CATCHES it: shrinking the
+        batch after an allocator failure is behaviour, not plumbing, and a stub
+        without this class would leave that path untestable off a GPU.
+        """
+
+    _torch_stub.OutOfMemoryError = _OutOfMemoryError
     _torch_stub.cuda = types.SimpleNamespace(
         is_available=lambda: False,
         get_device_name=lambda i=0: "stub",
+        empty_cache=lambda: None,
+        OutOfMemoryError=_OutOfMemoryError,
     )
     _torch_stub.device = lambda x: "cpu"
     _torch_stub.Tensor = object  # dummy for scipy is_torch_array check
@@ -45,6 +58,24 @@ if not os.environ.get("MUSIX_LIVE_STACK"):
     # one. Sentinels are enough — nothing under the stubs ever runs a kernel.
     _torch_stub.float16 = "float16"
     _torch_stub.float32 = "float32"
+
+    @contextlib.contextmanager
+    def _no_grad():
+        yield
+
+    _torch_stub.no_grad = _no_grad
+
+    class _CatResult(list):
+        """What the stub's ``torch.cat`` returns: the inputs, still inspectable.
+
+        A list so a test can count the batches that survived, and it answers
+        ``.coalesce()`` because the sparse leg calls that on the concatenation.
+        """
+
+        def coalesce(self):
+            return self
+
+    _torch_stub.cat = lambda tensors, dim=0: _CatResult(tensors)
     sys.modules.setdefault("torch", _torch_stub)
 
     _st_stub = types.ModuleType("sentence_transformers")

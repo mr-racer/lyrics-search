@@ -24,6 +24,14 @@ Device policy (2026-08):
   Three residents come to ~3.6 GB, which is what the deployment budget allows.
   This registry is their ONLY owner: nothing else may instantiate them, or the
   same weights land on the card twice.
+- Residency is only half the budget: what actually ran the card out of memory
+  was TRANSIENT. Each leg therefore carries its own token ceiling and batch
+  (``MAX_SEQ_LENGTH``, ``RERANK_MAX_LEN``/``RERANK_BATCH``,
+  ``SPARSE_MAX_LEN``/``SPARSE_BATCH``) rather than a shared pair, because their
+  peaks have very different shapes — the sparse leg's grows with the
+  VOCABULARY, which is why it was the one that failed. The card is shared with
+  an LLM whose free memory moves under us, so ``encode_sparse`` treats an
+  allocator refusal as a signal to shrink, not as an error.
 - CLAP lives on the CPU permanently: loaded once (startup preload), never
   moved, never unloaded. It does not compete with the text model for VRAM.
 - ``FORCE_CPU=1`` puts the text model on the CPU in fp32 (fp16 on CPU is
@@ -103,6 +111,21 @@ def _resolve_device() -> tuple[str, str]:
         return "cpu", f"CUDA probe raised {type(e).__name__}: {e}"
 
 
+def _release_cuda_cache() -> None:
+    """Hand cached-but-unused blocks back before retrying a failed allocation.
+
+    Never raises: this is called on the recovery path of an out-of-memory error,
+    and a CPU-only box (or a broken CUDA install) must take the smaller batch
+    rather than a second exception on top of the first.
+    """
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # What the model actually loaded onto, for /models/loaded and the logs.
 _device_in_use: str | None = None
 _device_reason: str = "not loaded yet"
@@ -146,6 +169,26 @@ SPARSE_MODEL_NAME = "omai-research/milco-650m"
 # LexEcho source view. Matters for proper nouns in non-English text, which is
 # most of what gets asked here.
 SPARSE_SOURCE_VIEW = True
+# The sparse leg's OWN budget — deliberately not the dense model's.
+#
+# MILCO projects every token into the SPLADE-v3 English vocabulary (30522
+# entries) inside ``mlm_head``, and the mask multiply on the next line keeps a
+# second copy of that tensor alive while ``logits.max(dim=1)`` reads both. One
+# batch therefore costs ``2 x batch x tokens x 30522 x 2`` bytes, and NOTHING
+# above capped it: ``milco.encode_text`` takes ``max_length`` but defaults it to
+# the tokenizer's own ceiling, so a 960-token passage asked for 448 MiB in a
+# single allocation. On a box where an LLM holds the rest of the card, that is
+# the difference between ranking on three signals and ranking on two.
+#
+# 512 matches RERANK_MAX_LEN on purpose: it is the SAME passage, and the
+# cross-encoder that decides the final order already refuses to read past it.
+# Terms mined from the tail beyond that are terms nothing downstream can score.
+SPARSE_MAX_LEN = 512
+# Peak at this batch is ~120 MiB (twice that with the mask copy), which fits at
+# the tightest moment measured on the deployment box. ENCODE_BATCH stays 8 for
+# the dense model, which has never run out of memory: the two legs have very
+# different shapes and sharing one number hid that for a while.
+SPARSE_BATCH = 4
 
 # Cross-encoder. Reads the query and the document TOGETHER and produces the
 # number every threshold in the assistant is expressed in.
@@ -194,6 +237,13 @@ class ModelRegistry:
     # missing model, and re-attempting it on every query turns one slow request
     # into every request being slow.
     _failed: set = set()
+    # Loading and ENCODING fail independently, and only the first one had a
+    # name. A leg whose weights are resident but whose every encode dies still
+    # reported itself as up, so hours of dense-only ranking looked exactly like
+    # "the answers got worse". These are what ``retrieval_status`` says instead.
+    _sparse_encode_failures: int = 0
+    _sparse_oom_retries: int = 0
+    _ce_encode_failures: int = 0
 
     # ── Text model ──
 
@@ -415,23 +465,63 @@ class ModelRegistry:
 
         Asymmetric like the dense model: queries and documents go through
         different heads, so the side is named rather than inferred.
+
+        Truncated at ``SPARSE_MAX_LEN`` and batched at ``SPARSE_BATCH`` — see
+        those constants for why this leg gets its own two numbers instead of
+        the dense model's.
+
+        **An allocator failure shrinks the batch; it does not lose the leg.**
+        The card is shared with an LLM whose free memory moves under us, so
+        "there is no room right now" is a normal condition rather than an
+        error. The batch ratchets DOWN and stays down for the rest of the call
+        (tight now means tight for the next batch too), and the work already
+        done is kept — on 92 documents, restarting would re-encode nearly all
+        of it. Only a refusal at a single text gives up, because then the card
+        genuinely has nothing left and the retriever is better off ranking on
+        the signals it still has.
         """
         import torch
         model = cls.load_sparse()
         if model is None or not texts:
             return None
-        try:
-            encode = model.encode_query if is_query else model.encode_document
-            reps = []
-            with torch.no_grad():
-                for i in range(0, len(texts), ENCODE_BATCH):
-                    batch = texts[i:i + ENCODE_BATCH]
-                    reps.append(
-                        encode(batch, source_view=SPARSE_SOURCE_VIEW).coalesce())
-            return torch.cat(reps, dim=0).coalesce()
-        except Exception:  # noqa: BLE001
-            logger.warning("[ModelRegistry] sparse encode failed", exc_info=True)
-            return None
+        encode = model.encode_query if is_query else model.encode_document
+
+        reps: list = []
+        size = SPARSE_BATCH
+        i = 0
+        while i < len(texts):
+            try:
+                with torch.no_grad():
+                    reps.append(encode(texts[i:i + size],
+                                       max_length=SPARSE_MAX_LEN,
+                                       source_view=SPARSE_SOURCE_VIEW).coalesce())
+                i += size
+            except torch.OutOfMemoryError:
+                # Halve what was ACTUALLY attempted, not the nominal size: on a
+                # short tail ``size`` can already exceed the texts left, and
+                # halving the nominal would re-send the identical batch and pay
+                # a second failed forward for nothing.
+                attempted = min(size, len(texts) - i)
+                if attempted == 1:
+                    cls._sparse_encode_failures += 1
+                    logger.warning(
+                        "[ModelRegistry] sparse encode out of memory even at one "
+                        "text (%d of %d done) — this run ranks without the sparse "
+                        "leg. Something else on the card grew; see "
+                        "GET /search/models/loaded for the running count.",
+                        i, len(texts))
+                    return None
+                size = attempted // 2
+                cls._sparse_oom_retries += 1
+                _release_cuda_cache()
+                logger.info(
+                    "[ModelRegistry] sparse encode hit OOM at %d of %d texts — "
+                    "continuing at batch=%d", i, len(texts), size)
+            except Exception:  # noqa: BLE001
+                cls._sparse_encode_failures += 1
+                logger.warning("[ModelRegistry] sparse encode failed", exc_info=True)
+                return None
+        return torch.cat(reps, dim=0).coalesce()
 
     @classmethod
     def ce_probabilities(cls, query: str, docs: list) -> Optional[list]:
@@ -461,6 +551,7 @@ class ModelRegistry:
                     out.extend(torch.sigmoid(col).cpu().tolist())
             return out
         except Exception:  # noqa: BLE001
+            cls._ce_encode_failures += 1
             logger.warning("[ModelRegistry] cross-encoder scoring failed",
                            exc_info=True)
             return None
@@ -470,13 +561,26 @@ class ModelRegistry:
         """Which retrieval legs are actually up. Surfaced by
         ``GET /search/models/loaded`` so a degraded ranking is visible without
         reading the startup log — the failure that otherwise looks like
-        'the answers got worse'."""
+        'the answers got worse'.
+
+        The booleans mean "the weights are resident" and nothing more, which is
+        why the counters sit next to them: a leg can load perfectly and then
+        fail every single encode, and for a while that read here as a healthy
+        stack. ``encode_failures`` counts runs that lost the leg;
+        ``sparse_oom_retries`` counts runs that kept it by shrinking the batch,
+        which is a load signal rather than a fault.
+        """
         return {
             "device": _device_in_use,
             "dense": cls._text_model is not None,
             "sparse": cls._sparse_model is not None,
             "cross_encoder": cls._reranker is not None,
             "failed": sorted(cls._failed),
+            "encode_failures": {
+                "sparse": cls._sparse_encode_failures,
+                "cross_encoder": cls._ce_encode_failures,
+            },
+            "sparse_oom_retries": cls._sparse_oom_retries,
         }
 
     # ── CLAP ──
