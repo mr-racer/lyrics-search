@@ -13,6 +13,7 @@ import pytest
 import torch
 
 from app.resources.model_registry import (
+    ENCODE_BATCH,
     MAX_SEQ_LENGTH,
     QUERY_PREFIX,
     TEXT_MODEL_NAME,
@@ -278,6 +279,100 @@ class TestEncodeFallback:
         model, _, _ = ModelRegistry.get_text_model()
         assert "prompt_name" not in model.encode_kwargs[-1]
         _reset_registry()
+
+
+class _CorpusModel(_FakeSentenceTransformer):
+    """A text model that answers with one row per sentence, and can refuse.
+
+    ``oom_above`` reproduces the only failure this path has ever had: the
+    indexing pass hands the model a batch big enough that Qwen3's attention
+    will not fit, and sentence-transformers raises out of the forward.
+    """
+    prompts = {"query": "Instruct: …\nQuery:", "document": " "}
+    oom_above: int | None = None
+
+    def encode(self, sentences, **kw):
+        import torch
+
+        self.encoded.append(list(sentences))
+        self.encode_kwargs.append(kw)
+        if self.oom_above is not None and len(sentences) > self.oom_above:
+            raise torch.OutOfMemoryError("CUDA out of memory")
+        return np.array([[float(len(s))] * VECTOR_DIM for s in sentences],
+                        dtype=np.float32)
+
+    @property
+    def batch_sizes(self) -> list:
+        return [len(s) for s in self.encoded]
+
+
+class TestEncodingAWholeCorpus:
+    """The indexing pass used to call ``model.encode`` directly with
+    ``batch_size=32`` while ``max_seq_length`` was 2048 — 65k tokens in one
+    forward, which is what actually ran the card out of memory. Going through
+    the registry is what bounds it, and what gets the document prompt applied.
+    """
+
+    def test_the_document_side_gets_its_prompt(self, monkeypatch):
+        """Reaching past ``encode_text`` left the document side bare. That was
+        right for Qwen3-Embedding and is wrong for Octen, which ships a
+        document prompt of its own — and a corpus embedded one way cannot be
+        searched by queries embedded the other."""
+        _install_fake(monkeypatch, _CorpusModel)
+        ModelRegistry.encode_documents(["a", "b"])
+        model, _, _ = ModelRegistry.get_text_model()
+        assert all(kw.get("prompt_name") == "document"
+                   for kw in model.encode_kwargs)
+
+    def test_it_never_hands_the_model_more_than_the_dense_batch(self, monkeypatch):
+        _install_fake(monkeypatch, _CorpusModel)
+        ModelRegistry.encode_documents([f"track {i}" for i in range(20)])
+        model, _, _ = ModelRegistry.get_text_model()
+        assert max(model.batch_sizes) <= ENCODE_BATCH
+        assert sum(model.batch_sizes) == 20
+
+    def test_every_row_comes_back_once_and_in_order(self, monkeypatch):
+        _install_fake(monkeypatch, _CorpusModel)
+        texts = ["a", "bb", "ccc", "dddd", "eeeee"] * 4
+        out = ModelRegistry.encode_documents(texts)
+        assert out.shape == (len(texts), VECTOR_DIM)
+        # The fake encodes a row as its own length, so order is checkable.
+        assert [row[0] for row in out] == [float(len(t)) for t in texts]
+
+    def test_an_oom_shrinks_the_batch_and_keeps_finished_work(self, monkeypatch):
+        _install_fake(monkeypatch, _CorpusModel)
+        _CorpusModel.oom_above = 4
+        try:
+            texts = [f"track {i}" for i in range(16)]
+            out = ModelRegistry.encode_documents(texts)
+            model, _, _ = ModelRegistry.get_text_model()
+            assert out.shape == (16, VECTOR_DIM)
+            assert model.batch_sizes[0] == ENCODE_BATCH      # refused
+            assert max(model.batch_sizes[1:]) <= 4           # and never again
+            assert sum(model.batch_sizes[1:]) == 16          # nothing redone
+        finally:
+            _CorpusModel.oom_above = None
+
+    def test_an_oom_at_a_single_track_raises_instead_of_degrading(self, monkeypatch):
+        """The assistant may rank on fewer signals; indexing may NOT write a
+        library with missing vectors. A silent partial pass would look like a
+        finished index and search would quietly miss those tracks, so this one
+        has to fail loudly and be re-run."""
+        import torch
+
+        _install_fake(monkeypatch, _CorpusModel)
+        _CorpusModel.oom_above = 0
+        try:
+            with pytest.raises(torch.OutOfMemoryError):
+                ModelRegistry.encode_documents(["only one"])
+        finally:
+            _CorpusModel.oom_above = None
+
+    def test_an_empty_corpus_never_touches_the_model(self, monkeypatch):
+        _install_fake(monkeypatch, _CorpusModel)
+        out = ModelRegistry.encode_documents([])
+        assert out.shape == (0, VECTOR_DIM)
+        assert _CorpusModel.instance_count == 0
 
 
 class _FakeClapModule:

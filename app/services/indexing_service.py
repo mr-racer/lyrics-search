@@ -700,18 +700,25 @@ class IndexingService:
         that fetches lyrics after CLAP must have written them into the same
         ``filtered`` dicts before calling this.
 
-        No instruction prefix here on purpose: Qwen3-Embedding is asymmetric and
-        this is the DOCUMENT side of the pair (the query side adds it via
-        ``ModelRegistry.encode_text(..., is_query=True)``).
+        Goes through ``ModelRegistry.encode_documents`` rather than touching the
+        model: that is what bounds the batch and what applies the document side
+        of Octen's prompt pair. This function used to call
+        ``self.engine.model.encode(..., batch_size=32)`` and did neither — 65k
+        tokens in one forward on a card shared with an LLM, embedded with a bare
+        document side. See that method for both stories.
         """
+        from app.resources.model_registry import ModelRegistry
+
         total = len(filtered)
         if progress_callback:
             progress_callback("lyrics", 0, total, "Encoding lyrics...")
 
+        def _progress(done: int) -> None:
+            if progress_callback:
+                progress_callback("lyrics", done, total, "Encoding lyrics...")
+
         texts = [s["lyrics"] for s in filtered]
-        text_vecs = self.engine.model.encode(
-            texts, batch_size=32, show_progress_bar=True, convert_to_numpy=True,
-        )
+        text_vecs = ModelRegistry.encode_documents(texts, progress=_progress)
 
         if progress_callback:
             progress_callback("lyrics", total, total, "Lyrics encoding done")

@@ -397,6 +397,65 @@ class ModelRegistry:
         return model.encode(sentences, **encode_kwargs)
 
     @classmethod
+    def encode_documents(cls, texts: list, *, progress=None):
+        """Dense vectors for a WHOLE corpus, as one ``(n, VECTOR_DIM)`` array.
+
+        The indexing pass's entry point. It exists because that pass used to
+        call ``model.encode(texts, batch_size=32)`` directly, and the two things
+        wrong with that were the two things this fixes.
+
+        **The batch.** 32 texts at ``MAX_SEQ_LENGTH`` is 65k tokens in one
+        forward. Whenever SDPA cannot take a memory-efficient path, attention
+        materialises as ``batch x heads x tokens x tokens`` — 4.3 GiB at that
+        size — and the card is shared with an LLM. ``ENCODE_BATCH`` is the
+        number the rest of the dense leg already uses; there is no reason this
+        one caller got its own, larger one.
+
+        **The prompt.** Reaching past ``encode_text`` also skipped the document
+        prompt. That was correct for Qwen3-Embedding, whose document side
+        genuinely takes nothing, and it is wrong for Octen — and a corpus
+        embedded one way cannot be searched by queries embedded the other.
+
+        An allocator refusal shrinks the batch and keeps what is already done,
+        as in ``encode_sparse``. It does NOT degrade to a partial result: a
+        library written with missing vectors would look like a finished index
+        while search quietly skipped those tracks, so the last resort here is
+        to raise and be re-run, not to return less.
+        """
+        import numpy as np
+        import torch
+
+        if not texts:
+            return np.zeros((0, VECTOR_DIM), dtype=np.float32)
+
+        chunks: list = []
+        size = ENCODE_BATCH
+        i = 0
+        while i < len(texts):
+            try:
+                chunks.append(cls.encode_text(
+                    texts[i:i + size], is_query=False,
+                    batch_size=size, convert_to_numpy=True))
+                i += size
+                if progress:
+                    progress(min(i, len(texts)))
+            except torch.OutOfMemoryError:
+                attempted = min(size, len(texts) - i)
+                if attempted == 1:
+                    logger.error(
+                        "[ModelRegistry] dense encode out of memory at one text "
+                        "(%d of %d done) — the card has nothing left, so this "
+                        "index run stops rather than write a library with holes "
+                        "in it", i, len(texts))
+                    raise
+                size = attempted // 2
+                _release_cuda_cache()
+                logger.warning(
+                    "[ModelRegistry] dense encode hit OOM at %d of %d texts — "
+                    "continuing at batch=%d", i, len(texts), size)
+        return np.concatenate(chunks, axis=0) if len(chunks) > 1 else chunks[0]
+
+    @classmethod
     def is_text_model_loaded(cls) -> bool:
         return cls._text_model is not None
 
