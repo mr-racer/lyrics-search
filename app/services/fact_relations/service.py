@@ -1,5 +1,13 @@
 """Pipeline entry point: raw facts -> GLiNER2 -> LLM classifier -> gates -> DB.
 
+**Production uses the producer leg only.** Sampling links are owned by the
+facts_v2 pipeline (``ai_tasks/refined_facts._store_links``), which labels a
+fact before reading it instead of matching a lexicon, and cleans its output
+through ``facts_v2.sample_links``. :func:`process_song_facts` therefore calls
+:func:`collect_claims` with ``samples=False``. The sampling stages below still
+exist for ``scripts/dry_run_relations.py``, which reports what this extractor
+would have said; nothing writes them.
+
 Four stages, in order of how much they cost:
 
 1. **Lexical prefilter** (:mod:`gates`). A fact is read for samples only if it
@@ -30,12 +38,7 @@ import json
 import logging
 
 from .extractor import get_extractor
-from .gates import (
-    SongContext,
-    apply_gates,
-    fact_mentions_sampling,
-    links_to_relations,
-)
+from .gates import fact_mentions_sampling
 from .llm_re import build_llm_messages, mark_fact, merge_results, parse_llm_re
 from .triage import triage_producer, triage_samples
 
@@ -106,12 +109,20 @@ def _resolve_llm(fact, candidates, title, artist, ask_llm_fn):
         return None
 
 
-def collect_claims(facts, title, artist, ask_llm_fn, extractor=None):
+def collect_claims(facts, title, artist, ask_llm_fn, extractor=None, samples=True):
     """Every producer name and candidate link a song's facts yield, ungated.
 
     Split out from :func:`process_song_facts` so the dry-run script can see
     what the model produced *before* the gates ran — that is the "было ->
     стало" column of its report.
+
+    ``samples=False`` skips the sampling leg entirely: no sample triage, and
+    no Song/Artist candidates in the LLM call. That is what production passes
+    now — sampling links are owned by the facts_v2 pipeline
+    (``ai_tasks/refined_facts._store_links``), and running this leg too would
+    both pay for a second opinion and overwrite the first one. The default
+    stays True for ``scripts/dry_run_relations.py``, which reports on what
+    this extractor WOULD say.
     """
     extractor = extractor or get_extractor()
     final = dict(_EMPTY)
@@ -129,7 +140,7 @@ def collect_claims(facts, title, artist, ask_llm_fn, extractor=None):
         producer_hits = triage_producer(fact, gliner_out, title)
         source_hits, usage_hits = (
             triage_samples(fact, gliner_out, title, artist)
-            if fact_mentions_sampling(fact) else ([], [])
+            if samples and fact_mentions_sampling(fact) else ([], [])
         )
 
         as_is = _as_is_dict(producer_hits, source_hits, usage_hits)
@@ -150,7 +161,16 @@ def collect_claims(facts, title, artist, ask_llm_fn, extractor=None):
 def process_song_facts(
     slug, facts, title, artist, db, ask_llm_fn, extractor=None, ctx=None,
 ):
-    """Extract producers/samples from ``facts`` and persist them for ``slug``.
+    """Extract PRODUCER credits from ``facts`` and persist them for ``slug``.
+
+    Sampling links used to come out of here as well, through the same GLiNER2
+    triage plus a relation classifier. They no longer do. The facts_v2
+    pipeline labels each fact before reading it and hands the sampling ones to
+    a dedicated prompt, so running both meant two models answering the same
+    question and the loser silently overwriting the winner: this function
+    persisted with ``replace_sample_links``, which deletes a song's rows
+    before inserting, and it ran AFTER ``refined_facts`` in the auto pipeline.
+    Producers stay here — facts_v2 does not extract them.
 
     Parameters
     ----------
@@ -158,42 +178,27 @@ def process_song_facts(
     facts       : raw fact strings for this song (English).
     title       : subject song title (for triage/LLM subject matching).
     artist      : subject artist name or slug (LLM normalizes dashes).
-    db          : object exposing ``set_song_relations`` and, when ``ctx``
-                  carries a collection, ``replace_sample_links``.
+    db          : object exposing ``set_song_producers``.
     ask_llm_fn  : callable(messages) -> dict|str|None. Called once per fact
                   that has any LLM-bucket candidate. May raise or return None;
                   both degrade gracefully to AS_IS-only for that fact.
     extractor   : object exposing ``extract(fact) -> dict`` (GLiNER2 output
                   shape). Defaults to the lazy ``get_extractor()`` singleton;
                   tests inject a fake to avoid loading torch/gliner2.
-    ctx         : :class:`gates.SongContext` with the album/year/library data
-                  the gates check against. Without it only the model-free
-                  gates (relation kind, missing artist, self-title) can fire.
+    ctx         : :class:`gates.SongContext`, accepted for call compatibility.
+                  Nothing here reads it any more — the gates it carried data
+                  for guarded the sampling leg.
 
-    Returns the gated ``{"producers": [...], "samples": [...],
-    "sampled_by": [...]}`` dict that was written to the DB.
+    Returns ``{"producers": [...]}`` — what was written to the DB.
     """
-    ctx = ctx or SongContext(slug=slug, title=title, artist=artist)
-    claims = collect_claims(facts, title, artist, ask_llm_fn, extractor)
-    links, rejected = apply_gates(claims["links"], ctx)
-    if rejected:
-        logger.info(
-            "[fact_relations] slug=%s: %d link(s) kept, %d rejected (%s)",
-            slug, len(links), len(rejected),
-            ", ".join(sorted({r for _c, r in rejected})),
-        )
-
-    if ctx.collection_name and hasattr(db, "replace_sample_links"):
-        db.replace_sample_links(ctx.collection_name, slug, links)
-
-    relations = links_to_relations(links)
-    final = {"producers": claims["producers"], **relations}
-    db.set_song_relations(
-        slug,
-        json.dumps(final["producers"]),
-        json.dumps({"samples": final["samples"], "sampled_by": final["sampled_by"]}),
+    claims = collect_claims(
+        facts, title, artist, ask_llm_fn, extractor, samples=False,
     )
-    return final
+    producers = claims["producers"]
+    # Producers only: writing samples_json from here would blank the sample
+    # cache that facts_v2 fills for the same song.
+    db.set_song_producers(slug, json.dumps(producers))
+    return {"producers": producers}
 
 
 async def process_song_facts_async(

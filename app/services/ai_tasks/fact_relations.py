@@ -1,4 +1,4 @@
-"""Fact-relations task — extract producers/samples from a collection's facts.
+"""Producer-credits task — extract producers from a collection's facts.
 
 This is the ONLY path that runs the GLiNER2+LLM relation pipeline. It used to
 share the job with an inline per-song hook in ``song_facts_service``, but that
@@ -6,17 +6,21 @@ hook was invisible to the progress UI and impossible to count, so it was
 removed; ``library_service._run_ai_tasks`` runs this task right after the FACTS
 stage instead, with its own progress bar.
 
-It walks ``MetadataDB.get_songs_needing_relations`` (songs visible to the
-collection that have English facts but no ``producers``/``samples_json`` yet)
-and runs ``fact_relations.process_song_facts_async`` per song. Being keyed on
-"no relations yet" makes it idempotent: a re-run only picks up songs added
-since, plus any whose facts arrived outside indexing.
+**Sampling links are not this task's business any more.** They come out of
+``ai_tasks/refined_facts``, which owns ``sample_links`` and the
+``songs.samples_json`` read cache built from it. This task used to extract them
+too and, running later in the auto pipeline, overwrote what facts_v2 had just
+written.
+
+It walks ``MetadataDB.get_songs_needing_producers`` (songs visible to the
+collection that have English facts but no ``producers`` yet) and runs
+``fact_relations.process_song_facts_async`` per song. Being keyed on "no
+producers yet" makes it idempotent: a re-run only picks up songs added since,
+plus any whose facts arrived outside indexing.
 
 The collection-wide context (library index + artist aliases) is built ONCE per
-run and shared by every song: the sample gates need to know which claimed
-works the user actually holds, what year they carry and which names the
-performer answers to, and rebuilding that per song would re-read the whole
-library thousands of times.
+run and shared by every song, and is still handed to the pipeline for call
+compatibility even though only the sampling gates ever read it.
 """
 from __future__ import annotations
 
@@ -61,8 +65,8 @@ def _build_context(collection_name: str):
 
 
 async def run(job, db_client, llm) -> None:
-    """Extract producer/sample relations for songs in the job's collection."""
-    songs = MetadataDB.get_songs_needing_relations(job.collection_name)
+    """Extract producer credits for songs in the job's collection."""
+    songs = MetadataDB.get_songs_needing_producers(job.collection_name)
     # The starter sizes every task by track count; ours is per SONG, so correct
     # the denominator before the progress bar renders it.
     MetadataDB.update_ai_job(job_id=job.job_id, n_total=len(songs))
@@ -105,18 +109,6 @@ async def run(job, db_client, llm) -> None:
         MetadataDB.update_ai_job(
             job_id=job.job_id, n_done=n_done, n_failed=n_failed, n_skipped=n_skipped,
         )
-
-    # The second direction only exists once every song has been through the
-    # pipeline: "who sampled X" is derived from other songs' links, so it can
-    # only be materialized after the last one is written.
-    if n_done:
-        try:
-            written = await asyncio.to_thread(
-                MetadataDB.rebuild_samples_cache, job.collection_name,
-            )
-            logger.info("[fact_relations] sample cache rebuilt for %d songs", written)
-        except Exception:
-            logger.warning("[fact_relations] sample cache rebuild failed", exc_info=True)
 
     if n_done == 0 and n_skipped > 0 and n_failed == 0:
         logger.warning(

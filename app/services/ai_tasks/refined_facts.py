@@ -31,6 +31,10 @@ from app.resources.metadata_db import MetadataDB
 from app.services import ai_indexing_service, text_quality as tq
 from app.services.artist_split import artist_slugs, name_for_slug
 from app.services.facts_v2 import pipeline as fv2
+from app.services.facts_v2 import sample_links as sl
+from app.services.facts_v2.verify_lane import (
+    VerifyLane, clean_and_store, seed_collection,
+)
 from app.services.llm_client import ask_llm
 from app.services.song_facts_service import get_song_facts_key
 
@@ -116,7 +120,8 @@ def _persist(job, scope: str, scope_key: str, origin_kind: str,
 
 
 async def _do_entity(job, ask, *, scope: str, scope_key: str, entity: dict,
-                     origin_kind: str, facts: list) -> tuple:
+                     origin_kind: str, facts: list,
+                     links_ctx: "LinkContext | None" = None) -> tuple:
     """Process one song or artist. Returns (n_facts, n_failed)."""
     ids = [int(f["id"]) for f in facts]
     done = MetadataDB.processed_origin_ids(origin_kind, job.lang, ids)
@@ -129,50 +134,91 @@ async def _do_entity(job, ask, *, scope: str, scope_key: str, entity: dict,
         ask, entity, scope, todo, lang_name=_LANG_NAME.get(job.lang, "Russian"),
         lang_code=job.lang,
         on_result=_persist(job, scope, scope_key, origin_kind, artist_name))
-    _store_links(job, scope_key, entity, recs)
+    _store_links(job, scope, scope_key, entity, recs, links_ctx)
     return len(facts), sum(1 for r in recs if r.get("error"))
 
 
 _LANG_NAME = {"ru": "Russian", "en": "English"}
 
 
-def _store_links(job, scope_key: str, entity: dict, recs: list) -> None:
-    """Write this song's sampling links. Verification is a separate pass.
+class LinkContext:
+    """Per-run state the sampling-link writer needs.
 
-    Deliberately not verified here: MusicBrainz answers about one request a
-    second, so checking inline would make indexing wait on the network once per
-    sampled track. ``scripts/verify_sample_links.py`` does that afterwards and
-    caches its verdicts.
+    The library index behind ``resolve`` is read once for the whole run. It was
+    tempting to build it inside the writer, but the writer runs once per song:
+    on a 6,000-track library that is 6,000 full reads of the song table.
+    """
+
+    def __init__(self, collection_name: str, lane=None):
+        try:
+            self.resolve, self.n_index = sl.library_resolver_from_db(collection_name)
+        except Exception:                           # noqa: BLE001
+            logger.warning("[refined_facts] library index unavailable — links "
+                           "will not resolve to owned tracks", exc_info=True)
+            self.resolve, self.n_index = None, 0
+        self.lane = lane
+
+
+def _store_links(job, scope: str, scope_key: str, entity: dict, recs: list,
+                 ctx: "LinkContext | None" = None) -> None:
+    """Clean this song's sampling links and write them.
+
+    What the model returns is a raw pair of names. Before this ran through
+    ``sample_links.clean`` the raw pair went straight into the table, and
+    production showed exactly what that costs: an album stored as a song
+    ("Glass Animals — Dreamland"), the same link under two spellings ("Billy
+    Squier — The Big Beat" beside "Billy Squire — Big Beat"), and ``dst_slug``
+    null on every row — which left the derived "sampled by" side, built from
+    that column, empty for the whole library.
+
+    ``clean`` does the free tiers only (shape, evidence against the fact text,
+    dedupe, fuzzy merge, and resolution against the user's own files). The one
+    tier that costs a network round trip is MusicBrainz, and it happens in
+    :class:`facts_v2.verify_lane.VerifyLane` while this keeps extracting.
+
+    Links are kept unless ``clean`` rejects them outright: an unchecked link is
+    not a wrong one, and the lane prunes what MusicBrainz disowns.
 
     ``replace_sample_links`` is a delete-then-insert per source song, so this
     collects every link of the entity and writes once — calling it per link
     would leave only the last one.
     """
-    from app.services.fact_relations.gates import dst_key
+    if scope != "song":
+        # An artist fact can carry a sampling label too, but sample_links is
+        # keyed by SONG slug: rows written under an artist slug match nothing
+        # the readers ask for and never reach the cache rebuild.
+        return
 
+    src_artist = entity.get("artist") or entity.get("name") or ""
+    src_title = entity.get("title") or ""
     rows, seen = [], set()
     for rec in recs:
+        fact_text = (rec.get("fact") or {}).get("fact") or ""
         for link in (rec.get("links") or []):
             artist = (link.get("artist") or "").strip()
             title = (link.get("title") or "").strip()
             if not artist or not title:
                 continue
             direction = link.get("direction") or "source"
-            key = dst_key(artist, title)
-            if (direction, key) in seen:
+            key = (direction, sl.db_key(artist, title))
+            if key in seen:
                 continue                    # one fact can restate another's link
-            seen.add((direction, key))
+            seen.add(key)
             rows.append({
-                "direction": direction, "dst_key": key, "dst_artist": artist,
-                "dst_title": title, "dst_slug": None,
+                "artist": artist, "title": title, "direction": direction,
                 "relation": link.get("relation") or "sample",
-                "evidence": (rec["fact"].get("fact") or "")[:400],
-                "confidence": None,
+                "src_slug": scope_key, "src_artist": src_artist,
+                "src_title": src_title, "fact": fact_text,
             })
     if not rows:
         return
+
     try:
-        MetadataDB.replace_sample_links(job.collection_name, scope_key, rows)
+        clean_and_store(
+            job.collection_name, scope_key, rows,
+            resolve=getattr(ctx, "resolve", None),
+            lane=getattr(ctx, "lane", None),
+        )
     except Exception:                               # noqa: BLE001
         logger.warning("[refined_facts] sample link store failed for %s",
                        scope_key, exc_info=True)
@@ -191,6 +237,28 @@ async def run(job, db_client, llm) -> None:
     ask = _asker(job)
     n_done = n_failed = n_skipped = 0
     seen_artist_slugs: set = set()
+
+    # The verification lane starts with the extraction rather than after it:
+    # MusicBrainz is paced at about a call a second and the network is idle
+    # while the LLM works, so the checking is paid for out of time this run
+    # spends anyway. Building the library index touches the whole song table —
+    # off the event loop.
+    lane = VerifyLane(job.collection_name)
+    lane.start()
+    links_ctx = await asyncio.to_thread(LinkContext, job.collection_name, lane)
+
+    # Links already in the table go through the same cleaning and checking.
+    # A resumed run returns before the writer for every fact it has already
+    # processed, so without this the only links ever verified would be the
+    # ones extracted in the very same run — and a library indexed before
+    # verification existed could never be healed by re-running the task.
+    seeded = await asyncio.to_thread(
+        seed_collection, job.collection_name, resolve=links_ctx.resolve)
+    for src_slug, links in seeded:
+        lane.submit(src_slug, links)
+    if seeded:
+        logger.info("[refined_facts] %d song(s) with stored links queued for "
+                    "verification", len(seeded))
 
     if job.new_track_ids is not None:
         # A small batch: one retrieve instead of a whole-collection scroll.
@@ -250,7 +318,8 @@ async def run(job, db_client, llm) -> None:
                         job, ask, scope="song", scope_key=song_slug,
                         entity={"slug": song_slug, "artist": artist_name,
                                 "title": title_text},
-                        origin_kind="song_facts", facts=facts)
+                        origin_kind="song_facts", facts=facts,
+                        links_ctx=links_ctx)
                     n_done += got
                     n_failed += failed
                     handled = True
@@ -282,6 +351,23 @@ async def run(job, db_client, llm) -> None:
                 n_skipped += 1
             MetadataDB.update_ai_job(job_id=job.job_id, n_done=n_done,
                                      n_failed=n_failed, n_skipped=n_skipped)
+
+    # Whatever the lane has not checked yet is finished here. In practice the
+    # queue drained long ago: it is fed one song at a time by a loop that
+    # spends seconds per song on the LLM, and a check costs under a second.
+    await lane.aclose()
+
+    # The read cache the player uses is derived, and the second direction can
+    # only be derived once every song has been written: "who sampled X" comes
+    # from OTHER songs' rows. So it is rebuilt here, at the end, rather than
+    # per song.
+    try:
+        written = await asyncio.to_thread(
+            MetadataDB.rebuild_samples_cache, job.collection_name)
+        logger.info("[refined_facts] sample cache rebuilt for %d songs", written)
+    except Exception:                                   # noqa: BLE001
+        logger.warning("[refined_facts] sample cache rebuild failed",
+                       exc_info=True)
 
     if n_done == 0 and n_skipped > 0 and n_failed == 0:
         logger.warning(

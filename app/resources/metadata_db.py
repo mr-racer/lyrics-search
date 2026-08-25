@@ -1770,6 +1770,22 @@ class MetadataDB:
         conn.commit()
 
     @classmethod
+    def set_song_producers(cls, slug: str, producers_json: str) -> None:
+        """Persist ONLY the producer credits for one song.
+
+        Separate from :meth:`set_song_relations` because the two halves now
+        have different owners: producers come from the GLiNER2 pipeline, while
+        sampling links come from facts_v2 and reach ``samples_json`` through
+        :meth:`rebuild_samples_cache`. Writing both columns from the producer
+        pass would blank the sample cache of every song it touched.
+        """
+        conn = cls._connect()
+        conn.execute(
+            "UPDATE songs SET producers = ? WHERE slug = ?", (producers_json, slug),
+        )
+        conn.commit()
+
+    @classmethod
     def get_songs_for_collection(cls, collection_name: str) -> List[dict]:
         """``[{slug, title, artist_slug}]`` for every song visible to a
         collection — the slug side of the sample-link library index."""
@@ -1858,17 +1874,26 @@ class MetadataDB:
         return {"samples": samples, "sampled_by": sampled_by}
 
     @classmethod
-    def get_sample_link_sources(cls, collection_name: str) -> List[dict]:
-        """Every ``direction='source'`` row of a collection (for cache rebuild)."""
+    def get_all_sample_links(cls, collection_name: str) -> List[dict]:
+        """Every stored link of a collection, BOTH directions, with ``direction``.
+
+        The reader this replaced returned only the ``'source'`` half and did
+        not carry the column at all. Feeding that to anything that writes back
+        through :meth:`replace_sample_links` — which deletes a song's rows in
+        BOTH directions before inserting — silently destroys every ``'usage'``
+        row the caller never saw. Read links through here, or not at all.
+        """
         conn = cls._connect()
         rows = conn.execute(
-            "SELECT src_slug, dst_title, dst_artist, dst_slug, relation, evidence "
-            "FROM sample_links WHERE collection_name = ? AND direction = 'source'",
+            "SELECT src_slug, direction, dst_title, dst_artist, dst_slug, "
+            "       relation, evidence, confidence "
+            "FROM sample_links WHERE collection_name = ?",
             (collection_name,),
         ).fetchall()
         return [
-            {"src_slug": r[0], "dst_title": r[1], "dst_artist": r[2],
-             "dst_slug": r[3], "relation": r[4], "evidence": r[5]}
+            {"src_slug": r[0], "direction": r[1], "dst_title": r[2],
+             "dst_artist": r[3], "dst_slug": r[4], "relation": r[5],
+             "evidence": r[6], "confidence": r[7]}
             for r in rows
         ]
 
@@ -2155,14 +2180,20 @@ class MetadataDB:
         return out
 
     @classmethod
-    def get_songs_needing_relations(cls, collection_name: str) -> List[Tuple[str, str, str]]:
+    def get_songs_needing_producers(cls, collection_name: str) -> List[Tuple[str, str, str]]:
         """Return ``(slug, title, artist_slug)`` for songs visible to
-        ``collection_name`` that have facts but no producers/samples
-        extraction yet.
+        ``collection_name`` that have facts but no producer extraction yet.
 
-        For a future backfill pass over songs indexed before this pipeline
-        existed. Idempotent: songs that already have a non-null
-        ``producers`` or ``samples_json`` are excluded.
+        Idempotent: songs with a non-null ``producers`` are excluded.
+
+        ``samples_json`` is deliberately NOT part of this condition, and used
+        to be. Sampling links moved to the facts_v2 pipeline, which writes the
+        read cache for every visible song — including an empty
+        ``{"samples": [], "sampled_by": []}`` for songs that have none. That
+        made the column non-null everywhere, so a condition mentioning it
+        selected nothing and this task could never run again: the cache had
+        become both the output and the gate on producing it, and an empty
+        result was indistinguishable from "not extracted yet".
         """
         conn = cls._connect()
         rows = conn.execute(
@@ -2171,7 +2202,7 @@ class MetadataDB:
                JOIN fact_visibility fv ON fv.kind = 'song' AND fv.slug = s.slug
                JOIN song_facts sf ON sf.song_slug = s.slug AND sf.lang = 'en'
                WHERE fv.collection_name = ?
-                 AND s.producers IS NULL AND s.samples_json IS NULL""",
+                 AND s.producers IS NULL""",
             (collection_name,),
         ).fetchall()
         return [(r[0], r[1], r[2]) for r in rows]

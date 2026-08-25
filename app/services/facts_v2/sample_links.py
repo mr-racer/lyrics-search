@@ -60,6 +60,32 @@ def norm(text: str, *, drop_feat: bool = True) -> str:
     return re.sub(r"\s+", " ", t)
 
 
+def db_key(artist: str, title: str) -> str:
+    """Identity of the other side, as stored in ``sample_links.dst_key``."""
+    return f"{norm(artist)}|{norm(title)}"
+
+
+def to_db_row(link: dict) -> dict:
+    """One cleaned link in the shape ``replace_sample_links`` inserts.
+
+    Shared by both writers — the extraction and the verification lane — so the
+    same link cannot end up stored under two different ``dst_key`` spellings
+    depending on which of them wrote it last.
+    """
+    return {
+        "direction": link["direction"],
+        "dst_key": db_key(link.get("artist") or "", link.get("title") or ""),
+        "dst_title": link.get("title"),
+        "dst_artist": link.get("artist"),
+        "dst_slug": link.get("dst_slug"),
+        "relation": link.get("relation") or "sample",
+        "src_year": link.get("src_year"),
+        "dst_year": link.get("dst_year"),
+        "evidence": (link.get("fact") or "")[:400] or None,
+        "confidence": link.get("confidence"),
+    }
+
+
 def shape_reject(link: dict, src_artist: str, src_title: str) -> str | None:
     """Reasons a link cannot be right, whatever the world says."""
     a, t = (link.get("artist") or "").strip(), (link.get("title") or "").strip()
@@ -246,15 +272,24 @@ class MusicBrainz:
                 os.environ.setdefault("https_proxy", proxy)
         except Exception:                          # noqa: BLE001
             pass
-        # urllib has no default timeout, so a stalled read waits forever — that
-        # is what hung the first production run: the process sat at 0:07 of CPU
-        # for minutes with the network idle.
-        import socket
-        socket.setdefaulttimeout(MB_TIMEOUT)
-        # MusicBrainz requires "app/version ( contact )" and answers 503 to a
-        # bare agent string.
-        mbngs.set_useragent("MusiX", "1.0", "https://musixai.ru")
-        mbngs.set_rate_limit(limit_or_interval=interval)
+        # Importable is not the same as usable: the test suite stubs this
+        # module with an empty one, and a future release could rename either
+        # call. Since the lane now starts inside indexing, a failure here would
+        # abort a fact run rather than merely skip a check — so it disables the
+        # client instead of raising.
+        try:
+            # urllib has no default timeout, so a stalled read waits forever —
+            # that is what hung the first production run: the process sat at
+            # 0:07 of CPU for minutes with the network idle.
+            import socket
+            socket.setdefaulttimeout(MB_TIMEOUT)
+            # MusicBrainz requires "app/version ( contact )" and answers 503 to
+            # a bare agent string.
+            mbngs.set_useragent("MusiX", "1.0", "https://musixai.ru")
+            mbngs.set_rate_limit(limit_or_interval=interval)
+        except Exception:                          # noqa: BLE001
+            self.enabled = False
+            return
         self.mb = mbngs
 
     def verify(self, artist: str, title: str) -> dict:

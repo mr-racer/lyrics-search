@@ -3,7 +3,8 @@ import json
 import pytest
 
 from app.resources.metadata_db import MetadataDB
-from app.services.fact_relations.service import process_song_facts
+from app.services.fact_relations.gates import SongContext, apply_gates
+from app.services.fact_relations.service import collect_claims, process_song_facts
 
 
 class _IsolatedDB:
@@ -76,7 +77,9 @@ class TestProcessSongFacts(_IsolatedDB):
             "SELECT producers, samples_json FROM songs WHERE slug = ?", ("a-b",)
         ).fetchone()
         assert json.loads(row[0]) == ["Rick Rubin"]
-        assert json.loads(row[1]) == {"samples": [], "sampled_by": []}
+        # samples_json belongs to facts_v2 now and must be left alone. Writing
+        # it from here blanked the sample cache of every song this task saw.
+        assert row[1] is None
 
     @pytest.mark.unit
     def test_llm_bucket_uses_ask_llm_fn_and_merges(self):
@@ -101,9 +104,50 @@ class TestProcessSongFacts(_IsolatedDB):
         assert res["producers"] == []
 
     @pytest.mark.unit
-    def test_classified_sample_lands_and_reference_does_not(self):
-        """The same fact shape, two classifier verdicts, two outcomes."""
+    def test_production_path_never_writes_sample_links(self):
+        """Samples have one owner now, and it is not this pipeline.
+
+        This function used to persist with ``replace_sample_links`` — a
+        delete-then-insert — and ran AFTER ``refined_facts`` in the auto
+        pipeline, so it silently replaced every link facts_v2 had extracted.
+        """
         fact = 'The track samples "Bound" by Ponderosa Twins Plus One.'
+        MetadataDB.add_song_facts_batch(
+            "s-1", "acct_test", [fact], title="Bound 2",
+            artist_slug="kanye-west", source="test",
+        )
+        MetadataDB.replace_sample_links("acct_test", "s-1", [{
+            "direction": "source", "dst_key": "ponderosa|bound",
+            "dst_title": "Bound", "dst_artist": "Ponderosa Twins Plus One",
+            "dst_slug": None, "relation": "sample",
+        }])
+
+        def eager_llm(messages):
+            return {"producers": [], "links": [{
+                "song": "Something Else", "artist": "Someone Else",
+                "direction": "source", "relation": "sample",
+            }]}
+
+        res = process_song_facts(
+            "s-1", [fact], "Bound 2", "kanye-west", MetadataDB,
+            ask_llm_fn=eager_llm, extractor=SampleExtractor(),
+            ctx=SongContext(slug="s-1", title="Bound 2", artist="kanye-west",
+                            collection_name="acct_test"),
+        )
+        assert "samples" not in res
+        stored = MetadataDB.get_sample_links("acct_test", "s-1")
+        assert [e["song"] for e in stored["samples"]] == ["Bound"]
+
+    @pytest.mark.unit
+    def test_dry_run_leg_still_classifies_samples(self):
+        """The same fact shape, two classifier verdicts, two outcomes.
+
+        The sampling leg is no longer reached from production, so it is tested
+        through the pair ``scripts/dry_run_relations.py`` calls — which is now
+        its only caller.
+        """
+        fact = 'The track samples "Bound" by Ponderosa Twins Plus One.'
+        ctx = SongContext(slug="s-1", title="Bound 2", artist="kanye-west")
 
         def llm(relation):
             def _call(messages):
@@ -113,37 +157,35 @@ class TestProcessSongFacts(_IsolatedDB):
                 }]}
             return _call
 
-        kept = process_song_facts(
-            "s-1", [fact], "Bound 2", "kanye-west", MetadataDB,
-            ask_llm_fn=llm("sample"), extractor=SampleExtractor(),
-        )
-        assert {"song": "Bound", "artist": "Ponderosa Twins Plus One"} in kept["samples"]
+        claims = collect_claims([fact], "Bound 2", "kanye-west",
+                                llm("sample"), SampleExtractor())
+        kept, _rejected = apply_gates(claims["links"], ctx)
+        assert [ln["dst_title"] for ln in kept] == ["Bound"]
 
-        dropped = process_song_facts(
-            "s-2", [fact], "Bound 2", "kanye-west", MetadataDB,
-            ask_llm_fn=llm("lyrical_reference"), extractor=SampleExtractor(),
-        )
-        assert dropped["samples"] == []
+        claims = collect_claims([fact], "Bound 2", "kanye-west",
+                                llm("lyrical_reference"), SampleExtractor())
+        kept, _rejected = apply_gates(claims["links"], ctx)
+        assert kept == []
 
     @pytest.mark.unit
-    def test_fact_without_sampling_words_never_yields_a_link(self):
-        """Adele/"Hello": the fact talks about a melody, not a sample."""
-        fact = ("The song's first line matches the melody of Lionel Richie's "
-                'iconic 1983 line from his own "Hello".')
+    def test_production_leg_asks_nothing_about_samples(self):
+        """`samples=False` also means no Song/Artist candidates in the prompt.
 
-        def eager_llm(messages):
-            # Even a model that hallucinates a sample cannot get one in: the
-            # fact never reaches the sample leg.
-            return {"producers": [], "links": [{
-                "song": "Hello", "artist": "Lionel Richie",
-                "direction": "source", "relation": "sample",
-            }]}
+        Running the leg anyway would pay a second LLM call per sampling fact
+        for an answer that is then thrown away.
+        """
+        fact = 'The track samples "Bound" by Ponderosa Twins Plus One.'
+        calls = []
 
-        res = process_song_facts(
-            "adele-hello", [fact], "Hello", "adele", MetadataDB,
-            ask_llm_fn=eager_llm, extractor=SampleExtractor(),
+        def spy_llm(messages):
+            calls.append(messages)
+            return {"producers": [], "links": []}
+
+        process_song_facts(
+            "s-2", [fact], "Bound 2", "kanye-west", MetadataDB,
+            ask_llm_fn=spy_llm, extractor=SampleExtractor(),
         )
-        assert res["samples"] == []
+        assert not calls, "no LLM call is warranted: the only candidates were samples"
 
     @pytest.mark.unit
     def test_llm_unavailable_still_writes_as_is(self):
