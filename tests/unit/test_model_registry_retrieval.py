@@ -160,11 +160,13 @@ class TestTheSeamTheRetrieverUses:
                                "failed"}
 
 
-class _Rep:
-    """One batch's sparse representation. Answers ``.coalesce()``, nothing more."""
+class _Rep(list):
+    """One batch's sparse representation — one row per text it encoded.
 
-    def __init__(self, size: int):
-        self.size = size
+    A list of the texts themselves so the row ORDER stays readable end to end:
+    the leg encodes longest-first and permutes back, and a test that could not
+    see rows could not catch that permutation going wrong.
+    """
 
     def coalesce(self):
         return self
@@ -183,6 +185,7 @@ class _FakeMILCO:
     def __init__(self, *, oom_above: int | None = None):
         self.oom_above = oom_above
         self.calls: list = []          # (n_texts, max_length, source_view)
+        self.batches: list = []        # the texts of each batch, in order
 
     def to(self, device):
         return self
@@ -194,9 +197,10 @@ class _FakeMILCO:
         import torch
 
         self.calls.append((len(texts), max_length, source_view))
+        self.batches.append(list(texts))
         if self.oom_above is not None and len(texts) > self.oom_above:
             raise torch.OutOfMemoryError("CUDA out of memory")
-        return _Rep(len(texts))
+        return _Rep(texts)
 
     encode_document = _encode
     encode_query = _encode
@@ -246,6 +250,59 @@ class TestTheSparseBudget:
         model = _install(monkeypatch, _FakeMILCO())
         ModelRegistry.encode_sparse(["a"])
         assert all(source_view for _, _, source_view in model.calls)
+
+
+class TestLengthBucketing:
+    """MILCO pads every batch to its longest member (``padding=True`` plus
+    ``pad_to_multiple_of=32``), and the leg's cost is
+    ``batch x tokens x 30522``. One 500-character passage sharing a batch with
+    three one-liners therefore pays for four long passages. The retriever feeds
+    exactly that mixture — web chunks next to one-sentence facts — so grouping
+    by length is free memory, and the only thing it can break is row order.
+    """
+
+    def test_the_helper_round_trips_the_order(self):
+        from app.resources.model_registry import _length_sorted_order
+
+        texts = ["short", "a much longer passage here", "mid length", "x"]
+        order, inverse = _length_sorted_order(texts)
+        encoded = [texts[i] for i in order]                 # what the model sees
+        restored = [encoded[inverse[i]] for i in range(len(texts))]
+        assert restored == texts
+
+    def test_the_longest_text_is_encoded_first(self):
+        """Longest-first means the biggest batch is attempted immediately: if it
+        fits, every later batch fits too, and if it does not, the shrink happens
+        before the run has spent anything."""
+        from app.resources.model_registry import _length_sorted_order
+
+        texts = ["x", "xxxxxxxxxx", "xxx"]
+        order, _ = _length_sorted_order(texts)
+        assert texts[order[0]] == "xxxxxxxxxx"
+
+    def test_batches_do_not_mix_long_texts_with_short_ones(self, monkeypatch):
+        model = _install(monkeypatch, _FakeMILCO())
+        texts = ["x" * 500, "x" * 480, "x" * 460, "x" * 440] + ["y"] * 4
+        ModelRegistry.encode_sparse(texts)
+        first, second = model.batches[0], model.batches[1]
+        assert all(len(t) >= 440 for t in first)
+        assert all(len(t) == 1 for t in second)
+
+    def test_rows_come_back_in_the_callers_order(self, monkeypatch):
+        """The retriever addresses ``self._sparse`` by document POSITION —
+        ``_sparse_similarity`` index_selects into it with indices that came from
+        the fused ranking. Rows left in encode order would silently score every
+        passage against the wrong document."""
+        _install(monkeypatch, _FakeMILCO())
+        texts = ["tiny", "x" * 300, "medium length text", "z", "y" * 120]
+        assert list(ModelRegistry.encode_sparse(texts)) == texts
+
+    def test_the_order_survives_a_batch_shrink(self, monkeypatch):
+        """The OOM path re-slices the reordered list mid-run; the permutation
+        back has to account for that too."""
+        _install(monkeypatch, _FakeMILCO(oom_above=2))
+        texts = [f"{'x' * (i * 7)}-{i}" for i in range(9)]
+        assert list(ModelRegistry.encode_sparse(texts)) == texts
 
 
 class TestTheSparseLegSurvivesAnOOM:

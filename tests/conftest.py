@@ -64,18 +64,31 @@ if not os.environ.get("MUSIX_LIVE_STACK"):
         yield
 
     _torch_stub.no_grad = _no_grad
+    _torch_stub.inference_mode = _no_grad
+    _torch_stub.long = "long"
 
     class _CatResult(list):
-        """What the stub's ``torch.cat`` returns: the inputs, still inspectable.
+        """What the stub's ``torch.cat`` returns: ROWS, not batches.
 
-        A list so a test can count the batches that survived, and it answers
-        ``.coalesce()`` because the sparse leg calls that on the concatenation.
+        Flattened on purpose. The sparse leg encodes its texts out of order
+        (longest first, so the biggest batch either fits or fails immediately)
+        and permutes the rows back afterwards. Row-level fakes are what let a
+        test assert that the permutation actually restores the caller's order —
+        the one place where that reordering could silently corrupt a ranking.
         """
+
+        # MILCO hands its rows back on the CPU (``milco.py`` calls ``.cpu()``
+        # per batch), and the leg reads ``.device`` off the concatenation to
+        # build the permutation index on the same one.
+        device = "cpu"
 
         def coalesce(self):
             return self
 
-    _torch_stub.cat = lambda tensors, dim=0: _CatResult(tensors)
+    _torch_stub.cat = lambda tensors, dim=0: _CatResult(
+        [row for t in tensors for row in t])
+    _torch_stub.tensor = lambda data, **kw: list(data)
+    _torch_stub.index_select = lambda t, dim, idx: _CatResult([t[i] for i in idx])
     sys.modules.setdefault("torch", _torch_stub)
 
     _st_stub = types.ModuleType("sentence_transformers")

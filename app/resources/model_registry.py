@@ -111,6 +111,33 @@ def _resolve_device() -> tuple[str, str]:
         return "cpu", f"CUDA probe raised {type(e).__name__}: {e}"
 
 
+def _length_sorted_order(texts: list) -> tuple[list, list]:
+    """``(order, inverse)`` for encoding the longest texts first.
+
+    ``order`` lists input positions longest-first; ``inverse[i]`` says where row
+    ``i`` of the caller's list ended up, so the encoded rows can be permuted
+    back before anyone sees them.
+
+    Two reasons for longest-first rather than any grouping:
+
+    * A padded batch costs its LONGEST member for every row it holds, so mixing
+      a 500-character passage with three one-liners pays for four long ones.
+      The retriever's corpus is exactly that mixture.
+    * The biggest batch is then attempted first. If it fits, every later batch
+      fits; if it does not, ``encode_sparse`` shrinks before the run has spent
+      anything, instead of discovering the ceiling nine batches in.
+
+    Character length rather than token count on purpose: tokenising twice to
+    save padding would cost more than the padding does, and it is the same
+    proxy ``sentence_transformers`` sorts by internally.
+    """
+    order = sorted(range(len(texts)), key=lambda i: -len(texts[i] or ""))
+    inverse = [0] * len(order)
+    for position, original in enumerate(order):
+        inverse[original] = position
+    return order, inverse
+
+
 def _release_cuda_cache() -> None:
     """Hand cached-but-unused blocks back before retrying a failed allocation.
 
@@ -199,7 +226,12 @@ RERANK_MODEL_NAME = "BAAI/bge-reranker-v2-m3"
 RERANK_MAX_LEN = 512
 
 ENCODE_BATCH = 8
-RERANK_BATCH = 16
+# 8, not 16: the cross-encoder reads (question, passage) pairs through a
+# 24-layer, 1024-wide XLM-R-large, so 16 x 512 tokens is ~8k tokens of
+# activations in one forward. Halving the batch halves that peak and costs
+# almost nothing in time — the FLOPs are identical either way, and 8 x 512
+# still leaves the GEMMs far above the size where an Ampere card saturates.
+RERANK_BATCH = 8
 
 
 class ModelRegistry:
@@ -470,6 +502,13 @@ class ModelRegistry:
         those constants for why this leg gets its own two numbers instead of
         the dense model's.
 
+        Encoded LONGEST-FIRST and permuted back before returning: MILCO pads
+        each batch to its longest member, so grouping by length is free memory
+        on the retriever's mixed corpus (see ``_length_sorted_order``). The
+        permutation is load-bearing — the retriever addresses these rows by
+        document position, so leaving them in encode order would score
+        passages against the wrong documents rather than fail.
+
         **An allocator failure shrinks the batch; it does not lose the leg.**
         The card is shared with an LLM whose free memory moves under us, so
         "there is no room right now" is a normal condition rather than an
@@ -486,13 +525,16 @@ class ModelRegistry:
             return None
         encode = model.encode_query if is_query else model.encode_document
 
+        order, inverse = _length_sorted_order(texts)
+        ordered = [texts[i] for i in order]
+
         reps: list = []
         size = SPARSE_BATCH
         i = 0
-        while i < len(texts):
+        while i < len(ordered):
             try:
                 with torch.no_grad():
-                    reps.append(encode(texts[i:i + size],
+                    reps.append(encode(ordered[i:i + size],
                                        max_length=SPARSE_MAX_LEN,
                                        source_view=SPARSE_SOURCE_VIEW).coalesce())
                 i += size
@@ -501,7 +543,7 @@ class ModelRegistry:
                 # short tail ``size`` can already exceed the texts left, and
                 # halving the nominal would re-send the identical batch and pay
                 # a second failed forward for nothing.
-                attempted = min(size, len(texts) - i)
+                attempted = min(size, len(ordered) - i)
                 if attempted == 1:
                     cls._sparse_encode_failures += 1
                     logger.warning(
@@ -509,19 +551,31 @@ class ModelRegistry:
                         "text (%d of %d done) — this run ranks without the sparse "
                         "leg. Something else on the card grew; see "
                         "GET /search/models/loaded for the running count.",
-                        i, len(texts))
+                        i, len(ordered))
                     return None
                 size = attempted // 2
                 cls._sparse_oom_retries += 1
                 _release_cuda_cache()
                 logger.info(
                     "[ModelRegistry] sparse encode hit OOM at %d of %d texts — "
-                    "continuing at batch=%d", i, len(texts), size)
+                    "continuing at batch=%d", i, len(ordered), size)
             except Exception:  # noqa: BLE001
                 cls._sparse_encode_failures += 1
                 logger.warning("[ModelRegistry] sparse encode failed", exc_info=True)
                 return None
-        return torch.cat(reps, dim=0).coalesce()
+
+        combined = torch.cat(reps, dim=0).coalesce()
+        if len(texts) > 1:
+            # Back into the caller's order. Not cosmetic: the retriever holds
+            # this tensor and index_selects into it with positions that came
+            # from the fused ranking, so rows left sorted by length would score
+            # every passage against a different document — silently, and only
+            # visible as worse answers.
+            combined = torch.index_select(
+                combined, 0,
+                torch.tensor(inverse, dtype=torch.long, device=combined.device),
+            ).coalesce()
+        return combined
 
     @classmethod
     def ce_probabilities(cls, query: str, docs: list) -> Optional[list]:
@@ -539,7 +593,15 @@ class ModelRegistry:
         device = cls._shared_device()
         try:
             out: list[float] = []
-            with torch.no_grad():
+            # ``inference_mode`` rather than ``no_grad``: it additionally drops
+            # version-counter and view tracking. Safe HERE specifically because
+            # nothing survives the block — the scores leave as a plain list of
+            # floats. The sparse leg deliberately keeps ``no_grad``: its tensor
+            # escapes into the retriever, which holds and re-slices it, and
+            # inference tensors carry restrictions that are not worth the
+            # nothing this would save there (MILCO already sets its own grad
+            # context internally, so the forward is unaffected either way).
+            with torch.inference_mode():
                 for i in range(0, len(docs), RERANK_BATCH):
                     batch = docs[i:i + RERANK_BATCH]
                     enc = tokenizer([query] * len(batch), batch, padding=True,
