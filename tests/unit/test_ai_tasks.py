@@ -79,8 +79,9 @@ class TestArtistBio:
     async def test_run_calls_llm_with_artist_facts_and_persists_bio(self):
         _seed_facts("dua-lipa", "c", ["Born in London 1995", "Released Future Nostalgia 2020"])
         points = [FakePoint("p1", {"artist": "Dua Lipa", "title": "Physical"})]
-        with patch("app.services.ai_tasks.artist_bio.web_research_bio",
-                   return_value="From London, indie-pop.") as mock_bio:
+        with patch("app.services.ai_tasks.artist_bio.bio2.build",
+                   return_value={"bio": "From London, indie-pop.",
+                                 "facets": {}}) as mock_bio:
             await artist_bio.run(_make_job(), FakeDb(points), None)
         mock_bio.assert_called_once()
         assert MetadataDB.get_artist_bio("dua-lipa", "c", "en") == "From London, indie-pop."
@@ -89,8 +90,8 @@ class TestArtistBio:
     async def test_run_processes_all_artists(self):
         """artist_bio processes every distinct artist regardless of facts."""
         points = [FakePoint("p1", {"artist": "Unknown", "title": "x"})]
-        with patch("app.services.ai_tasks.artist_bio.web_research_bio",
-                   return_value="Some bio.") as mock_bio:
+        with patch("app.services.ai_tasks.artist_bio.bio2.build",
+                   return_value={"bio": "Some bio.", "facets": {}}) as mock_bio:
             await artist_bio.run(_make_job(), FakeDb(points), None)
         mock_bio.assert_called_once()
         assert MetadataDB.get_artist_bio("unknown", "c", "en") == "Some bio."
@@ -103,8 +104,8 @@ class TestArtistBio:
             FakePoint("p2", {"artist": "Dua Lipa", "title": "B"}),
             FakePoint("p3", {"artist": "Dua Lipa", "title": "C"}),
         ]
-        with patch("app.services.ai_tasks.artist_bio.web_research_bio",
-                   return_value="bio") as mock_bio:
+        with patch("app.services.ai_tasks.artist_bio.bio2.build",
+                   return_value={"bio": "bio", "facets": {}}) as mock_bio:
             await artist_bio.run(_make_job(), FakeDb(points), None)
         assert mock_bio.call_count == 1  # one LLM call per artist, not per track
 
@@ -122,10 +123,10 @@ class TestArtistBio:
             "artists": ["Kanye West", "The Weeknd"],
             "artist_slugs": ["kanye-west", "the-weeknd"],
         })]
-        with patch("app.services.ai_tasks.artist_bio.web_research_bio",
-                   return_value="bio") as mock_bio:
+        with patch("app.services.ai_tasks.artist_bio.bio2.build",
+                   return_value={"bio": "bio", "facets": {}}) as mock_bio:
             await artist_bio.run(_make_job(), FakeDb(points), None)
-        names = sorted(c.kwargs["artist_name"] for c in mock_bio.call_args_list)
+        names = sorted(c.args[1] for c in mock_bio.call_args_list)
         assert names == ["Kanye West", "The Weeknd"]
 
     @pytest.mark.asyncio
@@ -137,10 +138,10 @@ class TestArtistBio:
         })]
         job = _make_job()
         job.new_track_ids = ("p1",)
-        with patch("app.services.ai_tasks.artist_bio.web_research_bio",
-                   return_value="bio") as mock_bio:
+        with patch("app.services.ai_tasks.artist_bio.bio2.build",
+                   return_value={"bio": "bio", "facets": {}}) as mock_bio:
             await artist_bio.run(job, FakeDb(points), None)
-        names = sorted(c.kwargs["artist_name"] for c in mock_bio.call_args_list)
+        names = sorted(c.args[1] for c in mock_bio.call_args_list)
         assert names == ["Kanye West", "The Weeknd"]
 
     @pytest.mark.asyncio
@@ -151,10 +152,10 @@ class TestArtistBio:
             "artists": ["Kanye West", "The Weeknd"],
             "artist_slugs": ["kanye-west", "the-weeknd"], "album": "TLOP",
         })
-        with patch("app.services.ai_tasks.artist_bio.web_research_bio",
-                   return_value="bio") as mock_bio:
+        with patch("app.services.ai_tasks.artist_bio.bio2.build",
+                   return_value={"bio": "bio", "facets": {}}) as mock_bio:
             await artist_bio.run(_make_job(), FakeDb([]), None)
-        names = sorted(c.kwargs["artist_name"] for c in mock_bio.call_args_list)
+        names = sorted(c.args[1] for c in mock_bio.call_args_list)
         assert names == ["Kanye West", "The Weeknd"]
 
     @pytest.mark.asyncio
@@ -164,17 +165,18 @@ class TestArtistBio:
             "artist": "Kanye West", "title": "x",
             "artist_slugs": ["kanye-west", "the-weeknd"],
         })]
-        with patch("app.services.ai_tasks.artist_bio.web_research_bio",
-                   return_value="bio") as mock_bio:
+        with patch("app.services.ai_tasks.artist_bio.bio2.build",
+                   return_value={"bio": "bio", "facets": {}}) as mock_bio:
             await artist_bio.run(_make_job(), FakeDb(points), None)
-        names = sorted(c.kwargs["artist_name"] for c in mock_bio.call_args_list)
+        names = sorted(c.args[1] for c in mock_bio.call_args_list)
         assert names == ["Kanye West", "The Weeknd"]
 
     @pytest.mark.asyncio
     async def test_run_skips_empty_bio_result(self):
         points = [FakePoint("p1", {"artist": "Empty Bio", "title": "x"})]
-        with patch("app.services.ai_tasks.artist_bio.web_research_bio",
-                   return_value=""):
+        with patch("app.services.ai_tasks.artist_bio.bio2.build",
+                   return_value={"bio": "", "facets": {},
+                                 "error": "no wikipedia article passed the gate"}):
             await artist_bio.run(_make_job(), FakeDb(points), None)
         assert MetadataDB.get_artist_bio("empty-bio", "c", "en") is None
 
@@ -1071,14 +1073,14 @@ class TestIncrementalScoping:
         db_client.qdrant = qdrant
 
         with patch(
-            "app.services.ai_tasks.artist_bio.web_research_bio",
-            return_value="From London, indie-pop.",
+            "app.services.ai_tasks.artist_bio.bio2.build",
+            return_value={"bio": "From London, indie-pop.", "facets": {}},
         ) as mock_bio:
             asyncio.run(artist_bio.run(job, db_client, None))
 
         qdrant.retrieve.assert_called_once()
         # The SQLite-mirror full walk must NOT be consulted in incremental mode.
         MetadataDB.get_artist_bio  # (attribute access, not a call, to be explicit)
-        # Two tracks, same artist → exactly ONE web-research call.
+        # Two tracks, same artist → exactly ONE research pass.
         assert mock_bio.call_count == 1
         assert MetadataDB.get_artist_bio("dua-lipa", "c", "en") == "From London, indie-pop."

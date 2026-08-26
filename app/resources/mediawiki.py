@@ -130,15 +130,55 @@ DISAMBIGUATORS = ("(band)", "(musician)", "(singer)", "(rapper)", "(group)",
 DISAMBIGUATORS_RU = ("(группа)", "(певец)", "(певица)", "(музыкант)")
 
 
-def probe_titles(name: str, lang: str = "en", *,
-                 timeout: float = 15.0,
-                 proxies: Optional[dict] = None) -> list:
-    """Articles at the disambiguated titles for ``name``, as search-shaped rows.
+# TextExtracts returns several extracts in one request only when ``exintro`` is
+# set, and caps them at 20. Twelve suffixes (the Russian list plus the English
+# one) fit under that with room to spare.
+_EXLIMIT = 20
+
+
+def _title_hops(query: dict) -> dict:
+    """``{title we asked for: title the API answered under}``.
+
+    A batch answers under the CANONICAL title, so a probe that looks itself up
+    by the string it sent finds nothing whenever the API moved it. Both hops it
+    performs — Unicode normalisation and redirects — are reported in the
+    response, and both have to be followed to map an answer back to the suffix
+    that asked for it.
+    """
+    hops: dict = {}
+    for key in ("normalized", "redirects"):
+        for hop in query.get(key) or []:
+            src, dst = hop.get("from"), hop.get("to")
+            if src and dst:
+                hops[src] = dst
+    return hops
+
+
+def _follow(title: str, hops: dict, limit: int = 4) -> str:
+    seen: set = set()
+    while title in hops and title not in seen and limit > 0:
+        seen.add(title)
+        title = hops[title]
+        limit -= 1
+    return title
+
+
+def probe_titles_batch(name: str, lang: str = "en", *,
+                       timeout: float = 15.0,
+                       proxies: Optional[dict] = None) -> list:
+    """Articles at the disambiguated titles for ``name`` — in ONE request.
 
     Candidates, not answers: a probe for "Bullet (musician)" finds a Ghanaian
     artist who is not the Swedish band someone actually has in their library.
     What comes back joins the pool the relevance gate ranks; it never wins by
     itself.
+
+    ``titles=`` takes the whole disambiguator list at once, so the rung costs
+    one request instead of one per suffix — measured at 9-10 requests per artist
+    on the production library, every one of them for a name the ladder was about
+    to discard anyway. Every hit is returned rather than the first, in
+    ``DISAMBIGUATORS`` order: the call is already paid for, and the gate judges
+    which of them is this artist better than the suffix order does.
 
     A redirect that lands on a disambiguation page is not an article, and
     Wikipedia says so in ``pageprops`` — which is the only reliable way to tell,
@@ -147,35 +187,47 @@ def probe_titles(name: str, lang: str = "en", *,
     import httpx
 
     suffixes = DISAMBIGUATORS_RU + DISAMBIGUATORS if lang == "ru" else DISAMBIGUATORS
-    proxy = (proxies or {}).get("https") or (proxies or {}).get("http")
-    out = []
-    for suffix in suffixes:
-        title = f"{name} {suffix}"
-        try:
-            resp = httpx.get(
-                f"https://{lang}.wikipedia.org/w/api.php",
-                params={"action": "query", "titles": title,
-                        "prop": "extracts|pageprops", "exintro": 1,
-                        "explaintext": 1, "redirects": 1,
-                        "format": "json", "formatversion": "2"},
-                timeout=timeout, proxy=proxy, headers={"User-Agent": _UA})
-            resp.raise_for_status()
-            pages = resp.json().get("query", {}).get("pages", []) or []
-        except Exception as exc:  # noqa: BLE001 — a probe that fails is just a miss
-            logger.debug("[mediawiki] probe %r failed: %s", title, exc)
+    titles = [f"{name} {suffix}" for suffix in suffixes]
+    try:
+        resp = httpx.get(
+            f"https://{lang}.wikipedia.org/w/api.php",
+            params={"action": "query", "titles": "|".join(titles),
+                    "prop": "extracts|pageprops", "exintro": 1,
+                    "explaintext": 1, "exlimit": _EXLIMIT, "redirects": 1,
+                    "format": "json", "formatversion": "2"},
+            timeout=timeout,
+            proxy=(proxies or {}).get("https") or (proxies or {}).get("http"),
+            headers={"User-Agent": _UA})
+        resp.raise_for_status()
+        query = resp.json().get("query", {}) or {}
+    except Exception as exc:  # noqa: BLE001 — a probe that fails is just a miss
+        logger.info("[mediawiki] probe %s %r failed: %s: %s", lang, name,
+                    type(exc).__name__, exc)
+        return []
+
+    pages = {p.get("title"): p for p in (query.get("pages") or [])}
+    hops = _title_hops(query)
+
+    out: list = []
+    seen: set = set()
+    for requested in titles:
+        page = pages.get(_follow(requested, hops))
+        if page is None or page.get("missing"):
             continue
-        page = pages[0] if pages else {}
-        if page.get("missing") or "disambiguation" in (page.get("pageprops") or {}):
+        if "disambiguation" in (page.get("pageprops") or {}):
             continue
-        real = page.get("title") or title
+        real = page.get("title") or requested
+        if real in seen:
+            continue
+        seen.add(real)
         out.append({
             "url": f"https://{lang}.wikipedia.org/wiki/{real.replace(' ', '_')}",
             "title": real,
             "snippet": " ".join((page.get("extract") or "").split())[:300],
         })
-        break                       # one disambiguated title per name is enough
     if out:
-        logger.info("[mediawiki] probe %s %r -> %s", lang, name, out[0]["title"])
+        logger.info("[mediawiki] probe %s %r -> %s", lang, name,
+                    ", ".join(c["title"] for c in out))
     return out
 
 

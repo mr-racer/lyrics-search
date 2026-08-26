@@ -2,9 +2,9 @@
 
 Small local model (~12B) — so both prompts are maximally rigid: strict JSON,
 "not sure -> no", never invent. The verifier is a pydantic_ai agent with a
-web_search tool hard-capped at 2 calls per candidate (closure counter, same
-scheme as ``llm_web_search._create_agent``; ``UsageLimits`` backstops a model
-that ignores the refusal). Verdicts are cached forever by the caller
+web_search tool hard-capped at 2 calls per candidate (closure counter, the same
+scheme ``playlist_agent/agent.py`` uses; ``UsageLimits`` backstops a model that
+ignores the refusal). Verdicts are cached forever by the caller
 (``gem_resolution_cache``) — one LLM price per unique candidate.
 
 Every public function swallows its errors: LLM being down must degrade the

@@ -1,12 +1,14 @@
-"""Web search utilities + pydantic_ai research agent.
+"""Web search utilities for the tool-calling agents.
 
 Public API:
   smart_web_search(query, fetch_content, max_results) -> str
       Raw search results as a formatted string (no LLM).
 
-  web_research_bio(artist_name, lang, base_url, model) -> str
-      Agentic loop: search → evaluate → search again → return bio text.
-      Uses pydantic_ai Agent with the project's OpenAI-compatible client.
+The bio research agent that used to live here is gone: biographies are written
+by ``services/bio_v2``, which reads the open web through the same cross-encoder
+gate and junk filter as everything else. What remains here serves the playlist
+agent, the track chat and the fact executor, which hand these strings to a model
+as tool output.
 """
 
 from __future__ import annotations
@@ -17,12 +19,7 @@ import re
 from urllib.parse import urlparse
 
 import httpx
-from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIModel
-from pydantic_ai.providers.openai import OpenAIProvider
-from pydantic_ai.usage import UsageLimits
 
-from app.services.llm_client import _get_client, resolve_model
 from app.services.proxy_config import get_proxy, get_proxy_url
 
 logger = logging.getLogger(__name__)
@@ -71,8 +68,7 @@ SEARXNG_PLAYLIST_ENGINES = os.environ.get(
 RANK_POOL_SIZE = 30
 
 # Ровно эта строка возвращается инструментом, когда искать было нечего. Она
-# сравнивается кодом (см. `web_research_bio`), а не читается глазами, поэтому
-# литерал один на весь модуль.
+# сравнивается кодом, а не читается глазами, поэтому литерал один на весь модуль.
 NO_RESULTS = "No results found"
 
 # Hard junk for LIST queries: individual-song / lyric / annotation / artist
@@ -739,175 +735,3 @@ def smart_web_search(
         else:
             output.append(f"### {title}\nURL: {url}\nSnippet: {snippet}")
     return "\n\n---\n\n".join(output)
-
-
-# ─────────────────────────────────────────
-# 4. АГЕНТ — ФАБРИКА
-# ─────────────────────────────────────────
-
-# Hard cap on web_search tool calls per agent run. After the cap the tool stops
-# hitting SearXNG and returns a "write your answer now" marker instead, so the
-# agent finishes with whatever it has rather than looping (or crashing).
-_MAX_WEB_SEARCHES = 3
-# Backstop for truly stuck models that keep calling the tool despite the marker:
-# hard ceiling on LLM round-trips per run (3 searches + a few retries + final).
-_MAX_LLM_REQUESTS = 12
-
-_AGENT_SYSTEM_PROMPT_TEMPLATE = """CRITICAL RULE: The artist name must appear in your response EXACTLY as given in the user message — character for character. Do not translate, transliterate, or alter it in any way.
-
-You are a music research assistant. Your task is to write a 2-3 sentence biographical paragraph about a given artist.
-
-Strategy:
-- Search for the artist's biography, origin, and genre.
-- Use fetch_content=True only when snippets are not enough.
-- If the first search is insufficient, search again with a refined query.
-- HARD LIMIT: you may call web_search at most 3 times. After that, write the biography from what you already have.
-- Always cite the source URL in your final answer.
-- Lead with origin + genre. Keep it journalistic, no clichés.
-- If the searches never establish who this artist is, answer with exactly NO_DATA and nothing else. Do not describe the search, do not guess a genre or a hometown, do not ask for clarification, do not fall back to a different artist with a similar name. NO_DATA is a correct answer; a plausible paragraph about an artist you did not find is the worst one.
-{artist_name_rule}"""
-
-_AGENT_SYSTEM_PROMPT_WITH_SEED_TEMPLATE = """CRITICAL RULE: The artist name must appear in your response EXACTLY as given in the user message — character for character. Do not translate, transliterate, or alter it in any way.
-
-You are a music research assistant editing an existing artist bio. An INITIAL BIO (from AudioDB) is provided in the user message. Your task is to rewrite it in the requested language, keeping the factual content but improving clarity and flow.
-
-Strategy:
-- Prefer fidelity to the initial bio — preserve its facts.
-- Use web_search ONLY if you spot a factual gap or contradiction in the initial bio.
-- If you do search, use fetch_content=True only when snippets are not enough.
-- HARD LIMIT: you may call web_search at most 3 times. After that, write the final bio from what you already have.
-- Lead with origin + genre. Keep it journalistic, no clichés.
-- Output a single paragraph (3-5 sentences).
-{artist_name_rule}"""
-
-
-def _create_agent(
-    base_url: str | None = None,
-    model_name: str | None = None,
-    artist_name: str | None = None,
-    seed_bio: str | None = None,
-) -> Agent:
-    """Создаёт pydantic_ai Agent, подключённый к OpenAI-совместимому серверу."""
-    resolved_model = resolve_model(model_name)
-    openai_client = _get_client(base_url)
-    provider = OpenAIProvider(openai_client=openai_client)
-    pydantic_model = OpenAIModel(resolved_model, provider=provider)
-
-    if artist_name:
-        artist_name_rule = f'- The artist name is "{artist_name}". Write it EXACTLY as "{artist_name}" — copy it character for character.'
-    else:
-        artist_name_rule = "- Write the artist name exactly as provided in the user message."
-
-    if seed_bio:
-        system_prompt = _AGENT_SYSTEM_PROMPT_WITH_SEED_TEMPLATE.format(artist_name_rule=artist_name_rule)
-    else:
-        system_prompt = _AGENT_SYSTEM_PROMPT_TEMPLATE.format(artist_name_rule=artist_name_rule)
-
-    agent: Agent = Agent(pydantic_model, system_prompt=system_prompt)
-
-    # Per-run search budget: the agent is created fresh for every
-    # web_research_bio() call, so this closure counter is per-artist.
-    #
-    # `hits` is what the caller acts on. Whether the run had ANYTHING to write
-    # from is a fact the code owns — it handed the tool's answers over itself —
-    # so it is read here rather than guessed from the wording of the answer.
-    search_calls = 0
-    stats = {"searches": 0, "hits": 0}
-
-    @agent.tool_plain
-    def web_search(query: str, fetch_content: bool = False) -> str:  # noqa: F841
-        """Search the web. HARD LIMIT: at most 3 calls per task.
-
-        Args:
-            query: Search query in English.
-            fetch_content: True = full page text, False = snippets only.
-        """
-        nonlocal search_calls
-        if search_calls >= _MAX_WEB_SEARCHES:
-            logger.info(
-                "[agent→tool] web_search limit (%d) exhausted, refusing query=%r",
-                _MAX_WEB_SEARCHES, query,
-            )
-            return (
-                f"SEARCH LIMIT REACHED: all {_MAX_WEB_SEARCHES} allowed web searches "
-                "are already used. Do NOT call web_search again. Write the final "
-                "biography NOW from the information you already have. If none of "
-                "it actually identified this artist, answer with exactly NO_DATA "
-                "and nothing else — do not pad it out into a general paragraph."
-            )
-        search_calls += 1
-        logger.info(
-            "[agent→tool] web_search called (%d/%d): query=%r fetch_content=%s",
-            search_calls, _MAX_WEB_SEARCHES, query, fetch_content,
-        )
-        result = smart_web_search(query, fetch_content)
-        stats["searches"] += 1
-        if result and result != NO_RESULTS:
-            stats["hits"] += 1
-        logger.info("[agent→tool] web_search result length: %d chars", len(result))
-        return result
-
-    return agent, stats
-
-
-# ─────────────────────────────────────────
-# 5. ПУБЛИЧНАЯ ФУНКЦИЯ ДЛЯ ARTIST_BIO
-# ─────────────────────────────────────────
-
-async def web_research_bio(
-    artist_name: str,
-    lang: str,
-    base_url: str | None = None,
-    model_name: str | None = None,
-    seed_bio: str | None = None,
-) -> str:
-    """Агентный web-поиск: возвращает биографический абзац об артисте.
-
-    Использует pydantic_ai Agent loop (search → evaluate → search again).
-    Если передан seed_bio (например, из AudioDB) — агент работает в режиме
-    редактирования: переписывает существующую биографию, обращаясь к web_search
-    только при обнаружении фактических пробелов.
-    Возвращает пустую строку при любой ошибке.
-    """
-    agent, stats = _create_agent(base_url, model_name, artist_name=artist_name,
-                                 seed_bio=seed_bio)
-    if seed_bio:
-        prompt = (
-            f'You are refining the biography of the music artist: "{artist_name}".\n\n'
-            f"INITIAL BIO (from AudioDB):\n{seed_bio}\n\n"
-            f"Rewrite this bio in {lang}, keeping the factual content but improving "
-            f"clarity and flow. Use web_search ONLY if you spot a factual gap or "
-            f"contradiction — otherwise prefer fidelity to the initial bio.\n"
-            f"Output: a single paragraph (3-5 sentences) in {lang}.\n"
-            f'IMPORTANT: The artist name must appear EXACTLY as "{artist_name}" — do not translate or modify it.'
-        )
-    else:
-        prompt = (
-            f'Write a 2-3 sentence biographical paragraph about the music artist: "{artist_name}".\n'
-            f"Write the biography in {lang}.\n"
-            f"If the searches do not establish who this artist is, answer with "
-            f"exactly NO_DATA and nothing else — no explanation, no guess.\n"
-            f'IMPORTANT: The artist name must appear EXACTLY as "{artist_name}" — do not translate or modify it.'
-        )
-    try:
-        # request_limit is a last-resort backstop against a model that ignores
-        # the tool's SEARCH-LIMIT refusal and loops forever; the graceful path
-        # (agent finishes on its own after 3 searches) never gets near it.
-        result = await agent.run(
-            prompt, usage_limits=UsageLimits(request_limit=_MAX_LLM_REQUESTS),
-        )
-    except Exception as e:
-        logger.warning("[web_research_bio] agent error for %s: %s", artist_name, e)
-        return ""
-
-    # Nothing was found, so there is nothing to write. Twenty-one production
-    # biographies were the model explaining that at length — every one of them
-    # from this path, and every one stored and shown as a biography. Whether the
-    # run had a source is a fact this code holds: either an AudioDB seed came
-    # in, or a search came back with something. Checking that beats reading the
-    # answer's wording, which changes with the model and the language.
-    if not seed_bio and not stats["hits"]:
-        logger.info("[web_research_bio] %s: %d searches, nothing found — no bio",
-                    artist_name, stats["searches"])
-        return ""
-    return (result.output or "").strip()

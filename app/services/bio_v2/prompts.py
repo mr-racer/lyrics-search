@@ -87,6 +87,35 @@ LANG_RETRY = """ЯЗЫК ОТВЕТА — РУССКИЙ. Ты уже один �
 """
 
 
+FACET_QUERIES_PROMPT = """You are writing SEARCH QUERIES that will be run against
+the text of {artist}'s biography — an encyclopedia article, or the pages a web
+search returned about them. The text is already downloaded; nothing you write
+goes to a search engine.
+
+For each of the four topics below, write 2 short queries that would match the
+sentence carrying the answer. Vary the WORDS, not the topic: the retriever
+already has the topic's own phrasing, so a query that repeats it adds nothing.
+
+  topic: "the year and place the band was formed or the artist began"
+  GOOD:  ["formed in", "origins and early years of the group"]
+  BAD:   ["the year the band was formed", "when was the band formed"]
+
+The GOOD pair works because articles say "was formed in Antibes in 1999" and
+head a section "Origins" — neither contains the word "year". The BAD pair is the
+topic said twice.
+
+Write the queries in {lang}, the language the text is written in. Keep each
+under eight words. Names of people and bands stay exactly as spelled here.
+
+TOPICS
+
+{topics}
+
+Answer with STRICT JSON and nothing else — the four keys, each a list of 2
+strings.
+{{"grammy": ["…", "…"], "formed": ["…", "…"], "name_origin": ["…", "…"], "years_active": ["…", "…"]}}"""
+
+
 FACET_PROMPTS = {
     "grammy": """From the PASSAGES below, how many Grammy Awards has {artist} WON,
 and how many nominations have they received? Count awards to the artist and to

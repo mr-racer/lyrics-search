@@ -519,8 +519,8 @@ Answer with STRICT JSON and nothing else — no markdown fence, no text around i
 #
 # So the text is checked for exactly what the prompt asked for, and the case the
 # prompt cannot guarantee is covered where the FACTS are rather than where the
-# words are: no biography is written at all when no search returned anything.
-# See ``llm_web_search.web_research_bio``.
+# words are: no biography is written at all when no source yielded a passage.
+# See ``bio_v2/sources.py`` and ``bio_v2/pipeline.write_bio``.
 NO_DATA = "NO_DATA"
 
 

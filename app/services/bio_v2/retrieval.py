@@ -31,6 +31,12 @@ PER_QUERY_POOL = 8
 FACET_SENTENCE_FLOOR = 0.30
 TOP_SENTENCES = 6
 
+# The facet's own retrieval: a shallower pool than the bio's, because a facet is
+# one fact and the prompt that reads it works better on four focused passages
+# than on ten that bury the sentence carrying the answer.
+FACET_POOL = 6
+FACET_CHUNKS = 4
+
 # Five facets of one life, hardcoded on purpose: the model does not get to
 # decide what a biography is made of. It writes the one these queries found.
 BIO_QUERIES = [
@@ -71,6 +77,39 @@ def bio_chunks(retriever, artist: str, *, limit: int = CHUNKS_IN_BIO) -> list:
     for i, question in enumerate(BIO_QUERIES):
         ranked = retriever.search(f"{artist}: {question}",
                                   min_prob=CE_CHUNK_GATE, limit=PER_QUERY_POOL)
+        rankings[f"q{i}"] = [r.index for r in ranked]
+    if not any(rankings.values()):
+        return []
+    fused = rrf(rankings)
+    return sorted(fused, key=lambda idx: -fused[idx])[:limit]
+
+
+def facet_chunks_hybrid(retriever, artist: str, queries: list, *,
+                        limit: int = FACET_CHUNKS) -> list:
+    """Indices of the chunks a facet is read from. A QUERY, never a new search.
+
+    The facets used to reach for the open web whenever the article did not
+    answer them — one search per empty facet, up to four per artist, each one
+    fetching two more pages. That is a lot of network to ask a question the
+    corpus on disk may already answer under different words, and it is what put
+    brave into a rate-limit suspension and duckduckgo behind a CAPTCHA.
+
+    So the corpus is asked again instead, with words the model chose: every
+    paraphrase is a full hybrid pass — dense and learned-sparse and BM25, fused
+    by RRF and reranked by the cross-encoder — and the paraphrases are fused
+    with each other by RRF over the RANKS. Not over the scores: cross-encoder
+    probabilities are not comparable ACROSS queries, so a merge on score lets
+    the sharpest phrasing own every slot, which is the failure the bio's five
+    facets already ran into.
+    """
+    if retriever is None or not queries:
+        return []
+    rankings = {}
+    for i, question in enumerate(queries):
+        if not (question or "").strip():
+            continue
+        ranked = retriever.search(f"{artist}: {question}",
+                                  min_prob=CE_CHUNK_GATE, limit=FACET_POOL)
         rankings[f"q{i}"] = [r.index for r in ranked]
     if not any(rankings.values()):
         return []

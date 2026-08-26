@@ -34,9 +34,6 @@ _TITLE_JUNK = re.compile(
 _NOT_THE_ARTIST = re.compile(
     r"(?i)(discograph|_songs|/singles|album\)|song\)|_tour\b|awards_and)")
 
-# A disambiguating suffix is a SECOND attempt, in the wiki's own language.
-_SUFFIX = {"ru": "музыкант", "en": "band musician"}
-
 
 def preferred_lang(artist: str) -> str:
     """Which Wikipedia to try first. A Cyrillic name is usually thin on
@@ -102,63 +99,45 @@ def gate(artist: str, pool: list) -> tuple:
     return passed[0], rejected
 
 
-def find(artist: str, *, proxies: Optional[dict] = None,
-         web_search=None) -> tuple:
-    """The artist's Wikipedia article: (article, rejected).
+def find(artist: str, *, proxies: Optional[dict] = None) -> tuple:
+    """The artist's Wikipedia article: (article, rejected). TWO requests, max.
 
-    Both rungs of the ladder always run, and the ladder advances on "nothing
-    PASSED THE GATE", not on "nothing was found". Advancing on the latter broke
-    the obscure case: a bare search for `Merk` returns five articles — a coin, a
-    Hungarian village, a football referee — so a "found something" test never
-    reached the suffixed query that finds `Merk (musician)`.
+    Both rungs advance on "nothing PASSED THE GATE", not on "nothing was found".
+    Advancing on the latter broke the obscure case: a bare search for `Merk`
+    returns five articles — a coin, a Hungarian village, a football referee — so
+    a "found something" test never reached the rung that finds
+    `Merk (musician)`.
+
+    One language, the preferred one. The second pass over en.wikipedia is gone
+    along with the per-suffix requests: it doubled the cost of every artist to
+    serve the case of a Cyrillic name that ru.wikipedia does not cover, and that
+    case now falls through to the open web like any other uncovered artist.
     """
     want = preferred_lang(artist)
-    pool: list = []
-    seen: set = set()
     rejected: list = []
 
-    # Rung zero: the disambiguated title. Relevance search answers "Merk" with a
-    # coin, a Hungarian village and a football referee and never reaches
-    # "Merk (musician)"; the title probe goes straight there. It contributes
-    # candidates like any other rung — the gate still decides.
-    for lang in [want] + (["en"] if want != "en" else []):
-        probed = [c for c in candidates(mediawiki.probe_titles(artist, lang,
-                                                               proxies=proxies), want)
-                  if c["url"] not in seen]
-        seen.update(c["url"] for c in probed)
-        pool += probed
-        if pool:
-            best, rej = gate(artist, sorted(pool, key=lambda c: c["rank"]))
-            if best is not None:
-                return best, rej
-            rejected = rej
+    # Rung zero: the disambiguated titles, all of them in one request. Relevance
+    # search answers "Merk" with a coin, a Hungarian village and a football
+    # referee and never reaches "Merk (musician)"; the title probe goes straight
+    # there. Candidates like any other rung — the gate still decides.
+    pool = candidates(
+        mediawiki.probe_titles_batch(artist, want, proxies=proxies), want)
+    if pool:
+        best, rejected = gate(artist, pool)
+        if best is not None:
+            return best, rejected
 
-    for lang in [want] + (["en"] if want != "en" else []):
-        for term in (artist, f"{artist} {_SUFFIX.get(lang, '')}".strip()):
-            fresh = [c for c in candidates(mediawiki.search(term, lang,
-                                                            proxies=proxies), want)
-                     if c["url"] not in seen]
-            seen.update(c["url"] for c in fresh)
-            pool += fresh
-            if not pool:
-                continue
-            pool.sort(key=lambda c: c["rank"])
-            best, rej = gate(artist, pool)
-            if best is not None:
-                return best, rej
-            rejected = rej
+    # Rung one: the BARE name against Wikipedia's own relevance index. Appending
+    # the disambiguating words here is what rung zero already did, and doing it
+    # in a query makes the answer worse — "Phoenix band musician" returns Rain,
+    # Summer and Liberty Phoenix, people surnamed Phoenix who are musicians,
+    # while the band ranks nowhere.
+    seen = {c["url"] for c in pool}
+    pool += [c for c in candidates(mediawiki.search(artist, want,
+                                                    proxies=proxies), want)
+             if c["url"] not in seen]
+    if not pool:
+        return None, rejected
 
-    # Last resort: the open web, host-filtered. Only reached when Wikipedia's
-    # own index knows nothing under either name.
-    if web_search is not None:
-        try:
-            rows = web_search(f"site:{want}.wikipedia.org {artist}")
-        except Exception:                       # noqa: BLE001
-            rows = []
-        fresh = [c for c in candidates(rows, want) if c["url"] not in seen]
-        if fresh:
-            best, rej = gate(artist, pool + fresh)
-            if best is not None:
-                return best, rej
-            rejected = rej
-    return None, rejected
+    best, rej = gate(artist, pool)
+    return best, (rej or rejected)

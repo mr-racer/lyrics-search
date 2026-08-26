@@ -18,17 +18,27 @@ import asyncio
 import json
 import logging
 import re
+from dataclasses import replace
 from typing import Optional
 
-from app.resources.model_registry import ModelRegistry
 from app.services import text_quality as tq
 from app.services.assistant.config import AgentConfig
 from app.services.assistant.fetcher import PageFetcher
 from app.services.bio_v2 import article as art
 from app.services.bio_v2 import prompts as P
 from app.services.bio_v2 import retrieval as R
+from app.services.bio_v2 import sources
 
 logger = logging.getLogger(__name__)
+
+# One open-web search per artist, and the instance that holds this number lives
+# for the whole run — see ``build``.
+WEB_BUDGET = 1
+
+# Which language the CORPUS is in, which is not the language the biography is
+# written in: an English article is read to write a Russian bio, and a query in
+# the wrong language reaches BM25 and the sparse leg with nothing to match.
+_LANG_NAME = {"ru": "Russian", "en": "English"}
 
 FACETS = {
     "grammy": "Grammy Awards won and nominations received",
@@ -128,47 +138,92 @@ async def write_bio(ask, artist: str, chunks: list, retriever, *,
     return bio.strip(), notes
 
 
-async def read_facets(ask, artist: str, chunks: list, sents: tuple, *,
-                      lang_name: str = "Russian", widen=None) -> dict:
-    """Extract the facts shown beside the bio. Returns column → value.
+def _corpus_lang(artist: str, meta: dict) -> str:
+    """The language the passages are written in, best guess.
 
-    The web is touched only when the article says nothing, and what comes back
-    is marked as web-sourced: an unguarded fallback once reported four Grammys
-    for a New Zealand bedroom-pop musician who has none, lifted from a page
-    about somebody else.
+    The article's own subdomain when there is an article — it is the one fact
+    here that is not a guess — and otherwise the language the artist's name is
+    written in, which is what chose the wiki in the first place.
     """
+    url = meta.get("source_url") or ""
+    host = url.split("//", 1)[-1].split("/", 1)[0].lower()
+    if host.endswith("wikipedia.org"):
+        return _LANG_NAME.get(host.split(".", 1)[0], "English")
+    return _LANG_NAME.get(art.preferred_lang(artist), "English")
+
+
+async def facet_queries(ask, artist: str, corpus_lang: str) -> dict:
+    """Per facet, the phrasings the corpus gets asked with.
+
+    The hardcoded question stays FIRST in every list and the generated ones are
+    added behind it. A model that returns nothing usable therefore costs the
+    facets nothing — the behaviour falls back to exactly what it was — while a
+    model that does understand the article's vocabulary gets to say so.
+    """
+    default = {name: [question] for name, question in FACETS.items()}
+    topics = "\n".join(f"  {name}: \"{question}\""
+                       for name, question in FACETS.items())
+    try:
+        obj = parse_json(await ask(P.FACET_QUERIES_PROMPT.format(
+            artist=artist, lang=corpus_lang, topics=topics), 0.3))
+    except Exception:                                # noqa: BLE001
+        return default
+    if not isinstance(obj, dict):
+        return default
+
     out: dict = {}
     for name, question in FACETS.items():
-        order, _best = await asyncio.to_thread(R.facet_chunks, artist, question, sents)
-        source = "wiki"
-        if not order and widen is not None:
-            fresh = await widen(question)
-            if fresh:
-                chunks.extend(fresh)
-                sents = await asyncio.to_thread(R.sentence_index, chunks)
-                order, _best = await asyncio.to_thread(
-                    R.facet_chunks, artist, question, sents)
-                source = "web"
+        raw = obj.get(name)
+        extra = ([q.strip() for q in raw
+                  if isinstance(q, str) and q.strip()][:3]
+                 if isinstance(raw, list) else [])
+        out[name] = [question] + extra
+    return out
+
+
+def _facet_source(chunks: list, order: list) -> str:
+    """Where the passages this facet was read from came from.
+
+    Recorded per facet, not per run: one corpus can hold the article and the
+    pages that filled the gaps in it, and a reader looking at a Grammy count
+    deserves to know which of the two said so."""
+    kinds = {getattr(chunks[i], "source", "web") for i in order
+             if 0 <= i < len(chunks)}
+    return "wiki" if kinds == {"wikipedia"} else "web"
+
+
+async def read_facets(ask, artist: str, chunks: list, retriever, sents: tuple, *,
+                      lang_name: str = "Russian",
+                      corpus_lang: str = "English") -> dict:
+    """Extract the facts shown beside the bio. Returns column → value.
+
+    No search happens here any more. A facet the article does not answer is
+    asked again OF THE SAME CORPUS in other words — see
+    ``retrieval.facet_chunks_hybrid`` for why that replaced one web search per
+    empty facet.
+    """
+    queries = await facet_queries(ask, artist, corpus_lang)
+    out: dict = {}
+    for name, question in FACETS.items():
+        asked = queries.get(name) or [question]
+        order = await asyncio.to_thread(
+            R.facet_chunks_hybrid, retriever, artist, asked)
+        if not order:
+            # The sentence pass. A facet answer is one sentence inside a chunk
+            # about something else, and at chunk granularity M83's "They decided
+            # to name their band M83, after the galaxy of that name" never
+            # surfaced at all — no fusion of paraphrases fixes that, because the
+            # unit being ranked is wrong.
+            order, _best = await asyncio.to_thread(
+                R.facet_chunks, artist, question, sents)
         if not order:
             continue
         obj = parse_json(await ask(P.FACET_PROMPTS[name].format(
             artist=artist, lang=lang_name,
             passages=R.passages(chunks, order)), 0.2))
-        if _empty(obj) and widen is not None and source == "wiki":
-            fresh = await widen(question)
-            if fresh:
-                chunks.extend(fresh)
-                sents = await asyncio.to_thread(R.sentence_index, chunks)
-                more, _ = await asyncio.to_thread(
-                    R.facet_chunks, artist, question, sents)
-                if more:
-                    source = "web"
-                    obj = parse_json(await ask(P.FACET_PROMPTS[name].format(
-                        artist=artist, lang=lang_name,
-                        passages=R.passages(chunks, more)), 0.2))
         if _empty(obj):
             continue
-        out.update(_columns(name, obj, source))
+        out.update(_columns(name, obj, _facet_source(chunks, order)))
     return out
 
 
@@ -208,65 +263,83 @@ def _columns(name: str, obj: dict, source: str) -> dict:
 async def build(ask, artist: str, *, lang_name: str = "Russian",
                 lang_code: str = "ru", config: Optional[AgentConfig] = None,
                 fetcher: Optional[PageFetcher] = None,
-                web_search=None, proxies: Optional[dict] = None) -> dict:
-    """Everything for one artist: bio text, facets, and what was rejected."""
+                searcher=None, seed_bio: Optional[str] = None,
+                proxies: Optional[dict] = None) -> dict:
+    """Everything for one artist: bio text, facets, and what was rejected.
+
+    Budget: two requests to Wikipedia, and one to the open web — the last spent
+    only when Wikipedia produced no biography, whether because there is no
+    article or because nothing in the one there is cleared the chunk gate.
+    """
     cfg = config or AgentConfig()
     fetcher = fetcher or PageFetcher(cfg)
+    if searcher is None:
+        # Imported HERE so the pipeline can be exercised — by a test, by a probe
+        # — without dragging in the assistant's search stack. ONE instance for
+        # the whole run, which is what makes ``max_web_searches`` mean anything:
+        # the budget and the repeat-query refusal both live on the instance, and
+        # the previous caller built a fresh one per call, so neither ever fired.
+        from app.services.assistant.web_sources import SearchSources
+
+        searcher = SearchSources(replace(cfg, max_web_searches=WEB_BUDGET))
 
     # Всё, что ниже уходит в поток НЕ ради скорости, а ради отзывчивости: эта
     # корутина живёт на главном event loop (задача запускается через
-    # asyncio.create_task), и любая синхронная ступень останавливает весь
-    # сервис. `find` — это поход в Википедию и кросс-энкодер, вместе секунды.
-    found, rejected = await asyncio.to_thread(
-        art.find, artist, proxies=proxies, web_search=web_search)
-    if found is None:
-        return {"error": "no wikipedia article passed the gate",
-                "rejected": rejected}
+    # asyncio.create_task), и любая синхронная ступень останавливает весь сервис.
+    chunks, meta = await sources.from_wikipedia(
+        artist, cfg=cfg, fetcher=fetcher, proxies=proxies)
 
-    page = await fetcher.fetch(found["url"], source="wikipedia",
-                               title=found["title"])
-    if not page.ok or not page.markdown:
-        return {"error": f"fetch failed: {page.error}", "rejected": rejected}
-
-    chunks = await asyncio.to_thread(R.chunk_page, page, cfg)
-    if not chunks:
-        return {"error": "no chunks", "rejected": rejected}
-    # Самая долгая ступень: dense + sparse кодирование кусков статьи. На проде
-    # держала loop по 18 секунд — в логе ровно столько тишины, а следом залп из
+    # Самая долгая ступень: dense + sparse кодирование кусков. На проде держала
+    # loop по 18 секунд — в логе ровно столько тишины, а следом залп из
     # накопившихся ответов.
-    retriever = await asyncio.to_thread(R.build_index, chunks)
+    retriever = await asyncio.to_thread(R.build_index, chunks) if chunks else None
 
-    bio, notes = await write_bio(ask, artist, chunks, retriever,
-                                 lang_name=lang_name, lang_code=lang_code)
+    bio, notes = "", {}
+    if chunks:
+        bio, notes = await write_bio(ask, artist, chunks, retriever,
+                                     lang_name=lang_name, lang_code=lang_code)
 
-    async def widen(question: str) -> list:
-        """One open-web search, entity-gated before it can enter the index."""
-        if web_search is None:
-            return []
-        try:
-            rows = await asyncio.to_thread(web_search, f"{artist} {question}")
-        except Exception:                        # noqa: BLE001
-            return []
-        fresh: list = []
-        for row in (rows or [])[:2]:
-            page2 = await fetcher.fetch(row.get("url") or "", source="web",
-                                        title=row.get("title") or "")
-            if page2.ok and page2.markdown:
-                fresh += await asyncio.to_thread(R.chunk_page, page2, cfg)
-        if not fresh:
-            return []
-        probs = await asyncio.to_thread(
-            ModelRegistry.ce_probabilities,
-            f"{artist} is a musical artist or band: their music, albums and "
-            f"career.", [c.text[:1200] for c in fresh])
-        if probs is not None:
-            fresh = [c for c, p in zip(fresh, probs)
-                     if p >= art.CE_ARTICLE_GATE]
-        return fresh
+    if not bio:
+        fresh, web_meta = await sources.from_web(
+            artist, cfg=cfg, fetcher=fetcher, searcher=searcher,
+            seed_bio=seed_bio)
+        meta["web"] = web_meta
+        if fresh:
+            if retriever is None:
+                chunks = fresh
+                retriever = await asyncio.to_thread(R.build_index, chunks)
+            else:
+                # ``extend`` encodes only the new documents and appends them in
+                # order, so chunk index and document index stay the same number
+                # — which is what every ``R.passages(chunks, order)`` assumes.
+                await asyncio.to_thread(retriever.extend,
+                                        [c.text for c in fresh])
+                chunks = chunks + fresh
+            notes["widened"] = len(fresh)
+            bio, more = await write_bio(ask, artist, chunks, retriever,
+                                        lang_name=lang_name,
+                                        lang_code=lang_code)
+            notes.update(more)
 
-    facets = await read_facets(ask, artist, chunks,
-                               await asyncio.to_thread(R.sentence_index, chunks),
-                               lang_name=lang_name, widen=widen)
-    facets.update({"source_url": found["url"], "source_kind": "wikipedia"})
-    return {"bio": bio, "facets": facets, "article": found,
-            "rejected": rejected, "notes": notes}
+    if not chunks or not bio:
+        # No biography means the caller stores nothing, and the facets are
+        # stored WITH the biography — reading them here would be five LLM calls
+        # whose answers have nowhere to go.
+        return {"bio": bio, "facets": {},
+                "error": meta.get("error") or "no bio written",
+                "rejected": meta.get("rejected") or [], "notes": notes}
+
+    facets = await read_facets(
+        ask, artist, chunks, retriever,
+        await asyncio.to_thread(R.sentence_index, chunks),
+        lang_name=lang_name, corpus_lang=_corpus_lang(artist, meta))
+
+    web_meta = meta.get("web") or {}
+    facets.update({
+        "source_url": meta.get("source_url") or web_meta.get("source_url"),
+        "source_kind": meta.get("source_kind") or web_meta.get("source_kind")
+                       or "web",
+    })
+    return {"bio": bio, "facets": facets, "article": meta.get("article"),
+            "rejected": meta.get("rejected") or [], "notes": notes,
+            "error": None if bio else (meta.get("error") or "no bio written")}
