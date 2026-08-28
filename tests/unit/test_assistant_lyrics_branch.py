@@ -17,6 +17,7 @@ from __future__ import annotations
 import pytest
 
 from app.domain.models import TrackHit, TrackMetadata
+from app.resources.models import ModelUnavailable
 from app.services.assistant.branches.lyrics import (LyricsBranch,
                                                     _match_best_hit,
                                                     _pick_matched_line,
@@ -58,7 +59,7 @@ class _Hub:
 
     def ce_probabilities(self, query, docs):
         if not self.enabled:
-            return None
+            raise ModelUnavailable("cross_encoder", "load", "no reranker in this test")
         self.batches.append(list(docs))
         terms = {t for t in query.lower().split() if len(t) > 2}
         out = []

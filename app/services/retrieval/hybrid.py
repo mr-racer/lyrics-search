@@ -17,6 +17,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Optional
 
+from app.resources.models import STATS, ModelError
 from app.services.retrieval.bm25 import BM25
 from app.services.retrieval.hub import DEFAULT_HUB
 
@@ -67,12 +68,38 @@ class HybridRetriever:
     def __init__(self, docs: list, *, hub=None):
         self.hub = hub or DEFAULT_HUB
         self.docs = list(docs)
-        self._dense = self.hub.encode_dense(self.docs, is_query=False)
-        self._sparse = self.hub.encode_sparse(self.docs, is_query=False)
+        self._dense = self._encode("dense", "index", self.docs)
+        self._sparse = self._encode("sparse", "index", self.docs)
         self._bm25 = BM25(self.docs)
         logger.info("[retrieval] indexed %d docs (dense=%s sparse=%s)",
                     len(self.docs), self._dense is not None,
                     self._sparse is not None)
+
+    # ── the one place a missing leg is survivable ─────────────────────────
+
+    def _encode(self, leg: str, where: str, texts: list, *,
+                is_query: bool = False):
+        """Encode with one leg, or drop that leg for this retriever.
+
+        This class is the ONLY sanctioned place to turn a model failure into a
+        missing signal, and it is sanctioned because RRF fuses whatever signals
+        exist: two out of three still answers the question, and "ranked worse"
+        beats "no answer" on a box whose card is shared with an LLM.
+
+        What was missing was never the behaviour, it was the record. A leg lost
+        here is counted against ``leg/where``, so a session that ranked on two
+        signals instead of three shows up in ``GET /search/models/loaded``
+        instead of only in how the answers read.
+        """
+        encode = (self.hub.encode_dense if leg == "dense"
+                  else self.hub.encode_sparse)
+        try:
+            return encode(texts, is_query=is_query)
+        except ModelError as e:
+            STATS.degraded(leg, where)
+            logger.warning("[retrieval] %s leg lost at '%s' (%d texts) — "
+                           "ranking without it: %s", leg, where, len(texts), e)
+            return None
 
     def __len__(self) -> int:
         return len(self.docs)
@@ -89,8 +116,8 @@ class HybridRetriever:
         if not docs:
             return 0
 
-        new_dense = self.hub.encode_dense(docs, is_query=False)
-        new_sparse = self.hub.encode_sparse(docs, is_query=False)
+        new_dense = self._encode("dense", "extend", docs)
+        new_sparse = self._encode("sparse", "extend", docs)
         try:
             import torch
 
@@ -109,8 +136,8 @@ class HybridRetriever:
         except Exception:  # noqa: BLE001
             logger.warning("[retrieval] extend failed — rebuilding", exc_info=True)
             self.docs.extend(docs)
-            self._dense = self.hub.encode_dense(self.docs, is_query=False)
-            self._sparse = self.hub.encode_sparse(self.docs, is_query=False)
+            self._dense = self._encode("dense", "rebuild", self.docs)
+            self._sparse = self._encode("sparse", "rebuild", self.docs)
             self._bm25 = BM25(self.docs)
             return len(docs)
 
@@ -177,11 +204,20 @@ class HybridRetriever:
             for i in order
         ]
 
-        probs = self.hub.ce_probabilities(
-            (ce_query or query), [self.docs[r.index] for r in results])
-        if probs is None:
-            logger.info("[retrieval] no cross-encoder — returning RRF order, "
-                        "min_prob not applied")
+        try:
+            probs = self.hub.ce_probabilities(
+                (ce_query or query), [self.docs[r.index] for r in results])
+        except ModelError as e:
+            # Degrading to "unfiltered but ranked" beats degrading to "empty":
+            # ``min_prob`` cannot be applied without a probability to compare,
+            # and dropping everything would be the wrong reading of "we could
+            # not judge". Counted, because a run whose whole pack went ungated
+            # is a materially different run.
+            STATS.degraded("cross_encoder", "search")
+            probs = None
+            logger.warning("[retrieval] no cross-encoder — returning RRF order, "
+                           "min_prob not applied: %s", e)
+        if not probs:
             return results[:limit] if limit else results
 
         lo = min(r.rrf for r in results)
@@ -261,7 +297,7 @@ class HybridRetriever:
     def _dense_scores(self, query: str) -> Optional[list]:
         if self._dense is None:
             return None
-        q = self.hub.encode_dense([query], is_query=True)
+        q = self._encode("dense", "query", [query], is_query=True)
         if q is None:
             return None
         try:
@@ -275,7 +311,7 @@ class HybridRetriever:
     def _sparse_scores(self, query: str) -> Optional[list]:
         if self._sparse is None:
             return None
-        q = self.hub.encode_sparse([query], is_query=True)
+        q = self._encode("sparse", "query", [query], is_query=True)
         if q is None:
             return None
         try:

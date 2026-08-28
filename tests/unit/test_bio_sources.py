@@ -10,6 +10,7 @@ import pytest
 
 from app.resources.mediawiki import _follow, _title_hops, probe_titles_batch
 from app.resources.model_registry import ModelRegistry
+from app.resources.models import ModelUnavailable
 from app.services.assistant.config import AgentConfig
 from app.services.assistant.contracts import Page, SearchHit
 from app.services.bio_v2 import article as art
@@ -113,6 +114,13 @@ class TestProbeTitlesBatch:
 
 # ── веб как источник ─────────────────────────────────────────────────────────
 
+def _cross_encoder_down(query, docs):
+    """The leg is down. It RAISES now — returning ``None`` was the
+    contract that made a dead cross-encoder indistinguishable from an
+    empty batch at every call site."""
+    raise ModelUnavailable("cross_encoder", "load", "no reranker in this test")
+
+
 class TestFromWeb:
     @pytest.fixture
     def cfg(self):
@@ -154,7 +162,7 @@ class TestFromWeb:
         """Гейта нет — значит нет и суждения. Непрогейченная выдача уже дарила
         новозеландскому музыканту четыре чужих «Грэмми»."""
         monkeypatch.setattr(ModelRegistry, "ce_probabilities",
-                            staticmethod(lambda q, docs: None))
+                            staticmethod(_cross_encoder_down))
         fetcher = _Fetcher()
         searcher = _Searcher([_hit(f"https://{i}/", "t", "s") for i in range(4)])
 
@@ -167,7 +175,7 @@ class TestFromWeb:
         """Ни статьи, ни выдачи — абзац из AudioDB это разница между
         биографией и пустой страницей."""
         monkeypatch.setattr(ModelRegistry, "ce_probabilities",
-                            staticmethod(lambda q, docs: None))
+                            staticmethod(_cross_encoder_down))
         chunks, meta = await sources.from_web(
             "Sade", cfg=cfg, fetcher=_Fetcher(), searcher=_Searcher([]),
             seed_bio="Sade are an English band formed in London in 1982.")

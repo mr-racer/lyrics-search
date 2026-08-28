@@ -34,6 +34,8 @@ from app.services.assistant.llm import as_str
 from app.services.assistant.prompts import LYRICS_ANSWER_SYSTEM
 from app.services.library_catalog import filter_by_era
 
+from app.resources.models import STATS, ModelError
+
 logger = logging.getLogger(__name__)
 
 
@@ -152,8 +154,18 @@ class LyricsBranch:
         if not pairs:
             return []
 
-        probs = self.agent.hub.ce_probabilities(ce_query, [w for _, w in pairs])
-        if probs is None:
+        try:
+            probs = self.agent.hub.ce_probabilities(
+                ce_query, [w for _, w in pairs])
+        except ModelError as e:
+            # Every window here is judged by ``lyrics_min_prob`` and nothing
+            # else — there is no rank, no recency, no second signal to fall
+            # back on. Without a score there is no such thing as a weaker
+            # match, only an unjudged one, so this branch answers nothing.
+            STATS.degraded("cross_encoder", "assistant.lyrics_windows")
+            logger.warning("[lyrics] no cross-encoder for %d windows over "
+                           "%d tracks — no matches returned: %s",
+                           len(pairs), len(hits), e)
             return []
 
         best: dict = {}

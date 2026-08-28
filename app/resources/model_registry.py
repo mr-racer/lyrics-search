@@ -4,9 +4,17 @@ Resources layer — singletons for models and database.
 ModelRegistry:
 - get_text_model() -> (model, VECTOR_NAME, VECTOR_DIM)
 - encode_text(sentences, is_query=False, **kw) -> embeddings (use for ALL text encodes)
-- encode_sparse(texts, is_query=False) -> coalesced sparse tensor | None
-- ce_probabilities(query, docs) -> list[float] | None
+- encode_sparse(texts, is_query=False) -> coalesced sparse tensor
+- ce_probabilities(query, docs) -> list[float]
 - load_clap() -> model
+
+Every one of the text legs RAISES on failure (``app/resources/models/errors.py``).
+They used to answer failure with ``None``, which read exactly like "encoded
+nothing" at the call site; a leg could then be dead for hours while the only
+symptom was worse answers. ``None`` and empty results now mean "you passed no
+input" and nothing else. Degrading is still correct in the retriever, but it is
+a decision written at a named site now, not the default that fell out of a bare
+``None``.
 
 Device policy (2026-08):
 - ONE text embedding model, ``TEXT_MODEL_NAME``, chosen once and for all. It is
@@ -50,6 +58,12 @@ import os
 import threading
 from pathlib import Path
 from typing import Any, Optional
+
+# Pure python, no torch: this package is the shared vocabulary for failures and
+# counters, and it is imported at module level on purpose — a caller that has to
+# catch something must not need the ML stack to name it.
+from .models import (STATS, CircuitBreaker, ModelEncodeFailed, ModelOOM,
+                     ModelUnavailable)
 
 # torch and sentence_transformers are imported INSIDE the functions that need
 # them. This module is reached by ``app/resources/__init__.py``, so importing
@@ -265,17 +279,18 @@ class ModelRegistry:
     # (tokenizer, model)
     _reranker: Optional[tuple[Any, Any]] = None
     _rerank_lock: threading.Lock = threading.Lock()
-    # A leg that tried to load and failed is not retried. A missing model is a
-    # missing model, and re-attempting it on every query turns one slow request
-    # into every request being slow.
-    _failed: set = set()
+    # A leg that tried to load and failed is not retried STRAIGHT AWAY — a
+    # retry on every query turns one slow request into every request being
+    # slow. It is no longer permanent, though: a load can fail because the card
+    # was full at that moment, and that clears on its own. See
+    # ``models/breaker.py``.
+    _breaker = CircuitBreaker()
     # Loading and ENCODING fail independently, and only the first one had a
     # name. A leg whose weights are resident but whose every encode dies still
     # reported itself as up, so hours of dense-only ranking looked exactly like
-    # "the answers got worse". These are what ``retrieval_status`` says instead.
-    _sparse_encode_failures: int = 0
-    _sparse_oom_retries: int = 0
-    _ce_encode_failures: int = 0
+    # "the answers got worse". The counters that say so live in ``STATS`` now,
+    # next to the DEGRADATION counts — how often a caller carried on without a
+    # leg — which is the other half of the same question.
 
     # ── Text model ──
 
@@ -288,14 +303,20 @@ class ModelRegistry:
         would double the VRAM footprint for nothing.
         """
         import torch
-        SentenceTransformer = _sentence_transformer_cls()
         cached = cls._text_model
         if cached is not None:
             return cached
+        cls._raise_if_breaker_open("dense", TEXT_MODEL_NAME)
+        try:
+            SentenceTransformer = _sentence_transformer_cls()
+        except RuntimeError as e:
+            cls._breaker.trip("dense", str(e))
+            raise ModelUnavailable("dense", "load", str(e), cause=e) from e
 
         with cls._text_lock:
             if cls._text_model is not None:
                 return cls._text_model
+            cls._raise_if_breaker_open("dense", TEXT_MODEL_NAME)
 
             global _device_in_use, _device_reason
             device, _device_reason = _resolve_device()
@@ -319,19 +340,28 @@ class ModelRegistry:
             if device == "cuda":
                 kwargs["model_kwargs"] = {"torch_dtype": torch.float16}
             try:
-                model = SentenceTransformer(TEXT_MODEL_NAME, device=device, **kwargs)
-            except TypeError as e:
-                # ONLY our own kwargs may send us down this path: an older
-                # sentence-transformers has neither, and fp32 on the GPU still
-                # beats fp16 on the CPU by a wide margin. A TypeError from
-                # deeper in the loader is a different failure — the retry
-                # cannot fix it, repeats it, and files it under a warning that
-                # blames the wrong thing. Let that one out as itself.
-                if not any(name in str(e) for name in kwargs):
-                    raise
-                logger.warning("[ModelRegistry] model_kwargs/tokenizer_kwargs "
-                               "unsupported — loading fp32 on %s", device)
-                model = SentenceTransformer(TEXT_MODEL_NAME, device=device)
+                try:
+                    model = SentenceTransformer(TEXT_MODEL_NAME, device=device,
+                                                **kwargs)
+                except TypeError as e:
+                    # ONLY our own kwargs may send us down this path: an older
+                    # sentence-transformers has neither, and fp32 on the GPU
+                    # still beats fp16 on the CPU by a wide margin. A TypeError
+                    # from deeper in the loader is a different failure — the
+                    # retry cannot fix it, repeats it, and files it under a
+                    # warning that blames the wrong thing. Let that one out.
+                    if not any(name in str(e) for name in kwargs):
+                        raise
+                    logger.warning("[ModelRegistry] model_kwargs/tokenizer_kwargs"
+                                   " unsupported — loading fp32 on %s", device)
+                    model = SentenceTransformer(TEXT_MODEL_NAME, device=device)
+            except Exception as e:  # noqa: BLE001 — re-raised as ModelUnavailable
+                cls._breaker.trip("dense", f"{type(e).__name__}: {e}")
+                logger.error("[ModelRegistry] text model '%s' would not load: %s",
+                             TEXT_MODEL_NAME, e, exc_info=True)
+                raise ModelUnavailable(
+                    "dense", "load",
+                    f"'{TEXT_MODEL_NAME}' would not load: {e}", cause=e) from e
             model.max_seq_length = MAX_SEQ_LENGTH
             cls._prompt_names = cls._resolve_prompt_names(model)
             _device_in_use = device
@@ -394,11 +424,28 @@ class ModelRegistry:
                 sentences = QUERY_PREFIX + sentences
             else:
                 sentences = [QUERY_PREFIX + s for s in sentences]
-        return model.encode(sentences, **encode_kwargs)
+        import torch
+        try:
+            return model.encode(sentences, **encode_kwargs)
+        except torch.OutOfMemoryError as e:
+            # Named apart from every other failure because it is the one the
+            # caller can DO something about: ``encode_documents`` halves the
+            # batch and carries on. Wrapping it into the generic failure would
+            # turn a recoverable moment into a lost index run.
+            raise ModelOOM("dense", "encode", str(e), cause=e) from e
+        except Exception as e:  # noqa: BLE001 — re-raised as ModelEncodeFailed
+            STATS.encode_failed("dense")
+            logger.warning("[ModelRegistry] dense encode failed", exc_info=True)
+            raise ModelEncodeFailed("dense", "encode", str(e), cause=e) from e
 
     @classmethod
-    def encode_documents(cls, texts: list, *, progress=None):
+    def encode_documents(cls, texts: list, *, progress=None,
+                         is_query: bool = False):
         """Dense vectors for a WHOLE corpus, as one ``(n, VECTOR_DIM)`` array.
+
+        ``is_query`` exists for the HTTP surface, which has to offer both sides
+        of the asymmetric pair and wants the same batch ceiling and the same
+        OOM shrink for each. Indexing leaves it at the default and reads on.
 
         The indexing pass's entry point. It exists because that pass used to
         call ``model.encode(texts, batch_size=32)`` directly, and the two things
@@ -423,7 +470,6 @@ class ModelRegistry:
         to raise and be re-run, not to return less.
         """
         import numpy as np
-        import torch
 
         if not texts:
             return np.zeros((0, VECTOR_DIM), dtype=np.float32)
@@ -434,14 +480,15 @@ class ModelRegistry:
         while i < len(texts):
             try:
                 chunks.append(cls.encode_text(
-                    texts[i:i + size], is_query=False,
+                    texts[i:i + size], is_query=is_query,
                     batch_size=size, convert_to_numpy=True))
                 i += size
                 if progress:
                     progress(min(i, len(texts)))
-            except torch.OutOfMemoryError:
+            except ModelOOM:
                 attempted = min(size, len(texts) - i)
                 if attempted == 1:
+                    STATS.encode_failed("dense")
                     logger.error(
                         "[ModelRegistry] dense encode out of memory at one text "
                         "(%d of %d done) — the card has nothing left, so this "
@@ -449,6 +496,7 @@ class ModelRegistry:
                         "in it", i, len(texts))
                     raise
                 size = attempted // 2
+                STATS.oom_retry("dense")
                 _release_cuda_cache()
                 logger.warning(
                     "[ModelRegistry] dense encode hit OOM at %d of %d texts — "
@@ -491,15 +539,24 @@ class ModelRegistry:
         return device
 
     @classmethod
-    def load_sparse(cls) -> Optional[Any]:
-        """The learned-sparse encoder, or None if it is unavailable."""
+    def load_sparse(cls) -> Any:
+        """The learned-sparse encoder.
+
+        Raises :class:`ModelUnavailable` when it will not load, and again —
+        without re-attempting — for as long as the breaker stays open. It used
+        to return ``None`` instead, which read identically to "encoded nothing"
+        at the call site and is why a dead leg could rank an entire session
+        without anyone noticing.
+        """
         import torch
-        if cls._sparse_model is not None or "sparse" in cls._failed:
+        if cls._sparse_model is not None:
             return cls._sparse_model
+        cls._raise_if_breaker_open("sparse", SPARSE_MODEL_NAME)
 
         with cls._sparse_lock:
-            if cls._sparse_model is not None or "sparse" in cls._failed:
+            if cls._sparse_model is not None:
                 return cls._sparse_model
+            cls._raise_if_breaker_open("sparse", SPARSE_MODEL_NAME)
             device = cls._shared_device()
             try:
                 from transformers import AutoModel
@@ -512,22 +569,47 @@ class ModelRegistry:
                 logger.info("[ModelRegistry] sparse model '%s' loaded (device=%s, %s)",
                             SPARSE_MODEL_NAME, device,
                             "fp16" if device == "cuda" else "fp32")
-            except Exception as e:  # noqa: BLE001 — a missing leg is a valid state
-                cls._failed.add("sparse")
+            except Exception as e:  # noqa: BLE001 — re-raised as ModelUnavailable
+                cls._breaker.trip("sparse", f"{type(e).__name__}: {e}")
                 logger.warning("[ModelRegistry] sparse model '%s' unavailable: %s",
                                SPARSE_MODEL_NAME, e, exc_info=True)
+                raise ModelUnavailable(
+                    "sparse", "load",
+                    f"'{SPARSE_MODEL_NAME}' unavailable: {e}", cause=e) from e
             return cls._sparse_model
 
     @classmethod
-    def load_reranker(cls) -> Optional[tuple[Any, Any]]:
-        """``(tokenizer, model)`` for the cross-encoder, or None."""
+    def _raise_if_breaker_open(cls, leg: str, model_name: str) -> None:
+        """Refuse fast while ``leg``'s breaker is open.
+
+        Shared by all three loaders so the message is the same wherever it comes
+        from — the caller is going to log it, and a leg that reads differently
+        depending on which loader refused is a leg nobody can grep for.
+        """
+        if cls._breaker.is_open(leg):
+            raise ModelUnavailable(
+                leg, "load",
+                f"'{model_name}': {cls._breaker.reason(leg) or 'load failed'} "
+                "(not retried yet)")
+
+    @classmethod
+    def load_reranker(cls) -> tuple[Any, Any]:
+        """``(tokenizer, model)`` for the cross-encoder.
+
+        Raises :class:`ModelUnavailable` rather than returning ``None`` — see
+        :meth:`load_sparse`. The breaker is keyed ``cross_encoder``, matching
+        ``retrieval_status`` and the counters; the leg was called ``reranker``
+        in the old ``_failed`` set and nowhere else, and one name is enough.
+        """
         import torch
-        if cls._reranker is not None or "reranker" in cls._failed:
+        if cls._reranker is not None:
             return cls._reranker
+        cls._raise_if_breaker_open("cross_encoder", RERANK_MODEL_NAME)
 
         with cls._rerank_lock:
-            if cls._reranker is not None or "reranker" in cls._failed:
+            if cls._reranker is not None:
                 return cls._reranker
+            cls._raise_if_breaker_open("cross_encoder", RERANK_MODEL_NAME)
             device = cls._shared_device()
             try:
                 from transformers import (AutoModelForSequenceClassification,
@@ -544,15 +626,23 @@ class ModelRegistry:
                 logger.info("[ModelRegistry] cross-encoder '%s' loaded (device=%s, %s)",
                             RERANK_MODEL_NAME, device,
                             "fp16" if device == "cuda" else "fp32")
-            except Exception as e:  # noqa: BLE001
-                cls._failed.add("reranker")
+            except Exception as e:  # noqa: BLE001 — re-raised as ModelUnavailable
+                cls._breaker.trip("cross_encoder", f"{type(e).__name__}: {e}")
                 logger.warning("[ModelRegistry] cross-encoder '%s' unavailable: %s",
                                RERANK_MODEL_NAME, e, exc_info=True)
+                raise ModelUnavailable(
+                    "cross_encoder", "load",
+                    f"'{RERANK_MODEL_NAME}' unavailable: {e}", cause=e) from e
             return cls._reranker
 
     @classmethod
     def encode_sparse(cls, texts: list, *, is_query: bool = False):
-        """Learned-sparse vectors as one coalesced sparse tensor, or None.
+        """Learned-sparse vectors as one coalesced sparse tensor.
+
+        ``None`` ONLY for an empty ``texts``. A leg that will not load
+        raises :class:`ModelUnavailable`, an allocator that refuses even a
+        single text raises :class:`ModelOOM`, anything else raises
+        :class:`ModelEncodeFailed`.
 
         Asymmetric like the dense model: queries and documents go through
         different heads, so the side is named rather than inferred.
@@ -579,9 +669,13 @@ class ModelRegistry:
         the signals it still has.
         """
         import torch
-        model = cls.load_sparse()
-        if model is None or not texts:
+        # Emptiness is checked BEFORE the load, not after. The load can now
+        # raise, and an empty batch must not be the thing that discovers the leg
+        # is down — callers pass empty lists on perfectly ordinary paths, and
+        # ``None`` here still means "you gave me nothing", never "it broke".
+        if not texts:
             return None
+        model = cls.load_sparse()
         encode = model.encode_query if is_query else model.encode_document
 
         order, inverse = _length_sorted_order(texts)
@@ -597,31 +691,34 @@ class ModelRegistry:
                                        max_length=SPARSE_MAX_LEN,
                                        source_view=SPARSE_SOURCE_VIEW).coalesce())
                 i += size
-            except torch.OutOfMemoryError:
+            except torch.OutOfMemoryError as e:
                 # Halve what was ACTUALLY attempted, not the nominal size: on a
                 # short tail ``size`` can already exceed the texts left, and
                 # halving the nominal would re-send the identical batch and pay
                 # a second failed forward for nothing.
                 attempted = min(size, len(ordered) - i)
                 if attempted == 1:
-                    cls._sparse_encode_failures += 1
+                    STATS.encode_failed("sparse")
                     logger.warning(
                         "[ModelRegistry] sparse encode out of memory even at one "
-                        "text (%d of %d done) — this run ranks without the sparse "
-                        "leg. Something else on the card grew; see "
+                        "text (%d of %d done) — the retriever will rank without "
+                        "the sparse leg. Something else on the card grew; see "
                         "GET /search/models/loaded for the running count.",
                         i, len(ordered))
-                    return None
+                    raise ModelOOM(
+                        "sparse", "encode",
+                        f"out of memory at a single text ({i} of {len(ordered)} "
+                        f"done)", cause=e) from e
                 size = attempted // 2
-                cls._sparse_oom_retries += 1
+                STATS.oom_retry("sparse")
                 _release_cuda_cache()
                 logger.info(
                     "[ModelRegistry] sparse encode hit OOM at %d of %d texts — "
                     "continuing at batch=%d", i, len(ordered), size)
-            except Exception:  # noqa: BLE001
-                cls._sparse_encode_failures += 1
+            except Exception as e:  # noqa: BLE001 — re-raised as ModelEncodeFailed
+                STATS.encode_failed("sparse")
                 logger.warning("[ModelRegistry] sparse encode failed", exc_info=True)
-                return None
+                raise ModelEncodeFailed("sparse", "encode", str(e), cause=e) from e
 
         combined = torch.cat(reps, dim=0).coalesce()
         if len(texts) > 1:
@@ -637,18 +734,24 @@ class ModelRegistry:
         return combined
 
     @classmethod
-    def ce_probabilities(cls, query: str, docs: list) -> Optional[list]:
-        """``sigmoid(logit)`` per (query, doc) pair, or None when unavailable.
+    def ce_probabilities(cls, query: str, docs: list) -> list:
+        """``sigmoid(logit)`` per (query, doc) pair.
+
+        An empty ``docs`` gives an empty list; everything else that goes
+        wrong raises. The gates in ``bio_v2`` used to read the old ``None``
+        as "score everything 1.0", which admitted the whole candidate pool
+        precisely when nothing could judge it.
 
         A probability rather than a raw logit because every threshold in the
         assistant is one number compared against this: logits are not comparable
         between model families, probabilities roughly are.
         """
         import torch
-        pair = cls.load_reranker()
-        if pair is None or not docs:
-            return None
-        tokenizer, model = pair
+        # Emptiness first, for the same reason as ``encode_sparse``: no
+        # documents is a normal call, not a broken leg.
+        if not docs:
+            return []
+        tokenizer, model = cls.load_reranker()
         device = cls._shared_device()
         try:
             out: list[float] = []
@@ -671,11 +774,17 @@ class ModelRegistry:
                     col = logits[:, 0] if logits.shape[-1] == 1 else logits[:, -1]
                     out.extend(torch.sigmoid(col).cpu().tolist())
             return out
-        except Exception:  # noqa: BLE001
-            cls._ce_encode_failures += 1
+        except torch.OutOfMemoryError as e:
+            STATS.encode_failed("cross_encoder")
+            logger.warning("[ModelRegistry] cross-encoder out of memory on %d "
+                           "pairs", len(docs))
+            raise ModelOOM("cross_encoder", "score", str(e), cause=e) from e
+        except Exception as e:  # noqa: BLE001 — re-raised as ModelEncodeFailed
+            STATS.encode_failed("cross_encoder")
             logger.warning("[ModelRegistry] cross-encoder scoring failed",
                            exc_info=True)
-            return None
+            raise ModelEncodeFailed("cross_encoder", "score", str(e),
+                                    cause=e) from e
 
     @classmethod
     def retrieval_status(cls) -> dict:
@@ -691,17 +800,30 @@ class ModelRegistry:
         ``sparse_oom_retries`` counts runs that kept it by shrinking the batch,
         which is a load signal rather than a fault.
         """
+        counters = STATS.snapshot()
+        failures = counters["encode_failures"]
         return {
             "device": _device_in_use,
             "dense": cls._text_model is not None,
             "sparse": cls._sparse_model is not None,
             "cross_encoder": cls._reranker is not None,
-            "failed": sorted(cls._failed),
+            # Legs whose breaker is currently open. Same key it had as a set,
+            # because the route and its test already read that name — but it now
+            # empties itself when the breaker expires, so a leg that reappears
+            # here after a while really did fail again.
+            "failed": cls._breaker.open_legs(),
             "encode_failures": {
-                "sparse": cls._sparse_encode_failures,
-                "cross_encoder": cls._ce_encode_failures,
+                "sparse": failures.get("sparse", 0),
+                "cross_encoder": failures.get("cross_encoder", 0),
+                "dense": failures.get("dense", 0),
             },
-            "sparse_oom_retries": cls._sparse_oom_retries,
+            "sparse_oom_retries": counters["oom_retries"].get("sparse", 0),
+            "oom_retries": counters["oom_retries"],
+            # How often a caller CHOSE to carry on without a leg, keyed
+            # ``leg/site``. The booleans above say what is loaded and the
+            # failures say what broke; only this says what the user actually
+            # got, which is the question the other two kept failing to answer.
+            "degradations": counters["degradations"],
         }
 
     # ── CLAP ──

@@ -12,6 +12,7 @@ import pytest
 from app.services.assistant.config import AgentConfig
 from app.services.assistant.contracts import SearchHit
 from app.services.assistant.web_sources import SearchSources, is_junk, rerank_hits
+from app.resources.models import ModelUnavailable
 
 
 @pytest.fixture
@@ -260,10 +261,19 @@ class TestDiagnostics:
 
 class TestRerank:
     class _Hub:
+        """``probs=None`` means the leg is DOWN, which is now a raise.
+
+        It used to be a returned ``None`` — the same value an empty input
+        gives back, which is exactly why a dead cross-encoder could rank a
+        whole session without anyone noticing.
+        """
+
         def __init__(self, probs=None):
             self.probs = probs
 
         def ce_probabilities(self, query, docs):
+            if self.probs is None:
+                raise ModelUnavailable("cross_encoder", "load", "no reranker in this test")
             return self.probs
 
     def test_only_hits_above_the_threshold_are_fetched(self):
@@ -329,7 +339,7 @@ class TestRerankDeduplication:
         class _NoCE:
             @staticmethod
             def ce_probabilities(query, docs):
-                return None
+                raise ModelUnavailable("cross_encoder", "load", "no reranker in this test")
 
         kept = rerank_hits(self._hits(), "q", hub=_NoCE(), threshold=0.2)
         assert len(kept) == 2

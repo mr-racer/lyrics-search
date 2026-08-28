@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 import torch
 
+from app.resources.models import ModelOOM, ModelUnavailable
 from app.resources.model_registry import (
     ENCODE_BATCH,
     MAX_SEQ_LENGTH,
@@ -56,6 +57,10 @@ class _FakeWithPrompts(_FakeSentenceTransformer):
 def _reset_registry():
     ModelRegistry._text_model = None
     ModelRegistry._prompt_names = (None, None)
+    # A load failure closes the breaker for five minutes, which outlives the
+    # whole suite. Tests that let a load fail would otherwise hand every
+    # later test a failure it did not cause.
+    ModelRegistry._breaker.reset()
 
 
 def _install_fake(monkeypatch, cls=_FakeSentenceTransformer):
@@ -207,9 +212,32 @@ class TestLoading:
                             _BrokenLoader)
         monkeypatch.setattr("app.resources.model_registry._resolve_device",
                             lambda: ("cuda", "cuda:0 = fake"))
-        with pytest.raises(TypeError, match="normalize_embeddings"):
+        # ModelUnavailable, not the raw TypeError — but the loader's own words
+        # have to survive the wrapping, because "blames the wrong thing" is the
+        # entire failure this test is about.
+        with pytest.raises(ModelUnavailable, match="normalize_embeddings"):
             ModelRegistry.get_text_model()
         assert len(attempts) == 1, "a retry that cannot help must not be made"
+        _reset_registry()
+
+    def test_a_second_call_does_not_re_attempt_a_failed_load(self, monkeypatch):
+        """The breaker is what stops one missing model from making every
+        request pay a full load attempt. It expires (see models/breaker.py);
+        what it must not do is expire immediately."""
+        attempts: list = []
+
+        class _BrokenLoader(_FakeSentenceTransformer):
+            def __init__(self, name, device=None, **kwargs):
+                attempts.append(name)
+                raise OSError("no such model")
+
+        _reset_registry()
+        monkeypatch.setattr("app.resources.model_registry.SentenceTransformer",
+                            _BrokenLoader)
+        for _ in range(3):
+            with pytest.raises(ModelUnavailable):
+                ModelRegistry.get_text_model()
+        assert len(attempts) == 1
         _reset_registry()
 
 
@@ -357,13 +385,17 @@ class TestEncodingAWholeCorpus:
         """The assistant may rank on fewer signals; indexing may NOT write a
         library with missing vectors. A silent partial pass would look like a
         finished index and search would quietly miss those tracks, so this one
-        has to fail loudly and be re-run."""
-        import torch
+        has to fail loudly and be re-run.
 
+        ``ModelOOM`` rather than the raw ``torch.OutOfMemoryError``: all three
+        legs name this failure the same way now, because it is the one a caller
+        can act on — the card is shared with an LLM, so "no room right now" is a
+        condition, not a defect, and the shrink loops key off exactly this type.
+        """
         _install_fake(monkeypatch, _CorpusModel)
         _CorpusModel.oom_above = 0
         try:
-            with pytest.raises(torch.OutOfMemoryError):
+            with pytest.raises(ModelOOM):
                 ModelRegistry.encode_documents(["only one"])
         finally:
             _CorpusModel.oom_above = None

@@ -24,6 +24,7 @@ import logging
 from typing import Optional
 
 from app.resources.model_registry import ModelRegistry
+from app.resources.models import STATS, ModelError
 from app.services.assistant.contracts import Page
 from app.services.bio_v2 import article as art
 from app.services.bio_v2 import retrieval as R
@@ -128,12 +129,21 @@ async def _gate_hits(artist: str, hits: list) -> list:
     if not hits:
         return []
     docs = [f"{h.title}\n{h.snippet}".strip() for h in hits]
-    probs = await asyncio.to_thread(
-        ModelRegistry.ce_probabilities, RELEVANCE.format(artist=artist), docs)
-    if probs is None:
+    try:
+        probs = await asyncio.to_thread(
+            ModelRegistry.ce_probabilities, RELEVANCE.format(artist=artist),
+            docs)
+    except ModelError as e:
         # No cross-encoder means no judgement, and an ungated web page is how a
         # New Zealand bedroom-pop musician was once credited with four Grammys
-        # lifted from a page about somebody else. Read the top result only.
+        # lifted from a page about somebody else. Read the top result only —
+        # the same trade the article gate refuses to make, taken here because
+        # search rank is at least SOME evidence and there is no wiki article
+        # waiting behind this step.
+        STATS.degraded("cross_encoder", "bio.gate_hits")
+        logger.warning("[bio.sources] no cross-encoder for %s — reading the "
+                       "top result of %d unjudged hits: %s",
+                       artist, len(hits), e)
         return hits[:1]
     kept = [h for h, p in zip(hits, probs) if p >= art.CE_ARTICLE_GATE]
     logger.info("[bio.sources] web gate %s: %d/%d hits above %.2f",
@@ -146,9 +156,19 @@ async def _gate_chunks(artist: str, chunks: list) -> list:
     its title and about the site's navigation everywhere else."""
     if not chunks:
         return []
-    probs = await asyncio.to_thread(
-        ModelRegistry.ce_probabilities, RELEVANCE.format(artist=artist),
-        [c.text[:1200] for c in chunks])
-    if probs is None:
+    try:
+        probs = await asyncio.to_thread(
+            ModelRegistry.ce_probabilities, RELEVANCE.format(artist=artist),
+            [c.text[:1200] for c in chunks])
+    except ModelError as e:
+        # Everything passes, and that is the right call HERE specifically:
+        # this runs on pages ``_gate_hits`` already judged to be about the
+        # artist, so what leaks through is a site's navigation, not somebody
+        # else's career. Noise the retriever ranks down, against losing the
+        # web source entirely. The article gate faces the opposite trade and
+        # takes the opposite decision.
+        STATS.degraded("cross_encoder", "bio.gate_chunks")
+        logger.warning("[bio.sources] no cross-encoder for %s — %d body "
+                       "chunks pass ungated: %s", artist, len(chunks), e)
         return chunks
     return [c for c, p in zip(chunks, probs) if p >= art.CE_ARTICLE_GATE]

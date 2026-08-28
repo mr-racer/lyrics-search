@@ -13,6 +13,7 @@ import re
 from typing import Optional
 
 from app.resources.model_registry import ModelRegistry
+from app.resources.models import STATS, ModelError
 from app.services.assistant.chunking import MarkdownChunker
 from app.services.assistant.config import AgentConfig
 from app.services.retrieval import HybridRetriever
@@ -147,8 +148,16 @@ def facet_chunks(artist: str, question: str, sents: tuple, *,
     texts, parent = sents
     if not texts:
         return [], None
-    probs = ModelRegistry.ce_probabilities(f"{artist}: {question}", texts)
-    if probs is None:
+    try:
+        probs = ModelRegistry.ce_probabilities(f"{artist}: {question}", texts)
+    except ModelError as e:
+        # Nothing rather than everything: a facet is a CLAIM about the artist,
+        # and the score is the only thing between a sentence and a sentence
+        # presented as fact. An unscored facet is not a weaker facet, it is an
+        # unsourced one.
+        STATS.degraded("cross_encoder", "bio.facet_sentences")
+        logger.warning("[bio.retrieval] no cross-encoder for facet %s (%s) — "
+                       "leaving it unanswered: %s", question, artist, e)
         return [], None
     order = sorted(range(len(texts)), key=lambda i: -probs[i])[:top]
     best = probs[order[0]] if order else None

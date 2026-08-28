@@ -19,6 +19,7 @@ from typing import Optional
 
 from app.resources import mediawiki
 from app.resources.model_registry import ModelRegistry
+from app.resources.models import STATS, ModelError
 
 logger = logging.getLogger(__name__)
 
@@ -79,9 +80,24 @@ def gate(artist: str, pool: list) -> tuple:
         return None, rejected
     pool = pool[:6]
     docs = [f"{c['title']}\n{c['snippet']}".strip() for c in pool]
-    probs = ModelRegistry.ce_probabilities(
-        f"{artist} is a musical artist or band: their music, albums and career.",
-        docs) or [1.0] * len(pool)
+    try:
+        probs = ModelRegistry.ce_probabilities(
+            f"{artist} is a musical artist or band: their music, albums and "
+            f"career.", docs)
+    except ModelError as e:
+        # This used to be ``or [1.0] * len(pool)``: with no cross-encoder every
+        # candidate scored a perfect 1.0 and cleared the gate. A gate that
+        # admits everyone when it breaks is not a gate — and this one exists
+        # precisely because a same-name footballer clears every OTHER check.
+        # It cost a measurement once: four artists "found" a Wikipedia article
+        # that does not exist, and the run looked successful.
+        STATS.degraded("cross_encoder", "bio.article_gate")
+        logger.warning("[bio.article] no cross-encoder for '%s' — refusing to "
+                       "pick an article rather than admitting %d unjudged "
+                       "candidates: %s", artist, len(pool), e)
+        rejected += [(c["title"], c["url"], "cross-encoder unavailable")
+                     for c in pool]
+        return None, rejected
     for cand, prob in zip(pool, probs):
         cand["ce"] = round(float(prob), 3)
 

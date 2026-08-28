@@ -34,6 +34,8 @@ from app.services.assistant.spam import is_spam_host, spam_report
 from app.services.assistant.web_urls import (dedupe_by_url, normalise_apple_url,
                                              source_for_url)
 
+from app.resources.models import STATS, ModelError
+
 logger = logging.getLogger(__name__)
 
 # Kept from the production ranker: these hosts never carry the text we want.
@@ -510,10 +512,15 @@ def rerank_hits(hits: list, ce_query: str, *, hub, threshold: float) -> list:
         logger.info("[sources] %d duplicate URLs collapsed before reranking",
                     before - len(hits))
     docs = [f"{h.title}\n{h.snippet}".strip() for h in hits]
-    probs = hub.ce_probabilities(ce_query, docs)
-    if probs is None:
-        logger.info("[sources] no cross-encoder — %d hits pass unfiltered",
-                    len(hits))
+    try:
+        probs = hub.ce_probabilities(ce_query, docs)
+    except ModelError as e:
+        # "An unfiltered pool is a worse pool, an empty one is no pool" —
+        # the docstring above. Unchanged, but now it is a caught failure
+        # with a name and a count instead of an indistinguishable ``None``.
+        STATS.degraded("cross_encoder", "assistant.rerank_hits")
+        logger.warning("[sources] no cross-encoder — %d hits pass "
+                       "unfiltered: %s", len(hits), e)
         return hits
     for hit, p in zip(hits, probs):
         hit.ce_prob = p

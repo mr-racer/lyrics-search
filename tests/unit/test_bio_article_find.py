@@ -10,9 +10,15 @@ import pytest
 
 from app.resources import mediawiki
 from app.resources.model_registry import ModelRegistry
+from app.resources.models import STATS, ModelUnavailable
 from app.services.bio_v2 import article
 
 pytestmark = pytest.mark.unit
+
+
+def _cross_encoder_down(query, docs):
+    """The leg is down: it raises, it does not answer ``None``."""
+    raise ModelUnavailable("cross_encoder", "load", "no reranker here")
 
 
 def _row(title, lang="en", snippet="American heavy metal band."):
@@ -120,3 +126,48 @@ def test_probed_wrong_entity_is_rejected_not_returned(stub_wiki, monkeypatch):
 
     assert found is not None and found["title"] == "Bullet (Swedish band)"
     assert any("footballer" in r[0] for r in rejected)
+
+
+class TestTheGateWithoutAJudge:
+    """The gate exists because a same-name footballer clears every OTHER check.
+
+    It used to read a missing cross-encoder as ``[1.0] * len(pool)`` — a perfect
+    score for every candidate, so the whole pool cleared a gate that had nothing
+    to judge with. It cost a measurement: four artists "found" a Wikipedia
+    article that does not exist, and the run reported success.
+    """
+
+    def test_no_cross_encoder_admits_nobody(self, monkeypatch):
+        monkeypatch.setattr(ModelRegistry, "ce_probabilities",
+                            staticmethod(_cross_encoder_down))
+        pool = [{"rank": 0, "url": "https://en.wikipedia.org/wiki/Merk",
+                 "title": "Merk", "snippet": "A Hungarian village."}]
+
+        best, rejected = article.gate("Merk", pool)
+
+        assert best is None, "an unjudged candidate is not an accepted candidate"
+        assert len(rejected) == 1
+        assert "cross-encoder unavailable" in rejected[0][2]
+
+    def test_the_ladder_reports_no_article_rather_than_the_wrong_one(
+            self, stub_wiki, monkeypatch):
+        """``find`` must not fall through to "found something" either: both
+        rungs advance on "nothing passed the gate", and nothing can pass it."""
+        stub_wiki["probe"] = [_row("Merk", snippet="A village in Hungary.")]
+        stub_wiki["search"] = [_row("Merk (coin)", snippet="A silver coin.")]
+        monkeypatch.setattr(ModelRegistry, "ce_probabilities",
+                            staticmethod(_cross_encoder_down))
+
+        found, rejected = article.find("Merk")
+
+        assert found is None
+        assert rejected, "the refusal has to say why, or it reads as 'no results'"
+
+    def test_the_degradation_is_counted(self, monkeypatch):
+        monkeypatch.setattr(ModelRegistry, "ce_probabilities",
+                            staticmethod(_cross_encoder_down))
+        STATS.reset()
+        article.gate("Merk", [{"rank": 0, "url": "https://en.wikipedia.org/wiki/M",
+                               "title": "M", "snippet": "s"}])
+        assert STATS.snapshot()["degradations"][
+            "cross_encoder/bio.article_gate"] == 1

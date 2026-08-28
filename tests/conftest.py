@@ -208,6 +208,25 @@ def _clear_light_payload_cache():
     invalidate_catalog()
 
 
+@pytest.fixture(autouse=True)
+def _clear_model_state():
+    """Reset the model breaker and counters before each test.
+
+    Both are process-wide by design, and the breaker has a 5-minute TTL — far
+    longer than a test run. One test that lets a load fail would otherwise close
+    the leg for every test after it, and the symptom is maximally confusing: the
+    victim reports a failure it never caused, quoting an exception from a test
+    it never ran.
+    """
+    from app.resources.models import STATS
+    from app.resources.model_registry import ModelRegistry
+    ModelRegistry._breaker.reset()
+    STATS.reset()
+    yield
+    ModelRegistry._breaker.reset()
+    STATS.reset()
+
+
 @pytest.fixture
 def sample_track():
     """A standard track metadata dict for unit tests."""

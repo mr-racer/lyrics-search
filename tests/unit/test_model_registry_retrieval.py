@@ -1,10 +1,19 @@
 """The two retrieval legs the assistant added to the registry.
 
 What matters here is not that they load — a unit test with a stubbed torch
-cannot prove that — but that they DEGRADE. A leg that will not load must be
-recorded once, never retried, and must turn into ``None`` at the call site
-rather than an exception halfway through a user's question. The alternative is
-one missing model turning every request into a slow failure.
+cannot prove that — but what they do when they do not. A leg that will not load
+must be recorded, must not be re-attempted on every query, and must SAY SO.
+
+Until 2026-08-28 "say so" meant returning ``None``, and that is the contract
+this file used to pin. It was the wrong one: ``None`` is also what an empty
+input returns, so a dead leg and an empty batch were indistinguishable at every
+call site — and four of them each invented a different recovery, one of which
+scored every Wikipedia candidate 1.0 and admitted the whole pool precisely when
+nothing could judge it.
+
+So the legs raise now. Degrading is still right in the retriever, and
+``TestTheRetrieverStillDegrades`` is where that lives — as a decision made at a
+named site and counted, rather than one that falls out of a bare ``None``.
 """
 
 from __future__ import annotations
@@ -15,15 +24,15 @@ import types
 import pytest
 
 from app.resources.model_registry import ModelRegistry
+from app.resources.models import (STATS, ModelEncodeFailed, ModelOOM,
+                                  ModelUnavailable)
 
 
 def _reset():
     ModelRegistry._sparse_model = None
     ModelRegistry._reranker = None
-    ModelRegistry._failed = set()
-    ModelRegistry._sparse_encode_failures = 0
-    ModelRegistry._sparse_oom_retries = 0
-    ModelRegistry._ce_encode_failures = 0
+    ModelRegistry._breaker.reset()
+    STATS.reset()
 
 
 @pytest.fixture(autouse=True)
@@ -59,6 +68,10 @@ def _transformers(*, sparse=None, tokenizer=None, model=None, boom=False):
 
 def _raise():
     raise OSError("no such model")
+
+
+def _raise_os(message: str):
+    raise OSError(message)
 
 
 class _Loadable:
@@ -101,14 +114,55 @@ class TestSparse:
         stub.AutoModel = types.SimpleNamespace(from_pretrained=from_pretrained)
         monkeypatch.setitem(sys.modules, "transformers", stub)
 
-        assert ModelRegistry.load_sparse() is None
-        assert ModelRegistry.load_sparse() is None
+        with pytest.raises(ModelUnavailable):
+            ModelRegistry.load_sparse()
+        with pytest.raises(ModelUnavailable):
+            ModelRegistry.load_sparse()
         assert len(attempts) == 1
         assert "sparse" in ModelRegistry.retrieval_status()["failed"]
 
-    def test_encoding_without_the_model_is_none_not_an_exception(self, monkeypatch):
+    def test_the_second_refusal_carries_the_original_reason(self, monkeypatch):
+        """The breaker answers without touching the model, so it has to carry
+        the reason forward — otherwise every log line after the first says
+        nothing but "unavailable"."""
+        stub = _transformers()
+        stub.AutoModel = types.SimpleNamespace(
+            from_pretrained=lambda name, **kw: _raise_os("weights are missing"))
+        monkeypatch.setitem(sys.modules, "transformers", stub)
+
+        with pytest.raises(ModelUnavailable):
+            ModelRegistry.load_sparse()
+        with pytest.raises(ModelUnavailable, match="weights are missing"):
+            ModelRegistry.load_sparse()
+
+    def test_a_breaker_that_expires_lets_the_leg_come_back(self, monkeypatch):
+        """A load can fail because the card was full at that moment — the LLM
+        next door moves its own footprint around — and that clears on its own.
+        A permanent set meant one bad minute cost the leg until a restart."""
+        calls = {"n": 0}
+
+        def from_pretrained(name, **kw):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise OSError("CUDA out of memory")
+            return _Loadable()
+
+        stub = _transformers()
+        stub.AutoModel = types.SimpleNamespace(from_pretrained=from_pretrained)
+        monkeypatch.setitem(sys.modules, "transformers", stub)
+
+        with pytest.raises(ModelUnavailable):
+            ModelRegistry.load_sparse()
+        ModelRegistry._breaker.reset("sparse")          # what the TTL does
+        assert ModelRegistry.load_sparse() is not None
+        assert calls["n"] == 2
+
+    def test_encoding_without_the_model_raises(self, monkeypatch):
+        """The failure the old ``None`` hid: this is a dead leg, not an empty
+        batch, and the two must not read the same at the call site."""
         monkeypatch.setitem(sys.modules, "transformers", _transformers(boom=True))
-        assert ModelRegistry.encode_sparse(["a"]) is None
+        with pytest.raises(ModelUnavailable):
+            ModelRegistry.encode_sparse(["a"])
 
     def test_an_empty_batch_never_touches_the_model(self, monkeypatch):
         def explode(*a, **kw):
@@ -127,37 +181,114 @@ class TestReranker:
         assert first is not None
         assert ModelRegistry.load_reranker() is first
 
-    def test_a_failed_load_degrades_to_none(self, monkeypatch):
+    def test_a_failed_load_raises_and_is_named_cross_encoder(self, monkeypatch):
+        """One name for the leg everywhere. It was ``reranker`` in the old
+        ``_failed`` set and ``cross_encoder`` in every counter and status field,
+        which made the status impossible to read against the logs."""
         monkeypatch.setitem(sys.modules, "transformers", _transformers(boom=True))
-        assert ModelRegistry.load_reranker() is None
-        assert ModelRegistry.ce_probabilities("q", ["a", "b"]) is None
-        assert "reranker" in ModelRegistry.retrieval_status()["failed"]
+        with pytest.raises(ModelUnavailable):
+            ModelRegistry.load_reranker()
+        with pytest.raises(ModelUnavailable):
+            ModelRegistry.ce_probabilities("q", ["a", "b"])
+        assert "cross_encoder" in ModelRegistry.retrieval_status()["failed"]
 
     def test_no_documents_means_no_call(self, monkeypatch):
+        """An empty list is not a failure, so it must not become one now that
+        the loader raises — and it must still not touch the model."""
         def explode(*a, **kw):
             raise AssertionError("should not have loaded anything")
 
         stub = _transformers()
         stub.AutoTokenizer = types.SimpleNamespace(from_pretrained=explode)
         monkeypatch.setitem(sys.modules, "transformers", stub)
-        assert ModelRegistry.ce_probabilities("q", []) is None
+        assert ModelRegistry.ce_probabilities("q", []) == []
 
 
 class TestTheSeamTheRetrieverUses:
-    def test_the_hub_passes_a_missing_leg_through_as_none(self, monkeypatch):
-        """``HybridRetriever`` reads None as "this signal does not exist" and
-        ranks on the rest; anything else would take the request down."""
+    def test_the_hub_no_longer_swallows_a_missing_leg(self, monkeypatch):
+        """The hub used to catch everything and answer ``None``. That is what
+        made a dead leg indistinguishable from an empty corpus for a whole
+        session; the decision belongs to the retriever, not to the seam."""
         from app.services.retrieval.hub import ModelHub
 
         monkeypatch.setitem(sys.modules, "transformers", _transformers(boom=True))
         hub = ModelHub()
-        assert hub.encode_sparse(["a"]) is None
-        assert hub.ce_probabilities("q", ["a"]) is None
+        with pytest.raises(ModelUnavailable):
+            hub.encode_sparse(["a"])
+        with pytest.raises(ModelUnavailable):
+            hub.ce_probabilities("q", ["a"])
+
+    def test_the_hub_still_answers_an_empty_input_without_a_model(self, monkeypatch):
+        from app.services.retrieval.hub import ModelHub
+
+        monkeypatch.setitem(sys.modules, "transformers", _transformers(boom=True))
+        hub = ModelHub()
+        assert hub.encode_sparse([]) is None
+        assert hub.ce_probabilities("q", []) == []
 
     def test_the_status_names_every_leg(self):
         status = ModelRegistry.retrieval_status()
         assert set(status) >= {"device", "dense", "sparse", "cross_encoder",
-                               "failed"}
+                               "failed", "encode_failures", "degradations"}
+
+
+class TestTheRetrieverStillDegrades:
+    """Raising moved the DECISION, it did not remove it.
+
+    Ranking on two signals beats not answering, especially on a box whose card
+    is shared with an LLM. What changed is that the choice is now made in one
+    named place and counted, so a session that lost a leg is visible in
+    ``GET /search/models/loaded`` and not only in how the answers read.
+    """
+
+    def test_a_dead_sparse_leg_does_not_take_the_retriever_down(self, monkeypatch):
+        from app.services.retrieval.hybrid import HybridRetriever
+
+        class _HalfHub:
+            def encode_dense(self, texts, *, is_query=False):
+                return None                      # no dense either: BM25 alone
+            def encode_sparse(self, texts, *, is_query=False):
+                raise ModelUnavailable("sparse", "load", "milco is not here")
+            def ce_probabilities(self, query, docs):
+                raise ModelUnavailable("cross_encoder", "load", "no reranker")
+
+        retriever = HybridRetriever(["a red car", "a blue boat"], hub=_HalfHub())
+        results = retriever.search("red")
+        assert results, "BM25 alone must still answer"
+        assert retriever.signals == ["bm25"]
+
+    def test_losing_a_leg_is_counted_against_the_site_that_lost_it(self, monkeypatch):
+        from app.services.retrieval.hybrid import HybridRetriever
+
+        class _NoSparse:
+            def encode_dense(self, texts, *, is_query=False):
+                return None
+            def encode_sparse(self, texts, *, is_query=False):
+                raise ModelUnavailable("sparse", "load", "milco is not here")
+            def ce_probabilities(self, query, docs):
+                return [0.9] * len(docs)
+
+        HybridRetriever(["a red car"], hub=_NoSparse())
+        assert STATS.snapshot()["degradations"]["sparse/index"] == 1
+
+    def test_an_unjudged_pack_is_returned_ranked_rather_than_empty(self):
+        """``min_prob`` cannot be applied without a probability to compare, and
+        dropping everything would be the wrong reading of "we could not judge"."""
+        from app.services.retrieval.hybrid import HybridRetriever
+
+        class _NoCE:
+            def encode_dense(self, texts, *, is_query=False):
+                return None
+            def encode_sparse(self, texts, *, is_query=False):
+                return None
+            def ce_probabilities(self, query, docs):
+                raise ModelEncodeFailed("cross_encoder", "score", "boom")
+
+        retriever = HybridRetriever(["a red car", "a blue boat"], hub=_NoCE())
+        results = retriever.search("red", min_prob=0.99)
+        assert results, "an unjudged pack is ranked, not emptied"
+        assert all(r.ce_prob is None for r in results)
+        assert STATS.snapshot()["degradations"]["cross_encoder/search"] == 1
 
 
 class _Rep(list):
@@ -332,11 +463,13 @@ class TestTheSparseLegSurvivesAnOOM:
         assert ModelRegistry.encode_sparse([f"d{i}" for i in range(12)]) is not None
         assert model.batch_sizes == [4, 4, 4, 2, 2]
 
-    def test_an_oom_at_a_single_text_degrades_to_none(self, monkeypatch):
+    def test_an_oom_at_a_single_text_raises_model_oom(self, monkeypatch):
         """Down to one text and still refused means the card genuinely has no
-        room. Rank on the remaining signals rather than take the request down."""
+        room. The retriever will rank on the remaining signals — but it decides
+        that, having been told which leg it lost and why."""
         model = _install(monkeypatch, _FakeMILCO(oom_above=0))
-        assert ModelRegistry.encode_sparse(["a", "b"]) is None
+        with pytest.raises(ModelOOM):
+            ModelRegistry.encode_sparse(["a", "b"])
         assert model.batch_sizes == [2, 1]
 
     def test_a_recovered_oom_is_a_retry_not_a_failure(self, monkeypatch):
@@ -354,7 +487,8 @@ class TestTheStatusStopsLyingAboutADeadLeg:
 
     def test_a_failed_encode_is_counted(self, monkeypatch):
         _install(monkeypatch, _FakeMILCO(oom_above=0))
-        ModelRegistry.encode_sparse(["a"])
+        with pytest.raises(ModelOOM):
+            ModelRegistry.encode_sparse(["a"])
         status = ModelRegistry.retrieval_status()
         assert status["sparse"] is True          # the weights really are loaded
         assert status["encode_failures"]["sparse"] == 1
@@ -363,7 +497,8 @@ class TestTheStatusStopsLyingAboutADeadLeg:
         model = _install(monkeypatch, _FakeMILCO())
         model.encode_document = lambda *a, **kw: (_ for _ in ()).throw(
             ValueError("something else entirely"))
-        assert ModelRegistry.encode_sparse(["a"]) is None
+        with pytest.raises(ModelEncodeFailed):
+            ModelRegistry.encode_sparse(["a"])
         assert ModelRegistry.retrieval_status()["encode_failures"]["sparse"] == 1
 
     def test_a_failed_rerank_is_counted(self, monkeypatch):
@@ -378,7 +513,8 @@ class TestTheStatusStopsLyingAboutADeadLeg:
             from_pretrained=lambda name, **kw: _Loadable())
         monkeypatch.setitem(sys.modules, "transformers", stub)
 
-        assert ModelRegistry.ce_probabilities("q", ["a"]) is None
+        with pytest.raises(ModelEncodeFailed):
+            ModelRegistry.ce_probabilities("q", ["a"])
         assert ModelRegistry.retrieval_status()["encode_failures"][
             "cross_encoder"] == 1
 
