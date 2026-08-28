@@ -38,6 +38,7 @@ from ..services.auth_service import AuthService
 # is empty.
 from ..services import ai_tasks  # noqa: F401
 from .routes import search_router, stream_router, library_router, chat_router, assistant_router, metadata_router, playback_router, recommend_router, ai_indexing_router, artists_router, system_router, playlists_router, instance_router, auth_router, admin_router, imports_router, quiz_router, quiz_stream_router
+from .routes import models_public_router, install_model_error_handler
 from .dependencies import get_current_user
 from .sse_utils import event_stream
 
@@ -396,6 +397,14 @@ def create_app() -> FastAPI:
     # Public routes — NO auth gate (login / mode probe happen pre-token).
     app.include_router(instance_router,     prefix="/api/v1")
     app.include_router(auth_router,         prefix="/api/v1")
+    # The model legs, for RAG services that are not MusiX. Outside the
+    # blanket gate because the caller is a SERVICE, not an account: it
+    # carries its own static bearer token (MUSIX_MODELS_TOKEN) and reaches
+    # nothing account-scoped. Refuses everything while that is unset.
+    app.include_router(models_public_router, prefix="/api/v1")
+    # ModelError -> HTTP in one place, so the error body cannot drift
+    # between routes.
+    install_model_error_handler(app)
 
     # Machine-readable service info. Root `/` serves the SPA (via the catch-all
     # below), so expose the JSON status payload here for health-probing monitors.

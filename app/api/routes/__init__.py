@@ -18,9 +18,12 @@ from .admin import router as admin_router
 from .imports import router as imports_router
 from .quiz import router as quiz_router
 from .quiz import stream_router as quiz_stream_router
+from .models_public import router as models_public_router
+from .models_public import install_model_error_handler
 
 __all__ = ["search_router", "stream_router", "library_router", "chat_router", "assistant_router", "metadata_router",
            "playback_router", "recommend_router", "ai_indexing_router",
            "artists_router", "system_router", "playlists_router",
            "instance_router", "auth_router", "admin_router", "imports_router",
-           "quiz_router", "quiz_stream_router"]
+           "quiz_router", "quiz_stream_router",
+           "models_public_router", "install_model_error_handler"]
