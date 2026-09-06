@@ -636,12 +636,20 @@ class StreamTrack(TrackMetadata):
     side) and ``familiar`` are the two the wave assembles from (2026-08-03
     session recsys); ``liked`` marks a computed favorite drawn into the familiar
     quota; ``replay`` a track resurfaced by the round-reset last-resort pass
-    (2026-06-14); ``axis`` a pick from the axis-playlist knobs; ``anchor``/
-    ``explore`` are the pre-2026-08-03 names, kept so old clients and the
-    similar-tracks surface keep validating.
+    (2026-06-14); ``axis`` a pick from the axis-playlist knobs; ``anchor``
+    is a pre-2026-08-03 name, kept so old clients and the similar-tracks
+    surface keep validating.
+
+    ``band`` and ``explore`` are the exploratory pools (2026-09-06): ``band``
+    is a neighbour past the near field, ``explore`` a stratified random pick.
+    Both are reported to the client so the playback event can carry the
+    provenance back — the wave forgives skips on its own guesses, and that
+    requires knowing which picks were its own. ``explore`` predates this as a
+    legacy alias, which is why only ``band`` had to be added here; adding a
+    pool label without extending this Literal 500s the whole chunk.
     """
     pool: Literal["fresh", "familiar", "liked", "replay",
-                  "anchor", "explore", "axis"]
+                  "anchor", "explore", "band", "axis"]
     anchor_track_id: Optional[str] = None   # closest cluster centroid, when known
     axis_match: Optional[float] = None
     score: Optional[float] = None
