@@ -30,6 +30,7 @@ import numpy as np
 from app.services.stream.baseline import Baseline, NEUTRAL
 from app.services.stream.signals import (
     Anchor,
+    EXPLORE_SKIP_DISCOUNT,
     FireSignal,
     PlaybackSignal,
     W_FULL,
@@ -42,6 +43,7 @@ from app.services.stream.signals import (
     base_weight,
     centroid,
     decayed,
+    is_explore_source,
     is_skip,
     listen_ratio,
     merge_anchors,
@@ -510,10 +512,17 @@ def build(
     for tid, w in fires.items():
         positive_weights[tid] = positive_weights.get(tid, 0.0) + w
 
+    # An exploratory pick is a guess the wave made on purpose; skipping it means
+    # «not this guess», not «not this sound». At full weight the skip builds a
+    # negative cluster that repels the whole region — so every failed escape
+    # fenced off the area an escape had to cross, and exploration extinguished
+    # itself. Discounted, not ignored: a pattern of them still registers (§3.4).
     skips = [
         SkipEvent(track_id=ev.track_id,
                   weight=abs(W_SKIP) * baseline.m_skip * decayed(
-                      1.0, age_days(ev.played_at, now), H_IMPLICIT_DAYS),
+                      1.0, age_days(ev.played_at, now), H_IMPLICIT_DAYS)
+                  * (EXPLORE_SKIP_DISCOUNT
+                     if is_explore_source(getattr(ev, "source", None)) else 1.0),
                   played_at=ev.played_at)
         for ev in influencing
         if is_skip(ev.played_sec, ev.total_dur) and not superseded(ev, cutoffs)

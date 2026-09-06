@@ -520,7 +520,7 @@ function getSessionId() {
   return id;
 }
 
-async function postPlaybackEvent({ trackId, playedSec, totalDur, interacted, influence }) {
+async function postPlaybackEvent({ trackId, playedSec, totalDur, interacted, influence, source }) {
   // No collection guard: the server derives the collection from the JWT and
   // ignores any client-supplied value (Phase D-soft). Requiring a non-empty
   // collectionName here silently dropped EVERY event after Phase D removed
@@ -535,6 +535,11 @@ async function postPlaybackEvent({ trackId, playedSec, totalDur, interacted, inf
     // listen (like/dislike/skip/pause/seek)? null = unknown (legacy semantics).
     interacted: interacted ?? null,
     influence: influence === undefined ? true : influence,
+    // Which candidate pool served this track ('band'/'explore'/'fresh'/
+    // 'familiar'/'liked'/'replay'), or 'manual' when the user picked it. The
+    // wave forgives skips on its OWN exploratory guesses, so it has to be able
+    // to tell them from a track the listener chose.
+    source: source || 'manual',
   });
   // fetch + keepalive instead of navigator.sendBeacon: /playback/events sits
   // behind the JWT gate and beacons CANNOT carry an Authorization header —
@@ -633,6 +638,8 @@ function resetPlaySession(el) {
   el.dataset.playInteracted = '0';
   // playNoInfluence is (re)stamped by setSrc per track; default off here.
   if (el.dataset.playNoInfluence === undefined) el.dataset.playNoInfluence = '0';
+  // playSource likewise; absent = the listener started this one by hand.
+  if (el.dataset.playSource === undefined) el.dataset.playSource = 'manual';
 }
 
 // Mark the CURRENT listen as user-touched (like/dislike/skip/pause/seek).
@@ -658,6 +665,7 @@ function flushAccumulatedListen(el) {
     totalDur: el.duration || null,
     interacted: el.dataset.playInteracted === '1',
     influence: el.dataset.playNoInfluence !== '1',
+    source: el.dataset.playSource || 'manual',
   });
 }
 
@@ -801,6 +809,8 @@ function useAudioPlayer() {
       el.dataset.playbackTrackId = meta.trackId || '';
       el.dataset.playbackCollection = meta.collectionName || '';
       el.dataset.playNoInfluence = meta.noInfluence ? '1' : '0';
+      // Provenance of this listen — the wave's pool label, or 'manual'.
+      el.dataset.playSource = meta.source || 'manual';
       resetPlaySession(el);
     }
     // New media: show the buffering veil until 'canplay'/'playing' clears it
@@ -17166,7 +17176,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
     setCurrentIndex(index);
     const track = playlist[index].track;
     const url = buildStreamUrl(track.track_id);
-    if (audio) audio.setSrc(url, { trackId: track.track_id, noInfluence: !!playlist[index]._noInfluence }, { autoplay: true });
+    if (audio) audio.setSrc(url, { trackId: track.track_id, noInfluence: !!playlist[index]._noInfluence, source: playlist[index]._pool }, { autoplay: true });
     // Sync with the src switch — the React-effect path is frozen on a locked
     // phone, which left the OS notification stuck on the previous track.
     applyMediaSessionNow(track);
@@ -17267,7 +17277,7 @@ function PlayerSection({ isDark, lang, initialPlaylist, initialTrack, onPlayTrac
           if (!first) return;
           const t = first.track ? first.track : first;
           audio.setSrc(buildStreamUrl(t.track_id),
-            { trackId: t.track_id, noInfluence: !!first._noInfluence },
+            { trackId: t.track_id, noInfluence: !!first._noInfluence, source: first._pool },
             { autoplay: true });
           applyMediaSessionNow(t);
           if (onTrackChange) onTrackChange(t);
@@ -21750,7 +21760,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
       // Synchronous src+play inside the 'ended' event — see setSrc for why
       // (background-tab timers are throttled/frozen once audio stops). The OS
       // notification must switch in the same sync task, for the same reason.
-      audio.setSrc(buildStreamUrl(t.track_id), { trackId: t.track_id, noInfluence: !!nextHit._noInfluence }, { autoplay: true });
+      audio.setSrc(buildStreamUrl(t.track_id), { trackId: t.track_id, noInfluence: !!nextHit._noInfluence, source: nextHit._pool }, { autoplay: true });
       applyMediaSessionNow(t);
       handleTrackChange(t);
       return;
@@ -21766,7 +21776,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     const firstFresh = fresh[0];
     if (firstFresh) {
       const t = firstFresh.track ? firstFresh.track : firstFresh;
-      audio.setSrc(buildStreamUrl(t.track_id), { trackId: t.track_id, noInfluence: !!firstFresh._noInfluence }, { autoplay: true });
+      audio.setSrc(buildStreamUrl(t.track_id), { trackId: t.track_id, noInfluence: !!firstFresh._noInfluence, source: firstFresh._pool }, { autoplay: true });
       applyMediaSessionNow(t);
       handleTrackChange(t);
     }
@@ -21791,7 +21801,7 @@ function App({ instanceMode = 'sharing', onLogout = () => {} }) {
     const prevHit = idx > 0 ? list[idx - 1] : null;
     if (!prevHit) return;
     const t = prevHit.track ? prevHit.track : prevHit;
-    audio.setSrc(buildStreamUrl(t.track_id), { trackId: t.track_id, noInfluence: !!prevHit._noInfluence }, { autoplay: true });
+    audio.setSrc(buildStreamUrl(t.track_id), { trackId: t.track_id, noInfluence: !!prevHit._noInfluence, source: prevHit._pool }, { autoplay: true });
     applyMediaSessionNow(t);
     handleTrackChange(t);
   };

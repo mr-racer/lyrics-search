@@ -41,7 +41,18 @@ FRESH_STRATIFIED_SHARE = 0.25   # floor share of fresh slots left to chance
 # the raw 0.80 this replaces landed on real libraries (p98.1 / p96.6).
 EXPLORE_NEG_PCT = 0.975
 EXPLORE_BIN_EDGE = 0.5      # z-bins: < −0.5 | −0.5..0.5 | > 0.5
-STRATIFIED_SCROLL_CAP = 5000
+# Ceiling on how much of the library the random sampler scans. It used to be
+# 5000 against a 5959-track library, i.e. 959 tracks the explore path could
+# never reach (insertion order, so always the same 959). Kept only as a sanity
+# bound on pathological libraries.
+STRATIFIED_SCROLL_CAP = 100_000
+
+# ── Band candidates (design 2026-09-06 §3.3) ───────────────────────────────
+# The missing middle. Top-of-kNN is what is already playing; a random library
+# track is a stranger. Band candidates are the neighbours ranked past the near
+# field but still recognisably in the same world — «рядом, но не то же».
+BAND_FETCH_K = 400          # how deep the positive-centroid search goes
+BAND_MIN_SIM_PCT = 0.85     # floor: on a small library rank 400 is already noise
 
 # Skip burst → widen the random share (the only survivor of the old pivot).
 SKIP_BURST_N = 3
@@ -79,12 +90,90 @@ def skip_burst(session_events, is_skip_fn) -> bool:
     return sum(1 for s in recent if is_skip_fn(s.played_sec, s.total_dur)) >= SKIP_BURST_N
 
 
+def explore_slots(n_played: int, n: int, share: float) -> int:
+    """How many of this chunk's ``n`` slots are exploratory (design §3.2).
+
+    The share used to be turned into a count with ``int(round(quota * share))``,
+    which on the default chunk is ``int(round(2 * 0.25)) == int(round(0.5))``
+    — and Python rounds halves to even, so the answer was **0**. Exploration was
+    off in the steady state entirely; measured on prod, that covered 67.4% of
+    all listening.
+
+    Rather than raise the share, this counts honestly. ``n_played`` is how many
+    tracks the session has already played, so the quota is a difference of two
+    floors over the session's own timeline:
+
+        floor((k + n)·E) − floor(k·E)
+
+    which spends exactly ``E`` of every slot in the long run, never rounds a
+    fraction away, and needs no stored accumulator — the engine is stateless and
+    recomputes this from the event count on every request. At the default
+    ``E = 0.175`` it yields one exploratory track roughly every six.
+    """
+    if share <= 0.0 or n <= 0:
+        return 0
+    share = min(1.0, share)
+    k = max(0, n_played)
+    return int(math.floor((k + n) * share) - math.floor(k * share))
+
+
+def band_candidates(
+    *,
+    value_by_id: dict[str, float],
+    rank_by_id: dict[str, int],
+    sim_by_id: dict[str, float],
+    owner_by_id: dict[str, str],
+    payload_by_id: dict[str, dict],
+    axis_match_by_id: dict[str, float],
+    repulsion_by_id: dict[str, float],
+    play_counts: dict[str, int],
+    recency_hours: dict[str, float],
+    near_k: int = FRESH_FETCH_K,
+    min_sim_pct: float = BAND_MIN_SIM_PCT,
+) -> list[StreamCandidate]:
+    """Candidates from the similarity band just past the near field (§3.3).
+
+    A track qualifies when its best rank across the positive centroids is at or
+    beyond ``near_k`` — so it is NOT already in the pool the wave draws from —
+    while its calibrated similarity still clears ``min_sim_pct``. The floor is
+    what keeps this from degenerating into the random sampler on a small
+    library, where rank 400 may already be half the collection.
+
+    Scored exactly like any other candidate, but tagged ``pool="band"`` so the
+    chunk assembler can reserve a slot for it and so the playback event records
+    where it came from.
+    """
+    out: list[StreamCandidate] = []
+    for tid, val in value_by_id.items():
+        if rank_by_id.get(tid, -1) < near_k:
+            continue                      # already part of the near field
+        if sim_by_id.get(tid, 0.0) < min_sim_pct:
+            continue                      # past the band — that is the stranger zone
+        payload = payload_by_id.get(tid)
+        if payload is None or not duration_ok(payload):
+            continue
+        axis = axis_match_by_id.get(tid, 0.0)
+        out.append(StreamCandidate(
+            track_id=tid, payload=payload, pool="band",
+            anchor_track_id=owner_by_id.get(tid),
+            max_anchor_cos=val,
+            axis_match=axis,
+            score=score_candidate(
+                affinity=val, repulsion=repulsion_by_id.get(tid, 0.0),
+                axis_match=axis,
+                play_count=play_counts.get(tid, 0),
+                recency_h=recency_hours.get(tid),
+            ),
+        ))
+    return out
+
+
 # ── Qdrant-backed neighbourhood maps ───────────────────────────────────────
 
 def cluster_neighbourhood(
     qdrant_client, collection_name: str, clusters, calibration, *,
     limit: int, excluded: set[str] | frozenset = frozenset(),
-    use_k: bool = False,
+    use_k: bool = False, rank_out: dict[str, int] | None = None,
 ) -> tuple[dict[str, float], dict[str, str], dict[str, float]]:
     """Search around each cluster centroid; keep the best value per track.
 
@@ -92,6 +181,13 @@ def cluster_neighbourhood(
     ``ŵ · sim_pct(cos)`` (× the cluster's repel coefficient when ``use_k``) and
     ``sim_by_id`` is the bare ``sim_pct`` — the stratified sampler thresholds on
     raw similarity, not on the weighted value.
+
+    ``rank_out``, when given, is filled in place with ``{track_id: best rank}``
+    — the candidate's position in its closest cluster's hit list, counted before
+    exclusions so it means «how deep into this region the track sits» and not
+    «where it happened to land after filtering». It is an out-parameter rather
+    than a fourth return value so existing callers keep their arity; the band
+    split (§3.3) is the only consumer.
 
     Ids and scores only: ``with_payload=False``. Metadata is looked up in the
     SQLite mirror by the caller.
@@ -114,7 +210,7 @@ def cluster_neighbourhood(
             logger.exception("[stream] cluster search failed for %s", c.track_id)
             continue
         k = c.repel_k if use_k else 1.0
-        for h in hits:
+        for rank, h in enumerate(hits):
             tid = str(h.id)
             if tid in excluded:
                 continue
@@ -125,6 +221,8 @@ def cluster_neighbourhood(
                 owner[tid] = c.track_id
             if sim > sims.get(tid, 0.0):
                 sims[tid] = sim
+            if rank_out is not None and rank < rank_out.get(tid, 1 << 30):
+                rank_out[tid] = rank
     return values, owner, sims
 
 
@@ -247,6 +345,7 @@ def stratified_fresh(
     play_counts: dict[str, int],
     pool_size: int,
     rng,
+    pool_label: str = "fresh",
 ) -> list[StreamCandidate]:
     """Random-but-spread fresh picks straight from the library index.
 
@@ -257,6 +356,12 @@ def stratified_fresh(
 
     ``meta`` is the SQLite-backed ``{track_id: payload}`` mirror of the whole
     collection — no Qdrant traffic happens here at all.
+
+    ``pool_label`` defaults to ``fresh`` for the historical callers. The stream
+    passes ``explore`` so the pick is distinguishable downstream: ``fresh`` only
+    means «not played in 30 days», which is true of most near-field candidates
+    too, and the skip-forgiveness rule (§3.4) must apply to the wave's guesses
+    alone, not to every unheard track.
     """
     payload_by_id: dict[str, dict] = {}
     z_by_id: dict[str, dict[str, float] | None] = {}
@@ -278,7 +383,7 @@ def stratified_fresh(
         payload = payload_by_id[tid]
         axis = axis_match_score(z_by_id[tid], p_final, confidence, axis_names)
         out.append(StreamCandidate(
-            track_id=tid, payload=payload, pool="fresh",
+            track_id=tid, payload=payload, pool=pool_label,
             axis_match=axis,
             score=score_candidate(
                 affinity=0.0, repulsion=repulsion_by_id.get(tid, 0.0),
@@ -291,6 +396,19 @@ def stratified_fresh(
 
 # ── Assembly ───────────────────────────────────────────────────────────────
 
+def explore_positions(n: int, n_explore: int) -> set[int]:
+    """Evenly spaced slot indices reserved for exploration (design §3.2).
+
+    One exploratory track in a chunk of three lands in the middle, two in a
+    chunk of six land at thirds. Spacing them keeps the widening from arriving
+    as a clump.
+    """
+    if n_explore <= 0 or n <= 0:
+        return set()
+    n_explore = min(n_explore, n)
+    return {int((i + 1) * n / (n_explore + 1)) for i in range(n_explore)}
+
+
 def assemble_chunk(
     fresh: list[StreamCandidate],
     familiar: list[StreamCandidate],
@@ -299,6 +417,8 @@ def assemble_chunk(
     fresh_quota: int,
     recent_artists: list[str],
     fresh_is_hard: bool,
+    explore: list[StreamCandidate] | None = None,
+    n_explore: int = 0,
 ) -> list[StreamCandidate]:
     """Fill ``n`` slots honouring the slider quota and the interleaving rules.
 
@@ -306,9 +426,22 @@ def assemble_chunk(
     familiar pool: a short chunk is the honest answer when nothing unheard is
     left. In the other direction undersupply is the worse outcome, so a dry
     familiar pool does fall back to fresh.
+
+    ``explore`` gets **reserved slots**, not a place in the fresh pool, and that
+    distinction is the whole point. Exploratory picks score far below near-field
+    ones by construction — the stratified sampler hard-codes ``affinity=0``, so
+    its ceiling is ``W_AXIS + W_NOVELTY = 0.30`` against a typical near-field
+    ``0.66`` — and this function serves the best-scoring candidate available.
+    Appending them to ``fresh`` therefore buried them: they could be counted by
+    the quota and still never be served. A reserved slot is what makes the quota
+    mean anything. When the explore pool is dry the slot falls through to the
+    normal pools rather than shortening the chunk.
     """
     fresh_sorted = sorted(fresh, key=lambda c: c.score, reverse=True)
     familiar_sorted = sorted(familiar, key=lambda c: c.score, reverse=True)
+    explore_sorted = sorted(explore or [], key=lambda c: c.score, reverse=True)
+    explore_left = max(0, min(n_explore, n))
+    slots = explore_positions(n, explore_left)
 
     out: list[StreamCandidate] = []
     artist_tail: list[str] = list(recent_artists)[-ARTIST_REPEAT_WINDOW:]
@@ -342,11 +475,23 @@ def assemble_chunk(
 
     for _ in range(n):
         slots_left = n - len(out)
-        must_fresh = quota_left >= slots_left
-        want_fresh = (quota_left > 0 and fresh_sorted
-                      and (consecutive["fresh"] < MAX_CONSECUTIVE_SAME_POOL or must_fresh))
 
         c = None
+        # Reserved exploration slot: this position, or any position left once
+        # the remaining slots are exactly the unspent explore quota.
+        if explore_left > 0 and explore_sorted and (
+                len(out) in slots or explore_left >= slots_left):
+            c = _pick(explore_sorted)
+            if c is not None:
+                explore_left -= 1
+                quota_left = max(0, quota_left - 1)   # an explore pick is unheard
+
+        # Every branch below is guarded by ``c is None``, so these only matter
+        # when the reserved slot did not claim this position.
+        must_fresh = quota_left >= slots_left
+        want_fresh = (c is None and quota_left > 0 and fresh_sorted
+                      and (consecutive["fresh"] < MAX_CONSECUTIVE_SAME_POOL or must_fresh))
+
         if want_fresh:
             c = _pick(fresh_sorted)
             if c is not None:
@@ -362,7 +507,10 @@ def assemble_chunk(
         if c is None:
             break  # both pools dry — return a short chunk
 
-        pool = "fresh" if c.pool == "fresh" else "familiar"
+        # The exploratory pools are unheard by construction, so they count as
+        # fresh for the ≤2-in-a-row rule — otherwise a band pick would license
+        # two more familiar ones straight after it.
+        pool = "fresh" if c.pool in ("fresh", "band", "explore") else "familiar"
         for key in consecutive:
             consecutive[key] = consecutive[key] + 1 if key == pool else 0
         out.append(c)

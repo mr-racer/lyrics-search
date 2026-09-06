@@ -329,6 +329,12 @@ class PlaybackEventIn(BaseModel):
     # influence=False → event is stored for anti-repeat but excluded from the
     # "For You" taste profile (e.g. hand-queued tracks, Task 5 _noInfluence).
     influence: bool = True
+    # Which candidate pool served this track ("fresh"/"familiar"/"liked"/
+    # "replay"/"band"), or "manual" when the user started it by hand. None =
+    # client doesn't report it (legacy frontend) and is read back as manual.
+    # The stream forgives skips on its own exploratory picks, so it has to know
+    # which picks were its own.
+    source: str | None = None
 
 
 class PlaybackEventOut(BaseModel):

@@ -47,6 +47,24 @@ H_IMPLICIT_DAYS = 30.0  # playback events, from played_at
 # Minimum track duration for recommendation surfaces (intros/interludes filter).
 MIN_TRACK_DURATION_SEC = 60.0
 
+# ── Exploration provenance (design 2026-09-06 §3.4) ────────────────────────
+# Pools whose picks are the wave's own attempt to leave the current region.
+# A skip on one of these is «not this guess», not «not this sound»: it is
+# weighted down and never feeds the hard multi-skip ban, because otherwise every
+# failed escape fences off the very area an escape would have to cross. Anything
+# else — including a legacy NULL, which reads as a manual play — is a normal skip.
+# NB «fresh» is deliberately NOT here: it only means «not played in 30 days»,
+# which is true of most near-field candidates too. Only these two labels mean
+# «the wave chose this to widen», and only they are forgiven.
+EXPLORE_SOURCES = frozenset({"band", "explore"})
+# How much of a normal skip an exploratory skip is worth.
+EXPLORE_SKIP_DISCOUNT = 0.25
+
+
+def is_explore_source(source: str | None) -> bool:
+    """True when this listen came from an exploratory pool (design §3.4)."""
+    return source in EXPLORE_SOURCES
+
 # cos > this → same taste region, weights merge. Raw-cosine default kept for the
 # long-term profile surface; the session layer passes a percentile instead.
 ANCHOR_MERGE_THRESHOLD = 0.85
@@ -63,6 +81,10 @@ class PlaybackSignal:
     ``influence=True`` (default) means this event contributes to the taste
     profile. Hand-queued tracks set ``influence=False`` so they are kept for
     anti-repeat but excluded from the "For You" profile aggregation.
+
+    ``source`` is the candidate pool that served the track (``band``, ``fresh``,
+    ``familiar``, ``liked``, ``replay``) or ``manual``. ``None`` means the event
+    predates the column and is read as manual — never as exploration.
     """
     track_id: str
     played_sec: float
@@ -71,6 +93,7 @@ class PlaybackSignal:
     session_id: str
     interacted: bool | None = None
     influence: bool = True
+    source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -94,8 +117,10 @@ class StreamCandidate:
 
     ``payload`` is the raw Qdrant payload (title/artist/…/sonic_axes) — the
     route layer converts it to TrackMetadata at the very end. ``pool`` is one of
-    ``fresh`` | ``familiar`` | ``liked`` | ``replay`` | ``anchor`` | ``axis``
-    (the last two belong to the similar/axis surfaces, which score differently).
+    ``fresh`` | ``familiar`` | ``liked`` | ``replay`` | ``band`` | ``explore`` |
+    ``anchor`` | ``axis`` (the last two belong to the similar/axis surfaces,
+    which score differently). ``band`` and ``explore`` are the exploratory
+    pools — see ``EXPLORE_SOURCES``.
     """
     track_id: str
     payload: dict

@@ -798,6 +798,18 @@ class MetadataDB:
             "influence": "INTEGER NOT NULL DEFAULT 1",
         })
 
+        # Provenance of the listen: which candidate pool served this track
+        # («fresh»/«familiar»/«liked»/«replay»/«band») or «manual» for anything
+        # the user started by hand. NULL = legacy rows, read as manual — never
+        # as exploration, so the forgiveness rule below can't fire on history
+        # that predates the column. Without this the wave cannot tell its own
+        # suggestions apart from a hand-picked play, which is what blocked both
+        # per-generator measurement and exploration-skip forgiveness
+        # (docs/superpowers/specs/2026-09-06-stream-exploration-design.md §3.1).
+        cls._ensure_columns(conn, "playback_events", {
+            "source": "TEXT",
+        })
+
         # Phase B: per-user settings live as columns on the (Phase A) users
         # table — model selection + CLAP toggle, keyed by users.id. Additive so
         # it coexists with the auth columns regardless of migration order.
@@ -2844,6 +2856,7 @@ class MetadataDB:
         total_dur: float | None,
         interacted: bool | None = None,
         influence: bool = True,
+        source: str | None = None,
     ) -> int:
         """Insert a playback event. Returns the new row id.
 
@@ -2855,6 +2868,11 @@ class MetadataDB:
 
         ``influence=False`` marks events that should NOT shape the taste profile
         (e.g. hand-queued tracks). They are still stored for anti-repeat purposes.
+
+        ``source`` is the candidate pool that served the track (or ``manual``);
+        ``None`` is stored as-is and read back as manual. The stream reads it to
+        forgive skips on its own exploratory picks — see
+        ``stream.signals.EXPLORE_SOURCES``.
         """
         if total_dur and total_dur > 0.0:
             # Both signals required to count as a skip — short play AND short ratio.
@@ -2865,12 +2883,13 @@ class MetadataDB:
         conn = cls._connect()
         cur = conn.execute(
             "INSERT INTO playback_events "
-            "(session_id, collection_name, track_id, played_sec, total_dur, skipped_early, interacted, influence) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "(session_id, collection_name, track_id, played_sec, total_dur, skipped_early, interacted, influence, source) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (session_id, collection_name, track_id, played_sec, total_dur,
              1 if skipped_early else 0,
              None if interacted is None else (1 if interacted else 0),
-             1 if influence else 0),
+             1 if influence else 0,
+             (source or None)),
         )
         conn.commit()
         return int(cur.lastrowid)
@@ -2883,12 +2902,13 @@ class MetadataDB:
 
         Chronology matters: replay detection and the idle rule scan a session's
         events in play order. ``played_at`` is normalised to ``datetime``;
-        ``interacted`` to ``bool | None`` (NULL = legacy = treated as action).
+        ``interacted`` to ``bool | None`` (NULL = legacy = treated as action);
+        ``source`` to ``str | None`` (NULL = legacy = read as a manual play).
         """
         from datetime import datetime as _dt
         conn = cls._connect()
         rows = conn.execute(
-            """SELECT track_id, played_sec, total_dur, played_at, session_id, interacted, influence
+            """SELECT track_id, played_sec, total_dur, played_at, session_id, interacted, influence, source
                FROM playback_events
                WHERE collection_name = ?
                ORDER BY id DESC LIMIT ?""",
@@ -2910,6 +2930,7 @@ class MetadataDB:
                 "session_id": r[4],
                 "interacted": None if r[5] is None else bool(r[5]),
                 "influence": True if r[6] is None else bool(r[6]),
+                "source": r[7] or None,
             })
         return out
 

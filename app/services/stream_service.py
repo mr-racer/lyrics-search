@@ -105,6 +105,7 @@ from app.services.stream.signals import (  # noqa: F401  (public surface)
     combine_weights,
     decayed,
     duration_ok as _duration_ok,
+    is_explore_source,
     is_skip,
     latest_per_track,
     merge_anchors,
@@ -167,7 +168,12 @@ ANTIREPEAT_FLOOR_TRACKS = 10
 ANTIREPEAT_FLOOR_MINUTES = 30
 
 LIKED_COOLDOWN_H = 8.0     # hard «не чаще раза в 8 часов» for the favorites pool
-LONG_TERM_EVENT_CAP = 2000  # newest events fed into profile building
+# Newest events fed into profile building. Raised from 2000 on 2026-09-06: the
+# live library had already logged 3428 events, so the cap was binding and the
+# «long-term» islands — the one force that pulls a session OUT of its current
+# region — could see only about a month back. Islands decay on H_ISLAND_DAYS=30
+# anyway, so a deeper window costs little and restores the pull.
+LONG_TERM_EVENT_CAP = 6000
 
 # Similar-tracks re-rank blend (GET /recommend/similar).
 SIMILAR_W_CLAP = 0.7
@@ -207,12 +213,20 @@ def negative_track_ids(
 
     Skips already superseded by an explicit reaction don't count (§2.1): if you
     fired a track and skipped it once, the fire speaks, not the skip.
+
+    Skips on the wave's OWN exploratory picks don't count either (2026-09-06
+    §3.4). This ban is what removes a track from the stream for over a week, and
+    charging it for a guess the listener never asked for is how the reachable
+    library shrinks: on prod, exploratory tracks are first plays, and first
+    plays are skipped no more often (16.0%) than familiar ones.
     """
     cutoffs = cutoffs or {}
     out = {r.track_id for r in reactions if r.reaction == "dislike"}
     skip_counts: dict[str, float] = {}
     for ev in signals:
         if not is_skip(ev.played_sec, ev.total_dur) or superseded(ev, cutoffs):
+            continue
+        if is_explore_source(getattr(ev, "source", None)):
             continue
         skip_counts[ev.track_id] = skip_counts.get(ev.track_id, 0.0) + decayed(
             1.0, _age_days(ev.played_at, now), H_IMPLICIT_DAYS,
@@ -774,17 +788,28 @@ def next_chunk(
         qdrant_client, collection_name, profile.negative, calibration,
         limit=pools_mod.NEG_FETCH_K, use_k=True,
     )
-    affinity, cand_owner, _sim = pools_mod.cluster_neighbourhood(
+    # One search, two zones. The near field (rank < FRESH_FETCH_K) is the pool
+    # the wave has always drawn from and is left byte-identical; everything
+    # between it and BAND_FETCH_K is the band, which only ever fills a reserved
+    # exploration slot. Deepening the search must NOT widen the ordinary pool —
+    # that would quietly change the near-field behaviour the owner likes.
+    cand_rank: dict[str, int] = {}
+    affinity_all, cand_owner, cand_sim = pools_mod.cluster_neighbourhood(
         qdrant_client, collection_name, profile.positive, calibration,
-        limit=pools_mod.FRESH_FETCH_K, excluded=fresh_excluded,
+        limit=pools_mod.BAND_FETCH_K, excluded=fresh_excluded,
+        rank_out=cand_rank,
     )
+    affinity = {t: v for t, v in affinity_all.items()
+                if cand_rank.get(t, 1 << 30) < pools_mod.FRESH_FETCH_K}
 
+    # Computed over the whole search, near field and band alike — the band
+    # candidates are scored by the same rules as everyone else.
     axis_match_by_id = {
         tid: axis_match_score(
             z_scores_for_axes((meta.get(tid) or {}).get("sonic_axes"),
                               axis_stats, AXIS_NAMES),
             p_final, confidence, AXIS_NAMES)
-        for tid in affinity
+        for tid in affinity_all
     }
 
     def _pool_of(tid: str) -> str:
@@ -850,34 +875,56 @@ def next_chunk(
     fresh_cands = [c for c in scored if c.pool == "fresh"]
     familiar_cands = [c for c in scored if c.pool == "familiar"] + liked_cands
 
-    # Stratified random slice of the fresh pool — filter-bubble insurance. Wide
-    # on a cold session, tapering to the floor as the session finds itself; a
-    # burst of skips widens it again (the only survivor of the old pivot).
+    # Exploration — filter-bubble insurance. Wide on a cold session, tapering
+    # to the floor as the session finds itself; a burst of skips widens it again
+    # (the only survivor of the old pivot).
     stratified_share = max(
         pools_mod.FRESH_STRATIFIED_SHARE,
         explore_share_for_warmth(profile.n_signals),
     )
     if pools_mod.skip_burst(session_events, is_skip):
         stratified_share = max(stratified_share, pools_mod.SKIP_BURST_STRATIFIED_SHARE)
-    n_stratified = int(round(fresh_quota * stratified_share)) if fresh_quota else 0
+    # Counted over the session's own timeline, not per chunk: the old
+    # per-chunk `int(round(fresh_quota * share))` rounded 0.5 to zero and served
+    # no exploration at all in the steady state (design §3.2).
+    n_explore = pools_mod.explore_slots(
+        len(session_events), n, stratified_share * (1.0 - liked_share))
     # True cold start — no clusters at all, so «familiar» is an empty category
     # by definition. The random slice has to carry the WHOLE chunk, including
     # the slots the slider nominally owes to the liked side; otherwise a fresh
     # account with the slider on «ЛЮБИМОЕ» gets an empty stream.
     if not profile.positive:
-        n_stratified = max(n_stratified, n)
-    if n_stratified > 0:
+        n_explore = max(n_explore, n)
+
+    # The band fills the reserved slots first; the random sampler is the
+    # fallback for when the band is dry (cold start, or a library too small to
+    # have a band at all).
+    explore_cands = pools_mod.band_candidates(
+        value_by_id={t: v for t, v in affinity_all.items() if t not in sampled_liked},
+        rank_by_id=cand_rank,
+        sim_by_id=cand_sim,
+        owner_by_id=cand_owner,
+        payload_by_id=meta,
+        axis_match_by_id=axis_match_by_id,
+        repulsion_by_id=repulsion,
+        play_counts=play_counts,
+        recency_hours=recency_hours,
+    )
+    n_band_available = len(explore_cands)
+    if n_explore > len(explore_cands):
         picks = pools_mod.stratified_fresh(
             meta,
-            excluded=fresh_excluded | {c.track_id for c in fresh_cands},
+            excluded=(fresh_excluded | {c.track_id for c in fresh_cands}
+                      | {c.track_id for c in explore_cands}),
             recency_hours=recency_hours,
             repulsion_by_id=repulsion, neg_sim_by_id=neg_sim,
             axis_stats=axis_stats, axis_names=AXIS_NAMES,
             p_final=p_final, confidence=confidence,
-            play_counts=play_counts, pool_size=n_stratified * 3, rng=rng,
+            play_counts=play_counts, pool_size=n_explore * 3, rng=rng,
+            pool_label="explore",
         )
         rng.shuffle(picks)
-        fresh_cands.extend(picks[:n_stratified])
+        explore_cands.extend(picks[: n_explore - n_band_available])
 
     chunk = pools_mod.assemble_chunk(
         fresh_cands, familiar_cands,
@@ -887,6 +934,7 @@ def next_chunk(
             for s in session_events[-pools_mod.ARTIST_REPEAT_WINDOW:]
         ],
         fresh_is_hard=fresh_is_hard,
+        explore=explore_cands, n_explore=n_explore,
     )
 
     # 7. Relax + fallback — familiar slots only. Freshness is a promise, so an
@@ -971,6 +1019,14 @@ def next_chunk(
         "fresh_served": n_fresh_served,
         "fresh_exhausted": bool(n_fresh_served < fresh_quota),
         "stratified_share": round(stratified_share, 3),
+        # Exploration, the 2026-09-06 surface: how many slots were reserved,
+        # how many the band could actually fill, and how many were served. A
+        # persistent explore_slots>0 with band_served=0 means the band is empty
+        # (library too small, or every neighbour already heard).
+        "explore_slots": n_explore,
+        "band_available": n_band_available,
+        "band_served": sum(1 for c in chunk if c.pool == "band"),
+        "explore_served": sum(1 for c in chunk if c.pool in ("band", "explore")),
         "fav_pool": len(fav_top),
         "round": round_no,
         "n_floor": len(floor_ids),
